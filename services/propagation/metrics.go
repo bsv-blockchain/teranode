@@ -1,3 +1,6 @@
+// Package propagation implements Bitcoin SV transaction propagation and validation services.
+// This file contains the Prometheus metrics definitions and initialization for monitoring
+// the performance, throughput, and error rates of the propagation service.
 package propagation
 
 import (
@@ -22,10 +25,23 @@ var (
 	prometheusMetricsInitOnce sync.Once
 )
 
+// initPrometheusMetrics initializes all Prometheus metrics for the propagation service.
+// This function uses sync.Once to ensure metrics are initialized exactly once,
+// preventing duplicate metric registration errors. It serves as the public
+// entry point for metrics initialization, delegating to the internal implementation.
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
 
+// _initPrometheusMetrics is the internal implementation that registers all Prometheus metrics.
+// This function defines and registers the following metrics:
+// - Health endpoint latency histogram
+// - Transaction processing latency histograms (single, batch, HTTP single, HTTP multiple)
+// - Transaction size histogram for monitoring data volume
+// - Invalid transaction counter for monitoring error rates
+//
+// Each metric is properly namespaced under 'teranode' and the 'propagation' subsystem
+// with appropriate bucket definitions based on the expected value distributions.
 func _initPrometheusMetrics() {
 	prometheusHealth = promauto.NewHistogram(
 		prometheus.HistogramOpts{

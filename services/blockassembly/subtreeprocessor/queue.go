@@ -11,6 +11,16 @@ import (
 // and dequeue generic values.
 // This implementation is concurrent safe for queueing, but not for dequeueing.
 // Reference: https://www.cs.rochester.edu/research/synchronization/pseudocode/queues.html
+//
+// The queue is specifically designed for high-throughput transaction processing,
+// allowing multiple producer threads to concurrently enqueue transactions while
+// a single consumer thread dequeues them. This design optimizes for the common
+// pattern in blockchain systems where many sources submit transactions but a
+// single process builds blocks.
+//
+// The atomic operations used ensure memory visibility across threads without
+// requiring explicit locking mechanisms, improving performance in high-concurrency
+// scenarios.
 type LockFreeQueue struct {
 	head        *TxIDAndFee                // Points to the head of the queue
 	tail        atomic.Pointer[TxIDAndFee] // Atomic pointer to the tail

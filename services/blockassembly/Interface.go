@@ -1,4 +1,11 @@
 // Package blockassembly provides functionality for assembling Bitcoin blocks in Teranode.
+//
+// This file defines the interfaces used by clients to interact with the blockassembly service.
+// These interfaces abstract the implementation details of block assembly operations,
+// providing a clean API for transaction submission, mining operations, and service status checks.
+// Both production and mock implementations are provided to support various usage scenarios.
+// The interfaces follow a consistent pattern aligned with other Teranode services.
+
 package blockassembly
 
 import (
@@ -10,6 +17,11 @@ import (
 )
 
 // ClientI defines the interface for block assembly client operations.
+// This interface provides methods for external components to interact with the block assembly service,
+// including transaction submission, mining operations, and service management functions.
+// Implementations of this interface handle the communication details with the underlying service,
+// whether through direct in-process calls or remote procedure calls.
+
 type ClientI interface {
 	// Health checks the health status of the block assembly service.
 	//
@@ -126,6 +138,11 @@ type ClientI interface {
 }
 
 // Store defines the interface for block assembly storage operations.
+// This interface abstracts the storage mechanism used for transactions in the block assembly process,
+// providing methods for storing and removing transactions from the assembly queue.
+// It isolates the storage implementation details from the client code and enables
+// different storage backends to be used without changing the client code.
+
 type Store interface {
 	// Store stores a transaction in the storage system.
 	//
@@ -150,3 +167,4 @@ type Store interface {
 	//   - error: Any error encountered during removal
 	RemoveTx(ctx context.Context, hash *chainhash.Hash) error
 }
+

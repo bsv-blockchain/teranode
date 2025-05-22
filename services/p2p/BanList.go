@@ -1,4 +1,14 @@
 // Package p2p provides peer-to-peer networking functionality for the Teranode system.
+// The ban management subsystem in this package implements mechanisms to protect
+// the network from malicious or misbehaving peers by temporarily or permanently
+// restricting their access to the node.
+//
+// The ban system supports:
+// - IP-based and subnet-based banning
+// - Time-limited bans with automatic expiration
+// - Persistent storage of ban information across restarts
+// - Event notifications for ban-related actions
+// - Thread-safe operations for concurrent access
 package p2p
 
 import (
@@ -23,30 +33,75 @@ var (
 )
 
 // BanInfo contains information about a banned peer.
+// It encapsulates all the data needed to track and manage a ban entry,
+// including when the ban should expire and what network range it applies to.
+//
+// The struct supports both individual IP bans and subnet-based bans through
+// the Subnet field. For individual IP bans, the subnet mask is set to /32 (IPv4)
+// or /128 (IPv6) to represent a single address.
 type BanInfo struct {
 	ExpirationTime time.Time  // Time when the ban expires
-	Subnet         *net.IPNet // Subnet information for the ban
+	Subnet         *net.IPNet // Subnet information for the ban (can represent single IP or CIDR range)
 }
 
 // BanEvent represents a ban-related event in the system.
+// It is used for notifying subscribers about changes to the ban list,
+// allowing other components to react to ban-related activities.
+//
+// BanEvents are published through channels created via the Subscribe method,
+// and can be used for logging, metrics collection, and coordination with
+// other network components like the P2P node.
 type BanEvent struct {
-	Action string     // Action type ("add" or "remove")
-	IP     string     // IP address involved in the ban
-	Subnet *net.IPNet // Subnet information if applicable
+	Action string     // Action type ("add" for new bans or "remove" for unbanning)
+	IP     string     // IP address involved in the ban action
+	Subnet *net.IPNet // Subnet information if the ban applies to a network range
 }
 
-// BanListI defines the interface for peer banning functionality
+// BanListI defines the interface for peer banning functionality.
+// This interface abstracts the implementation details of ban management,
+// allowing different implementations to be used (such as in-memory, database-backed,
+// or distributed implementations) while providing a consistent API.
+//
+// The interface supports checking, adding, removing, and listing banned peers,
+// with operations to manage both individual IP addresses and subnets.
+// Thread-safety is guaranteed by implementations of this interface.
 type BanListI interface {
-	// IsBanned checks if a peer is banned
+	// IsBanned checks if a peer is banned by its IP address.
+	// This is a fast, thread-safe operation suitable for frequent checks
+	// during network operations.
+	//
+	// Parameters:
+	// - ipStr: The IP address to check as a string
+	//
+	// Returns true if the IP is currently banned, false otherwise
 	IsBanned(ipStr string) bool
 
-	// Add adds an IP or subnet to the ban list
+	// Add adds an IP or subnet to the ban list with an expiration time.
+	// For individual IPs, the ipOrSubnet parameter should be a valid IP address.
+	// For subnets, it should be in CIDR notation (e.g., "192.168.1.0/24").
+	//
+	// Parameters:
+	// - ctx: Context for the operation, allowing for cancellation
+	// - ipOrSubnet: IP address or subnet to ban
+	// - expirationTime: When the ban should expire; use a far future time for permanent bans
+	//
+	// Returns an error if the IP/subnet cannot be parsed or the ban cannot be applied
 	Add(ctx context.Context, ipOrSubnet string, expirationTime time.Time) error
 
-	// Remove removes an IP or subnet from the ban list
+	// Remove removes an IP or subnet from the ban list.
+	// The format for ipOrSubnet is the same as in the Add method.
+	//
+	// Parameters:
+	// - ctx: Context for the operation, allowing for cancellation
+	// - ipOrSubnet: IP address or subnet to unban
+	//
+	// Returns an error if the operation fails or the IP/subnet was not banned
 	Remove(ctx context.Context, ipOrSubnet string) error
 
-	// ListBanned returns a list of all banned IP addresses and subnets
+	// ListBanned returns a list of all currently banned IP addresses and subnets.
+	// The list includes both individual IPs and subnet ranges currently in effect.
+	//
+	// Returns a slice of strings representing banned IPs and subnets
 	ListBanned() []string
 
 	// Subscribe returns a channel to receive ban events

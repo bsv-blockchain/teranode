@@ -10,6 +10,9 @@ import (
 )
 
 // TxIDAndFee represents a transaction with its associated fee information and linking metadata.
+// This structure is a fundamental building block for the transaction processing system,
+// containing all necessary information for fee-based transaction prioritization and
+// queue management. It serves as both a data container and a node in the lock-free queue.
 type TxIDAndFee struct {
 	node    util.SubtreeNode           // The transaction node containing hash and fee information
 	parents []chainhash.Hash           // Slice of parent transaction hashes
@@ -18,6 +21,9 @@ type TxIDAndFee struct {
 }
 
 // TxIDAndFeeBatch manages batches of transactions for efficient processing.
+// It provides atomic batch operations to improve throughput and reduce overhead
+// when processing multiple transactions. The batching mechanism significantly
+// reduces contention and context switching in high-volume transaction scenarios.
 type TxIDAndFeeBatch struct {
 	txs  []*TxIDAndFee // Slice of transactions in the current batch
 	size int           // Maximum size of the batch

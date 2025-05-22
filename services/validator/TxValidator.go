@@ -2,7 +2,28 @@
 Package validator implements Bitcoin SV transaction validation functionality.
 
 This file contains the core transaction validation logic and implements the standard
-Bitcoin transaction validation rules and policies.
+Bitcoin transaction validation rules and policies. The TxValidator component is responsible
+for enforcing both consensus rules (which all nodes must follow) and policy rules
+(which can be configured per node).
+
+The implementation supports multiple script interpreters through a plugin architecture,
+allowing different script verification engines to be used based on configuration. Currently
+supported interpreters include:
+- Go-BT: Pure Go implementation from the libsv/go-bt library
+- Go-SDK: Bitcoin SV SDK implementation
+- Go-BDK: Bitcoin Development Kit implementation
+
+The validation process enforces rules including but not limited to:
+- Transaction size limits
+- Input and output structure verification
+- Non-dust output values
+- Script operation count limits
+- Signature verification
+- Fee policy enforcement
+- Locktime and sequence number verification
+
+This component is designed to be highly performant and configurable to support
+different validation scenarios from development to high-volume production environments.
 */
 package validator
 
@@ -31,24 +52,43 @@ const (
 	TxInterpreterGoBDK TxInterpreter = "GoBDK"
 )
 
-// TxValidatorI defines the interface for transaction validation operations
+// TxValidatorI defines the interface for transaction validation operations.
+// This interface serves as the contract for all transaction validators, abstracting
+// the implementation details from the rest of the system. This enables different
+// validation strategies to be used (including mocks for testing) while maintaining
+// a consistent API.
+//
+// The validator is responsible for enforcing Bitcoin consensus rules and configurable
+// policy rules across the full range of transaction properties. This includes
+// script verification, size limits, fee policies, and structure validation.
 type TxValidatorI interface {
-	// ValidateTransaction performs comprehensive validation of a transaction
+	// ValidateTransaction performs comprehensive validation of a transaction.
+	// This method enforces all consensus and policy rules against the transaction,
+	// including format, structure, inputs/outputs, signature verification, and fees.
+	// The validation context includes the current blockchain height and configuration
+	// options that may modify validation behavior (e.g., skip certain checks).
+	//
 	// Parameters:
-	//   - tx: The transaction to validate
+	//   - tx: The transaction to validate, must be properly initialized
 	//   - blockHeight: The current block height for validation context
-	//   - validationOptions: Optional validation options
+	//   - validationOptions: Optional validation options to customize validation behavior
 	// Returns:
-	//   - error: Any validation errors encountered
+	//   - error: Specific validation error with reason if validation fails, nil on success
 	ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error
 
-	// ValidateTransactionScripts performs script validation for a transaction
+	// ValidateTransactionScripts performs script validation for a transaction.
+	// This method specifically handles the script execution and signature verification
+	// portion of validation, which is typically the most computationally intensive part.
+	// It can be called independently from ValidateTransaction when only script
+	// validation is needed.
+	//
 	// Parameters:
 	//   - tx: The transaction containing the scripts to validate
-	//   - blockHeight: Current block height for validation context
-	//   - validationOptions: Optional validation options
+	//   - blockHeight: Current block height for validation context (affects script flags)
+	//   - utxoHeights: Heights of the UTXOs being spent, used for BIP68 relative locktime
+	//   - validationOptions: Optional validation options to customize validation behavior
 	// Returns:
-	//   - error: Any script validation errors encountered
+	//   - error: Specific script validation error if validation fails, nil on success
 	ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
 }
 

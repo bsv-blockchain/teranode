@@ -1,6 +1,30 @@
-// Package subtreevalidation provides functionality for validating subtrees in a blockchain context.
-// It handles the validation of transaction subtrees, manages transaction metadata caching,
-// and interfaces with blockchain and validation services.
+// Package subtreevalidation implements the subtree validation service for the Teranode architecture.
+//
+// The subtree validation service is responsible for validating transaction subtrees, which are
+// groups of interdependent transactions that are processed together to maintain blockchain integrity.
+// This package ensures that all transactions within a subtree are valid according to Bitcoin SV
+// consensus rules before they are committed to the blockchain.
+//
+// Key features and capabilities:
+// - Efficient validation of transaction subtrees with interdependent transactions
+// - Transaction metadata caching for improved performance
+// - Parallel processing of transactions within subtrees
+// - Missing transaction retrieval from network sources
+// - Integration with blockchain and validation services
+// - Health monitoring and diagnostics
+//
+// The package integrates with several other Teranode components:
+// - Blockchain service: For chain state information and block height validation
+// - Validator service: For transaction validation against consensus rules
+// - UTXO store: For unspent transaction output state management
+// - Blob stores: For persistent storage of subtrees and transactions
+// - Kafka: For message-based communication with other services
+//
+// Architecture design:
+// The service follows a client-server model with a gRPC API for external communication.
+// It employs a layered approach with clear separation between API handling, business logic,
+// and storage interactions. The service implements defensive programming techniques including
+// retry mechanisms, graceful error handling, and proper resource management.
 package subtreevalidation
 
 import (
@@ -11,21 +35,63 @@ import (
 )
 
 // Interface defines the contract for subtree validation operations.
+//
+// This interface abstracts the subtree validation service, allowing for flexible
+// implementations and easier testing through mocking. It provides the core operations
+// needed by other services to validate transaction subtrees and ensure blockchain integrity.
+//
+// Implementations of this interface should handle transaction validation, subtree composition,
+// and ensure that all Bitcoin consensus rules are followed before transactions are committed
+// to the blockchain.
 type Interface interface {
 	// Health checks the health status of the subtree validation service.
 	// If checkLiveness is true, it performs only liveness checks.
 	// Returns HTTP status code, status message, and any error encountered.
+	//
+	// This method follows the standard Teranode health check pattern and is used by
+	// monitoring systems to determine service availability and readiness.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and tracing
+	//   - checkLiveness: If true, performs only basic liveness checks; if false, performs full readiness checks
+	//
+	// Returns:
+	//   - int: HTTP status code (200 for healthy, other codes for specific issues)
+	//   - string: Human-readable status message
+	//   - error: Detailed error information if the service is unhealthy
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 
 	// CheckSubtreeFromBlock validates a subtree with the given hash at a specific block height.
-	// baseURL specifies the source for fetching missing transactions.
-	// blockHash is optional and can be nil.
+	// This is the primary method for validating transaction subtrees, ensuring that all
+	// transactions in the subtree are valid according to consensus rules and can be included
+	// in the blockchain.
+	//
+	// The method handles missing transaction retrieval, ancestor validation, and ensures that
+	// all transactions in the subtree can be added to the blockchain at the specified height.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and tracing
+	//   - hash: The hash of the subtree to validate
+	//   - baseURL: URL to fetch missing transactions from if needed
+	//   - blockHeight: The height of the block containing the subtree
+	//   - blockHash: Optional hash of the block containing the subtree (can be nil)
+	//   - previousBlockHash: Optional hash of the previous block (can be nil)
+	//
+	// Returns:
+	//   - error: Any error encountered during validation, nil if successful
 	CheckSubtreeFromBlock(ctx context.Context, hash chainhash.Hash, baseURL string, blockHeight uint32, blockHash, previousBlockHash *chainhash.Hash) error
 }
 
 var _ Interface = &MockSubtreeValidation{}
 
 // MockSubtreeValidation provides a mock implementation of the Interface for testing.
+//
+// This implementation uses the testify mock package to create a mockable version
+// of the Interface. It allows test code to set expectations on method calls and
+// control return values for predictable testing scenarios.
+//
+// MockSubtreeValidation is only intended for use in test code and should not be
+// used in production environments.
 type MockSubtreeValidation struct {
 	mock.Mock
 }

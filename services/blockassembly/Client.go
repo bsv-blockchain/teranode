@@ -17,6 +17,10 @@ import (
 )
 
 // batchItem represents an item in a transaction batch.
+// This structure encapsulates a transaction request along with a channel
+// for signaling completion, enabling asynchronous batch processing while
+// still allowing the caller to wait for individual transaction results.
+
 type batchItem struct {
 	// req contains the transaction request
 	req *blockassembly_api.AddTxRequest
@@ -26,6 +30,13 @@ type batchItem struct {
 }
 
 // Client implements the ClientI interface for block assembly operations.
+// It provides a high-level API for interacting with the block assembly service,
+// handling communication details, request formatting, and response processing.
+//
+// This client includes built-in batching support for transaction submission to improve
+// performance when processing large numbers of transactions. It also provides methods
+// for mining operations, service status checks, and block assembly management.
+
 type Client struct {
 	// client is the gRPC client for block assembly API
 	client blockassembly_api.BlockAssemblyAPIClient

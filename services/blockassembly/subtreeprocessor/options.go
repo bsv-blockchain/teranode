@@ -2,6 +2,9 @@
 package subtreeprocessor
 
 // Options represents a function type for configuring the SubtreeProcessor.
+// This type implements the functional options pattern, allowing for flexible and
+// extensible configuration of the SubtreeProcessor with optional parameters.
+// Multiple options can be composed together to customize processor behavior.
 type Options func(*SubtreeProcessor)
 
 // WithBatcherSize creates an option to set the batcher size for the SubtreeProcessor.

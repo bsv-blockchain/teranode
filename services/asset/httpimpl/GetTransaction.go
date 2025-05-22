@@ -13,16 +13,31 @@ import (
 )
 
 // GetTransaction creates an HTTP handler for retrieving transaction data in multiple formats.
-// The transaction data is retrieved from either the UTXO store or transaction store.
+// The transaction data is retrieved from either the UTXO store or transaction store,
+// providing a unified interface for transaction retrieval regardless of its storage location.
+//
+// This handler function implements content negotiation through the ReadMode parameter,
+// allowing clients to request the same transaction in different representation formats
+// without requiring separate API endpoints. It supports standard Bitcoin transaction formats
+// including raw binary, hexadecimal, and structured JSON representations.
+//
+// The implementation includes proper error handling for various failure scenarios,
+// translating internal errors to appropriate HTTP status codes and messages.
+// It also implements optional response signing for data verification when configured.
+//
+// Performance considerations:
+// - Binary mode provides the most efficient transfer for large transactions
+// - JSON mode provides human-readable format at the cost of increased size and parsing overhead
+// - Hex mode strikes a balance between human-readability and parsing simplicity
 //
 // Parameters:
 //   - mode: ReadMode specifying the response format (JSON, BINARY_STREAM, or HEX)
 //
 // Returns:
-//   - func(c echo.Context) error: Echo handler function
+//   - func(c echo.Context) error: Echo handler function that processes the HTTP request
 //
 // URL Parameters:
-//   - hash: Transaction hash (hex string)
+//   - hash: Transaction hash (64-character hex string)
 //
 // HTTP Response Formats:
 //
@@ -33,72 +48,85 @@ import (
 //     {
 //     "inputs": [                     // Array of transaction inputs
 //     {
-//     "previousTxId": "<string>",
-//     "previousTxIndex": <uint32>,
-//     "unlockingScript": "<string>",
-//     "sequenceNumber": <uint32>
+//     "previousTxId": "<string>",  // Hash of the transaction containing the output being spent
+//     "previousTxIndex": <uint32>,  // Output index in the previous transaction
+//     "unlockingScript": "<string>", // Script that satisfies the conditions of the output's locking script
+//     "sequenceNumber": <uint32>    // Sequence number for the input
 //     }
 //     ],
 //     "outputs": [                    // Array of transaction outputs
 //     {
-//     "satoshis": <uint64>,
-//     "lockingScript": "<string>"
+//     "satoshis": <uint64>,         // Value of the output in satoshis
+//     "lockingScript": "<string>"  // Script specifying the conditions to spend this output
 //     }
 //     ],
-//     "version": <uint32>,            // Transaction version
-//     "locktime": <uint32>            // Transaction locktime
+//     "version": <uint32>,            // Transaction version number
+//     "locktime": <uint32>            // The block height or timestamp when transaction is final
 //     }
 //
 //  2. Binary (mode = BINARY_STREAM):
 //     Status: 200 OK
 //     Content-Type: application/octet-stream
 //     Body: Raw Bitcoin transaction format:
-//     - Version (4 bytes)
-//     - Input count (VarInt)
-//     - Inputs (variable length)
-//     - Output count (VarInt)
-//     - Outputs (variable length)
-//     - Locktime (4 bytes)
+//     - Version (4 bytes): Transaction version number as a little-endian uint32
+//     - Input count (VarInt): Number of inputs in the transaction
+//     - Inputs (variable length): Each consisting of:
+//       * Previous transaction hash (32 bytes, little-endian)
+//       * Previous output index (4 bytes, little-endian uint32)
+//       * Script length (VarInt)
+//       * Unlocking script (variable length)
+//       * Sequence number (4 bytes, little-endian uint32)
+//     - Output count (VarInt): Number of outputs in the transaction
+//     - Outputs (variable length): Each consisting of:
+//       * Value (8 bytes, little-endian uint64, in satoshis)
+//       * Script length (VarInt)
+//       * Locking script (variable length)
+//     - Locktime (4 bytes): Transaction locktime as a little-endian uint32
 //
 //  3. Hex (mode = HEX):
 //     Status: 200 OK
 //     Content-Type: text/plain
-//     Body: Hexadecimal string of the binary format
+//     Body: Hexadecimal string representation of the raw binary transaction format
+//           Each byte is encoded as two hex characters (0-9, a-f)
 //
 // Error Responses:
 //
-//   - 404 Not Found:
+//   - 400 Bad Request:
+//     Returned when the transaction hash is invalid (wrong format or length)
+//     Example: {"message": "invalid hash length"}
+//     Example: {"message": "invalid hash string"}
 //
-//   - Transaction not found
+//   - 404 Not Found:
+//     Returned when the transaction doesn't exist in any of the storage systems
 //     Example: {"message": "not found"}
 //
 //   - 500 Internal Server Error:
+//     Returned for various internal errors:
+//     - Repository access failures
+//     - Transaction deserialization errors for JSON mode
+//     - Storage system unavailability
+//     Example: {"message": "error parsing transaction"}
 //
-//   - Invalid transaction hash
-//
-//   - Repository errors
-//
-//   - Invalid read mode
-//
-//   - Transaction parsing errors
-//
-// Security:
+// Security Considerations:
 //   - Response includes cryptographic signature if private key is configured
+//   - Transaction hashes are validated for length and format before processing
+//   - Raw binary responses should be handled carefully by clients to prevent buffer overflows
 //
-// Monitoring:
-//   - Execution time recorded in "GetTransaction_http" statistic
-//   - Prometheus metric "asset_http_get_transaction" tracks responses
+// Monitoring and Metrics:
+//   - Execution time recorded in "GetTransaction_http" statistic for performance tracking
+//   - Prometheus metric "asset_http_get_transaction" tracks response counts by status
+//   - Request logging includes client IP and requested transaction hash
 //
 // Example Usage:
 //
-//	# Get transaction in JSON format
-//	GET /tx/hash/<txid>
+//   # Get transaction in JSON format (for human-readable exploration)
+//   GET /tx/{hash}/json
 //
-//	# Get raw transaction
-//	GET /tx/hash/<txid>/raw
+//   # Get raw binary transaction (for efficient machine processing)
+//   GET /tx/{hash}
 //
-//	# Get transaction in hex format
-//	GET /tx/hash/<txid>/hex
+//   # Get transaction in hex format (for verification or debugging)
+//   GET /tx/{hash}/hex
 func (h *HTTP) GetTransaction(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashStr := c.Param("hash")

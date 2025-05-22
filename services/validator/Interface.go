@@ -1,9 +1,26 @@
 /*
 Package validator implements Bitcoin SV transaction validation functionality.
 
-This file defines the core interfaces for the validator service, providing
-the contract that all validator implementations must fulfill. It also includes
-a mock implementation for testing purposes.
+This package provides a comprehensive transaction validation framework that implements
+the Bitcoin SV consensus and policy rules. It serves as a critical component in the
+Teranode architecture, ensuring that only valid transactions are accepted into the
+mempool and blocks.
+
+This file defines the core interfaces for the validator service, providing the contract
+that all validator implementations must fulfill. The Interface type establishes the
+required methods for any validator implementation, ensuring consistent behavior across
+different implementations or testing scenarios. The file also includes a mock implementation
+for testing purposes that satisfies the interface contract without performing actual
+validation.
+
+The validator package interacts with multiple other components in the system:
+- UTXO store for input validation and double-spend prevention
+- Block assembly for transaction prioritization and mining
+- Blockchain service for block height and chain state information
+- Kafka for asynchronous event processing and communication
+
+These interfaces enable loose coupling between components while enforcing the necessary
+validation contract to maintain Bitcoin consensus rules.
 */
 package validator
 

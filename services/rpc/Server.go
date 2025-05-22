@@ -1,3 +1,44 @@
+// Package rpc implements the Bitcoin JSON-RPC API service for Teranode.
+//
+// The rpc package provides a full-featured and standards-compliant Bitcoin JSON-RPC server
+// implementation that enables external clients to interact with the Teranode node
+// using established protocols. The service implements both standard Bitcoin Core RPC methods
+// and Bitcoin SV specific extensions, supporting operations such as:
+//
+// - Blockchain data retrieval (blocks, transactions, chain state)
+// - Transaction submission and broadcast
+// - Mining interfaces (block templates, mining solutions)
+// - Network peer management
+// - Node configuration and status information
+//
+// Architecture:
+// The RPC service is architected as a concurrent HTTP server that processes JSON-RPC
+// formatted requests from authenticated clients. Key components include:
+//
+// - RPCServer: The core server implementation handling connections, authentication, and request routing
+// - Handlers: Individual command processors for each supported RPC method
+// - Distributor: Component for reliable transaction propagation to the network
+// - Authentication: Two-tier system with admin and limited-access users
+//
+// Security features:
+// - HTTP Basic authentication with SHA256 credential validation
+// - Connection limiting to prevent denial-of-service attacks
+// - Configurable access levels for sensitive operations
+// - Proper HTTP request/response handling with appropriate headers
+//
+// Integration with other Teranode services:
+// The RPC service integrates with several other Teranode components including:
+// - Blockchain service: For block data and chain state information
+// - Block Assembly service: For mining operations
+// - P2P service: For peer information and management
+// - Legacy service: For compatibility with older network protocols
+// - UTXO store: For transaction validation
+//
+// Performance considerations:
+// - Connection pooling and limits to prevent resource exhaustion
+// - Response caching for frequently accessed data
+// - Timeout handling to prevent client connections from blocking indefinitely
+// - Graceful shutdown to complete in-progress requests
 package rpc
 
 import (
@@ -537,29 +578,101 @@ func handleVersion(_ context.Context, s *RPCServer, cmd interface{}, closeChan <
 	return result, nil
 }
 
-// RPCServer provides a concurrent safe RPC server to a chain server.
+// RPCServer provides a concurrent-safe JSON-RPC server implementation for the Bitcoin protocol.
+// It handles client authentication, request processing, response generation, and
+// maintains connections to other Teranode services to fulfill RPC requests.
+//
+// The server implements a two-tier authentication system that separates administrative
+// capabilities from limited-user operations, providing security through proper authorization.
+// It supports standard Bitcoin Core RPC methods and Bitcoin SV extensions for
+// compatibility with existing tools while enhancing functionality.
+//
+// The RPCServer is designed for concurrent operation, employing synchronization mechanisms
+// to handle multiple simultaneous client connections without race conditions or resource
+// conflicts. It implements proper connection management, graceful shutdown, and health monitoring.
 type RPCServer struct {
+	// settings contains the configuration parameters for the RPC server including
+	// authentication credentials, network binding options, and service parameters
 	settings               *settings.Settings
+
+	// started indicates whether the server has been started (1) or not (0)
+	// This uses atomic operations for thread-safe access
 	started                int32
+
+	// shutdown indicates whether the server is in the process of shutting down (1) or not (0)
+	// This uses atomic operations for thread-safe access
 	shutdown               int32
+
+	// authsha contains the SHA256 hash of the HTTP basic auth string for admin-level access
+	// This is used for authenticating clients with full administrative privileges
 	authsha                [sha256.Size]byte
+
+	// limitauthsha contains the SHA256 hash of the HTTP basic auth string for limited-level access
+	// This is used for authenticating clients with restricted access (read-only operations)
 	limitauthsha           [sha256.Size]byte
+
+	// numClients tracks the number of connected RPC clients for connection limiting
+	// This uses atomic operations for thread-safe access
 	numClients             int32
+
+	// statusLines maps HTTP status codes to their corresponding status text lines
+	// Used for proper HTTP response generation
 	statusLines            map[int]string
+
+	// statusLock protects concurrent access to the status lines map
 	statusLock             sync.RWMutex
+
+	// wg is used to wait for all goroutines to exit during shutdown
 	wg                     sync.WaitGroup
+
+	// requestProcessShutdown is closed when an authorized RPC client requests a shutdown
+	// This channel is used to notify the main process that a shutdown has been requested
 	requestProcessShutdown chan struct{}
+
+	// quit is used to signal the server to shut down
+	// All long-running goroutines should monitor this channel for termination signals
 	quit                   chan int
+
+	// logger provides structured logging capabilities for operational and debugging messages
 	logger                 ulogger.Logger
+
+	// rpcMaxClients is the maximum number of concurrent RPC clients allowed
+	// This setting helps prevent resource exhaustion from too many simultaneous connections
 	rpcMaxClients          int
+
+	// rpcQuirks enables backwards-compatible quirks in the RPC server when true
+	// This improves compatibility with clients expecting legacy Bitcoin Core behavior
 	rpcQuirks              bool
+
+	// listeners contains the network listeners for the RPC server
+	// Multiple listeners may be active for different IP addresses and ports
 	listeners              []net.Listener
+
+	// blockchainClient provides access to blockchain data and operations
+	// Used for retrieving block information, chain state, and blockchain operations
 	blockchainClient       blockchain.ClientI
+
+	// blockAssemblyClient provides access to block assembly and mining services
+	// Used for mining-related RPC commands like getminingcandidate and generate
 	blockAssemblyClient    *blockassembly.Client
+
+	// peerClient provides access to legacy peer network services
+	// Used for peer management and information retrieval
 	peerClient             peer.ClientI
+
+	// p2pClient provides access to the P2P network services
+	// Used for modern peer management and network operations
 	p2pClient              p2p.ClientI
+
+	// assetHTTPURL is the URL where assets (e.g., for HTTP UI) are served from
 	assetHTTPURL           *url.URL
+
+	// helpCacher caches help text for RPC commands to improve performance
+	// Prevents regenerating help text for each request
 	helpCacher             *helpCacher
+
+	// utxoStore provides access to the UTXO (Unspent Transaction Output) database
+	// Used for transaction validation and UTXO queries
 	utxoStore              utxo.Store
 }
 
@@ -625,7 +738,20 @@ func (s *RPCServer) writeHTTPResponseHeaders(req *http.Request, headers http.Hea
 	return err
 }
 
-// Stop is used by server.go to stop the rpc listener.
+// Stop gracefully shuts down the RPC server and its associated resources.
+// It ensures that any in-progress requests are allowed to complete before terminating,
+// and that all network connections are properly closed.
+//
+// This method implements a thread-safe shutdown mechanism using atomic operations
+// to prevent multiple concurrent shutdown attempts. When called, it closes the quit
+// channel to signal all goroutines to terminate, then waits for them to exit using
+// the wait group before returning.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing purposes
+//
+// Returns:
+//   - error: Any error encountered during the shutdown process, or nil if successful
 func (s *RPCServer) Stop(ctx context.Context) error {
 	if atomic.AddInt32(&s.shutdown, 1) != 1 {
 		s.logger.Infof("RPC server is already in the process of shutting down")
@@ -642,16 +768,42 @@ func (s *RPCServer) Stop(ctx context.Context) error {
 }
 
 // RequestedProcessShutdown returns a channel that is sent to when an authorized
-// RPC client requests the process to shutdown.  If the request can not be read
-// immediately, it is dropped.
+// RPC client requests the process to shutdown via the 'stop' RPC command.
+//
+// This method provides a mechanism for external clients with administrative privileges
+// to trigger a graceful shutdown of the entire Teranode process. The returned channel
+// is closed when an authorized shutdown request is received, allowing the main process
+// to detect this event and initiate orderly termination of all services.
+//
+// If the request cannot be read immediately by the main process, it is dropped
+// to prevent the RPC server from blocking. This non-blocking behavior ensures
+// that the RPC server continues processing other requests even if the shutdown
+// signal is not immediately consumed.
+//
+// Returns:
+//   - <-chan struct{}: A receive-only channel that will be closed when a shutdown is requested
 func (s *RPCServer) RequestedProcessShutdown() <-chan struct{} {
 	return s.requestProcessShutdown
 }
 
-// limitConnections responds with a 503 service unavailable and returns true if
-// adding another client would exceed the maximum allow RPC clients.
+// limitConnections implements connection throttling to protect the server from resource exhaustion.
+// It responds with an HTTP 503 Service Unavailable status and returns true if adding another
+// client would exceed the maximum allowed number of RPC clients (s.rpcMaxClients).
 //
-// This function is safe for concurrent access.
+// This method is part of the RPC server's defensive programming pattern to maintain
+// stability under high load or potential denial-of-service conditions. When the
+// connection limit is reached, new connection attempts are rejected with an appropriate
+// HTTP error rather than queuing them, which could lead to resource exhaustion.
+//
+// Parameters:
+//   - w: HTTP response writer used to send the 503 error if limits are exceeded
+//   - remoteAddr: The IP address and port of the client attempting to connect (for logging)
+//
+// Returns:
+//   - bool: true if connection limits are exceeded and the client was rejected,
+//           false if the connection can proceed
+//
+// This function is safe for concurrent access through the use of atomic operations.
 func (s *RPCServer) limitConnections(w http.ResponseWriter, remoteAddr string) bool {
 	if int(atomic.LoadInt32(&s.numClients)+1) > s.rpcMaxClients {
 		s.logger.Infof("Max RPC clients exceeded [%d] - "+
@@ -666,35 +818,69 @@ func (s *RPCServer) limitConnections(w http.ResponseWriter, remoteAddr string) b
 	return false
 }
 
-// incrementClients adds one to the number of connected RPC clients.  Note
-// this only applies to standard clients.  Websocket clients have their own
-// limits and are tracked separately.
+// incrementClients atomically increments the count of connected RPC clients.
+// 
+// This method is part of the connection tracking system that enables the server
+// to enforce limits on the number of simultaneous connections. It maintains an
+// accurate count of standard HTTP JSON-RPC clients currently connected to the server.
+// Note that WebSocket clients are tracked separately with their own limits.
+//
+// The counter is implemented using atomic operations to ensure thread-safety
+// in the highly concurrent environment of the RPC server. This guarantees that
+// connection counting is accurate even when multiple clients connect or disconnect
+// simultaneously.
 //
 // This function is safe for concurrent access.
 func (s *RPCServer) incrementClients() {
 	atomic.AddInt32(&s.numClients, 1)
 }
 
-// decrementClients subtracts one from the number of connected RPC clients.
-// Note this only applies to standard clients.  Websocket clients have their own
-// limits and are tracked separately.
+// decrementClients atomically decrements the count of connected RPC clients.
+// 
+// This method is called when an RPC client disconnects, properly reducing the
+// tracked count of active connections. It works in conjunction with incrementClients
+// to maintain an accurate count of standard HTTP JSON-RPC clients currently
+// connected to the server. Note that WebSocket clients are tracked separately
+// with their own connection limits.
+//
+// The counter is implemented using atomic operations to ensure thread-safety
+// in a concurrent environment. This guarantees that the connection count remains
+// accurate even when many clients connect or disconnect simultaneously across
+// multiple goroutines.
 //
 // This function is safe for concurrent access.
 func (s *RPCServer) decrementClients() {
 	atomic.AddInt32(&s.numClients, -1)
 }
 
-// checkAuth checks the HTTP Basic authentication supplied by a wallet
-// or RPC client in the HTTP request r.  If the supplied authentication
-// does not match the username and password expected, a non-nil error is
-// returned.
+// checkAuth implements the two-tier HTTP Basic authentication system for RPC clients.  
+// It validates credentials supplied in the HTTP request against configured admin and 
+// limited-access username/password combinations.
 //
-// This check is time-constant.
+// The method implements a secure authentication flow that:
+// 1. Extracts the Authorization header from the HTTP request
+// 2. Validates the credentials against both admin and limited-user authentication strings
+// 3. Uses time-constant comparison operations to prevent timing attacks
+// 4. Distinguishes between admin users (who can perform state-changing operations)
+//    and limited users (who can only perform read-only operations)
 //
-// The first bool return value signifies auth success (true if successful) and
-// the second bool return value specifies whether the user can change the state
-// of the server (true) or whether the user is limited (false). The second is
-// always false if the first is.
+// Security considerations:
+// - Uses SHA256 for credential hashing
+// - Implements constant-time comparison to prevent timing attacks
+// - Properly handles missing or malformed authentication headers
+// - Can be configured to require or not require authentication based on settings
+//
+// Parameters:
+//   - r: The HTTP request containing the Authorization header
+//   - require: If true, authentication is mandatory; if false, it's optional
+//
+// Returns:
+//   - bool: Authentication success (true if successful)
+//   - bool: Authorization level (true for admin access, false for limited access). The value specifies whether the user can change the state of the node.
+//   - error: Authentication error if any occurred, nil on success
+//
+// The second bool is always false if the first bool is false (authorization 
+// level is only meaningful for authenticated requests).
 func (s *RPCServer) checkAuth(r *http.Request, require bool) (bool, bool, error) {
 	authhdr := r.Header["Authorization"]
 
@@ -978,7 +1164,31 @@ func jsonAuthFail(w http.ResponseWriter) {
 	http.Error(w, "401 Unauthorized.", http.StatusUnauthorized)
 }
 
-// Start is used by server.go to start the rpc listener.
+// Start initializes and launches the RPC server, binding to the configured network addresses
+// and beginning to accept and process client connections.
+//
+// This method performs several critical initialization tasks:
+// 1. Validates the server has not already been started (using atomic operations)
+// 2. Initializes network listeners on all configured interfaces and ports
+// 3. Launches goroutines to accept and process incoming connections
+// 4. Sets up proper signal handling for clean shutdown
+// 5. Signals readiness through the provided channel
+//
+// The server supports binding to multiple addresses simultaneously, allowing both
+// IPv4 and IPv6 connections, as well as restricting access to localhost-only if
+// configured for development or testing environments.
+//
+// Network security considerations:
+// - Proper error handling for network binding failures
+// - Systematic tracking of all launched goroutines for clean shutdown
+// - Validation of TLS configuration when secure connections are enabled
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - readyCh: Channel to signal when the server is ready to accept connections
+//
+// Returns:
+//   - error: Any error encountered during startup, nil on success
 func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -1083,6 +1293,28 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	return nil
 }
 
+// NewServer creates and configures a new RPC server instance with the given dependencies.
+//
+// This factory function creates a fully configured RPCServer instance, setting up:
+// - Authentication credentials from settings
+// - Connection limits and parameters
+// - Command handlers and help text
+// - Client connections to required services
+//
+// The RPC server requires connections to several other Teranode services to function
+// properly, as it primarily serves as an API gateway to underlying node functionality.
+// These dependencies are injected through this constructor to maintain proper
+// service separation and testability.
+//
+// Parameters:
+//   - logger: Structured logger for operational and debug messages
+//   - tSettings: Configuration settings for the RPC server and related features
+//   - blockchainClient: Interface to the blockchain service for block and chain operations
+//   - utxoStore: Interface to the UTXO database for transaction validation
+//
+// Returns:
+//   - *RPCServer: Configured server instance ready for initialization
+//   - error: Any error encountered during configuration
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store) (*RPCServer, error) {
 	initPrometheusMetrics()
 
@@ -1161,6 +1393,23 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 	return &rpc, nil
 }
 
+// Init performs second-stage initialization of the RPC server by establishing connections
+// to dependent services that weren't available during initial construction.
+//
+// This method completes the RPC server initialization by:
+// 1. Connecting to the Block Assembly service for mining-related operations
+// 2. Connecting to the P2P service for network peer management
+// 3. Connecting to the Legacy service for compatibility with older protocols
+// 4. Refreshing the help cache with complete command information
+//
+// The initialization is designed to be idempotent and can be safely called multiple times,
+// though typically it's only called once after NewServer and before Start.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//
+// Returns:
+//   - error: Any error encountered during initialization
 func (s *RPCServer) Init(ctx context.Context) (err error) {
 	rpcHandlers = rpcHandlersBeforeInit
 	// rand.Seed(time.Now().UnixNano())
@@ -1182,6 +1431,30 @@ func (s *RPCServer) Init(ctx context.Context) (err error) {
 	return nil
 }
 
+// Health reports the operational status of the RPC service for monitoring and health checking.
+//
+// This method implements the standard Teranode health checking interface used across all services
+// for consistent monitoring, alerting, and orchestration. It provides both readiness and liveness
+// checking capabilities to support different operational scenarios:
+//
+// - Readiness: Indicates whether the service is ready to accept requests (listeners are bound
+//   and core dependencies are available)
+// - Liveness: Indicates whether the service is functioning correctly (listeners are still working
+//   and not in a hung state)
+//
+// The method performs checks appropriate to the service's role, including:
+// - Verifying network listeners are active
+// - Checking connections to dependent services
+// - Validating internal state consistency
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeouts
+//   - checkLiveness: If true, performs deeper health checks; if false, only checks readiness
+//
+// Returns:
+//   - int: HTTP status code representing health (200 for healthy, other codes for specific issues)
+//   - string: Human-readable description of the current health state
+//   - error: Detailed error information if the service is unhealthy
 func (s *RPCServer) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.

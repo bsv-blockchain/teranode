@@ -1,3 +1,6 @@
+// Package txmetacache provides a high-performance caching layer for transaction metadata.
+// This file implements the ImprovedCache - a memory-efficient, highly concurrent cache
+// specifically optimized for blockchain transaction metadata storage with minimal GC pressure.
 package txmetacache
 
 import (
@@ -14,44 +17,76 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Example calculation for the improved cache:
-// cache size : 2 * 2 *  1024 -> 4 KB
-// number of buckets: 4
-// bucket size: 4 KB / 4 = 1 KB
-// chunk size: 2 * 128 = 256 bytes
-// number of total chunks: 4 KB / 256 bytes = 16 chunks
-// number of chunks per bucket: 16 / 4 = 4 chunks
+// ImprovedCache Design Calculations and Memory Model:
 //
-// 600 Million keys per block * 5 blocks = 3 Billion keys
-// 3 billion keys
-// 16 * 1024 buckets = 16,384 buckets, 256 GB / 16,384 buckets = 16 MB per bucket
-// 1024 chunks per bucket = 16 MB / 1024 chunks = 16 KB per chunk
-// (16 * 1024) bucket * 1024 chunks per bucket = 16,777,216 chunks
-// 3 billion / 16,777,216 = 178 keys per chunk
-// 178 * 68 bytes = 194,156 bytes per chunk -> 194 KB
-// For 128 GB, 8 * 1024 buckets, 1.5 Billion keys.
+// The cache is designed to efficiently handle billions of transaction entries with
+// minimal memory overhead and garbage collection impact. The design is based on the
+// following principles:
+//
+// 1. Divide the cache into multiple buckets to reduce lock contention
+// 2. Use fixed-size memory chunks to minimize GC pressure
+// 3. Apply hash-based distribution of entries across buckets
+// 4. Implement different allocation strategies based on use cases
+//
+// Memory usage calculations for various configurations:
+// ----------------------------------------------------
+// Example for small cache (test environment):
+// - Cache size: 2 * 2 * 1024 = 4 KB
+// - Number of buckets: 4
+// - Bucket size: 4 KB / 4 = 1 KB
+// - Chunk size: 2 * 128 = 256 bytes
+// - Total chunks: 4 KB / 256 bytes = 16 chunks
+// - Chunks per bucket: 16 / 4 = 4 chunks
+//
+// Example for production cache with 3 billion keys:
+// - Keys: 600 Million keys per block * 5 blocks = 3 Billion keys
+// - Buckets: 16 * 1024 = 16,384 buckets
+// - Bucket size: 256 GB / 16,384 buckets = 16 MB per bucket
+// - Chunks per bucket: 1024 chunks = 16 MB / 1024 chunks = 16 KB per chunk
+// - Total chunks: (16 * 1024) buckets * 1024 chunks per bucket = 16,777,216 chunks
+// - Keys per chunk: 3 billion / 16,777,216 = 178 keys per chunk
+// - Memory per chunk: 178 * 68 bytes = 194,156 bytes (~194 KB)
+//
+// For 128 GB configuration: 8 * 1024 buckets, ~1.5 Billion keys capacity
+// Cache configuration constants and memory management parameters
 
+// maxValueSizeKB defines the maximum size of a cached value in kilobytes
 const maxValueSizeKB = 2 // 2KB
 
+// maxValueSizeLog is the log2 representation of maxValueSizeKB (with offset)
+// Used for faster size calculations with bitwise operations
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
+// bucketSizeBits defines how many bits are used for bucket size representation
+// This affects the maximum possible size of a bucket
 const bucketSizeBits = 40
 
+// genSizeBits defines how many bits are used for generation tracking
+// Generation tracking helps manage entry eviction policies
 const genSizeBits = 64 - bucketSizeBits
 
+// maxGen is the maximum generation value before wrapping around
 const maxGen = 1<<genSizeBits - 1
 
+// maxBucketSize defines the maximum number of entries a bucket can hold
 const maxBucketSize uint64 = 1 << bucketSizeBits
 
+// chunksPerAlloc defines how many chunks to allocate at once
+// This helps reduce allocation overhead and memory fragmentation
 const chunksPerAlloc = 1024
 
 // -------------------------------------------------------------------
-// Depending on the tags set, the cache will use one of these bucket counts and chunkSizes...
+// Cache size configuration constants
 //
-// See improved_cache_const_large.go for large cache settings
-// See improved_cache_const_small.go for small cache settings
-// Set improved_cache_const_test.go to use test settings
+// The cache uses different configurations based on build tags, allowing for
+// flexibility in deployment across various environments with different memory
+// requirements. At build time, only one of these configurations will be used:
+//
+// 1. Large cache (production): See improved_cache_const_large.go
+// 2. Small cache (development): See improved_cache_const_small.go
+// 3. Test cache: See improved_cache_const_test.go
 // -------------------------------------------------------------------
+// Configuration options for different cache sizes (only one set will be used)
 const bucketCountLarge = 8 * 1024                //nolint:unused
 const bucketCountSmall = 32                      //nolint:unused
 const bucketCountTest = 8                        //nolint:unused
@@ -60,23 +95,35 @@ const chunkSizeSmall = maxValueSizeKB * 512      //nolint:unused
 const chunkSizeTest = maxValueSizeKB * 2 * 1024  //nolint:unused
 // -------------------------------------------------------------------
 
-// Stats represents cache stats.
+// Stats represents cache statistics for monitoring and diagnostics.
 //
-// Use Cache.UpdateStats for obtaining fresh stats from the cache.
+// This structure provides visibility into the cache's current state,
+// including entry count, eviction metrics, and memory utilization.
+// Use ImprovedCache.UpdateStats method to obtain the most current statistics.
 type Stats struct {
 	// EntriesCount is the current number of entries in the cache.
-	EntriesCount       uint64
-	TrimCount          uint64
-	TotalMapSize       uint64
-	TotalElementsAdded uint64
+	EntriesCount       uint64 // Current number of entries stored in the cache
+	TrimCount          uint64 // Number of trim operations performed on the cache
+	TotalMapSize       uint64 // Total size of all hash maps used by the cache buckets
+	TotalElementsAdded uint64 // Cumulative count of all elements ever added to the cache
 }
 
-// Reset resets s, so it may be re-used again in Cache.UpdateStats.
+// Reset clears all statistics in the Stats object.
+// This allows the Stats instance to be reused for subsequent UpdateStats calls
+// without allocating a new instance, reducing memory allocations.
 func (s *Stats) Reset() {
 	*s = Stats{}
 }
 
-// create a bucket interface, which will be implemented by the bucket and bucketUnallcated
+// bucketInterface defines the contract for cache bucket implementations.
+// The cache uses multiple buckets to distribute load and reduce lock contention.
+// Different bucket implementations provide varying memory allocation strategies
+// and performance characteristics for different use cases.
+//
+// There are three implementations of this interface:
+// 1. bucketPreallocated: Preallocates all memory upfront
+// 2. bucketUnallocated: Allocates memory on demand
+// 3. bucketTrimmed: Similar to unallocated but with trimming capabilities
 type bucketInterface interface {
 	Init(maxBytes uint64, trimRatio int) error
 	Reset()
@@ -90,23 +137,51 @@ type bucketInterface interface {
 	getMapSize() uint64
 }
 
-// ImprovedCache is a fast thread-safe inmemory cache optimized for big number
-// of entries.
+// ImprovedCache is a high-performance, thread-safe in-memory cache optimized for
+// storing billions of transaction metadata entries with minimal GC pressure.
 //
-// It has much lower impact on GC comparing to a simple `map[string][]byte`.
+// Key features:
+// - Sharded architecture with multiple buckets to reduce lock contention
+// - Efficient memory management with pre-allocated chunks to minimize GC impact
+// - Support for different memory allocation strategies via bucket implementations
+// - Fast hash-based lookup and insertion operations
+// - Support for batch operations to improve throughput
+// - Built-in metrics for monitoring cache performance
 //
-// Use New or LoadFromFile* for creating new cache instance.
-// Concurrent goroutines may call any Cache methods on the same cache instance.
+// The cache significantly outperforms a simple map[string][]byte for large datasets,
+// as it manages memory in fixed-size chunks and uses specialized data structures.
 //
-// Call Reset when the cache is no longer needed. This reclaims the allocated
-// memory.
+// Thread-safety: All methods are safe for concurrent use by multiple goroutines.
+//
+// Memory management: Call Reset when the cache is no longer needed to reclaim memory.
+// Note: Call Reset when the cache is no longer needed to reclaim allocated memory.
 type ImprovedCache struct {
+	// buckets is an array of bucket interfaces that store the actual data
+	// Sharding data across multiple buckets reduces lock contention
 	buckets   [BucketsCount]bucketInterface
+	
+	// trimRatio controls how aggressively the cache evicts entries when full
+	// Higher values result in more aggressive trimming
 	trimRatio int
 }
 
-// NewImprovedCache returns new cache with the given maxBytes capacity in bytes.
-// trimRatioSetting is the percentage of the chunks to be removed when the chunks are full, default is 25%.
+// NewImprovedCache creates a new cache instance with the specified memory allocation strategy.
+//
+// Parameters:
+// - maxBytes: Maximum memory capacity of the cache in bytes. This is divided evenly
+//   among all buckets.
+// - bucketType: The memory allocation strategy to use (Unallocated, Preallocated, or Trimmed)
+//   which affects performance characteristics and memory usage patterns:
+//   * Unallocated: Allocates memory on demand, suitable for caches with unpredictable usage patterns
+//   * Preallocated: Allocates all memory upfront, optimizing for predictable high-throughput scenarios
+//   * Trimmed: Uses a trimming strategy to manage memory, balancing between the other approaches
+//
+// Returns:
+// - A new ImprovedCache instance configured with the specified parameters
+// - Error if initialization fails due to invalid parameters or memory allocation issues
+//
+// The cache distributes data across multiple buckets to reduce lock contention,
+// with each bucket initialized according to the specified allocation strategy.
 func NewImprovedCache(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 	LogCacheSize() // log whether we are using small or large cache
 
@@ -157,19 +232,25 @@ func NewImprovedCache(maxBytes int, bucketType BucketType) (*ImprovedCache, erro
 	return &c, nil
 }
 
-// Set stores (k, v) in the cache.
+// Set stores a key-value pair in the cache.
 //
-// Get must be used for reading the stored entry.
+// Parameters:
+// - k: Key as byte slice, typically a transaction hash
+// - v: Value as byte slice, typically transaction metadata
 //
-// The stored entry may be evicted at any time either due to cache
-// overflow or due to unlikely hash collision.
-// Pass higher maxBytes value to New if the added items disappear
-// frequently.
+// Returns:
+// - Error if the storage operation fails
 //
-// (k, v) entries with summary size exceeding maxValueSizeKB aren't stored in the cache.
-// SetBig can be used for storing entries exceeding maxValueSizeKB.
+// Implementation details:
+// - Uses xxhash for fast hashing and bucket selection
+// - Delegates actual storage to the appropriate bucket implementation
+// - Thread-safe for concurrent access
 //
-// k and v contents may be modified after returning from Set.
+// Important notes:
+// - The key and value contents may be modified after returning from Set
+// - Values exceeding maxValueSizeKB (2KB) won't be stored in the cache
+// - Entries may be evicted at any time due to cache overflow or hash collisions
+// - Use Get method to retrieve stored values
 func (c *ImprovedCache) Set(k, v []byte) error {
 	h := xxhash.Sum64(k)
 	idx := h % BucketsCount
@@ -177,13 +258,25 @@ func (c *ImprovedCache) Set(k, v []byte) error {
 	return c.buckets[idx].Set(k, v, h)
 }
 
-// SetMultiKeysSingleValue stores multiple (k, v) entries in the cache, for the same v.
-// New v is appended to the existing v, doesn't overwrite.
+// SetMultiKeysSingleValue efficiently stores multiple keys with the same value in the cache.
 //
-// Logic: decides which bucket, for lots of items. All keys are distributed to buckets. All buckets are populated via goroutines.
-// Keys: multiple byte slices containing keys.
-// Value: single block id is sent for all keys. 4 bytes for each block ID, there can be more than one block ID per key.
-// Value bytes are appended to the end of the previous value bytes.
+// This method is optimized for scenarios where multiple transaction keys (hashes) need
+// to be associated with the same metadata (such as a block ID). It is particularly useful
+// for batch processing of transactions that share common metadata.
+//
+// Parameters:
+// - keys: Array of byte slices containing the keys (transaction hashes)
+// - value: A single byte slice value to be associated with all keys
+// - keySize: Number of keys per batch for processing
+//
+// Returns:
+// - Error if the operation fails, particularly if keys length is not a multiple of keySize
+//
+// Implementation details:
+// - Distributes keys across appropriate buckets based on hash value
+// - Uses concurrent processing with goroutines for better performance
+// - Appends new value bytes to existing values rather than overwriting
+// - Optimized for scenarios like associating multiple transactions with a block ID
 func (c *ImprovedCache) SetMultiKeysSingleValue(keys [][]byte, value []byte, keySize int) error {
 	if len(keys)%keySize != 0 {
 		return errors.NewProcessingError("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
@@ -322,11 +415,25 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 
 // Get appends value by the key k to the given dst.
 //
-// Get allocates new byte slice for the returned value if dst is nil.
+// Get retrieves a value from the cache for the given key.
 //
-// Get returns only values stored in c via Set.
+// This method efficiently retrieves cached transaction metadata using a fast hash-based
+// lookup strategy. It handles the destination buffer allocation and copying of the value.
 //
-// k contents may be modified after returning from Get.
+// Parameters:
+// - dst: Pointer to a byte slice where the retrieved value will be stored
+//   The method may resize this slice as needed to accommodate the value
+// - k: Key to look up (typically a transaction hash)
+//
+// Returns:
+// - nil if the key was found in the cache and the value was successfully retrieved
+// - ErrNotFound if the key doesn't exist in the cache
+//
+// Implementation details:
+// - Uses xxhash for fast hashing and bucket selection
+// - Thread-safe for concurrent access
+// - The key contents may be modified after returning from this method
+// - Uses a bucket-specific implementation to handle the actual retrieval
 func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
 	h := xxhash.Sum64(k)
 	idx := h % BucketsCount
@@ -338,7 +445,21 @@ func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
 	return nil
 }
 
-// Has returns true if entry for the given key k exists in the cache.
+// Has checks if an entry exists in the cache for the given key.
+//
+// This method performs a lightweight existence check without retrieving the actual value,
+// making it more efficient than Get when only checking for presence.
+//
+// Parameters:
+// - k: Key to check (typically a transaction hash)
+//
+// Returns:
+// - true if the key exists in the cache
+// - false if the key does not exist in the cache
+//
+// Implementation details:
+// - Uses xxhash for fast hashing and bucket selection
+// - Thread-safe for concurrent access
 func (c *ImprovedCache) Has(k []byte) bool {
 	h := xxhash.Sum64(k)
 	idx := h % BucketsCount
@@ -346,25 +467,55 @@ func (c *ImprovedCache) Has(k []byte) bool {
 	return c.buckets[idx].Get(nil, k, h, false)
 }
 
-// Del deletes value for the given k from the cache.
+// Del removes an entry from the cache for the given key.
 //
-// k contents may be modified after returning from Del.
+// This method efficiently removes transaction metadata from the cache
+// based on the key's hash value.
+//
+// Parameters:
+// - k: Key to delete (typically a transaction hash)
+//
+// Implementation details:
+// - Uses xxhash for fast hashing and bucket selection
+// - Thread-safe for concurrent access
+// - The key contents may be modified after returning from this method
+// - No-op if the key doesn't exist in the cache (doesn't return an error)
 func (c *ImprovedCache) Del(k []byte) {
 	h := xxhash.Sum64(k)
 	idx := h % BucketsCount
 	c.buckets[idx].Del(h)
 }
 
-// Reset removes all the items from the cache.
+// Reset clears all entries from the cache and reclaims allocated memory.
+//
+// This method is important for proper memory management when the cache
+// is no longer needed or when a complete refresh is required. It iterates
+// through all buckets and resets each one.
+//
+// Implementation details:
+// - Thread-safe for concurrent access
+// - Calls Reset on each bucket implementation
+// - Does not destroy the cache structure itself, just clears its contents
+// - Useful when repurposing an existing cache or during graceful shutdown
 func (c *ImprovedCache) Reset() {
 	for i := range c.buckets[:] {
 		c.buckets[i].Reset()
 	}
 }
 
-// UpdateStats adds cache stats to s.
+// UpdateStats populates the provided Stats structure with current cache statistics.
 //
-// Call s.Reset before calling UpdateStats if s is re-used.
+// This method collects performance metrics from all cache buckets, providing
+// insight into the cache's current state and utilization.
+//
+// Parameters:
+// - s: Pointer to a Stats structure that will be populated with cache statistics
+//
+// Implementation details:
+// - Aggregates statistics from all bucket implementations
+// - Thread-safe for concurrent access
+// - Call s.Reset before calling UpdateStats if s is being reused to avoid
+//   mixing statistics from previous calls
 func (c *ImprovedCache) UpdateStats(s *Stats) {
 	for i := range c.buckets[:] {
 		c.buckets[i].UpdateStats(s)

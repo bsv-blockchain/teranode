@@ -1,3 +1,7 @@
+// Package memory provides an in-memory implementation of the blob.Store interface.
+// This implementation is designed for temporary storage, testing, and development purposes.
+// It stores all blobs in memory, making it fast but volatile (data is lost on process restart).
+// The implementation supports all blob.Store features including DAH-based expiration.
 package memory
 
 import (
@@ -12,19 +16,41 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 )
 
+// Memory implements the blob.Store interface using in-memory data structures.
+// It provides a fast, non-persistent storage solution primarily for testing and development.
+// The implementation uses maps to store blob data, headers, footers, and Delete-At-Height values.
 type Memory struct {
+	// mu protects concurrent access to all maps and shared data
 	mu                 sync.RWMutex
+	// headers stores blob header data by key
 	headers            map[string][]byte
+	// footers stores blob footer data by key
 	footers            map[string][]byte
+	// keys tracks known blob keys
 	keys               map[string][]byte
+	// blobs stores the actual blob content by key
 	blobs              map[string][]byte
+	// dahs stores Delete-At-Height values by key
 	dahs               map[string]uint32
+	// options contains default options for blob operations
 	options            *options.Options
+	// Counters tracks operation metrics (exported for testing)
 	Counters           map[string]int
+	// countersMu protects access to Counters map
 	countersMu         sync.Mutex
+	// currentBlockHeight tracks current blockchain height for DAH processing
 	currentBlockHeight uint32
 }
 
+// New creates a new in-memory blob store with the specified options.
+// It initializes all internal maps and starts a background goroutine to periodically
+// clean expired blobs based on their Delete-At-Height (DAH) values.
+//
+// Parameters:
+//   - opts: Optional store configuration options that affect default behavior
+//
+// Returns:
+//   - *Memory: A configured in-memory blob store instance
 func New(opts ...options.StoreOption) *Memory {
 	m := &Memory{
 		keys:     make(map[string][]byte),
@@ -41,10 +67,23 @@ func New(opts ...options.StoreOption) *Memory {
 	return m
 }
 
+// SetBlockHeight updates the current block height used for DAH-based cleanup.
+// When the current block height exceeds a blob's DAH value, the blob becomes
+// eligible for automatic deletion during the next cleanup cycle.
+//
+// Parameters:
+//   - blockHeight: The current blockchain height
 func (m *Memory) SetBlockHeight(blockHeight uint32) {
 	m.currentBlockHeight = blockHeight
 }
 
+// ttlCleaner runs a periodic cleanup process to remove expired blobs.
+// It runs as a background goroutine and checks for expired blobs based on their
+// Delete-At-Height (DAH) values compared to the current block height.
+//
+// Parameters:
+//   - ctx: Context for controlling the cleaner lifecycle
+//   - interval: Duration between cleanup operations
 func (m *Memory) ttlCleaner(ctx context.Context, interval time.Duration) {
 	for {
 		select {
@@ -56,6 +95,13 @@ func (m *Memory) ttlCleaner(ctx context.Context, interval time.Duration) {
 	}
 }
 
+// cleanExpiredFiles removes blobs that have reached their Delete-At-Height (DAH).
+// When a blob's DAH is less than or equal to the current block height, the blob
+// and all its associated data (headers, footers, etc.) are removed from memory.
+//
+// Parameters:
+//   - m: The Memory store instance
+//   - blockHeight: Current blockchain height to compare against DAH values
 func cleanExpiredFiles(m *Memory, blockHeight uint32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -74,6 +120,18 @@ func cleanExpiredFiles(m *Memory, blockHeight uint32) {
 	}
 }
 
+// Health checks the operational status of the memory store.
+// For the memory implementation, this always succeeds unless the context is canceled.
+// The function increments an internal counter for monitoring/debugging purposes.
+//
+// Parameters:
+//   - ctx: Context for the operation (can be used to cancel the check)
+//   - checkLiveness: Whether to perform a more thorough health check (ignored for memory store)
+//
+// Returns:
+//   - int: HTTP status code (always http.StatusOK for memory store)
+//   - string: Status message
+//   - error: Any error that occurred (always nil for memory store)
 func (m *Memory) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	m.countersMu.Lock()
 	m.Counters["health"]++
@@ -82,6 +140,16 @@ func (m *Memory) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return http.StatusOK, "Memory Store", nil
 }
 
+// Close releases resources associated with the memory store.
+// For the memory implementation, this is a no-op operation since there are no
+// external resources to release, but it does increment an internal counter.
+// The method acquires a lock to ensure thread safety with concurrent operations.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused in memory implementation)
+//
+// Returns:
+//   - error: Any error that occurred (always nil for memory store)
 func (m *Memory) Close(_ context.Context) error {
 	// The lock is to ensure that no other operations are happening while we close the store
 	m.mu.Lock()

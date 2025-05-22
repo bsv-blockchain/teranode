@@ -201,10 +201,31 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	return v.ValidateWithOptions(ctx, tx, blockHeight, ProcessOptions(opts...))
 }
 
-// ValidateWithOptions performs comprehensive validation of a transaction.
-// It checks transaction finality, validates inputs and outputs, updates the UTXO set,
-// and optionally adds the transaction to block assembly.
-// Returns error if validation fails.
+// ValidateWithOptions performs comprehensive validation of a transaction with explicit options.
+// This method is the core transaction validation entry point that implements the full Bitcoin
+// validation ruleset. It delegates to validateInternal for the actual validation logic and
+// handles rejected transaction reporting via Kafka when validation fails.
+//
+// The validation process includes:
+// - Script signature verification
+// - Double-spend detection
+// - Transaction format validation
+// - UTXO existence verification
+// - Fee calculation and policy enforcement
+// - Block assembly integration (if enabled)
+//
+// When validation fails with errors other than storage or service errors, the transaction
+// is reported to the rejected transaction Kafka topic for monitoring and analysis.
+//
+// Parameters:
+//   - ctx: Context for the validation operation, used for tracing and cancellation
+//   - tx: Transaction to validate, must be properly initialized
+//   - blockHeight: Current blockchain height to validate against
+//   - validationOptions: Options controlling validation behavior and policy enforcement
+//
+// Returns:
+//   - *meta.Data: Transaction metadata if validation succeeds, includes fee calculations
+//   - error: Detailed validation error if validation fails, nil on success
 func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
 	if txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
@@ -235,8 +256,34 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 }
 
 // validateInternal performs the core validation logic for a transaction.
-// It handles UTXO spending, transaction metadata storage, and block assembly integration.
-// Returns error if any validation step fails.
+// This method contains the detailed step-by-step transaction validation workflow and manages
+// the entire lifecycle of a transaction from initial validation through UTXO updates and
+// optional block assembly integration. It is the heart of the validation engine and
+// implements the full Bitcoin consensus and policy rules.
+//
+// The validation process follows these key steps:
+// 1. Initialize tracing and performance monitoring
+// 2. Extend transaction with previous output data for validation
+// 3. Validate transaction format, structure, and basic policy rules
+// 4. Spend referenced UTXOs, checking for double-spends
+// 5. Generate and store transaction metadata
+// 6. Validate transaction scripts (signature verification)
+// 7. Perform two-phase commit to finalize UTXO state changes
+// 8. Optionally send to block assembly for mining consideration
+//
+// The method includes extensive error handling and rollback capability in case
+// any validation step fails, ensuring UTXO database consistency even during partial
+// validation failures.
+//
+// Parameters:
+//   - ctx: Context for the validation operation, used for tracing and cancellation
+//   - tx: Transaction to validate, must be properly initialized
+//   - blockHeight: Current blockchain height to validate against
+//   - validationOptions: Options controlling validation behavior and policy enforcement
+//
+// Returns:
+//   - *meta.Data: Transaction metadata if validation succeeds, includes fee calculations
+//   - error: Detailed validation error with specific reason if validation fails
 //
 //gocognit:ignore
 func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {

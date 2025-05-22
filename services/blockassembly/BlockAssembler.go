@@ -76,6 +76,13 @@ var StateStrings = map[State]string{
 }
 
 // BlockAssembler manages the assembly of new blocks and coordinates mining operations.
+// It is the central component responsible for transaction selection, block candidate
+// generation, and interaction with the mining system.
+//
+// BlockAssembler maintains the current blockchain state, manages transaction queues,
+// and coordinates with the subtree processor to organize transactions efficiently.
+// It handles blockchain reorganizations and ensures that block templates remain valid
+// as the chain state changes.
 type BlockAssembler struct {
 	// logger provides logging functionality for the assembler
 	logger ulogger.Logger

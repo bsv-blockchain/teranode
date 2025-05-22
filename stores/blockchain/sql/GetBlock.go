@@ -1,3 +1,6 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
 package sql
 
 import (
@@ -12,11 +15,31 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// getBlockCache is an internal struct used for caching block data.
+// It stores both the block object and its height to avoid additional database queries.
 type getBlockCache struct {
-	block  *model.Block
-	height uint32
+	block  *model.Block // Complete block data including header and transaction information
+	height uint32      // Block height in the blockchain
 }
 
+// GetBlock retrieves a complete block from the database by its hash.
+// It implements the blockchain.Store.GetBlock interface method.
+//
+// The method first checks an in-memory cache for the block to avoid database queries.
+// If not found in cache, it executes a SQL query to retrieve the block data,
+// reconstructs the full block object with header information, transaction count,
+// subtrees, and other metadata, then adds it to the cache before returning.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allows for cancellation and timeouts
+//   - blockHash: The unique hash identifier of the block to retrieve
+//
+// Returns:
+//   - *model.Block: The complete block data if found
+//   - uint32: The height of the block in the blockchain
+//   - error: Any error encountered during retrieval, specifically:
+//     * BlockNotFoundError if the block does not exist
+//     * StorageError for other database or processing errors
 func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlock")
 	defer deferFn()

@@ -1,3 +1,19 @@
+// Package txmetacache provides a memory-efficient caching layer for transaction metadata
+// in the Teranode blockchain system. It serves as a performance optimization layer 
+// that wraps around an underlying UTXO store to reduce database load and improve
+// transaction processing throughput.
+//
+// Key features:
+// - Implements a configurable memory caching mechanism for transaction metadata
+// - Uses height-based expiration to maintain cache freshness
+// - Integrates with Prometheus for operational metrics and monitoring
+// - Provides both single and batch operations for transaction metadata retrieval and updates
+// - Supports parallel processing for improved performance on multi-core systems
+//
+// The package works by intercepting calls to the underlying UTXO store, caching results
+// in memory, and proxying other calls through to the underlying store. This architecture
+// significantly reduces database load for frequently accessed transaction data during
+// block validation and mempool management.
 package txmetacache
 
 import (
@@ -19,46 +35,85 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// metrics holds atomic counters for collecting operational statistics about the cache.
+// These metrics are exposed via Prometheus for monitoring cache effectiveness.
 type metrics struct {
-	insertions atomic.Uint64
-	hits       atomic.Uint64
-	misses     atomic.Uint64
-	evictions  atomic.Uint64
-	hitOldTx   atomic.Uint64
+	insertions atomic.Uint64 // Tracks number of items inserted into the cache
+	hits       atomic.Uint64 // Tracks number of successful cache retrievals
+	misses     atomic.Uint64 // Tracks number of failed cache retrievals
+	evictions  atomic.Uint64 // Tracks number of items evicted from the cache
+	hitOldTx   atomic.Uint64 // Tracks number of cache hits for outdated transactions
 }
 
-// CachedData struct for the cached transaction metadata
-// do not change order, has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
+// CachedData struct for the cached transaction metadata.
+// This struct stores the essential metadata about a transaction that needs to be
+// quickly accessible during validation and other operations.
+// 
+// Important implementation note:
+// do not change field order, has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
 type CachedData struct {
-	ParentTxHashes []*chainhash.Hash `json:"parentTxHashes"`
-	BlockHashes    []*chainhash.Hash `json:"blockHashes"` // TODO change this to use the db ids instead of the hashes
-	Fee            uint64            `json:"fee"`
-	SizeInBytes    uint64            `json:"sizeInBytes"`
+	ParentTxHashes []*chainhash.Hash `json:"parentTxHashes"` // List of parent transaction hashes for dependency tracking
+	BlockHashes    []*chainhash.Hash `json:"blockHashes"` // List of block hashes where this transaction appears (TODO change this to use the db ids instead of the hashes)
+	Fee            uint64            `json:"fee"` // Transaction fee in satoshis
+	SizeInBytes    uint64            `json:"sizeInBytes"` // Size of the transaction in bytes
 }
 
+// TxMetaCache is the main struct that implements a caching layer around a UTXO store.
+// It intercepts and caches transaction metadata operations to improve performance.
+// The cache acts as a decorator around the underlying UTXO store, implementing the
+// same interface but adding caching capabilities.
 type TxMetaCache struct {
-	utxoStore                     utxo.Store
-	cache                         *ImprovedCache
-	metrics                       metrics
-	logger                        ulogger.Logger
-	noOfBlocksToKeepInTxMetaCache uint32
+	utxoStore                     utxo.Store     // The underlying UTXO store that this cache wraps
+	cache                         *ImprovedCache // The in-memory cache implementation
+	metrics                       metrics        // Performance metrics for monitoring
+	logger                        ulogger.Logger // Logger for operational logging
+	noOfBlocksToKeepInTxMetaCache uint32         // Configuration for cache expiration based on block height
 }
 
+// CacheStats provides statistical information about the current state of the cache.
+// These statistics are useful for monitoring cache utilization and performance.
 type CacheStats struct {
-	EntriesCount       uint64
-	TrimCount          uint64
-	TotalMapSize       uint64
-	TotalElementsAdded uint64
+	EntriesCount       uint64 // Number of entries currently in the cache
+	TrimCount          uint64 // Number of trim operations performed
+	TotalMapSize       uint64 // Total size of all map buckets in the cache
+	TotalElementsAdded uint64 // Cumulative count of all elements added to the cache
 }
 
+// BucketType defines the allocation strategy for the cache's internal buckets.
+// This affects memory usage patterns and performance characteristics of the cache.
 type BucketType int
 
 const (
+	// Unallocated indicates that memory for buckets will be allocated on demand.
 	Unallocated BucketType = iota
+	
+	// Preallocated indicates that memory for buckets will be allocated upfront.
+	// This can improve performance but uses more initial memory.
 	Preallocated
+	
+	// Trimmed indicates that the cache should maintain a trimmed state,
+	// which can help control memory usage.
 	Trimmed
 )
 
+// NewTxMetaCache creates a new transaction metadata cache that wraps an existing UTXO store.
+// The cache intercepts and handles transaction metadata operations to improve performance
+// while maintaining the same interface as the underlying store.
+//
+// Parameters:
+// - ctx: Context for lifecycle management and cancellation
+// - tSettings: Teranode settings containing cache configuration parameters
+// - logger: Logger for operational logging and diagnostics
+// - utxoStore: The underlying UTXO store that this cache will wrap
+// - bucketType: Strategy for memory allocation in the cache (Unallocated, Preallocated, or Trimmed)
+// - maxMBOverride: Optional override for the cache size in MB (defaults to config value if not provided)
+//
+// Returns:
+// - A utxo.Store interface that can be used in place of the original store
+// - Error if initialization fails
+//
+// The function starts a background goroutine that updates Prometheus metrics every 5 seconds
+// to provide operational visibility into cache performance.
 func NewTxMetaCache(
 	ctx context.Context,
 	tSettings *settings.Settings,
@@ -121,6 +176,16 @@ func NewTxMetaCache(
 	return m, nil
 }
 
+// SetCache adds or updates transaction metadata in the cache for a given transaction hash.
+// Before storing, it removes the actual transaction from the metadata to save memory,
+// and appends the current block height to support expiration policies.
+//
+// Parameters:
+// - hash: Transaction hash to use as the cache key
+// - txMeta: Transaction metadata to store in the cache
+//
+// Returns:
+// - Error if the cache operation fails
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {
 	txMeta.Tx = nil
 
@@ -134,6 +199,16 @@ func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {
 	return nil
 }
 
+// SetCacheFromBytes adds or updates transaction metadata in the cache using raw byte slices.
+// This is a lower-level alternative to SetCache that avoids unnecessary conversions
+// when the cache key and metadata are already available as byte slices.
+//
+// Parameters:
+// - key: Raw byte slice to use as the cache key (typically a transaction hash)
+// - txMetaBytes: Serialized transaction metadata to store in the cache
+//
+// Returns:
+// - Error if the cache operation fails
 func (t *TxMetaCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
 	err := t.cache.Set(key, t.appendHeightToValue(txMetaBytes))
 	if err != nil {
@@ -145,6 +220,16 @@ func (t *TxMetaCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
 	return nil
 }
 
+// SetCacheMulti performs a batch operation to add or update multiple transaction metadata
+// entries in the cache simultaneously. This is more efficient than calling SetCacheFromBytes
+// multiple times when many transactions need to be cached at once.
+//
+// Parameters:
+// - keys: Slice of raw byte slices to use as cache keys (typically transaction hashes)
+// - values: Slice of serialized transaction metadata to store in the cache, corresponding to keys
+//
+// Returns:
+// - Error if the batch cache operation fails
 func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 	valuesWithHeight := make([][]byte, len(values))
 	for i, value := range values {
@@ -161,6 +246,21 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 	return nil
 }
 
+// GetMetaCached retrieves transaction metadata from the cache without falling back to the
+// underlying store. This provides a way to check if data is available in the cache only.
+//
+// Parameters:
+// - ctx: Context for the operation (not used, but maintained for interface consistency)
+// - hash: Transaction hash to use as the cache key
+//
+// Returns:
+// - Pointer to the cached transaction metadata if found and not expired, nil otherwise
+//
+// The function performs several checks:
+// 1. Verifies the data exists in the cache
+// 2. Validates that the data is not empty
+// 3. Checks if the data has expired based on block height
+// All these conditions have corresponding metrics incremented for monitoring.
 func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *meta.Data {
 	cachedBytes := make([]byte, 0)
 
@@ -192,6 +292,19 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *me
 	return &txmetaData
 }
 
+// GetMeta retrieves transaction metadata for a given transaction hash, first checking the cache
+// and falling back to the underlying store if needed.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - hash: Transaction hash to retrieve metadata for
+//
+// Returns:
+// - The transaction metadata if found
+// - Error if retrieval fails
+//
+// This is one of the primary interface methods that proxies calls to the underlying store
+// with a caching layer in between for improved performance.
 func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
 	err := t.cache.Get(&cachedBytes, hash[:])
@@ -238,6 +351,21 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 	return txMeta, nil
 }
 
+// Get retrieves transaction metadata from either the cache or the underlying store.
+// It supports selective field retrieval to optimize performance when only specific
+// transaction metadata fields are needed.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - hash: Hash of the transaction to retrieve metadata for
+// - fields: Optional list of specific metadata fields to retrieve
+//
+// Returns:
+// - Transaction metadata if found
+// - Error if retrieval fails
+//
+// This method first checks the cache for the requested data, and if not found or if
+// specific fields are requested, it falls back to the underlying store.
 func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
 
@@ -284,6 +412,19 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...f
 	return txMeta, nil
 }
 
+// BatchDecorate retrieves metadata for multiple transactions in a single batch operation.
+// This is more efficient than calling Get for each transaction individually.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - hashes: List of unresolved transaction metadata objects to populate
+// - fields: Optional list of specific metadata fields to retrieve
+//
+// Returns:
+// - Error if the batch operation fails
+//
+// The method optimizes retrieval by first checking the cache for each transaction,
+// then batching any cache misses into a single call to the underlying store.
 func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
 	if err := t.utxoStore.BatchDecorate(ctx, hashes, fields...); err != nil {
 		return err
@@ -312,6 +453,20 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 	return nil
 }
 
+// Create adds a new transaction to the system, updating both the underlying store and the cache.
+// This is typically called when a new transaction is seen, either from the mempool or in a block.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - tx: The transaction to create metadata for
+// - blockHeight: The current blockchain height
+// - opts: Optional creation options such as block information
+//
+// Returns:
+// - The created transaction metadata
+// - Error if creation fails
+//
+// This method delegates the creation to the underlying store and then adds the result to the cache.
 func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	txMeta, err := t.utxoStore.Create(ctx, tx, blockHeight, opts...)
 	if err != nil {
@@ -340,6 +495,16 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	return txMeta, nil
 }
 
+// setMinedInCache updates the cache with information about a transaction that has been mined in a block.
+// This internal helper method is used by both SetMined and SetMinedMulti to maintain cache consistency.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - hash: Hash of the transaction to mark as mined
+// - minedBlockInfo: Information about the block where the transaction was mined
+//
+// Returns:
+// - Error if updating the transaction metadata fails
 func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (err error) {
 	var txMeta *meta.Data
 
@@ -369,6 +534,16 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 	return nil
 }
 
+// SetMined marks a transaction as mined in a specific block, updating both the
+// underlying store and the cache to maintain consistency.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - hash: Hash of the transaction to mark as mined
+// - minedBlockInfo: Information about the block where the transaction was mined
+//
+// Returns:
+// - Error if updating either the underlying store or cache fails
 func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
 	err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, minedBlockInfo)
 	if err != nil {
@@ -383,6 +558,16 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedB
 	return nil
 }
 
+// SetMinedMulti marks multiple transactions as mined in a specific block.
+// This batch operation is more efficient than calling SetMined multiple times.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - hashes: List of transaction hashes to mark as mined
+// - minedBlockInfo: Information about the block where the transactions were mined
+//
+// Returns:
+// - Error if updating the cache for any transaction fails
 func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (err error) {
 	// do not update the aerospike tx meta store, it kills the aerospike server
 	// err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockID)
@@ -399,6 +584,17 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	return nil
 }
 
+// SetMinedMultiParallel marks multiple transactions as mined in a specific block using parallel processing.
+// This method provides better performance for large transaction batches by distributing the work
+// across multiple goroutines.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - hashes: List of transaction hashes to mark as mined
+// - blockID: ID of the block where the transactions were mined
+//
+// Returns:
+// - Error if updating the cache for any transaction fails
 func (t *TxMetaCache) SetMinedMultiParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	err = t.setMinedInCacheParallel(ctx, hashes, blockID)
 	if err != nil {
@@ -408,6 +604,18 @@ func (t *TxMetaCache) SetMinedMultiParallel(ctx context.Context, hashes []*chain
 	return nil
 }
 
+// setMinedInCacheParallel is an internal helper method that updates the mined status
+// of multiple transactions in parallel, using goroutines to improve performance.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - hashes: List of transaction hashes to mark as mined
+// - blockID: ID of the block where the transactions were mined
+//
+// Returns:
+// - Error if updating the cache for any transaction fails
+//
+// The method uses an errgroup to manage concurrent updates while properly handling errors.
 func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	var txMeta *meta.Data
 
@@ -445,6 +653,16 @@ func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*cha
 	return nil
 }
 
+// Delete removes a transaction's metadata from the underlying store.
+// This method only forwards the deletion to the underlying store without
+// affecting the cache, as the entry will naturally expire from the cache.
+//
+// Parameters:
+// - ctx: Context for the operation (unused but required by interface)
+// - hash: Hash of the transaction to delete
+//
+// Returns:
+// - Error if deletion from the underlying store fails
 func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	t.cache.Del(hash[:])
 	t.metrics.evictions.Add(1)
@@ -452,7 +670,17 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-// appendHeightToValue appends the current block height to the end of the txMetaBytes
+// appendHeightToValue appends the current block height to the end of the txMetaBytes.
+// This allows for height-based expiration of cache entries, enabling the cache to automatically
+// discard entries that are no longer relevant as the blockchain grows.
+//
+// Parameters:
+// - txMetaBytes: The serialized transaction metadata
+//
+// Returns:
+// - A new byte slice containing the original metadata followed by the current block height
+//
+// The height is encoded as a little-endian uint32 in the last 4 bytes of the returned slice.
 func (t *TxMetaCache) appendHeightToValue(txMetaBytes []byte) []byte {
 	height := t.utxoStore.GetBlockHeight()
 	valueWithHeight := make([]byte, len(txMetaBytes)+4)
@@ -462,11 +690,33 @@ func (t *TxMetaCache) appendHeightToValue(txMetaBytes []byte) []byte {
 	return valueWithHeight
 }
 
-// readHeightFromValue reads the encoded height from the end of the value
+// readHeightFromValue reads the encoded block height from the end of a cached value.
+// This is used to determine if a cached entry is still valid based on the current blockchain height.
+//
+// Parameters:
+// - value: The cached value with height information appended
+//
+// Returns:
+// - The block height (uint32) that was extracted from the last 4 bytes of the value
+//
+// This function is the counterpart to appendHeightToValue and extracts the little-endian uint32
+// that was previously appended.
 func readHeightFromValue(value []byte) uint32 {
 	return binary.BigEndian.Uint32(value[len(value)-4:])
 }
 
+// returnValue determines if a cached value should be returned based on its age in blocks.
+// This implements the expiration logic for cached transaction metadata to ensure fresh data.
+//
+// Parameters:
+// - valueBytes: The cached value containing metadata and the block height
+//
+// Returns:
+// - true if the value is fresh enough to use, false if it's too old and should be ignored
+//
+// The determination is based on the configured noOfBlocksToKeepInTxMetaCache setting,
+// which indicates how many blocks worth of transaction metadata should be kept in the cache.
+// If the metadata is older than this threshold, it is considered stale and not returned.
 func (t *TxMetaCache) returnValue(valueBytes []byte) bool {
 	// if the block height is less than the noOfBlocksToKeepInTxMetaCache, we should return the value
 	if t.utxoStore.GetBlockHeight() <= t.noOfBlocksToKeepInTxMetaCache {
@@ -488,6 +738,14 @@ func (t *TxMetaCache) returnValue(valueBytes []byte) bool {
 	return true
 }
 
+// GetCacheStats retrieves current operational statistics from the underlying cache.
+// These statistics are useful for monitoring cache performance and behavior.
+//
+// Returns:
+// - A CacheStats structure containing current statistical information about the cache
+//
+// This method is primarily used by the metrics reporting goroutine to collect and expose
+// cache performance data via Prometheus, but can also be used for debugging or diagnostics.
 func (t *TxMetaCache) GetCacheStats() *CacheStats {
 	s := &Stats{}
 	t.cache.UpdateStats(s)
@@ -500,6 +758,17 @@ func (t *TxMetaCache) GetCacheStats() *CacheStats {
 	}
 }
 
+// Health performs a health check on both the cache and the underlying store.
+// This is used for monitoring and operational status reporting.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - checkLiveness: Whether to perform additional liveness checks
+//
+// Returns:
+// - HTTP status code indicating health status
+// - Descriptive message about the health state
+// - Error if the health check encounters a problem
 func (t *TxMetaCache) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return t.utxoStore.Health(ctx, checkLiveness)
 }
@@ -568,18 +837,44 @@ func (t *TxMetaCache) SetUnspendable(ctx context.Context, txHashes []chainhash.H
 	return nil
 }
 
+// SetBlockHeight updates the current block height in the underlying store.
+// This is critical for cache expiration as it determines which cached entries are considered stale.
+//
+// Parameters:
+// - height: The new blockchain height to set
+//
+// Returns:
+// - Error if updating the block height fails
 func (t *TxMetaCache) SetBlockHeight(height uint32) error {
 	return t.utxoStore.SetBlockHeight(height)
 }
 
+// GetBlockHeight retrieves the current blockchain height from the underlying store.
+// This height is used to determine which cache entries should be considered expired.
+//
+// Returns:
+// - The current blockchain height
 func (t *TxMetaCache) GetBlockHeight() uint32 {
 	return t.utxoStore.GetBlockHeight()
 }
 
+// SetMedianBlockTime updates the median block time in the underlying store.
+// This is used for transaction validation and other time-based operations.
+//
+// Parameters:
+// - height: Block height used to calculate the median time
+//
+// Returns:
+// - Error if updating the median block time fails
 func (t *TxMetaCache) SetMedianBlockTime(height uint32) error {
 	return t.utxoStore.SetMedianBlockTime(height)
 }
 
+// GetMedianBlockTime retrieves the current median block time from the underlying store.
+// This time value is used for validating time-based transaction conditions.
+//
+// Returns:
+// - The current median block time as a Unix timestamp
 func (t *TxMetaCache) GetMedianBlockTime() uint32 {
 	return t.utxoStore.GetMedianBlockTime()
 }

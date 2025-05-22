@@ -1,4 +1,5 @@
-// Package blockpersister provides functionality for persisting blockchain blocks and their associated data.
+// Package blockpersister provides comprehensive functionality for persisting blockchain blocks and their associated data.
+// It implements metrics collection for monitoring performance, throughput, and operational health of the block persistence process.
 package blockpersister
 
 import (
@@ -9,52 +10,74 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// Prometheus metrics variables for monitoring block persister operations
+// Prometheus metrics variables for monitoring block persister operations.
+// These metrics track performance, throughput, and error conditions across all aspects of the
+// block persistence process, enabling operational monitoring, alerting, and performance optimization.
 var (
-	// prometheusBlockPersisterValidateSubtree tracks subtree validation duration
+	// prometheusBlockPersisterValidateSubtree tracks the duration of individual subtree validation operations
+	// in milliseconds. This helps identify performance bottlenecks in the validation pipeline.
 	prometheusBlockPersisterValidateSubtree prometheus.Histogram
 
-	// prometheusBlockPersisterValidateSubtreeRetry counts subtree validation retries
+	// prometheusBlockPersisterValidateSubtreeRetry counts the number of times subtree validation
+	// needed to be retried, indicating transient failures or race conditions that required resolution.
 	prometheusBlockPersisterValidateSubtreeRetry prometheus.Counter
 
-	// prometheusBlockPersisterValidateSubtreeHandler tracks subtree handler duration
+	// prometheusBlockPersisterValidateSubtreeHandler tracks the total duration of the subtree
+	// handler including validation and peripheral operations, measured in milliseconds.
 	prometheusBlockPersisterValidateSubtreeHandler prometheus.Histogram
 
-	// prometheusBlockPersisterPersistBlock tracks block persistence duration
+	// prometheusBlockPersisterPersistBlock measures the total time required to persist a complete
+	// block including all its subtrees and UTXO changes, in milliseconds. This is a key performance
+	// indicator for overall system throughput.
 	prometheusBlockPersisterPersistBlock prometheus.Histogram
 
-	// prometheusBlockPersisterBlessMissingTransaction tracks missing transaction blessing duration
+	// prometheusBlockPersisterBlessMissingTransaction tracks the duration of operations that
+	// resolve or "bless" transactions that were initially missing from the primary data store.
 	prometheusBlockPersisterBlessMissingTransaction prometheus.Histogram
 
-	// prometheusBlockPersisterSetTXMetaCacheKafka tracks Kafka tx meta cache set duration
+	// prometheusBlockPersisterSetTXMetaCacheKafka measures the time taken to set transaction
+	// metadata in the Kafka-based caching layer, in microseconds.
 	prometheusBlockPersisterSetTXMetaCacheKafka prometheus.Histogram
 
-	// prometheusBlockPersisterDelTXMetaCacheKafka tracks Kafka tx meta cache delete duration
+	// prometheusBlockPersisterDelTXMetaCacheKafka tracks the duration of operations that
+	// delete transaction metadata from the Kafka-based cache, in microseconds.
 	prometheusBlockPersisterDelTXMetaCacheKafka prometheus.Histogram
 
-	// prometheusBlockPersisterSetTXMetaCacheKafkaErrors counts Kafka tx meta cache set errors
+	// prometheusBlockPersisterSetTXMetaCacheKafkaErrors counts errors encountered when
+	// attempting to set transaction metadata in the Kafka cache, helping identify integration issues.
 	prometheusBlockPersisterSetTXMetaCacheKafkaErrors prometheus.Counter
 
-	// prometheusBlockPersisterBlocks tracks block processing duration
+	// prometheusBlockPersisterBlocks measures the complete processing time for blocks
+	// in the block persister service, from receipt to full persistence, in milliseconds.
 	prometheusBlockPersisterBlocks prometheus.Histogram
 
-	// prometheusBlockPersisterSubtrees tracks subtree processing duration
+	// prometheusBlockPersisterSubtrees tracks the duration of processing complete subtrees
+	// in the block persister service, in milliseconds.
 	prometheusBlockPersisterSubtrees prometheus.Histogram
 
-	// prometheusBlockPersisterSubtreeBatch tracks subtree batch processing duration
+	// prometheusBlockPersisterSubtreeBatch measures the time taken to process a batch of subtrees
+	// in the block persister service, in milliseconds, helping optimize batch size configurations.
 	prometheusBlockPersisterSubtreeBatch prometheus.Histogram
 )
 
 var (
+	// prometheusMetricsInitOnce ensures that metrics initialization occurs exactly once,
+	// regardless of how many times initPrometheusMetrics() is called, preventing duplicate
+	// metric registration which would cause Prometheus to panic.
 	prometheusMetricsInitOnce sync.Once
 )
 
-// initPrometheusMetrics initializes all Prometheus metrics once
+// initPrometheusMetrics initializes all Prometheus metrics once.
+// This function is called during server initialization to ensure metrics are registered
+// with Prometheus before they are used. It uses sync.Once to guarantee thread-safe
+// initialization exactly one time, preventing registration conflicts.
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
 
-// _initPrometheusMetrics is the internal implementation of metrics initialization
+// _initPrometheusMetrics is the internal implementation of metrics initialization.
+// It creates and registers all the Prometheus metrics with appropriate namespaces,
+// help text, and bucket configurations optimized for the expected value distributions.
 func _initPrometheusMetrics() {
 	prometheusBlockPersisterValidateSubtree = promauto.NewHistogram(
 		prometheus.HistogramOpts{

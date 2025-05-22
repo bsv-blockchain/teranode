@@ -1,4 +1,18 @@
-// Package blockchain provides functionality for managing the Bitcoin blockchain.
+// Package blockchain provides functionality for managing the Bitcoin blockchain within the Teranode system.
+//
+// The blockchain package is responsible for:
+// - Maintaining the blockchain data structure and state management
+// - Processing new blocks and managing the chain selection logic
+// - Providing access to blockchain data via gRPC and HTTP APIs
+// - Managing the blockchain's finite state machine (FSM) for different operational modes
+// - Supporting subscriptions and notifications for blockchain events
+// - Publishing block data to Kafka for downstream services
+// - Handling block validation and revalidation requests
+//
+// This package serves as the central source of truth for blockchain state in the Teranode
+// system and integrates with other services like blockvalidation and blockpersister.
+// It implements a resilient state management system using a finite state machine pattern
+// that can recover from interruptions and maintain consistency across service restarts.
 package blockchain
 
 import (
@@ -34,6 +48,14 @@ import (
 )
 
 // subscriber represents a subscription to blockchain notifications.
+//
+// subscriber encapsulates the connection to a client interested in blockchain events,
+// providing a mechanism for sending notifications about new blocks, state changes,
+// and other blockchain events. It maintains the gRPC stream connection until the
+// client disconnects or the subscription is explicitly terminated.
+//
+// This struct enables the publish-subscribe pattern where multiple services can
+// receive real-time updates about blockchain state changes without polling.
 type subscriber struct {
 	subscription blockchain_api.BlockchainAPI_SubscribeServer // The gRPC subscription server
 	source       string                                       // Source identifier of the subscription
@@ -41,6 +63,20 @@ type subscriber struct {
 }
 
 // Blockchain represents the main blockchain service structure.
+//
+// The Blockchain struct is the central component of the blockchain service, responsible
+// for maintaining the Bitcoin blockchain state and providing access to blockchain data.
+// It manages the lifecycle of blocks from addition to storage, handles subscriptions for
+// notifications about blockchain events, and coordinates with other services through
+// both synchronous (gRPC/HTTP) and asynchronous (Kafka) communication channels.
+//
+// The service uses a finite state machine (FSM) to manage its operational state,
+// allowing it to handle different modes of operation such as normal processing,
+// synchronization, and recovery scenarios. This design provides resilience and
+// ensures consistent behavior across service restarts.
+//
+// Concurrency is managed through multiple channels and mutex-protected data structures,
+// enabling safe parallel processing of blockchain operations while maintaining data integrity.
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
 	addBlockChan                  chan *blockchain_api.AddBlockRequest // Channel for adding blocks
@@ -64,6 +100,27 @@ type Blockchain struct {
 }
 
 // New creates a new Blockchain instance with the provided dependencies.
+//
+// This constructor initializes the core blockchain service with all required components and
+// sets up internal channels for communication between different parts of the service.
+// It configures metrics tracking, initializes the difficulty calculator, and prepares the
+// subscription management system.
+//
+// The optional localTestStartFromState parameter allows initializing the blockchain service
+// in a specific FSM state for testing purposes, bypassing the normal state initialization
+// process that would read from persistent storage.
+//
+// Parameters:
+// - ctx: Application context for lifecycle management and cancellation
+// - logger: Logger instance for service-level logging
+// - tSettings: Configuration settings for the blockchain service
+// - store: Storage interface for persisting blockchain data
+// - blocksFinalKafkaAsyncProducer: Kafka producer for publishing finalized blocks
+// - localTestStartFromState: Optional initial FSM state for testing purposes
+//
+// Returns:
+// - A configured Blockchain instance and nil error on success
+// - nil and an error if initialization fails
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blockchain_store.Store, blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI, localTestStartFromState ...string) (*Blockchain, error) {
 	initPrometheusMetrics()
 
@@ -103,16 +160,56 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 }
 
 // GetStoreFSMState retrieves the current FSM state from the store.
+//
+// This method provides access to the persisted FSM state directly from the underlying storage,
+// which may differ from the in-memory state of the service's FSM. This is useful for
+// diagnostics and recovery scenarios where the persisted state needs to be inspected
+// without modifying the running service state.
+//
+// Parameters:
+// - ctx: Context for the operation with timeout and cancellation support
+//
+// Returns:
+// - The persisted FSM state as a string
+// - An error if the retrieval operation fails
 func (b *Blockchain) GetStoreFSMState(ctx context.Context) (string, error) {
 	return b.store.GetFSMState(ctx)
 }
 
 // ResetFSMS resets the finite state machine to nil (used for testing).
+//
+// This method is primarily intended for testing purposes to force a clean state.
+// It allows tests to control when the FSM is initialized and what state it starts in,
+// enabling more deterministic test scenarios around state transitions and recovery.
+//
+// Note: This method should only be called in test environments, as resetting the FSM
+// in a production environment would lead to inconsistent state and potential data loss.
 func (b *Blockchain) ResetFSMS() {
 	b.finiteStateMachine = nil
 }
 
 // Health checks the health status of the blockchain service.
+//
+// This method performs health checks for both liveness (whether the service is running)
+// and readiness (whether the service and its dependencies are ready to accept requests).
+// The behavior changes based on the checkLiveness parameter:
+//
+// - Liveness check (checkLiveness=true): Verifies only the internal service state,
+//   used by orchestration systems to determine if the service needs to be restarted.
+//   A service might be alive but not ready to accept requests.
+//
+// - Readiness check (checkLiveness=false): Verifies both the service and its dependencies
+//   (Kafka, blockchain store) are operational and ready to accept requests. Used for
+//   determining if traffic should be routed to this service instance.
+//
+// Parameters:
+// - ctx: Context for the operation with timeout and cancellation support
+// - checkLiveness: Boolean flag to control whether to check liveness (true) or readiness (false)
+//
+// Returns:
+// - HTTP status code (200 for healthy, 503 for unhealthy)
+// - Human-readable status message with health details
+// - Error if the health check encounters an unexpected failure
 func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -141,6 +238,23 @@ func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, strin
 }
 
 // HealthGRPC provides health check information via gRPC.
+//
+// This method exposes the readiness health check functionality through the gRPC API,
+// allowing remote services to check whether this blockchain service is ready to accept
+// requests. It wraps the Health method to provide a standardized gRPC response format
+// used across all Teranode services.
+//
+// The method includes performance tracking via tracing and metrics for monitoring and
+// diagnostics. It always performs a readiness check (equivalent to Health() with
+// checkLiveness=false), verifying both internal service state and dependencies.
+//
+// Parameters:
+// - ctx: Context for the operation with timeout and cancellation support
+// - _: Empty request parameter (unused but required by the gRPC interface)
+//
+// Returns:
+// - HealthResponse with current service status, human-readable details, and timestamp
+// - Error if the health check fails unexpectedly (wrapped for gRPC transmission)
 func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(b.stats),
@@ -159,6 +273,24 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 }
 
 // Init initializes the blockchain service.
+//
+// This method sets up the finite state machine (FSM) that governs the service's
+// operational states. It handles three initialization scenarios:
+//
+// 1. Test mode: Uses a predefined state for testing, bypassing normal state persistence
+// 2. New deployment: Initializes a default state when no previous state exists in storage
+// 3. Normal operation: Restores the previously persisted state from storage
+//
+// The method ensures that the service state is persisted to survive service restarts
+// and updates metrics to reflect the current operational state. The FSM provides a
+// consistent framework for managing the service's complex state transitions and
+// recovery processes.
+//
+// Parameters:
+// - ctx: Context for the operation with timeout and cancellation support
+//
+// Returns:
+// - Error if initialization fails, nil on success
 func (b *Blockchain) Init(ctx context.Context) error {
 	b.finiteStateMachine = b.NewFiniteStateMachine()
 
@@ -199,6 +331,23 @@ func (b *Blockchain) Init(ctx context.Context) error {
 }
 
 // Start begins the blockchain service operations.
+//
+// This method initializes and launches all the core components of the blockchain service:
+// - Starts the Kafka producer for publishing block data to other services
+// - Initializes the subscription management goroutine for notifications
+// - Sets up the HTTP server for administrative endpoints
+// - Starts the gRPC server for client API access
+//
+// The method uses a synchronized approach to ensure the service is fully operational
+// before signaling readiness through the provided channel. It manages clean startup
+// sequence and handles initialization failures appropriately.
+//
+// Parameters:
+// - ctx: Context for the operation with cancellation support
+// - readyCh: Channel to signal when the service is fully initialized and ready
+//
+// Returns:
+// - Error if any part of the startup sequence fails, nil on successful startup
 func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -223,6 +372,23 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 }
 
 // startHTTP initializes and starts the HTTP server for the blockchain service.
+//
+// This method sets up an HTTP server with administrative endpoints for blockchain operations
+// such as invalidating and revalidating blocks. It configures essential middleware for:
+// - Error recovery to prevent crashes from HTTP request handling
+// - CORS configuration for cross-origin requests
+//
+// The server is launched in a non-blocking manner with two goroutines: one to monitor
+// for context cancellation to enable graceful shutdown, and another to run the actual
+// HTTP server. This design ensures the service remains responsive and can be cleanly
+// terminated when needed.
+//
+// Parameters:
+// - ctx: Context for the operation with cancellation support for clean shutdown
+//
+// Returns:
+// - Configuration error if HTTP listen address is not specified
+// - Nil on successful server initialization (actual serving happens in background)
 func (b *Blockchain) startHTTP(ctx context.Context) error {
 	httpAddress := b.settings.BlockChain.HTTPListenAddress
 	if httpAddress == "" {
@@ -266,6 +432,21 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 }
 
 // invalidateHandler handles HTTP requests to invalidate a block.
+//
+// This method processes HTTP requests to mark a specific block as invalid in the blockchain.
+// It extracts the block hash from the URL path parameter, validates it as a proper hash,
+// and delegates to the InvalidateBlock gRPC method to perform the actual invalidation.
+//
+// The invalidation process helps maintain blockchain integrity by marking blocks that
+// should be excluded from the active chain due to consensus rule violations or other issues.
+//
+// Parameters:
+// - c: The echo HTTP context containing the request details and response writer
+//
+// Returns:
+// - HTTP 400 (Bad Request) if the hash parameter is invalid
+// - HTTP 500 (Internal Server Error) if the invalidation operation fails
+// - HTTP 200 (OK) with success message if the block is successfully invalidated
 func (b *Blockchain) invalidateHandler(c echo.Context) error {
 	hashStr := c.Param("hash")
 
@@ -286,6 +467,22 @@ func (b *Blockchain) invalidateHandler(c echo.Context) error {
 }
 
 // revalidateHandler handles HTTP requests to revalidate a block.
+//
+// This method processes HTTP requests to revalidate a previously invalidated block
+// in the blockchain. It extracts the block hash from the URL path parameter, validates
+// it as a proper hash, and delegates to the RevalidateBlock gRPC method to perform the
+// actual revalidation.
+//
+// Revalidation allows blocks that were previously marked as invalid to be reconsidered,
+// which is useful for recovery from false invalidations or after rule changes.
+//
+// Parameters:
+// - c: The echo HTTP context containing the request details and response writer
+//
+// Returns:
+// - HTTP 400 (Bad Request) if the hash parameter is invalid
+// - HTTP 500 (Internal Server Error) if the revalidation operation fails
+// - HTTP 200 (OK) with success message if the block is successfully revalidated
 func (b *Blockchain) revalidateHandler(c echo.Context) error {
 	hashStr := c.Param("hash")
 
@@ -306,6 +503,17 @@ func (b *Blockchain) revalidateHandler(c echo.Context) error {
 }
 
 // startKafka initializes and starts the Kafka producer.
+//
+// This method sets up the asynchronous Kafka messaging infrastructure used for publishing
+// finalized blocks to downstream services. It creates a buffered channel for message
+// queuing and activates the Kafka producer which handles the actual publishing.
+//
+// The Kafka producer is a critical component that enables the blockchain service to
+// communicate with other services in the Teranode system in a decoupled manner.
+// It allows for reliable, asynchronous propagation of block data while maintaining
+// performance and resilience.
+//
+// Note: This method should be called during service startup before any blocks are processed.
 func (b *Blockchain) startKafka() {
 	b.logger.Infof("[Blockchain][startKafka] Starting Kafka producer for blocks")
 	b.kafkaChan = make(chan *kafka.Message, 100)
@@ -314,7 +522,22 @@ func (b *Blockchain) startKafka() {
 }
 
 // startSubscriptions manages blockchain subscriptions in a goroutine.
-/* Must be started as a go routine unless you are in a test */
+//
+// This method handles all subscription management including:
+// - Adding new subscribers to the notification system
+// - Removing dead or disconnected subscribers
+// - Broadcasting notifications to all active subscribers
+// - Processing and forwarding events to interested clients
+//
+// The method runs in an infinite loop until the application context is cancelled,
+// at which point it cleans up all subscriptions and terminates. It is designed
+// to handle high-throughput notification scenarios with concurrent delivery to
+// multiple subscribers.
+//
+// Each notification is forwarded asynchronously to prevent slow subscribers from
+// impacting overall system performance, with automatic cleanup of failed connections.
+//
+// Note: This method must be started as a goroutine unless running in a test environment.
 func (b *Blockchain) startSubscriptions() {
 	for {
 		select {
@@ -361,12 +584,47 @@ func (b *Blockchain) startSubscriptions() {
 }
 
 // Stop gracefully stops the blockchain service.
+//
+// This method handles the graceful shutdown of the blockchain service, allowing
+// for proper resource cleanup and state persistence before termination.
+//
+// While the current implementation is minimal, this method provides an extension
+// point for adding proper shutdown logic such as:
+// - Persisting any in-memory state
+// - Gracefully closing open connections and channels
+// - Ensuring ongoing operations complete safely
+// - Releasing acquired resources
+//
+// Parameters:
+// - _: Context for the shutdown operation (currently unused)
+//
+// Returns:
+// - Error if shutdown encounters issues, nil on successful shutdown
 func (b *Blockchain) Stop(_ context.Context) error {
 	return nil
 }
 
 // AddBlock processes a request to add a new block to the blockchain.
-// It validates the block, stores it, and notifies subscribers.
+//
+// This method is one of the core operations of the blockchain service and handles the full
+// lifecycle of adding a new block to the blockchain:
+// - Validates and parses the incoming block data (header, coinbase transaction, subtree hashes)
+// - Persists the validated block to the blockchain store
+// - Updates block metadata such as height information
+// - Publishes the finalized block to Kafka for downstream services
+// - Notifies subscribers about the new block
+//
+// The method includes performance tracking via tracing and metrics, with detailed logging
+// at key points in the process. Error conditions are carefully handled with appropriate
+// GRPC error wrapping to ensure consistent error reporting across the system.
+//
+// Parameters:
+// - ctx: Context for the operation with timeout and cancellation support
+// - request: The AddBlockRequest containing block data and metadata
+//
+// Returns:
+// - Empty response on success
+// - Error if the block addition fails (wrapped for GRPC transmission)
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "AddBlock",
 		tracing.WithParentStat(b.stats),
@@ -456,6 +714,25 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 }
 
 // GetBlock retrieves a block by its hash.
+//
+// This method fetches a complete Bitcoin block from the blockchain store based on its hash.
+// It performs the following operations:
+// - Validates the requested block hash format
+// - Retrieves the block data from the blockchain store
+// - Converts internal block representation to the API response format
+// - Includes all block components: header, coinbase transaction, and subtree hashes
+//
+// The method includes performance tracking via tracing and metrics for monitoring
+// and diagnostics. Error handling includes specific error types for various failure
+// scenarios, such as invalid hash format or block not found conditions.
+//
+// Parameters:
+// - ctx: Context for the operation with timeout and cancellation support
+// - request: Request containing the hash of the block to retrieve
+//
+// Returns:
+// - Complete block data in API response format on success
+// - Error if block retrieval fails (wrapped for GRPC transmission)
 func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlock",
 		tracing.WithParentStat(b.stats),

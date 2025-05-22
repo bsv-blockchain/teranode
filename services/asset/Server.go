@@ -1,5 +1,21 @@
-// Package asset provides functionality for managing and querying Teranode Bitcoin SV blockchain assets.
-// It implements a server that handles both the HTTP and the Centrifuge protocol for asset-related operations.
+// Package asset provides comprehensive functionality for managing and querying blockchain assets within the Teranode Bitcoin SV implementation.
+// It serves as a central access point for blockchain data including blocks, transactions, UTXOs, and subtrees.
+//
+// Key features and capabilities:
+// - HTTP API endpoints for querying blockchain data via REST interfaces
+// - Real-time updates via Centrifuge protocol for subscribing to blockchain events
+// - Flexible query capabilities for blocks, transactions, UTXOs and other blockchain assets
+// - Support for both traditional and novel blockchain data access patterns
+// - Integration with various storage backends (UTXO store, transaction store, etc.)
+//
+// The asset service integrates with other Teranode components like blockchain and validation services
+// to provide a cohesive view of the blockchain state. It follows a layered architecture with:
+// - HTTP/Centrifuge interfaces at the top level for external communication
+// - Repository layer for business logic and data transformation
+// - Storage interfaces for persistent data access
+//
+// The service implements health checks and graceful shutdown procedures to ensure
+// operational reliability in production environments.
 
 package asset
 
@@ -23,7 +39,24 @@ import (
 
 // Server represents the main asset service handler, managing blockchain data access and API endpoints.
 // It coordinates between different storage backends and provides both HTTP and Centrifuge interfaces
-// for accessing blockchain data.
+// for accessing blockchain data. The Server acts as the primary orchestrator for all asset-related
+// operations and maintains connections to the necessary data stores and services.
+//
+// The Server employs a composition-based design pattern, delegating specific functionality to
+// specialized components while maintaining overall coordination responsibility.
+//
+// Fields:
+// - logger: Handles structured logging for operational monitoring and debugging
+// - settings: Contains configuration parameters for the asset service
+// - utxoStore: Provides access to the UTXO (Unspent Transaction Output) dataset
+// - txStore: Stores and retrieves transaction data
+// - subtreeStore: Manages subtree data for optimized block processing
+// - blockPersisterStore: Handles persistence of complete block data
+// - httpAddr: Network address for the HTTP server
+// - httpServer: Handles HTTP API requests for asset data
+// - centrifugeAddr: Network address for the Centrifuge server
+// - centrifugeServer: Manages real-time data subscriptions via the Centrifuge protocol
+// - blockchainClient: Interface for interacting with the blockchain service
 type Server struct {
 	logger              ulogger.Logger
 	settings            *settings.Settings
@@ -40,15 +73,24 @@ type Server struct {
 
 // NewServer creates a new Server instance with the provided dependencies.
 // It initializes the server with necessary stores and clients for handling
-// blockchain data.
+// blockchain data. This factory function ensures proper dependency injection
+// and initialization of all required components.
+//
+// The function follows the dependency injection pattern to facilitate unit testing
+// and enhance modularity. Each injected component represents a specific responsibility
+// within the system architecture.
 //
 // Parameters:
-//   - logger: Logger instance for service logging
-//   - utxoStore: Store for UTXO (Unspent Transaction Output) data
-//   - txStore: Store for transaction data
-//   - subtreeStore: Store for subtree data
-//   - blockPersisterStore: Store for block persistence
-//   - blockchainClient: Client interface for blockchain operations
+//   - logger: Logger instance for service logging and operational monitoring
+//   - utxoStore: Store for UTXO (Unspent Transaction Output) data, providing access to the current UTXO set
+//   - txStore: Store for transaction data, offering persistent storage and retrieval of transactions
+//   - subtreeStore: Store for subtree data, enabling efficient block traversal and validation
+//   - blockPersisterStore: Store for block persistence, ensuring durable storage of validated blocks
+//   - blockchainClient: Client interface for blockchain operations, facilitating integration with the blockchain service
+//
+// Returns:
+//   - *Server: A fully initialized Server instance ready for use
+//   - error: Any error encountered during server creation
 //
 // Returns:
 //   - *Server: Newly created server instance
@@ -68,15 +110,24 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 
 // Health performs health checks on the server and its dependencies.
 // It supports both liveness and readiness checks based on the checkLiveness parameter.
+// 
+// The health check implementation follows the standard Kubernetes health check pattern,
+// providing both liveness (is the service running?) and readiness (is the service ready
+// to accept requests?) information. It performs comprehensive verification of all critical
+// dependencies including storage backends and connected services.
+//
+// The function executes the following checks:
+// - For liveness: Verifies basic server operation without checking dependent services
+// - For readiness: Performs deep checks on all connected stores and services
 //
 // Parameters:
-//   - ctx: Context for the health check operation
+//   - ctx: Context for the health check operation, allowing for timeouts and cancellation
 //   - checkLiveness: If true, performs liveness check; if false, performs readiness check
-//
+// 
 // Returns:
-//   - int: HTTP status code indicating health status
-//   - string: Description of the health status
-//   - error: Any error encountered during health check
+//   - int: HTTP status code indicating health status (200 for healthy, 503 for unhealthy)
+//   - string: Description of the health status with details about any detected issues
+//   - error: Any error encountered during health check that prevented proper evaluation
 func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -113,12 +164,22 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 
 // Init initializes the server by setting up HTTP and Centrifuge endpoints.
 // It configures the necessary components based on the provided configuration.
+// 
+// This method performs the following initialization steps:
+// - Sets up HTTP server with all required routes and handlers
+// - Configures Centrifuge real-time communication server if enabled
+// - Establishes connections to all required data stores
+// - Initializes internal state and prepares the service for operation
 //
+// The initialization follows a fail-fast approach, where any configuration or
+// dependency initialization failure will abort the entire process and return an error.
+// This ensures the service is either fully operational or not running at all.
+// 
 // Parameters:
-//   - ctx: Context for initialization
-//
+//   - ctx: Context for initialization, allowing for timeouts and cancellation during setup
+// 
 // Returns:
-//   - error: Any error encountered during initialization
+//   - error: Any error encountered during initialization, with details about the specific failure point
 func (v *Server) Init(ctx context.Context) (err error) {
 	v.httpAddr = v.settings.Asset.HTTPListenAddress
 	if v.httpAddr == "" {
@@ -161,11 +222,23 @@ func (v *Server) Init(ctx context.Context) (err error) {
 // Start begins the server operation, launching HTTP and Centrifuge servers
 // if configured. It also handles FSM state restoration if required.
 //
+// This method launches all configured server components in parallel using an error group
+// to manage their lifecycle and propagate errors. It implements the following behaviors:
+// - Starts the HTTP server on the configured address if enabled
+// - Launches the Centrifuge real-time subscription server if enabled
+// - Signals service readiness through the provided channel
+// - Handles graceful shutdown when the context is canceled
+//
+// The method uses goroutines with proper synchronization to ensure concurrent
+// operation while maintaining error propagation. It follows a graceful shutdown
+// pattern where all components are properly terminated when the context is canceled.
+//
 // Parameters:
-//   - ctx: Context for server operation
+//   - ctx: Context for server operation, used for lifecycle management and cancellation
+//   - readyCh: Channel to signal when the service is fully operational and ready to accept requests
 //
 // Returns:
-//   - error: Any error encountered during server startup
+//   - error: Any error encountered during server startup or operation
 func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -208,12 +281,22 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 }
 
 // Stop gracefully shuts down the server and its components.
+// 
+// This method implements a coordinated shutdown sequence for all server components:
+// - Stops the HTTP server with a graceful shutdown period for in-flight requests
+// - Terminates the Centrifuge server and closes all client connections
+// - Releases any resources held by the server
+// - Ensures all goroutines are properly terminated
 //
+// The shutdown process respects the provided context deadline to ensure timely
+// termination even if some components are slow to shut down. It prioritizes
+// graceful shutdown while still enforcing overall timeout constraints.
+// 
 // Parameters:
-//   - ctx: Context for shutdown operation
-//
+//   - ctx: Context for shutdown operation, controlling the maximum time allowed for shutdown
+// 
 // Returns:
-//   - error: Any error encountered during shutdown
+//   - error: Any error encountered during shutdown, with information about which components failed to stop properly
 func (v *Server) Stop(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

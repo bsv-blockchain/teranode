@@ -3,6 +3,28 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
+// Package rpc implements the Bitcoin JSON-RPC API service for Teranode.
+//
+// This file (rpcserverhelp.go) implements the help system for the RPC server. It provides
+// detailed documentation for each RPC command including:
+//
+// - Command synopsis and parameter descriptions
+// - Detailed usage information with examples
+// - Return value documentation
+// - Condition-based help for commands with multiple behaviors
+//
+// The help system is designed with the following features:
+//
+// - Efficient caching to avoid regenerating help text for repeated requests
+// - Organized by command categories for easier navigation
+// - Thread-safe implementation for concurrent access
+// - Internationalization support (currently English only)
+// - Standardized formatting for consistent presentation
+//
+// The help text is stored in string maps that are indexed by command and field names,
+// making it easy to locate and update documentation for specific commands or parameters.
+// All help text is cached after first generation to improve performance for
+// subsequent help requests.
 package rpc
 
 import (
@@ -786,15 +808,46 @@ var rpcResultTypes = map[string][]interface{}{
 	"rescanblocks":              {(*[]bsvjson.RescannedBlock)(nil)},
 }
 
-// helpCacher provides a concurrent safe type that provides help and usage for
-// the RPC server commands and caches the results for future calls.
+// helpCacher provides a concurrent-safe cache for RPC command help information.
+// It stores and efficiently retrieves both overall usage information and detailed
+// help for individual methods, avoiding regeneration of this text for repeated requests.
+//
+// The help system's caching mechanism is particularly important for production environments
+// where the help command may be frequently used, as generating complete help text
+// requires assembling information from multiple sources and can be relatively expensive.
+//
+// The helpCacher is thread-safe through the use of a mutex, allowing multiple
+// goroutines to safely request help information concurrently without conflicts
+// or race conditions.
 type helpCacher struct {
+	// Mutex protects concurrent access to the cache fields
 	sync.Mutex
+
+	// usage contains the cached one-line usage for all commands
 	usage      string
+
+	// methodHelp maps command names to their complete help text
 	methodHelp map[string]string
 }
 
-// rpcMethodHelp returns an RPC help string for the provided method.
+// rpcMethodHelp generates and returns detailed help documentation for a specific RPC method.
+//
+// This method assembles comprehensive help text for the requested command, including:
+// - Command synopsis explaining the purpose of the command
+// - Parameter descriptions with type information and valid values
+// - Expected return values and their formats
+// - Usage examples and special conditions
+//
+// The generated help is cached to avoid regeneration for subsequent requests of the
+// same command, providing significant performance benefits in busy servers. The
+// cache is protected by a mutex to ensure thread safety.
+//
+// Parameters:
+//   - method: The name of the RPC method to get help for (e.g., 'getblock')
+//
+// Returns:
+//   - string: Formatted help text for the specified command
+//   - error: Error if the method is not found or help cannot be generated
 //
 // This function is safe for concurrent access.
 func (c *helpCacher) rpcMethodHelp(method string) (string, error) {
@@ -823,7 +876,20 @@ func (c *helpCacher) rpcMethodHelp(method string) (string, error) {
 	return help, nil
 }
 
-// rpcUsage returns one-line usage for all support RPC commands.
+// rpcUsage returns a comprehensive list of all supported RPC commands with their one-line synopsis.
+//
+// This method generates and returns a formatted string containing every available
+// RPC command along with a brief description of its purpose. The commands are
+// organized alphabetically for easy reference and formatted consistently with
+// command name and synopsis separated by whitespace.
+//
+// The generated usage text is cached after first creation to avoid regeneration
+// for subsequent help requests, providing significant performance benefits for
+// frequently accessed help. The cache is protected by a mutex to ensure thread safety.
+//
+// Returns:
+//   - string: Formatted list of all RPC commands with their synopsis
+//   - error: Error if the usage information cannot be generated
 //
 // This function is safe for concurrent access.
 func (c *helpCacher) rpcUsage() (string, error) {
@@ -864,8 +930,19 @@ func (c *helpCacher) rpcUsage() (string, error) {
 	return c.usage, nil
 }
 
-// newHelpCacher returns a new instance of a help cacher which provides help and
-// usage for the RPC server commands and caches the results for future calls.
+// newHelpCacher creates and initializes a new help caching system for RPC commands.
+//
+// This factory function initializes a new helpCacher instance with empty caches
+// that will be populated on-demand when clients request help information. The
+// cacher provides significant performance benefits by storing generated help text
+// to avoid repeated processing of the same information.
+//
+// The returned helpCacher is ready to use and is thread-safe for concurrent access
+// across multiple goroutines, making it suitable for use in the high-concurrency
+// environment of the RPC server.
+//
+// Returns:
+//   - *helpCacher: A new, initialized help caching system
 func newHelpCacher() *helpCacher {
 	return &helpCacher{
 		methodHelp: make(map[string]string),

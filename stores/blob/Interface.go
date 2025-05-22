@@ -8,8 +8,23 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 )
 
-// Store defines the interface for blob storage operations. It provides methods for
-// storing, retrieving, and managing blob data with support for DAH and various options.
+// Store defines the interface for blob storage operations.
+// It provides a unified API for storing, retrieving, and managing blob data across different
+// backend implementations. The interface is designed to support the needs of blockchain
+// applications with features such as Delete-At-Height (DAH) for automatic expiration,
+// partial retrieval for efficient data access, and various configuration options.
+//
+// Implementations of this interface include:
+// - memory: In-memory storage for ephemeral blobs (useful for testing)
+// - file: Filesystem-based storage for persistent blobs
+// - s3: Amazon S3-compatible storage for cloud-based scalability
+// - http: HTTP client for accessing remote blob stores
+// - null: No-op implementation for testing and development
+//
+// The Store interface can be extended with additional capabilities through wrappers:
+// - batcher: Efficient batch processing of multiple operations
+// - localdah: Delete-At-Height functionality for blockchain-based expiration
+// - concurrent: Thread-safe access to the underlying store
 type Store interface {
 	// Health checks the health status of the blob store.
 	// Parameters:
@@ -110,7 +125,24 @@ type Store interface {
 	// Returns:
 	//   - error: Any error that occurred during deletion
 	Del(ctx context.Context, key []byte, opts ...options.FileOption) error
+	// GetHeader retrieves the header portion of a blob.
+	// Parameters:
+	//   - ctx: The context for the operation
+	//   - key: The key identifying the blob
+	//   - opts: Optional file options
+	// Returns:
+	//   - []byte: The header data
+	//   - error: Any error that occurred during retrieval
 	GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+
+	// GetFooterMetaData retrieves the footer metadata of a blob.
+	// Parameters:
+	//   - ctx: The context for the operation
+	//   - key: The key identifying the blob
+	//   - opts: Optional file options
+	// Returns:
+	//   - []byte: The footer metadata
+	//   - error: Any error that occurred during retrieval
 	GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
 
 	// Close closes the blob store and releases any resources.

@@ -1,4 +1,6 @@
-// Package httpimpl provides HTTP handlers for blockchain data retrieval.
+// Package httpimpl provides HTTP handlers for blockchain data retrieval and analysis.
+// It implements a comprehensive REST API for accessing blocks, transactions, and other
+// blockchain data through standardized interfaces with multiple response formats.
 package httpimpl
 
 import (
@@ -17,6 +19,19 @@ import (
 
 // BlockExtended represents a block with additional information about the next block
 // in the blockchain. It embeds the base Block model and adds the next block hash.
+//
+// This structure extends the standard Block model to provide additional blockchain traversal 
+// capabilities by including a reference to the next block in the chain. This is particularly
+// useful for blockchain explorers and analysis tools that need to navigate the chain in
+// a forward direction.
+//
+// The structure preserves all fields from the base Block model through embedding, while
+// adding the NextBlock field that can be used for chain traversal. This approach maintains
+// compatibility with existing Block-based code while extending functionality.
+//
+// Fields:
+// - Block: Embedded Block model containing all standard block data including header, transactions, etc.
+// - NextBlock: Hash of the next block in the chain, or nil if this is the tip of the chain
 type BlockExtended struct {
 	*model.Block                 // Embedded Block model containing basic block data
 	NextBlock    *chainhash.Hash `json:"nextblock"` // Hash of the next block in the chain, if available
@@ -24,15 +39,33 @@ type BlockExtended struct {
 
 // GetBlockByHeight creates an HTTP handler for retrieving blocks by their height in the blockchain.
 // The functionality mirrors GetBlockByHash but uses block height for lookup instead of hash.
+// This is particularly useful for clients that need to retrieve blocks based on their position
+// in the blockchain rather than their identifying hash.
+//
+// The handler performs the following operations:
+// 1. Validates the height parameter from the URL path
+// 2. Retrieves the block from the repository using its height
+// 3. Fetches the next block hash (if available) to enhance the response with chain traversal data
+// 4. Signs the response if configured
+// 5. Formats and returns the block according to the specified read mode
+//
+// This endpoint is commonly used by blockchain explorers, analytics systems, and applications
+// that need to traverse the blockchain sequentially or access blocks at specific heights.
 //
 // Parameters:
 //   - mode: ReadMode specifying the response format (JSON, BINARY_STREAM, or HEX)
+//     JSON provides a structured representation with all block fields
+//     BINARY_STREAM offers the most efficient transfer format
+//     HEX provides a human-readable representation of the binary data
 //
 // Returns:
-//   - func(c echo.Context) error: Echo handler function
+//   - func(c echo.Context) error: Echo handler function that processes the request
 //
 // URL Parameters:
-//   - height: Block height (uint64)
+//   - height: Block height (uint32) representing the position in the blockchain
+//
+// Query Parameters:
+//   - format: Optional parameter to override the default response format
 //
 // HTTP Response Formats:
 //

@@ -1,4 +1,5 @@
-// Package blockpersister provides functionality for persisting blockchain blocks and their associated data.
+// Package blockpersister provides comprehensive functionality for persisting blockchain blocks and their associated data.
+// It ensures reliable storage of blocks, transactions, and UTXO set changes to maintain blockchain data integrity.
 package blockpersister
 
 import (
@@ -15,18 +16,32 @@ import (
 )
 
 // persistBlock stores a block and its associated data to persistent storage.
+// 
+// This is a core function of the blockpersister service that handles the complete persistence
+// workflow for a single block. It ensures all components of a block (header, transactions,
+// and UTXO changes) are properly stored in a consistent and recoverable manner.
+//
+// The function implements a multi-stage persistence process:
+//   1. Convert raw block bytes into a structured block model
+//   2. Create a new UTXO difference set for tracking changes
+//   3. Process the coinbase transaction if no subtrees are present
+//   4. For blocks with subtrees, process each subtree concurrently according to configured limits
+//   5. Close and finalize the UTXO difference set once all transactions are processed
+//   6. Write the complete block to persistent storage
+//
+// Concurrency is managed through errgroup with configurable parallel processing limits
+// to optimize performance while avoiding resource exhaustion.
+//
 // Parameters:
-//   - ctx: context for the operation
-//   - hash: hash of the block to persist
-//   - blockBytes: raw bytes of the block
+//   - ctx: Context for the operation, used for cancellation and tracing
+//   - hash: Hash identifier of the block to persist
+//   - blockBytes: Raw serialized bytes of the complete block
 //
-// The function handles:
-//   - Creating a new block from bytes
-//   - Processing all subtrees in the block
-//   - Managing UTXO set differences
-//   - Writing block data to storage
+// Returns an error if any part of the persistence process fails. The error will be wrapped
+// with appropriate context to identify the specific failure point.
 //
-// Returns an error if any part of the persistence process fails.
+// Note: Block persistence is atomic - if any part fails, the entire operation is considered
+// failed and should be retried after resolving the underlying issue.
 func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBytes []byte) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "persistBlock",
 		tracing.WithHistogram(prometheusBlockPersisterPersistBlock),

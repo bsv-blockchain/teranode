@@ -10,6 +10,10 @@ import (
 )
 
 // Prometheus metrics variables for monitoring subtree processor operations
+// These metrics provide comprehensive observability into the performance and behavior
+// of the subtree processor component, including transaction processing rates,
+// block movement operations, and state transitions. They are essential for
+// performance monitoring, troubleshooting, and capacity planning.
 var (
 	prometheusSubtreeProcessorAddTx                    prometheus.Counter
 	prometheusSubtreeProcessorMoveForwardBlock         prometheus.Counter
@@ -33,13 +37,19 @@ var (
 )
 
 // initPrometheusMetrics initializes all Prometheus metrics for the subtree processor.
-// This function is called once during package initialization.
+// This function is called once during package initialization to ensure that
+// all metrics are properly registered before any operations occur.
+// It leverages sync.Once to guarantee that the initialization happens exactly once,
+// even in concurrent environments.
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
 
 // _initPrometheusMetrics is the actual implementation of metrics initialization.
-// It creates and registers all Prometheus metrics used by the subtree processor.
+// It creates and registers all Prometheus metrics used by the subtree processor,
+// configuring each with appropriate namespace, subsystem, name, and help text.
+// The metrics cover various aspects of subtree processing including transaction
+// addition, block movements, and performance timing for critical operations.
 func _initPrometheusMetrics() {
 	prometheusSubtreeProcessorAddTx = promauto.NewCounter(
 		prometheus.CounterOpts{

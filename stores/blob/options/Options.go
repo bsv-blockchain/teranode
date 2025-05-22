@@ -1,3 +1,8 @@
+// Package options provides configuration structures and functions for blob store operations.
+// It defines a flexible set of options that can be applied at both the store level (global
+// configuration) and at the individual file operation level (per-operation configuration).
+// The package supports various blob storage features including custom filenames, extensions,
+// Delete-At-Height (DAH) values, directory organization, and metadata handling.
 package options
 
 import (
@@ -10,24 +15,60 @@ import (
 	"github.com/ordishs/go-utils"
 )
 
+// Options represents the complete set of configuration options for blob operations.
+// It combines both store-level options (which apply globally) and file-level options
+// (which apply to individual operations). The structure is designed to be flexible
+// and extensible to accommodate various blob storage configuration needs.
 type Options struct {
-	BlockHeightRetention uint32 // This is the block height retention for the store (StoreOption)
-	DAH                  uint32 // This is the delete at height for a file (FileOption)
+	// BlockHeightRetention is the default number of blocks to retain blobs (StoreOption)
+	// When a blob is stored without an explicit DAH, it will be set to expire after
+	// the current block height plus this retention period
+	BlockHeightRetention uint32
+	// DAH (Delete-At-Height) is the blockchain height at which a blob should be deleted (FileOption)
+	// When this height is reached or exceeded, the blob becomes eligible for deletion
+	DAH                  uint32
+	// Filename is an optional custom name for storing a blob instead of using its hash
 	Filename             string
+	// Extension is an optional file extension to append to blob filenames
 	Extension            string
+	// SubDirectory is an optional subdirectory for organizing blobs within the store
 	SubDirectory         string
+	// HashPrefix controls how hash-based directory structures are created
+	// Positive: Use first N characters of hash as directory
+	// Negative: Use last N characters of hash as directory
+	// Zero: Don't use hash-based directories
 	HashPrefix           int
+	// AllowOverwrite determines if existing blobs can be overwritten
 	AllowOverwrite       bool
+	// Header is optional data to prepend to the blob content
 	Header               []byte
+	// Footer is optional data and metadata to append to the blob content
 	Footer               *Footer
+	// GenerateSHA256 enables SHA256 checksumming for integrity verification
 	GenerateSHA256       bool
+	// PersistSubDir is a subdirectory for persistent storage in tiered storage models
 	PersistSubDir        string
+	// LongtermStoreURL is the URL for a longterm storage backend in tiered storage models
 	LongtermStoreURL     *url.URL
 }
 
+// StoreOption is a function type for configuring store-level options.
+// These options apply globally to all operations performed by a store instance.
 type StoreOption func(*Options)
+
+// FileOption is a function type for configuring file-level options.
+// These options apply only to the specific blob operation being performed.
 type FileOption func(*Options)
 
+// NewStoreOptions creates a new Options instance configured with store-level options.
+// This function is typically used when creating a new blob store to establish its
+// default behavior and configuration.
+//
+// Parameters:
+//   - opts: Variable number of StoreOption functions to apply
+//
+// Returns:
+//   - *Options: A configured Options instance with store-level defaults
 func NewStoreOptions(opts ...StoreOption) *Options {
 	options := &Options{
 		GenerateSHA256: false,
@@ -39,6 +80,15 @@ func NewStoreOptions(opts ...StoreOption) *Options {
 	return options
 }
 
+// NewFileOptions creates a new Options instance configured with file-level options.
+// This function is typically used when performing individual blob operations to
+// specify operation-specific behavior.
+//
+// Parameters:
+//   - opts: Variable number of FileOption functions to apply
+//
+// Returns:
+//   - *Options: A configured Options instance with file-level settings
 func NewFileOptions(opts ...FileOption) *Options {
 	options := &Options{}
 	for _, opt := range opts {
@@ -168,6 +218,17 @@ func ReplaceExtention(fileOpts []FileOption, oldExt string, newExt string) []Fil
 }
 
 // MergeOptions combines StoreOptions and FileOptions into a single MergedOptions struct
+// MergeOptions combines store-level options with file-level options.
+// This function is used to create a final configuration that incorporates both
+// the store's default settings and any operation-specific overrides. Store-level
+// options provide defaults, while file-level options take precedence when specified.
+//
+// Parameters:
+//   - storeOpts: The store-level options to use as defaults
+//   - fileOpts: The file-level options to override defaults with
+//
+// Returns:
+//   - *Options: A new Options instance with the combined configuration
 func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 	options := &Options{}
 
@@ -190,6 +251,16 @@ func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 }
 
 // FileOptionsToQuery converts FileOptions to URL query parameters
+// FileOptionsToQuery converts FileOptions to URL query parameters.
+// This is useful for transmitting blob options over HTTP or other URL-based protocols.
+// The function encodes options into standard URL query parameters that can be decoded
+// on the receiving end.
+//
+// Parameters:
+//   - opts: The file options to convert
+//
+// Returns:
+//   - url.Values: URL query parameters representing the options
 func FileOptionsToQuery(opts ...FileOption) url.Values {
 	options := NewFileOptions(opts...)
 	query := url.Values{}
@@ -214,6 +285,15 @@ func FileOptionsToQuery(opts ...FileOption) url.Values {
 }
 
 // QueryToFileOptions converts URL query parameters to FileOptions
+// QueryToFileOptions converts URL query parameters to FileOptions.
+// This is the inverse of FileOptionsToQuery and is typically used on the receiving
+// end of an HTTP request to reconstruct the original file options from query parameters.
+//
+// Parameters:
+//   - query: URL query parameters to convert
+//
+// Returns:
+//   - []FileOption: File options reconstructed from the query parameters
 func QueryToFileOptions(query url.Values) []FileOption {
 	var opts []FileOption
 

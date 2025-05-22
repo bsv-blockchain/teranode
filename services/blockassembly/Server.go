@@ -1,4 +1,17 @@
 // Package blockassembly provides functionality for assembling Bitcoin blocks in Teranode.
+//
+// The blockassembly service is responsible for managing the block creation process,
+// including transaction selection, block template generation, and mining integration.
+// It serves as a critical component in the blockchain's consensus mechanism by:
+//   - Continuously processing and organizing transactions into subtrees
+//   - Constructing valid block templates for miners
+//   - Processing mining solutions and submitting validated blocks to the blockchain
+//   - Handling block reorganizations and maintaining block assembly state
+//
+// The service integrates with other Teranode components through well-defined interfaces
+// and uses a subtree-based approach for efficient transaction management. It implements
+// both synchronous and asynchronous processing paths to optimize for throughput and
+// latency requirements of high-volume Bitcoin transaction processing.
 package blockassembly
 
 import (
@@ -1160,6 +1173,27 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 
+// GetBlockAssemblyState retrieves the current operational state of the block assembly service.
+//
+// This method provides comprehensive diagnostic information about the current state
+// of the block assembly service and its components. It returns details including:
+//   - The current operational state of both the block assembler and subtree processor
+//   - Reset wait counters and timers
+//   - Transaction and subtree counts
+//   - Current blockchain tip information (height and hash)
+//   - Transaction queue metrics
+//
+// This information is valuable for monitoring, debugging, and ensuring the service
+// is operating correctly. It can be used both by automated monitoring systems and
+// for manual troubleshooting.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - _: Empty message request (unused)
+//
+// Returns:
+//   - *blockassembly_api.StateMessage: Detailed state information
+//   - error: Any error encountered while gathering state information
 func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.StateMessage, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "GetBlockAssemblyState",
 		tracing.WithParentStat(ba.stats),
@@ -1195,6 +1229,20 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 	}, nil
 }
 
+// GetCurrentDifficulty retrieves the current mining difficulty target.
+//
+// This method provides access to the current difficulty target required for valid
+// proof-of-work, which is critical information for miners. The difficulty is returned
+// as a floating-point value derived from the current network state and consensus rules.
+// This value determines how much computational work is required to find a valid block solution.
+//
+// Parameters:
+//   - ctx: Context for cancellation (unused in current implementation)
+//   - _: Empty message request (unused)
+//
+// Returns:
+//   - *blockassembly_api.GetCurrentDifficultyResponse: Response containing the current difficulty
+//   - error: Any error encountered during retrieval
 func (ba *BlockAssembly) GetCurrentDifficulty(_ context.Context, _ *blockassembly_api.EmptyMessage) (resp *blockassembly_api.GetCurrentDifficultyResponse, err error) {
 	cd := ba.blockAssembler.currentDifficulty.Load()
 	dif := cd.CalculateDifficulty()
@@ -1205,7 +1253,24 @@ func (ba *BlockAssembly) GetCurrentDifficulty(_ context.Context, _ *blockassembl
 	}, nil
 }
 
-// GenerateBlocks generates the given number of blocks
+// GenerateBlocks generates the given number of blocks.
+//
+// This method provides a block generation capability primarily used for testing and
+// development environments. It sequentially creates blocks by:
+//   - Retrieving a mining candidate block template
+//   - Finding a valid proof-of-work solution through mining
+//   - Submitting the solution to add the block to the blockchain
+//
+// The operation requires the GenerateSupported flag to be enabled in chain configuration.
+// An optional address parameter allows specifying where mining rewards should be sent.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - req: Block generation request containing count and optional reward address
+//
+// Returns:
+//   - *blockassembly_api.EmptyMessage: Empty response on success
+//   - error: Any error encountered during block generation
 func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) (*blockassembly_api.EmptyMessage, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "generateBlocks",
 		tracing.WithParentStat(ba.stats),

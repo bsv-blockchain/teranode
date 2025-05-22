@@ -1,4 +1,18 @@
-// Package blockpersister provides functionality for persisting blockchain blocks and their associated data.
+// Package blockpersister provides comprehensive functionality for persisting blockchain blocks and their associated data.
+// 
+// The blockpersister service is responsible for taking blocks from the blockchain service and ensuring they are
+// properly stored in persistent storage along with all related data (transactions, UTXOs, etc.). It plays a
+// critical role in the overall blockchain data persistence strategy by:
+//
+// - Processing and storing complete blocks in the blob store
+// - Managing subtree processing for efficient transaction handling
+// - Maintaining UTXO set differences for each block
+// - Ensuring data consistency and integrity during persistence operations
+// - Providing resilient error handling and recovery mechanisms
+//
+// The service integrates with multiple stores (block store, subtree store, UTXO store) and
+// coordinates between them to ensure consistent and reliable block data persistence.
+// It employs concurrency and batching techniques to optimize performance for high transaction volumes.
 package blockpersister
 
 import (
@@ -21,37 +35,53 @@ import (
 )
 
 // Server represents the main block persister service that handles block storage and processing.
+// It coordinates the persistence of blocks and their associated data across multiple storage systems,
+// ensuring data integrity and consistency throughout the process.
 type Server struct {
-	// ctx is the context for controlling server lifecycle
+	// ctx is the context for controlling server lifecycle and handling cancellation signals
 	ctx context.Context
 
-	// logger provides logging functionality
+	// logger provides structured logging functionality for operational monitoring and debugging
 	logger ulogger.Logger
 
-	// settings contains configuration settings for the server
+	// settings contains configuration settings for the server, controlling behavior such as
+	// concurrency levels, batch sizes, and persistence strategies
 	settings *settings.Settings
 
-	// blockStore provides storage for blocks
+	// blockStore provides persistent storage for complete blocks
+	// This is typically implemented as a blob store capable of handling large block data
 	blockStore blob.Store
 
-	// subtreeStore provides storage for block subtrees
+	// subtreeStore provides storage for block subtrees, which are hierarchical structures
+	// containing transaction references that make up parts of a block
 	subtreeStore blob.Store
 
-	// utxoStore provides storage for UTXO data
+	// utxoStore provides storage for UTXO (Unspent Transaction Output) data
+	// Used to track the current state of the UTXO set and process changes
 	utxoStore utxo.Store
 
-	// stats tracks server statistics
+	// stats tracks operational statistics for monitoring and performance analysis
 	stats *gocore.Stat
 
-	// blockchainClient interfaces with the blockchain
+	// blockchainClient interfaces with the blockchain service to retrieve block data
+	// and coordinate persistence operations with blockchain state
 	blockchainClient blockchain.ClientI
 
-	// state manages the persister's internal state
+	// state manages the persister's internal state, tracking which blocks have been
+	// successfully persisted and allowing for recovery after interruptions
 	state *state.State
 }
 
 // WithSetInitialState is an optional configuration function that sets the initial state
-// of the block persister server.
+// of the block persister server. This can be used during initialization to establish
+// a known starting point for block persistence operations.
+//
+// Parameters:
+//   - height: The blockchain height to set as the initial state
+//   - hash: The block hash corresponding to the specified height
+//
+// Returns a function that, when called with a Server instance, will set the initial state
+// of that server. If the state cannot be set, an error is logged but not returned.
 func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server) {
 	return func(s *Server) {
 		if err := s.state.AddBlock(height, hash.String()); err != nil {
@@ -61,6 +91,22 @@ func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server) {
 }
 
 // New creates a new block persister server instance with the provided dependencies.
+//
+// This constructor initializes all components required for block persistence operations,
+// including stores, state management, and client connections. It accepts optional
+// configuration functions to customize the server instance after construction.
+//
+// Parameters:
+//   - ctx: Context for controlling the server lifecycle
+//   - logger: Logger for recording operational events and errors
+//   - tSettings: Configuration settings that control server behavior
+//   - blockStore: Storage interface for blocks
+//   - subtreeStore: Storage interface for block subtrees
+//   - utxoStore: Storage interface for UTXO data
+//   - blockchainClient: Client for interacting with the blockchain service
+//   - opts: Optional configuration functions to apply after construction
+//
+// Returns a fully constructed and configured Server instance ready for initialization.
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -95,8 +141,23 @@ func New(
 }
 
 // Health performs health checks on the server and its dependencies.
-// If checkLiveness is true, only liveness checks are performed.
-// Returns HTTP status code, status message, and any error encountered.
+// This method implements the health.Check interface and is used by monitoring systems
+// to determine the operational status of the service.
+//
+// The health check distinguishes between liveness (is the service running?) and 
+// readiness (is the service able to handle requests?) checks:
+//  - Liveness checks verify the service process is running and responsive
+//  - Readiness checks verify all dependencies are available and functioning
+//
+// Parameters:
+//   - ctx: Context for coordinating cancellation or timeouts
+//   - checkLiveness: When true, only liveness checks are performed; when false, both liveness 
+//     and readiness checks are performed
+//
+// Returns:
+//   - int: HTTP status code (200 for healthy, 503 for unhealthy)
+//   - string: Human-readable status message
+//   - error: Any error encountered during health checking
 func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -132,6 +193,14 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 }
 
 // Init initializes the server, setting up any required resources.
+//
+// This method is called after construction but before the server starts processing blocks.
+// It performs one-time initialization tasks such as setting up Prometheus metrics.
+//
+// Parameters:
+//   - ctx: Context for coordinating initialization operations
+//
+// Returns an error if initialization fails, or nil on success.
 func (u *Server) Init(ctx context.Context) (err error) {
 	initPrometheusMetrics()
 
@@ -140,6 +209,24 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 // getNextBlockToProcess retrieves the next block that needs to be processed
 // based on the current state and configuration.
+//
+// This method determines the next block to persist by comparing the last persisted block height
+// with the current blockchain tip. It ensures blocks are persisted in sequence without gaps
+// and respects the configured persistence age policy to control how far behind persistence
+// can lag.
+//
+// Parameters:
+//   - ctx: Context for coordinating the block retrieval operation
+//
+// Returns:
+//   - *model.Block: The next block to process, or nil if no block needs processing yet
+//   - error: Any error encountered during the operation
+//
+// The method follows these steps:
+//   1. Get the last persisted block height from the state
+//   2. Get the current best block from the blockchain
+//   3. If the difference between them exceeds BlockPersisterPersistAge, return the next block
+//   4. Otherwise, return nil to indicate no blocks need processing yet
 func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error) {
 	lastPersistedHeight, err := u.state.GetLastPersistedBlockHeight()
 	if err != nil {
@@ -163,7 +250,23 @@ func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error
 	return nil, nil
 }
 
-// Start function
+// Start initializes and begins the block persister service operations.
+//
+// This method starts the main processing loop and sets up HTTP services if configured.
+// It waits for the blockchain FSM to transition from IDLE state before beginning
+// block persistence operations to ensure the blockchain is ready.
+//
+// The method implements the following key operations:
+// - Waits for blockchain service readiness
+// - Sets up HTTP blob server if required by configuration
+// - Starts the main processing loop in a background goroutine
+// - Signals service readiness through the provided channel
+//
+// Parameters:
+//   - ctx: Context for controlling the service lifecycle and handling cancellation
+//   - readyCh: Channel used to signal when the service is ready to accept requests
+//
+// Returns an error if the service fails to start properly, nil otherwise.
 func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -263,6 +366,19 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 }
 
 // Stop gracefully shuts down the server.
+//
+// This method is called when the service is being stopped and provides an opportunity
+// to perform any necessary cleanup operations, such as closing connections, flushing
+// buffers, or persisting state.
+//
+// Currently, the Server doesn't need to perform any specific cleanup actions during shutdown
+// as resource cleanup is handled by the context cancellation mechanism in the Start method.
+//
+// Parameters:
+//   - ctx: Context for controlling the shutdown operation (currently unused)
+//
+// Returns an error if shutdown fails, or nil on successful shutdown.
 func (u *Server) Stop(_ context.Context) error {
+	// Currently, the Server doesn't need to perform any action on shutdown
 	return nil
 }

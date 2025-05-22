@@ -1,3 +1,6 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
 package sql
 
 import (
@@ -9,6 +12,22 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// GetBlockHeight retrieves the height of a block from the database by its hash.
+// This implements the blockchain.Store.GetBlockHeight interface method.
+//
+// The method first checks an in-memory cache for the block header metadata to avoid database queries.
+// If not found in cache, it executes a focused SQL query that only retrieves the height field
+// rather than fetching the entire block data for efficiency.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allows for cancellation and timeouts
+//   - blockHash: The unique hash identifier of the block to query
+//
+// Returns:
+//   - uint32: The height of the block in the blockchain (0 if not found)
+//   - error: Any error encountered during retrieval, specifically:
+//     * BlockNotFoundError if the block does not exist
+//     * StorageError for other database errors
 func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeight")
 	defer deferFn()

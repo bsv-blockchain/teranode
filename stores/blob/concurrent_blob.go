@@ -1,4 +1,7 @@
-// Package blob provides blob storage functionality with various storage backend implementations.
+// Package blob provides a comprehensive blob storage system with multiple backend implementations.
+// The blob package is designed to store, retrieve, and manage arbitrary binary data (blobs) with
+// features such as customizable storage backends, Delete-At-Height (DAH) functionality for automatic
+// data expiration, and a standardized HTTP API.
 package blob
 
 import (
@@ -11,21 +14,35 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// ConcurrentBlob provides thread-safe access to blob storage operations.
+// ConcurrentBlob provides thread-safe access to blob storage operations with optimized concurrent access patterns.
+// It implements a double-checked locking pattern to ensure that only one fetch operation occurs at a time
+// for each unique key, while allowing concurrent operations on different keys. This pattern
+// is particularly useful in high-concurrency environments where the same blob might be requested
+// multiple times simultaneously, avoiding duplicate network or disk operations.
+// ConcurrentBlob is a generic type parametrized by a key type K that must satisfy chainhash.Hash constraints.
+// This allows type-safe handling of different hash types while maintaining the concurrent access pattern.
 type ConcurrentBlob[K chainhash.Hash] struct {
-	// blobStore is the underlying blob storage implementation
+	// blobStore is the underlying blob storage implementation that handles the actual data storage
 	blobStore Store
-	// options contains the file options to use when storing blobs
+	// options contains the file options to use when storing blobs (e.g., DAH settings)
 	options []blob_options.FileOption
-	// mu provides mutual exclusion for concurrent operations
+	// mu provides mutual exclusion for concurrent operations, using a read-write lock for efficiency
 	mu sync.RWMutex
-	// wg tracks ongoing blob operations by key
+	// wg tracks ongoing blob operations by key, allowing other goroutines to wait for completion
+	// rather than duplicating work
 	wg map[K]*sync.WaitGroup
 }
 
-// NewConcurrentBlob creates a new ConcurrentBlob instance
-// blobStore is the blob store to use for caching the blobs. Set a default DAH on the store to have the blobs expire.
-// options is a list of file options to use when storing the blobs.
+// NewConcurrentBlob creates a new ConcurrentBlob instance with the specified blob store and options.
+// 
+// Parameters:
+//   - blobStore: The underlying blob store implementation to use for data storage. For automatic
+//     expiration of blobs, use a store with Default-At-Height (DAH) functionality configured.
+//   - options: Optional file options to apply when storing blobs, such as custom metadata or
+//     specific DAH values. These options will be used for all operations performed by this instance.
+//
+// Returns:
+//   - *ConcurrentBlob[K]: A new instance ready for concurrent blob operations
 func NewConcurrentBlob[K chainhash.Hash](blobStore Store, options ...blob_options.FileOption) *ConcurrentBlob[K] {
 	return &ConcurrentBlob[K]{
 		blobStore: blobStore,

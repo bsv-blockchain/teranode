@@ -1,6 +1,21 @@
 // Package propagation implements Bitcoin SV transaction propagation and validation services.
 // It provides functionality for processing, validating, and distributing BSV transactions
 // across the network using multiple protocols including GRPC and UDP6 multicast.
+//
+// The propagation service acts as a critical gateway for transaction ingress into the Teranode
+// architecture. It ensures transactions are validated, stored, and efficiently distributed to
+// other components while maintaining high throughput and reliability. Key responsibilities include:
+//
+// - Transaction acceptance via multiple protocols (GRPC, HTTP, UDP6 multicast)
+// - Initial validation to ensure transaction format correctness
+// - Transaction storage in the configured blob store
+// - Asynchronous validation through integration with the validator service
+// - Efficient batch processing for high transaction volumes
+// - Size-based routing with fallback mechanisms for large transactions
+//
+// The service implements multiple connection strategies and fallback mechanisms to ensure
+// reliable transaction processing even under high load conditions or when dealing with
+// exceptionally large transactions that exceed standard gRPC message size limits.
 package propagation
 
 import (
@@ -344,7 +359,23 @@ func (ps *PropagationServer) Stop(_ context.Context) error {
 	return nil
 }
 
-// handleSingleTx handles a single transaction request on the /tx endpoint
+// handleSingleTx handles a single transaction request on the /tx endpoint.
+// This method creates and returns an HTTP handler function for processing
+// individual transactions submitted via HTTP POST. The handler:
+//
+// 1. Sets up tracing and instrumentation for the request
+// 2. Reads the raw transaction data from the request body
+// 3. Delegates to processTransaction for core processing logic
+// 4. Returns appropriate HTTP response codes and messages
+//
+// The /tx endpoint is critical for accepting transactions from external clients
+// and also serves as a fallback mechanism for large transactions within the system.
+//
+// Parameters:
+//   - _: Unused context parameter (context is obtained from the HTTP request)
+//
+// Returns:
+//   - echo.HandlerFunc: HTTP handler function for the Echo web framework
 func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "handleSingleTx",
@@ -368,7 +399,27 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 	}
 }
 
-// handleMultipleTx handles multiple transactions on the /txs endpoint
+// handleMultipleTx handles multiple transactions on the /txs endpoint.
+// This method creates and returns an HTTP handler function for processing
+// batches of transactions submitted via HTTP POST. The handler implements
+// a sophisticated processing pipeline that:
+//
+// 1. Sets up tracing and instrumentation for batch processing
+// 2. Creates a worker pool with channels for parallel transaction processing
+// 3. Concurrently reads and parses transactions from the request body
+// 4. Enforces batch size limits (maxTransactionsPerRequest) and data size limits (maxDataPerRequest)
+// 5. Processes each transaction through a separate goroutine for maximum throughput
+// 6. Collects and aggregates errors from parallel processing
+// 7. Returns appropriate HTTP responses with detailed error information
+//
+// The batch processing endpoint is critical for high-throughput ingestion scenarios
+// where clients need to submit multiple transactions efficiently.
+//
+// Parameters:
+//   - _: Unused context parameter (context is obtained from the HTTP request)
+//
+// Returns:
+//   - echo.HandlerFunc: HTTP handler function for the Echo web framework
 func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "handleMultipleTx",
@@ -452,7 +503,27 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 	}
 }
 
-// startHTTPServer initializes and starts the HTTP server for transaction processing
+// startHTTPServer initializes and starts the HTTP server for transaction processing.
+// This method configures and launches the Echo web server with the following setup:
+//
+// 1. Creates an Echo server instance with context for graceful shutdown
+// 2. Registers essential middleware (recover, CORS, request ID, logging)
+// 3. Configures transaction processing endpoints:
+//    - POST /tx for single transaction processing
+//    - POST /txs for batch transaction processing
+//    - GET /health for service health checks
+// 4. Sets up listener configuration with appropriate address binding
+// 5. Starts the server in a non-blocking mode with proper error handling
+//
+// The HTTP server provides REST endpoints that complement the gRPC and UDP6
+// interfaces for transaction ingestion, serving different client needs.
+//
+// Parameters:
+//   - ctx: Context for server lifecycle and shutdown
+//   - httpAddresses: Comma-separated list of address:port combinations to bind
+//
+// Returns:
+//   - error: Error if server initialization or startup fails
 func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses string) error {
 	// Initialize Echo server with settings
 	ps.httpServer = echo.New()
@@ -488,7 +559,21 @@ func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses 
 	return nil
 }
 
-// startAndMonitorHTTPServer starts the HTTP server and monitors for shutdown
+// startAndMonitorHTTPServer starts the HTTP server and monitors for shutdown.
+// This method manages the HTTP server lifecycle by:
+//
+// 1. Starting the HTTP server with the given addresses in a background goroutine
+// 2. Logging server startup events and any errors encountered
+// 3. Monitoring for context cancellation signals
+// 4. Performing graceful shutdown when the context is canceled
+// 5. Ensuring all resources are properly released
+//
+// The server is launched in a non-blocking manner, allowing the main service
+// thread to continue initialization and operation while HTTP endpoints are available.
+//
+// Parameters:
+//   - ctx: Context for server lifecycle monitoring and shutdown signals
+//   - httpAddresses: Address configuration for HTTP server bindings
 func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, httpAddresses string) {
 	// Start the server
 	go func() {
@@ -510,20 +595,26 @@ func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, http
 }
 
 // ProcessTransaction validates and stores a single transaction.
-// It performs the following steps:
-// 1. Validates transaction format
-// 2. Verifies it's not a coinbase transaction
-// 3. Ensures transaction is extended
-// 4. Stores the transaction
-// 5. Triggers validation through validator service or Kafka
+// This method is the primary gRPC entry point for transaction submission and implements
+// the complete transaction processing pipeline with the following steps:
 //
+// 1. Validates transaction format and parses it into a Bitcoin transaction
+// 2. Verifies it's not a coinbase transaction (not allowed for propagation)
+// 3. Ensures the transaction is in extended format (required for processing)
+// 4. Stores the transaction in the configured blob store for persistence
+// 5. Triggers validation through the appropriate channel (validator service or Kafka)
+// 6. Records performance metrics for monitoring and alerting
+//
+// The method is designed to handle high transaction throughput while providing
+// detailed error reporting for various failure scenarios.
+// 
 // Parameters:
-//   - ctx: context for the transaction processing
-//   - req: transaction processing request containing raw transaction data
-//
+//   - ctx: Context for the transaction processing with tracing information
+//   - req: Transaction processing request containing raw transaction data
+// 
 // Returns:
-//   - *propagation_api.EmptyMessage: empty response on success
-//   - error: error if transaction processing fails
+//   - *propagation_api.EmptyMessage: Empty response on successful processing
+//   - error: Error with specific details if transaction processing fails
 func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
 	if err := ps.processTransaction(ctx, req); err != nil {
 		ps.logger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
@@ -535,16 +626,24 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 }
 
 // ProcessTransactionBatch processes multiple transactions concurrently.
-// It uses error groups to handle parallel processing while maintaining
-// proper error handling and context cancellation.
+// This method implements efficient concurrent processing of transaction batches with the following workflow:
 //
+// 1. Validates batch constraints (max batch size and total data size)
+// 2. Uses error groups (errgroup) to manage parallel transaction processing with proper cancellation
+// 3. Processes each transaction independently while preserving the original order in results
+// 4. Aggregates errors for each transaction while allowing the batch to complete even with partial failures
+// 5. Collects and maps individual transaction errors to their respective positions in the response
+//
+// This concurrent processing approach significantly improves throughput for batch submission
+// while maintaining proper error isolation between transactions.
+// 
 // Parameters:
-//   - ctx: context for the batch processing operation
-//   - req: batch request containing multiple transactions
-//
+//   - ctx: Context for the batch processing operation with cancellation support
+//   - req: Batch request containing multiple raw transactions
+// 
 // Returns:
-//   - *propagation_api.ProcessTransactionBatchResponse: response containing error status for each transaction
-//   - error: error if batch processing fails
+//   - *propagation_api.ProcessTransactionBatchResponse: Response containing per-transaction error status
+//   - error: Error if overall batch processing fails (size limits, context canceled)
 func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessTransactionBatch",
 		tracing.WithParentStat(ps.stats),
@@ -623,6 +722,25 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 	return nil
 }
 
+// processTransactionInternal performs the core business logic for processing a transaction.
+// This function implements the validation, storage, and validation routing logic with
+// the following workflow:
+//
+// 1. Validates that the transaction is not a coinbase transaction (not allowed)
+// 2. Verifies the transaction is in extended format (required for proper processing)
+// 3. Stores the transaction in the configured blob store with proper tracing context decoupling
+// 4. Routes the transaction to the appropriate validation path based on size and configuration:
+//    - If Kafka is configured, uses size-based routing:
+//      - Small transactions go through Kafka for async validation
+//      - Large transactions that exceed Kafka size limits use HTTP fallback
+//    - If no Kafka is configured, uses direct synchronous validation
+//
+// Parameters:
+//   - ctx: Context for transaction processing with tracing information
+//   - btTx: Bitcoin transaction to process (must be already parsed)
+//
+// Returns:
+//   - error: Error if any step in the processing pipeline fails
 func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btTx *bt.Tx) error {
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
@@ -667,8 +785,24 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 	return nil
 }
 
-// validateTransactionViaHTTP sends a transaction to the validator's HTTP endpoint
-// This is used as a fallback when Kafka message size limits are exceeded
+// validateTransactionViaHTTP sends a transaction to the validator's HTTP endpoint.
+// This method serves as a fallback mechanism for large transactions that exceed
+// the configured Kafka message size limits. It performs the following operations:
+//
+// 1. Verifies a validator HTTP endpoint is configured (fails if not available)
+// 2. Creates an HTTP client with appropriate timeout
+// 3. Constructs the complete request URL by resolving the endpoint path
+// 4. Submits the transaction's extended bytes to the validator's /tx endpoint
+// 5. Processes the response with proper error handling
+//
+// Parameters:
+//   - ctx: Context for HTTP request with cancellation support
+//   - btTx: Bitcoin transaction to validate
+//   - txSize: Size of the transaction in bytes (pre-calculated)
+//   - maxKafkaMessageSize: Maximum Kafka message size for logging/comparison
+//
+// Returns:
+//   - error: Error if HTTP validation fails or is not available
 func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btTx *bt.Tx, txSize int, maxKafkaMessageSize int) error {
 	if ps.validatorHTTPAddr == nil {
 		return errors.NewServiceError("[ProcessTransaction][%s] Transaction size %d bytes exceeds Kafka message limit (%d bytes), but no HTTP endpoint configured for validator",
@@ -715,7 +849,23 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 	return nil
 }
 
-// validateTransactionViaKafka sends a transaction to the validator through Kafka
+// validateTransactionViaKafka sends a transaction to the validator through Kafka.
+// This method handles the asynchronous validation pathway for transactions that
+// fit within the Kafka message size limits. It performs the following operations:
+//
+// 1. Creates a validation options object with default settings
+// 2. Constructs a Kafka message with the transaction and validation options
+// 3. Serializes the message using Protocol Buffers
+// 4. Publishes the message to the configured Kafka topic
+//
+// This asynchronous validation path is generally preferred for normal-sized transactions
+// as it provides better throughput and scalability compared to synchronous HTTP validation.
+//
+// Parameters:
+//   - btTx: Bitcoin transaction to validate
+//
+// Returns:
+//   - error: Error if message preparation or publishing fails
 func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
 	validationOptions := validator.NewDefaultOptions()
 
@@ -744,15 +894,24 @@ func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
 }
 
 // storeTransaction persists a transaction to the configured storage backend.
-// It stores the transaction using its chain hash as the key and extended
-// bytes as the value.
+// This method implements the transaction storage mechanism with the following workflow:
 //
+// 1. Extracts the transaction chain hash to use as the unique key
+// 2. Obtains the extended transaction bytes for storage
+// 3. Attempts to store the transaction in the configured blob store
+// 4. Handles errors with appropriate categorization and context
+// 5. Updates metrics for performance monitoring
+//
+// The storage mechanism is critical for transaction durability and enables
+// transaction lookup for subsequent processing stages. Using the chain hash
+// as key ensures consistent and efficient transaction retrieval.
+// 
 // Parameters:
-//   - ctx: context for the storage operation
-//   - btTx: Bitcoin transaction to store
-//
+//   - ctx: Context for the storage operation with tracing and timeout
+//   - btTx: Bitcoin transaction to store (must be properly parsed)
+// 
 // Returns:
-//   - error: error if storage operation fails
+//   - error: Error with detailed context if the storage operation fails
 func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "PropagationServer:Set:Store")
 	defer deferFn()

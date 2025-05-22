@@ -1,4 +1,17 @@
 // Package subtreeprocessor provides functionality for processing transaction subtrees in Teranode.
+//
+// The subtreeprocessor implements an efficient system for organizing transactions into
+// hierarchical subtrees that can be quickly assembled into blocks. This approach enables:
+//   - Efficient transaction storage and retrieval
+//   - Dynamic adjustment of subtree sizes based on transaction volume
+//   - Parallelized processing of transaction groups
+//   - Optimized block candidate generation
+//   - Fast response to blockchain reorganizations
+//
+// The package works closely with the blockassembly service to maintain transaction
+// integrity during chain reorganizations and provides mechanisms for transaction
+// deduplication and conflict resolution.
+
 package subtreeprocessor
 
 import (
@@ -31,6 +44,10 @@ import (
 )
 
 // Job represents a mining job with its associated data.
+// A Job encapsulates all the information needed for a miner to attempt finding a valid
+// proof-of-work solution, including the block template and associated transaction subtrees.
+// Each job is uniquely identified to track mining attempts and solutions.
+
 type Job struct {
 	ID              *chainhash.Hash        // Unique identifier for the job
 	Subtrees        []*util.Subtree        // Collection of subtrees for the job
@@ -38,6 +55,9 @@ type Job struct {
 }
 
 // NewSubtreeRequest encapsulates a request to process a new subtree.
+// This structure is used to communicate new subtrees between the block assembly service
+// and the subtree processor, including an error channel for asynchronous result reporting.
+
 type NewSubtreeRequest struct {
 	Subtree     *util.Subtree                                     // The subtree to process
 	ParentTxMap *util.SyncedMap[chainhash.Hash, []chainhash.Hash] // Map of parent transactions
@@ -87,6 +107,18 @@ type ResetResponse struct {
 }
 
 // SubtreeProcessor manages the processing of transaction subtrees and block assembly.
+// It serves as the core component for organizing transactions into efficient structures
+// for block creation. The processor maintains the current blockchain state, manages
+// transaction queues, and coordinates with the block assembler to create valid block templates.
+//
+// Key responsibilities include:
+//   - Organizing transactions into hierarchical subtrees
+//   - Processing newly arrived transactions
+//   - Handling chain reorganizations
+//   - Managing transaction conflicts
+//   - Optimizing subtree sizes based on transaction volume
+//   - Providing transaction sets for block candidates
+
 type SubtreeProcessor struct {
 	// settings contains the configuration parameters for the processor
 	settings *settings.Settings

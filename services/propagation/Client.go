@@ -23,6 +23,15 @@ import (
 )
 
 // batchItem represents a single transaction in a batch along with its completion channel.
+// This type serves as the fundamental unit in the transaction batch processing system:
+//
+// - tx: Contains the parsed Bitcoin transaction (bt.Tx) ready for submission
+// - done: Channel used for asynchronous completion notification and error reporting
+//
+// When a transaction is submitted through the batching system, it's wrapped in a batchItem
+// and placed in the batch queue. Once the transaction is processed (either successfully
+// or with an error), the result is sent through the done channel, allowing the original
+// caller to continue execution with proper error handling.
 type batchItem struct {
 	tx   *bt.Tx     // Bitcoin transaction to process
 	done chan error // Channel to signal completion and return any error
@@ -114,7 +123,18 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 }
 
 // Stop gracefully shuts down the client and closes the gRPC connection.
-// This should be called when the client is no longer needed to clean up resources.
+// This method performs proper cleanup of resources used by the propagation client:
+//
+// 1. Verifies that both client and connection are initialized before attempting cleanup
+// 2. Safely closes the gRPC connection to the propagation service
+// 3. Silently handles any close errors to prevent propagation of shutdown errors
+//
+// This method should be called when the client is no longer needed to prevent
+// resource leaks, particularly long-lived gRPC connections. It's commonly used
+// during service shutdown or when switching connection configurations.
+//
+// Important: After Stop is called, the client instance should not be reused.
+// A new client instance should be created if needed.
 
 func (c *Client) Stop() {
 	if c.client != nil && c.conn != nil {
@@ -169,6 +189,24 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 	return errors.UnwrapGRPC(err)
 }
 
+// sendTransactionViaHTTP sends a single transaction to the propagation service via HTTP.
+// This method implements the HTTP fallback path for transaction submission when:
+// 1. The transaction exceeds gRPC message size limits
+// 2. The client is configured to always use HTTP (AlwaysUseHTTP=true)
+//
+// The implementation follows these steps:
+// 1. Creates an HTTP client with appropriate timeout settings
+// 2. Prepares a POST request to the /tx endpoint with the transaction's extended bytes
+// 3. Sends the request with proper context propagation for cancellation
+// 4. Processes the response with thorough error handling
+// 5. Logs success or detailed error information
+//
+// Parameters:
+//   - ctx: Context for HTTP request with cancellation support
+//   - tx: Bitcoin transaction to submit
+//
+// Returns:
+//   - error: Error if HTTP transaction submission fails
 func (c *Client) sendTransactionViaHTTP(ctx context.Context, tx *bt.Tx) error {
 	// Create an HTTP client with a timeout
 	client := &http.Client{
@@ -203,11 +241,39 @@ func (c *Client) sendTransactionViaHTTP(ctx context.Context, tx *bt.Tx) error {
 
 // TriggerBatcher forces the current batch to be processed immediately,
 // regardless of whether it has reached the configured batch size or timeout.
+// This method provides a mechanism to flush any pending transactions in the
+// current batch, which is particularly useful in scenarios such as:
+//
+// 1. Service shutdown where pending transactions should be processed
+// 2. Low-volume periods where transactions might wait too long
+// 3. Testing scenarios where immediate processing is desired
+// 4. Manual intervention points in transaction processing flow
+//
+// The method delegates to the underlying batcher's Trigger method to initiate
+// the immediate batch processing.
 func (c *Client) TriggerBatcher() {
 	c.batcher.Trigger()
 }
 
-// handleBatchError sends the given error to all transactions in the batch
+// handleBatchError sends the given error to all transactions in the batch.
+// This method provides uniform error handling for batch processing failures:
+//
+// 1. Logs the error with the provided format string and additional context
+// 2. Distributes the error to all transaction items in the batch through their
+//    individual completion channels
+// 3. Ensures all goroutines waiting on transaction completion are unblocked
+//
+// This centralized error handling ensures consistent behavior across different
+// batch processing failure scenarios.
+//
+// Parameters:
+//   - batch: Slice of transaction items with completion channels
+//   - err: Error to propagate to all transactions
+//   - format: Log message format string
+//   - args: Additional arguments for the format string
+//
+// Returns:
+//   - error: Returns the input error for convenience in call chaining
 func (c *Client) handleBatchError(batch []*batchItem, err error, format string, args ...interface{}) error {
 	wrappedErr := errors.NewServiceError(format, append(args, err)...)
 	c.logger.Errorf(wrappedErr.Error())
@@ -219,7 +285,20 @@ func (c *Client) handleBatchError(batch []*batchItem, err error, format string, 
 	return wrappedErr
 }
 
-// handleBatchResponse processes the gRPC response for a batch and notifies each transaction
+// handleBatchResponse processes the gRPC response for a batch and notifies each transaction.
+// This method handles the successful gRPC batch processing response by:
+//
+// 1. Iterating through each transaction in the batch
+// 2. Mapping response errors to the corresponding transactions
+// 3. Sending appropriate errors or success notifications via completion channels
+// 4. Ensuring all waiting goroutines are unblocked with the correct status
+//
+// The method ensures that even within a successful batch, individual transaction
+// errors are properly captured and reported.
+//
+// Parameters:
+//   - batch: Slice of transaction items with completion channels
+//   - response: gRPC response containing per-transaction error status
 func (c *Client) handleBatchResponse(batch []*batchItem, response *propagation_api.ProcessTransactionBatchResponse) {
 	for i, err := range response.Errors {
 		if !err.IsNil() { // don't do err != nil, proto can't return nil TError
@@ -230,7 +309,25 @@ func (c *Client) handleBatchResponse(batch []*batchItem, response *propagation_a
 	}
 }
 
-// processBatchViaHTTP sends transaction batch via HTTP fallback when gRPC fails
+// processBatchViaHTTP sends transaction batch via HTTP fallback when gRPC fails.
+// This method implements the HTTP transport fallback for batch processing:
+//
+// 1. Prepares a properly formatted multipart form request with all transactions
+// 2. Sets appropriate HTTP headers and connection parameters
+// 3. Submits the batch to the propagation service's /txs endpoint
+// 4. Processes the response, analyzing status codes and error conditions
+// 5. Reports any errors back to the original transaction channels
+//
+// The HTTP fallback path is critical for resilient operation when transactions
+// exceed the gRPC message size limits or when configured to always use HTTP.
+//
+// Parameters:
+//   - ctx: Context for HTTP request processing
+//   - batch: Slice of transaction items with completion channels
+//   - txs: Raw transaction bytes for each transaction in the batch
+//
+// Returns:
+//   - error: Error if the HTTP batch processing fails
 func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, txs [][]byte) error {
 	// Create HTTP client for large batch
 	client := &http.Client{
@@ -280,7 +377,28 @@ func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, tx
 }
 
 // ProcessTransactionBatch sends multiple transactions to the validator for processing.
-// It attempts to process them via gRPC first, falling back to HTTP if the message size is too large.
+// This method implements a sophisticated multi-transport strategy with automatic fallback:
+//
+// 1. If AlwaysUseHTTP is configured, it directly uses the HTTP endpoint
+// 2. Otherwise, it attempts to use gRPC for better performance:
+//    - Prepares a batch request with extended transaction bytes
+//    - Sends the request to the propagation service
+//    - Processes the response with per-transaction error handling
+// 3. If the gRPC request fails due to message size limits:
+//    - Automatically falls back to HTTP transport
+//    - Logs the transport fallback event
+//    - Preserves the original batch processing semantics
+// 4. For other types of errors, properly unwraps and propagates them
+//
+// The method ensures all transactions in the batch receive appropriate error
+// feedback through their individual completion channels.
+//
+// Parameters:
+//   - ctx: Context for batch processing with timeout/cancellation
+//   - batch: Slice of transaction items with completion channels
+//
+// Returns:
+//   - error: Error if batch processing fails at the transport level
 func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem) error {
 	// Create a slice of raw transaction bytes for the gRPC request
 	txs := make([][]byte, len(batch))
@@ -322,14 +440,28 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 }
 
 // getClientConn establishes a gRPC connection to the propagation service.
-// It uses the configured service addresses and connection options.
-//
+// This method handles the critical task of establishing a reliable connection
+// to the propagation service with proper configuration:
+// 
+// 1. Uses the configured list of propagation service addresses
+// 2. Configures connection with appropriate gRPC options:
+//    - WithInsecure for non-TLS connections (configurable)
+//    - WithBlock for synchronous connection establishment
+//    - WithDefaultCallOptions for appropriate message size limits
+// 3. Establishes the connection with proper timeout handling
+// 4. Incorporates any user-defined dial options from settings
+// 
+// The connection created by this method serves as the foundation for all
+// gRPC-based transaction propagation communications.
+// 
 // Parameters:
-//   - ctx: Context for connection establishment
-//
+//   - ctx: Context for connection establishment with timeout control
+//   - propagationGrpcAddresses: List of propagation service endpoints
+//   - tSettings: Settings containing connection configuration
+// 
 // Returns:
-//   - *grpc.ClientConn: Established gRPC connection
-//   - error: Error if connection fails
+//   - *grpc.ClientConn: Established gRPC connection ready for client creation
+//   - error: Error if connection establishment fails
 func getClientConn(ctx context.Context, propagationGrpcAddresses []string, tSettings *settings.Settings) (*grpc.ClientConn, error) {
 	conn, err := util.GetGRPCClient(ctx, propagationGrpcAddresses[0], &util.ConnectionOptions{
 		MaxRetries:   tSettings.GRPCMaxRetries,

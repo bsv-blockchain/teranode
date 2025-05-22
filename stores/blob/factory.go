@@ -79,16 +79,24 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 	return
 }
 
-// createDAHStore wraps a store with DAH capabilities using a local cache.
-// Parameters:
-//   - storeURL: URL containing DAH store configuration
-//   - logger: Logger instance for DAH operations
-//   - opts: Store options
-//   - store: The base store to wrap
+// createDAHStore wraps a store with Delete-At-Height (DAH) capabilities using a local cache.
+// DAH functionality allows blobs to be automatically deleted when a specific blockchain
+// height is reached. This implementation uses a local cache to track the DAH values
+// for blobs in the underlying store.
 //
+// The DAH implementation supports various storage backends for the cache itself, specified
+// via the localDAHStore query parameter in the URL (e.g., ?localDAHStore=memory://)
+//
+// Parameters:
+//   - storeURL: URL containing DAH store configuration and parameters
+//   - logger: Logger instance for DAH operations and error reporting
+//   - opts: Store options to be passed to the DAH store and cache store
+//   - store: The base store to wrap with DAH functionality
+// 
 // Returns:
 //   - Store: The DAH-enabled store instance
-//   - error: Any error that occurred during creation
+//   - error: Any error that occurred during creation, particularly if the local DAH cache
+//     cannot be initialized
 func createDAHStore(storeURL *url.URL, logger ulogger.Logger, opts []options.StoreOption, store Store) (Store, error) {
 	localDAHStorePath := storeURL.Query().Get("localDAHStorePath")
 
@@ -118,15 +126,25 @@ func createDAHStore(storeURL *url.URL, logger ulogger.Logger, opts []options.Sto
 	return store, nil
 }
 
-// createBatchedStore wraps a store with batching capabilities.
-// Parameters:
-//   - storeURL: URL containing batch configuration
-//   - store: The base store to wrap
-//   - logger: Logger instance for batch operations
+// createBatchedStore wraps a store with batching capabilities for improved performance.
+// Batching allows multiple blob operations to be processed as a group, which can
+// significantly improve throughput and reduce overhead, especially for storage backends
+// with high per-operation costs like network or disk I/O.
 //
+// The batcher is configured through URL query parameters:
+//   - batchSize: Maximum number of operations in a batch (default: 1000)
+//   - batchInterval: Maximum time in milliseconds before a batch is processed (default: 100ms)
+//   - batchWorkers: Number of worker goroutines for processing batches (default: 10)
+//
+// Parameters:
+//   - storeURL: URL containing batch configuration parameters
+//   - store: The base store to wrap with batching capabilities
+//   - logger: Logger instance for batch operations, monitoring, and error reporting
+// 
 // Returns:
-//   - Store: The batched store instance
-//   - error: Any error that occurred during creation
+//   - Store: The batched store instance with configured batch parameters
+//   - error: Any error that occurred during creation, particularly if the batcher
+//     cannot be properly configured with the provided parameters
 func createBatchedStore(storeURL *url.URL, store Store, logger ulogger.Logger) (Store, error) {
 	sizeInBytes := int64(4 * 1024 * 1024)
 

@@ -1,5 +1,26 @@
 // Package legacy implements a Bitcoin SV legacy protocol server that handles peer-to-peer communication
 // and blockchain synchronization using the traditional Bitcoin network protocol.
+//
+// The legacy package provides a bridge between modern Bitcoin SV architecture and the traditional
+// Bitcoin network protocol. It maintains compatibility with legacy Bitcoin nodes while integrating
+// with Teranode's high-performance microservices architecture.
+//
+// Key features:
+// - Full implementation of the Bitcoin P2P protocol
+// - Peer discovery and connection management
+// - Network address management with persistent storage
+// - Ban list management for malicious peers
+// - Block and transaction relay
+// - Integration with blockchain, validation, and other Teranode services
+//
+// Architecture:
+// The legacy service is designed as a standalone microservice that communicates with other
+// Teranode components through well-defined gRPC interfaces. It maintains its own peer connections
+// and translates between legacy protocol messages and modern service requests.
+//
+// Security:
+// The package implements various security measures including peer banning, connection limits,
+// and protocol validation to protect against DoS attacks and other network threats.
 package legacy
 
 import (
@@ -32,6 +53,15 @@ import (
 )
 
 // Server represents the main legacy protocol server structure that implements the peer service interface.
+// It serves as the primary integration point between the legacy Bitcoin protocol and Teranode services.
+//
+// Server manages peer connections, handles protocol messages, and coordinates with other Teranode
+// microservices to provide blockchain synchronization and transaction relay services.
+//
+// Concurrency safety:
+// - The Server maintains its own goroutines for handling peer connections and message processing
+// - All method calls should be considered thread-safe unless explicitly noted otherwise
+// - The underlying server implementation handles the complexity of concurrent peer connections
 type Server struct {
 	// UnimplementedPeerServiceServer is embedded to satisfy the gRPC interface
 	peer_api.UnimplementedPeerServiceServer
@@ -55,32 +85,58 @@ type Server struct {
 	height uint32
 
 	// blockchainClient handles blockchain operations
+	// Used for querying blockchain state and submitting new blocks
 	blockchainClient blockchain.ClientI
 
 	// validationClient handles transaction validation
+	// Used to validate incoming transactions before relay
 	validationClient validator.Interface
 
 	// subtreeStore provides storage for merkle subtrees
+	// Used in block validation and merkle proof verification
 	subtreeStore blob.Store
 
 	// tempStore provides temporary storage
+	// Used for ephemeral data storage during processing
 	tempStore blob.Store
 
 	// utxoStore manages the UTXO set
+	// Used for transaction validation and UTXO queries
 	utxoStore utxo.Store
 
 	// subtreeValidation handles merkle subtree validation
+	// Used to verify merkle proofs and validate block structure
 	subtreeValidation subtreevalidation.Interface
 
 	// blockValidation handles block validation
+	// Used to validate incoming blocks before acceptance
 	blockValidation blockvalidation.Interface
 
 	// blockAssemblyClient handles block assembly operations
+	// Used for mining and block template generation
 	blockAssemblyClient *blockassembly.Client
 }
 
 // New creates and returns a new Server instance with the provided dependencies.
 // It initializes Prometheus metrics and returns a configured server ready for use.
+//
+// New is the recommended constructor for the legacy server and sets up all necessary
+// internal state required for proper operation. It does not start any network operations
+// or begin listening for connections until the Start method is called.
+//
+// Parameters:
+//  - logger: Provides structured logging capabilities for the server
+//  - tSettings: Contains all configuration settings for the server and its components
+//  - blockchainClient: Interface to the blockchain service for querying and submitting blocks
+//  - validationClient: Interface to the transaction validation service
+//  - subtreeStore: Blob storage interface for merkle subtree data
+//  - tempStore: Temporary blob storage for ephemeral data
+//  - utxoStore: Interface to the UTXO (Unspent Transaction Output) database
+//  - subtreeValidation: Interface to the subtree validation service
+//  - blockValidation: Interface to the block validation service
+//  - blockAssemblyClient: Client for the block assembly service (used for mining)
+//
+// Returns a properly configured Server instance that is ready to be initialized and started.
 func New(logger ulogger.Logger,
 	tSettings *settings.Settings,
 	blockchainClient blockchain.ClientI,
@@ -110,8 +166,26 @@ func New(logger ulogger.Logger,
 }
 
 // Health performs health checks on the server and its dependencies.
-// It returns an HTTP status code, a message, and an error if any.
-// The checkLiveness parameter determines whether to perform liveness or readiness checks.
+// It implements the health.Checker interface for integration with Teranode's health monitoring system.
+//
+// The Health method performs two types of checks depending on the checkLiveness parameter:
+// 1. Liveness checks: Verify if the service is running and responsive but do not check dependencies.
+//    These are used to determine if the service should be restarted.
+// 2. Readiness checks: Verify if the service and all its dependencies are operational.
+//    These are used to determine if the service can accept traffic.
+//
+// The method aggregates health status from all dependent services including the blockchain client,
+// validation client, stores, and connected peers. It also performs custom checks like verifying
+// peer connections and recent peer activity.
+//
+// Parameters:
+//  - ctx: Context for cancellation and timeouts
+//  - checkLiveness: If true, performs only liveness checks; if false, performs readiness checks
+//
+// Returns:
+//  - HTTP status code (200 for healthy, 503 for unhealthy)
+//  - A human-readable status message
+//  - Error details if the check failed
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -200,6 +274,22 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 
 // Init initializes the server by setting up wire limits, network listeners,
 // and other required components. It returns an error if initialization fails.
+//
+// This method must be called after creating a new Server with the New function and before
+// calling Start. It performs the following key operations:
+// - Sets up message size limits for the wire protocol
+// - Determines the server's public IP address for listening
+// - Creates and configures the internal server implementation
+// - Sets up initial peer connections from configuration
+//
+// Init does not start accepting connections or begin network operations. That happens when
+// Start is called.
+//
+// Parameters:
+//  - ctx: Context for cancellation and timeout control
+//
+// Returns an error if any part of initialization fails, particularly if required
+// configuration settings are missing or network setup fails.
 func (s *Server) Init(ctx context.Context) error {
 	var err error
 
@@ -249,14 +339,45 @@ func (s *Server) Init(ctx context.Context) error {
 	return nil
 }
 
+// GetPeerCount returns the total number of connected peers.
+//
+// This method is part of the peer_api.PeerServiceServer gRPC interface and provides
+// a simple count of currently connected peers to the legacy server.
+//
+// Parameters:
+//  - ctx: Context for cancellation and timeout control
+//  - _: Empty message parameter (required by gRPC interface)
+//
+// Returns:
+//  - GetPeerCountResponse containing the peer count
+//  - Error if the operation fails (nil on success)
 func (s *Server) GetPeerCount(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetPeerCountResponse, error) {
 	pc := s.server.ConnectedCount()
 
 	return &peer_api.GetPeerCountResponse{Count: pc}, nil
 }
 
-// GetPeers returns information about all connected peers.
-// It returns a GetPeersResponse containing details about each peer's connection and state.
+// GetPeers returns detailed information about all connected peers.
+// It provides a comprehensive snapshot of the current peer connections, including
+// connection details, protocol versions, network statistics, and peer status.
+//
+// This method is part of the peer_api.PeerServiceServer gRPC interface and is used
+// by monitoring and control systems to observe the state of the peer network.
+//
+// The returned information includes:
+// - Peer identification and addressing information
+// - Connection statistics (bytes sent/received, timing)
+// - Protocol and version information
+// - Blockchain synchronization status
+// - Ban score and whitelisting status
+//
+// Parameters:
+//  - ctx: Context for cancellation and timeout control
+//  - _: Empty message parameter (required by gRPC interface)
+//
+// Returns:
+//  - GetPeersResponse containing detailed information about all peers
+//  - Error if the operation fails, particularly if the server is not initialized
 func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetPeersResponse, error) {
 	s.logger.Debugf("GetPeers called")
 
@@ -303,19 +424,72 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 	return resp, nil
 }
 
+// IsBanned checks if a specific IP address or subnet is currently banned.
+//
+// This method is part of the peer_api.PeerServiceServer gRPC interface and provides
+// a way to query the ban status of a specific network address.
+//
+// Parameters:
+//  - ctx: Context for cancellation and timeout control
+//  - peer: Request containing the IP address or subnet to check
+//
+// Returns:
+//  - IsBannedResponse containing a boolean indicating ban status
+//  - Error if the operation fails (nil on success)
 func (s *Server) IsBanned(ctx context.Context, peer *peer_api.IsBannedRequest) (*peer_api.IsBannedResponse, error) {
 	return &peer_api.IsBannedResponse{IsBanned: s.server.banList.IsBanned(peer.IpOrSubnet)}, nil
 }
 
+// ListBanned returns a list of all currently banned IP addresses and subnets.
+//
+// This method is part of the peer_api.PeerServiceServer gRPC interface and provides
+// a complete view of all banned network addresses.
+//
+// Parameters:
+//  - ctx: Context for cancellation and timeout control
+//  - _: Empty message parameter (required by gRPC interface)
+//
+// Returns:
+//  - ListBannedResponse containing a list of all banned addresses
+//  - Error if the operation fails (nil on success)
 func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*peer_api.ListBannedResponse, error) {
 	return &peer_api.ListBannedResponse{Banned: s.server.banList.ListBanned()}, nil
 }
 
+// ClearBanned removes all entries from the ban list, allowing previously banned
+// addresses to reconnect.
+//
+// This method is part of the peer_api.PeerServiceServer gRPC interface and provides
+// a way to reset the ban list, typically used for administrative purposes.
+//
+// Parameters:
+//  - ctx: Context for cancellation and timeout control
+//  - _: Empty message parameter (required by gRPC interface)
+//
+// Returns:
+//  - ClearBannedResponse with Ok=true to indicate success
+//  - Error if the operation fails (nil on success)
 func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*peer_api.ClearBannedResponse, error) {
 	s.server.banList.Clear()
 	return &peer_api.ClearBannedResponse{Ok: true}, nil
 }
 
+// BanPeer bans a peer from connecting for a specified duration.
+//
+// This method is part of the peer_api.PeerServiceServer gRPC interface and provides
+// a way to temporarily ban a peer based on its network address. The peer will be
+// disconnected if currently connected and prevented from reconnecting until the
+// ban expires.
+//
+// Parameters:
+//  - ctx: Context for cancellation and timeout control
+//  - peer: Request containing the peer address and ban duration
+//    - Addr: The peer's network address (IP:Port)
+//    - Until: Unix timestamp when the ban should expire (seconds since epoch)
+//
+// Returns:
+//  - BanPeerResponse with Ok=true if the ban was successful, Ok=false otherwise
+//  - Error if the ban operation fails, particularly if the peer address is invalid
 func (s *Server) BanPeer(ctx context.Context, peer *peer_api.BanPeerRequest) (*peer_api.BanPeerResponse, error) {
 	err := s.banPeer(peer.Addr, peer.Until)
 	if err != nil {
@@ -325,6 +499,24 @@ func (s *Server) BanPeer(ctx context.Context, peer *peer_api.BanPeerRequest) (*p
 	return &peer_api.BanPeerResponse{Ok: true}, nil
 }
 
+// UnbanPeer removes a ban on a specific peer, allowing it to reconnect immediately.
+//
+// This method is part of the peer_api.PeerServiceServer gRPC interface and provides
+// a way to lift an existing ban on a peer. The request is processed asynchronously
+// through a channel to the internal server component.
+//
+// Parameters:
+//  - ctx: Context for cancellation and timeout control
+//  - peer: Request containing the peer address to unban
+//    - Addr: The peer's network address (IP:Port) or subnet
+//
+// Returns:
+//  - UnbanPeerResponse with Ok=true to indicate the request was received
+//  - Error if the operation fails (nil on success)
+//
+// Note: The Ok=true response indicates only that the request was received and processed,
+// not necessarily that the unban operation was successful. The actual unban operation
+// happens asynchronously.
 func (s *Server) UnbanPeer(ctx context.Context, peer *peer_api.UnbanPeerRequest) (*peer_api.UnbanPeerResponse, error) {
 	// put the unban request on the unbanPeer channel
 	s.server.unbanPeer <- unbanPeerReq{addr: bannedPeerAddr(peer.Addr)}
@@ -333,6 +525,17 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *peer_api.UnbanPeerRequest)
 	return &peer_api.UnbanPeerResponse{Ok: true}, nil // ok means the request was received and processed, but no necessarily successfully
 }
 
+// banPeer is an internal helper method to ban a peer by its address for a specified duration.
+//
+// This method attempts to find a connected peer with the provided address, and if found,
+// sends a ban request to the server's ban channel. It handles the actual work of finding
+// the peer and initiating the ban process.
+//
+// Parameters:
+//  - peerAddr: The network address of the peer to ban (IP:Port)
+//  - until: Unix timestamp indicating when the ban should expire (seconds since epoch)
+//
+// Returns an error if the peer couldn't be found by the provided address
 func (s *Server) banPeer(peerAddr string, until int64) error {
 	var foundPeer *serverPeer
 
@@ -358,7 +561,18 @@ func (s *Server) banPeer(peerAddr string, until int64) error {
 }
 
 // logPeerStats periodically logs statistics about connected peers.
-// It runs every minute until the provided context is canceled.
+// It runs as a separate goroutine and logs information about peer connections
+// once per minute until the provided context is canceled.
+//
+// This method collects and logs detailed information about each connected peer,
+// including connection durations, bytes transferred, and protocol state. It also
+// logs the current FSM state of the blockchain service if available.
+//
+// The statistics are useful for monitoring peer connectivity, network health,
+// and debugging communication issues between nodes.
+//
+// Parameters:
+//  - ctx: Context that controls when logging should stop
 func (s *Server) logPeerStats(ctx context.Context) {
 	for {
 		select {
@@ -393,6 +607,28 @@ func (s *Server) logPeerStats(ctx context.Context) {
 
 // Start begins the server operation, including starting the internal server
 // and gRPC service. It returns an error if the server fails to start.
+//
+// This method initializes and starts all components of the legacy service:
+// - Waits for the blockchain FSM to transition from IDLE state
+// - Starts the internal peer server to handle P2P connections
+// - Begins periodic peer statistics logging
+// - Launches the gRPC service to handle API requests
+//
+// The method blocks until the gRPC server completes (either successfully running
+// or encountering an error). The readyCh parameter is used to signal when the
+// server is fully operational and ready to accept connections.
+//
+// Concurrency notes:
+// - Start launches multiple goroutines for different server components
+// - Each component runs independently but coordinates via the server state
+// - The gRPC service runs in the current goroutine and blocks until completion
+//
+// Parameters:
+//  - ctx: Context for cancellation and timeout control
+//  - readyCh: Channel to signal when the server is ready to accept connections
+//
+// Returns an error if any component fails to start, particularly if the blockchain
+// service isn't ready or the gRPC server fails to initialize
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -450,6 +686,21 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 // Stop gracefully shuts down the server and its components.
 // It returns an error if the shutdown process fails.
+//
+// This method performs a clean shutdown of all server components:
+// - Closes all peer connections
+// - Stops all network listeners
+// - Shuts down the internal server state
+// - Releases any allocated resources
+//
+// The method attempts to ensure that all connections are properly terminated
+// and resources are released, but it may not wait indefinitely for operations
+// to complete if they're taking too long.
+//
+// Parameters:
+//  - _: Context parameter (unused in the current implementation)
+//
+// Returns an error if the shutdown process encounters problems, or nil on successful shutdown
 func (s *Server) Stop(_ context.Context) error {
 	return s.server.Stop()
 }

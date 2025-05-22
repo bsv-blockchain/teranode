@@ -8,6 +8,10 @@ import (
 )
 
 // Data represents transaction metadata used in block assembly.
+// This structure encapsulates essential transaction information needed for the block assembly process,
+// including the transaction ID, fee amount, and size. It provides methods for serialization
+// and deserialization to enable efficient storage and transmission between components.
+
 type Data struct {
 	// TxIDChainHash is the transaction ID hash
 	TxIDChainHash chainhash.Hash
@@ -22,6 +26,14 @@ type Data struct {
 	Parents []chainhash.Hash
 }
 
+// NewFromBytes deserializes a byte array into a Data structure.
+//
+// Parameters:
+//   - bytes: Byte array containing serialized transaction metadata (at least 48 bytes)
+//
+// Returns:
+//   - *Data: Parsed transaction metadata
+//   - error: Any error encountered during deserialization
 func NewFromBytes(bytes []byte) (*Data, error) {
 	d := &Data{}
 
@@ -47,6 +59,12 @@ func NewFromBytes(bytes []byte) (*Data, error) {
 	return d, nil
 }
 
+// Bytes serializes the Data structure into a byte array.
+// The resulting byte array contains the transaction ID hash (32 bytes),
+// fee (8 bytes), and size (8 bytes) in little-endian format.
+//
+// Returns:
+//   - []byte: Serialized transaction metadata
 func (d *Data) Bytes() []byte {
 	bytes := make([]byte, 0, 256)
 

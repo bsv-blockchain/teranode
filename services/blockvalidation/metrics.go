@@ -45,10 +45,24 @@ var (
 	prometheusMetricsInitOnce sync.Once
 )
 
+// initPrometheusMetrics initializes all the Prometheus metrics for the blockvalidation service.
+// This function uses sync.Once to ensure metrics are only initialized once,
+// regardless of how many times it's called, preventing duplicate metric registration errors.
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
 
+// _initPrometheusMetrics is the internal implementation that registers all Prometheus metrics
+// used by the blockvalidation service. The metrics are organized into several categories:
+//
+// - Service health and availability metrics
+// - Channel buffer monitoring metrics
+// - Performance timing metrics for key operations
+// - Cache statistics metrics
+// - Transaction processing metrics
+//
+// These metrics provide comprehensive visibility into the performance, throughput,
+// and resource utilization of the block validation service during operation.
 func _initPrometheusMetrics() {
 	prometheusBlockValidationHealth = promauto.NewCounter(
 		prometheus.CounterOpts{

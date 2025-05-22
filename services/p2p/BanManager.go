@@ -1,3 +1,6 @@
+// Package p2p provides peer-to-peer networking functionality for the Teranode system.
+// The ban management subsystem implements fine-grained control over peer scoring,
+// ban durations, and ban events to ensure network health and security.
 package p2p
 
 import (
@@ -9,6 +12,11 @@ import (
 )
 
 // BanReason is an enum for ban reasons.
+// It represents standardized categories for why a peer might receive ban score points,
+// allowing for consistent policy enforcement and metrics collection.
+//
+// Using typed reasons rather than strings enables structured reasoning about ban patterns
+// and provides better support for localization and audit logging.
 type BanReason int
 
 const (
@@ -32,33 +40,73 @@ func (r BanReason) String() string {
 }
 
 // BanScore holds the score and ban status for a peer.
+// It tracks accumulating penalties for misbehavior and manages the ban state.
+//
+// The ban score system works on a threshold principle - when a peer's score exceeds
+// a configured threshold, the peer is banned for a period of time. The score decays over
+// time, providing forgiveness for temporary issues or minor violations.
+//
+// This structure maintains a history of reasons that contributed to the current score,
+// enabling analysis of patterns of misbehavior and informed decisions about permanent bans.
 type BanScore struct {
-	Score      int
-	Banned     bool
-	BanUntil   time.Time
-	LastUpdate time.Time
-	Reasons    []string // history of reasons (with optional timestamps)
+	Score      int       // Current numerical score for the peer (higher is worse)
+	Banned     bool      // Whether the peer is currently banned
+	BanUntil   time.Time // Time when the ban expires
+	LastUpdate time.Time // Time of the last score update (for decay calculations)
+	Reasons    []string  // History of reasons for score increases (with timestamps)
 }
 
 // BanEventHandler allows the system to react to ban events.
+// This interface provides a hook for other components to be notified when a peer is banned,
+// enabling coordinated responses across the system (such as disconnecting from the peer,
+// logging the event, or updating metrics).
+//
+// Implementations of this interface should be thread-safe as ban events may be
+// triggered from multiple goroutines concurrently.
 type BanEventHandler interface {
+	// OnPeerBanned is called when a peer has been banned.
+	// Parameters:
+	// - peerID: Identifier of the banned peer
+	// - until: Time when the ban expires
+	// - reason: Human-readable reason for the ban
 	OnPeerBanned(peerID string, until time.Time, reason string)
 }
 
 // PeerBanManager manages all peer scores and bans.
+// It implements a reputation system that tracks peer behavior, applies score penalties
+// for violations, and enforces temporary bans when scores exceed configured thresholds.
+//
+// The manager provides automatic score decay over time to allow peers to recover from
+// temporary issues or minor violations. It also maintains a history of ban reasons to
+// enable analysis of behavior patterns.
+//
+// All operations are thread-safe for concurrent access from multiple goroutines.
 type PeerBanManager struct {
-	ctx           context.Context
-	mu            sync.RWMutex
-	peerBanScores map[string]*BanScore
-	reasonPoints  map[BanReason]int
-	banThreshold  int
-	banDuration   time.Duration
-	decayInterval time.Duration
-	decayAmount   int
-	handler       BanEventHandler
+	ctx           context.Context      // Context for lifecycle management
+	mu            sync.RWMutex         // Mutex for thread-safe operations
+	peerBanScores map[string]*BanScore // Map of peer IDs to their ban scores
+	reasonPoints  map[BanReason]int    // Mapping of ban reasons to their penalty points
+	banThreshold  int                  // Score threshold that triggers a ban
+	banDuration   time.Duration        // Duration of bans when threshold is exceeded
+	decayInterval time.Duration        // How often scores are reduced (decay period)
+	decayAmount   int                  // How many points are removed during each decay
+	handler       BanEventHandler      // Handler for ban events to notify other components
 }
 
 // NewPeerBanManager creates a new ban manager with sensible defaults.
+// This constructor initializes a PeerBanManager with configuration derived from the settings
+// and reasonable default values for ban thresholds, durations, and score decay.
+//
+// The manager is configured with point values for different ban reasons based on their
+// severity, with more serious violations (like spam) receiving higher penalties than
+// minor issues (like invalid subtrees).
+//
+// Parameters:
+// - ctx: Context for lifecycle management and cancellation
+// - handler: Handler that will be notified when ban events occur
+// - tSettings: Application settings containing ban-related configuration
+//
+// Returns a fully configured PeerBanManager ready for use
 func NewPeerBanManager(ctx context.Context, handler BanEventHandler, tSettings *settings.Settings) *PeerBanManager {
 	m := &PeerBanManager{
 		ctx:           ctx,
@@ -94,6 +142,26 @@ func NewPeerBanManager(ctx context.Context, handler BanEventHandler, tSettings *
 }
 
 // AddScore increments the score for a peer, applies decay, and handles banning.
+// This method is the core of the peer reputation system, responsible for accumulating
+// misbehavior scores and enforcing bans when thresholds are exceeded.
+//
+// When called, it performs several operations:
+// - Applies time-based score decay based on elapsed time since last update
+// - Adds penalty points based on the specified reason
+// - Applies ban if score exceeds threshold
+// - Records the reason in ban history
+// - Notifies ban event handler if a ban is triggered
+//
+// Score decay allows peers to gradually recover from penalties over time, while
+// the reason tracking provides an audit trail of behavior problems.
+//
+// Parameters:
+// - peerID: Identifier of the peer to apply score to
+// - reason: Categorized reason for the score increase
+//
+// Returns:
+// - score: The peer's current score after adjustment
+// - banned: Whether the peer is now banned as a result of this score increase
 func (m *PeerBanManager) AddScore(peerID string, reason BanReason) (score int, banned bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

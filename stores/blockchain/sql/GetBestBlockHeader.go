@@ -1,3 +1,6 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
 package sql
 
 import (
@@ -12,6 +15,26 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// GetBestBlockHeader retrieves the header of the block at the tip of the best chain.
+// This implements the blockchain.Store.GetBestBlockHeader interface method.
+//
+// The best block is determined by the highest chainwork value, which represents the
+// cumulative proof-of-work difficulty in the chain. In case of equal chainwork,
+// it uses a deterministic tie-breaker based on peer_id and block id.
+//
+// The method first checks an in-memory cache for the best block header to avoid database queries.
+// If not found in cache, it executes a SQL query to find the valid block with the highest chainwork,
+// then reconstructs the header and metadata objects before returning.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allows for cancellation and timeouts
+//
+// Returns:
+//   - *model.BlockHeader: The header of the best block in the chain, if found
+//   - *model.BlockHeaderMeta: Metadata about the best block including height, tx count, etc.
+//   - error: Any error encountered during retrieval, specifically:
+//     * BlockNotFoundError if no valid blocks exist in the database
+//     * StorageError for other database or processing errors
 func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBestBlockHeader")
 	defer deferFn()

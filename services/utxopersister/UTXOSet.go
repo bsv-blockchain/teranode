@@ -2,6 +2,17 @@
 // for each block in the Teranode blockchain. Its primary function is to process the output of the
 // Block Persister service (utxo-additions and utxo-deletions) and generate complete UTXO set files.
 // The resulting UTXO set files can be exported and used to initialize the UTXO store in new Teranode instances.
+//
+// UTXOSet.go implements the core UTXO set management functionality, including:
+// - Creating and initializing UTXO set data structures
+// - Processing transactions to extract and track UTXOs
+// - Managing additions (new outputs) and deletions (spent outputs)
+// - Serializing and deserializing UTXO data to/from storage
+// - Constructing complete UTXO sets by consolidating previous sets with new changes
+//
+// The UTXO set files use a structured binary format with headers, data records, and footers
+// to ensure data integrity and efficient processing. This file implements both the data structures
+// and the algorithms needed to maintain an accurate UTXO state across blockchain updates.
 package utxopersister
 
 import (
@@ -65,6 +76,17 @@ const (
 // UTXOSet manages a set of Unspent Transaction Outputs.
 // It provides functionality to track, store, and retrieve UTXOs for a specific block.
 // UTXOSet handles both additions (new outputs) and deletions (spent outputs) for maintaining the UTXO state.
+//
+// UTXOSet is the primary data structure for managing the blockchain's UTXO state. It maintains:
+// - A reference to the current block being processed
+// - File storers for both additions and deletions
+// - In-memory tracking of UTXO operations for efficient processing
+// - Statistics for monitoring performance and resource usage
+//
+// UTXOSet implements thread-safe operations through mutex locking and provides
+// methods for transaction processing, serialization, deserialization, and UTXO set creation.
+// It serves as the core component for maintaining an accurate representation of all
+// unspent transaction outputs at any given block height.
 type UTXOSet struct {
 	// ctx provides context for operations
 	ctx context.Context
@@ -113,6 +135,26 @@ type UTXOSet struct {
 // It initializes the additions and deletions storers and writes their headers.
 // This constructor prepares the storage for a new block's UTXO additions and deletions.
 // Returns the initialized UTXOSet and any error encountered during setup.
+//
+// Parameters:
+// - ctx: Context for controlling the initialization process
+// - logger: Logger interface for recording operational events and errors
+// - tSettings: Configuration settings that control behavior
+// - store: Blob store instance for persisting UTXO data
+// - blockHash: Pointer to the hash of the block being processed
+// - blockHeight: Height of the block being processed
+//
+// Returns:
+// - *UTXOSet: The initialized UTXOSet instance
+// - error: Any error encountered during setup
+//
+// This method performs several key initialization steps:
+// 1. Creates file storers for both additions and deletions files
+// 2. Builds appropriate headers for each file type with magic numbers and block information
+// 3. Writes the headers to the respective files
+// 4. Initializes the UTXOSet with the necessary references and empty tracking structures
+//
+// The resulting UTXOSet is ready to process transactions and maintain UTXO state for the block.
 func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error) {
 	// Now, write the block file
 	logger.Infof("[BlockPersister] Persisting utxo additions and deletions for block %s", blockHash.String())
@@ -163,6 +205,22 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // It's used for reading existing UTXO data rather than creating new data.
 // This method doesn't check if the UTXO set actually exists.
 // Returns the initialized UTXOSet and any error encountered.
+//
+// Parameters:
+// - ctx: Context for controlling the operation
+// - logger: Logger interface for recording operational events and errors
+// - tSettings: Configuration settings that control behavior
+// - store: Blob store instance for accessing persisted UTXO data
+// - blockHash: Pointer to the hash of the block whose UTXO set is being accessed
+//
+// Returns:
+// - *UTXOSet: The initialized UTXOSet instance
+// - error: Any error encountered during setup
+//
+// This method is simpler than NewUTXOSet as it doesn't create any new files or write headers.
+// It only initializes a UTXOSet instance with the necessary references to access existing data.
+// Use this method when you need to read from an existing UTXO set but don't need to
+// verify its existence first. For verification, use GetUTXOSetWithExistCheck instead.
 func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
 	return &UTXOSet{
 		ctx:       ctx,
@@ -176,6 +234,23 @@ func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // GetUTXOSetWithExistCheck creates a new UTXOSet instance and checks if it exists.
 // Unlike GetUTXOSet, this method also verifies if the UTXO set for the specified block exists in storage.
 // Returns the UTXOSet, a boolean indicating existence, and any error encountered.
+//
+// Parameters:
+// - ctx: Context for controlling the operation
+// - logger: Logger interface for recording operational events and errors
+// - tSettings: Configuration settings that control behavior
+// - store: Blob store instance for accessing persisted UTXO data
+// - blockHash: Pointer to the hash of the block whose UTXO set is being accessed
+//
+// Returns:
+// - *UTXOSet: The initialized UTXOSet instance
+// - bool: True if the UTXO set exists, false otherwise
+// - error: Any error encountered during setup or verification
+//
+// This method combines the functionality of GetUTXOSet with an existence check.
+// It initializes a UTXOSet instance and then verifies whether a UTXO set file
+// exists for the specified block hash. This is useful when you need to determine
+// if a UTXO set needs to be created before attempting to read from it.
 func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, bool, error) {
 	us := &UTXOSet{
 		ctx:       ctx,
@@ -196,7 +271,27 @@ func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSetti
 
 // BuildHeaderBytes creates a header for UTXO files.
 // It constructs a byte array containing the magic identifier, block hash, height, and optionally a previous block hash.
-// The magic parameter specifies the file type (e.g., "U-A-1.0" for additions, "U-D-1.0" for deletions).
+// The magic parameter specifies the file type (e.g., "U-A-1.0" for additions, "U-D-1.0" for deletions, "U-S-1.0" for UTXO sets).
+//
+// Parameters:
+// - magic: File type identifier string (8 bytes max, right-padded with zeros)
+// - blockHash: Pointer to the hash of the block this file is associated with
+// - height: Block height
+// - optionalPrevHash: Optional pointer to the hash of the previous block (only for UTXO set files)
+//
+// Returns:
+// - []byte: The serialized header bytes
+// - error: Any error encountered during serialization
+//
+// The header format follows this structure:
+// - Bytes 0-7: Magic number/identifier (8 bytes, right-padded with zeros)
+// - Bytes 8-39: Block hash (32 bytes)
+// - Bytes 40-43: Block height (4 bytes, little-endian)
+// - Bytes 44-75: Previous block hash (32 bytes, only for UTXO set files)
+//
+// This header serves as a file identifier and provides essential metadata about
+// the block associated with the UTXO data contained in the file. For UTXO set files,
+// the previous block hash is included to support chain traversal and validation.
 // The format is:
 // - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
 // - a 32-byte hash (little endian) of the block that the data is for
@@ -292,6 +387,22 @@ func GetUTXOSetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint
 // It handles both spending (deletions) and creation (additions) of UTXOs.
 // This method ensures thread-safety with a mutex lock.
 // Returns an error if processing fails.
+//
+// Parameters:
+// - tx: Pointer to the transaction to process
+//
+// Returns:
+// - error: Any error encountered during processing
+//
+// This method performs two main operations:
+// 1. Processing inputs: For each input, it creates a UTXODeletion record marking
+//    the referenced output as spent and calls the delete method to record it.
+// 2. Processing outputs: For all outputs in the transaction, it creates a UTXOWrapper
+//    containing the outputs and writes it to the additions file.
+//
+// The method maintains thread-safety through a mutex lock, ensuring consistent
+// state even when processing multiple transactions concurrently. It also
+// updates transaction and UTXO count statistics for monitoring purposes.
 func (us *UTXOSet) ProcessTx(tx *bt.Tx) error {
 	us.mu.Lock()
 	defer us.mu.Unlock()
@@ -495,6 +606,25 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 // and applying additions and deletions from the consolidator. It handles the creation, serialization,
 // and storage of the complete UTXO state after processing a block or range of blocks.
 // Returns an error if the operation fails.
+//
+// Parameters:
+// - ctx: Context for controlling the operation
+// - c: Pointer to the consolidator containing UTXO additions and deletions
+//
+// Returns:
+// - error: Any error encountered during UTXO set creation
+//
+// This method performs several key steps:
+// 1. Creates and initializes a file storer for the UTXO set output file
+// 2. Writes the UTXO set header with magic number and block information
+// 3. Processes the previous block's UTXO set, filtering out spent outputs
+// 4. Adds new unspent outputs from the current block
+// 5. Writes all remaining UTXOs to the UTXO set file
+// 6. Finalizes the file with footer information and counts
+//
+// The method uses error groups to process UTXOs in parallel for better performance,
+// with coordinated error handling to ensure data integrity. Tracing is used for
+// performance monitoring and diagnostics throughout the operation.
 func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err error) {
 	ctx, createStat, deferFn := tracing.StartTracing(ctx, "CreateUTXOSet",
 		tracing.WithParentStat(us.stats),

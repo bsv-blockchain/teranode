@@ -1,4 +1,18 @@
 // Package blockchain provides interfaces and implementations for blockchain data storage and retrieval.
+// It offers a comprehensive API for storing, retrieving, and managing blockchain data including blocks,
+// headers, transactions, and chain state information.
+//
+// The package follows a layered architecture with a core interface (Store) that defines all blockchain
+// operations, with implementations for different storage backends including SQL databases.
+// It integrates with other components of the Teranode system while maintaining storage abstraction.
+//
+// Key features:
+// - Block and header storage and retrieval by hash, height, or other criteria
+// - Chain state tracking (best chain, orphans, invalid blocks)
+// - Support for chain reorganization
+// - Performance optimizations through caching
+// - Transaction data management
+// - Blockchain analysis and statistics
 package blockchain
 
 import (

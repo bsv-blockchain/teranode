@@ -1,4 +1,9 @@
 // Package alert implements the Bitcoin SV alert system server and related functionality.
+// 
+// The node.go file contains the Node implementation that provides integration
+// with the Bitcoin network for the alert system. It enables interactions with
+// blockchain data, UTXO management, and peer communication, supporting the
+// alert system's ability to respond to and affect network conditions.
 package alert
 
 import (
@@ -26,31 +31,59 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// Node implements the node interface for interacting with the Bitcoin network.
+// Node implements the config.NodeInterface for interacting with the Bitcoin network.
+// It provides the alert system with access to blockchain data, UTXO management,
+// peer communications, and block assembly operations. The Node encapsulates all
+// the functionality needed for the alert system to gather network information and
+// enforce consensus rules such as transaction blacklisting and confiscation.
+//
+// The Node acts as an adapter between the alert system and the underlying Bitcoin
+// network components, isolating the alert system from the specific implementation
+// details of blockchain access, UTXO management, and peer communication.
 type Node struct {
-	// logger handles logging operations
+	// logger handles logging operations for the Node instance
+	// It provides consistent logging across all Node operations
 	logger ulogger.Logger
 
-	// blockchainClient provides access to blockchain operations
+	// blockchainClient provides access to blockchain operations such as
+	// retrieving block headers, invalidating blocks, and querying chain state
 	blockchainClient blockchain.ClientI
 
-	// utxoStore manages UTXO operations
+	// utxoStore manages UTXO operations including blacklisting UTXOs and
+	// managing unspendable flags for confiscation transactions
 	utxoStore utxo.Store
 
-	// blockassemblyClient handles block assembly operations
+	// blockassemblyClient handles block assembly operations, allowing the
+	// alert system to interact with block creation processes
 	blockassemblyClient *blockassembly.Client
 
-	// peerClient handles peer operations
+	// peerClient handles peer operations such as banning and unbanning peers
+	// based on alert system decisions
 	peerClient peer.ClientI
 
-	// p2pClient handles p2p operations
+	// p2pClient handles p2p network operations for communication with other nodes
 	p2pClient p2p.ClientI
 
-	// settings contains node configuration
+	// settings contains node configuration parameters from the teranode settings system
 	settings *settings.Settings
 }
 
 // NewNodeConfig creates a new Node instance with the provided dependencies.
+// This factory function creates and initializes a Node that implements the config.NodeInterface
+// required by the alert system. All necessary dependencies are injected, making the Node
+// testable and configurable with different implementations of its dependencies.
+//
+// Parameters:
+//   - logger: The logger instance for Node operations
+//   - blockchainClient: Interface for accessing blockchain operations
+//   - utxoStore: Store for managing UTXO-related operations
+//   - blockassemblyClient: Client for interacting with block assembly
+//   - peerClient: Client for managing peer operations
+//   - p2pClient: Client for P2P network communications
+//   - tSettings: Configuration settings for the Node
+//
+// Returns:
+//   - config.NodeInterface: A fully initialized Node instance that satisfies the required interface
 func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store,
 	blockassemblyClient *blockassembly.Client, peerClient peer.ClientI, p2pClient p2p.ClientI, tSettings *settings.Settings) config.NodeInterface {
 	return &Node{
@@ -65,6 +98,15 @@ func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, u
 }
 
 // BestBlockHash returns the hash of the best block in the main chain.
+// This method is part of the config.NodeInterface and provides the alert system
+// with information about the current chain tip.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//
+// Returns:
+//   - string: The hash of the best block in hex string format
+//   - error: Any error encountered while retrieving the best block hash
 func (n *Node) BestBlockHash(ctx context.Context) (string, error) {
 	bestBlockHeader, _, err := n.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
@@ -75,21 +117,46 @@ func (n *Node) BestBlockHash(ctx context.Context) (string, error) {
 }
 
 // GetRPCHost returns the RPC host address.
+// This method is part of the config.NodeInterface but is not used in the current implementation.
+// It exists for interface compatibility with systems that expect RPC connections.
+//
+// Returns:
+//   - string: An empty string as direct RPC connections are not used in this implementation
 func (n *Node) GetRPCHost() string {
 	return ""
 }
 
 // GetRPCPassword returns the RPC password.
+// This method is part of the config.NodeInterface but is not used in the current implementation.
+// It exists for interface compatibility with systems that expect RPC connections.
+//
+// Returns:
+//   - string: An empty string as direct RPC connections are not used in this implementation
 func (n *Node) GetRPCPassword() string {
 	return ""
 }
 
 // GetRPCUser returns the RPC username.
+// This method is part of the config.NodeInterface but is not used in the current implementation.
+// It exists for interface compatibility with systems that expect RPC connections.
+//
+// Returns:
+//   - string: An empty string as direct RPC connections are not used in this implementation
 func (n *Node) GetRPCUser() string {
 	return ""
 }
 
 // InvalidateBlock marks a block as invalid by its hash.
+// This method is part of the config.NodeInterface and allows the alert system
+// to respond to certain conditions by invalidating blocks, which can trigger
+// reorganization of the blockchain.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - blockHashStr: The hash of the block to invalidate, in hex string format
+//
+// Returns:
+//   - error: Any error encountered during the invalidation process
 func (n *Node) InvalidateBlock(ctx context.Context, blockHashStr string) error {
 	blockHash, err := chainhash.NewHashFromStr(blockHashStr)
 	if err != nil {
@@ -99,7 +166,17 @@ func (n *Node) InvalidateBlock(ctx context.Context, blockHashStr string) error {
 	return n.blockchainClient.InvalidateBlock(ctx, blockHash)
 }
 
-// BanPeer adds the peer's IP address to the ban list
+// BanPeer adds the peer's IP address to the ban list for both P2P and legacy peers.
+// This method is part of the config.NodeInterface and allows the alert system to
+// enforce bans on malicious or misbehaving peers. It attempts to ban the peer in both
+// the P2P and legacy peer subsystems, ensuring comprehensive coverage.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - peer: The peer address to ban, in the format "IP:port" or "IP"
+//
+// Returns:
+//   - error: Any error encountered during the ban process, or if the ban failed on all systems
 func (n *Node) BanPeer(ctx context.Context, peer string) error {
 	banned := false
 	// ban p2p peer for 100 years
@@ -129,6 +206,17 @@ func (n *Node) BanPeer(ctx context.Context, peer string) error {
 	return nil
 }
 
+// UnbanPeer removes the peer's IP address from the ban list for both P2P and legacy peers.
+// This method is part of the config.NodeInterface and allows the alert system to
+// lift previously applied bans. It attempts to unban the peer in both the P2P and legacy
+// peer subsystems, ensuring comprehensive removal of the ban.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - peer: The peer address to unban, in the format "IP:port" or "IP"
+//
+// Returns:
+//   - error: Any error encountered during the unban process, or if the unban failed on all systems
 func (n *Node) UnbanPeer(ctx context.Context, peer string) error {
 	unbanned := false
 
@@ -159,8 +247,23 @@ func (n *Node) UnbanPeer(ctx context.Context, peer string) error {
 	return nil
 }
 
-// AddToConsensusBlacklist adds funds to the consensus blacklist
-// Sets a specified UTXO as un-spendable until further notice
+// AddToConsensusBlacklist adds funds to the consensus blacklist.
+// This method is a critical enforcement mechanism that sets specified UTXOs as
+// un-spendable until further notice. It implements a key function of the alert system,
+// allowing authorities to freeze suspect funds or prevent unauthorized spending.
+//
+// The method processes each fund individually, ensuring thorough error handling and
+// comprehensive status reporting for each UTXO. It creates a specialized marker in
+// the UTXO store that prevents the inputs from being spent in future transactions.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - funds: An array of Fund objects identifying UTXOs to blacklist, each containing
+//     transaction ID, output index, and additional metadata
+//
+// Returns:
+//   - *models.BlacklistResponse: Response containing processed and unprocessed funds with status
+//   - error: Any error encountered during the overall blacklisting process
 func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund) (*models.BlacklistResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "AddToConsensusBlacklist",
 		tracing.WithDebugLogMessage(n.logger, "[AddToConsensusBlacklist] called for %d funds", len(funds)),
@@ -226,6 +329,16 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 	return response, nil
 }
 
+// getAddToConsensusBlacklistResponse creates a standardized response for failed blacklist operations.
+// This helper method formats consistent response objects for UTXOs that could not be blacklisted,
+// including the original fund details and the specific error that prevented processing.
+//
+// Parameters:
+//   - fund: The Fund object that failed to be blacklisted
+//   - err: The specific error that prevented blacklisting
+//
+// Returns:
+//   - models.BlacklistNotProcessed: A structured response object containing the fund and error details
 func (n *Node) getAddToConsensusBlacklistResponse(fund models.Fund, err error) models.BlacklistNotProcessed {
 	return models.BlacklistNotProcessed{
 		TxOut: models.TxOut{
@@ -236,8 +349,26 @@ func (n *Node) getAddToConsensusBlacklistResponse(fund models.Fund, err error) m
 	}
 }
 
-// AddToConfiscationTransactionWhitelist re-assigns a utxo to a confiscation transaction
-// This allows the confiscation transaction to spend the utxo(s) in question
+// AddToConfiscationTransactionWhitelist re-assigns UTXOs to a confiscation transaction.
+// This critical enforcement mechanism allows authorized confiscation transactions to spend
+// previously frozen UTXOs. The method validates each transaction and its inputs, ensuring
+// that the confiscation transaction is properly formatted and that the inputs refer to
+// valid, frozen UTXOs.
+//
+// For each confiscation transaction, the method:
+// - Validates the transaction format and structure
+// - Verifies each input against its parent transaction
+// - Extracts the public key from the unlocking script
+// - Creates a new locking script for the UTXO based on the public key
+// - Updates the UTXO store to allow the confiscation transaction to spend the UTXO
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - txs: Array of confiscation transaction details containing transaction hex data
+//
+// Returns:
+//   - *models.AddToConfiscationTransactionWhitelistResponse: Response containing processing status for each transaction
+//   - error: Any error encountered during the overall whitelisting process
 func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []models.ConfiscationTransactionDetails) (*models.AddToConfiscationTransactionWhitelistResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "AddToConfiscationTransactionWhitelist",
 		tracing.WithDebugLogMessage(n.logger, "[AddToConfiscationTransactionWhitelist] called for %d txs", len(txs)),
@@ -333,6 +464,16 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 	return response, nil
 }
 
+// getAddToConfiscationTransactionWhitelistResponse creates a standardized response for failed whitelist operations.
+// This helper method formats consistent response objects for confiscation transactions that could
+// not be whitelisted, including the transaction ID and the specific error that prevented processing.
+//
+// Parameters:
+//   - txID: The transaction ID of the confiscation transaction that failed to be whitelisted
+//   - err: The specific error that prevented whitelisting
+//
+// Returns:
+//   - models.WhitelistNotProcessed: A structured response object containing the transaction ID and error details
 func (n *Node) getAddToConfiscationTransactionWhitelistResponse(txID string, err error) models.WhitelistNotProcessed {
 	return models.WhitelistNotProcessed{
 		ConfiscationTransaction: models.WhitelistConfiscationTransaction{
@@ -342,8 +483,20 @@ func (n *Node) getAddToConfiscationTransactionWhitelistResponse(txID string, err
 	}
 }
 
-// extractPublicKey extracts the public key from a P2PKH scriptSig
-// Assuming scriptSig is the unlocking script from the transaction input
+// extractPublicKey extracts the public key from a P2PKH scriptSig.
+// This helper function parses the unlocking script (scriptSig) from a transaction input
+// to extract the public key used for signing. In P2PKH inputs, the scriptSig contains
+// both the signature and the public key in a specific format.
+//
+// The function handles the standard P2PKH script format:
+// [signature] [public key]
+//
+// Parameters:
+//   - scriptSig: Raw bytes of the unlocking script from a transaction input
+//
+// Returns:
+//   - []byte: The extracted public key if successful
+//   - error: Any error encountered during extraction, such as malformed scripts
 func extractPublicKey(scriptSig []byte) ([]byte, error) {
 	// Parse the scriptSig into an array of elements (OpCodes or Data pushes)
 	parsedScript := script.NewFromBytes(scriptSig)

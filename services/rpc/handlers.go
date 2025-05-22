@@ -1,5 +1,31 @@
+// Package rpc implements the Bitcoin JSON-RPC API service for Teranode.
 package rpc
 
+// The handlers.go file contains implementations of all the supported RPC command handlers
+// that process client requests. Each handler follows a consistent pattern of:
+//
+// 1. Parameter validation and type assertion
+// 2. Interaction with the appropriate backing services (blockchain, p2p, etc.)
+// 3. Response formatting according to the Bitcoin RPC specification
+// 4. Error handling with appropriate error codes and messages
+//
+// All handler functions conform to the commandHandler type signature, taking a context,
+// server reference, command parameters, and a close notification channel. They return
+// a properly formatted response object or an error to be encoded as a JSON-RPC response.
+//
+// The handlers connect to other Teranode services via the client interfaces established
+// during RPCServer initialization, including:
+// - blockchainClient: For blockchain and block data operations
+// - blockAssemblyClient: For mining and block template creation
+// - peerClient: For network peer management
+// - p2pClient: For advanced P2P network operations
+// - utxoStore: For UTXO set queries and transaction validation
+//
+// Performance considerations are implemented for many handlers, including:
+// - Response caching for frequently requested data
+// - Efficient serialization for large responses
+// - Proper context handling for cancellation
+// - Request tracing for operational visibility
 import (
 	"bytes"
 	"context"
@@ -35,7 +61,27 @@ import (
 // live items expire after 10s, cleanup runs every minute
 var rpcCallCache = cache.New(10*time.Second, time.Minute)
 
-// handleGetBlock implements the getblock command.
+// handleGetBlock implements the getblock command, which retrieves information about a block
+// from the blockchain based on its hash.
+//
+// The command supports three verbosity levels that control the amount of information returned:
+// - 0: Returns the serialized block as a hex-encoded string
+// - 1: Returns a JSON object with block header information and transaction IDs
+// - 2: Returns a JSON object with full transaction details for all transactions in the block
+//
+// This handler interfaces with the blockchain service to retrieve block data and performs
+// format conversion appropriate to the requested verbosity level. Response size increases
+// significantly with higher verbosity, especially for blocks with many transactions.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.GetBlockCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Block data in the requested format (string or bsvjson.GetBlockVerboseResult)
+//   - error: Any error encountered during processing
 func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBlock",
 		tracing.WithParentStat(RPCStat),
@@ -281,7 +327,25 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 	return blockReply, nil
 }
 
-// handleGetBestBlockHash implements the getbestblockhash command.
+// handleGetBestBlockHash implements the getbestblockhash command, which returns the hash
+// of the current best (tip) block in the longest blockchain.
+//
+// This handler provides a simple but crucial method for clients to determine the current
+// blockchain state. It's commonly used by wallets and blockchain explorers to check
+// for new blocks and synchronize their state with the network.
+//
+// The handler connects to the blockchain service to retrieve the current best block's
+// information. It has minimal computational overhead and is optimized for frequent calls.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - _: Unused command arguments (command takes no parameters)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: String containing the hash of the best block in the main chain
+//   - error: Any error encountered during processing
 func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBestBlockHash",
 		tracing.WithParentStat(RPCStat),
@@ -308,8 +372,33 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 	return hash.String(), nil
 }
 
-// handleGetRawTransaction implements the getrawtransaction command.
+// handleGetRawTransaction implements the getrawtransaction command, which retrieves the raw
+// transaction data for a specific transaction hash.
+//
+// This handler supports two modes of operation through the 'verbose' parameter:
+// - When verbose=false: Returns the serialized, hex-encoded transaction data
+// - When verbose=true: Returns a JSON object with detailed transaction information
+//
+// The handler can retrieve transactions from both the blockchain (confirmed transactions)
+// and unconfirmed transactions that are being processed. For blockchain transactions, the
+// transaction's confirmation status and block information are also provided.
+//
+// Security and performance considerations:
+// - Resource intensive for servers with large transaction history
+// - May be subject to rate limiting in production environments
+// - Can be optimized with indexing for faster lookups
+//
 // TODO: this is not implemented correctly, it should return the transaction in the same format as bitcoind
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.GetRawTransactionCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Either a string (raw transaction hex) or a GetRawTransactionResult object
+//   - error: Any error encountered during processing, including if transaction is not found
 func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "handleGetRawTransaction",
 		tracing.WithParentStat(RPCStat),
@@ -474,7 +563,35 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 	return mtxHex, nil
 }
 
-// handleSendRawTransaction implements the sendrawtransaction command.
+// handleSendRawTransaction implements the sendrawtransaction command, which submits a
+// raw transaction to the network for inclusion in the blockchain.
+//
+// This is one of the most critical RPC methods as it serves as the primary interface
+// for clients to submit transactions to the Bitcoin network. The handler performs:
+// 1. Basic validation of the transaction format and structure
+// 2. Policy-based acceptance checks (fees, standardness, etc.)
+// 3. Submission to the transaction processing system
+// 4. Propagation to peers in the network
+//
+// The handler supports the 'allowhighfees' parameter to bypass the normal fee rate limits,
+// which can be useful for testing or certain specialized applications. However, this
+// should be used with caution as high-fee transactions might be interpreted as an error.
+//
+// Security and scaling considerations:
+// - Rate limiting may be applied to prevent DoS attacks
+// - Transaction size and complexity checks protect node resources
+// - May trigger additional validation steps for non-standard transactions
+// - Performance critical for high-volume applications like payment processors
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.SendRawTransactionCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: String containing the transaction hash if successful
+//   - error: Detailed error information if transaction submission fails
 func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "handleSendRawTransaction",
 		tracing.WithParentStat(RPCStat),
@@ -523,7 +640,34 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	return res, nil
 }
 
-// handleGenerate handles generate commands.
+// handleGenerate implements the generate command, which instructs the node to
+// immediately mine the specified number of blocks for testing purposes.
+//
+// This command is intended primarily for testing and development environments, not for
+// production mining. It generates blocks using the node's block assembly service and
+// submits them to the blockchain, effectively creating a private fork if used on mainnet.
+//
+// The command instructs the node to mine a specific number of blocks and returns the
+// block hashes of the generated blocks. For each block, the node:
+// 1. Creates a new block template with current unconfirmed transactions
+// 2. Attempts to solve the proof-of-work (may use CPU mining)
+// 3. Submits the solved block to the local blockchain
+//
+// Security and operational notes:
+// - This command is typically disabled on production nodes
+// - Resource intensive operation that may temporarily reduce node responsiveness
+// - Generated blocks will only be accepted by the network if valid
+// - Not suitable for actual mining revenue generation
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.GenerateCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Array of strings containing the hashes of the generated blocks
+//   - error: Any error encountered during block generation
 func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	c := cmd.(*bsvjson.GenerateCmd)
 	_, _, deferFn := tracing.StartTracing(ctx, "handleGenerate",
@@ -569,7 +713,34 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	return nil, nil
 }
 
-// handleGenerateToAddress handles generatetoaddress commands.
+// handleGenerateToAddress implements the generatetoaddress command, which instructs the node to
+// immediately mine the specified number of blocks with coinbase rewards sent to a specified address.
+//
+// Similar to the 'generate' command, this is primarily intended for testing and development
+// environments. The key difference is that it allows specifying the beneficiary address
+// that will receive the block rewards, providing more flexibility for testing scenarios.
+//
+// For each requested block, the handler:
+// 1. Creates a new block template with unconfirmed transactions
+// 2. Sets the coinbase transaction to pay to the specified address
+// 3. Attempts to solve the proof-of-work challenge
+// 4. Submits the solved block to the blockchain
+//
+// Security and operational considerations:
+// - Command typically disabled in production environments
+// - Resource-intensive operation that could impact node performance
+// - Requires proper address format validation
+// - Block rewards will only be spendable after 100 blocks (coinbase maturity)
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.GenerateToAddressCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Array of strings containing the hashes of the generated blocks
+//   - error: Any error encountered during block generation or address parsing
 func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	c := cmd.(*bsvjson.GenerateToAddressCmd)
 	_, _, deferFn := tracing.StartTracing(ctx, "handleGenerateToAddress",
@@ -619,6 +790,37 @@ func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{},
 	return nil, nil
 }
 
+// handleGetMiningCandidate implements the getminingcandidate command, which provides
+// external miners with the information needed to construct a block for mining.
+//
+// This command is a critical component of the mining interface, allowing miners to
+// retrieve the current block template with all necessary data to begin hashing. Unlike
+// the BIP22 getblocktemplate command, this uses a simplified format optimized for
+// efficiency in high-performance mining operations.
+//
+// The handler generates and returns a mining candidate containing:
+// - The previous block hash to build upon
+// - The current block height being targeted
+// - The current timestamp
+// - The current difficulty target
+// - Merkle root for the block
+// - Pre-selected transactions to include
+//
+// Performance considerations:
+// - Optimized for frequent polling by miners
+// - Caching mechanisms reduce load on the node
+// - Context timeouts prevent blocking during blockchain reorganizations
+// - Designed for mining pool integration
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (optional coinbase value)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: A mining candidate object with all required fields for miners
+//   - error: Any error encountered during template generation
 func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetMiningCandidate",
 		tracing.WithParentStat(RPCStat),
@@ -917,6 +1119,36 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	return jsonMap, nil
 }
 
+// handleSubmitMiningSolution implements the submitminingsolution command, which allows
+// external miners to submit solved blocks to the network.
+//
+// This command is the counterpart to getminingcandidate, completing the mining workflow
+// by allowing miners to submit their proof-of-work solutions. When a miner successfully
+// finds a nonce that produces a valid hash, they submit the solution containing:
+// - The block hash being solved
+// - The nonce value that produces a valid proof-of-work
+// - The coinbase transaction
+// - The timestamp used (may differ from the template if sufficient time has passed)
+//
+// The handler validates the submission and, if valid, propagates the new block to the
+// network. This command is optimized for high-frequency submission attempts typical in
+// modern mining operations.
+//
+// Security and validation considerations:
+// - Thorough validation prevents invalid block submissions
+// - Anti-DoS measures may limit submission rates
+// - Performance critical - must process quickly to minimize orphan risk
+// - Success guarantees only that the block was accepted locally
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.SubmitMiningSolutionCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Boolean true if the solution was accepted, error otherwise
+//   - error: Detailed error if the solution was rejected
 func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleSubmitMiningSolution",
 		tracing.WithParentStat(RPCStat),
@@ -956,7 +1188,36 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 	return true, nil
 }
 
-// handleInvalidateBlock implements the invalidateblock command.
+// handleInvalidateBlock implements the invalidateblock command, which marks a block
+// as invalid, forcing a chain reorganization.
+//
+// This command allows manual intervention in blockchain validation by instructing the node
+// to consider a specific block as invalid, even if it passes all consensus rules. When a block
+// is invalidated, the blockchain service will:
+// 1. Mark the specified block as invalid in the block index
+// 2. Disconnect it and all blocks built on top of it from the active chain
+// 3. Rewind the chain state to the last valid block before the invalidation point
+// 4. Attempt to find an alternative chain to follow
+//
+// This is a privileged command intended primarily for testing and emergency recovery
+// scenarios, such as responding to a consensus failure or attack. It should be used
+// with extreme caution as it can cause the node to diverge from network consensus.
+//
+// Security considerations:
+// - Requires admin privileges to execute
+// - Can cause chain splits if used on blocks accepted by other nodes
+// - May result in transaction reordering in the transaction processing system
+// - Changes persist across node restarts until explicitly reconsidered
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.InvalidateBlockCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Null on success
+//   - error: Any error encountered during block invalidation
 func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleInvalidateBlock",
 		tracing.WithParentStat(RPCStat),
@@ -980,7 +1241,37 @@ func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 	return nil, nil
 }
 
-// handleReconsiderBlock implements the reconsiderblock command.
+// handleReconsiderBlock implements the reconsiderblock command, which removes the
+// invalid status from a previously invalidated block, allowing it to be considered
+// for inclusion in the blockchain again.
+//
+// This command reverses the effect of invalidateblock by undoing the manual
+// invalidation of a block. This allows the node to reconsider the block during
+// its normal validation process and potentially accept it if it follows consensus
+// rules. The blockchain service will:
+// 1. Remove the specified block from the invalid block list
+// 2. Trigger revalidation of the block and its descendants
+// 3. Possibly reorganize the chain if the reconsidered block belongs to a stronger chain
+//
+// Like invalidateblock, this is a privileged command intended for testing and recovery
+// scenarios. It provides a mechanism to correct mistaken manual interventions in
+// the blockchain validation process.
+//
+// Security considerations:
+// - Requires admin privileges to execute
+// - May trigger chain reorganization if the block is part of the best chain
+// - Could potentially cause the node to switch to a chain that others consider invalid
+// - May result in transaction reordering in the transaction processing system
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.ReconsiderBlockCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Null on success
+//   - error: Any error encountered during block reconsideration
 func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleReconsiderBlock",
 		tracing.WithParentStat(RPCStat),
@@ -1052,6 +1343,30 @@ func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan str
 
 	return help, nil
 }
+// handleIsBanned implements the isbanned command, which checks if a specific IP address
+// or subnet is currently banned from connecting to the node.
+//
+// This command provides a simple query interface to determine the ban status of a given
+// network address. It's useful for administrators to verify ban list contents without
+// having to retrieve and search through the entire ban list, especially when the list
+// is large.
+//
+// The handler checks the given address against all active bans, considering both:
+// - Direct IP address matches
+// - Subnet bans that would include the specified address
+//
+// This command can be used as part of automated network security monitoring and
+// for troubleshooting connectivity issues with specific peers.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.IsBannedCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Boolean indicating whether the address is banned (true) or not (false)
+//   - error: Any error encountered during ban check, such as invalid address format
 func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "handleIsBanned",
 		tracing.WithParentStat(RPCStat),
@@ -1102,6 +1417,30 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	return p2pBanned || peerBanned, nil
 }
 
+// handleListBanned implements the listbanned command, which returns a list of all
+// currently banned IP addresses and subnets along with ban metadata.
+//
+// This command provides comprehensive information about the node's active ban list,
+// enabling administrators to audit and manage network access controls. For each ban
+// entry, the command returns detailed information including:
+// - The banned IP address or subnet
+// - When the ban was created
+// - When the ban expires (or if it's permanent)
+// - The ban reason, if available
+//
+// The returned information is useful for security auditing, troubleshooting
+// connection issues, and planning ban management strategies. It also serves as
+// a reference when using other ban-related commands like setban and clearbanned.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (no specific parameters)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Array of ban information objects
+//   - error: Any error encountered while retrieving ban information
 func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "handleListBanned",
 		tracing.WithParentStat(RPCStat),
@@ -1134,6 +1473,32 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 	return bannedList, nil
 }
 
+// handleClearBanned implements the clearbanned command, which removes all IP address
+// and subnet bans from the node.
+//
+// This command provides a way to completely reset the node's ban list, effectively
+// allowing all previously banned addresses to reconnect (subject to other connection
+// policies). This is useful in scenarios such as:
+// - When recovering from a misconfiguration that caused excessive banning
+// - After an attack is mitigated and normal operation should resume
+// - During testing and debugging of network connectivity
+// - When implementing a new ban policy from scratch
+//
+// Security considerations:
+// - Requires admin privileges to execute
+// - Immediately allows previously banned peers to reconnect
+// - Should be used with caution in production environments
+// - Consider using setban with specific removals for more targeted approaches
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (no specific parameters)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Null on success
+//   - error: Any error encountered while clearing the ban list
 func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "handleClearBanned",
 		tracing.WithParentStat(RPCStat),
@@ -1157,6 +1522,34 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 	return true, nil
 }
+// handleSetBan implements the setban command, which adds or removes an IP address or subnet
+// from the node's ban list, controlling which peers can connect to the node.
+//
+// This command is an essential network security feature that allows administrators to
+// manage connections to potential malicious actors. The command supports two operations:
+// - 'add': Adds an IP or subnet to the ban list for a specified time (or permanently)
+// - 'remove': Removes an IP or subnet from the ban list, allowing connections again
+//
+// When adding a ban, the duration can be specified in seconds, or an 'absolute' flag
+// can be set to interpret the time as an absolute unix timestamp. This provides
+// flexibility in ban management for different operational scenarios.
+//
+// Security considerations:
+// - Requires admin privileges to execute
+// - Critical for protecting against DoS attacks and malicious peers
+// - Bans persist across node restarts by default
+// - Can ban entire subnets using CIDR notation
+// - Changes apply immediately, disconnecting currently connected peers if banned
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.SetBanCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Null on success
+//   - error: Any error encountered during ban list modification
 func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "handleSetBan",
 		tracing.WithParentStat(RPCStat),
@@ -1422,8 +1815,24 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	return nil, nil
 }
 
-// messageToHex serializes a message to the wire protocol encoding using the
-// latest protocol version and returns a hex-encoded string of the result.
+// messageToHex serializes a wire protocol message to its binary representation
+// and returns it as a hex-encoded string.
+//
+// This utility method provides consistent serialization of Bitcoin protocol
+// messages to a standardized format suitable for transmission over the RPC
+// interface. It ensures that all messages are encoded using the latest
+// protocol version for maximum compatibility.
+//
+// The method is used by various RPC handlers to convert internal message
+// structures to the string representation expected by RPC clients, maintaining
+// consistency in how binary data is presented in the JSON-RPC responses.
+//
+// Parameters:
+//   - msg: The wire.Message to serialize
+//
+// Returns:
+//   - string: Hex-encoded string representation of the serialized message
+//   - error: Any error encountered during serialization
 func (s *RPCServer) messageToHex(msg wire.Message) (string, error) {
 	var buf bytes.Buffer
 	if err := msg.BsvEncode(&buf, wire.ProtocolVersion, wire.BaseEncoding); err != nil {
@@ -1434,10 +1843,44 @@ func (s *RPCServer) messageToHex(msg wire.Message) (string, error) {
 	return hex.EncodeToString(buf.Bytes()), nil
 }
 
+// calculateHashRate computes the estimated network hash rate based on
+// the current difficulty and average block time.
+//
+// This utility function implements the standard formula for estimating the
+// Bitcoin network's total hash rate:
+//   hashRate = difficulty * 2^32 / blockTimeInSeconds
+//
+// The result represents the estimated hashes per second being performed
+// by all miners on the network combined. This is a key metric reported
+// in various RPC commands for monitoring network strength and mining
+// competitiveness.
+//
+// Parameters:
+//   - difficulty: The current network difficulty value
+//   - blockTime: The average time between blocks in seconds
+//
+// Returns:
+//   - float64: Estimated network hash rate in hashes per second
 func calculateHashRate(difficulty float64, blockTime float64) float64 {
 	return (difficulty * math.Pow(2, 32)) / blockTime
 }
 
+// isIPOrSubnet validates whether a string is a valid IP address or subnet in CIDR notation.
+//
+// This utility function is used primarily by the network ban management RPC commands
+// to validate input parameters before attempting to ban or unban addresses. It supports
+// both IPv4 and IPv6 addresses, and can validate subnet specifications in CIDR notation
+// (e.g., 192.168.1.0/24 or 2001:db8::/32).
+//
+// The function is designed to be conservative, returning false for any input that
+// cannot be definitively determined to be a valid IP address or subnet, helping
+// prevent accidental banning of invalid network specifications.
+//
+// Parameters:
+//   - ipOrSubnet: String representation of an IP address or subnet to validate
+//
+// Returns:
+//   - bool: true if the string is a valid IP or subnet, false otherwise
 func isIPOrSubnet(ipOrSubnet string) bool {
 	// no slash means ip
 	if !strings.Contains(ipOrSubnet, "/") {

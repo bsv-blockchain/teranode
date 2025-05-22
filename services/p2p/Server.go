@@ -1,4 +1,17 @@
 // Package p2p provides peer-to-peer networking functionality for the Teranode system.
+// It implements a robust distributed network for blockchain data propagation using libp2p.
+//
+// Key features include:
+// - Decentralized peer discovery and management
+// - Topic-based publish/subscribe for blocks, transactions, and control messages
+// - Configurable ban management for misbehaving peers
+// - Integration with blockchain and block validation services
+// - Support for both public and private DHT networks
+// - Websocket API for external connectivity
+//
+// The p2p service serves as a communication backbone for Teranode, connecting
+// multiple nodes in a resilient network topology and facilitating efficient
+// propagation of blockchain data across the network.
 package p2p
 
 import (
@@ -42,6 +55,17 @@ const (
 )
 
 // Server represents the P2P server instance and implements the P2P service functionality.
+// It is the main entry point for the p2p service and coordinates all peer-to-peer communication.
+// The Server manages topics, subscriptions, message propagation, and peer lifecycle management.
+//
+// Server integrates with multiple Teranode components, including the blockchain service
+// for retrieving block data and the block validation service for verifying incoming blocks.
+// It implements both HTTP and gRPC interfaces for external communication and control.
+//
+// Concurrency notes:
+// - The Server uses multiple goroutines for handling different topics and events
+// - Network I/O operations are performed asynchronously
+// - Ban management is thread-safe across connections
 type Server struct {
 	p2p_api.UnimplementedPeerServiceServer
 	P2PNode                       P2PNodeI                  // The P2P network node instance - using interface instead of concrete type
@@ -68,6 +92,20 @@ type Server struct {
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
+// It initializes the core components of the P2P service including the network node, topic subscriptions,
+// ban management, and integration with external services.
+//
+// Parameters:
+// - ctx: The parent context for lifecycle management
+// - logger: Logging interface for all P2P operations
+// - tSettings: Configuration settings containing network topology and behavior parameters
+// - blockchainClient: Client for retrieving and querying blockchain data
+// - rejectedTxKafkaConsumerClient: Kafka consumer client for receiving rejected transaction notifications
+// - subtreeKafkaProducerClient: Kafka producer client for publishing subtree data
+// - blocksKafkaProducerClient: Kafka producer client for publishing block data
+//
+// Returns a configured Server instance ready to be initialized and started, or an error if configuration
+// validation fails or any dependencies cannot be properly initialized.
 func NewServer(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -180,6 +218,16 @@ func NewServer(
 }
 
 // Health performs health checks on the P2P server and its dependencies.
+// This method implements the standard Teranode health check interface used by the service manager
+// and monitoring systems to verify that the P2P service is operational.
+//
+// When checkLiveness is true, it only verifies that the service process is responsive.
+// When checkLiveness is false, it performs deeper checks including dependency status.
+//
+// Returns:
+// - HTTP status code (200 for healthy, 503 for unhealthy)
+// - Status message describing the health state
+// - Error details if any issues were encountered during the health check
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -213,6 +261,13 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 }
 
 // Init initializes the P2P server and its components.
+// This method prepares the server for operation but does not yet start network services or connect to peers.
+// It performs initial setup of HTTP endpoints and sets configuration variables used during the main Start phase.
+//
+// The initialization process configures the service's public-facing HTTP address for asset discovery
+// and prepares internal data structures and channels.
+//
+// Returns an error if any component initialization fails, or nil if successful.
 func (s *Server) Init(ctx context.Context) (err error) {
 	s.logger.Infof("[Init] P2P service initialising")
 
@@ -227,6 +282,20 @@ func (s *Server) Init(ctx context.Context) (err error) {
 }
 
 // Start begins the P2P server operations and starts listening for connections.
+// This method is the main entry point for activating the P2P network functionality.
+// It performs several key operations:
+// - Waits for the blockchain FSM to transition from idle state
+// - Sets up topic handlers for blocks, subtrees, mining notifications, and peer handshakes
+// - Initializes the P2P node and starts listening on configured addresses
+// - Starts Kafka consumers for rejected transactions
+// - Launches the HTTP server for external API access
+// - Begins periodic peer height synchronization
+// - Establishes connections to static peers if configured
+//
+// The method signals service readiness by closing the provided readyCh channel when
+// all components have started successfully.
+//
+// Returns an error if any component fails to start, or nil on successful startup.
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -754,6 +823,18 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the P2P server and its components.
+// This method coordinates an orderly shutdown of all P2P service components, including:
+// - Stopping the underlying libp2p P2P node
+// - Closing Kafka consumer connections
+// - Shutting down the HTTP server
+//
+// The method attempts to stop all components even if some fail, collecting errors along the way.
+// If multiple errors occur during shutdown, the first error is returned.
+//
+// Context cancellation is honored for time-bound shutdown operations.
+//
+// Returns any error encountered during the shutdown process, or nil if all components
+// shut down successfully.
 func (s *Server) Stop(ctx context.Context) error {
 	s.logger.Infof("[Stop] Stopping P2P service")
 

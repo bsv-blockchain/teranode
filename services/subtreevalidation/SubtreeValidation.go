@@ -29,8 +29,19 @@ import (
 )
 
 // missingTx represents a transaction that needs to be retrieved and its position in the subtree.
+//
+// This structure pairs a transaction with its index in the original subtree transaction list,
+// allowing the validation process to maintain the correct ordering and relationship of transactions
+// even after retrieval and processing operations that might otherwise lose this context.
+//
+// The structure is primarily used during the transaction retrieval and validation phase
+// to track which transactions were missing from local storage and needed to be fetched
+// from external sources.
 type missingTx struct {
+	// tx is the actual transaction data that was retrieved
 	tx  *bt.Tx
+
+	// idx is the original position of this transaction in the subtree's transaction list
 	idx int
 }
 
@@ -202,19 +213,38 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	return tx, nil
 }
 
-// blessMissingTransaction validates a transaction and retrieves its metadata.
-// The transaction is validated against the current blockchain state and its
-// metadata is stored for future reference.
+// blessMissingTransaction validates a transaction and retrieves its metadata,
+// performing the core consensus validation operations required for blockchain inclusion.
+//
+// This method applies full validation to a transaction, ensuring it adheres to all
+// Bitcoin consensus rules and can be properly included in the blockchain. The validation
+// includes:
+// - Transaction format and structure validation
+// - Input signature verification
+// - Input UTXO availability and spending authorization
+// - Fee calculation and policy enforcement
+// - Script execution and validation
+// - Double-spend prevention
+//
+// Upon successful validation, the transaction's metadata is calculated and stored,
+// making it available for future reference and for validation of dependent transactions.
+// The metadata includes critical information such as input references, output values,
+// and transaction state.
+//
+// This method employs defensive validation techniques with proper error handling
+// and logging to ensure robustness even with malformed or invalid transactions.
 //
 // Parameters:
-//   - ctx: Context for cancellation and tracing
-//   - subtreeHash: Hash of the subtree containing the transaction
-//   - tx: Transaction to validate
+//   - ctx: Context for cancellation, tracing, and timeouts
+//   - subtreeHash: Hash of the subtree containing the transaction (for logging and reference)
+//   - tx: The transaction to validate
 //   - blockHeight: Height of the block containing the transaction
+//   - blockIds: Map of block IDs to check if transactions in the subtree are already mined
+//   - validationOptions: Additional options controlling validation behavior
 //
 // Returns:
-//   - *meta.Data: Transaction metadata if validation succeeds
-//   - error: Any error encountered during validation
+//   - *meta.Data: Transaction metadata structure if validation succeeds, nil otherwise
+//   - error: Detailed error information if validation fails for any reason
 func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions *validator.Options) (txMeta *meta.Data, err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getMissingTransaction",
@@ -324,29 +354,66 @@ func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHa
 }
 
 // ValidateSubtree contains the parameters needed for validating a subtree.
+//
+// This structure encapsulates all the necessary information required to validate
+// a transaction subtree, providing a clean interface for the validation methods.
+// It contains the identifying information for the subtree, source location for
+// retrieving missing transactions, and configuration options for the validation process.
 type ValidateSubtree struct {
-	// SubtreeHash is the merkle root hash of the subtree to validate
+	// SubtreeHash is the unique identifier hash of the subtree to be validated
 	SubtreeHash chainhash.Hash
-	// BaseURL is the source URL for fetching missing transactions
+
+	// BaseURL is the source URL for retrieving missing transactions if needed
 	BaseURL string
+
 	// TxHashes contains the list of transaction hashes in the subtree
+	// This may be empty if the subtree transactions need to be fetched from the store
 	TxHashes []chainhash.Hash
+
+	// AllowFailFast enables early termination of validation when an error is encountered
+	// When true, validation stops at the first error; when false, attempts to validate all transactions
 	// AllowFailFast enables quick failure for invalid subtrees
 	AllowFailFast bool
 }
 
 // ValidateSubtreeInternal performs the actual validation of a subtree.
-// It handles transaction validation, metadata management, and subtree storage.
+//
+// This is the core method of the subtree validation service, responsible for the
+// complete validation process of a transaction subtree. It handles the complex task
+// of verifying that all transactions in a subtree are valid both individually and
+// collectively, ensuring they can be safely added to the blockchain.
+//
+// The validation process includes several key steps:
+// 1. Retrieving the subtree structure and transaction list
+// 2. Identifying which transactions need validation (missing metadata)
+// 3. Retrieving missing transactions from appropriate sources
+// 4. Validating transaction dependencies and ordering
+// 5. Applying consensus rules to each transaction
+// 6. Managing transaction metadata storage and updates
+// 7. Handling any conflicts or validation failures
+//
+// The method employs several optimization techniques:
+// - Batch processing of transaction validations where possible
+// - Caching of transaction metadata to avoid redundant validation
+// - Parallel processing of independent transaction validations
+// - Early termination for invalid subtrees (when AllowFailFast is true)
+// - Efficient retrieval of missing transactions in batches
+//
+// The method includes comprehensive error handling and logging to ensure
+// problems can be diagnosed and resolved effectively.
 //
 // Parameters:
-// - ctx: The context for managing request-scoped values and deadlines.
-// - v: The ValidateSubtree struct containing subtree details.
-// - blockHeight: The height of the block containing the subtree.
-// - blockIds: A map of block IDs to check if transactions in the subtree are already mined.
-// - validationOptions: Additional options for transaction validation.
+//   - ctx: Context for cancellation, tracing, and request-scoped values
+//   - v: ValidateSubtree struct containing the subtree hash, base URL, and configuration
+//   - blockHeight: The height of the block containing the subtree
+//   - blockIds: Map of block IDs to check if transactions are already mined
+//   - validationOptions: Additional options controlling validation behavior
 //
 // Returns:
-// - err: An error if validation fails.
+//   - error: Detailed error information if validation fails, nil on success
+//
+// This method is typically called by higher-level API handlers after performing
+// necessary authorization and parameter validation.
 func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
 	startTotal := time.Now()
@@ -714,7 +781,38 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 }
 
 // processMissingTransactions handles the retrieval and validation of missing transactions
-// in a subtree. It supports both file-based and network-based transaction retrieval.
+// in a subtree, coordinating both the retrieval process and the validation workflow.
+//
+// This method is a critical part of the subtree validation process, responsible for:
+// 1. Retrieving transactions that are referenced in the subtree but not available locally
+// 2. Organizing transactions into dependency levels for ordered processing
+// 3. Validating each transaction according to consensus rules
+// 4. Managing parallel processing of independent transaction validations
+// 5. Tracking validation results and updating transaction metadata
+//
+// The method supports both file-based and network-based transaction retrieval,
+// with fallback mechanisms to ensure maximum resilience. It implements a level-based
+// processing approach where transactions are grouped by dependency level and processed
+// in order, ensuring that parent transactions are validated before their children.
+//
+// Performance optimization includes parallel processing of transactions within the same
+// dependency level, which significantly improves validation throughput while maintaining
+// correctness guarantees.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - subtreeHash: Hash of the subtree being validated
+//   - subtree: Parsed subtree structure containing transaction relationships
+//   - missingTxHashes: List of transaction hashes that need to be retrieved and validated
+//   - allTxs: Complete list of all transaction hashes in the subtree
+//   - baseURL: Source URL for retrieving missing transactions
+//   - txMetaSlice: Pre-allocated slice to store transaction metadata results
+//   - blockHeight: Height of the block containing the subtree
+//   - blockIds: Map of block IDs to check if transactions are already mined
+//   - validationOptions: Additional options for transaction validation behavior
+//
+// Returns:
+//   - error: Any error encountered during retrieval or validation
 func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash chainhash.Hash, subtree *util.Subtree,
 	missingTxHashes []utxo.UnresolvedMetaData, allTxs []chainhash.Hash, baseURL string, txMetaSlice []*meta.Data, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
@@ -805,6 +903,32 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 	return nil
 }
 
+// getSubtreeMissingTxs retrieves transactions that are referenced in a subtree but not available locally.
+//
+// This method implements an intelligent retrieval strategy for missing transactions with
+// optimizations for different scenarios. It first checks if a complete subtree data file exists
+// locally, which would contain all transactions. If not available, it makes a decision based on
+// the percentage of missing transactions:
+//
+// - If a large percentage of transactions are missing (configurable threshold), it attempts to
+//   fetch the entire subtree data file from the peer to optimize network usage.
+// - Otherwise, it retrieves only the specific missing transactions individually.
+//
+// The method employs fallback mechanisms to ensure maximum resilience, switching between
+// file-based and network-based retrieval methods as needed. This approach balances efficiency
+// with reliability, optimizing for both common and edge cases.
+//
+// Parameters:
+//   - ctx: Context for cancellation, tracing, and timeout control
+//   - subtreeHash: Hash of the subtree containing the transactions
+//   - subtree: Parsed subtree structure for reference
+//   - missingTxHashes: List of transaction hashes that need to be retrieved
+//   - allTxs: Complete list of all transaction hashes in the subtree
+//   - baseURL: Base URL for network-based transaction retrieval
+//
+// Returns:
+//   - []missingTx: Slice of retrieved transactions paired with their indices
+//   - error: Any error encountered during the retrieval process
 func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash.Hash, subtree *util.Subtree,
 	missingTxHashes []utxo.UnresolvedMetaData, allTxs []chainhash.Hash, baseURL string) ([]missingTx, error) {
 	// first check whether we have the subtreeData file for this subtree and use that for the missing transactions
@@ -875,9 +999,30 @@ type txMapWrapper struct {
 }
 
 // prepareTxsPerLevel organizes transactions by their dependency level for ordered processing.
-// It returns the maximum level and a map of transactions per level.
-// Levels are determined by the number of parents in the block
-// this code is very similar to the one in the legacy netsync/handle_block handler, but works on different base tx data
+//
+// This method implements a topological sorting algorithm to organize transactions based on their
+// dependency relationships. Transactions are grouped into levels, where each level contains
+// transactions that can be processed in parallel without dependency conflicts.
+//
+// The level assignment follows these rules:
+// - Level 0: Transactions with no parents in the current subtree
+// - Level 1: Transactions with parents only in level 0
+// - Level n: Transactions with parents in levels 0 through n-1
+//
+// This approach enables efficient parallel processing while maintaining correct validation order,
+// ensuring that parent transactions are always validated before their children. The implementation
+// is optimized for large subtrees with complex dependency graphs.
+//
+// Note: This code is conceptually similar to the transaction ordering logic in the legacy
+// netsync/handle_block handler but is adapted for the subtree validation context and data structures.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - transactions: List of transactions to organize by level
+//
+// Returns:
+//   - uint32: The maximum dependency level found
+//   - map[uint32][]missingTx: Map of dependency levels to transactions at that level
 
 func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, map[uint32][]missingTx) {
 	_, _, deferFn := tracing.StartTracing(ctx, "prepareTxsPerLevel",

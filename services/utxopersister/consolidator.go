@@ -2,6 +2,12 @@
 // for each block in the Teranode blockchain. Its primary function is to process the output of the
 // Block Persister service (utxo-additions and utxo-deletions) and generate complete UTXO set files.
 // The resulting UTXO set files can be exported and used to initialize the UTXO store in new Teranode instances.
+//
+// The consolidator.go file implements functionality for efficiently combining UTXO additions and
+// deletions across multiple blocks. This consolidation is essential for creating accurate UTXO sets
+// when processing ranges of blocks, ensuring that outputs created and then spent within the range
+// are properly handled. The consolidator maintains a consistent view of the UTXO state across block
+// boundaries, handling the complex dependencies between blocks in the chain.
 
 package utxopersister
 
@@ -28,6 +34,16 @@ type headerIfc interface {
 // It processes additions and deletions across a range of blocks to create an accurate UTXO set.
 // This type is responsible for resolving conflicts when outputs are both created and spent within
 // the consolidated range, ensuring the final UTXO set is correct.
+//
+// The consolidator employs an efficient algorithm that:
+// - Tracks both additions and deletions in memory using maps for fast lookups
+// - Maintains insertion order to ensure deterministic processing
+// - Resolves conflicts when an output is both created and spent within the processed range
+// - Handles block chain traversal and header retrieval
+// - Manages the dependencies between blocks, including previous block hash linkage
+//
+// This approach allows for efficient batch processing of blocks, which is especially
+// important during initial blockchain synchronization or when recovering from a system failure.
 type consolidator struct {
 	// logger provides logging functionality
 	logger ulogger.Logger
@@ -74,6 +90,15 @@ type consolidator struct {
 // It contains information about a new unspent output, including its insertion order,
 // value, height, script, and whether it's from a coinbase transaction.
 // This structure is used during consolidation to track new outputs.
+//
+// Addition is an in-memory representation that captures all essential data about an unspent output:
+// - The insertion order ensures deterministic processing when outputs are sorted
+// - The value, height, and coinbase flag are required for validating and processing the UTXO
+// - The script contains the locking conditions that must be satisfied to spend the output
+//
+// During consolidation, Addition structures are mapped to their corresponding UTXODeletion keys,
+// allowing efficient lookups and conflict resolution when the same output is both created and
+// spent within the consolidated block range.
 type Addition struct {
 	// Order represents the insertion order
 	Order uint64
@@ -95,6 +120,22 @@ type Addition struct {
 // It initializes the consolidator with the provided dependencies and empty data structures.
 // The consolidator needs access to blockchain data and storage capabilities to perform its operations.
 // Returns a pointer to the initialized consolidator.
+//
+// Parameters:
+// - logger: Logger interface for recording operational events and errors
+// - tSettings: Configuration settings that control behavior
+// - blockchainStore: Interface for accessing blockchain headers from storage
+// - blockchainClient: Interface for accessing blockchain headers via client API
+// - blockStore: Blob store instance for persisting UTXO data
+// - previousBlockHash: Hash of the block preceding the consolidation range
+//
+// Returns:
+// - *consolidator: The initialized consolidator instance
+//
+// This constructor initializes empty maps for tracking additions and deletions,
+// and sets up references to external dependencies required for operation.
+// The previousBlockHash parameter is critical as it establishes the starting point
+// for the consolidation process, connecting to the existing blockchain state.
 func NewConsolidator(logger ulogger.Logger, tSettings *settings.Settings, blockchainStore headerIfc, blockchainClient headerIfc, blockStore blob.Store, previousBlockHash *chainhash.Hash) *consolidator {
 	return &consolidator{
 		logger:                 logger,
@@ -113,6 +154,24 @@ func NewConsolidator(logger ulogger.Logger, tSettings *settings.Settings, blockc
 // and then processes the UTXO additions and deletions from each block.
 // This builds up a comprehensive view of all UTXOs across the range.
 // Returns an error if consolidation fails.
+//
+// Parameters:
+// - ctx: Context for controlling the consolidation operation
+// - startBlock: Height of the first block in the range to consolidate
+// - endBlock: Height of the last block in the range to consolidate
+//
+// Returns:
+// - error: Any error encountered during consolidation
+//
+// This method performs several key operations:
+// 1. Retrieves block headers for the specified range from either blockchainStore or blockchainClient
+// 2. Processes each block in sequence, retrieving its UTXO additions and deletions
+// 3. Builds a consolidated view of the UTXO state by tracking additions and deletions across blocks
+// 4. Maintains block chain linkage information for the entire range
+//
+// The consolidation process handles cases where outputs are created and then spent within
+// the specified range, ensuring an accurate final UTXO set. This is particularly important
+// when processing multiple blocks in batch during initial sync or recovery operations.
 func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, endBlock uint32) error {
 	var (
 		headers []*model.BlockHeader
@@ -273,6 +332,20 @@ type keyAndVal struct {
 // It converts the consolidator's internal map of additions into a sorted slice of UTXOWrappers.
 // The sorting is based on transaction ID, which ensures deterministic output order.
 // Returns the sorted slice of UTXOWrappers, ready to be written to the UTXO set.
+//
+// Returns:
+// - []*UTXOWrapper: Sorted slice of UTXO wrappers
+//
+// This method transforms the consolidator's internal addition map into a format suitable
+// for persistent storage. The algorithm follows these steps:
+// 1. Extracts all additions that weren't subsequently deleted within the consolidated range
+// 2. Constructs a map from transaction ID to groups of UTXOs belonging to that transaction
+// 3. Converts the grouped UTXOs into UTXOWrapper objects with appropriate metadata
+// 4. Sorts the resulting UTXOWrappers by transaction ID for deterministic ordering
+//
+// The deterministic ordering is critical for creating reproducible UTXO set files
+// and ensuring data consistency across different nodes. The resulting slice
+// contains only the outputs that remain unspent at the end of the consolidated range.
 func (c *consolidator) getSortedUTXOWrappers() []*UTXOWrapper {
 	sortedAdditions := make([]*keyAndVal, 0, len(c.additions))
 

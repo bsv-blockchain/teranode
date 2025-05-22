@@ -1,3 +1,6 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
 package sql
 
 import (
@@ -17,6 +20,26 @@ import (
 	"modernc.org/sqlite"
 )
 
+// StoreBlock persists a new block to the database and updates chain state.
+// This implements the blockchain.Store.StoreBlock interface method.
+//
+// The method performs the following operations:
+// - Stores the block data in the database with appropriate metadata
+// - Calculates the cumulative chain work for the new block
+// - Extracts miner information from the coinbase transaction if available
+// - Updates the in-memory cache with the new block information
+// - Resets response caches to ensure consistency
+//
+// Parameters:
+//   - ctx: Context for the database operation, allows for cancellation and timeouts
+//   - block: The complete block structure to be stored
+//   - peerID: Identifier of the peer that provided this block
+//   - opts: Optional parameters to modify storage behavior (e.g., minedSet, subtreesSet flags)
+//
+// Returns:
+//   - uint64: The unique database ID assigned to the stored block
+//   - uint32: The height of the block in the blockchain
+//   - error: Any error encountered during storage operations
 func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:StoreBlock")
 	defer deferFn()
@@ -73,6 +96,20 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	return newBlockID, height, nil
 }
 
+// getPreviousBlockInfo retrieves essential information about a block's parent.
+// The function first attempts to retrieve this information from the in-memory cache,
+// falling back to the database if necessary.
+//
+// Parameters:
+//   - ctx: Context for the database operation
+//   - prevBlockHash: Hash of the previous (parent) block
+//
+// Returns:
+//   - id: Database ID of the previous block
+//   - chainWork: Cumulative proof-of-work for the previous block
+//   - height: Blockchain height of the previous block
+//   - invalid: Whether the previous block is marked as invalid
+//   - err: Any error encountered during retrieval
 func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.Hash) (id uint64, chainWork []byte, height uint32, invalid bool, err error) {
 	// Try to get previous block info from cache first
 	prevHeader, prevMeta := s.blocksCache.GetBlockHeader(prevBlockHash)
@@ -114,6 +151,27 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 	return id, chainWork, height, invalid, nil
 }
 
+// storeBlock is the internal implementation that performs the actual database operations
+// to persist a block. It handles both genesis and regular blocks differently.
+//
+// The function performs the following key steps:
+// - Retrieves and validates previous block data
+// - Handles special case for genesis block
+// - Calculates cumulative chain work
+// - Prepares block data and executes appropriate SQL insert statement
+// - Handles database-specific errors and conflicts
+//
+// Parameters:
+//   - ctx: Context for the database operation
+//   - block: The block structure to be stored
+//   - peerID: Identifier of the peer that provided this block
+//   - opts: Optional parameters to modify storage behavior
+//
+// Returns:
+//   - uint64: The unique database ID assigned to the stored block
+//   - uint32: The height of the block in the blockchain
+//   - []byte: The calculated cumulative chain work for this block
+//   - error: Any error encountered during the operation
 func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, []byte, error) {
 	// Apply options
 	storeBlockOptions := options.StoreBlockOptions{}
@@ -247,6 +305,16 @@ RETURNING id
 	return newBlockID, height, cumulativeChainWorkBytes, nil
 }
 
+// parseSQLError unwraps and translates SQL-specific errors into domain-specific errors.
+// This helper function detects database constraint violations from different SQL backends
+// (PostgreSQL and SQLite) and converts them into appropriate application errors.
+//
+// Parameters:
+//   - err: The original SQL error to parse
+//   - block: The block being processed, used for error context
+//
+// Returns:
+//   - error: A domain-specific error with appropriate context
 func (*SQL) parseSQLError(err error, block *model.Block) error {
 	// check whether this is a postgres exists constraint error
 	var pqErr *pq.Error
@@ -264,6 +332,25 @@ func (*SQL) parseSQLError(err error, block *model.Block) error {
 	return errors.NewStorageError("failed to store block", err)
 }
 
+// getPreviousBlockData determines if this is a genesis block and retrieves information
+// about the previous block necessary for storing a new block.
+//
+// The function performs special handling for the genesis block where previous values
+// are initialized with defaults. For non-genesis blocks, it retrieves the previous
+// block's data and validates the block height encoding in the coinbase transaction.
+//
+// Parameters:
+//   - ctx: Context for database operations
+//   - coinbaseTxID: Transaction ID of the coinbase transaction
+//   - block: The block being processed
+//
+// Returns:
+//   - genesis: Whether this is the genesis block
+//   - height: Height of the current block
+//   - previousBlockID: Database ID of the previous block
+//   - previousChainWork: Cumulative proof-of-work for previous block
+//   - previousBlockInvalid: Whether the previous block is marked as invalid
+//   - err: Any error encountered during processing
 func (s *SQL) getPreviousBlockData(
 	ctx context.Context,
 	coinbaseTxID string,
@@ -308,6 +395,17 @@ func (s *SQL) getPreviousBlockData(
 	return genesis, height, previousBlockID, previousChainWork, previousBlockInvalid, nil
 }
 
+// calculateAndPrepareChainWork computes the cumulative proof-of-work for a new block.
+// It converts the previous chain work bytes to a hash, calculates the new cumulative
+// chain work by adding the block's work, and returns the result in byte format.
+//
+// Parameters:
+//   - previousChainWorkBytes: The byte representation of the previous block's cumulative work
+//   - block: The block being processed
+//
+// Returns:
+//   - []byte: The byte representation of the new cumulative chain work
+//   - error: Any error encountered during the calculation
 func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Block) ([]byte, error) {
 	prevChainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(previousChainWorkBytes))
 	if err != nil {
@@ -324,6 +422,17 @@ func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Bl
 	return cumulativeChainWorkBytes, nil
 }
 
+// validateCoinbaseHeight ensures that blocks comply with BIP34 requirements.
+// BIP34 requires that the coinbase transaction must include the correct block height
+// in its first input script for all blocks version 2 or higher after the activation height.
+//
+// Parameters:
+//   - block: The block being validated
+//   - currentHeight: The calculated height for this block
+//
+// Returns:
+//   - error: Validation error if the coinbase height doesn't match or can't be extracted,
+//     or nil if validation passes or isn't required
 func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) error {
 	// Check that the coinbase transaction includes the correct block height for all
 	// blocks that are version 2 or higher. BIP34 activation height is 227835.
@@ -353,6 +462,17 @@ func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) e
 	return nil // No validation needed or validation passed
 }
 
+// getCumulativeChainWork calculates the total proof-of-work up to and including this block.
+// It delegates to the work calculator to add the current block's work to the previous
+// cumulative chain work value.
+//
+// Parameters:
+//   - chainWork: The cumulative proof-of-work hash up to the previous block
+//   - block: The block whose work should be added to the cumulative total
+//
+// Returns:
+//   - *chainhash.Hash: The new cumulative chain work hash
+//   - error: Any error encountered during calculation
 func getCumulativeChainWork(chainWork *chainhash.Hash, block *model.Block) (*chainhash.Hash, error) {
 	newWork, err := work.CalculateWork(chainWork, block.Header.Bits)
 	if err != nil {

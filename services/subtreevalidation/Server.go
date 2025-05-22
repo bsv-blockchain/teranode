@@ -31,34 +31,73 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Server represents the main subtree validation service.
+// Server implements the subtree validation service and provides functionality for
+// validating transaction subtrees within the blockchain.
+//
+// The Server is the central component of the subtreevalidation package, managing the complete
+// lifecycle of subtree validation including transaction validation, storage, and integration
+// with other Teranode services. It implements both the gRPC API endpoints and the core
+// validation logic.
+//
+// The Server employs several design patterns:
+// - Dependency Injection: All dependencies are provided through the constructor
+// - Repository Pattern: Abstraction of storage operations behind interfaces
+// - Service Layer: Clear separation between API and business logic
+// - Concurrent Processing: Parallel validation of transactions where possible
+//
+// Thread safety is maintained through careful synchronization primitive usage and
+// atomic operations where appropriate.
 type Server struct {
+	// UnimplementedSubtreeValidationAPIServer embeds the auto-generated gRPC server base
 	subtreevalidation_api.UnimplementedSubtreeValidationAPIServer
-	// logger handles all logging operations
+
+	// logger handles all logging operations for the service
 	logger ulogger.Logger
-	// settings contains the configuration for the service
+
+	// settings contains the configuration parameters for the service
+	// including connection details, timeouts, and operational modes
 	settings *settings.Settings
+
 	// subtreeStore manages persistent storage of subtrees
+	// This blob store is used to save and retrieve complete subtree structures
 	subtreeStore blob.Store
+
 	// txStore manages transaction storage
+	// This blob store is used to save and retrieve individual transactions
 	txStore blob.Store
-	// utxoStore manages UTXO state
+
+	// utxoStore manages the Unspent Transaction Output (UTXO) state
+	// It's used during transaction validation to verify input spending
 	utxoStore utxo.Store
+
 	// validatorClient provides transaction validation services
+	// It's used to validate transactions against consensus rules
 	validatorClient validator.Interface
+
 	// subtreeCount tracks the number of subtrees processed
+	// Uses atomic operations for thread-safe access
 	subtreeCount atomic.Int32
-	// stats tracks operational statistics
+
+	// stats tracks operational statistics for monitoring and diagnostics
 	stats *gocore.Stat
+
 	// prioritySubtreeCheckActiveMap tracks active priority subtree checks
+	// Maps subtree hash strings to boolean values indicating check status
 	prioritySubtreeCheckActiveMap map[string]bool
-	// prioritySubtreeCheckActiveMapLock protects the priority map
+
+	// prioritySubtreeCheckActiveMapLock protects concurrent access to the priority map
 	prioritySubtreeCheckActiveMapLock sync.Mutex
-	// blockchainClient interfaces with the blockchain
+
+	// blockchainClient interfaces with the blockchain service
+	// Used to retrieve block information and validate chain state
 	blockchainClient blockchain.ClientI
+
 	// subtreeConsumerClient consumes subtree-related Kafka messages
+	// Handles incoming subtree validation requests from other services
 	subtreeConsumerClient kafka.KafkaConsumerGroupI
+
 	// txmetaConsumerClient consumes transaction metadata Kafka messages
+	// Processes transaction metadata updates from other services
 	txmetaConsumerClient kafka.KafkaConsumerGroupI
 }
 
@@ -70,7 +109,30 @@ var (
 )
 
 // New creates a new Server instance with the provided dependencies.
-// It initializes the service with the given configuration and stores.
+//
+// This factory function constructs and initializes a fully configured subtree validation service,
+// injecting all required dependencies. It follows the dependency injection pattern to ensure
+// testability and proper separation of concerns.
+//
+// The method ensures that the service is configured with proper stores, clients, and settings
+// before it's made available for use. It also initializes internal tracking structures and
+// statistics for monitoring.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - logger: Structured logger for operational and debug messages
+//   - tSettings: Configuration settings for the service
+//   - subtreeStore: Blob store for persistent subtree storage
+//   - txStore: Blob store for transaction storage
+//   - utxoStore: Store for UTXO set management
+//   - validatorClient: Client for transaction validation services
+//   - blockchainClient: Client for blockchain interaction
+//   - subtreeConsumerClient: Kafka consumer for subtree-related messages
+//   - txmetaConsumerClient: Kafka consumer for transaction metadata messages
+//
+// Returns:
+//   - *Server: Fully initialized server instance ready for starting
+//   - error: Any error encountered during initialization
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -140,7 +202,26 @@ func New(
 }
 
 // Health checks the health status of the service and its dependencies.
-// It returns an HTTP status code, status message, and any error encountered.
+//
+// This method implements the standard Teranode health check interface used across all services
+// for consistent monitoring, alerting, and orchestration. It provides both readiness and
+// liveness checking capabilities to support different operational scenarios.
+//
+// The method performs checks appropriate to the service's role, including:
+// - Verifying store access for subtree, transaction, and UTXO data
+// - Checking connections to dependent services (validator, blockchain)
+// - Validating Kafka consumer health
+// - Ensuring internal state consistency
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - checkLiveness: If true, performs only basic liveness checks; if false, includes
+//     more thorough readiness checks
+//
+// Returns:
+//   - int: HTTP status code representing health (200 for healthy, other codes for issues)
+//   - string: Human-readable description of the current health state
+//   - error: Detailed error information if the service is unhealthy
 func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -194,6 +275,19 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *subtreevalidation_api.EmptyM
 }
 
 // Init initializes the server metrics and performs any necessary setup.
+//
+// This method completes the initialization process by setting up components that
+// require runtime initialization rather than construction-time setup. It's called
+// after New() but before Start() to ensure all systems are properly initialized.
+//
+// The initialization is designed to be idempotent and can be safely called multiple times,
+// though typically it's only called once after construction and before starting the service.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//
+// Returns:
+//   - error: Any error encountered during initialization
 func (u *Server) Init(ctx context.Context) (err error) {
 	InitPrometheusMetrics()
 
@@ -208,8 +302,28 @@ func (u *Server) SetUutxoStore(s utxo.Store) {
 	u.utxoStore = s
 }
 
-// Start initializes and starts the server components including Kafka consumers
-// and gRPC server. It blocks until the context is canceled or an error occurs.
+// Start initializes and starts the server components including Kafka consumers and gRPC server.
+//
+// This method launches all the operational components of the subtree validation service,
+// including:
+// - Kafka consumers for subtree and transaction metadata messages
+// - The gRPC server for API access
+// - Any background workers or timers required for operation
+//
+// The method implements a safe startup sequence to ensure all components are properly
+// initialized before the service is marked as ready. It also handles proper error propagation
+// if any component fails to start.
+//
+// Once all components are successfully started, the method signals readiness through the
+// provided channel and then blocks until the context is canceled or an error occurs. This
+// design allows the caller to coordinate the startup of multiple services.
+//
+// Parameters:
+//   - ctx: Context for cancellation and coordination
+//   - readyCh: Channel to signal when the service is fully started and ready for requests
+//
+// Returns:
+//   - error: Any error encountered during startup or operation
 func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -238,6 +352,23 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 }
 
 // Stop gracefully shuts down the server components including Kafka consumers.
+//
+// This method ensures a clean and orderly shutdown of all service components,
+// allowing in-progress operations to complete when possible and releasing
+// all resources properly. It follows a consistent shutdown sequence that:
+// 1. Stops accepting new requests
+// 2. Pauses Kafka consumers to prevent new messages from being processed
+// 3. Waits for in-progress operations to complete (with reasonable timeouts)
+// 4. Closes connections and releases resources
+//
+// The method is designed to be called when the service needs to be terminated,
+// either for normal shutdown or in response to system signals.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing (unused in current implementation)
+//
+// Returns:
+//   - error: Any error encountered during shutdown
 func (u *Server) Stop(_ context.Context) error {
 	// close the kafka consumers gracefully
 	if err := u.subtreeConsumerClient.Close(); err != nil {
@@ -252,20 +383,37 @@ func (u *Server) Stop(_ context.Context) error {
 }
 
 // CheckSubtreeFromBlock validates a subtree and its transactions based on the provided request.
-// It handles both legacy and current validation paths, managing locks to prevent
-// duplicate processing.
+//
+// This method is the primary gRPC API endpoint for subtree validation, responsible for
+// coordinating the validation process for an entire subtree of interdependent transactions.
+// It ensures that all transactions in the subtree adhere to consensus rules and can be
+// added to the blockchain.
+//
+// The method implements several important features:
+// - Distributed locking to prevent duplicate validation of the same subtree
+// - Retry logic for lock acquisition with exponential backoff
+// - Support for both legacy and current validation paths for backward compatibility
+// - Proper resource cleanup even in error conditions
+// - Structured error responses with appropriate gRPC status codes
+//
+// Validation includes checking that:
+// - All transactions in the subtree are valid according to consensus rules
+// - All transaction inputs refer to unspent outputs or other transactions in the subtree
+// - No double-spending conflicts exist within the subtree or with existing chain state
+// - Transactions satisfy all policy rules (fees, standardness, etc.)
 //
 // Parameters:
-//   - ctx: Context for cancellation and tracing
-//   - request: Contains subtree hash, base URL, and block information
+//   - ctx: Context for cancellation and tracing, with appropriate deadlines
+//   - request: Contains subtree hash, base URL for retrieving missing transactions,
+//     block height, and block hash information
 //
 // Returns:
-//   - bool: True if the subtree is valid
-//   - error: Any error encountered during validation
+//   - *CheckSubtreeFromBlockResponse: Response indicating validation success or failure
+//   - error: Any error encountered during validation with appropriate gRPC status codes
 //
-// The function implements a retry mechanism for lock acquisition and supports
-// both legacy and current validation paths. It will retry for up to 20 seconds
-// when attempting to acquire a lock.
+// The method will retry lock acquisition for up to 20 seconds with exponential backoff,
+// making it resilient to temporary contention when multiple services attempt to validate
+// the same subtree simultaneously.
 func (u *Server) CheckSubtreeFromBlock(ctx context.Context, request *subtreevalidation_api.CheckSubtreeFromBlockRequest) (*subtreevalidation_api.CheckSubtreeFromBlockResponse, error) {
 	subtreeBlessed, err := u.checkSubtreeFromBlock(ctx, request)
 	if err != nil {
@@ -277,10 +425,35 @@ func (u *Server) CheckSubtreeFromBlock(ctx context.Context, request *subtreevali
 	}, nil
 }
 
-// checkSubtreeFromBlock is the internal function used to check a subtree
-// This function expects a subtree to have been stored in the subtree store with an extension of .subtreeToCheck
-// compared to the normal .subtree extension. This is done so that the subtree validation does not think that the subtree
-// is a valid subtree and has already been checked.
+// checkSubtreeFromBlock is the internal implementation of subtree validation logic.
+//
+// This method contains the core business logic for validating a subtree, separated from
+// the API-level concerns handled by the public CheckSubtreeFromBlock method. The separation
+// allows for cleaner testing and better separation of concerns.
+//
+// The method expects the subtree to be stored in the subtree store with a special extension
+// (.subtreeToCheck instead of .subtree) to differentiate between validated and unvalidated
+// subtrees. This prevents the validation service from mistakenly treating an unvalidated
+// subtree as already validated.
+//
+// The validation process includes:
+// 1. Retrieving the subtree data from storage
+// 2. Parsing the subtree structure
+// 3. Checking for existing transaction metadata
+// 4. Retrieving and validating missing transactions
+// 5. Verifying transaction dependencies and ordering
+// 6. Confirming all transactions meet consensus rules
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - request: Contains subtree hash, base URL, and block information
+//
+// Returns:
+//   - bool: True if the subtree is valid and can be added to the blockchain
+//   - error: Detailed error information if validation fails
+//
+// This method is called internally by CheckSubtreeFromBlock after acquiring the
+// appropriate locks to prevent duplicate processing.
 func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevalidation_api.CheckSubtreeFromBlockRequest) (ok bool, err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "checkSubtree",
 		tracing.WithParentStat(u.stats),

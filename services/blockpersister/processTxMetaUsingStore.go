@@ -1,4 +1,5 @@
-// Package blockpersister provides functionality for persisting blockchain blocks and their associated data.
+// Package blockpersister provides comprehensive functionality for persisting blockchain blocks and their associated data.
+// It coordinates the storage of blocks, transactions, and UTXO set changes with high efficiency and data integrity.
 package blockpersister
 
 import (
@@ -16,15 +17,37 @@ import (
 )
 
 // processTxMetaUsingStore retrieves transaction metadata from storage for a batch of transactions.
+//
+// This method efficiently retrieves transaction metadata from the UTXO store, supporting both
+// batch retrieval and individual lookups based on configuration. It's a critical component in
+// the transaction processing pipeline, ensuring all necessary transaction data is available
+// for validation and persistence.
+//
+// The function implements two distinct retrieval strategies:
+//   1. Batched mode: Collects missing transaction hashes into batches and retrieves them
+//      in bulk operations, significantly reducing the number of store requests for high
+//      transaction volumes
+//   2. Individual mode: Retrieves transaction metadata one by one, which may be more
+//      efficient for small numbers of transactions or when batch retrieval is not supported
+//
+// The method employs concurrency through goroutines to parallelize retrieval operations,
+// with configurable batch sizes and concurrency limits to optimize performance based on
+// system capabilities and load characteristics.
+//
 // Parameters:
-//   - ctx: context for the operation
-//   - txHashes: slice of transaction hashes to process
-//   - txMetaSlice: slice to store retrieved transaction metadata
-//   - batched: whether to use batch processing
+//   - ctx: Context for coordinating cancellation and tracing
+//   - txHashes: Slice of transaction hashes to retrieve metadata for
+//   - txMetaSlice: Pre-allocated slice where retrieved transaction metadata will be stored,
+//     with indices corresponding to txHashes
+//   - batched: Whether to use batch processing mode (true) or individual retrieval (false)
 //
 // Returns:
-//   - int: number of transactions that couldn't be found
-//   - error: any error encountered during processing
+//   - int: Number of transactions that couldn't be found or had retrieval errors
+//   - error: Any error encountered during the retrieval process
+//
+// The function handles special cases like coinbase transactions, which are placeholders not
+// present in the store. It also accounts for context cancellation to support clean shutdowns.
+// Concurrent access to shared state is protected using atomic operations to ensure thread safety.
 func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data, batched bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, errors.NewInvalidArgumentError("txHashes and txMetaSlice must be the same length")

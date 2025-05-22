@@ -10,6 +10,9 @@ import (
 )
 
 // Prometheus metrics variables for monitoring block assembly operations
+// These metrics provide observability into the performance, throughput, and health
+// of the block assembly service. They are used for monitoring system behavior,
+// detecting anomalies, and analyzing performance patterns across various operations.
 var (
 	// prometheusBlockAssemblyHealth tracks health check calls
 	prometheusBlockAssemblyHealth prometheus.Counter
@@ -54,7 +57,10 @@ var (
 )
 
 // initPrometheusMetrics initializes all Prometheus metrics.
-// This function is called once during package initialization.
+// This function is called once during package initialization to set up
+// all required counters, gauges, and histograms with appropriate labels,
+// buckets, and descriptions for monitoring the block assembly service.
+// It ensures all metrics are correctly registered with the Prometheus registry.
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }

@@ -1,6 +1,22 @@
 // Package utxopersister creates and maintains up-to-date Unspent Transaction Output (UTXO) file sets
 // for each block in the Teranode blockchain. Its primary function is to process the output of the
 // Block Persister service (utxo-additions and utxo-deletions) and generate complete UTXO set files.
+//
+// The package implements a server that monitors blockchain updates and processes blocks as they are
+// added to the chain. For each block, it extracts the UTXOs, reconciles them with previous UTXO sets,
+// and persists them in a structured format. The resulting UTXO set files can be exported and used to
+// initialize the UTXO store in new Teranode instances, enabling fast synchronization of new nodes.
+//
+// Key components:
+// - Server: Coordinates the processing of blocks and UTXO persistence
+// - UTXOWrapper: Encapsulates transaction outputs with metadata
+// - UTXO: Represents individual unspent outputs
+// - BlockIndex: Contains block metadata for validation and reference
+//
+// Integration points:
+// - Blockchain service: Source of block notifications and blockchain data
+// - Block Store: Storage for persisted UTXO sets
+// - Block Persister: Source of UTXO additions and deletions
 package utxopersister
 
 import (
@@ -29,6 +45,10 @@ import (
 // Server manages the UTXO persistence operations.
 // It coordinates the processing of blocks, extraction of UTXOs, and their persistent storage.
 // The server maintains the state of the UTXO set by handling additions and deletions as new blocks are processed.
+// It subscribes to blockchain notifications to detect new blocks and processes them asynchronously,
+// ensuring that a complete and consistent UTXO set is maintained for each block height.
+// The server implements a fallback mechanism to poll for new blocks when subscription is not available.
+// All operations are thread-safe and can be gracefully stopped and restarted.
 type Server struct {
 	// logger provides logging functionality
 	logger ulogger.Logger
@@ -63,6 +83,17 @@ type Server struct {
 
 // New creates a new Server instance with the provided parameters.
 // It initializes a new UTXO persister server with the given logger, settings, block store, and blockchain client.
+//
+// Parameters:
+// - ctx: Context for controlling the initialization process
+// - logger: Logger interface used for recording operational events and errors
+// - tSettings: Configuration settings that control server behavior
+// - blockStore: Blob store instance used for persisting UTXO data
+// - blockchainClient: Client interface for accessing blockchain data and subscribing to notifications
+//
+// Returns a configured Server instance ready for initialization via the Init method.
+// Note that this constructor leverages the blockchain client interface for operations,
+// which is suitable for distributed setups where components may be on different machines.
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -84,6 +115,17 @@ func New(
 // NewDirect creates a new Server instance with direct blockchain store access.
 // Unlike New, this constructor provides direct access to the blockchain store without using the client interface.
 // This can be more efficient when the server is running in the same process as the blockchain store.
+//
+// Parameters:
+// - ctx: Context for controlling the initialization process
+// - logger: Logger interface used for recording operational events and errors
+// - tSettings: Configuration settings that control server behavior
+// - blockStore: Blob store instance used for persisting UTXO data
+// - blockchainStore: Direct access to the blockchain storage layer
+//
+// Returns a configured Server instance and any error encountered during setup.
+// Using this constructor bypasses the client abstraction layer, providing better
+// performance but requiring the blockchain store to be in the same process.
 func NewDirect(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -106,6 +148,20 @@ func NewDirect(
 // Liveness checks verify that the service is running, while readiness checks also verify that
 // dependencies like blockchain client, FSM, blockchain store, and block store are available.
 // Returns HTTP status code, status message, and any error encountered.
+//
+// Parameters:
+// - ctx: Context for controlling the health check operation
+// - checkLiveness: Boolean flag that determines the check type (true for liveness, false for readiness)
+//
+// Returns:
+// - int: HTTP status code (200 for OK, 503 for Service Unavailable)
+// - string: Status message describing the health state
+// - error: Any error encountered during health checks
+//
+// For liveness checks, this method only verifies that the service process is running and responsive.
+// For readiness checks, it performs comprehensive dependency checks to ensure the service can
+// handle requests. This supports Kubernetes or other orchestration systems in determining
+// when to route traffic to this service instance.
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -139,6 +195,16 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // It retrieves the last block height that was successfully processed from persistent storage
 // and sets it as the starting point for future processing.
 // Returns an error if the height cannot be read.
+//
+// Parameters:
+// - ctx: Context for controlling the initialization process
+//
+// Returns:
+// - error: Any error encountered during initialization
+//
+// This method should be called after creating a new Server instance and before calling Start.
+// It ensures the server has the correct starting state for processing blocks.
+// If no previous height information is found, processing will start from height 0.
 func (s *Server) Init(ctx context.Context) (err error) {
 	height, err := s.readLastHeight(ctx)
 	if err != nil {
@@ -155,6 +221,21 @@ func (s *Server) Init(ctx context.Context) (err error) {
 // The loop processes blocks as they are received through the notification channel or on a timer.
 // The readyCh is closed when initialization is complete to signal readiness.
 // Returns an error if subscription or processing fails.
+//
+// Parameters:
+// - ctx: Context for controlling the server's lifecycle
+// - readyCh: Channel closed when initialization is complete to signal readiness
+//
+// Returns:
+// - error: Any error encountered during startup or processing
+//
+// This method blocks until the context is canceled or an error occurs. It first waits for
+// the blockchain's FSM to transition from IDLE state, then subscribes to blockchain notifications.
+// If no blockchain client is available, it falls back to a polling mechanism with a shorter interval.
+// The processing loop handles three types of events:
+// 1. Context cancellation - triggers shutdown
+// 2. Blockchain notifications - triggers processing of new blocks
+// 3. Timer events - triggers periodic processing attempts
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	close(readyCh)
 
@@ -216,6 +297,17 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 // Stop stops the server's processing operations.
 // It performs cleanup and shutdown procedures for the UTXO persister server.
+//
+// Parameters:
+// - ctx: Context for controlling the shutdown process (currently unused)
+//
+// Returns:
+// - error: Any error encountered during shutdown (currently always returns nil)
+//
+// This method ensures graceful termination of server operations and can be used
+// during application shutdown or when reconfiguring the server.
+// Currently, no specific cleanup operations are performed, but the method signature
+// maintains compatibility with other service interfaces.
 func (s *Server) Stop(_ context.Context) error {
 	return nil
 }
@@ -224,8 +316,21 @@ func (s *Server) Stop(_ context.Context) error {
 // It ensures only one processing operation runs at a time and handles various trigger sources.
 // The source parameter indicates what triggered the processing (blockchain, timer, etc.).
 // Returns an error if the processing encounters a problem.
-// It ensures only one processing operation runs at a time and handles various trigger sources.
-// The source parameter indicates what triggered the processing (blockchain, timer, etc.).
+//
+// Parameters:
+// - ctx: Context for controlling the processing operation
+// - source: String identifier indicating what triggered the processing (blockchain, timer, startup)
+//
+// Returns:
+// - error: Any error encountered during processing
+//
+// This method uses a mutex to ensure that only one processing operation runs at a time,
+// preventing race conditions and duplicate work. It updates the running state of the server
+// and initiates the block processing via processNextBlock. If a processing operation is already
+// in progress, it returns immediately.
+//
+// The trigger mechanism supports multiple sources to accommodate both push (notification-based)
+// and pull (timer-based) processing models, making the server resilient to missed notifications.
 func (s *Server) trigger(ctx context.Context, source string) error {
 	s.mu.Lock()
 
@@ -278,6 +383,25 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 // and persists them to storage. It also updates the last processed height.
 // Returns a duration to wait before processing the next block and any error encountered.
 // The duration is used to implement confirmation waiting periods.
+//
+// Parameters:
+// - ctx: Context for controlling the processing operation
+//
+// Returns:
+// - time.Duration: Time to wait before processing the next block (for confirmation periods)
+// - error: Any error encountered during processing
+//
+// This method performs several key operations:
+// 1. Retrieves the next block information from the blockchain store or client
+// 2. Extracts UTXO additions and deletions for the block
+// 3. Validates the previous UTXO set to ensure consistency
+// 4. Creates a new UTXO set by applying additions and deletions
+// 5. Persists the new UTXO set to storage
+// 6. Updates the last processed height
+//
+// If the new block is not yet available or if it doesn't follow directly after the last processed height,
+// the method will return a waiting duration to retry later. This handles chain reorganizations and
+// ensures blocks are processed in sequence.
 func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	var (
 		headers       []*model.BlockHeader
@@ -376,6 +500,19 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 // It attempts to retrieve the height from a special file in the block store.
 // Returns the height as uint32 and any error encountered.
 // If the height file doesn't exist, it returns 0 and no error.
+//
+// Parameters:
+// - ctx: Context for controlling the storage operation
+//
+// Returns:
+// - uint32: The last processed block height, or 0 if no height is stored
+// - error: Any error encountered during the read operation
+//
+// This method reads the height value from a dedicated file named 'utxo-height'
+// in the blob store. The height is stored as a decimal string representation.
+// If the file does not exist (typically during first startup), the method returns 0,
+// indicating that processing should start from the genesis block.
+// Other errors during reading or parsing are returned to the caller.
 func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 	// Read the file content as a byte slice
 	b, err := s.blockStore.Get(ctx, nil, options.WithFilename("lastProcessed"), options.WithFileExtension("dat"))
@@ -409,7 +546,18 @@ func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 // It persists the last processed height to a special file in the block store.
 // This allows the server to resume processing from the correct point after a restart.
 // Returns an error if the write operation fails.
-// It persists the last processed height for recovery purposes.
+//
+// Parameters:
+// - ctx: Context for controlling the storage operation
+// - height: The block height to be stored
+//
+// Returns:
+// - error: Any error encountered during the write operation
+//
+// This method stores the height as a decimal string representation in a dedicated file
+// named 'utxo-height' in the blob store. The height is stored after each successful
+// block processing operation to enable recovery after restarts or crashes.
+// The write operation uses atomic store semantics to ensure consistency.
 func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 	// Convert the height to a string
 	heightStr := fmt.Sprintf("%d", height)
@@ -430,6 +578,22 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 // It checks if the UTXO set for the given hash exists and has valid header and footer.
 // This verification ensures that the UTXO set was completely written and is not corrupted.
 // Returns an error if verification fails.
+//
+// Parameters:
+// - ctx: Context for controlling the verification operation
+// - hash: Pointer to the block hash for which to verify the UTXO set
+//
+// Returns:
+// - error: Any error encountered during verification, or nil if verification succeeds
+//
+// This method performs several integrity checks on the UTXO set:
+// 1. Verifies that a UTXO set file exists for the given block hash
+// 2. Checks that the header record is valid and matches the expected block hash
+// 3. Ensures that the footer exists and is correctly formatted
+//
+// These checks confirm that the UTXO set for the block was completely written
+// and can be used for subsequent operations. This is crucial for maintaining
+// blockchain state consistency, especially after system restarts.
 func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error {
 	us := &UTXOSet{
 		ctx:       ctx,

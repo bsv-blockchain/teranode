@@ -1,4 +1,17 @@
 // Package blockchain provides Prometheus metrics for blockchain operations.
+//
+// This file defines the Prometheus metrics used to monitor the performance and health of
+// the blockchain service. These metrics cover various aspects of blockchain operations
+// including block processing, retrievals, state management, and API request handling.
+//
+// The metrics are registered with Prometheus through the promauto factory to ensure proper
+// initialization and registration with the metrics registry. They are designed to track:
+// - Request latency for various operations (histograms)
+// - Call counts for health checks (counters)
+// - Current service state (gauges)
+//
+// These metrics enable comprehensive monitoring of the blockchain service behavior in
+// production environments and help diagnose performance issues.
 package blockchain
 
 import (

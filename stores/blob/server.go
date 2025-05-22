@@ -1,4 +1,18 @@
-// Package blob provides blob storage functionality with various storage backend implementations.
+// Package blob provides a comprehensive blob storage system with multiple backend implementations.
+// The blob package is designed to store, retrieve, and manage arbitrary binary data (blobs) with
+// features such as customizable storage backends, Delete-At-Height (DAH) functionality for automatic
+// data expiration, and a standardized HTTP API.
+//
+// Key features:
+// - Multiple storage backends (memory, file, S3, HTTP, etc.) behind a common interface
+// - HTTP API for interacting with blob stores over the network
+// - Batching capabilities for efficient bulk operations
+// - Delete-At-Height (DAH) support for blockchain-based data expiration
+// - Range-based content retrieval for partial data access
+// - Streaming data access through io.Reader interfaces
+//
+// This package integrates with the broader Teranode system to provide reliable data storage
+// with features specifically designed for blockchain data management.
 package blob
 
 import (
@@ -19,8 +33,14 @@ import (
 
 const NotFoundMsg = "Not found"
 
+// HTTPBlobServer provides an HTTP interface to a blob storage backend.
+// It implements the http.Handler interface and exposes blob operations as RESTful endpoints.
+// The server supports standard CRUD operations plus specialized features like health checks,
+// range requests, and DAH management.
 type HTTPBlobServer struct {
+	// store is the underlying blob storage implementation
 	store  Store
+	// logger provides structured logging for server operations
 	logger ulogger.Logger
 }
 
@@ -78,8 +98,20 @@ func (s *HTTPBlobServer) Start(ctx context.Context, addr string) error {
 	return srv.ListenAndServe()
 }
 
-// ServeHTTP handles HTTP requests to the blob server.
-// Implements http.Handler interface.
+// ServeHTTP handles HTTP requests to the blob server, implementing the http.Handler interface.
+// It routes requests to the appropriate handler function based on the HTTP method and path.
+// 
+// The server supports the following endpoints:
+// - GET /health: Health check endpoint
+// - GET /blob/{key}: Retrieve a blob
+// - HEAD /blob/{key}: Check if a blob exists
+// - POST /blob/{key}: Store a new blob
+// - PATCH /blob/{key}: Update blob's Delete-At-Height value
+// - DELETE /blob/{key}: Delete a blob
+//
+// Parameters:
+//   - w: HTTP response writer for sending the response
+//   - r: HTTP request containing the client's request details
 func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/health" {
 		s.handleHealth(w, r)
@@ -104,6 +136,14 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// setCurrentBlockHeight updates the current block height in the underlying store if it supports this operation.
+// This is used for DAH (Delete-At-Height) functionality to determine when blobs should be deleted.
+//
+// Parameters:
+//   - height: The current blockchain height to set
+//
+// Returns:
+//   - error: Error if the underlying store doesn't support the SetCurrentBlockHeight operation
 func (s *HTTPBlobServer) setCurrentBlockHeight(height uint32) error {
 	store, ok := s.store.(interface {
 		SetCurrentBlockHeight(height uint32)
@@ -118,7 +158,12 @@ func (s *HTTPBlobServer) setCurrentBlockHeight(height uint32) error {
 	return nil
 }
 
-// handleHealth processes health check requests.
+// handleHealth processes health check requests to verify the blob store's operational status.
+// It queries the underlying store's health status and returns the appropriate HTTP response.
+//
+// Parameters:
+//   - w: HTTP response writer for sending the health status response
+//   - r: HTTP request containing the health check request details
 func (s *HTTPBlobServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	status, msg, err := s.store.Health(r.Context(), false)
 	if err != nil {
@@ -131,7 +176,15 @@ func (s *HTTPBlobServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(msg))
 }
 
-// handleExists processes blob existence check requests.
+// handleExists processes blob existence check requests (HTTP HEAD).
+// It checks if a blob exists in the store and returns an appropriate HTTP status code:
+// - 200 OK if the blob exists
+// - 404 Not Found if the blob doesn't exist
+//
+// Parameters:
+//   - w: HTTP response writer for sending the existence check response
+//   - r: HTTP request containing the blob key in the path
+//   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleExists(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
 	key, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
@@ -152,7 +205,17 @@ func (s *HTTPBlobServer) handleExists(w http.ResponseWriter, r *http.Request, op
 	}
 }
 
-// handleGet processes blob retrieval requests.
+// handleGet processes blob retrieval requests (HTTP GET).
+// It supports both full blob retrieval and partial retrieval via Range headers.
+// For Range requests, it delegates to handleRangeRequest for specialized handling.
+//
+// The function streams data directly from the store to the HTTP response to minimize
+// memory usage when handling large blobs.
+//
+// Parameters:
+//   - w: HTTP response writer for sending the blob data response
+//   - r: HTTP request containing the blob key in the path
+//   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
 	key, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
@@ -183,7 +246,16 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 	_, _ = io.Copy(w, rc)
 }
 
-// handleRangeRequest processes partial content requests.
+// handleRangeRequest processes partial content requests using HTTP Range headers.
+// It implements the HTTP/1.1 Range request specification to return only a portion of a blob.
+// The function parses the Range header, retrieves the requested byte range, and returns
+// the data with appropriate Content-Range headers and 206 Partial Content status.
+//
+// Parameters:
+//   - w: HTTP response writer for sending the partial content response
+//   - r: HTTP request containing the Range header
+//   - key: The blob key to retrieve partial content from
+//   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Request, key []byte, opts ...options.FileOption) {
 	rangeHeader := r.Header.Get("Range")
 
@@ -258,7 +330,15 @@ func parseRange(rangeHeader string) (int, int, error) {
 	return start, end + 1, nil
 }
 
-// handleSet processes blob storage requests.
+// handleSet processes blob storage requests (HTTP POST).
+// It reads the request body as the blob content and stores it in the blob store
+// using the key extracted from the URL path. The function uses streaming via
+// SetFromReader to efficiently handle large blob uploads without excessive memory usage.
+//
+// Parameters:
+//   - w: HTTP response writer for sending the storage operation response
+//   - r: HTTP request containing the blob key in the path and content in the body
+//   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
 	key, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
@@ -281,7 +361,15 @@ func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts 
 	w.WriteHeader(http.StatusCreated)
 }
 
-// handleSetDAH processes DAH setting requests.
+// handleSetDAH processes Delete-At-Height (DAH) setting requests (HTTP PATCH).
+// It updates the DAH value for an existing blob, which determines when the blob
+// will be automatically deleted based on blockchain height. The DAH value is provided
+// as a query parameter in the request URL.
+//
+// Parameters:
+//   - w: HTTP response writer for sending the DAH update response
+//   - r: HTTP request containing the blob key in the path and DAH value in query parameters
+//   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleSetDAH(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
 	key, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
@@ -311,7 +399,14 @@ func (s *HTTPBlobServer) handleSetDAH(w http.ResponseWriter, r *http.Request, op
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleDelete processes blob deletion requests.
+// handleDelete processes blob deletion requests (HTTP DELETE).
+// It permanently removes a blob from the store based on the key in the URL path.
+// Upon successful deletion, it returns HTTP 204 No Content status.
+//
+// Parameters:
+//   - w: HTTP response writer for sending the deletion response
+//   - r: HTTP request containing the blob key in the path
+//   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
 	key, err := getKeyFromPath(r.URL.Path)
 	if err != nil {

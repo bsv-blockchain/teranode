@@ -1,6 +1,15 @@
 // Package meta provides types and utilities for handling Bitcoin SV transaction metadata
 // in the UTXO store. It includes serialization and deserialization of transaction data
 // along with associated metadata like parent transactions, block references, and fees.
+//
+// The meta package is a core component of the UTXO store, providing:
+//   - Structured representation of transaction metadata
+//   - Binary serialization/deserialization for efficient storage
+//   - Support for advanced Bitcoin features like conflicting transaction tracking
+//   - Methods for retrieving and manipulating transaction metadata
+//
+// Transaction metadata is essential for efficient blockchain validation, allowing
+// quick access to critical information without requiring full transaction parsing.
 package meta
 
 import (
@@ -83,14 +92,23 @@ type PreviousOutput struct {
 	Satoshis uint64
 }
 
-// NewMetaDataFromBytes creates a new Data object from a byte slice
-// the byte slice should be in the format:
+// NewMetaDataFromBytes creates a new Data object from a byte slice.
+// This function populates an existing Data object with metadata extracted from the binary format.
+// It's optimized for performance by avoiding allocations and operating directly on the provided slice.
 //
-//	8 bytes for Fee
-//	8 bytes for SizeInBytes
-//	1 byte for IsCoinbase
-//	8 bytes for the number of ParentTxHashes
-//	32 bytes for each ParentTxHash
+// The binary format is as follows:
+//   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
+//   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Unspendable)
+//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
+//   - [25+]   - 32 bytes for each ParentTxHash
+//
+// Parameters:
+//   - dataBytes: Pointer to a byte slice containing the serialized metadata
+//   - d: Pointer to a Data object to populate
+//
+// Note: This function assumes the byte slice is valid and contains enough data.
+// No error checking is performed for performance reasons.
 func NewMetaDataFromBytes(dataBytes *[]byte, d *Data) {
 	// read the numbers
 	d.Fee = binary.LittleEndian.Uint64((*dataBytes)[:8])
@@ -109,15 +127,31 @@ func NewMetaDataFromBytes(dataBytes *[]byte, d *Data) {
 	}
 }
 
-// NewDataFromBytes creates a new Data object from a byte slice
-// the byte slice should be in the format:
-// 8 bytes for Fee
-// 8 bytes for SizeInBytes
-// 1 byte for IsCoinbase
-// 8 bytes for the number of ParentTxHashes
-// 32 bytes for each ParentTxHash
-// the transaction data as a serialized byte slice
-// the remainder of the byte slice is the block hashes as 4 byte integers
+// NewDataFromBytes creates a new Data object from a byte slice.
+// This function allocates and returns a new Data object containing transaction metadata
+// and the transaction itself.
+//
+// The binary format is as follows:
+//   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
+//   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Unspendable)
+//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
+//   - [25+]   - 32 bytes for each ParentTxHash
+//   - [...]   - Variable-length transaction data (full transaction)
+//   - [...]   - Remainder: block IDs as 4-byte integers (uint32, little-endian)
+//
+// Unlike NewMetaDataFromBytes, this function:
+//   - Performs error checking on the input data
+//   - Allocates and returns a new Data object
+//   - Parses the full transaction data
+//   - Extracts block IDs
+//
+// Parameters:
+//   - dataBytes: Byte slice containing the serialized data
+//
+// Returns:
+//   - Pointer to a new Data object
+//   - Error if parsing fails or input data is invalid
 func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	if len(dataBytes) < 24 {
 		return nil, errors.NewProcessingError("dataBytes too short, expected at least 24 bytes, got %d", len(dataBytes))
@@ -180,15 +214,25 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	return d, nil
 }
 
-// Bytes returns the Data object as a byte slice
-// the byte slice is in the format:
-// 8 bytes for Fee
-// 8 bytes for SizeInBytes
-// 1 byte for IsCoinbase
-// 8 bytes for the number of ParentTxHashes
-// 32 bytes for each ParentTxHash
-// the transaction data as a serialized byte slice
-// the remainder of the byte slice is the block hashes as 4 byte integers
+// Bytes returns the Data object as a byte slice.
+// This method provides a binary serialization of the complete Data object,
+// including the transaction data and all metadata. It's the inverse operation
+// of NewDataFromBytes.
+//
+// The binary format is as follows:
+//   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
+//   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Unspendable)
+//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
+//   - [25+]   - 32 bytes for each ParentTxHash
+//   - [...]   - Variable-length transaction data (full transaction)
+//   - [...]   - Remainder: block IDs as 4-byte integers (uint32, little-endian)
+//
+// Returns:
+//   - Byte slice containing the serialized Data object
+//
+// Note: This method allocates a new byte slice with an initial capacity of 1024 bytes
+// and grows it as needed to accommodate the full serialized data.
 func (d *Data) Bytes() []byte {
 	buf := make([]byte, 25, 1024) // 8 for Fee, 8 for SizeInBytes
 
@@ -232,13 +276,22 @@ func (d *Data) Bytes() []byte {
 	return buf
 }
 
-// MetaBytes returns the Data object as a byte slice
-// the byte slice is in the format:
-// 8 bytes for Fee
-// 8 bytes for SizeInBytes
-// 1 byte for IsCoinbase
-// 8 bytes for the number of ParentTxHashes
-// 32 bytes for each ParentTxHash
+// MetaBytes returns the Data object as a byte slice containing only metadata.
+// Unlike Bytes(), this method does not include the transaction data or block IDs,
+// making it more efficient when only metadata is needed.
+//
+// The binary format is as follows:
+//   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
+//   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Unspendable)
+//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
+//   - [25+]   - 32 bytes for each ParentTxHash
+//
+// Returns:
+//   - Byte slice containing the serialized metadata (without transaction or block IDs)
+//
+// Use this method when you need to efficiently store or transmit just the
+// metadata portion of a transaction record.
 func (d *Data) MetaBytes() []byte {
 	buf := make([]byte, 25, 1024) // 8 for Fee, 8 for SizeInBytes
 
@@ -271,7 +324,19 @@ func (d *Data) MetaBytes() []byte {
 }
 
 // String returns a human-readable representation of the Data object.
-// The format includes all metadata fields and the transaction ID if available.
+// This method implements the Stringer interface, providing a formatted
+// string representation of the Data object's contents for debugging
+// and logging purposes.
+//
+// The string includes all key metadata fields such as:
+//   - Transaction ID (if transaction is available)
+//   - Fee amount
+//   - Size in bytes
+//   - IsCoinbase flag
+//   - BlockIDs where the transaction appears
+//   - Parent transaction hashes
+//   - Status flags (Frozen, Conflicting, Unspendable)
+//
 // Returns "nil" if the Data object is nil.
 func (d *Data) String() string {
 	if d == nil {

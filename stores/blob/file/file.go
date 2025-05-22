@@ -1,3 +1,7 @@
+// Package file provides a filesystem-based implementation of the blob.Store interface.
+// This implementation stores blobs as files on disk with support for all Store interface
+// features including Delete-At-Height (DAH), checksums, headers, and footers. The file store
+// is designed for production use with durable, persistent storage of blob data.
 package file
 
 import (
@@ -31,29 +35,73 @@ import (
 
 const checksumExtension = ".sha256"
 
+// File implements the blob.Store interface using the local filesystem for storage.
+// It provides persistent storage with features like checksumming, DAH-based cleanup,
+// and optional integration with a separate longterm storage backend for hybrid storage models.
+// The implementation includes background processes for tracking and cleaning expired blobs.
 type File struct {
+	// path is the base directory path where blob files are stored
 	path               string
+	// logger provides structured logging for file operations and errors
 	logger             ulogger.Logger
+	// options contains default options for blob operations
 	options            *options.Options
+	// fileDAHs maps filenames to their Delete-At-Height values for expiration tracking
 	fileDAHs           map[string]uint32
+	// fileDAHsMu protects concurrent access to the fileDAHs map
 	fileDAHsMu         sync.Mutex
+	// fileDAHsCtxCancel is used to stop the DAH cleanup background process on close
 	fileDAHsCtxCancel  context.CancelFunc
+	// currentBlockHeight tracks the current blockchain height for DAH processing
 	currentBlockHeight atomic.Uint32
+	// persistSubDir is an optional subdirectory for organization within the base path
 	persistSubDir      string
+	// longtermClient is an optional secondary storage backend for hybrid storage models
 	longtermClient     longtermStore
 }
 
+// longtermStore defines the interface for a secondary storage backend that can be used
+// in conjunction with the file store for a hybrid storage model. This allows blobs to be
+// retrieved from a secondary location if not found in the primary file storage, enabling
+// tiered storage architectures with different retention policies and access patterns.
 type longtermStore interface {
+	// Get retrieves a blob from the longterm store
 	Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+	// GetIoReader provides streaming access to a blob in the longterm store
 	GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error)
+	// Exists checks if a blob exists in the longterm store
 	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
+	// GetFooterMetaData retrieves footer metadata from the longterm store
 	GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+	// GetHeader retrieves header data from the longterm store
 	GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
 }
 
-// create a global limiting semaphore for file operations
+// fileSemaphore is a global limiting semaphore for file operations to prevent excessive
+// concurrent file operations that could impact system performance. It limits the maximum
+// number of concurrent file operations to 1024, which helps prevent resource exhaustion
+// while still allowing enough parallelism for high-throughput scenarios.
 var fileSemaphore = make(chan struct{}, 1024)
 
+// New creates a new filesystem-based blob store with the specified configuration.
+// The store is configured via URL parameters in the storeURL, which can specify options
+// such as the base directory path, headers, footers, checksumming, and DAH cleaning intervals.
+//
+// The storeURL format follows the pattern: file:///path/to/storage/directory?param1=value1&param2=value2
+// Supported URL parameters include:
+// - header: Custom header to prepend to blobs (can be hex-encoded or plain text)
+// - eofmarker: Custom footer marker to append to blobs (can be hex-encoded or plain text)
+// - checksum: When set to "true", enables SHA256 checksumming of blobs
+// - dahCleanerInterval: Duration between DAH cleanup operations (e.g., "5m" for 5 minutes)
+//
+// Parameters:
+//   - logger: Logger instance for store operations and error reporting
+//   - storeURL: URL containing the store configuration and path
+//   - opts: Additional store configuration options
+//
+// Returns:
+//   - *File: The configured file store instance
+//   - error: Any error that occurred during creation
 func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*File, error) {
 	if storeURL == nil {
 		return nil, errors.NewConfigurationError("storeURL is nil")

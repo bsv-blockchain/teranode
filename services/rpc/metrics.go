@@ -1,5 +1,24 @@
+// Package rpc implements the Bitcoin JSON-RPC API service for Teranode.
 package rpc
 
+// The metrics.go file implements a comprehensive performance monitoring system for the RPC service
+// using Prometheus. It tracks latency distributions for all supported RPC commands, enabling
+// detailed analysis of API performance, throughput, and error rates.
+//
+// The metrics system provides:
+// - Per-command latency histograms with configurable buckets
+// - Consistent naming patterns for easy dashboard creation
+// - Thread-safe initialization through sync.Once
+// - Integration with Teranode's global Prometheus registry
+//
+// These metrics enable operators to:
+// - Identify performance bottlenecks in specific RPC commands
+// - Track changes in API usage patterns over time
+// - Detect anomalies that might indicate problems
+// - Plan capacity based on actual usage patterns
+//
+// The metrics are exported through Teranode's standard Prometheus endpoint
+// and can be visualized using Grafana or similar monitoring tools.
 import (
 	"sync"
 

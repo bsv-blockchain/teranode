@@ -1,4 +1,5 @@
-// Package blockpersister provides functionality for persisting blockchain blocks and their associated data.
+// Package blockpersister provides comprehensive functionality for persisting blockchain blocks and their associated data.
+// It handles block persistence, transaction processing, and UTXO set management across multiple storage backends.
 package blockpersister
 
 import (
@@ -18,13 +19,32 @@ import (
 )
 
 // ProcessSubtree processes a subtree of transactions, validating and storing them.
+// 
+// A subtree represents a hierarchical structure containing transaction references that make up part of a block.
+// This method retrieves a subtree from the subtree store, processes all the transactions it contains,
+// and writes them to the block store while updating the UTXO set differences.
+// 
+// The process follows these key steps:
+//   1. Retrieve the subtree from the subtree store using its hash
+//   2. Deserialize the subtree structure to extract transaction hashes
+//   3. Load transaction metadata from the UTXO store, either in batch mode or individually
+//   4. Create a file storer for writing transactions to persistent storage
+//   5. Write all transactions and process their UTXO changes
+// 
+// Transaction metadata retrieval can use batching if configured, which optimizes performance
+// for high transaction volumes by reducing the number of individual store requests.
+// 
 // Parameters:
-//   - pCtx: parent context for the operation
-//   - subtreeHash: hash of the subtree to process
-//   - coinbaseTx: the coinbase transaction for this subtree
-//   - utxoDiff: the UTXO set differences to track changes
+//   - pCtx: Parent context for the operation, used for cancellation and tracing
+//   - subtreeHash: Hash identifier of the subtree to process
+//   - coinbaseTx: The coinbase transaction for the block containing this subtree
+//   - utxoDiff: UTXO set difference tracker to record all changes resulting from processing
 //
-// Returns an error if processing fails.
+// Returns an error if any part of the subtree processing fails. Errors are wrapped with
+// appropriate context to identify the specific failure point (storage, processing, etc.).
+// 
+// Note: Processing is not atomic across multiple subtrees - each subtree is processed individually,
+// allowing partial block processing to succeed even if some subtrees fail.
 func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error {
 	ctx, _, deferFn := tracing.StartTracing(pCtx, "ProcessSubtree",
 		tracing.WithHistogram(prometheusBlockPersisterValidateSubtree),
@@ -118,14 +138,35 @@ func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash
 }
 
 // WriteTxs writes a series of transactions to storage and processes their UTXO changes.
+// 
+// This function handles the final persistence of transaction data to storage and optionally
+// processes UTXO set changes. It's a critical component in the block persistence pipeline
+// that ensures transactions are properly serialized and stored.
+// 
+// The function performs the following steps:
+//   1. Write the number of transactions as a 32-bit integer header
+//   2. For each transaction in the provided slice:
+//      a. Write the raw transaction bytes to storage
+//      b. If a UTXO diff is provided, process the transaction's UTXO changes
+//   3. Report any errors or validation issues encountered
+// 
+// The function includes safety checks to handle nil transaction metadata or transactions,
+// logging errors but continuing processing when possible to maximize resilience.
+// 
 // Parameters:
-//   - ctx: context for the operation
-//   - logger: logger for recording operations
-//   - writer: destination for writing transaction data
-//   - txMetaSlice: slice of transaction metadata to write
-//   - utxoDiff: UTXO set to track changes (can be nil)
+//   - ctx: Context for the operation, enabling cancellation and tracing
+//   - logger: Logger for recording operations, errors, and warnings
+//   - writer: FileStorer destination for writing serialized transaction data
+//   - txMetaSlice: Slice of transaction metadata objects containing the transactions to write
+//   - utxoDiff: UTXO set difference tracker (optional, can be nil if UTXO tracking not needed)
 //
-// Returns an error if writing fails.
+// Returns an error if writing fails at any point. Specific error conditions include:
+//   - Failure to write the transaction count header
+//   - Failure to write individual transaction data
+//   - Errors during UTXO processing for transactions
+// 
+// The operation is not fully atomic - some transactions may be written successfully even if
+// others fail. The caller should handle partial success scenarios appropriately.
 func WriteTxs(ctx context.Context, logger ulogger.Logger, writer *filestorer.FileStorer, txMetaSlice []*meta.Data, utxoDiff *utxopersister.UTXOSet) error {
 	// Write the number of txs in the subtree
 	//      this makes it impossible to stream directly from S3 to the client

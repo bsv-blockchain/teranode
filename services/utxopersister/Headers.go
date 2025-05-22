@@ -2,6 +2,10 @@
 // for each block in the Teranode blockchain. Its primary function is to process the output of the
 // Block Persister service (utxo-additions and utxo-deletions) and generate complete UTXO set files.
 // The resulting UTXO set files can be exported and used to initialize the UTXO store in new Teranode instances.
+//
+// This file defines structures and methods for block header indexing and serialization. Block headers
+// are crucial for verifying the integrity and validity of UTXO sets. The headers are stored as part of
+// the UTXO set files and provide metadata about the blocks from which the UTXOs were derived.
 package utxopersister
 
 import (
@@ -18,6 +22,15 @@ import (
 // BlockIndex represents the index information for a block.
 // It encapsulates critical metadata about a block including its hash, height, transaction count,
 // and header information. This structure is used for efficient lookup and validation of blocks.
+//
+// BlockIndex serves as a compact reference to blocks in the blockchain and is used to:
+// - Link UTXO sets to their corresponding blocks
+// - Validate block sequence integrity when applying UTXO changes
+// - Provide block metadata without requiring access to the full block
+// - Support header-based synchronization for lightweight clients
+//
+// The structure stores only essential block information needed for UTXO operations,
+// keeping storage requirements minimal while enabling all necessary validation checks.
 type BlockIndex struct {
 	// Hash contains the block hash
 	Hash *chainhash.Hash
@@ -36,6 +49,21 @@ type BlockIndex struct {
 // It serializes the block hash, height, transaction count, and block header in a defined format.
 // This method is used when persisting block index information to storage.
 // Returns an error if any write operation fails.
+//
+// Parameters:
+// - writer: io.Writer interface to which the serialized data will be written
+//
+// Returns:
+// - error: Any error encountered during the serialization or write operations
+//
+// The serialization format is as follows:
+// - Bytes 0-31: Block hash (32 bytes)
+// - Bytes 32-35: Block height (4 bytes, little-endian)
+// - Bytes 36-43: Transaction count (8 bytes, little-endian)
+// - Bytes 44-123: Block header (80 bytes in wire format)
+//
+// This serialized representation contains all necessary information to reconstruct the BlockIndex
+// and validate its integrity. The block header is serialized using the standard Bitcoin wire format.
 func (bi *BlockIndex) Serialise(writer io.Writer) error {
 	if _, err := writer.Write(bi.Hash[:]); err != nil {
 		return err
@@ -64,6 +92,21 @@ func (bi *BlockIndex) Serialise(writer io.Writer) error {
 // It deserializes block index data by reading the hash, height, transaction count, and block header.
 // The function also checks for EOF markers to detect the end of a stream.
 // Returns the BlockIndex and any error encountered during reading.
+//
+// Parameters:
+// - reader: io.Reader from which to read the serialized BlockIndex data
+//
+// Returns:
+// - *BlockIndex: Deserialized BlockIndex, or empty BlockIndex if EOF marker is encountered
+// - error: io.EOF if EOF marker is encountered, or any error during deserialization
+//
+// This method implements the inverse of the Serialise method, reading the block hash, height,
+// transaction count, and block header in sequence. If the block hash matches the EOF marker
+// (32 zero bytes), it returns an empty BlockIndex with io.EOF error to signal the end of the stream.
+//
+// The method performs thorough error checking at each step of the deserialization process,
+// returning detailed error information if any read operations fail or if the data format is invalid.
+// It uses model.NewBlockHeaderFromBytes to convert the raw header bytes into a structured BlockHeader.
 func NewUTXOHeaderFromReader(reader io.Reader) (*BlockIndex, error) {
 	hash := &chainhash.Hash{}
 	if n, err := io.ReadFull(reader, hash[:]); err != nil || n != 32 {
@@ -111,6 +154,19 @@ func NewUTXOHeaderFromReader(reader io.Reader) (*BlockIndex, error) {
 // String returns a string representation of the BlockIndex.
 // The string includes the block hash, height, transaction count, previous hash, and computed hash.
 // This is useful for debugging, logging, and producing human-readable representations of block data.
+//
+// Returns:
+// - string: Human-readable representation of the BlockIndex
+//
+// The formatted string contains:
+// - Block hash in hexadecimal format
+// - Block height
+// - Transaction count
+// - Previous block hash from the block header
+// - Computed hash from the block header
+//
+// This method is primarily used for debugging, logging, and diagnostic purposes.
+// The computed hash should match the block hash if the block data is valid and uncorrupted.
 func (bi *BlockIndex) String() string {
 	return fmt.Sprintf("Hash: %s, Height: %d, TxCount: %d, PreviousHash: %s, ComputedHash: %s", bi.Hash.String(), bi.Height, bi.TxCount, bi.BlockHeader.HashPrevBlock.String(), bi.BlockHeader.String())
 }

@@ -39,6 +39,12 @@ const (
 
 // P2PNodeI defines the interface for P2P node functionality.
 // This interface abstracts the concrete implementation to allow for better testability.
+// It provides methods for managing the core peer-to-peer networking operations, including
+// node lifecycle management, topic subscription, peer discovery, and message propagation.
+//
+// The interface is designed to be robust for both standard network operation and
+// specialized testing scenarios. It encapsulates all libp2p functionality behind
+// a clean API that integrates with the rest of the Teranode system.
 type P2PNodeI interface {
 	// Core lifecycle methods
 	Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error
@@ -73,41 +79,80 @@ type P2PNodeI interface {
 	GetPeerIPs(peerID peer.ID) []string
 }
 
+// P2PNode implements the P2PNodeI interface and provides the core functionality
+// for peer-to-peer networking in Teranode using libp2p.
+// It manages peer connections, topic subscriptions, message routing, and network discovery.
+//
+// The P2PNode encapsulates several critical components:
+// - libp2p host for network transport and connection management
+// - PubSub for topic-based message distribution
+// - Peer height tracking for blockchain synchronization
+// - Bandwidth and activity metrics for monitoring
+//
+// Thread safety is maintained for all concurrent operations across multiple goroutines.
 type P2PNode struct {
-	config            P2PConfig
-	settings          *settings.Settings
-	host              host.Host
-	pubSub            *pubsub.PubSub
-	topics            map[string]*pubsub.Topic
-	logger            ulogger.Logger
-	bitcoinProtocolID string
-	handlerByTopic    map[string]Handler
-	startTime         time.Time
-	onPeerConnected   func(context.Context, peer.ID)
+	config            P2PConfig                      // Configuration parameters for the node
+	settings          *settings.Settings             // Global settings for the Teranode system
+	host              host.Host                      // libp2p host for network communication
+	pubSub            *pubsub.PubSub                 // Publish-subscribe system for topic-based messaging
+	topics            map[string]*pubsub.Topic       // Map of topic names to topic objects
+	logger            ulogger.Logger                 // Logger for P2P operations
+	bitcoinProtocolID string                         // Protocol identifier for Bitcoin-specific streams
+	handlerByTopic    map[string]Handler             // Map of topic handlers for message processing
+	startTime         time.Time                      // Time when the node was started
+	onPeerConnected   func(context.Context, peer.ID) // Callback for peer connection events
 
-	// The following variables must only be used atomically.
-	bytesReceived uint64
-	bytesSent     uint64
-	lastRecv      int64
-	lastSend      int64
-	peerHeights   sync.Map
+	// IMPORTANT: The following variables must only be used atomically.
+	bytesReceived uint64   // Counter for bytes received over the network
+	bytesSent     uint64   // Counter for bytes sent over the network
+	lastRecv      int64    // Timestamp of last message received
+	lastSend      int64    // Timestamp of last message sent
+	peerHeights   sync.Map // Thread-safe map tracking peer blockchain heights
 }
 
+// Handler defines the function signature for topic message handlers.
+// Each topic in the P2P network can have a dedicated handler that processes incoming messages.
+//
+// Parameters:
+// - ctx: Context for the handler execution, allowing for cancellation and timeouts
+// - msg: Raw message bytes received from the network
+// - from: Identifier of the peer that sent the message
+//
+// Handlers should process messages efficiently as they may be called frequently
+// in high-traffic scenarios. Any long-running operations should be delegated to separate goroutines.
 type Handler func(ctx context.Context, msg []byte, from string)
 
+// P2PConfig defines the configuration parameters for a P2P node.
+// It encapsulates all the settings needed to establish and maintain
+// a functional peer-to-peer network presence.
 type P2PConfig struct {
-	ProcessName        string
-	ListenAddresses    []string
-	AdvertiseAddresses []string
-	Port               int
-	PrivateKey         string
-	SharedKey          string
-	UsePrivateDHT      bool
-	OptimiseRetries    bool
-	Advertise          bool
-	StaticPeers        []string
+	ProcessName        string   // Identifier for this node in logs and metrics
+	ListenAddresses    []string // Network addresses to listen on for incoming connections
+	AdvertiseAddresses []string // Addresses to advertise to other peers (may differ from listen addresses)
+	Port               int      // Port number for P2P communication
+	PrivateKey         string   // Node's private key for secure communication
+	SharedKey          string   // Shared key for private network communication
+	UsePrivateDHT      bool     // Whether to use a private DHT instead of the public IPFS DHT
+	OptimiseRetries    bool     // Whether to optimize connection retry behavior
+	Advertise          bool     // Whether to advertise this node's presence on the network
+	StaticPeers        []string // List of peer addresses to always attempt to connect to
 }
 
+// NewP2PNode creates and initializes a new P2P network node with the provided configuration.
+// This constructor performs the core setup of the libp2p networking stack, including:
+// - Setting up the node's cryptographic identity (private key)
+// - Configuring network transports and listeners
+// - Initializing the DHT (Distributed Hash Table) for peer discovery
+// - Preparing topic handlers and message routing systems
+//
+// Parameters:
+// - ctx: Context for controlling the initialization process
+// - logger: Logger for recording initialization and operational events
+// - tSettings: Global Teranode settings with additional configuration parameters
+// - config: P2P-specific configuration parameters defining network behavior
+// - blockchainClient: Client for blockchain operations and service integration
+//
+// Returns a fully initialized P2P node ready for starting, or an error if initialization fails.
 func NewP2PNode(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, config P2PConfig, blockchainClient blockchain.ClientI) (*P2PNode, error) {
 	logger.Infof("[P2PNode] Creating node")
 
@@ -358,6 +403,21 @@ func (s *P2PNode) initGossipSub(ctx context.Context, topicNames []string) error 
 	return nil
 }
 
+// Start activates the P2P node and begins network operations.
+// This method initializes peer discovery, topic subscriptions, and stream handlers.
+// It performs several key operations:
+// - Launches static peer connector to maintain connections with configured static peers
+// - Starts peer discovery in a background goroutine to find and connect to network peers
+// - Initializes the GossipSub protocol for pub/sub messaging
+// - Sets up stream handlers for direct peer-to-peer communication
+//
+// Parameters:
+// - ctx: Context for controlling the start process and subsequent operations
+// - streamHandler: Handler for incoming protocol streams (can be nil if not using direct streams)
+// - topicNames: List of topic names to subscribe to for pub/sub messaging
+//
+// The method is non-blocking for peer discovery but waits for GossipSub initialization to complete.
+// Returns an error if any critical component fails to initialize.
 func (s *P2PNode) Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error {
 	s.logger.Infof("[%s] starting", s.config.ProcessName)
 

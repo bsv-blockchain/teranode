@@ -34,42 +34,81 @@ import (
 )
 
 // Server represents the main alert system server structure.
+// The Server is the central component of the alert service, implementing the gRPC API
+// that external systems use to interact with the alert system. It manages connections
+// to all required subsystems and handles the lifecycle of the alert service.
+//
+// The Server integrates with multiple Teranode components including blockchain,
+// UTXO store, and peer systems to implement alert system functionality such as
+// fund blacklisting, transaction whitelisting, and peer banning. It also maintains
+// a persistent store of alert-related data and runs a peer-to-peer communication subsystem
+// to distribute alerts across the network.
+//
+// The Server implements the alert_api.AlertAPIServer interface, allowing it to serve gRPC
+// requests for alert system functions defined in the API protobuf files.
 type Server struct {
-	// UnimplementedAlertAPIServer is embedded for forward compatibility with the alert API
+	// UnimplementedAlertAPIServer is embedded for forward compatibility with the alert API,
+	// ensuring that new methods added to the API interface won't break existing implementations
 	alert_api.UnimplementedAlertAPIServer
 
-	// logger handles all logging operations
+	// logger handles all logging operations across the alert service,
+	// providing consistent and configurable logging capabilities
 	logger ulogger.Logger
 
-	// settings contains the server configuration settings
+	// settings contains the server configuration settings from Teranode's
+	// global configuration system, controlling the behavior of the alert service
 	settings *settings.Settings
 
-	// stats tracks server statistics
+	// stats tracks operational statistics for monitoring and diagnostic purposes,
+	// recording metrics such as request counts and response times
 	stats *gocore.Stat
 
-	// blockchainClient provides access to blockchain operations
+	// blockchainClient provides access to blockchain operations such as
+	// retrieving block information and invalidating blocks
 	blockchainClient blockchain.ClientI
 
-	// peerClient provides access to peer operations
+	// peerClient provides access to legacy peer operations,
+	// including banning and unbanning network peers
 	peerClient peer.ClientI
 
-	// p2pClient provides access to p2p operations
+	// p2pClient provides access to p2p network operations,
+	// allowing for communication with other nodes in the network
 	p2pClient p2pservice.ClientI
 
-	// utxoStore manages UTXO operations
+	// utxoStore manages UTXO operations, providing the ability to
+	// mark UTXOs as unspendable for blacklisting or whitelisting
 	utxoStore utxo.Store
 
-	// blockassemblyClient handles block assembly operations
+	// blockassemblyClient handles block assembly operations,
+	// allowing the alert system to influence block creation when necessary
 	blockassemblyClient *blockassembly.Client
 
-	// appConfig contains alert system specific configuration
+	// appConfig contains alert system specific configuration loaded from
+	// the alert system configuration file, separate from Teranode settings
 	appConfig *config.Config
 
-	// p2pServer manages peer-to-peer communication
+	// p2pServer manages peer-to-peer communication for distributing
+	// alerts across the network to other alert system nodes
 	p2pServer *p2p.Server
 }
 
 // New creates and returns a new Server instance with the provided dependencies.
+// This factory function initializes an alert system server with all necessary dependencies
+// injected, making it highly testable and configurable. It initializes Prometheus metrics
+// and creates a statistics tracker for monitoring the server.
+//
+// Parameters:
+//   - logger: Logger for server operations
+//   - tSettings: Teranode configuration settings
+//   - blockchainClient: Interface for blockchain operations
+//   - utxoStore: Store for UTXO operations
+//   - blockassemblyClient: Client for block assembly operations
+//   - peerClient: Client for legacy peer operations
+//   - p2pClient: Client for P2P network operations
+//
+// Returns:
+//   - *Server: A new Server instance configured with the provided dependencies,
+//     but not yet initialized or started
 func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client, peerClient peer.ClientI, p2pClient p2pservice.ClientI) *Server {
 	initPrometheusMetrics()
 
@@ -86,6 +125,23 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient b
 }
 
 // Health performs health checks on the server and its dependencies.
+// This method implements the standard Teranode health check protocol, supporting both
+// liveness and readiness probes. Liveness checks verify that the service is running and
+// responsive, while readiness checks also verify that dependencies are available.
+//
+// The health check increments the prometheusHealth counter for monitoring purposes
+// and performs checks on key dependencies such as the blockchain client, UTXO store,
+// and P2P systems when checking readiness.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - checkLiveness: When true, only check if the service itself is alive;
+//     when false, also check if dependencies are available and ready
+//
+// Returns:
+//   - int: HTTP status code indicating health status (200 for healthy, 503 for unhealthy)
+//   - string: Human-readable health status message
+//   - error: Any error encountered during health checking
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -117,6 +173,17 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 }
 
 // HealthGRPC implements the gRPC health check endpoint.
+// This method provides a gRPC-compatible version of the health check, allowing clients
+// to query the service's health status via the gRPC API. It uses the same health check
+// logic as the HTTP-based Health method but formats the response as a gRPC message.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - _: Empty message, not used but required by the gRPC interface
+//
+// Returns:
+//   - *alert_api.HealthResponse: gRPC response containing health status information
+//   - error: Any error encountered during health checking
 func (s *Server) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*alert_api.HealthResponse, error) {
 	prometheusHealth.Add(1)
 
@@ -130,6 +197,19 @@ func (s *Server) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*alert_api.H
 }
 
 // Init initializes the server by loading configuration.
+// This method performs first-stage initialization of the alert service, loading
+// configuration and setting up essential services. It should be called after
+// creating a new Server instance and before starting the server.
+//
+// The initialization process includes loading the alert system configuration,
+// connecting to the database, and initializing the P2P communication subsystem.
+// Any errors during initialization are returned, allowing the caller to handle them appropriately.
+//
+// Parameters:
+//   - ctx: Context for initialization, allowing for cancellation and timeouts
+//
+// Returns:
+//   - error: Any error encountered during initialization
 func (s *Server) Init(ctx context.Context) (err error) {
 	// Load the alert system configuration
 	if err = s.loadConfig(ctx, models.BaseModels, false); err != nil {
@@ -140,6 +220,20 @@ func (s *Server) Init(ctx context.Context) (err error) {
 }
 
 // Start begins the server operation and blocks until shutdown.
+// This method starts all server components, including the gRPC server for the API,
+// and signals readiness through the provided channel when startup is complete.
+// It then blocks until the context is cancelled or an error occurs.
+//
+// If any errors occur during startup, they are returned before signaling readiness.
+// This method follows the standard Teranode service lifecycle pattern, making it
+// compatible with the service manager's startup and shutdown sequence.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and shutdown
+//   - readyCh: Channel to signal when the server is ready to accept requests
+//
+// Returns:
+//   - error: Any error encountered during startup or operation
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error) {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -184,6 +278,18 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 }
 
 // Stop gracefully shuts down the server.
+// This method performs a clean shutdown of all server components, ensuring that
+// ongoing operations can complete and resources are properly released. It follows
+// the standard Teranode service lifecycle pattern for orderly shutdown.
+//
+// The shutdown sequence includes stopping the P2P server if it's running and
+// any other cleanup operations needed for a graceful termination.
+//
+// Parameters:
+//   - ctx: Context for the shutdown operation, potentially with a deadline
+//
+// Returns:
+//   - error: Any error encountered during shutdown
 func (s *Server) Stop(ctx context.Context) error {
 	s.appConfig.CloseAll(ctx)
 
