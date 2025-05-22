@@ -4,6 +4,8 @@ package legacy
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"sync"
@@ -411,11 +413,35 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	go s.logPeerStats(ctx)
 	s.logger.Infof("[Legacy Server] Started peer statistics logging")
 
+	apiKey := s.settings.GRPCAdminAPIKey
+	if apiKey == "" {
+		// Generate a random API key if not provided
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return errors.WrapGRPC(errors.NewServiceNotStartedError("[P2P] failed to generate API key", err))
+		}
+
+		apiKey = hex.EncodeToString(key)
+		s.logger.Infof("[Legacy] Generated admin API key: %s", apiKey)
+	}
+
+	// Define protected methods - use the full gRPC method path
+	protectedMethods := map[string]bool{
+		"/peer_api.PeerService/BanPeer":   true,
+		"/peer_api.PeerService/UnbanPeer": true,
+	}
+
+	// Create auth options
+	authOptions := &util.AuthOptions{
+		APIKey:           apiKey,
+		ProtectedMethods: protectedMethods,
+	}
+
 	// this will block
 	if err = util.StartGRPCServer(ctx, s.logger, s.settings, "legacy", s.settings.Legacy.GRPCListenAddress, func(server *grpc.Server) {
 		peer_api.RegisterPeerServiceServer(server, s)
 		closeOnce.Do(func() { close(readyCh) })
-	}); err != nil {
+	}, authOptions); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] can't start GRPC server", err))
 	}
 

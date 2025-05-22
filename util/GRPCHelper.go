@@ -21,13 +21,21 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/resolver"
 	"google.golang.org/grpc/status"
 )
 
 const (
-	ONE_GIGABYTE = 1024 * 1024 * 1024
+	oneGigabyte = 1024 * 1024 * 1024
+	// Define context keys
+	authenticatedKey contextKey = "authenticated"
+
+	apiKeyHeader = "x-api-key"
 )
+
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
 
 // PasswordCredentials -----------------------------------------------
 // The PasswordCredentials type and the receivers it implements, allow
@@ -59,6 +67,7 @@ type ConnectionOptions struct {
 	RetryBackoff     time.Duration       // Backoff between retries
 	Credentials      PasswordCredentials // Credentials to pass to downstream middleware (optional)
 	MaxConnectionAge time.Duration       // The maximum amount of time a connection may exist before it will be closed by sending a GoAway
+	APIKey           string              // API key for authentication
 }
 
 // ---------------------------------------------------------------------
@@ -74,7 +83,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 	}
 
 	if connectionOptions.MaxMessageSize == 0 {
-		connectionOptions.MaxMessageSize = ONE_GIGABYTE
+		connectionOptions.MaxMessageSize = oneGigabyte
 	}
 
 	opts := []grpc.DialOption{
@@ -101,6 +110,22 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 
 	unaryClientInterceptors := make([]grpc.UnaryClientInterceptor, 0)
 	streamClientInterceptors := make([]grpc.StreamClientInterceptor, 0)
+
+	if connectionOptions.APIKey != "" {
+		unaryClientInterceptors = append(unaryClientInterceptors,
+			func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn,
+				invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+				ctx = metadata.AppendToOutgoingContext(ctx, apiKeyHeader, connectionOptions.APIKey)
+				return invoker(ctx, method, req, reply, cc, opts...)
+			})
+
+		streamClientInterceptors = append(streamClientInterceptors,
+			func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn,
+				method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+				ctx = metadata.AppendToOutgoingContext(ctx, apiKeyHeader, connectionOptions.APIKey)
+				return streamer(ctx, desc, cc, method, opts...)
+			})
+	}
 
 	// add tracing, which is configured and enabled in the config
 	opts, unaryClientInterceptors, streamClientInterceptors = tracing.GetGRPCClientTracerOptions(
@@ -161,11 +186,9 @@ var prometheusMetrics = prometheus.NewServerMetrics(
 	prometheus.WithServerHandlingTimeHistogram(),
 )
 
-func getGRPCServer(connectionOptions *ConnectionOptions, tSettings *settings.Settings) (*grpc.Server, error) {
-	var opts []grpc.ServerOption
-
+func getGRPCServer(connectionOptions *ConnectionOptions, opts []grpc.ServerOption, tSettings *settings.Settings) (*grpc.Server, error) {
 	if connectionOptions.MaxMessageSize == 0 {
-		connectionOptions.MaxMessageSize = ONE_GIGABYTE
+		connectionOptions.MaxMessageSize = oneGigabyte
 	}
 
 	opts = append(opts,
@@ -386,5 +409,38 @@ func InitGRPCResolver(logger ulogger.Logger, grpcResolver string) {
 		kuberesolver.RegisterInClusterWithSchema("k8s")
 	default:
 		logger.Infof("[VALIDATOR] Using default resolver for clients")
+	}
+}
+
+// CreateAuthInterceptor creates a gRPC interceptor that handles authentication for protected methods
+func CreateAuthInterceptor(apiKey string, protectedMethods map[string]bool) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		// Skip authentication for non-protected methods
+		if !protectedMethods[info.FullMethod] {
+			return handler(ctx, req)
+		}
+
+		// Extract metadata from context
+		md, ok := metadata.FromIncomingContext(ctx)
+		if !ok {
+			return nil, status.Error(codes.Unauthenticated, "missing metadata")
+		}
+
+		// Get API key from metadata
+		keys := md.Get(apiKeyHeader)
+		if len(keys) == 0 {
+			return nil, status.Error(codes.Unauthenticated, "missing API key")
+		}
+
+		// Validate API key
+		if keys[0] != apiKey {
+			return nil, status.Error(codes.Unauthenticated, "invalid API key")
+		}
+
+		// Add authentication info to context for logging
+		newCtx := context.WithValue(ctx, authenticatedKey, true)
+
+		// Proceed with the handler
+		return handler(newCtx, req)
 	}
 }

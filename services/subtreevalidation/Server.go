@@ -230,7 +230,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	if err := util.StartGRPCServer(ctx, u.logger, u.settings, "subtreevalidation", u.settings.SubtreeValidation.GRPCListenAddress, func(server *grpc.Server) {
 		subtreevalidation_api.RegisterSubtreeValidationAPIServer(server, u)
 		closeOnce.Do(func() { close(readyCh) })
-	}); err != nil {
+	}, nil); err != nil {
 		return err
 	}
 

@@ -30,9 +30,16 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 }
 
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, address string) (ClientI, error) {
+	// Include the admin API key in the connection options
+	apiKey := tSettings.GRPCAdminAPIKey
+	if apiKey != "" {
+		logger.Infof("[Legacy Client] Using API key for authentication")
+	}
+
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,
+		APIKey:       apiKey, // Add the API key to the connection options
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init peer service connection ", err)

@@ -230,7 +230,7 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 	if err = util.StartGRPCServer(ctx, ps.logger, ps.settings, "propagation", ps.settings.Propagation.GRPCListenAddress, func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
 		closeOnce.Do(func() { close(readyCh) })
-	}, maxConnectionAge); err != nil {
+	}, nil, maxConnectionAge); err != nil {
 		return err
 	}
 

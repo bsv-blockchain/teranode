@@ -1039,7 +1039,7 @@ func (s *P2PNode) ConnectedPeers() []PeerInfo {
 			height = h.(int32)
 		}
 
-		fmt.Printf("[P2PNode] Peer height: %s %d\n", peerID.String(), height)
+		s.logger.Debugf("[P2PNode] Peer height: %s %d\n", peerID.String(), height)
 	}
 
 	// Add each peer to the slice
@@ -1088,7 +1088,7 @@ func (s *P2PNode) DisconnectPeer(ctx context.Context, peerID peer.ID) error {
 }
 
 func (s *P2PNode) UpdatePeerHeight(peerID peer.ID, height int32) {
-	fmt.Printf("[P2PNode] UpdatePeerHeight: %s %d\n", peerID.String(), height)
+	s.logger.Debugf("[P2PNode] UpdatePeerHeight: %s %d\n", peerID.String(), height)
 	s.peerHeights.Store(peerID, height)
 }
 

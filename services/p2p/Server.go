@@ -3,6 +3,8 @@ package p2p
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -356,12 +358,36 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Send initial handshake (version)
 	s.sendHandshake(ctx)
 
+	apiKey := s.settings.GRPCAdminAPIKey
+	if apiKey == "" {
+		// Generate a random API key if not provided
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return errors.WrapGRPC(errors.NewServiceNotStartedError("[P2P] failed to generate API key", err))
+		}
+
+		apiKey = hex.EncodeToString(key)
+		s.logger.Infof("[P2P] Generated admin API key: %s", apiKey)
+	}
+
+	// Define protected methods - use the full gRPC method path
+	protectedMethods := map[string]bool{
+		"/p2p_api.PeerService/BanPeer":   true,
+		"/p2p_api.PeerService/UnbanPeer": true,
+	}
+
+	// Create auth options
+	authOptions := &util.AuthOptions{
+		APIKey:           apiKey,
+		ProtectedMethods: protectedMethods,
+	}
+
 	// this will block
 	if err = util.StartGRPCServer(ctx, s.logger, s.settings, "p2p", s.settings.P2P.GRPCListenAddress, func(server *grpc.Server) {
 		p2p_api.RegisterPeerServiceServer(server, s)
 		closeOnce.Do(func() { close(readyCh) })
-	}); err != nil {
-		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] can't start GRPC server", err))
+	}, authOptions); err != nil {
+		return errors.WrapGRPC(errors.NewServiceNotStartedError("[P2P] can't start GRPC server", err))
 	}
 
 	<-ctx.Done()

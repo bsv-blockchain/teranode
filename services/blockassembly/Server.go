@@ -524,7 +524,7 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 	if err = util.StartGRPCServer(ctx, ba.logger, ba.settings, "blockassembly", ba.settings.BlockAssembly.GRPCListenAddress, func(server *grpc.Server) {
 		blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
 		closeOnce.Do(func() { close(readyCh) })
-	}); err != nil {
+	}, nil); err != nil {
 		return err
 	}
 

@@ -33,6 +33,7 @@ type Settings struct {
 	SecurityLevelGRPC        int
 	UsePrometheusGRPCMetrics bool
 	TracingCollectorURL      *url.URL
+	GRPCAdminAPIKey          string
 
 	ChainCfgParams             *chaincfg.Params
 	Policy                     *PolicySettings

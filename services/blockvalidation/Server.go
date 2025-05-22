@@ -512,7 +512,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	if err := util.StartGRPCServer(ctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {
 		blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
 		closeOnce.Do(func() { close(readyCh) })
-	}); err != nil {
+	}, nil); err != nil {
 		return err
 	}
 

@@ -215,7 +215,7 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	if err := util.StartGRPCServer(ctx, b.logger, b.settings, "blockchain", b.settings.BlockChain.GRPCListenAddress, func(server *grpc.Server) {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
 		closeOnce.Do(func() { close(readyCh) })
-	}); err != nil {
+	}, nil); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain][Start] can't start GRPC server", err))
 	}
 

@@ -2000,7 +2000,8 @@ func TestConnectedPeers_Old(t *testing.T) {
 
 	// Create a P2PNode with just the host
 	node := &P2PNode{
-		host: h1,
+		host:   h1,
+		logger: ulogger.TestLogger{},
 	}
 
 	// Check initial peer count using Network().Peers() which shows active connections

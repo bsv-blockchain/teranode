@@ -15,7 +15,16 @@ import (
 	"google.golang.org/grpc/reflection"
 )
 
-func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.Settings, serviceName string, grpcListenerAddress string, register func(server *grpc.Server), maxConnectionAge ...time.Duration) error {
+// AuthOptions contains configuration for API authentication
+type AuthOptions struct {
+	// API key for authentication
+	APIKey string
+
+	// Map of method names that require authentication
+	ProtectedMethods map[string]bool
+}
+
+func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.Settings, serviceName string, grpcListenerAddress string, register func(server *grpc.Server), authOptions *AuthOptions, maxConnectionAge ...time.Duration) error {
 	address := grpcListenerAddress
 
 	securityLevel := tSettings.SecurityLevelGRPC
@@ -34,6 +43,15 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 		}
 	}
 
+	// Create server options
+	var serverOptions []grpc.ServerOption
+
+	// Add authentication interceptor if auth options are provided
+	if authOptions != nil && authOptions.APIKey != "" {
+		authInterceptor := CreateAuthInterceptor(authOptions.APIKey, authOptions.ProtectedMethods)
+		serverOptions = append(serverOptions, grpc.UnaryInterceptor(authInterceptor))
+	}
+
 	connectionOptions := &ConnectionOptions{
 		SecurityLevel: securityLevel,
 		CertFile:      certFile,
@@ -44,7 +62,7 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 		connectionOptions.MaxConnectionAge = maxConnectionAge[0]
 	}
 
-	grpcServer, err := getGRPCServer(connectionOptions, tSettings)
+	grpcServer, err := getGRPCServer(connectionOptions, serverOptions, tSettings)
 	if err != nil {
 		return errors.NewConfigurationError("[%s] could not create GRPC server", serviceName, err)
 	}

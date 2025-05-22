@@ -240,7 +240,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	if err := util.StartGRPCServer(ctx, v.logger, v.settings, "validator", v.settings.Validator.GRPCListenAddress, func(server *grpc.Server) {
 		validator_api.RegisterValidatorAPIServer(server, v)
 		closeOnce.Do(func() { close(readyCh) })
-	}); err != nil {
+	}, nil); err != nil {
 		return err
 	}
 
