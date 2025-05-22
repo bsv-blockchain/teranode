@@ -1383,7 +1383,7 @@ func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logg
 		}
 
 		for nodeIdx := 0; nodeIdx < len(subtree.Nodes); nodeIdx++ {
-			if sIdx == 0 && nodeIdx == 0 {
+			if sIdx == 0 && nodeIdx == 0 && subtree.Nodes[nodeIdx].Hash.Equal(util.CoinbasePlaceholderHashValue) {
 				// skip coinbase
 				continue
 			}

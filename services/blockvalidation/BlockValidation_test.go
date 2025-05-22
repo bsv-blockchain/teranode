@@ -2073,3 +2073,109 @@ func Test_checkOldBlockIDs(t *testing.T) {
 		require.Contains(t, err.Error(), "are not from current chain")
 	})
 }
+
+func Test_createAppendBloomFilter(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	// Create a test block with specified size and valid header
+	block := &model.Block{
+		Header:           blockHeader,
+		SizeInBytes:      123,
+		TransactionCount: 1,
+		CoinbaseTx:       tx1,                 // Using tx1 from test setup
+		Subtrees:         []*chainhash.Hash{}, // Initialize empty subtrees slice
+	}
+
+	t.Run("smoke test", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+
+		blockValidation := &BlockValidation{
+			logger:                        logger,
+			blockchainClient:              blockchainMock,
+			blockBloomFiltersBeingCreated: util.NewSwissMap(0),
+			recentBlocksBloomFilters:      util.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+			subtreeStore:                  blobmemory.New(),
+		}
+
+		blockchainMock.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{
+			Height: 100,
+		}, nil)
+
+		err := blockValidation.createAppendBloomFilter(t.Context(), block)
+		require.NoError(t, err)
+	})
+
+	t.Run("check the bloom filter", func(t *testing.T) {
+		blockchainMock := &blockchain.Mock{}
+
+		blockValidation := &BlockValidation{
+			logger:                        logger,
+			blockchainClient:              blockchainMock,
+			blockBloomFiltersBeingCreated: util.NewSwissMap(0),
+			recentBlocksBloomFilters:      util.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+			subtreeStore:                  blobmemory.New(),
+		}
+
+		blockchainMock.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{
+			Height: 100,
+		}, nil)
+
+		// create subtree with transactions
+		subtree, err := util.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+
+		txs := make([]chainhash.Hash, 0, 4)
+
+		for i := uint64(0); i < 4; i++ {
+			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
+			require.NoError(t, subtree.AddNode(txHash, i, i))
+
+			txs = append(txs, txHash)
+		}
+
+		subtreeBytes, err := subtree.Serialize()
+		require.NoError(t, err)
+
+		err = blockValidation.subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+		require.NoError(t, err)
+
+		// clone the block
+		blockClone := &model.Block{
+			Header:           block.Header,
+			CoinbaseTx:       block.CoinbaseTx,
+			TransactionCount: block.TransactionCount,
+			SizeInBytes:      block.SizeInBytes,
+			Subtrees:         []*chainhash.Hash{subtree.RootHash()},
+			SubtreeSlices:    []*util.Subtree{subtree},
+			Height:           100,
+		}
+
+		err = blockValidation.createAppendBloomFilter(t.Context(), blockClone)
+		require.NoError(t, err)
+
+		// get the bloomfilter and check whether all the transactions are in there
+		bloomFilter, ok := blockValidation.recentBlocksBloomFilters.Get(*blockClone.Hash())
+		require.True(t, ok, "bloom filter should be present in the map")
+		require.NotNil(t, bloomFilter)
+
+		for _, txHash := range txs {
+			// check whether the transaction is in the bloom filter
+			n64 := binary.BigEndian.Uint64(txHash[:])
+			assert.True(t, bloomFilter.Filter.Has(n64), "bloom filter should match the transaction: "+txHash.String())
+		}
+
+		// check for some random transaction
+		randomTxHash := chainhash.HashH([]byte("randomTxHash"))
+		n64 := binary.BigEndian.Uint64(randomTxHash[:])
+		require.False(t, bloomFilter.Filter.Has(n64), "bloom filter should not match the random transaction")
+	})
+}

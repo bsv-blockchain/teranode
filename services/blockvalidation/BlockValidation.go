@@ -86,10 +86,7 @@ type BlockValidation struct {
 	utxoStore utxo.Store
 
 	// recentBlocksBloomFilters maintains bloom filters for recent blocks
-	recentBlocksBloomFilters map[chainhash.Hash]*model.BlockBloomFilter
-
-	// recentBlocksBloomFiltersMu protects concurrent access to bloom filters
-	recentBlocksBloomFiltersMu sync.Mutex
+	recentBlocksBloomFilters *util.SyncedMap[chainhash.Hash, *model.BlockBloomFilter]
 
 	// bloomFilterRetentionSize defines bloom filter defines the number of blocks to keep the bloom filter for
 	bloomFilterRetentionSize uint32
@@ -165,7 +162,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		subtreeBlockHeightRetention:   tSettings.GlobalBlockHeightRetention,
 		txStore:                       txStore,
 		utxoStore:                     utxoStore,
-		recentBlocksBloomFilters:      make(map[chainhash.Hash]*model.BlockBloomFilter),
+		recentBlocksBloomFilters:      util.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 		bloomFilterRetentionSize:      tSettings.BlockValidation.BloomFilterRetentionSize,
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(tSettings.GlobalBlockHeightRetention),
@@ -744,7 +741,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
 
 			// only get the bloom filters for the current chain.
-			bloomFilters, err := u.collectNecessaryBloomFilters(ctx, blockHeaders)
+			bloomFilters, err := u.collectNecessaryBloomFilters(ctx, block, blockHeaders)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to collect necessary bloom filters: %s", block.String(), err)
 
@@ -800,10 +797,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
 
 		// only get the bloom filters for the current chain
-		bloomFilters, err := u.collectNecessaryBloomFilters(ctx, blockHeaders)
+		bloomFilters, err := u.collectNecessaryBloomFilters(ctx, block, blockHeaders)
 		if err != nil {
-			u.logger.Errorf("[ValidateBlock][%s] failed to collect necessary bloom filters: %s", block.String(), err)
-
 			return errors.NewServiceError("[ValidateBlock][%s] failed to collect necessary bloom filters", block.String(), err)
 		}
 
@@ -855,42 +850,30 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 	}()
 
-	if useOptimisticMining {
-		// run the bloom filter creation in the background
-		go func() {
-			// / create bloom filter for the block and store
-			u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block in background", block.Hash().String())
-			// TODO: for the next phase, consider re-building the bloom filter in the background when node restarts.
-			// currently, if the node restarts, the bloom filter is not re-built and the node will not be able to validate transactions properly,
-			// since there are no bloom filters. This is a temporary solution to get the node up and running.
-			//
-			// Options are:
-			//   1. Re-build the bloom filter in the background when the node restarts
-			//   2. after creating the bloom filter, record it in the storage, and delete it after it expires.
-			u.createAppendBloomFilter(callerSpan.Ctx, block)
-
-			u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
-		}()
-	} else {
-		// create bloom filter for the block and wait for it
-		u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block", block.Hash().String())
-		u.createAppendBloomFilter(callerSpan.Ctx, block)
-		u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
+	// create bloom filter for the block and wait for it
+	if err = u.createAppendBloomFilter(callerSpan.Ctx, block); err != nil {
+		u.logger.Errorf("[ValidateBlock][%s] failed to create bloom filter: %s", block.Hash().String(), err)
 	}
 
 	return nil
 }
 
-func (u *BlockValidation) collectNecessaryBloomFilters(ctx context.Context, currentChainBlockHeaders []*model.BlockHeader) ([]*model.BlockBloomFilter, error) {
+func (u *BlockValidation) collectNecessaryBloomFilters(ctx context.Context, block *model.Block, currentChainBlockHeaders []*model.BlockHeader) ([]*model.BlockBloomFilter, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "collectNecessaryBloomFilters",
+		tracing.WithParentStat(u.stats),
+		tracing.WithLogMessage(u.logger, "[collectNecessaryBloomFilters][%s] collecting bloom filters for %d headers", block.String(), len(currentChainBlockHeaders)),
+	)
+	defer deferFn()
+
 	// Collect only the bloom-filters whose BlockHash is in that set
 	bloomFilters := make([]*model.BlockBloomFilter, 0, len(currentChainBlockHeaders))
 
-	u.recentBlocksBloomFiltersMu.Lock()
 	for _, h := range currentChainBlockHeaders {
-		if bf, ok := u.recentBlocksBloomFilters[*h.Hash()]; ok {
+		if bf, ok := u.recentBlocksBloomFilters.Get(*h.Hash()); ok {
 			bloomFilters = append(bloomFilters, bf)
-		} else { // We should not be here, because we should have the bloom filter in the recentBlocksBloomFilters map.
-			// try to get the bloom filter from the subtree store
+		} else {
+			// We should not be here, because we should have the bloom filter in the recentBlocksBloomFilters map.
+			// Try to get the bloom filter from the subtree store
 			bloomFilterFromSubtreeStore := u.getBloomFilterFromSubtreeStore(ctx, h.Hash())
 
 			// if we found the bloom filter in the subtree store, we can use it
@@ -899,23 +882,20 @@ func (u *BlockValidation) collectNecessaryBloomFilters(ctx context.Context, curr
 			} else {
 				// bloom filter not found in subtree store
 				// we need to create the bloom filter
-				u.logger.Infof("[collectNecessaryBloomFilters][%s] bloom filter not found in subtree store, creating", h.Hash().String())
+				u.logger.Debugf("[collectNecessaryBloomFilters][%s] bloom filter for %s not found in subtree store, creating", block.String(), h.Hash().String())
 
 				// we need to create the bloom filter, get the block
 				blockToCreateBloomFilter, err := u.blockchainClient.GetBlock(ctx, h.Hash())
 				if err != nil {
-					u.logger.Errorf("[collectNecessaryBloomFilters][%s] failed to get block: %s", h.Hash().String(), err)
-					return nil, err
+					return nil, errors.NewProcessingError("[collectNecessaryBloomFilters][%s] failed to get block %s from store: %s", block.String(), h.Hash().String(), err)
 				}
 
-				u.createAppendBloomFilter(ctx, blockToCreateBloomFilter)
-
-				u.logger.Infof("[waitForPreviousBlocksToBeProcessed][%s] creating bloom filter is DONE", h.Hash().String())
+				if err = u.createAppendBloomFilter(ctx, blockToCreateBloomFilter); err != nil {
+					return nil, errors.NewProcessingError("[collectNecessaryBloomFilters][%s] failed to create bloom filter %s from store: %s", block.String(), h.Hash().String(), err)
+				}
 			}
 		}
 	}
-
-	u.recentBlocksBloomFiltersMu.Unlock()
 
 	return bloomFilters, nil
 }
@@ -931,18 +911,15 @@ func (u *BlockValidation) collectNecessaryBloomFilters(ctx context.Context, curr
 // Returns an error if parent mining verification fails.
 // Returns an error if parent mining verification and collecting bloom filters fails.
 func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context, block *model.Block, currentChainBlockHeaders []*model.BlockHeader) error {
-	u.recentBlocksBloomFiltersMu.Lock()
-
 	// iterate over the bloom filters and check if they are ready
 	missingBlockBloomFilters := make([]*chainhash.Hash, 0)
 
 	for _, header := range currentChainBlockHeaders {
 		// check if recentBlocksBloomFilters contains the block hash
-		if _, exists := u.recentBlocksBloomFilters[*header.Hash()]; !exists {
+		if _, exists := u.recentBlocksBloomFilters.Get(*header.Hash()); !exists {
 			missingBlockBloomFilters = append(missingBlockBloomFilters, header.Hash())
 		}
 	}
-	u.recentBlocksBloomFiltersMu.Unlock()
 
 	for _, hash := range missingBlockBloomFilters {
 		// try to get the bloom filter from the subtree store
@@ -950,25 +927,18 @@ func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context
 
 		// if we found the bloom filter in the subtree store, we can use it
 		if bloomFilterFromSubtreeStore != nil {
-			u.logger.Errorf("[waitForPreviousBlocksToBeProcessed][%s] bloom filter could not  from subtree store: %s", hash.String())
-
-			u.recentBlocksBloomFiltersMu.Lock()
-			u.recentBlocksBloomFilters[*hash] = bloomFilterFromSubtreeStore
-			u.recentBlocksBloomFiltersMu.Unlock()
-		} else { // bloom filter not found in subtree store
-			u.logger.Infof("[waitForPreviousBlocksToBeProcessed][%s] bloom filter not found in subtree store, creating", hash.String(), "block height: ", block.Height)
-
+			u.recentBlocksBloomFilters.Set(*hash, bloomFilterFromSubtreeStore)
+		} else {
+			// bloom filter not found in subtree store
 			// we need to create the bloom filter
-			// get the block of hash
 			blockToCreateBloomFilter, err := u.blockchainClient.GetBlock(ctx, hash)
 			if err != nil {
-				u.logger.Errorf("[waitForPreviousBlocksToBeProcessed][%s] failed to get block: %s", hash.String(), err)
-				return err
+				return errors.NewProcessingError("[waitForPreviousBlocksToBeProcessed][%s] failed to get block %s from store: %s", block.String(), hash.String(), err)
 			}
 
-			u.createAppendBloomFilter(ctx, blockToCreateBloomFilter)
-
-			u.logger.Infof("[waitForPreviousBlocksToBeProcessed][%s] creating bloom filter is DONE", block.Hash().String())
+			if err = u.createAppendBloomFilter(ctx, blockToCreateBloomFilter); err != nil {
+				return errors.NewProcessingError("[waitForPreviousBlocksToBeProcessed][%s] failed to create bloom filter %s: %s", block.String(), hash.String(), err)
+			}
 		}
 	}
 
@@ -1054,10 +1024,8 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	}
 
 	// only get the bloom filters for the current chain
-	bloomFilters, err := u.collectNecessaryBloomFilters(ctx, blockHeaders)
+	bloomFilters, err := u.collectNecessaryBloomFilters(ctx, blockData.block, blockHeaders)
 	if err != nil {
-		u.logger.Errorf("[reValidateBlock][%s] failed to collect necessary bloom filters: %s", blockData.block.String(), err)
-
 		return errors.NewServiceError("[reValidateBlock][%s] failed to collect necessary bloom filters", blockData.block.String(), err)
 	}
 
@@ -1093,7 +1061,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 // Parameters:
 //   - ctx: Context for the operation
 //   - block: Block to create filter for
-func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *model.Block) {
+func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *model.Block) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "createAppendBloomFilter",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[createAppendBloomFilter][%s] creating bloom filter", block.Hash().String()),
@@ -1101,26 +1069,18 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 	defer deferFn()
 
 	if u.blockBloomFiltersBeingCreated.Exists(*block.Hash()) {
-		return
+		return nil
 	}
 
 	// check whether the bloom filter for this block already exists
-	u.recentBlocksBloomFiltersMu.Lock()
-
-	if _, exists := u.recentBlocksBloomFilters[*block.Hash()]; exists {
-		u.recentBlocksBloomFiltersMu.Unlock()
-		return
+	if _, exists := u.recentBlocksBloomFilters.Get(*block.Hash()); exists {
+		return nil
 	}
-	u.recentBlocksBloomFiltersMu.Unlock()
 
 	_ = u.blockBloomFiltersBeingCreated.Put(*block.Hash())
 	defer func() {
 		_ = u.blockBloomFiltersBeingCreated.Delete(*block.Hash())
 	}()
-
-	startTime := time.Now()
-
-	u.logger.Infof("[createAppendBloomFilter][%s] creating bloom filter", block.Hash().String())
 
 	var err error
 
@@ -1133,27 +1093,24 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 
 	bbf.Filter, err = block.NewOptimizedBloomFilter(ctx, u.logger, u.subtreeStore)
 	if err != nil {
-		u.logger.Errorf("[createAppendBloomFilter][%s] failed to create bloom filter: %s", block.Hash().String(), err)
-		return
+		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to create bloom filter: %s", block.Hash().String(), err)
 	}
 
 	// Serialize the filter
 	filterBytes, err := bbf.Serialize()
 	if err != nil {
-		u.logger.Errorf("[createAppendBloomFilter][%s] failed to serialize bloom filter: %s", block.Hash().String(), err)
-		return
+		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to serialize bloom filter: %s", block.Hash().String(), err)
 	}
 
 	// record the bloom filter in the subtreestore
 	err = u.subtreeStore.Set(ctx, block.Hash()[:], filterBytes, options.WithDeleteAt(u.bloomFilterRetentionSize), options.WithFileExtension("bloomfilter"))
 	if err != nil {
-		u.logger.Errorf("[createAppendBloomFilter][%s] failed to record bloom filter in subtree store: %s", block.Hash().String(), err)
-		return
+		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to record bloom filter in subtree store: %s", block.Hash().String(), err)
 	}
 
 	u.pruneBloomFilters(ctx, block, bbf)
 
-	u.logger.Infof("[createAppendBloomFilter][%s] creating bloom filter DONE in %s (%d filters)", block.Hash().String(), time.Since(startTime), len(u.recentBlocksBloomFilters))
+	return nil
 }
 
 func (u *BlockValidation) pruneBloomFilters(ctx context.Context, block *model.Block, bbf *model.BlockBloomFilter) {
@@ -1172,22 +1129,18 @@ func (u *BlockValidation) pruneBloomFilters(ctx context.Context, block *model.Bl
 
 	filtersToPrune := make([]chainhash.Hash, 0)
 
-	u.recentBlocksBloomFiltersMu.Lock()
-
 	// Delete old filters directly from map
-	for hash, bf := range u.recentBlocksBloomFilters {
+	for hash, bf := range u.recentBlocksBloomFilters.Range() {
 		if bf.BlockHeight < lowestBlockHeightToKeep {
-			delete(u.recentBlocksBloomFilters, hash)
+			u.recentBlocksBloomFilters.Delete(hash)
 			filtersToPrune = append(filtersToPrune, hash)
 		}
 	}
 
 	// Add the new bloom filter
-	u.recentBlocksBloomFilters[*block.Hash()] = bbf
+	u.recentBlocksBloomFilters.Set(*block.Hash(), bbf)
 
-	remainingCount := len(u.recentBlocksBloomFilters)
-
-	u.recentBlocksBloomFiltersMu.Unlock()
+	remainingCount := u.recentBlocksBloomFilters.Length()
 
 	u.logger.Debugf("[pruneBloomFilters][%s] pruned %d filters, %d remaining",
 		block.Hash().String(), len(filtersToPrune), remainingCount)

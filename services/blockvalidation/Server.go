@@ -692,7 +692,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 	oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	// only get the bloom filters for the current chain
-	bloomFilters, err := u.blockValidation.collectNecessaryBloomFilters(ctx, blockHeaders)
+	bloomFilters, err := u.blockValidation.collectNecessaryBloomFilters(ctx, block, blockHeaders)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("[ValidateBlock][%s] failed to collect necessary bloom filters", block.String(), err))
 	}
