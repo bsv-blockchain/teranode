@@ -164,8 +164,8 @@ services:
       - ./wait.sh:/app/wait.sh
   miner-1:
     <<: *teranode-commands-base
-    # profiles:
-    #   - skip
+    profiles:
+      - default
     container_name: miner-1
     depends_on:
       - teranode-1
@@ -180,7 +180,7 @@ services:
   miner-2:
     <<: *teranode-commands-base
     profiles:
-      - skip
+      - default
     container_name: miner-2
     depends_on:
       - teranode-2
@@ -195,7 +195,7 @@ services:
   miner-3:
     <<: *teranode-commands-base
     profiles:
-      - skip
+      - default
     container_name: miner-3
     depends_on:
       - teranode-3
@@ -205,6 +205,19 @@ services:
     volumes:
       - ../settings.conf:/app/settings.conf
       - ../data/miner3:/app/data
+    restart: unless-stopped
+    
+  block-generator:
+    image: curlimages/curl:latest
+    profiles:
+      - chainintegrity
+    container_name: block-generator
+    depends_on:
+      - teranode-1
+    network_mode: "host"
+    volumes:
+      - ./scripts/generate-blocks.sh:/generate-blocks.sh
+    entrypoint: ["/generate-blocks.sh"]
     restart: unless-stopped
 
   coinbase-1:

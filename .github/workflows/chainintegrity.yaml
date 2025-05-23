@@ -48,8 +48,8 @@ jobs:
       - name: Remove old data
         run: rm -rf data
 
-      - name: Start Teranode nodes (docker compose up)
-        run: docker compose -f compose/docker-compose-host.yml up -d
+      - name: Start Teranode nodes with block generator (docker compose up)
+        run: docker compose --profile chainintegrity -f compose/docker-compose-host.yml up -d
 
       - name: Wait for mining to complete (all nodes at height 110+ and in sync)
         run: |

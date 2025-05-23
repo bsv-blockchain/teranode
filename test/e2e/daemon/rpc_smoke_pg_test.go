@@ -261,7 +261,7 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 	require.Equal(t, block103.Hash().String(), getBlockByHeightResp.Result.Nextblockhash)
 }
 
-func TestShouldNotProcessNonFinalTx(t *testing.T) {
+func TestShouldNotProcessNonFinalTxWithPostgres(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
