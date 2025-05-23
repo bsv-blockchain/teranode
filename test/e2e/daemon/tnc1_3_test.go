@@ -1,4 +1,14 @@
-package tnc
+// How to run:
+// go test -v -timeout 30s -run ^TestCandidateContainsAllTxs$
+// go test -v -timeout 30s -run ^TestCheckHashPrevBlockCandidate$
+// go test -v -timeout 30s -run ^TestCoinbaseTXAmount$
+// go test -v -timeout 30s -run ^TestCoinbaseTXAmount2$
+// $ go test -v -run "^TestCandidateContainsAllTxs$" ./test/smoke/tnc1_3_test.go
+// $ go test -v -run "^TestCheckHashPrevBlockCandidate$" ./test/smoke/tnc1_3_test.go
+// $ go test -v -run "^TestCoinbaseTXAmount$" ./test/smoke/tnc1_3_test.go
+// $ go test -v -run "^TestCoinbaseTXAmount2$" ./test/smoke/tnc1_3_test.go
+
+package smoke
 
 import (
 	"context"
@@ -10,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TODO: TestCandidateContainsAllTxs when EnableP2P it's fixed
 func TestCheckHashPrevBlockCandidate(t *testing.T) {
 	ctx := context.Background()
 
@@ -87,5 +98,48 @@ func TestCoinbaseTXAmount(t *testing.T) {
 
 	if amount != coinbaseValueBlock {
 		t.Errorf("Error calculating Coinbase Tx amount")
+	}
+}
+
+// TODO: Still check the Tx fees should add up to the coinbase value
+func TestCoinbaseTXAmount2(t *testing.T) {
+	ctx := context.Background()
+
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
+	})
+
+	defer td.Stop(t)
+
+	// Mine starting blocks
+	_, err := td.CallRPC("generate", []interface{}{101})
+	require.NoError(t, err, "Failed to mine blocks")
+
+	block, errblock := td.BlockchainClient.GetBlockByHeight(ctx, 1)
+	require.NoError(t, errblock)
+
+	_, _, err = td.CreateAndSendTxs(t, block.CoinbaseTx, 35)
+	require.NoError(t, err)
+
+	// Get mining candidate
+	mc, errMc := helper.GetMiningCandidate(ctx, *td.BlockAssemblyClient, td.Logger)
+	require.NoError(t, errMc, "Failed to get mining candidate")
+
+	coinbaseValueBlock := mc.CoinbaseValue
+
+	td.Logger.Infof("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
+
+	_, bbMeta, err := td.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	bestBlock, err := td.BlockchainClient.GetBlockByHeight(ctx, bbMeta.Height)
+	require.NoError(t, err)
+
+	coinbaseTX := bestBlock.CoinbaseTx
+	amount := coinbaseTX.TotalOutputSatoshis()
+
+	if coinbaseValueBlock < amount {
+		t.Errorf("Error calculating fees")
 	}
 }

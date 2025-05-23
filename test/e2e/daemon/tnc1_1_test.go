@@ -1,7 +1,7 @@
 // How to run:
 // go test -v -timeout 30s -tags "test_tnc" -run ^TestVerifyMerkleRootCalculation$
 
-package tnc
+package smoke
 
 import (
 	"context"

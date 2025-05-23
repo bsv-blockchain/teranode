@@ -2,7 +2,7 @@
 // go test -v -timeout 30s -run ^TestCheckPrevBlockHash$
 // go test -v -timeout 30s -run ^TestPrevBlockHashAfterReorg$
 
-package tnc
+package smoke
 
 import (
 	"context"
