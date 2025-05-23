@@ -44,6 +44,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
+	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -51,7 +52,7 @@ import (
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/test"
 	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
-	"github.com/libsv/go-bt/v2"
+	bt "github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -833,4 +834,195 @@ func TestFalseOrEmptyTopStackElementScriptError(t *testing.T) {
 
 	err := v.validateTransactionScripts(span.Ctx, tx, height, []uint32{}, &Options{SkipPolicyChecks: true})
 	require.Error(t, err)
+}
+
+func TestValidator_TwoPhaseCommitTransaction(t *testing.T) {
+	tracing.SetGlobalMockTracer()
+
+	ctx := context.Background()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+
+	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+
+	_, err = utxoStore.Create(ctx, tx, 100, utxostore.WithUnspendable(true))
+	require.NoError(t, err)
+
+	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	require.NoError(t, err)
+	require.True(t, meta.Unspendable)
+
+	v := &Validator{
+		logger:      ulogger.TestLogger{},
+		utxoStore:   utxoStore,
+		settings:    test.CreateBaseTestSettings(),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings()),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	span := tracing.Start(ctx, "Test")
+	defer span.Finish()
+	err = v.twoPhaseCommitTransaction(span, tx, tx.TxID())
+	require.NoError(t, err)
+
+	meta, err = utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	require.NoError(t, err)
+	assert.False(t, meta.Unspendable)
+}
+
+func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
+	tracing.SetGlobalMockTracer()
+
+	ctx := context.Background()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+
+	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+
+	// Add the tx as spendable (Unspendable == false)
+	_, err = utxoStore.Create(ctx, tx, 100, utxostore.WithUnspendable(false))
+	require.NoError(t, err)
+
+	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	require.NoError(t, err)
+	assert.False(t, meta.Unspendable, "TX should be spendable before 2-phase commit")
+
+	v := &Validator{
+		logger:      ulogger.TestLogger{},
+		utxoStore:   utxoStore,
+		settings:    test.CreateBaseTestSettings(),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings()),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	span := tracing.Start(ctx, "Test")
+	defer span.Finish()
+	err = v.twoPhaseCommitTransaction(span, tx, tx.TxID())
+	assert.NoError(t, err)
+
+	meta, err = utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	require.NoError(t, err)
+	assert.False(t, meta.Unspendable, "TX should remain spendable after 2-phase commit")
+}
+
+type FailingUtxoStore struct {
+	utxoMemorystore.Memory
+}
+
+func (f *FailingUtxoStore) SetUnspendable(ctx context.Context, hashes []chainhash.Hash, unspendable bool) error {
+	return errors.NewProcessingError("throws error")
+}
+
+func NewFailingUtxoStore() *FailingUtxoStore {
+	return &FailingUtxoStore{
+		Memory: *utxoMemorystore.New(ulogger.TestLogger{}),
+	}
+}
+
+func TestValidator_TwoPhaseCommitTransaction_SetUnspendableFails(t *testing.T) {
+	tracing.SetGlobalMockTracer()
+
+	ctx := context.Background()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+
+	utxoStore := NewFailingUtxoStore()
+	_, _ = utxoStore.Create(ctx, tx, 100, utxostore.WithUnspendable(true))
+
+	v := &Validator{
+		logger:      ulogger.TestLogger{},
+		utxoStore:   utxoStore,
+		settings:    test.CreateBaseTestSettings(),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings()),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	span := tracing.Start(ctx, "Test")
+	defer span.Finish()
+	err = v.twoPhaseCommitTransaction(span, tx, tx.TxID())
+	assert.Error(t, err)
+
+	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	require.NoError(t, err)
+	require.True(t, meta.Unspendable)
+}
+
+func TestValidator_UnspendableFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
+	tracing.SetGlobalMockTracer()
+
+	ctx := context.Background()
+
+	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+	_, err := utxoStore.Create(ctx, txs[0], 101, utxostore.WithUnspendable(false))
+	require.NoError(t, err)
+
+	blockAsmMock := blockassembly.NewMock()
+
+	settings := test.CreateBaseTestSettings()
+	settings.BlockAssembly.Disabled = false
+
+	v := &Validator{
+		logger:         ulogger.TestLogger{},
+		utxoStore:      utxoStore,
+		blockAssembler: blockAsmMock,
+		settings:       settings,
+		txValidator:    NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings()),
+		stats:          gocore.NewStat("validator"),
+	}
+
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(true, nil).Times(1)
+
+	opts := &Options{AddTXToBlockAssembly: true}
+	_, err = v.ValidateWithOptions(ctx, txs[1], 100, opts)
+	require.NoError(t, err)
+
+	meta, err := utxoStore.GetMeta(ctx, txs[1].TxIDChainHash())
+	require.NoError(t, err)
+	assert.False(t, meta.Unspendable, "Flag should be unset after successful block assembly")
+}
+
+func TestValidator_UnspendableFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T) {
+	tracing.SetGlobalMockTracer()
+
+	ctx := context.Background()
+
+	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+	_, err := utxoStore.Create(ctx, txs[0], 101, utxostore.WithUnspendable(false))
+	require.NoError(t, err)
+
+	_, err = utxoStore.Create(ctx, txs[1], 101, utxostore.WithUnspendable(true))
+	require.NoError(t, err)
+
+	blockAsmMock := blockassembly.NewMock()
+
+	settings := test.CreateBaseTestSettings()
+	settings.BlockAssembly.Disabled = false
+
+	v := &Validator{
+		logger:         ulogger.TestLogger{},
+		utxoStore:      utxoStore,
+		blockAssembler: blockAsmMock,
+		settings:       settings,
+		txValidator:    NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings()),
+		stats:          gocore.NewStat("validator"),
+	}
+
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(false, errors.New(errors.ERR_PROCESSING, "tx rejected")).Once()
+
+	opts := &Options{AddTXToBlockAssembly: true}
+	_, err = v.ValidateWithOptions(ctx, txs[1], 100, opts)
+	require.NoError(t, err)
+
+	meta, err := utxoStore.GetMeta(ctx, txs[1].TxIDChainHash())
+	require.NoError(t, err)
+	assert.True(t, meta.Unspendable, "Flag should be set if block assembly did not store tx")
 }
