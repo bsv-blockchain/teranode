@@ -500,6 +500,35 @@ NEXT_BATCH_RECORD:
 					items[idx].Data.Tx = tx
 				}
 
+			case fields.Inputs:
+				// check that we are not also getting the tx, as this will be handled above
+				if slices.Contains(items[idx].Fields, fields.Tx) {
+					continue
+				}
+
+				// If the tx is external, we already have it, otherwise we need to build it from the bins.
+				if external {
+					items[idx].Data.Tx = externalTx
+				} else {
+					tx := &bt.Tx{}
+
+					if inputInterfaces, ok := bins[fields.Inputs.String()].([]interface{}); ok {
+						tx.Inputs = make([]*bt.Input, len(inputInterfaces))
+
+						for i, inputInterface := range inputInterfaces {
+							input := inputInterface.([]byte)
+							tx.Inputs[i] = &bt.Input{}
+
+							_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
+							if err != nil {
+								return errors.NewTxInvalidError("could not read input", err)
+							}
+						}
+					}
+
+					items[idx].Data.Tx = tx
+				}
+
 			case fields.Fee:
 				fee, ok := bins[key.String()].(int)
 				if !ok {

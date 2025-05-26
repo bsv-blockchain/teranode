@@ -810,7 +810,11 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					g.Go(func() error {
 						txMeta, err := txMetaStore.Get(parentCtx, &txHash, fields.Inputs)
 						if err != nil {
-							return errors.NewStorageError("[BLOCK][%s] error getting transaction %s from txMetaStore", b.Hash().String(), txHash.String(), err)
+							return errors.NewProcessingError("[BLOCK][%s] error getting transaction %s from txMetaStore", b.Hash().String(), txHash.String(), err)
+						}
+
+						if txMeta == nil || txMeta.Tx == nil || len(txMeta.Tx.Inputs) == 0 {
+							return errors.NewStorageError("[BLOCK][%s] transaction %s has no inputs", b.Hash().String(), txHash.String())
 						}
 
 						for inputIdx, input := range txMeta.Tx.Inputs {
