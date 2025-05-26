@@ -10,6 +10,7 @@ env:
   SETTINGS_CONTEXT_DEFAULT: default_context
   USE_ECR_IMAGE: true
   GO_VERSION: '1.24.1'
+  TEST_DIR: ./test/e2e/daemon
 
 permissions:
   contents: read
@@ -51,53 +52,6 @@ jobs:
     strategy:
       matrix:
         test_config:
-          # TNC Tests
-          - test_dir: "test/tnc"
-            test_tags: "test_tnc"
-            test_suite: "TestTNC1_1TestSuite"
-            test_func: "TestVerifyMerkleRootCalculation"
-            test_filename: "tnc1_1_test.go"
-          - test_dir: "test/tnc"
-            test_tags: "test_tnc"
-            test_suite: "TestTNC1_2TestSuite"
-            test_func: "TestCheckPrevBlockHash"
-            test_filename: "tnc1_2_test.go"
-          - test_dir: "test/tnc"
-            test_tags: "test_tnc"
-            test_suite: "TestTNC1_2TestSuite"
-            test_func: "TestPrevBlockHashAfterReorg"
-            test_filename: "tnc1_2_test.go"
-          - test_dir: "test/tnc"
-            test_tags: "test_tnc"
-            test_suite: "TestTNC1TestSuite"
-            test_func: "TestCandidateContainsAllTxs"
-            test_filename: "tnc1_3_test.go"
-          - test_dir: "test/tnc"
-            test_tags: "test_tnc"
-            test_suite: "TestTNC1TestSuite"
-            test_func: "TestCheckHashPrevBlockCandidate"
-            test_filename: "tnc1_3_test.go"
-          - test_dir: "test/tnc"
-            test_tags: "test_tnc"
-            test_suite: "TestTNC1TestSuite"
-            test_func: "TestCoinbaseTXAmount"
-            test_filename: "tnc1_3_test.go"
-          - test_dir: "test/tnc"
-            test_tags: "test_tnc"
-            test_suite: "TestTNC1TestSuite"
-            test_func: "TestCoinbaseTXAmount2"
-            test_filename: "tnc1_3_test.go"
-          - test_dir: "test/tnc"
-            test_tags: "test_tnc"
-            test_suite: "TestTNC2_1TestSuite"
-            test_func: "TestUniqueCandidateIdentifiers"
-            test_filename: "tnc2_1_test.go"
-          - test_dir: "test/tnc"
-            test_tags: "test_tnc"
-            test_suite: "TestTNC2_1TestSuite"
-            test_func: "TestConcurrentCandidateIdentifiers"
-            test_filename: "tnc2_1_test.go"
-
           # TNB Tests
           - test_dir: "test/tnb"
             test_tags: "test_tnb"
@@ -193,48 +147,6 @@ jobs:
             test_func: "TestNodeDoesNotSendMiningCandidate_CatchUpState_WithStartAndStopNodes"
             test_filename: "fsm_state.go"
 
-          # Reorg Tests
-          - test_dir: "test/smoke/withdaemon"
-            test_tags: "test_docker_daemon"
-            test_func: "TestMoveUp"
-            test_filename: "reorg_test.go"
-          - test_dir: "test/smoke/withdaemon"
-            test_tags: "test_docker_daemon"
-            test_func: "TestMoveDownMoveUpWhenNewBlockIsGenerated"
-            test_filename: "reorg_test.go"
-          - test_dir: "test/smoke/withdaemon"
-            test_tags: "test_docker_daemon"
-            test_func: "TestMoveDownMoveUpWhenNoNewBlockIsGenerated"
-            test_filename: "reorg_test.go"
-          - test_dir: "test/smoke/withdaemon"
-            test_tags: "test_docker_daemon"
-            test_func: "TestInvalidBlock"
-            test_filename: "reorg_test.go"
-
-          # Block Subsidy Tests
-          - test_dir: "test/smoke/withdaemon"
-            test_tags: "test_docker_daemon"
-            test_func: "TestBlockSubsidy"
-            test_filename: "block_subsidy_test.go"
-
-          # Reassign Tests
-          - test_dir: "test/smoke/withdaemon"
-            test_tags: "test_docker_daemon"
-            test_func: "TestShouldAllowReassign"
-            test_filename: "reassign_test.go"
-
-          # Spend UTXO Tests
-          - test_dir: "test/smoke/withdaemon"
-            test_tags: "test_docker_daemon"
-            test_func: "TestShouldAllowSpendAllUtxos"
-            test_filename: "spend_utxo_test.go"
-
-          # UTXO Tests
-          - test_dir: "test/smoke/withdaemon"
-            test_tags: "test_docker_daemon"
-            test_func: "TestFreezeAndUnfreezeUtxos"
-            test_filename: "utxo_test.go"
-
           #TNx postgres tests - tna2 single tx
           - test_dir: "test/tna/withdaemon"
             test_tags: "test_tna"
@@ -319,49 +231,77 @@ jobs:
       - name: Run Block Subsidy Tests
         run: |
           go clean -testcache
-          go test -v -tags test_nightly ./test/smoke/withdaemon/block_subsidy_test.go
+          go test -v $TEST_DIR/block_subsidy_test.go
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
 
       - name: Run Legacy Tests
         run: |
-          go test -v -tags test_nightly ./test/smoke/withdaemon/legacy_test.go
+          go test -v $TEST_DIR/legacy_test.go
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
 
       - name: Run Reassign Tests
         run: |
-          go test -v -tags test_nightly ./test/smoke/withdaemon/reassign_test.go
+          go test -v $TEST_DIR/reassign_test.go
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
 
       - name: Run Reorg Tests
         run: |
-          go test -v -tags test_nightly ./test/smoke/withdaemon/reorg_test.go
+          go test -v $TEST_DIR/reorg_test.go
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
 
       - name: Run RPC Smoke PG Tests
         run: |
-          go test -v -tags test_nightly ./test/smoke/withdaemon/rpc_smoke_pg_test.go
+          go test -v $TEST_DIR/rpc_smoke_pg_test.go
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
 
       - name: Run Spend UTXO Tests
         run: |
-          go test -v -tags test_nightly ./test/smoke/withdaemon/spend_utxo_test.go
+          go test -v $TEST_DIR/spend_utxo_test.go
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
 
       - name: Run UTXO Tests
         run: |
-          go test -v -tags test_nightly ./test/smoke/withdaemon/utxo_test.go
+          go test -v $TEST_DIR/utxo_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run TNC1.1 Test
+        run: |
+          go test -v $TEST_DIR/tnc1_1_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run TNC1.2 Test
+        run: |
+          go test -v $TEST_DIR/tnc1_2_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run TNC1.3 Test
+        run: |
+          go test -v $TEST_DIR/tnc1_3_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run TNC2.1 Test
+        run: |
+          go test -v $TEST_DIR/tnc2_1_test.go
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
