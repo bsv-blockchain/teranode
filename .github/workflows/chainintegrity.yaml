@@ -1,16 +1,13 @@
 name: Chain Integrity Test
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_call:
 
 permissions:
   contents: read
   pull-requests: read
   id-token: write
+  packages: read
 
 env:
   GO_VERSION: '1.24.1'
@@ -45,6 +42,35 @@ jobs:
         with:
           mask-password: true
 
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image from GHCR and tag as local teranode:latest
+        run: |
+          echo "github.event_name is ${{ github.event_name }}"
+          echo "github.sha is ${{ github.sha }}"
+          echo "github.ref is ${{ github.ref }}"
+          echo "github.ref_name is ${{ github.ref_name }}"
+          echo "github.ref_type is ${{ github.ref_type }}"
+          if [[ '${{ github.ref_type }}' == 'tag' ]]; then
+            tag="${{ github.ref_name }}"
+            echo "version tag is $tag"
+          elif [[ '${{ github.event_name }}' == 'pull_request' ]]; then
+            tag="${{ github.event.pull_request.head.sha }}"
+            echo "version tag is $tag"
+          else
+            tag="${{ github.sha }}"
+            echo "version tag is $tag"
+          fi
+          echo "Pulling image ghcr.io/bitcoin-sv/teranode:$tag"
+          docker pull "ghcr.io/bitcoin-sv/teranode:$tag"
+          docker tag "ghcr.io/bitcoin-sv/teranode:$tag" teranode:latest
+          docker images | grep teranode
+
       - name: Remove old data
         run: rm -rf data
 
@@ -62,6 +88,14 @@ jobs:
             h2=$(curl -s http://localhost:28090/api/v1/bestblockheader/json | jq -r .height)
             h3=$(curl -s http://localhost:38090/api/v1/bestblockheader/json | jq -r .height)
             echo "Attempt $i: heights: $h1 $h2 $h3"
+            if [[ -z "$h1" || -z "$h2" || -z "$h3" ]]; then
+              if [[ $i -gt 10 ]]; then
+                echo "Error: One or more nodes are not responding after 10 attempts. Exiting."
+                exit 1
+              else
+                echo "Warning: One or more nodes are not responding. Continuing..."
+              fi
+            fi
             if [[ "$h1" =~ ^[0-9]+$ && "$h2" =~ ^[0-9]+$ && "$h3" =~ ^[0-9]+$ ]]; then
               if [[ $h1 -ge $REQUIRED_HEIGHT && $h2 -ge $REQUIRED_HEIGHT && $h3 -ge $REQUIRED_HEIGHT ]]; then
                 echo "All nodes have reached height $REQUIRED_HEIGHT or greater."
@@ -72,6 +106,23 @@ jobs:
           done
           echo "Timeout waiting for all nodes to reach height $REQUIRED_HEIGHT."
           exit 1
+
+      - name: Collect Docker container logs
+        if: failure()
+        run: |
+          mkdir -p container-logs
+          containers=$(docker ps -a --format "{{.Names}}")
+          for container in $containers; do
+            echo "Collecting logs for container: $container"
+            docker logs "$container" > "container-logs/$container.log" 2>&1 || true
+          done
+
+      - name: Upload container logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-logs
+          path: container-logs/
 
       - name: Stop Teranode nodes (docker compose down for teranode-1/2/3)
         run: docker compose -f compose/docker-compose-host.yml down teranode-1 teranode-2 teranode-3
@@ -99,4 +150,4 @@ jobs:
 
       - name: Cleanup (docker compose down)
         if: always()
-        run: docker compose -f compose/docker-compose-host.yml down 
+        run: docker compose -f compose/docker-compose-host.yml down

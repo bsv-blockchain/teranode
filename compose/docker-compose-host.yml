@@ -1,5 +1,5 @@
 x-teranode-base: &teranode-base
-  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:latest
+  image: teranode:latest
   network_mode: "host"
   depends_on:
     - postgres
@@ -10,7 +10,7 @@ x-teranode-commands-base: &teranode-commands-base
   network_mode: "host"
 
 x-teranode-coinbase-base: &teranode-coinbase-base
-  image : 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-coinbase:latest 
+  image : 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-coinbase:latest
   network_mode: "host"
   depends_on:
     - postgres
@@ -26,7 +26,7 @@ services:
 
   teranode-builder:
     container_name: teranode-builder
-    image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:latest
+    image: teranode:latest
     network_mode: "host"
     build:
       context: ..
@@ -206,7 +206,7 @@ services:
       - ../settings.conf:/app/settings.conf
       - ../data/miner3:/app/data
     restart: unless-stopped
-    
+
   block-generator:
     image: curlimages/curl:latest
     profiles:
