@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"runtime"
-	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -21,7 +20,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -354,21 +352,21 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// 1. Check that the block header hash is less than the target difficulty.
 	headerValid, _, err := b.Header.HasMetTargetDifficulty()
 	if err != nil {
-		return false, errors.NewProcessingError("[BLOCK][%s] error checking target difficulty", b.Hash().String(), err)
+		return false, errors.NewProcessingError("[BLOCK][%s] error checking target difficulty", b.String(), err)
 	}
 
 	if !headerValid {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block header hash is not less than the target difficulty", b.Hash().String())
+		return false, errors.NewBlockInvalidError("[BLOCK][%s] block header hash is not less than the target difficulty", b.String())
 	}
 
 	// 2. Check that the block timestamp is not more than two hours in the future.
 	twoHoursToTheFutureTimestampUint32, err := util.SafeInt64ToUint32(time.Now().Add(2 * time.Hour).Unix())
 	if err != nil {
-		return false, errors.NewProcessingError("[BLOCK][%s] failed to convert two hours to the future timestamp to uint32", b.Hash().String(), err)
+		return false, errors.NewProcessingError("[BLOCK][%s] failed to convert two hours to the future timestamp to uint32", b.String(), err)
 	}
 
 	if b.Header.Timestamp > twoHoursToTheFutureTimestampUint32 {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block timestamp is more than two hours in the future", b.Hash().String())
+		return false, errors.NewBlockInvalidError("[BLOCK][%s] block timestamp is more than two hours in the future", b.String())
 	}
 
 	// 3. Check that the median time past of the block is after the median time past of the last 11 blocks.
@@ -409,11 +407,11 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	}
 	// 4. Check that the coinbase transaction is valid (reward checked later).
 	if b.CoinbaseTx == nil {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block has no coinbase tx", b.Hash().String())
+		return false, errors.NewBlockInvalidError("[BLOCK][%s] block has no coinbase tx", b.String())
 	}
 
 	if !b.CoinbaseTx.IsCoinbase() {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.Hash().String())
+		return false, errors.NewBlockInvalidError("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
 	}
 
 	// We can only calculate the height from coinbase transactions in block versions 2 and higher
@@ -430,11 +428,11 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	if b.Header.Version > 1 && b.Height > LastV1Block {
 		height, err := b.ExtractCoinbaseHeight()
 		if err != nil {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] error extracting coinbase height", b.Hash().String(), err)
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] error extracting coinbase height", b.String(), err)
 		}
 
 		if height != b.Height {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.Hash().String(), height, b.Height)
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
 		}
 	}
 
@@ -448,7 +446,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
 		// if !b.SubtreeSlices[0].Nodes[0].Hash.Equal(CoinbasePlaceholder) {
-		// 	return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.Hash().String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
+		// 	return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
 		// }
 
 		// 8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
@@ -482,10 +480,6 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	if txMetaStore != nil {
 		err = b.validOrderAndBlessed(ctx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats, oldBlockIDsMap)
 		if err != nil {
-			return false, err
-		}
-
-		if err = b.checkConflictingTransactions(ctx, logger, txMetaStore); err != nil {
 			return false, err
 		}
 	}
@@ -523,12 +517,21 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 	coinbaseReward := util.GetBlockSubsidyForHeight(height, b.settings.ChainCfgParams)
 
 	if coinbaseOutputSatoshis > subtreeFees+coinbaseReward {
-		return errors.NewBlockInvalidError("[BLOCK][%s] coinbase output (%d) is greater than the fees + block subsidy (%d)", b.Hash().String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
+		return errors.NewBlockInvalidError("[BLOCK][%s] coinbase output (%d) is greater than the fees + block subsidy (%d)", b.String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
 	}
 
 	return nil
 }
 
+// checkDuplicateTransactions checks for duplicate transactions in all the subtrees in the block.
+// It uses a concurrent approach to check for duplicates in each subtree.
+// If a duplicate transaction is found, it returns an error.
+//
+// Parameters:
+// - ctx: the context to use for tracing and cancellation
+//
+// Returns:
+// - error: if a duplicate transaction is found or if there is an error adding the transaction to the txMap
 func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	_, _, deferFn := tracing.StartTracing(ctx, "Block:checkDuplicateTransactions")
 	defer deferFn()
@@ -543,7 +546,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 
 	transactionCountUint32, err := util.SafeUint64ToUint32(b.TransactionCount)
 	if err != nil {
-		return errors.NewProcessingError("[BLOCK][%s] failed to convert transaction count to int", b.Hash().String(), err)
+		return errors.NewProcessingError("[checkDuplicateTransactions][%s] failed to convert transaction count to int", b.String(), err)
 	}
 
 	b.txMap = util.NewSplitSwissMapUint64(transactionCountUint32)
@@ -552,31 +555,51 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 		subtree := b.SubtreeSlices[subIdx]
 
 		g.Go(func() (err error) {
-			for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
-				if subIdx == 0 && txIdx == 0 {
-					continue
-				}
-
-				subtreeNode := subtree.Nodes[txIdx]
-
-				// in a tx map, Put is mutually exclusive, can only be called once per key
-				err = b.txMap.Put(subtreeNode.Hash, uint64((subIdx*len(subtree.Nodes))+txIdx))
-				if err != nil {
-					if errors.Is(err, errors.ErrTxExists) {
-						return errors.NewBlockInvalidError("[BLOCK][%s] duplicate transaction %s", b.Hash().String(), subtreeNode.Hash.String())
-					}
-
-					return errors.NewStorageError("[BLOCK][%s] error adding transaction %s to txMap", b.Hash().String(), subtreeNode.Hash.String(), err)
-				}
-			}
-
-			return nil
+			return b.checkDuplicateTransactionsInSubtree(subtree, subIdx)
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		// just return the error from above
+	if err = g.Wait(); err != nil {
+		// return the error from above without wrapping it
 		return err
+	}
+
+	return nil
+}
+
+// checkDuplicateTransactionsInSubtree checks for duplicate transactions in a subtree.
+// It uses the block txMap to store the transactions and check for duplicates.
+// If a duplicate transaction is found, it returns an error.
+//
+// Parameters:
+// - subtree: the subtree to check for duplicate transactions
+// - subIdx: the index of the subtree in the block
+//
+// Returns:
+// - error: if a duplicate transaction is found or if there is an error adding the transaction to the txMap
+func (b *Block) checkDuplicateTransactionsInSubtree(subtree *util.Subtree, subIdx int) (err error) {
+	var idx64 uint64
+
+	for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
+		if subIdx == 0 && txIdx == 0 && subtree.Nodes[txIdx].Hash.Equal(util.CoinbasePlaceholderHashValue) {
+			continue
+		}
+
+		subtreeNode := subtree.Nodes[txIdx]
+
+		idx64, err = util.SafeIntToUint64((subIdx * len(subtree.Nodes)) + txIdx)
+		if err != nil {
+			return errors.NewProcessingError("[BLOCK][%s] failed to convert index to uint64", b.String(), err)
+		}
+
+		// in a tx map, Put is mutually exclusive, can only be called once per key
+		if err = b.txMap.Put(subtreeNode.Hash, idx64); err != nil {
+			if errors.Is(err, errors.ErrTxExists) {
+				return errors.NewBlockInvalidError("[BLOCK][%s] duplicate transaction %s", b.String(), subtreeNode.Hash.String())
+			}
+
+			return errors.NewStorageError("[BLOCK][%s] error adding transaction %s to txMap", b.String(), subtreeNode.Hash.String(), err)
+		}
 	}
 
 	return nil
@@ -586,7 +609,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats,
 	oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32]) error {
 	if b.txMap == nil {
-		return errors.NewStorageError("[BLOCK][%s] txMap is nil, cannot check transaction order", b.Hash().String())
+		return errors.NewStorageError("[validOrderAndBlessed][%s] txMap is nil, cannot check transaction order", b.String())
 	}
 
 	currentBlockHeaderHashesMap := make(map[chainhash.Hash]struct{}, len(currentChain))
@@ -607,32 +630,31 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, concurrency)
 
-	parentSpendsMap := util.NewSyncedMap[chainhash.Hash, chainhash.Hash]()
-	checkParentOutpoints := make([]chainhash.Hash, 0, 1024)
+	parentSpendsMap := util.NewSyncedMap[meta.Inpoint, struct{}]()
 
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
 		sIdx := sIdx
 
 		g.Go(func() (err error) {
-			subtreeHash := subtree.RootHash()
-			checkParentTxHashes := make([]missingParentTx, 0, len(subtree.Nodes))
-
-			// if the subtree meta slice is loaded, we can use that instead of the txMetaStore
-			var subtreeMetaSlice *util.SubtreeMeta
+			var (
+				subtreeMetaSlice    *util.SubtreeMeta
+				parentTxHashes      []chainhash.Hash
+				subtreeHash         = subtree.RootHash()
+				checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes))
+			)
 
 			subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, subtreeStore, *subtreeHash, subtree)
 			if err != nil {
 				subtreeMetaSlice, err = retry.Retry(ctx, logger, func() (*util.SubtreeMeta, error) {
 					return b.getSubtreeMetaSlice(gCtx, subtreeStore, *subtreeHash, subtree)
-				}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][%s:%d] error getting subtree meta slice", b.Hash().String(), subtreeHash.String(), sIdx)))
+				}, retry.WithMessage(fmt.Sprintf("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice", b.String(), subtreeHash.String(), sIdx)))
 
+				// a subtreeMetaSlice is required for further block validation, so if we cannot get it, we return an error
 				if err != nil {
-					logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
+					return errors.NewProcessingError("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice: %v", b.String(), subtreeHash.String(), sIdx, err)
 				}
 			}
-
-			var parentTxHashes []chainhash.Hash
 
 			if bloomStats != nil {
 				bloomStats.mu.Lock()
@@ -642,7 +664,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 			for snIdx := 0; snIdx < len(subtree.Nodes); snIdx++ {
 				// ignore the very first transaction, is coinbase
-				if sIdx == 0 && snIdx == 0 {
+				if sIdx == 0 && snIdx == 0 && subtree.Nodes[snIdx].Hash.Equal(util.CoinbasePlaceholderHashValue) {
 					continue
 				}
 
@@ -650,62 +672,27 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 				txIdx, ok := b.txMap.Get(subtreeNode.Hash)
 				if !ok {
-					return errors.NewNotFoundError("[BLOCK][%s][%s:%d]:%d transaction %s is not in the txMap", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
+					return errors.NewNotFoundError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s is not in the txMap", b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
 				}
 
-				if subtreeMetaSlice != nil {
-					parentTxHashes = subtreeMetaSlice.ParentTxHashes[snIdx]
-				} else {
-					// get from the txMetaStore
-					var txMeta *meta.Data
-
-					txMeta, err = txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
-					if err != nil {
-						txMeta, err = retry.Retry(ctx, logger, func() (*meta.Data, error) {
-							return txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
-						}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())))
-
-						if err != nil {
-							if errors.Is(err, errors.ErrTxNotFound) {
-								return errors.NewNotFoundError("[BLOCK][%s][%s:%d]:%d transaction %s could not be found in tx txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
-							}
-
-							return errors.NewStorageError("[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
-						}
-					}
-
-					if txMeta == nil {
-						return errors.NewProcessingError("transaction %s is not blessed", subtreeNode.Hash.String())
-					}
-
-					parentTxHashes = txMeta.ParentTxHashes
-
-					if txMeta.LockTime > 0 {
-						// A transaction must be final, meaning that, if exists, the lock time is: Equal to zero, or <500000000 and smaller than block height, or >=500000000 and SMALLER THAN TIMESTAMP
-						// Any transaction that does not adhere to this consensus rule is to be rejected. See Consensus Rules - TNJ-13
-						if err := util.ValidLockTime(txMeta.LockTime, b.Height, b.medianTimestamp); err != nil {
-							return errors.NewTxLockTimeError("[BLOCK][%s][%s:%d]:%d transaction %s has an invalid locktime: %d", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), txMeta.LockTime, err)
-						}
-					}
+				parentTxHashes, err = subtreeMetaSlice.GetParentTxHashes(snIdx)
+				if err != nil {
+					return errors.NewStorageError("[validOrderAndBlessed][%s][%s:%d]:%d error getting parent tx hashes from subtree meta slice", b.String(), subtreeHash.String(), sIdx, snIdx, err)
 				}
 
 				if parentTxHashes == nil {
-					return errors.NewBlockInvalidError("[BLOCK][%s][%s:%d]:%d transaction %s could not be found in tx meta data", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
+					return errors.NewBlockInvalidError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s could not be found in tx meta data", b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
 				}
 
-				// add all the parentTxHashes + idxs to a map to check that they are unique (not duplicates)
-				// there should be no spends of the same output in a block, this cannot be detected by the subtree validation
-				for _, parentTxHash := range parentTxHashes {
-					if otherTx, found := parentSpendsMap.Get(parentTxHash); found {
-						// there are 2 transactions spending the same parent tx, we must check whether they are spending the same output
-						checkParentOutpoints = append(checkParentOutpoints, subtreeNode.Hash)
+				txInpoints, err := subtreeMetaSlice.GetTxInpoints(snIdx)
+				if err != nil {
+					return errors.NewStorageError("[validOrderAndBlessed][%s][%s:%d]:%d error getting tx inpoints from subtree meta slice", b.String(), subtreeHash.String(), sIdx, snIdx, err)
+				}
 
-						if !slices.Contains(checkParentOutpoints, otherTx) {
-							checkParentOutpoints = append(checkParentOutpoints, otherTx)
-						}
+				for _, txInpoint := range txInpoints {
+					if _, valueSet := parentSpendsMap.SetIfNotExists(txInpoint, struct{}{}); !valueSet {
+						return errors.NewBlockInvalidError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s has duplicate inputs", b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
 					}
-
-					parentSpendsMap.Set(parentTxHash, subtreeNode.Hash)
 				}
 
 				// check whether the transaction has recently been mined in a block on our chain
@@ -737,12 +724,12 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 								continue
 							}
 
-							return errors.NewStorageError("[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
+							return errors.NewStorageError("[validOrderAndBlessed][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
 						}
 
 						for _, blockID := range txMeta.BlockIDs {
 							if _, found := currentBlockHeaderIDsMap[blockID]; found {
-								return errors.NewBlockInvalidError("[BLOCK][%s][%s:%d]:%d transaction %s has already been mined in block %d", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), blockID)
+								return errors.NewBlockInvalidError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s has already been mined in block %d", b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), blockID)
 							}
 						}
 
@@ -759,7 +746,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					if foundInSameBlock {
 						// parent tx was found in the same block as our tx, check idx
 						if parentTxIdx > txIdx {
-							return errors.NewBlockInvalidError("[BLOCK][%s][%s:%d]:%d transaction %s comes before parent transaction %s in block", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), parentTxHash.String())
+							return errors.NewBlockInvalidError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s comes before parent transaction %s in block", b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), parentTxHash.String())
 						}
 
 						// if the parent is in the same block, we have already checked whether it is on the same chain
@@ -799,92 +786,12 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				}
 			}
 
-			if len(checkParentOutpoints) > 0 {
-				parentOutpoints := util.NewSyncedMap[OutPoint, OutPoint]()
-
-				// get all txMeta for all the transactions we need to check in parallel
-				parentG, parentCtx := errgroup.WithContext(ctx)
-				util.SafeSetLimit(parentG, b.settings.BlockValidation.ProcessTxMetaUsingStoreConcurrency)
-
-				for _, txHash := range checkParentOutpoints {
-					g.Go(func() error {
-						txMeta, err := txMetaStore.Get(parentCtx, &txHash, fields.Inputs)
-						if err != nil {
-							return errors.NewProcessingError("[BLOCK][%s] error getting transaction %s from txMetaStore", b.Hash().String(), txHash.String(), err)
-						}
-
-						if txMeta == nil || txMeta.Tx == nil || len(txMeta.Tx.Inputs) == 0 {
-							return errors.NewStorageError("[BLOCK][%s] transaction %s has no inputs", b.Hash().String(), txHash.String())
-						}
-
-						for inputIdx, input := range txMeta.Tx.Inputs {
-							parentOutpoint := OutPoint{
-								Hash:  *input.PreviousTxIDChainHash(),
-								Index: input.PreviousTxOutIndex,
-							}
-
-							if otherTxInput, exists := parentOutpoints.SetIfNotExists(parentOutpoint, OutPoint{
-								Hash:  txHash,
-								Index: uint32(inputIdx), //nolint:gosec
-							}); !exists {
-								return errors.NewBlockInvalidError("[BLOCK][%s] transaction %s:%d spends parent transaction %s:%d in the same block as %s:%d", b.Hash().String(), txHash.String(), inputIdx, parentOutpoint.Hash.String(), parentOutpoint.Index, otherTxInput.Hash.String(), otherTxInput.Index)
-							}
-						}
-
-						return nil
-					})
-				}
-
-				if err = parentG.Wait(); err != nil {
-					return err
-				}
-			}
-
 			return nil
 		})
 	}
 
 	// do not wrap the error again, the error is already wrapped
 	return g.Wait()
-}
-
-// checkConflictingTransactions checks whether the transactions in the block have conflicting transactions on the chain
-// - 0: get the counter conflicting transactions, check they are not mined on our chain
-func (b *Block) checkConflictingTransactions(ctx context.Context, _ ulogger.Logger, txMetaStore utxo.Store) error {
-	// get all conflicting transaction from all subtrees
-	conflictingTxs, err := b.GetCounterConflictingTxs(ctx, txMetaStore)
-	if err != nil {
-		return err
-	}
-
-	_ = conflictingTxs
-
-	return nil
-}
-
-func (b *Block) GetCounterConflictingTxs(ctx context.Context, txMetaStore utxo.Store) ([]chainhash.Hash, error) {
-	conflictingTxs := make([]chainhash.Hash, 0, 1024)
-
-	for _, subtree := range b.SubtreeSlices {
-		for _, conflictingNode := range subtree.ConflictingNodes {
-			tx, err := txMetaStore.Get(ctx, &conflictingNode, fields.Tx)
-			if err != nil {
-				return nil, errors.NewStorageError("error getting transaction %s from txMetaStore", conflictingNode.String(), err)
-			}
-
-			// for _, parentTxHash := range txMeta.ParentTxHashes {
-			// 	// get the parent tx from the txMetaStore
-			// 	parentTxMeta, err := txMetaStore.GetMeta(ctx, &parentTxHash)
-			// 	if err != nil {
-			// 		return nil, errors.NewStorageError("error getting parent transaction %s from txMetaStore", parentTxHash.String(), err)
-			// 	}
-			// }
-
-			_ = tx
-		}
-	}
-
-	return conflictingTxs, nil
 }
 
 func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) ([]uint32, error) {
@@ -923,7 +830,7 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 
 		if minBlockID < minSetBlockID {
 			// parent is from a block that is older than the blocks we have in the current chain
-			logger.Debugf("[BLOCK][%s] parent transaction %s of tx %s is over %d blocks ago - checking later in validator", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(currentBlockHeaderIDsMap))
+			logger.Debugf("[BLOCK][%s] parent transaction %s of tx %s is over %d blocks ago - checking later in validator", b.String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(currentBlockHeaderIDsMap))
 
 			// we need to return parentTxMeta.BlockIDs back to validator, which can check if those blocks are part of our chain
 			oldBlockIDs = append(oldBlockIDs, parentTxMeta.BlockIDs...)
@@ -950,7 +857,7 @@ func ErrCheckParentExistsOnChain(gCtx context.Context, currentBlockHeaderIDsMap 
 		headerErr = errors.NewProcessingError("tx TxMeta: %v", txMeta, headerErr)
 	}
 
-	return errors.NewBlockInvalidError("[BLOCK][%s] parent transaction %s of tx %s is not valid on our current chain, found %d times", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(foundInPreviousBlocks), headerErr)
+	return errors.NewBlockInvalidError("[BLOCK][%s] parent transaction %s of tx %s is not valid on our current chain, found %d times", b.String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(foundInPreviousBlocks), headerErr)
 }
 
 func filterCurrentBlockHeaderIDsMap(parentTxMeta *meta.Data, currentBlockHeaderIDsMap map[uint32]struct{}) (map[uint32]struct{}, uint32) {
@@ -1092,14 +999,14 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 				subtree := &util.Subtree{}
 
 				findSubtree := func() (io.ReadCloser, error) {
-					readCloser, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
+					readCloser, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
 					if err != nil {
 						if errors.Is(err, errors.ErrNotFound) && fallbackGetFunc != nil {
 							if err := fallbackGetFunc(*subtreeHash); err != nil {
 								return nil, errors.NewSubtreeNotFoundError("failed to get subtree via fallback method", err)
 							}
 
-							return subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
+							return subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
 						}
 					}
 
@@ -1155,7 +1062,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 			subtreeSize = subtree.Length()
 		} else if subtree.Length() != subtreeSize && sIdx != nrOfSubtrees-1 {
 			// all subtrees need to be the same size as the first tree, except the last one
-			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.Hash().String(), b.ID, sIdx, subtree.Length(), subtreeSize)
+			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.String(), b.ID, sIdx, subtree.Length(), subtreeSize)
 		}
 	}
 
@@ -1170,9 +1077,9 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 
 func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore blob.Store, subtreeHash chainhash.Hash, subtree *util.Subtree) (*util.SubtreeMeta, error) {
 	// get subtree meta
-	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], options.WithFileExtension("meta"))
+	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], options.WithFileExtension(options.SubtreeMetaFileExtension))
 	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to get subtree meta", b.Hash().String(), subtreeHash.String(), err)
+		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to get subtree meta", b.String(), subtreeHash.String(), err)
 	}
 
 	defer func() {
@@ -1182,7 +1089,7 @@ func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore blob.Store
 	// no need to check whether this fails or not, it's just a cache file and not critical
 	subtreeMetaSlice, err := util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
 	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to deserialize subtree meta", b.Hash().String(), subtreeHash.String(), err)
+		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to deserialize subtree meta", b.String(), subtreeHash.String(), err)
 	}
 
 	return subtreeMetaSlice, nil
@@ -1190,7 +1097,7 @@ func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore blob.Store
 
 func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	if len(b.Subtrees) != len(b.SubtreeSlices) {
-		return errors.NewStorageError("[BLOCK][%s] number of subtrees does not match number of subtree slices, have you called block.GetAndValidateSubtrees()?", b.Hash().String())
+		return errors.NewStorageError("[BLOCK][%s] number of subtrees does not match number of subtree slices, have you called block.GetAndValidateSubtrees()?", b.String())
 	}
 
 	_, _, deferFn := tracing.StartTracing(ctx, "Block:CheckMerkleRoot",
@@ -1206,7 +1113,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 			// We need to inject the coinbase tx id into the first position of the first subtree
 			rootHash, err := subtree.RootHashWithReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size()))
 			if err != nil {
-				return errors.NewProcessingError("[BLOCK][%s] error replacing root node in subtree", b.Hash().String(), err)
+				return errors.NewProcessingError("[BLOCK][%s] error replacing root node in subtree", b.String(), err)
 			}
 
 			hashes[sIdx] = *rootHash
@@ -1224,13 +1131,13 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		// Create a new subtree with the hashes of the subtrees
 		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))
 		if err != nil {
-			return errors.NewProcessingError("[BLOCK][%s] error creating new root tree", b.Hash().String(), err)
+			return errors.NewProcessingError("[BLOCK][%s] error creating new root tree", b.String(), err)
 		}
 
 		for _, hash := range hashes {
 			err = st.AddNode(hash, 1, 0)
 			if err != nil {
-				return errors.NewProcessingError("[BLOCK][%s] error adding node to root tree", b.Hash().String(), err)
+				return errors.NewProcessingError("[BLOCK][%s] error adding node to root tree", b.String(), err)
 			}
 		}
 
@@ -1238,14 +1145,14 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 
 		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
 		if err != nil {
-			return errors.NewProcessingError("[BLOCK][%s] error creating calculated merkle root hash", b.Hash().String(), err)
+			return errors.NewProcessingError("[BLOCK][%s] error creating calculated merkle root hash", b.String(), err)
 		}
 	default:
 		calculatedMerkleRootHash = b.CoinbaseTx.TxIDChainHash()
 	}
 
 	if !b.Header.HashMerkleRoot.IsEqual(calculatedMerkleRootHash) {
-		return errors.NewBlockInvalidError("[BLOCK][%s] merkle root does not match", b.Hash().String())
+		return errors.NewBlockInvalidError("[BLOCK][%s] merkle root does not match", b.String())
 	}
 
 	return nil
@@ -1256,11 +1163,11 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 // blocks of version 2 or later.  This was added as part of BIP0034.
 func (b *Block) ExtractCoinbaseHeight() (uint32, error) {
 	if b.CoinbaseTx == nil {
-		return 0, errors.NewBlockInvalidError("[BLOCK][%s] missing coinbase transaction", b.Hash().String())
+		return 0, errors.NewBlockInvalidError("[BLOCK][%s] missing coinbase transaction", b.String())
 	}
 
 	if len(b.CoinbaseTx.Inputs) != 1 {
-		return 0, errors.NewBlockInvalidError("[BLOCK][%s] multiple coinbase transactions", b.Hash().String())
+		return 0, errors.NewBlockInvalidError("[BLOCK][%s] multiple coinbase transactions", b.String())
 	}
 
 	return util.ExtractCoinbaseHeight(b.CoinbaseTx)
@@ -1272,13 +1179,13 @@ func (b *Block) SubTreeBytes() ([]byte, error) {
 
 	err := wire.WriteVarInt(buf, 0, uint64(len(b.Subtrees)))
 	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s] error writing subtree length", b.Hash().String(), err)
+		return nil, errors.NewProcessingError("[BLOCK][%s] error writing subtree length", b.String(), err)
 	}
 
 	for _, subTree := range b.Subtrees {
 		_, err = buf.Write(subTree[:])
 		if err != nil {
-			return nil, errors.NewProcessingError("[BLOCK][%s] error writing subtree hash", b.Hash().String(), err)
+			return nil, errors.NewProcessingError("[BLOCK][%s] error writing subtree hash", b.String(), err)
 		}
 	}
 
@@ -1290,7 +1197,7 @@ func (b *Block) SubTreesFromBytes(subtreesBytes []byte) error {
 
 	subTreeCount, err := wire.ReadVarInt(buf, 0)
 	if err != nil {
-		return errors.NewProcessingError("[BLOCK][%s] error reading subtree length", b.Hash().String(), err)
+		return errors.NewProcessingError("[BLOCK][%s] error reading subtree length", b.String(), err)
 	}
 
 	var (
@@ -1301,12 +1208,12 @@ func (b *Block) SubTreesFromBytes(subtreesBytes []byte) error {
 	for i := uint64(0); i < subTreeCount; i++ {
 		_, err = io.ReadFull(buf, subtreeBytes[:])
 		if err != nil {
-			return errors.NewProcessingError("[BLOCK][%s] error reading subtree hash", b.Hash().String(), err)
+			return errors.NewProcessingError("[BLOCK][%s] error reading subtree hash", b.String(), err)
 		}
 
 		subtreeHash, err = chainhash.NewHash(subtreeBytes[:])
 		if err != nil {
-			return errors.NewProcessingError("[BLOCK][%s] error creating subtree hash", b.Hash().String(), err)
+			return errors.NewProcessingError("[BLOCK][%s] error creating subtree hash", b.String(), err)
 		}
 
 		b.Subtrees = append(b.Subtrees, subtreeHash)
@@ -1319,7 +1226,7 @@ func (b *Block) SubTreesFromBytes(subtreesBytes []byte) error {
 
 func (b *Block) Bytes() ([]byte, error) {
 	if b.Header == nil {
-		return nil, errors.NewBlockInvalidError("[BLOCK][%s] block has no header", b.Hash().String())
+		return nil, errors.NewBlockInvalidError("[BLOCK][%s] block has no header", b.String())
 	}
 
 	// write the header
@@ -1328,23 +1235,23 @@ func (b *Block) Bytes() ([]byte, error) {
 	// write the transaction count
 	err := wire.WriteVarInt(buf, 0, b.TransactionCount)
 	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s] error writing transaction count", b.Hash().String(), err)
+		return nil, errors.NewProcessingError("[BLOCK][%s] error writing transaction count", b.String(), err)
 	}
 
 	// write the size in bytes
 	err = wire.WriteVarInt(buf, 0, b.SizeInBytes)
 	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s] error writing size in bytes", b.Hash().String(), err)
+		return nil, errors.NewProcessingError("[BLOCK][%s] error writing size in bytes", b.String(), err)
 	}
 
 	// write the subtree list
 	subtreeBytes, err := b.SubTreeBytes()
 	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s] error writing subtree list", b.Hash().String(), err)
+		return nil, errors.NewProcessingError("[BLOCK][%s] error writing subtree list", b.String(), err)
 	}
 
 	if _, err := buf.Write(subtreeBytes); err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s] error writing subtree list", b.Hash().String(), err)
+		return nil, errors.NewProcessingError("[BLOCK][%s] error writing subtree list", b.String(), err)
 	}
 
 	coinbaseTX := b.CoinbaseTx
@@ -1355,12 +1262,12 @@ func (b *Block) Bytes() ([]byte, error) {
 	// write the coinbase tx
 	_, err = buf.Write(coinbaseTX.Bytes())
 	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s] error writing coinbase tx", b.Hash().String(), err)
+		return nil, errors.NewProcessingError("[BLOCK][%s] error writing coinbase tx", b.String(), err)
 	}
 
 	err = wire.WriteVarInt(buf, 0, uint64(b.Height))
 	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s] error writing height", b.Hash().String(), err)
+		return nil, errors.NewProcessingError("[BLOCK][%s] error writing height", b.String(), err)
 	}
 
 	return buf.Bytes(), nil
@@ -1383,7 +1290,7 @@ func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logg
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
 		if subtree == nil {
-			return nil, errors.NewProcessingError("[BLOCK][%s] missing subtree %d", b.Hash().String(), sIdx)
+			return nil, errors.NewProcessingError("[BLOCK][%s] missing subtree %d", b.String(), sIdx)
 		}
 
 		for nodeIdx := 0; nodeIdx < len(subtree.Nodes); nodeIdx++ {

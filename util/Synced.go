@@ -87,6 +87,16 @@ func (m *SyncedMap[K, V]) Set(key K, value V) {
 	m.setUnlocked(key, value)
 }
 
+// SetIfNotExists sets the value for the key if it does not already exist in the map.
+// It returns the existing value and false if the key already exists, or the new value and true if it was set.
+//
+// Params:
+//   - key: The key to set the value for.
+//   - value: The value to set for the key.
+//
+// Returns:
+//   - V: The value that was set or already existed.
+//   - bool: true if the value was set, false if the key already existed with a different value.
 func (m *SyncedMap[K, V]) SetIfNotExists(key K, value V) (V, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

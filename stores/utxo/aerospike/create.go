@@ -391,7 +391,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				timeStart := time.Now()
 
 				setOptions := []options.FileOption{
-					options.WithFileExtension("tx"),
+					options.WithFileExtension(ExternalTxFileExtension),
 					// options.WithAllowOverwrite(true),
 				}
 
@@ -730,7 +730,7 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 	timeStart := time.Now()
 
 	opts := []options.FileOption{
-		options.WithFileExtension("tx"),
+		options.WithFileExtension(ExternalTxFileExtension),
 		// options.WithAllowOverwrite(true),
 	}
 

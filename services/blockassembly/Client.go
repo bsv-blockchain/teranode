@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher"
@@ -203,17 +204,17 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // Returns:
 //   - bool: True if storage was successful
 //   - error: Any error encountered during storage
-func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, parentTxHashes []chainhash.Hash) (bool, error) {
-	parents := make([][]byte, len(parentTxHashes))
-	for i, parentHash := range parentTxHashes {
-		parents[i] = parentHash[:]
+func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints meta.TxInpoints) (bool, error) {
+	txInpointsBytes, err := txInpoints.Serialize()
+	if err != nil {
+		return false, err
 	}
 
 	req := &blockassembly_api.AddTxRequest{
-		Txid:    hash[:],
-		Fee:     fee,
-		Size:    size,
-		Parents: parents,
+		Txid:       hash[:],
+		Fee:        fee,
+		Size:       size,
+		TxInpoints: txInpointsBytes,
 	}
 
 	if s.batchSize == 0 {

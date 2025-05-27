@@ -12,13 +12,13 @@ import (
 )
 
 var (
-	// DEBUG DEBUG DEBUG
-	blockWait = 30 * time.Second
+// DEBUG DEBUG DEBUG
+// blockWait = 30 * time.Second
 )
 
 func TestUtxoStore(t *testing.T) {
 	_, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
-		Path:        "../..",
+		Path:        "..",
 		ComposeFile: "docker-compose-host.yml",
 		Profiles:    []string{"postgres"},
 	})
@@ -26,8 +26,10 @@ func TestUtxoStore(t *testing.T) {
 
 	settingsNode1 := settings.NewSettings("docker.host.teranode1.daemon")
 	settingsNode1.Propagation.GRPCAddresses = []string{"localhost:8084", "localhost:28084", "localhost:38084"}
+
 	utxoStore, err := url.Parse("postgres://miner1:miner1@localhost:15432/teranode1")
 	require.NoError(t, err)
+
 	settingsNode1.UtxoStore.UtxoStore = utxoStore
 	settingsNode1.Validator.UseLocalValidator = false
 
@@ -42,7 +44,7 @@ func TestUtxoStore(t *testing.T) {
 		td.Stop(t)
 	})
 
-	td.CallRPC("generate", []interface{}{101})
+	_, _ = td.CallRPC("generate", []interface{}{101})
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
@@ -58,7 +60,7 @@ func TestUtxoStore(t *testing.T) {
 	delay := td.Settings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(time.Duration(delay) * time.Millisecond)
+		time.Sleep(delay * time.Millisecond)
 	}
 
 	utxoMeta, err := td.UtxoStore.Get(td.Ctx, newTx.TxIDChainHash())

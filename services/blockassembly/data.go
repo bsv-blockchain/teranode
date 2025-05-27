@@ -4,6 +4,7 @@ package blockassembly
 import (
 	"encoding/binary"
 
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -23,7 +24,7 @@ type Data struct {
 	Size uint64
 
 	// Parents is a list of parent transaction hashes
-	Parents []chainhash.Hash
+	TxInpoints meta.TxInpoints
 }
 
 // NewFromBytes deserializes a byte array into a Data structure.
@@ -47,14 +48,12 @@ func NewFromBytes(bytes []byte) (*Data, error) {
 	d.Size = binary.LittleEndian.Uint64(bytes[40:48])
 
 	// read remaining bytes as parents
-	parentsCount := (len(bytes) - 48) / 32
-	d.Parents = make([]chainhash.Hash, parentsCount)
-
-	for i := 0; i < parentsCount; i++ {
-		start := 48 + i*32
-		end := start + 32
-		d.Parents[i] = chainhash.Hash(bytes[start:end])
+	txInpoints, err := meta.NewTxInpointsFromBytes(bytes[48:])
+	if err != nil {
+		return nil, err
 	}
+
+	d.TxInpoints = txInpoints
 
 	return d, nil
 }
@@ -80,10 +79,13 @@ func (d *Data) Bytes() []byte {
 	binary.LittleEndian.PutUint64(b64, d.Size)
 	bytes = append(bytes, b64...)
 
-	// write parents
-	for _, parent := range d.Parents {
-		bytes = append(bytes, parent[:]...)
+	// write txInpoints
+	txInpointsBytes, err := d.TxInpoints.Serialize()
+	if err != nil {
+		return nil
 	}
+
+	bytes = append(bytes, txInpointsBytes...)
 
 	return bytes
 }

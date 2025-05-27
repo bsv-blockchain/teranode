@@ -155,7 +155,7 @@ func (l *LocalDAH) Get(ctx context.Context, key []byte, opts ...options.FileOpti
 	value, err := l.dahStore.Get(ctx, key, opts...)
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
-			value, err = l.dahStore.Get(ctx, key, options.ReplaceExtention(opts, "subtree", "subtreeToCheck")...)
+			value, err = l.dahStore.Get(ctx, key, options.ReplaceExtention(opts, options.SubtreeFileExtension, "subtreeToCheck")...)
 		}
 
 		if err != nil {

@@ -474,7 +474,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		LockTime: lockTime,
 	}
 
-	if contains(bins, fields.Tx) || contains(bins, fields.Inputs) || contains(bins, fields.ParentTxHashes) || contains(bins, fields.Utxos) {
+	if contains(bins, fields.Tx) || contains(bins, fields.Inputs) || contains(bins, fields.TxInpoints) || contains(bins, fields.Utxos) {
 		q := `
 			SELECT
 			 previous_transaction_hash
@@ -641,9 +641,10 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		data.Tx = &tx
 	}
 
-	if contains(bins, fields.ParentTxHashes) {
-		for _, input := range tx.Inputs {
-			data.ParentTxHashes = append(data.ParentTxHashes, *input.PreviousTxIDChainHash())
+	if contains(bins, fields.TxInpoints) {
+		data.TxInpoints, err = meta.NewTxInpointsFromInputs(tx.Inputs)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to create tx inpoints from inputs", err)
 		}
 	}
 

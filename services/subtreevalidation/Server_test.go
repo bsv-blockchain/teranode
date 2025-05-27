@@ -78,7 +78,7 @@ func TestOneTransaction(t *testing.T) {
 	subtreeStore := memory.New()
 
 	subtreeBytes, _ := subtrees[0].Serialize()
-	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 
 	// loads the subtrees into the block
 	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, nil)
@@ -139,7 +139,7 @@ func TestTwoTransactions(t *testing.T) {
 	subtreeStore := memory.New()
 
 	subtreeBytes, _ := subtrees[0].Serialize()
-	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 
 	// loads the subtrees into the block
 	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, nil)
@@ -208,7 +208,7 @@ func TestMerkleRoot(t *testing.T) {
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 
 		subtreeBytes, _ := subTree.Serialize()
-		_ = subtreeStore.Set(ctx, rootHash[:], subtreeBytes, options.WithFileExtension("subtree"))
+		_ = subtreeStore.Set(ctx, rootHash[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 	}
 
 	nBits, _ := model.NewNBitFromSlice(bits)

@@ -55,9 +55,9 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	data, err := teranode_model.TestCachedTxMetaStore.Get(context.Background(), reqTxId)
 	require.NoError(t, err)
 	require.Equal(t, &meta.Data{
-		Fee:            1,
-		SizeInBytes:    1,
-		ParentTxHashes: []chainhash.Hash{},
+		Fee:         1,
+		SizeInBytes: 1,
+		TxInpoints:  meta.TxInpoints{ParentTxHashes: nil, Idxs: nil},
 	}, data)
 
 	for idx, subtreeHash := range block.Subtrees {
@@ -229,9 +229,9 @@ func TestBigBlock_Valid(t *testing.T) {
 	data, err := teranode_model.TestCachedTxMetaStore.Get(context.Background(), reqTxId)
 	require.NoError(t, err)
 	require.Equal(t, &meta.Data{
-		Fee:            1,
-		SizeInBytes:    1,
-		ParentTxHashes: []chainhash.Hash{},
+		Fee:         1,
+		SizeInBytes: 1,
+		TxInpoints:  meta.TxInpoints{ParentTxHashes: nil, Idxs: nil},
 	}, data)
 
 	currentChain := make([]*teranode_model.BlockHeader, 11)
@@ -331,7 +331,7 @@ func Test_NewOptimizedBloomFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, bloomFilterBytes)
 
-	//record the bloom filter in the subtreestore
+	// record the bloom filter in the subtreestore
 	err = subtreeStore.Set(context.Background(), block.Hash()[:], bloomFilterBytes, options.WithFileExtension("bloomfilter"))
 	require.NoError(t, err)
 

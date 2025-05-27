@@ -900,7 +900,7 @@ func TestWithSHA256Checksum(t *testing.T) {
 		opts           []options.StoreOption
 		data           []byte
 		key            []byte
-		extension      string
+		extension      options.FileExtension
 		expectSHA256   bool
 		expectedFormat string
 	}{
@@ -1006,7 +1006,7 @@ func TestSetFromReaderWithSHA256(t *testing.T) {
 	// Test data
 	testData := []byte("test data for SetFromReader")
 	key := []byte("testreaderkey")
-	extension := "txt"
+	extension := options.FileExtension("txt")
 
 	// Create reader
 	reader := io.NopCloser(bytes.NewReader(testData))
@@ -1067,7 +1067,7 @@ func TestSHA256WithHeaderFooter(t *testing.T) {
 	// Test data
 	data := []byte("test data")
 	key := []byte("testheaderfooter")
-	extension := "txt"
+	extension := options.FileExtension("txt")
 
 	// Set data
 	err = store.Set(context.Background(), key, data, options.WithFileExtension(extension))

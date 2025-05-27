@@ -4,16 +4,18 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"math"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type SubtreeMeta struct {
-	Subtree        *Subtree
-	ParentTxHashes [][]chainhash.Hash
+	// Subtree is the subtree this meta is for
+	Subtree *Subtree
+	// TxInpoints is a lookup of the parent tx inpoints for each node in the subtree
+	TxInpoints []meta.TxInpoints
 
 	// RootHash is the hash of the root node of the subtree
 	rootHash chainhash.Hash
@@ -22,13 +24,29 @@ type SubtreeMeta struct {
 // NewSubtreeMeta creates a new SubtreeMeta object
 // the size parameter is the number of nodes in the subtree,
 // the index in that array should match the index of the node in the subtree
+//
+// Parameters:
+//   - subtree: The subtree for which to create the meta
+//
+// Returns:
+//   - *SubtreeMeta: A new SubtreeMeta object with the specified subtree and an empty TxInpoints slice
 func NewSubtreeMeta(subtree *Subtree) *SubtreeMeta {
 	return &SubtreeMeta{
-		Subtree:        subtree,
-		ParentTxHashes: make([][]chainhash.Hash, subtree.Size()),
+		Subtree:    subtree,
+		TxInpoints: make([]meta.TxInpoints, subtree.Size()),
 	}
 }
 
+// NewSubtreeMetaFromBytes creates a new SubtreeMeta object from the provided byte slice.
+// It reads the subtree meta data from the byte slice and populates the SubtreeMeta struct.
+//
+// Parameters:
+//   - subtree: The subtree for which to create the meta
+//   - dataBytes: The byte slice containing the serialized subtree meta data
+//
+// Returns:
+//   - *SubtreeMeta: A new SubtreeMeta object populated with data from the byte slice
+//   - error: An error if the deserialization fails
 func NewSubtreeMetaFromBytes(subtree *Subtree, dataBytes []byte) (*SubtreeMeta, error) {
 	s := &SubtreeMeta{
 		Subtree: subtree,
@@ -40,10 +58,21 @@ func NewSubtreeMetaFromBytes(subtree *Subtree, dataBytes []byte) (*SubtreeMeta, 
 	return s, nil
 }
 
+// NewSubtreeMetaFromReader creates a new SubtreeMeta object from the provided reader.
+//
+// Parameters:
+//   - subtree: The subtree for which to create the meta
+//   - dataReader: The reader from which to read the subtree meta data
+//
+// Returns:
+//   - *SubtreeMeta: A new SubtreeMeta object populated with data from the reader
+//   - error: An error if the deserialization fails
 func NewSubtreeMetaFromReader(subtree *Subtree, dataReader io.Reader) (*SubtreeMeta, error) {
 	s := &SubtreeMeta{
-		Subtree: subtree,
+		Subtree:    subtree,
+		TxInpoints: make([]meta.TxInpoints, subtree.Size()),
 	}
+
 	if err := s.deserializeFromReader(dataReader); err != nil {
 		return nil, errors.NewProcessingError("unable to create subtree meta from reader", err)
 	}
@@ -51,12 +80,54 @@ func NewSubtreeMetaFromReader(subtree *Subtree, dataReader io.Reader) (*SubtreeM
 	return s, nil
 }
 
+// GetParentTxHashes returns the unique parent transaction hashes for the specified index in the subtree meta.
+// It returns an error if the index is out of range.
+//
+// Parameters:
+//   - index: The index of the subtree node for which to get the parent transaction hashes
+//
+// Returns:
+//   - []chainhash.Hash: The unique parent transaction hashes for the specified index
+//   - error: An error if the index is out of range or if there is an issue retrieving the parent transaction hashes
+func (s *SubtreeMeta) GetParentTxHashes(index int) ([]chainhash.Hash, error) {
+	if index >= len(s.TxInpoints) {
+		return nil, errors.NewProcessingError("index out of range")
+	}
+
+	return s.TxInpoints[index].GetParentTxHashes(), nil
+}
+
+// GetTxInpoints returns the TxInpoints for the specified index in the subtree meta.
+// It returns an error if the index is out of range.
+//
+// Parameters:
+//   - index: The index of the subtree node for which to get the TxInpoints
+//
+// Returns:
+//   - []meta.Inpoint: The TxInpoints for the specified index
+//   - error: An error if the index is out of range or if there is an issue retrieving the TxInpoints
+func (s *SubtreeMeta) GetTxInpoints(index int) ([]meta.Inpoint, error) {
+	if index >= len(s.TxInpoints) {
+		return nil, errors.NewProcessingError("index out of range getting tx inpoints")
+	}
+
+	return s.TxInpoints[index].GetTxInpoints(), nil
+}
+
+// deserializeFromReader reads the subtree meta from the provided reader
+// and populates the SubtreeMeta struct with the data.
+//
+// Parameters:
+//   - buf: The reader from which to read the subtree meta data
+//
+// Returns:
+//   - error: An error if the deserialization fails
 func (s *SubtreeMeta) deserializeFromReader(buf io.Reader) error {
-	var err error
-
-	var bytesUint64 [8]byte
-
-	var hashBytes [32]byte
+	var (
+		err       error
+		dataBytes [4]byte
+		hashBytes [32]byte
+	)
 
 	// read the root hash
 	if _, err = io.ReadFull(buf, hashBytes[:]); err != nil {
@@ -65,87 +136,86 @@ func (s *SubtreeMeta) deserializeFromReader(buf io.Reader) error {
 
 	s.rootHash = hashBytes
 
-	var dataBytes [8]byte
 	// read the number of parent tx hashes
 	if _, err = io.ReadFull(buf, dataBytes[:]); err != nil {
 		return errors.NewProcessingError("unable to read number of parent tx hashes", err)
 	}
 
-	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[:])
-	if parentTxHashesLen > math.MaxUint32 {
-		return errors.NewProcessingError("parent tx hashes length is too large")
-	}
+	txInpointsLen := binary.LittleEndian.Uint32(dataBytes[:])
 
 	// read the parent tx hashes
-	s.ParentTxHashes = make([][]chainhash.Hash, parentTxHashesLen)
+	s.TxInpoints = make([]meta.TxInpoints, s.Subtree.Size())
 
-	for i := uint64(0); i < parentTxHashesLen; i++ {
-		// read hash len from buffer
-		_, err = io.ReadFull(buf, bytesUint64[:])
+	return s.deserializeTxInpointsFromReader(buf, txInpointsLen)
+}
+
+// deserializeTxInpointsFromReader reads the TxInpoints from the provided reader
+// and populates the TxInpoints slice in the SubtreeMeta.
+//
+// Parameters:
+//   - buf: The reader from which to read the TxInpoints
+//   - txInpointsLen: The number of TxInpoints to read
+//
+// Returns:
+//   - error: An error if the deserialization fails
+func (s *SubtreeMeta) deserializeTxInpointsFromReader(buf io.Reader, txInpointsLen uint32) error {
+	var (
+		err        error
+		txInpoints meta.TxInpoints
+	)
+
+	for i := uint32(0); i < txInpointsLen; i++ {
+		txInpoints, err = meta.NewTxInpointsFromReader(buf)
 		if err != nil {
-			return errors.NewProcessingError("unable to read parent tx hash length", err)
+			return errors.NewProcessingError("unable to deserialize parent outpoints", err)
 		}
 
-		hashLen := binary.LittleEndian.Uint64(bytesUint64[:])
-		if hashLen > math.MaxUint32 {
-			return errors.NewProcessingError("parent tx hash length is too large")
-		}
-
-		if hashLen > 0 {
-			s.ParentTxHashes[i] = make([]chainhash.Hash, hashLen)
-
-			for j := uint64(0); j < hashLen; j++ {
-				_, err = io.ReadFull(buf, hashBytes[:])
-				if err != nil {
-					return errors.NewProcessingError("unable to read parent tx hash", err)
-				}
-
-				s.ParentTxHashes[i][j] = hashBytes
-			}
-		}
+		s.TxInpoints[i] = txInpoints
 	}
 
 	return nil
 }
 
-// SetParentTxHash sets the parent tx hash for a given node in the subtree
-func (s *SubtreeMeta) SetParentTxHash(index int, parentTxHash chainhash.Hash) error {
-	if s.ParentTxHashes[index] == nil {
-		s.ParentTxHashes[index] = make([]chainhash.Hash, 0)
+// SetTxInpointsFromTx sets the TxInpoints for the subtree meta from a transaction.
+// It finds the index of the transaction in the subtree and sets the TxInpoints at that index.
+// If the transaction is not found in the subtree, it returns an error.
+//
+// Parameters:
+//   - tx: The transaction to set the TxInpoints from
+//
+// Returns:
+//   - error: An error if the transaction is not found in the subtree or if there is an issue creating the TxInpoints
+func (s *SubtreeMeta) SetTxInpointsFromTx(tx *bt.Tx) error {
+	index := s.Subtree.NodeIndex(*tx.TxIDChainHash())
+	if index == -1 {
+		return errors.NewProcessingError("[SetParentTxHashesFromTx][%s] node not found in subtree", tx.TxID())
 	}
 
-	if s.Subtree.Length() <= index || s.Subtree.Nodes[index].Hash.Equal(chainhash.Hash{}) {
-		return errors.NewProcessingError("node at index %d is not set in subtree", index)
+	p, err := meta.NewTxInpointsFromTx(tx)
+	if err != nil {
+		return err
 	}
 
-	s.ParentTxHashes[index] = append(s.ParentTxHashes[index], parentTxHash)
+	s.TxInpoints[index] = p
 
 	return nil
 }
 
-// SetParentTxHashes sets the parent tx hashes for a given node in the subtree
-func (s *SubtreeMeta) SetParentTxHashes(index int, parentTxHashes []chainhash.Hash) error {
-	if s.Subtree.Length() <= index || s.Subtree.Nodes[index].Hash.Equal(chainhash.Hash{}) {
-		return errors.NewProcessingError("node at index %d is not set in subtree", index)
+// SetTxInpoints sets the TxInpoints at the specified index in the subtree meta.
+// It returns an error if the index is out of range.
+//
+// Parameters:
+//   - idx: The index at which to set the TxInpoints
+//   - txInpoints: The TxInpoints to set at the specified index
+//
+// Returns:
+//   - error: An error if the index is out of range
+func (s *SubtreeMeta) SetTxInpoints(idx int, txInpoints meta.TxInpoints) error {
+	if idx >= len(s.TxInpoints) {
+		return errors.NewProcessingError("index out of range")
 	}
 
-	s.ParentTxHashes[index] = parentTxHashes
-
-	return nil
-}
-
-// SetParentTxHashesFromTx sets the parent tx hashes for a given node in the subtree, using the transaction
-func (s *SubtreeMeta) SetParentTxHashesFromTx(tx *bt.Tx, index int) error {
-	if s.Subtree.Length() <= index || s.Subtree.Nodes[index].Hash.Equal(chainhash.Hash{}) {
-		return errors.NewProcessingError("node at index %d is not set in subtree", index)
-	}
-
-	parentTxHashes := make([]chainhash.Hash, 0, len(tx.Inputs))
-	for _, input := range tx.Inputs {
-		parentTxHashes = append(parentTxHashes, *input.PreviousTxIDChainHash())
-	}
-
-	s.ParentTxHashes[index] = parentTxHashes
+	s.TxInpoints[idx] = txInpoints
 
 	return nil
 }
@@ -158,49 +228,66 @@ func (s *SubtreeMeta) Serialize() ([]byte, error) {
 	if s.Subtree == nil {
 		return nil, errors.NewProcessingError("cannot serialize, subtree is not set")
 	}
+
 	// check the data in the subtree matches the data in the parent tx hashes
 	subtreeLen := s.Subtree.Length()
 	for i := 0; i < subtreeLen; i++ {
-		if s.ParentTxHashes[i] == nil && i != 0 {
+		if i != 0 && s.TxInpoints[i].ParentTxHashes == nil {
 			return nil, errors.NewProcessingError("subtree length does not match parent tx hashes length")
 		}
 	}
 
-	bufBytes := make([]byte, 0, 32*1024) // 16MB (arbitrary size, should be enough for most cases)
+	bufBytes := make([]byte, 0, 32*1024) // 32MB (arbitrary size, should be enough for most cases)
 	buf := bytes.NewBuffer(bufBytes)
 
-	if s.Subtree != nil {
-		s.rootHash = *s.Subtree.RootHash()
-	}
+	s.rootHash = *s.Subtree.RootHash()
 
 	// write root hash
 	if _, err = buf.Write(s.rootHash[:]); err != nil {
 		return nil, errors.NewProcessingError("unable to write root hash", err)
 	}
 
-	var bytesUint64 [8]byte
-
-	// write number of parent tx hashes
-	binary.LittleEndian.PutUint64(bytesUint64[:], uint64(len(s.ParentTxHashes)))
-
-	if _, err = buf.Write(bytesUint64[:]); err != nil {
-		return nil, errors.NewProcessingError("unable to write number of nodes", err)
-	}
-
-	// write parent tx hashes
-	for _, hashes := range s.ParentTxHashes {
-		binary.LittleEndian.PutUint64(bytesUint64[:], uint64(len(hashes)))
-
-		if _, err = buf.Write(bytesUint64[:]); err != nil {
-			return nil, errors.NewProcessingError("unable to write number of parent tx hashes", err)
-		}
-
-		for _, hash := range hashes {
-			if _, err = buf.Write(hash[:]); err != nil {
-				return nil, errors.NewProcessingError("unable to write parent tx hash", err)
-			}
-		}
+	if err = s.serializeTxInpoints(buf); err != nil {
+		return nil, err
 	}
 
 	return buf.Bytes(), nil
+}
+
+func (s *SubtreeMeta) serializeTxInpoints(buf *bytes.Buffer) error {
+	var (
+		err         error
+		bytesUint32 [4]byte
+	)
+
+	parentTxHashesLen32, err := SafeIntToUint32(s.Subtree.Length())
+	if err != nil {
+		return errors.NewProcessingError("unable to get safe uint32", err)
+	}
+
+	// write number of parent tx hashes
+	binary.LittleEndian.PutUint32(bytesUint32[:], parentTxHashesLen32)
+
+	if _, err = buf.Write(bytesUint32[:]); err != nil {
+		return errors.NewProcessingError("unable to write total number of nodes", err)
+	}
+
+	var outpointBytes []byte
+
+	// write parent outpoints
+	// for _, outpoint := range s.TxInpoints {
+	for i := uint32(0); i < parentTxHashesLen32; i++ {
+		outpoint := s.TxInpoints[i]
+
+		outpointBytes, err = outpoint.Serialize()
+		if err != nil {
+			return errors.NewProcessingError("unable to write parent tx hash", err)
+		}
+
+		if _, err = buf.Write(outpointBytes); err != nil {
+			return errors.NewProcessingError("unable to write parent tx hash", err)
+		}
+	}
+
+	return nil
 }

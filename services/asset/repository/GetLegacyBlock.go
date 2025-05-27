@@ -180,7 +180,7 @@ func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, w *i
 // Returns:
 //   - error: Any error encountered during writing
 func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w *io.PipeWriter, block *model.Block, subtreeHash *chainhash.Hash) error {
-	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
+	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension(options.SubtreeFileExtension))
 	if err != nil {
 		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error getting subtree %s from store", subtreeHash.String(), err)
 	}

@@ -612,10 +612,10 @@ func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b
 }
 
 type txFeeSize struct {
-	txHash  *chainhash.Hash
-	fee     uint64
-	size    uint64
-	parents []chainhash.Hash
+	txHash     *chainhash.Hash
+	fee        uint64
+	size       uint64
+	txInpoints meta.TxInpoints
 }
 
 type MockBlockAssemblyStore struct {
@@ -624,7 +624,7 @@ type MockBlockAssemblyStore struct {
 	removedTxs  []chainhash.Hash
 }
 
-func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, parents []chainhash.Hash) (bool, error) {
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints meta.TxInpoints) (bool, error) {
 	if s.returnError != nil {
 		return false, s.returnError
 	}
@@ -634,10 +634,10 @@ func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, 
 	}
 
 	s.storedTxs = append(s.storedTxs, txFeeSize{
-		txHash:  hash,
-		fee:     fee,
-		size:    size,
-		parents: parents,
+		txHash:     hash,
+		fee:        fee,
+		size:       size,
+		txInpoints: txInpoints,
 	})
 
 	return true, nil
@@ -765,7 +765,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			BlockHeights: make([]uint32, 0),
 		}, nil)
 
-		utxoHashes, _, err := v.getUtxoBlockHeights(ctx, tx, tx.TxID())
+		utxoHashes, err := v.getUtxoBlockHeights(ctx, tx, tx.TxID())
 		require.NoError(t, err)
 
 		expected := []uint32{1000, 1000, 1000}
@@ -803,7 +803,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			BlockHeights: []uint32{768, 769},
 		}, nil).Once()
 
-		utxoHashes, _, err := v.getUtxoBlockHeights(ctx, tx, tx.TxID())
+		utxoHashes, err := v.getUtxoBlockHeights(ctx, tx, tx.TxID())
 		require.NoError(t, err)
 
 		expected := []uint32{125, 1000, 768}

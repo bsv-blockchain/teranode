@@ -478,7 +478,7 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 		return true, nil
 	}
 
-	exists, err := u.subtreeStore.Exists(ctx, hash[:], options.WithFileExtension("subtree"))
+	exists, err := u.subtreeStore.Exists(ctx, hash[:], options.WithFileExtension(options.SubtreeFileExtension))
 	if err != nil {
 		return false, err
 	}
@@ -1183,7 +1183,7 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 		g.Go(func() error {
 			u.logger.Debugf("[updateSubtreesDAH][%s] updating subtree DAH for %s", block.Hash().String(), subtreeHash.String())
 
-			if err := u.subtreeStore.SetDAH(gCtx, subtreeHash[:], 0, options.WithFileExtension("subtree")); err != nil {
+			if err := u.subtreeStore.SetDAH(gCtx, subtreeHash[:], 0, options.WithFileExtension(options.SubtreeFileExtension)); err != nil {
 				return errors.NewStorageError("[updateSubtreesDAH][%s] failed to update subtree DAH for %s", block.Hash().String(), subtreeHash.String(), err)
 			}
 

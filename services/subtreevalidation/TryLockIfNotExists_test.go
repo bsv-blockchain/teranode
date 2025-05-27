@@ -354,7 +354,7 @@ func TestNewQuorumWithOptions(t *testing.T) {
 	})
 
 	t.Run("WithExtension", func(t *testing.T) {
-		ext := ".customlock"
+		ext := options.FileExtension("customlock")
 		q, err := NewQuorum(logger, mockExister, path, WithExtension(ext))
 		require.NoError(t, err)
 		assert.Equal(t, ext, q.extension)

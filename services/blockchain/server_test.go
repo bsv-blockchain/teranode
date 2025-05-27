@@ -241,7 +241,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = ctx.subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+	err = ctx.subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 	require.NoError(t, err)
 
 	subtreeHashes := make([]*chainhash.Hash, 0)

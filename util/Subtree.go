@@ -138,6 +138,7 @@ func (st *Subtree) Duplicate() *Subtree {
 	return newSubtree
 }
 
+// Size returns the capacity of the subtree
 func (st *Subtree) Size() int {
 	st.mu.RLock()
 	size := cap(st.Nodes)
@@ -146,6 +147,7 @@ func (st *Subtree) Size() int {
 	return size
 }
 
+// Length returns the number of nodes in the subtree
 func (st *Subtree) Length() int {
 	st.mu.RLock()
 	length := len(st.Nodes)

@@ -394,9 +394,9 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 		tracing.WithLogMessage(sm.logger, "[writeSubtree][%s] writing subtree for block %s height %d", subtree.RootHash().String(), block.Hash().String(), block.Height()),
 	)
 
-	subtreeFileExtension := "subtreeToCheck"
+	subtreeFileExtension := options.SubtreeToCheckFileExtension
 	if quickValidationMode {
-		subtreeFileExtension = "subtree"
+		subtreeFileExtension = options.SubtreeFileExtension
 	}
 
 	defer deferFn()
@@ -434,7 +434,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 		if err = sm.subtreeStore.Set(gCtx,
 			subtreeData.RootHash()[:],
 			subtreeBytes,
-			options.WithFileExtension("subtreeData"),
+			options.WithFileExtension(options.SubtreeDataFileExtension),
 			options.WithDeleteAt(dah),
 		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 			return errors.NewStorageError("[writeSubtree][%s] failed to store subtree data", subtree.RootHash().String(), err)
@@ -457,7 +457,7 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			if err = sm.subtreeStore.Set(ctx,
 				subtreeData.RootHash()[:],
 				subtreeBytes,
-				options.WithFileExtension("meta"),
+				options.WithFileExtension(options.SubtreeMetaFileExtension),
 				options.WithDeleteAt(dah),
 			); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 				return errors.NewStorageError("[writeSubtree][%s] failed to store subtree meta data", subtree.RootHash().String(), err)
@@ -772,7 +772,7 @@ func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, 
 				return errors.NewTxError("failed to add tx to subtree data", err)
 			}
 
-			if err = subtreeMetaData.SetParentTxHashesFromTx(tx, currentIdx); err != nil {
+			if err = subtreeMetaData.SetTxInpointsFromTx(tx); err != nil {
 				return errors.NewTxError("failed to add tx to subtree meta data", err)
 			}
 		}

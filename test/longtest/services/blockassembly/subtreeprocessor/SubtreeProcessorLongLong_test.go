@@ -17,6 +17,7 @@ import (
 	blob_memory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -101,7 +102,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 		if i == 0 {
 			stp.GetCurrentSubtree().ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, []chainhash.Hash{})
+			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 		}
 	}
 
@@ -224,7 +225,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 			subtree := createSubtree(t, subtreeSize, i == 0)
 			subtreeBytes, err := subtree.Serialize()
 			require.NoError(t, err)
-			err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+			err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 			require.NoError(t, err)
 
 			block.Subtrees = append(block.Subtrees, subtree.RootHash())

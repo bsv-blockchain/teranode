@@ -51,9 +51,9 @@ func TestHTTPServer_Endpoints(t *testing.T) {
 			}
 
 			return &meta.Data{
-				Fee:            32279815860,
-				SizeInBytes:    245,
-				ParentTxHashes: []chainhash.Hash{*txid},
+				Fee:         32279815860,
+				SizeInBytes: 245,
+				TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
 			}, nil
 		},
 	}
@@ -189,9 +189,9 @@ func TestValidatorHTTP_Endpoints(t *testing.T) {
 	mockValidator := &TestMockValidator{
 		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			return &meta.Data{
-				Fee:            32279815860,
-				SizeInBytes:    245,
-				ParentTxHashes: []chainhash.Hash{*txid},
+				Fee:         32279815860,
+				SizeInBytes: 245,
+				TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
 			}, nil
 		},
 	}
@@ -298,9 +298,9 @@ func TestHTTPServerIntegration(t *testing.T) {
 	mockValidator := &TestMockValidator{
 		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			return &meta.Data{
-				Fee:            32279815860,
-				SizeInBytes:    245,
-				ParentTxHashes: []chainhash.Hash{*txid},
+				Fee:         32279815860,
+				SizeInBytes: 245,
+				TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
 			}, nil
 		},
 	}
@@ -342,9 +342,9 @@ func TestHTTPServerHandlers(t *testing.T) {
 	mockValidator := &TestMockValidator{
 		validateTxFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
 			return &meta.Data{
-				Fee:            32279815860,
-				SizeInBytes:    245,
-				ParentTxHashes: []chainhash.Hash{*txid},
+				Fee:         32279815860,
+				SizeInBytes: 245,
+				TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
 			}, nil
 		},
 	}

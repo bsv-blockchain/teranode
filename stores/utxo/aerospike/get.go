@@ -348,7 +348,7 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 	newBins := append([]fields.FieldName{}, bins...)
 
 	// add missing bins
-	if slices.Contains(newBins, fields.ParentTxHashes) {
+	if slices.Contains(newBins, fields.TxInpoints) {
 		if !slices.Contains(newBins, fields.Inputs) {
 			newBins = append(newBins, fields.Inputs)
 			newBins = append(newBins, fields.External)
@@ -427,7 +427,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 			return errors.NewProcessingError("failed to init new aerospike key for txMeta", err)
 		}
 
-		bins := []fields.FieldName{fields.Tx, fields.Fee, fields.SizeInBytes, fields.ParentTxHashes, fields.BlockIDs, fields.IsCoinbase}
+		bins := []fields.FieldName{fields.Tx, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase}
 		if len(item.Fields) > 0 {
 			bins = item.Fields
 		} else if len(optionalFields) > 0 {
@@ -549,22 +549,23 @@ NEXT_BATCH_RECORD:
 
 				items[idx].Data.SizeInBytes = uint64(sizeInBytes) // nolint:gosec
 
-			case fields.ParentTxHashes:
+			case fields.TxInpoints:
 				if external {
-					items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(externalTx.Inputs))
+					items[idx].Data.TxInpoints, err = meta.NewTxInpointsFromTx(externalTx)
+					if err != nil {
+						items[idx].Err = errors.NewTxInvalidError("could not process tx inpoints", err)
 
-					for i, input := range externalTx.Inputs {
-						items[idx].Data.ParentTxHashes[i] = *input.PreviousTxIDChainHash()
+						continue NEXT_BATCH_RECORD // because there was an error processing the tx inpoints.
 					}
 				} else {
-					res, err := processInputs(bins)
+					txInpoints, err := processInputsToTxInpoints(bins)
 					if err != nil {
 						items[idx].Err = errors.NewTxInvalidError("could not process input interfaces", err)
 
-						continue NEXT_BATCH_RECORD // because there was an error processing the input interfaces.
+						continue NEXT_BATCH_RECORD // because there was an error reading the tx inpoints from the store.
 					}
 
-					items[idx].Data.ParentTxHashes = res
+					items[idx].Data.TxInpoints = txInpoints
 				}
 
 			case fields.BlockIDs:
@@ -652,24 +653,29 @@ NEXT_BATCH_RECORD:
 	return nil
 }
 
-func processInputs(bins aerospike.BinMap) ([]chainhash.Hash, error) {
+func processInputsToTxInpoints(bins aerospike.BinMap) (txInpoints meta.TxInpoints, err error) {
 	inputInterfaces, ok := bins[fields.Inputs.String()].([]interface{})
 	if !ok {
-		return nil, errors.NewStorageError("failed to get inputs")
+		return txInpoints, errors.NewProcessingError("failed to get inputs")
 	}
 
-	res := make([]chainhash.Hash, len(inputInterfaces))
+	tx := &bt.Tx{}
+	tx.Inputs = make([]*bt.Input, len(inputInterfaces))
 
 	for i, inputInterface := range inputInterfaces {
-		input, ok := inputInterface.([]byte)
-		if !ok {
-			return nil, errors.NewStorageError("failed to get input")
-		}
+		input := inputInterface.([]byte)
+		tx.Inputs[i] = &bt.Input{}
 
-		res[i] = chainhash.Hash(input[:32])
+		if _, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input)); err != nil {
+			return txInpoints, errors.NewProcessingError("could not read input", err)
+		}
 	}
 
-	return res, nil
+	if txInpoints, err = meta.NewTxInpointsFromInputs(tx.Inputs); err != nil {
+		return txInpoints, errors.NewProcessingError("could not create tx inpoints from tx", err)
+	}
+
+	return txInpoints, nil
 }
 
 func processBlockIDs(bins aerospike.BinMap) ([]uint32, error) {
@@ -1084,7 +1090,7 @@ func (s *Store) GetTxFromExternalStore(ctx context.Context, previousTxHash chain
 }
 
 func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
-	ext := "tx"
+	ext := ExternalTxFileExtension
 
 	// Get the raw transaction from the externalStore...
 	txBytes, err := s.externalStore.Get(
@@ -1094,7 +1100,7 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 	)
 	if err != nil {
 		// Try to get the data from an output file instead
-		ext = "outputs"
+		ext = ExternalTxOutputsFileExtension
 
 		txBytes, err = s.externalStore.Get(
 			ctx,
@@ -1108,7 +1114,7 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 
 	tx := &bt.Tx{}
 
-	if ext == "tx" {
+	if ext == ExternalTxFileExtension {
 		tx, err = bt.NewTxFromBytes(txBytes)
 		if err != nil {
 			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read tx from bytes", previousTxHash.String(), err)

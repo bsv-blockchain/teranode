@@ -188,7 +188,7 @@ func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store,
 		}
 
 		stHash, _ := chainhash.NewHashFromStr(fileWithoutExtension)
-		stReader, err := storeSubtree.GetIoReader(ctx, stHash[:], options.WithFileExtension(ext))
+		stReader, err := storeSubtree.GetIoReader(ctx, stHash[:], options.WithFileExtension(options.FileExtension(ext)))
 
 		if err != nil {
 			return false, errors.NewProcessingError("error getting subtree reader from store", err)
@@ -1026,7 +1026,7 @@ func TestTxInBlock(ctx context.Context, logger ulogger.Logger, storeBlock blob.S
 }
 
 func TestTxInSubtree(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, subtree []byte, tx chainhash.Hash) (bool, error) {
-	subtreeReader, err := subtreeStore.GetIoReader(ctx, subtree, options.WithFileExtension("subtree"))
+	subtreeReader, err := subtreeStore.GetIoReader(ctx, subtree, options.WithFileExtension(options.SubtreeFileExtension))
 	if err != nil {
 		return false, errors.NewProcessingError("error getting subtree reader", err)
 	}
@@ -1343,7 +1343,7 @@ func ValidateUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Sto
 		return false, errors.NewProcessingError("invalid diff type: %s, must be 'additions' or 'deletions'", diffType)
 	}
 
-	r, err := store.GetIoReader(context.Background(), blockHash[:], options.WithFileExtension(fmt.Sprintf("utxo-%s", diffType)))
+	r, err := store.GetIoReader(context.Background(), blockHash[:], options.WithFileExtension(options.FileExtension(fmt.Sprintf("utxo-%s", diffType))))
 	if err != nil {
 		return false, errors.NewProcessingError("error getting reader from store", err)
 	}
@@ -1392,7 +1392,7 @@ func ValidateUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Sto
 }
 
 // VerifyUTXOFileExists checks if a UTXO-related file exists in the block store
-func VerifyUTXOFileExists(ctx context.Context, store blob.Store, blockHash chainhash.Hash, fileType string) error {
+func VerifyUTXOFileExists(ctx context.Context, store blob.Store, blockHash chainhash.Hash, fileType options.FileExtension) error {
 	exists, err := store.Exists(ctx, blockHash[:], options.WithFileExtension(fileType))
 	if err != nil {
 		return errors.NewProcessingError("failed to check if %s exists: %v", fileType, err)

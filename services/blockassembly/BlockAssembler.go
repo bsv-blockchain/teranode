@@ -19,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/cleanup"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -670,8 +671,8 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 //
 // Parameters:
 //   - node: Transaction node to add
-func (b *BlockAssembler) AddTx(node util.SubtreeNode, parents []chainhash.Hash) {
-	b.subtreeProcessor.Add(node, parents)
+func (b *BlockAssembler) AddTx(node util.SubtreeNode, txInpoints meta.TxInpoints) {
+	b.subtreeProcessor.Add(node, txInpoints)
 }
 
 // RemoveTx removes a transaction from the block assembler.

@@ -166,8 +166,8 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, uint64(215), value.Fee)
 		assert.Equal(t, uint64(328), value.SizeInBytes)
-		assert.Len(t, value.ParentTxHashes, 1)
-		assert.Equal(t, []chainhash.Hash{*parentTxHash}, value.ParentTxHashes)
+		assert.Len(t, value.TxInpoints.ParentTxHashes, 1)
+		assert.Equal(t, []chainhash.Hash{*parentTxHash}, value.TxInpoints.ParentTxHashes)
 		assert.Len(t, value.BlockIDs, 0)
 		assert.Nil(t, value.BlockIDs)
 

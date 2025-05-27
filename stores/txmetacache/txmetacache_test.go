@@ -10,7 +10,9 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -53,10 +55,10 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), Unallocated)
 
 		metaData := &meta.Data{
-			Fee:            100,
-			SizeInBytes:    111,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         100,
+			SizeInBytes: 111,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: nil},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -68,6 +70,29 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, metaData, metaGet)
+	})
+
+	t.Run("test set cache from tx", func(t *testing.T) {
+		ctx := context.Background()
+
+		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), Unallocated)
+
+		metaData, err := util.TxMetaDataFromTx(tests.Tx)
+		require.NoError(t, err)
+
+		err = c.(*TxMetaCache).SetCache(tests.Tx.TxIDChainHash(), metaData)
+		require.NoError(t, err)
+
+		metaGet, err := c.GetMeta(ctx, tests.Tx.TxIDChainHash())
+		require.NoError(t, err)
+
+		require.Equal(t, metaData, metaGet)
+
+		assert.Nil(t, metaGet.Tx) // Tx should be nil as it is not set in the cache
+		assert.Equal(t, len(metaData.TxInpoints.ParentTxHashes), len(metaGet.TxInpoints.ParentTxHashes))
+		assert.Equal(t, metaData.TxInpoints.ParentTxHashes[0], metaGet.TxInpoints.ParentTxHashes[0])
+		assert.Equal(t, len(metaData.TxInpoints.Idxs), len(metaGet.TxInpoints.Idxs))
+		assert.Equal(t, metaData.TxInpoints.Idxs[0], metaGet.TxInpoints.Idxs[0])
 	})
 }
 
@@ -106,9 +131,9 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 	cache := c.(*TxMetaCache)
 
 	meta := &meta.Data{
-		Fee:            100,
-		SizeInBytes:    111,
-		ParentTxHashes: []chainhash.Hash{},
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 	}
 
 	iterationCount := 50_000
@@ -178,10 +203,10 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 
 		// Create and set a transaction
 		metaData := &meta.Data{
-			Fee:            100,
-			SizeInBytes:    111,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         100,
+			SizeInBytes: 111,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -211,10 +236,10 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 
 		// Create and set a transaction
 		metaData := &meta.Data{
-			Fee:            100,
-			SizeInBytes:    111,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         100,
+			SizeInBytes: 111,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -246,10 +271,10 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 
 		// Create first transaction
 		metaData1 := &meta.Data{
-			Fee:            100,
-			SizeInBytes:    111,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         100,
+			SizeInBytes: 111,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		hash1, err := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -268,10 +293,10 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 
 		// Create second transaction
 		metaData2 := &meta.Data{
-			Fee:            100,
-			SizeInBytes:    111,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         100,
+			SizeInBytes: 111,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		hash2, err := chainhash.NewHashFromStr("b7fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb90")
@@ -301,10 +326,10 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 		require.NoError(t, err)
 
 		metaData := &meta.Data{
-			Fee:            100,
-			SizeInBytes:    111,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         100,
+			SizeInBytes: 111,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -349,10 +374,10 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 
 		// Create and set a transaction
 		metaData := &meta.Data{
-			Fee:            100,
-			SizeInBytes:    111,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         100,
+			SizeInBytes: 111,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		hash, err := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -390,10 +415,10 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 
 		// Create and set a transaction
 		metaData := &meta.Data{
-			Fee:            100,
-			SizeInBytes:    111,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         100,
+			SizeInBytes: 111,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		hash, err := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -433,10 +458,10 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 
 		// Create and set a transaction with specific fields
 		metaData := &meta.Data{
-			Fee:            100,
-			SizeInBytes:    111,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       []uint32{1, 2, 3},
+			Fee:         100,
+			SizeInBytes: 111,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    []uint32{1, 2, 3},
 		}
 
 		hash, err := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -490,17 +515,17 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 
 		// Create multiple transactions
 		metaData1 := &meta.Data{
-			Fee:            100,
-			SizeInBytes:    111,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         100,
+			SizeInBytes: 111,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		metaData2 := &meta.Data{
-			Fee:            200,
-			SizeInBytes:    222,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         200,
+			SizeInBytes: 222,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		hash1, err := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -509,8 +534,11 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 		require.NoError(t, err)
 
 		// Convert to bytes for SetCacheMulti
-		metaBytes1 := metaData1.Bytes()
-		metaBytes2 := metaData2.Bytes()
+		metaBytes1, err := metaData1.Bytes()
+		require.NoError(t, err)
+
+		metaBytes2, err := metaData2.Bytes()
+		require.NoError(t, err)
 
 		// Set multiple transactions
 		err = cache.SetCacheMulti([][]byte{hash1[:], hash2[:]}, [][]byte{metaBytes1, metaBytes2})
@@ -559,17 +587,17 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 
 		// Create multiple transactions
 		metaData1 := &meta.Data{
-			Fee:            100,
-			SizeInBytes:    111,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         100,
+			SizeInBytes: 111,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		metaData2 := &meta.Data{
-			Fee:            200,
-			SizeInBytes:    222,
-			ParentTxHashes: []chainhash.Hash{},
-			BlockIDs:       make([]uint32, 0),
+			Fee:         200,
+			SizeInBytes: 222,
+			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			BlockIDs:    make([]uint32, 0),
 		}
 
 		hash1, err := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -578,7 +606,10 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set first transaction
-		err = cache.SetCacheMulti([][]byte{hash1[:]}, [][]byte{metaData1.Bytes()})
+		metaBytes, err := metaData1.Bytes()
+		require.NoError(t, err)
+
+		err = cache.SetCacheMulti([][]byte{hash1[:]}, [][]byte{metaBytes})
 		require.NoError(t, err)
 
 		// Advance block height
@@ -586,7 +617,10 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set second transaction
-		err = cache.SetCacheMulti([][]byte{hash2[:]}, [][]byte{metaData2.Bytes()})
+		metaBytes2, err := metaData2.Bytes()
+		require.NoError(t, err)
+
+		err = cache.SetCacheMulti([][]byte{hash2[:]}, [][]byte{metaBytes2})
 		require.NoError(t, err)
 
 		// Verify first transaction is not retrievable (too old)

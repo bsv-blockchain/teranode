@@ -13,6 +13,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -46,7 +47,7 @@ type ClientI interface {
 	// Returns:
 	//   - bool: True if storage was successful
 	//   - error: Any error encountered during storage
-	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, parentTxHashes []chainhash.Hash) (bool, error)
+	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints meta.TxInpoints) (bool, error)
 
 	// RemoveTx removes a transaction from block assembly.
 	//
@@ -155,7 +156,7 @@ type Store interface {
 	// Returns:
 	//   - bool: True if storage was successful
 	//   - error: Any error encountered during storage
-	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, parentTxHashes []chainhash.Hash) (bool, error)
+	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints meta.TxInpoints) (bool, error)
 
 	// RemoveTx removes a transaction from storage.
 	//
@@ -167,4 +168,3 @@ type Store interface {
 	//   - error: Any error encountered during removal
 	RemoveTx(ctx context.Context, hash *chainhash.Hash) error
 }
-

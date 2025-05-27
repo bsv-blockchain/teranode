@@ -6,6 +6,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 )
@@ -17,6 +18,12 @@ func TestNullStoreImplementsInterface(t *testing.T) {
 func TestNullStoreCreate(t *testing.T) {
 	store := &NullStore{}
 	tx := &bt.Tx{}
+	_ = tx.FromUTXOs(&bt.UTXO{
+		TxIDHash:      &chainhash.Hash{},
+		Vout:          0,
+		LockingScript: &bscript.Script{},
+		Satoshis:      100,
+	})
 	ctx := context.Background()
 	data, err := store.Create(ctx, tx, 0)
 

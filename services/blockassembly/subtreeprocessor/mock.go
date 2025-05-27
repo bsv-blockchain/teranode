@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"github.com/bitcoin-sv/teranode/model"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
@@ -12,9 +13,9 @@ type MockSubtreeProcessor struct {
 	mock.Mock
 }
 
-func (m *MockSubtreeProcessor) GetCurrentTxMap() *util.SyncedMap[chainhash.Hash, []chainhash.Hash] {
+func (m *MockSubtreeProcessor) GetCurrentTxMap() *util.SyncedMap[chainhash.Hash, meta.TxInpoints] {
 	args := m.Called()
-	return args.Get(0).(*util.SyncedMap[chainhash.Hash, []chainhash.Hash])
+	return args.Get(0).(*util.SyncedMap[chainhash.Hash, meta.TxInpoints])
 }
 
 func (m *MockSubtreeProcessor) GetCurrentRunningState() State {
@@ -72,8 +73,8 @@ func (m *MockSubtreeProcessor) SubtreeCount() int {
 }
 
 // Add implements Interface.Add
-func (m *MockSubtreeProcessor) Add(node util.SubtreeNode, parents []chainhash.Hash) {
-	m.Called(node, parents)
+func (m *MockSubtreeProcessor) Add(node util.SubtreeNode, txInpoints meta.TxInpoints) {
+	m.Called(node, txInpoints)
 }
 
 // CheckSubtreeProcessor implements Interface.CheckSubtreeProcessor

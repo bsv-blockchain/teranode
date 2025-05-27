@@ -212,7 +212,7 @@ func TestFileStorer(t *testing.T) {
 
 	ctx := context.Background()
 	key := []byte("test")
-	ext := "dat"
+	ext := options.FileExtension("dat")
 
 	// Delete the key if it exists.
 	_ = blockStore.Del(ctx, key, options.WithFileExtension(ext))
@@ -291,7 +291,7 @@ func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *MockStore, *memory.Me
 	// Create the .subtree file
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 	require.NoError(t, err)
 
 	// Create the .subtreeData file
@@ -304,7 +304,7 @@ func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *MockStore, *memory.Me
 
 	subtreeDataBytes, err := subtreeData.Serialize()
 	require.NoError(t, err)
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeDataBytes, options.WithFileExtension("subtreeData"))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeDataBytes, options.WithFileExtension(options.SubtreeDataFileExtension))
 	require.NoError(t, err)
 
 	blockStore := memory.New()

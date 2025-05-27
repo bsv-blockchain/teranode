@@ -1,5 +1,5 @@
 // Package txmetacache provides a memory-efficient caching layer for transaction metadata
-// in the Teranode blockchain system. It serves as a performance optimization layer 
+// in the Teranode blockchain system. It serves as a performance optimization layer
 // that wraps around an underlying UTXO store to reduce database load and improve
 // transaction processing throughput.
 //
@@ -48,14 +48,14 @@ type metrics struct {
 // CachedData struct for the cached transaction metadata.
 // This struct stores the essential metadata about a transaction that needs to be
 // quickly accessible during validation and other operations.
-// 
+//
 // Important implementation note:
 // do not change field order, has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
 type CachedData struct {
 	ParentTxHashes []*chainhash.Hash `json:"parentTxHashes"` // List of parent transaction hashes for dependency tracking
-	BlockHashes    []*chainhash.Hash `json:"blockHashes"` // List of block hashes where this transaction appears (TODO change this to use the db ids instead of the hashes)
-	Fee            uint64            `json:"fee"` // Transaction fee in satoshis
-	SizeInBytes    uint64            `json:"sizeInBytes"` // Size of the transaction in bytes
+	BlockHashes    []*chainhash.Hash `json:"blockHashes"`    // List of block hashes where this transaction appears (TODO change this to use the db ids instead of the hashes)
+	Fee            uint64            `json:"fee"`            // Transaction fee in satoshis
+	SizeInBytes    uint64            `json:"sizeInBytes"`    // Size of the transaction in bytes
 }
 
 // TxMetaCache is the main struct that implements a caching layer around a UTXO store.
@@ -86,11 +86,11 @@ type BucketType int
 const (
 	// Unallocated indicates that memory for buckets will be allocated on demand.
 	Unallocated BucketType = iota
-	
+
 	// Preallocated indicates that memory for buckets will be allocated upfront.
 	// This can improve performance but uses more initial memory.
 	Preallocated
-	
+
 	// Trimmed indicates that the cache should maintain a trimmed state,
 	// which can help control memory usage.
 	Trimmed
@@ -189,8 +189,12 @@ func NewTxMetaCache(
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {
 	txMeta.Tx = nil
 
-	err := t.cache.Set(hash[:], t.appendHeightToValue(txMeta.Bytes()))
+	txMetaBytes, err := txMeta.Bytes()
 	if err != nil {
+		return err
+	}
+
+	if err = t.cache.Set(hash[:], t.appendHeightToValue(txMetaBytes)); err != nil {
 		return err
 	}
 
@@ -287,7 +291,10 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *me
 	t.metrics.hits.Add(1)
 
 	txmetaData := meta.Data{}
-	meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+	if err := meta.NewMetaDataFromBytes(cachedBytes, &txmetaData); err != nil {
+		t.logger.Errorf("Failed to unmarshal txmetaData: %v", err)
+		return nil
+	}
 
 	return &txmetaData
 }
@@ -325,7 +332,9 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 		t.metrics.hits.Add(1)
 
 		txmetaData := meta.Data{}
-		meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+		if err = meta.NewMetaDataFromBytes(cachedBytes, &txmetaData); err != nil {
+			return nil, err
+		}
 
 		txmetaData.BlockIDs = make([]uint32, 0) // this is expected behavior, needs to be non-nil
 
@@ -386,7 +395,9 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...f
 		t.metrics.hits.Add(1)
 
 		txmetaData := meta.Data{}
-		meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+		if err = meta.NewMetaDataFromBytes(cachedBytes, &txmetaData); err != nil {
+			return nil, err
+		}
 
 		return &txmetaData, nil
 	}
@@ -436,8 +447,8 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 		if data.Data != nil {
 			data.Data.Tx = nil
 
-			if len(data.Data.ParentTxHashes) > 48 {
-				t.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", data.Data.SizeInBytes, len(data.Data.ParentTxHashes))
+			if len(data.Data.TxInpoints.ParentTxHashes) > 48 {
+				t.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", data.Data.SizeInBytes, len(data.Data.TxInpoints.ParentTxHashes))
 			}
 
 			if err := t.SetCache(&data.Hash, data.Data); err != nil {

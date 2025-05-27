@@ -255,7 +255,7 @@ func checkNodeIntegrity(nodeContext string, checkInterval int, alertThreshold in
 			for _, subtreeHash := range block.Subtrees {
 				logger.Debugf("[%s] checking subtree %s", loggerContext, subtreeHash)
 
-				subtreeBytes, err = subtreeStore.Get(ctx, subtreeHash[:], options.WithFileExtension("subtree"))
+				subtreeBytes, err = subtreeStore.Get(ctx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
 				if err != nil {
 					logger.Errorf("[%s] failed to get subtree %s for block %s: %s", loggerContext, subtreeHash, block, err)
 					logger.Debugf("[%s] block dump: %s", block.Header.StringDump())

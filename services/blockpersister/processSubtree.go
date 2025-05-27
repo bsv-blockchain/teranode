@@ -19,21 +19,21 @@ import (
 )
 
 // ProcessSubtree processes a subtree of transactions, validating and storing them.
-// 
+//
 // A subtree represents a hierarchical structure containing transaction references that make up part of a block.
 // This method retrieves a subtree from the subtree store, processes all the transactions it contains,
 // and writes them to the block store while updating the UTXO set differences.
-// 
+//
 // The process follows these key steps:
-//   1. Retrieve the subtree from the subtree store using its hash
-//   2. Deserialize the subtree structure to extract transaction hashes
-//   3. Load transaction metadata from the UTXO store, either in batch mode or individually
-//   4. Create a file storer for writing transactions to persistent storage
-//   5. Write all transactions and process their UTXO changes
-// 
+//  1. Retrieve the subtree from the subtree store using its hash
+//  2. Deserialize the subtree structure to extract transaction hashes
+//  3. Load transaction metadata from the UTXO store, either in batch mode or individually
+//  4. Create a file storer for writing transactions to persistent storage
+//  5. Write all transactions and process their UTXO changes
+//
 // Transaction metadata retrieval can use batching if configured, which optimizes performance
 // for high transaction volumes by reducing the number of individual store requests.
-// 
+//
 // Parameters:
 //   - pCtx: Parent context for the operation, used for cancellation and tracing
 //   - subtreeHash: Hash identifier of the subtree to process
@@ -42,7 +42,7 @@ import (
 //
 // Returns an error if any part of the subtree processing fails. Errors are wrapped with
 // appropriate context to identify the specific failure point (storage, processing, etc.).
-// 
+//
 // Note: Processing is not atomic across multiple subtrees - each subtree is processed individually,
 // allowing partial block processing to succeed even if some subtrees fail.
 func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error {
@@ -95,7 +95,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 		return errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get %d of %d tx meta from store", subtreeHash.String(), missed, len(txHashes))
 	}
 
-	storer, err := filestorer.NewFileStorer(context.Background(), u.logger, u.settings, u.blockStore, subtreeHash[:], "subtreeData")
+	storer, err := filestorer.NewFileStorer(context.Background(), u.logger, u.settings, u.blockStore, subtreeHash[:], options.SubtreeDataFileExtension)
 	if err != nil {
 		return errors.NewStorageError("error creating subtree file", err)
 	}
@@ -110,7 +110,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 
 func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash) (*util.SubtreeData, error) {
 	// 1. get the subtree from the subtree store
-	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
+	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension(options.SubtreeFileExtension))
 	if err != nil {
 		return nil, errors.NewStorageError("[BlockPersister] failed to get subtree from store", err)
 	}
@@ -122,7 +122,7 @@ func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash
 	}
 
 	// 2 get the subtree data from the subtree store
-	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtreeData"))
+	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension(options.SubtreeDataFileExtension))
 	if err != nil {
 		return nil, errors.NewStorageError("[BlockPersister] error getting subtree data for %s from store", subtreeHash.String(), err)
 	}
@@ -138,21 +138,21 @@ func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash
 }
 
 // WriteTxs writes a series of transactions to storage and processes their UTXO changes.
-// 
+//
 // This function handles the final persistence of transaction data to storage and optionally
 // processes UTXO set changes. It's a critical component in the block persistence pipeline
 // that ensures transactions are properly serialized and stored.
-// 
+//
 // The function performs the following steps:
-//   1. Write the number of transactions as a 32-bit integer header
-//   2. For each transaction in the provided slice:
-//      a. Write the raw transaction bytes to storage
-//      b. If a UTXO diff is provided, process the transaction's UTXO changes
-//   3. Report any errors or validation issues encountered
-// 
+//  1. Write the number of transactions as a 32-bit integer header
+//  2. For each transaction in the provided slice:
+//     a. Write the raw transaction bytes to storage
+//     b. If a UTXO diff is provided, process the transaction's UTXO changes
+//  3. Report any errors or validation issues encountered
+//
 // The function includes safety checks to handle nil transaction metadata or transactions,
 // logging errors but continuing processing when possible to maximize resilience.
-// 
+//
 // Parameters:
 //   - ctx: Context for the operation, enabling cancellation and tracing
 //   - logger: Logger for recording operations, errors, and warnings
@@ -164,7 +164,7 @@ func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash
 //   - Failure to write the transaction count header
 //   - Failure to write individual transaction data
 //   - Errors during UTXO processing for transactions
-// 
+//
 // The operation is not fully atomic - some transactions may be written successfully even if
 // others fail. The caller should handle partial success scenarios appropriately.
 func WriteTxs(ctx context.Context, logger ulogger.Logger, writer *filestorer.FileStorer, txMetaSlice []*meta.Data, utxoDiff *utxopersister.UTXOSet) error {

@@ -372,9 +372,9 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 				for _, data := range saveBatch {
 					data := data
 					if err = txMetaStore.SetCache(&data.hash, &meta.Data{
-						Fee:            data.fee,
-						SizeInBytes:    data.sizeInBytes,
-						ParentTxHashes: []chainhash.Hash{},
+						Fee:         data.fee,
+						SizeInBytes: data.sizeInBytes,
+						TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 					}); err != nil {
 						return err
 					}
@@ -396,9 +396,9 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 		for _, data := range batch {
 			data := data
 			if err := txMetaStore.SetCache(&data.hash, &meta.Data{
-				Fee:            data.fee,
-				SizeInBytes:    data.sizeInBytes,
-				ParentTxHashes: []chainhash.Hash{},
+				Fee:         data.fee,
+				SizeInBytes: data.sizeInBytes,
+				TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			}); err != nil {
 				return err
 			}
@@ -476,7 +476,7 @@ func (l TestLocalSubtreeStore) Exists(ctx context.Context, key []byte, opts ...o
 	// Check if it exists in the FileData map
 	keyString := string(key)
 	if opt.Extension != "" {
-		keyString = keyString + "." + opt.Extension
+		keyString = keyString + "." + opt.Extension.String()
 	}
 
 	if l.FileData != nil {
@@ -504,7 +504,7 @@ func (l TestLocalSubtreeStore) Get(ctx context.Context, key []byte, opts ...opti
 	// Try to find the data in the FileData map first (for bloom filters and other data)
 	keyString := string(key)
 	if opt.Extension != "" {
-		keyString = keyString + "." + opt.Extension
+		keyString = keyString + "." + opt.Extension.String()
 	}
 
 	if l.FileData != nil {
@@ -558,7 +558,7 @@ func (l *TestLocalSubtreeStore) Set(ctx context.Context, key []byte, value []byt
 	// Create a storage key based on the hash and extension
 	keyString := string(key)
 	if opt.Extension != "" {
-		keyString = keyString + "." + opt.Extension
+		keyString = keyString + "." + opt.Extension.String()
 	}
 
 	// Store the data in memory

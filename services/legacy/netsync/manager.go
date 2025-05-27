@@ -2256,7 +2256,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 					// we just got notified of a new subtree internally, announce all the transactions to our peers
 					sm.logger.Debugf("[Legacy Manager] received new subtree notification: %v", notification)
 
-					subtreeBytes, err := sm.subtreeStore.Get(ctx, notification.Hash, options.WithFileExtension("subtree"))
+					subtreeBytes, err := sm.subtreeStore.Get(ctx, notification.Hash, options.WithFileExtension(options.SubtreeFileExtension))
 					if err != nil {
 						sm.logger.Errorf("[Legacy Manager] failed to get subtree from store: %v", err)
 						continue
@@ -2380,7 +2380,11 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 
 			var txMeta meta.Data
 
-			meta.NewMetaDataFromBytes(&kafkaMsg.Content, &txMeta)
+			if err = meta.NewMetaDataFromBytes(kafkaMsg.Content, &txMeta); err != nil {
+				sm.logger.Errorf("Failed to create tx meta data from bytes: %v", err)
+				return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to create tx meta data from bytes", err)
+			}
+
 			sm.txAnnounceBatcher.Put(&TxHashAndFee{
 				TxHash: *hash,
 				Fee:    txMeta.Fee,

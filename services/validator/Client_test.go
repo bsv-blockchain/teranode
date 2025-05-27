@@ -319,46 +319,6 @@ func TestHandleValidationError_HTTPServerFail(t *testing.T) {
 	assert.Error(t, resultErr)
 }
 
-func TestProcessValidationResponse_NilMetadata(t *testing.T) {
-	client, server := setupTestClient(t, &MockValidatorAPIClient{})
-	defer server.Close()
-
-	// Call with nil metadata
-	result := client.processValidationResponse(nil)
-
-	// Should return nil when metadata is nil
-	assert.Nil(t, result)
-}
-
-func TestProcessValidationResponse_WithMetadata(t *testing.T) {
-	client, server := setupTestClient(t, &MockValidatorAPIClient{})
-	defer server.Close()
-
-	// Create valid metadata with minimum required length (25 bytes)
-	metaBytes := make([]byte, 25)
-
-	// Fee (8 bytes)
-	binary.LittleEndian.PutUint64(metaBytes[0:8], 500)
-
-	// SizeInBytes (8 bytes)
-	binary.LittleEndian.PutUint64(metaBytes[8:16], 200)
-
-	// Flags (1 byte) - set conflicting flag as an example
-	metaBytes[16] = 4 // 0b100 for Conflicting
-
-	// ParentTxHashesLen (8 bytes) - 0 parent tx hashes
-	binary.LittleEndian.PutUint64(metaBytes[17:25], 0)
-
-	// Call with sample metadata
-	result := client.processValidationResponse(metaBytes)
-
-	// Should return a non-nil metadata object
-	assert.NotNil(t, result)
-	assert.Equal(t, uint64(500), result.Fee)
-	assert.Equal(t, uint64(200), result.SizeInBytes)
-	assert.True(t, result.Conflicting)
-}
-
 func TestBatchValidation(t *testing.T) {
 	// Create mock client that returns batch responses
 	mockClient := &MockValidatorAPIClient{

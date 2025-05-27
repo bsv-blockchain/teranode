@@ -3,12 +3,13 @@ package subtreeprocessor
 import (
 	"github.com/bitcoin-sv/teranode/model"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type Interface interface {
-	Add(node util.SubtreeNode, parents []chainhash.Hash)
+	Add(node util.SubtreeNode, txInpoints meta.TxInpoints)
 	GetCurrentRunningState() State
 	GetCurrentLength() int
 	CheckSubtreeProcessor() error
@@ -20,7 +21,7 @@ type Interface interface {
 	GetCurrentBlockHeader() *model.BlockHeader
 	SetCurrentBlockHeader(blockHeader *model.BlockHeader)
 	GetCurrentSubtree() *util.Subtree
-	GetCurrentTxMap() *util.SyncedMap[chainhash.Hash, []chainhash.Hash]
+	GetCurrentTxMap() *util.SyncedMap[chainhash.Hash, meta.TxInpoints]
 	GetChainedSubtrees() []*util.Subtree
 	GetUtxoStore() utxostore.Store
 	SetCurrentItemsPerFile(v int)

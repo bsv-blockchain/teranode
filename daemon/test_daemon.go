@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"math/big"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -45,7 +44,6 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
@@ -467,7 +465,7 @@ func (td *TestDaemon) VerifyBlockByHash(t *testing.T, expectedBlock *model.Block
 }
 
 func (td *TestDaemon) VerifyConflictingInSubtrees(t *testing.T, subtreeHash *chainhash.Hash, expectedConflicts ...*bt.Tx) {
-	latestSubtreeBytes, err := td.SubtreeStore.Get(td.Ctx, subtreeHash[:], options.WithFileExtension("subtree"))
+	latestSubtreeBytes, err := td.SubtreeStore.Get(td.Ctx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
 	require.NoError(t, err, "Failed to get subtree")
 
 	latestSubtree, err := util.NewSubtreeFromBytes(latestSubtreeBytes)
@@ -496,7 +494,7 @@ func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	require.NoError(t, err)
 
 	for _, subtreeHash := range candidate.SubtreeHashes {
-		subtreeBytes, err := td.SubtreeStore.Get(td.Ctx, subtreeHash, options.WithFileExtension("subtree"))
+		subtreeBytes, err := td.SubtreeStore.Get(td.Ctx, subtreeHash, options.WithFileExtension(options.SubtreeFileExtension))
 		require.NoError(t, err, "Failed to get subtree")
 
 		subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
@@ -526,7 +524,7 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	}
 
 	for _, subtreeHash := range candidate.SubtreeHashes {
-		subtreeBytes, err := td.SubtreeStore.Get(td.Ctx, subtreeHash, options.WithFileExtension("subtree"))
+		subtreeBytes, err := td.SubtreeStore.Get(td.Ctx, subtreeHash, options.WithFileExtension(options.SubtreeFileExtension))
 		require.NoError(t, err, "Failed to get subtree")
 
 		subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
@@ -806,15 +804,22 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 		}
 
 		// add the transaction to the subtree meta, with the index of the node, which is i+1, skipping the coinbase node
-		err = subtreeMeta.SetParentTxHashes(i+1, parentTxHashes)
-		if err != nil {
+		if err = subtreeMeta.SetTxInpointsFromTx(tx); err != nil {
 			return nil, err
 		}
 	}
 
+	if err = storeSubtreeFiles(ctx, subtreeStore, subtree, subtreeData, subtreeMeta); err != nil {
+		return nil, err
+	}
+
+	return subtree, nil
+}
+
+func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *util.Subtree, subtreeData *util.SubtreeData, subtreeMeta *util.SubtreeMeta) error {
 	subtreeBytes, err := subtree.Serialize()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = subtreeStore.Set(
@@ -826,57 +831,44 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	subtreeDataBytes, err := subtreeData.Serialize()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = subtreeStore.Set(
 		ctx,
 		subtreeData.RootHash()[:],
 		subtreeDataBytes,
-		options.WithFileExtension("subtreeData"),
+		options.WithFileExtension(options.SubtreeDataFileExtension),
 		options.WithDeleteAt(100),
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = subtreeStore.Set(
 		ctx,
 		subtree.RootHash()[:],
 		subtreeMetaBytes,
-		options.WithFileExtension("meta"),
+		options.WithFileExtension(options.SubtreeMetaFileExtension),
 		options.WithDeleteAt(100),
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return subtree, nil
-}
-
-func isKafkaRunning() bool {
-	port, _ := gocore.Config().GetInt("KAFKA_PORT", 9092)
-
-	conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", port))
-	if err != nil {
-		return false
-	}
-
-	_ = conn.Close()
-
-	return true
+	return nil
 }
 
 func (td *TestDaemon) ResetServiceManagerContext(t *testing.T) {

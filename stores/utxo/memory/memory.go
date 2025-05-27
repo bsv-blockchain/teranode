@@ -180,7 +180,7 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opts .
 	return txMetaData, nil
 }
 
-func (m *Memory) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
+func (m *Memory) Get(_ context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
@@ -206,6 +206,11 @@ func (m *Memory) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields
 
 		for idx, utxoHash := range utxoHashes {
 			txMeta.SpendingDatas[idx] = data.utxoMap[*utxoHash]
+		}
+
+		txMeta.TxInpoints, err = meta.NewTxInpointsFromTx(data.tx)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to get tx inpoints", err)
 		}
 
 		return txMeta, nil

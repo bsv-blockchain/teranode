@@ -221,7 +221,14 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 			return nil, c.handleValidationError(ctx, tx, blockHeight, validationOptions, err)
 		}
 
-		return c.processValidationResponse(response.Metadata), nil
+		result := &utxometa.Data{}
+
+		if err = utxometa.NewMetaDataFromBytes(response.Metadata, result); err != nil {
+			c.logger.Errorf("[ValidateWithOptions] failed to parse metadata: %v", err)
+			return nil, err
+		}
+
+		return result, nil
 	}
 
 	// Batch mode
@@ -245,19 +252,14 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, r.err
 	}
 
-	return c.processValidationResponse(r.metaData), nil
-}
+	result := &utxometa.Data{}
 
-// processValidationResponse handles the metadata conversion
-func (c *Client) processValidationResponse(metadataBytes []byte) *utxometa.Data {
-	if metadataBytes == nil {
-		return nil
+	if err = utxometa.NewMetaDataFromBytes(r.metaData, result); err != nil {
+		c.logger.Errorf("[ValidateWithOptions] failed to parse metadata: %v", err)
+		return nil, err
 	}
 
-	result := &utxometa.Data{}
-	utxometa.NewMetaDataFromBytes(&metadataBytes, result)
-
-	return result
+	return result, nil
 }
 
 // handleValidationError processes validation errors and attempts HTTP fallback if appropriate

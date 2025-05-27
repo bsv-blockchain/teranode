@@ -51,9 +51,9 @@ func (m *MockValidator) Validate(ctx context.Context, tx *bt.Tx, height uint32, 
 	// Instead of trying to create actual parent hashes, let's just use nil for testing
 	// The HTTP handler should work with a nil ParentTxHashes
 	return &meta.Data{
-		Fee:            32279815860,
-		SizeInBytes:    245,
-		ParentTxHashes: nil, // Using nil is safe for the test
+		Fee:         32279815860,
+		SizeInBytes: 245,
+		TxInpoints:  meta.TxInpoints{}, // Using nil is safe for the test
 	}, nil
 }
 

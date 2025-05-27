@@ -89,14 +89,14 @@ func TestOptionsConstructFilename(t *testing.T) {
 		{
 			name:        "With FileExtension",
 			key:         []byte("key"),
-			fileOptions: []FileOption{WithFileExtension("meta")},
+			fileOptions: []FileOption{WithFileExtension(SubtreeMetaFileExtension)},
 			expected:    tempDir + "/79656b.meta",
 		},
 		{
 			name:         "With FileName and FileExtension",
 			key:          []byte("key"),
 			storeOptions: []StoreOption{WithDefaultSubDirectory("./data4/")},
-			fileOptions:  []FileOption{WithFilename("filename-1234"), WithFileExtension("meta")},
+			fileOptions:  []FileOption{WithFilename("filename-1234"), WithFileExtension(SubtreeMetaFileExtension)},
 			expected:     tempDir + "/data4/filename-1234.meta",
 		},
 		// WithHashPrefix
@@ -150,11 +150,11 @@ func TestNewFileOptions(t *testing.T) {
 	t.Run("With multiple options", func(t *testing.T) {
 		opts := NewFileOptions(
 			WithFilename("test.txt"),
-			WithFileExtension("meta"),
+			WithFileExtension(SubtreeMetaFileExtension),
 			WithSubDirectory("subdir"),
 		)
 		assert.Equal(t, "test.txt", opts.Filename)
-		assert.Equal(t, "meta", opts.Extension)
+		assert.Equal(t, SubtreeMetaFileExtension, opts.Extension)
 		assert.Equal(t, "subdir", opts.SubDirectory)
 	})
 }
@@ -213,7 +213,7 @@ func TestFileOptionsToQuery(t *testing.T) {
 		opts := []FileOption{
 			WithDeleteAt(bhr),
 			WithFilename("test.txt"),
-			WithFileExtension("meta"),
+			WithFileExtension(SubtreeMetaFileExtension),
 			WithAllowOverwrite(true),
 		}
 
@@ -221,7 +221,7 @@ func TestFileOptionsToQuery(t *testing.T) {
 
 		assert.Equal(t, "5", query.Get("dah"))
 		assert.Equal(t, "test.txt", query.Get("filename"))
-		assert.Equal(t, "meta", query.Get("extension"))
+		assert.Equal(t, SubtreeMetaFileExtension, query.Get("extension"))
 		assert.Equal(t, "true", query.Get("allowOverwrite"))
 	})
 }
@@ -237,7 +237,7 @@ func TestQueryToFileOptions(t *testing.T) {
 		query := url.Values{
 			"blockHeightRetention": []string{"5"},
 			"filename":             []string{"test.txt"},
-			"extension":            []string{"meta"},
+			"extension":            []string{SubtreeMetaFileExtension.String()},
 			"allowOverwrite":       []string{"true"},
 		}
 
@@ -246,7 +246,7 @@ func TestQueryToFileOptions(t *testing.T) {
 
 		assert.Equal(t, uint32(5), options.DAH)
 		assert.Equal(t, "test.txt", options.Filename)
-		assert.Equal(t, "meta", options.Extension)
+		assert.Equal(t, SubtreeMetaFileExtension, options.Extension)
 		assert.True(t, options.AllowOverwrite)
 	})
 

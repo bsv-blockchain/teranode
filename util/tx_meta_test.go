@@ -34,7 +34,7 @@ func TestTxMetaDataFromTx(t *testing.T) {
 	assert.Equal(t, tx, metaData.Tx)
 	assert.Equal(t, uint64(tx.Size()), metaData.SizeInBytes)
 	assert.Equal(t, tx.IsCoinbase(), metaData.IsCoinbase)
-	assert.Len(t, metaData.ParentTxHashes, 1)
-	assert.Equal(t, *prevTxHash, metaData.ParentTxHashes[0])
+	assert.Len(t, metaData.TxInpoints.ParentTxHashes, 1)
+	assert.Equal(t, *prevTxHash, metaData.TxInpoints.ParentTxHashes[0])
 	assert.Equal(t, satoshis-700, metaData.Fee)
 }

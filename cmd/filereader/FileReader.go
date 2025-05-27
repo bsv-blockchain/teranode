@@ -74,6 +74,10 @@ func FileReader(logger ulogger.Logger, tSettings *settings.Settings, verboseInpu
 }
 
 func ProcessFile(ctx context.Context, path string, logger ulogger.Logger, tSettings *settings.Settings) error {
+	if path == "" {
+		return errors.NewProcessingError("no file specified")
+	}
+
 	dir, filename, ext, r, err := getReader(path, logger, tSettings)
 	if err != nil {
 		return errors.NewProcessingError("error getting reader", err)
@@ -352,7 +356,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 			}
 		}
 
-	case "subtree":
+	case options.SubtreeFileExtension.String():
 		st := &util.Subtree{}
 		if err := st.DeserializeFromReader(br); err != nil {
 			return errors.NewProcessingError("error reading subtree", err)
@@ -376,7 +380,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 			}
 		}
 
-	case "subtreeData":
+	case options.SubtreeDataFileExtension.String():
 		// The subtreeData deserialization needs the subtree first
 		stPath := filepath.Join(dir, fmt.Sprintf("%s.subtree", filename))
 
@@ -412,6 +416,41 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 					fmt.Printf(coinbasePlaceholderFormat, i)
 				default:
 					fmt.Printf(nodeFormat, i, tx.TxIDChainHash())
+				}
+			}
+		}
+
+	case options.SubtreeMetaFileExtension.String():
+		// The subtreeData deserialization needs the subtree first
+		stPath := filepath.Join(dir, fmt.Sprintf("%s.subtree", filename))
+
+		logger.Infof("Reading subtree from %s\n", stPath)
+
+		_, _, _, stReader, err := getReader(stPath, logger, tSettings)
+		if err != nil {
+			return errors.NewProcessingError("Reading subtreeData files depends on subtree file", err)
+		}
+
+		st := &util.Subtree{}
+		if err := st.DeserializeFromReader(stReader); err != nil {
+			return errors.NewProcessingError("error reading subtree", err)
+		}
+
+		subtreeMeta, err := util.NewSubtreeMetaFromReader(st, br)
+		if err != nil {
+			return errors.NewProcessingError("error reading subtree meta", err)
+		}
+
+		fmt.Printf("Subtree root hash: %s\n", st.RootHash())
+		fmt.Printf(numTransactionsFormat, st.Length())
+
+		if verbose {
+			for i, txInpoints := range subtreeMeta.TxInpoints {
+				switch {
+				case txInpoints.ParentTxHashes == nil:
+					fmt.Printf("%10d: <nil>\n", i)
+				default:
+					fmt.Printf(nodeFormat, i, txInpoints.GetTxInpoints())
 				}
 			}
 		}
@@ -490,7 +529,7 @@ func getReader(path string, logger ulogger.Logger, tSettings *settings.Settings)
 
 		store := getBlockStore(logger, tSettings)
 
-		r, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension(ext))
+		r, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension(options.FileExtension(ext)))
 		if err != nil {
 			return "", "", "", nil, errors.NewProcessingError("error getting reader from store", err)
 		}

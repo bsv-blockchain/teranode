@@ -3,6 +3,7 @@ package blockassembly
 import (
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,9 +32,15 @@ func TestData_Bytes(t *testing.T) {
 			TxIDChainHash: *hash0,
 			Fee:           1,
 			Size:          2,
-			Parents: []chainhash.Hash{
-				*hash1,
-				*hash2,
+			TxInpoints: meta.TxInpoints{
+				ParentTxHashes: []chainhash.Hash{
+					*hash1,
+					*hash2,
+				},
+				Idxs: [][]uint32{
+					{1, 2},
+					{3, 4},
+				},
 			},
 		}
 
@@ -45,9 +52,9 @@ func TestData_Bytes(t *testing.T) {
 		assert.Equal(t, d.TxIDChainHash, dd.TxIDChainHash)
 		assert.Equal(t, d.Fee, dd.Fee)
 		assert.Equal(t, d.Size, dd.Size)
-		assert.Equal(t, len(d.Parents), len(dd.Parents))
-		assert.Equal(t, d.Parents[0], dd.Parents[0])
-		assert.Equal(t, d.Parents[1], dd.Parents[1])
+		assert.Equal(t, len(d.TxInpoints.ParentTxHashes), len(dd.TxInpoints.ParentTxHashes))
+		assert.Equal(t, d.TxInpoints.ParentTxHashes[0], dd.TxInpoints.ParentTxHashes[0])
+		assert.Equal(t, d.TxInpoints.ParentTxHashes[1], dd.TxInpoints.ParentTxHashes[1])
 	})
 }
 

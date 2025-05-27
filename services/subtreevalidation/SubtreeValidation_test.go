@@ -216,7 +216,7 @@ func TestBlockValidationValidateSubtreeInternalLegacy(t *testing.T) {
 		t.Context(),
 		subtree.RootHash()[:],
 		subtreeDataBytes,
-		options.WithFileExtension("subtreeData"),
+		options.WithFileExtension(options.SubtreeDataFileExtension),
 	)
 	require.NoError(t, err)
 
@@ -700,7 +700,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 		err = subtreeStore.Set(t.Context(),
 			subtree.RootHash()[:],
 			subtreeDataBytes,
-			options.WithFileExtension("subtreeData"),
+			options.WithFileExtension(options.SubtreeDataFileExtension),
 		)
 		require.NoError(t, err)
 
@@ -751,7 +751,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 		err = subtreeStore.Set(t.Context(),
 			coinbaseSubtree.RootHash()[:],
 			subtreeDataBytes,
-			options.WithFileExtension("subtreeData"),
+			options.WithFileExtension(options.SubtreeDataFileExtension),
 		)
 		require.NoError(t, err)
 
@@ -814,7 +814,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 			t.Context(),
 			subtreeHash[:],
 			subtreeDataBytes,
-			options.WithFileExtension("subtreeData"),
+			options.WithFileExtension(options.SubtreeDataFileExtension),
 		)
 		require.NoError(t, err)
 
@@ -885,7 +885,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 			t.Context(),
 			subtreeHash[:],
 			subtreeDataBytes,
-			options.WithFileExtension("subtreeData"),
+			options.WithFileExtension(options.SubtreeDataFileExtension),
 		)
 		require.NoError(t, err)
 

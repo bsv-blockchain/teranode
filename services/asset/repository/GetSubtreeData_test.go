@@ -21,7 +21,7 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 		ctx, subtree, metaDatas := setupSubtreeReaderTest(t)
 
 		// create the block-store .subtree file
-		storer, err := filestorer.NewFileStorer(t.Context(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], "subtreeData")
+		storer, err := filestorer.NewFileStorer(t.Context(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], options.SubtreeDataFileExtension)
 		require.NoError(t, err)
 
 		err = blockpersister.WriteTxs(t.Context(), ctx.logger, storer, metaDatas, nil)
@@ -46,7 +46,7 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 		require.NoError(t, err)
 
 		// write the subtree to the subtree store
-		err = ctx.repo.SubtreeStore.Set(t.Context(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+		err = ctx.repo.SubtreeStore.Set(t.Context(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 		require.NoError(t, err)
 
 		// should be able to get the subtree from the block-store (should NOT be looking at subtree-store)

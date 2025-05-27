@@ -163,7 +163,7 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	value, err := subtree.Serialize()
 	require.NoError(t, err)
 
-	err = subtreeStore.Set(context.Background(), key.CloneBytes(), value, options.WithFileExtension("subtree"))
+	err = subtreeStore.Set(context.Background(), key.CloneBytes(), value, options.WithFileExtension(options.SubtreeFileExtension))
 	require.NoError(t, err)
 
 	// Create a new repository

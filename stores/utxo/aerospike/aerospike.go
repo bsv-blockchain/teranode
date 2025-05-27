@@ -73,6 +73,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/aerospike/cleanup"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
@@ -89,6 +90,9 @@ var _ utxo.Store = (*Store)(nil)
 
 const MaxTxSizeInStoreInBytes = 32 * 1024
 
+const ExternalTxFileExtension options.FileExtension = "tx"
+const ExternalTxOutputsFileExtension options.FileExtension = "outputs"
+
 var (
 	binNames = []fields.FieldName{
 		fields.Unspendable,
@@ -96,7 +100,7 @@ var (
 		fields.SizeInBytes,
 		fields.LockTime,
 		fields.Utxos,
-		fields.ParentTxHashes,
+		fields.TxInpoints,
 		fields.BlockIDs,
 		fields.UtxoSpendableIn,
 		fields.Conflicting,

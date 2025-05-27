@@ -65,13 +65,13 @@ var (
 	testBlockBytes, _ = testBlock.Bytes()
 	testSubtree, _    = util.NewTreeByLeafCount(4)
 	testTxMeta        = &meta.Data{
-		Tx:             testTx1,
-		ParentTxHashes: []chainhash.Hash{*testTx1.Inputs[0].PreviousTxIDChainHash()},
-		BlockIDs:       []uint32{100},
-		Fee:            123,
-		SizeInBytes:    321,
-		IsCoinbase:     false,
-		LockTime:       testTx1.LockTime,
+		Tx:          testTx1,
+		TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*testTx1.Inputs[0].PreviousTxIDChainHash()}, Idxs: [][]uint32{{testTx1.Inputs[0].PreviousTxOutIndex}}},
+		BlockIDs:    []uint32{100},
+		Fee:         123,
+		SizeInBytes: 321,
+		IsCoinbase:  false,
+		LockTime:    testTx1.LockTime,
 	}
 	testUtxo = &utxo.SpendResponse{
 		Status:       1,

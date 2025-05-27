@@ -12,59 +12,59 @@ type FieldName string
 
 const (
 	// Tx represents the full serialized transaction data
-	Tx                  FieldName = "tx"
+	Tx FieldName = "tx"
 	// Inputs represents the transaction inputs data
-	Inputs              FieldName = "inputs"
+	Inputs FieldName = "inputs"
 	// Outputs represents the transaction outputs data
-	Outputs             FieldName = "outputs"
+	Outputs FieldName = "outputs"
 	// External indicates external data associated with the transaction
-	External            FieldName = "external"
+	External FieldName = "external"
 	// LockTime is the block height or timestamp until which the transaction is locked
-	LockTime            FieldName = "locktime"
+	LockTime FieldName = "locktime"
 	// Version is the transaction version number
-	Version             FieldName = "version"
+	Version FieldName = "version"
 	// Fee is the transaction fee in satoshis
-	Fee                 FieldName = "fee"
+	Fee FieldName = "fee"
 	// SizeInBytes is the serialized size of the transaction in bytes
-	SizeInBytes         FieldName = "sizeInBytes"
+	SizeInBytes FieldName = "sizeInBytes"
 	// ExtendedSize is the size of the transaction including additional metadata
-	ExtendedSize        FieldName = "extendedSize"
-	// ParentTxHashes contains the transaction IDs of all parent transactions
-	ParentTxHashes      FieldName = "parentTxHashes"
+	ExtendedSize FieldName = "extendedSize"
+	// TxInpoints contains the transaction inpoints, which are references to previous transaction outputs
+	TxInpoints FieldName = "txInpoints"
 	// IsCoinbase indicates whether the transaction is a coinbase transaction
-	IsCoinbase          FieldName = "isCoinbase"
+	IsCoinbase FieldName = "isCoinbase"
 	// Conflicting indicates whether the transaction conflicts with another transaction
-	Conflicting         FieldName = "conflicting"
+	Conflicting FieldName = "conflicting"
 	// ConflictingChildren contains transactions that spend from this conflicting transaction
 	ConflictingChildren FieldName = "conflictingCs" // bin Fieldname can only be max 15 chars in aerospike
 	// Unspendable indicates whether the transaction outputs are marked as unspendable
-	Unspendable         FieldName = "unspendable"
+	Unspendable FieldName = "unspendable"
 	// UtxoSpendableIn indicates the number of blocks after which the UTXO becomes spendable
-	UtxoSpendableIn     FieldName = "utxoSpendableIn"
+	UtxoSpendableIn FieldName = "utxoSpendableIn"
 	// SpendingHeight is the block height at which the UTXO was spent
-	SpendingHeight      FieldName = "spendingHeight"
+	SpendingHeight FieldName = "spendingHeight"
 	// Utxos represents the UTXOs associated with a transaction
-	Utxos               FieldName = "utxos"
+	Utxos FieldName = "utxos"
 	// TotalUtxos is the total number of UTXOs created by a transaction
-	TotalUtxos          FieldName = "totalUtxos"
+	TotalUtxos FieldName = "totalUtxos"
 	// RecordUtxos represents UTXOs that are stored in the record
-	RecordUtxos         FieldName = "recordUtxos"
+	RecordUtxos FieldName = "recordUtxos"
 	// SpentUtxos is the number of UTXOs that have been spent
-	SpentUtxos          FieldName = "spentUtxos"
+	SpentUtxos FieldName = "spentUtxos"
 	// TotalExtraRecs is the total number of extra records
-	TotalExtraRecs      FieldName = "totalExtraRecs"
+	TotalExtraRecs FieldName = "totalExtraRecs"
 	// SpentExtraRecs is the number of spent extra records
-	SpentExtraRecs      FieldName = "spentExtraRecs"
+	SpentExtraRecs FieldName = "spentExtraRecs"
 	// BlockIDs contains the block IDs where this transaction appears
-	BlockIDs            FieldName = "blockIDs"
+	BlockIDs FieldName = "blockIDs"
 	// BlockHeights contains the block heights where this transaction appears
-	BlockHeights        FieldName = "blockHeights"
+	BlockHeights FieldName = "blockHeights"
 	// SubtreeIdxs contains the subtree indexes where this transaction appears
-	SubtreeIdxs         FieldName = "subtreeIdxs"
+	SubtreeIdxs FieldName = "subtreeIdxs"
 	// Reassignments tracks UTXOs that have been reassigned
-	Reassignments       FieldName = "reassignments"
+	Reassignments FieldName = "reassignments"
 	// DeleteAtHeight specifies the block height at which the record should be deleted
-	DeleteAtHeight      FieldName = "deleteAtHeight"
+	DeleteAtHeight FieldName = "deleteAtHeight"
 )
 
 // String returns the string representation of the FieldName.

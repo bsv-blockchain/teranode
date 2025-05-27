@@ -19,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -47,7 +48,7 @@ var (
 		Fee:         1,
 		SizeInBytes: 1,
 	}
-	parents = []chainhash.Hash{hash1, hash2}
+	parents = meta.TxInpoints{ParentTxHashes: []chainhash.Hash{hash1, hash2}}
 )
 
 func Test_DeserializeHashesFromReaderIntoBuckets(t *testing.T) {
@@ -151,7 +152,7 @@ func Test_MoveBlock(t *testing.T) {
 	})
 }
 
-func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees []*util.Subtree, txMap *util.SyncedMap[chainhash.Hash, []chainhash.Hash]) []*chainhash.Hash {
+func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees []*util.Subtree, txMap *util.SyncedMap[chainhash.Hash, meta.TxInpoints]) []*chainhash.Hash {
 	subtreeHashes := make([]*chainhash.Hash, 0, len(subtrees))
 
 	for _, subtree := range subtrees {
@@ -159,15 +160,15 @@ func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees 
 		subtreeBytes, err := subtree.Serialize()
 		require.NoError(t, err)
 
-		require.NoError(t, subtreeStore.Set(t.Context(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree")))
+		require.NoError(t, subtreeStore.Set(t.Context(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
 
 		subtreeMeta := util.NewSubtreeMeta(subtree)
 		for idx, node := range subtree.Nodes {
 			if !node.Hash.IsEqual(util.CoinbasePlaceholderHash) {
-				parents, ok := txMap.Get(node.Hash)
+				txInpoints, ok := txMap.Get(node.Hash)
 				require.True(t, ok)
 
-				require.NoError(t, subtreeMeta.SetParentTxHashes(idx, parents))
+				require.NoError(t, subtreeMeta.SetTxInpoints(idx, txInpoints))
 			}
 		}
 
@@ -175,7 +176,7 @@ func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees 
 		subtreeMetaBytes, err := subtreeMeta.Serialize()
 		require.NoError(t, err)
 
-		require.NoError(t, subtreeStore.Set(t.Context(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension("meta")))
+		require.NoError(t, subtreeStore.Set(t.Context(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
 
 		subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	}
@@ -265,7 +266,7 @@ func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Me
 			SizeInBytes: 1,
 		}
 
-		stp.Add(node, []chainhash.Hash{hash1, hash2})
+		stp.Add(node, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{hash1, hash2}, Idxs: [][]uint32{{0, 1}, {2, 3}}})
 	}
 
 	waitForSubtreeProcessorQueueToEmpty(t, stp)

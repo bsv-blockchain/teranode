@@ -5,6 +5,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
 )
@@ -33,8 +34,8 @@ func (m *Mock) Health(ctx context.Context, checkLiveness bool) (int, string, err
 	return args.Int(0), args.String(1), args.Error(2)
 }
 
-func (m *Mock) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, parentTxHashes []chainhash.Hash) (bool, error) {
-	args := m.Called(ctx, hash, fee, size, parentTxHashes)
+func (m *Mock) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints meta.TxInpoints) (bool, error) {
+	args := m.Called(ctx, hash, fee, size, txInpoints)
 
 	if args.Error(1) != nil {
 		return false, args.Error(1)

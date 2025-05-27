@@ -557,7 +557,7 @@ func (g *S3) getObjectKey(hash []byte, o *options.Options) *string {
 	)
 
 	if o.Extension != "" {
-		ext = "." + o.Extension
+		ext = "." + o.Extension.String()
 	}
 
 	if o.Filename != "" {

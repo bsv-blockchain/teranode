@@ -344,8 +344,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	// get the block heights of all inputs of the transaction
 	// utxoHeights is a slice of block heights for each input
-	// parentTxHashesMap is a map of parent transaction hashes to the input indexes of the current transaction
-	utxoHeights, parentTxHashesMap, err := v.getTransactionInputBlockHeights(ctx, tx, txID)
+	// txInpoints is a struct containing the parent tx hashes and the vout indexes of each input
+	utxoHeights, err := v.getTransactionInputBlockHeights(ctx, tx, txID)
 	if err != nil {
 		return nil, err
 	}
@@ -468,10 +468,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 
 	if addToBlockAssembly {
-		// get a slice of unique parent tx hashes from the map
-		parentTxHashes := make([]chainhash.Hash, 0, len(parentTxHashesMap))
-		for parentTxHash := range parentTxHashesMap {
-			parentTxHashes = append(parentTxHashes, parentTxHash)
+		txInpoints, err := meta.NewTxInpointsFromTx(tx)
+		if err != nil {
+			return nil, errors.NewProcessingError("[Validate][%s] error getting tx inpoints: %v", txID, err)
 		}
 
 		// first we send the tx to the block assembler
@@ -479,7 +478,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			TxIDChainHash: *tx.TxIDChainHash(),
 			Fee:           txMetaData.Fee,
 			Size:          uint64(tx.Size()),
-			Parents:       parentTxHashes,
+			TxInpoints:    txInpoints,
 		}, spentUtxos); err != nil {
 			err = errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", txID, err)
 
@@ -518,19 +517,19 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 }
 
 // getTransactionInputBlockHeights returns the block heights for each input of the transaction
-func (v *Validator) getTransactionInputBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, map[chainhash.Hash][]int, error) {
+func (v *Validator) getTransactionInputBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getTransactionInputBlockHeights",
 		tracing.WithHistogram(getTransactionInputBlockHeights),
 	)
 	defer deferFn()
 
 	// get the utxo heights for each input
-	utxoHeights, parentTxHashes, err := v.getUtxoBlockHeights(ctx, tx, txID)
+	utxoHeights, err := v.getUtxoBlockHeights(ctx, tx, txID)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	return utxoHeights, parentTxHashes, nil
+	return utxoHeights, nil
 }
 
 // twoPhaseCommitTransaction marks the transaction as spendable
@@ -551,7 +550,7 @@ func (v *Validator) twoPhaseCommitTransaction(setSpan tracing.Span, tx *bt.Tx, t
 }
 
 // getUtxoBlockHeights returns the block heights for each input of the transaction
-func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, map[chainhash.Hash][]int, error) {
+func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
 	// get the block heights of the input transactions of the transaction
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, v.settings.UtxoStore.GetBatcherSize)
@@ -599,10 +598,10 @@ func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID str
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	return utxoHeights, parentTxHashes, nil
+	return utxoHeights, nil
 }
 
 func (v *Validator) TriggerBatcher() {
@@ -675,10 +674,13 @@ func (v *Validator) CreateInUtxoStore(traceSpan tracing.Span, tx *bt.Tx, blockHe
 func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) error {
 	startKafka := time.Now()
 
-	metaBytes := data.MetaBytes()
+	metaBytes, err := data.MetaBytes()
+	if err != nil {
+		return errors.NewProcessingError("error serializing tx meta data for tx %s", txHash.String(), err)
+	}
 
 	if len(metaBytes) > 2048 {
-		v.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", len(metaBytes), len(data.ParentTxHashes))
+		v.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", len(metaBytes), len(data.TxInpoints.ParentTxHashes))
 	}
 
 	value, err := proto.Marshal(&kafkamessage.KafkaTxMetaTopicMessage{
@@ -746,7 +748,7 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 		v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
 	}
 
-	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.Parents); err != nil {
+	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints); err != nil {
 		e := errors.NewServiceError("error calling blockAssembler Store()", err)
 		traceSpan.RecordError(e)
 

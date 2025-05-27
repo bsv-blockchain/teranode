@@ -39,7 +39,7 @@ import (
 // from external sources.
 type missingTx struct {
 	// tx is the actual transaction data that was retrieved
-	tx  *bt.Tx
+	tx *bt.Tx
 
 	// idx is the original position of this transaction in the subtree's transaction list
 	idx int
@@ -641,7 +641,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		// add the txMeta data we need for block validation
 		subtreeIdx := subtree.Length() - 1
 
-		if err = subtreeMeta.SetParentTxHashes(subtreeIdx, txMeta.ParentTxHashes); err != nil {
+		if err = subtreeMeta.SetTxInpoints(subtreeIdx, txMeta.TxInpoints); err != nil {
 			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to set parent tx hash in subtreeMeta", v.SubtreeHash.String(), err)
 		}
 	}
@@ -670,7 +670,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	dah := u.utxoStore.GetBlockHeight() + u.settings.GlobalBlockHeightRetention
 
-	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeMetaBytes, options.WithDeleteAt(dah), options.WithFileExtension("meta"))
+	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeMetaBytes, options.WithDeleteAt(dah), options.WithFileExtension(options.SubtreeMetaFileExtension))
 
 	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
 
@@ -700,7 +700,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		merkleRoot[:],
 		completeSubtreeBytes,
 		options.WithDeleteAt(u.settings.GlobalBlockHeightRetention),
-		options.WithFileExtension("subtree"),
+		options.WithFileExtension(options.SubtreeFileExtension),
 	)
 
 	stat.NewStat("8. storeSubtree").AddTime(start)
@@ -910,9 +910,9 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 // locally, which would contain all transactions. If not available, it makes a decision based on
 // the percentage of missing transactions:
 //
-// - If a large percentage of transactions are missing (configurable threshold), it attempts to
-//   fetch the entire subtree data file from the peer to optimize network usage.
-// - Otherwise, it retrieves only the specific missing transactions individually.
+//   - If a large percentage of transactions are missing (configurable threshold), it attempts to
+//     fetch the entire subtree data file from the peer to optimize network usage.
+//   - Otherwise, it retrieves only the specific missing transactions individually.
 //
 // The method employs fallback mechanisms to ensure maximum resilience, switching between
 // file-based and network-based retrieval methods as needed. This approach balances efficiency
@@ -934,7 +934,7 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 	// first check whether we have the subtreeData file for this subtree and use that for the missing transactions
 	subtreeDataExists, err := u.subtreeStore.Exists(ctx,
 		subtreeHash[:],
-		options.WithFileExtension("subtreeData"),
+		options.WithFileExtension(options.SubtreeDataFileExtension),
 	)
 	if err != nil {
 		return nil, errors.NewProcessingError("[validateSubtree][%s] failed to check if subtreeData exists", subtreeHash.String(), err)
@@ -956,7 +956,7 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 				if subtreeDataErr = u.subtreeStore.SetFromReader(ctx,
 					subtreeHash[:],
 					body,
-					options.WithFileExtension("subtreeData"),
+					options.WithFileExtension(options.SubtreeDataFileExtension),
 				); subtreeDataErr != nil {
 					u.logger.Errorf("[validateSubtree][%s] failed to store subtree data: %v", subtreeHash.String(), subtreeDataErr)
 				} else {
@@ -1111,7 +1111,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 		// load the subtree
 		subtreeReader, err := u.subtreeStore.GetIoReader(ctx,
 			subtreeHash[:],
-			options.WithFileExtension("subtree"),
+			options.WithFileExtension(options.SubtreeFileExtension),
 		)
 		if err != nil {
 			// try getting the subtree from the store, marked as to be checked from the legacy service
@@ -1153,7 +1153,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	// get the subtreeData
 	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx,
 		subtreeHash[:],
-		options.WithFileExtension("subtreeData"),
+		options.WithFileExtension(options.SubtreeDataFileExtension),
 	)
 	if err != nil {
 		return nil, errors.NewStorageError("[getMissingTransactionsFromFile] failed to get subtreeData from store", err)

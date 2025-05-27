@@ -16,13 +16,13 @@ import (
 
 var (
 	transactionMeta = &meta.Data{
-		Tx:             nil,
-		ParentTxHashes: []chainhash.Hash{*testBlockHeader.Hash()},
-		BlockIDs:       []uint32{1, 2, 3},
-		Fee:            123,
-		SizeInBytes:    321,
-		IsCoinbase:     false,
-		LockTime:       500000,
+		Tx:          nil,
+		TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*testBlockHeader.Hash()}, Idxs: [][]uint32{{1}}},
+		BlockIDs:    []uint32{1, 2, 3},
+		Fee:         123,
+		SizeInBytes: 321,
+		IsCoinbase:  false,
+		LockTime:    500000,
 	}
 )
 
@@ -55,10 +55,13 @@ func TestGetTransactionMeta(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		txInpoints := response["txInpoints"].(map[string]interface{})
+		parentTxHashes := txInpoints["ParentTxHashes"].([]interface{})
+
 		// Check response fields
 		require.NotNil(t, response)
 		assert.Nil(t, response["tx"])
-		assert.Equal(t, []interface{}{"9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995"}, response["parentTxHashes"])
+		assert.Equal(t, []interface{}{"9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995"}, parentTxHashes)
 		assert.Equal(t, []interface{}{float64(1), float64(2), float64(3)}, response["blockIDs"])
 		assert.Equal(t, float64(123), response["fee"])
 		assert.Equal(t, float64(321), response["sizeInBytes"])

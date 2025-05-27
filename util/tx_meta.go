@@ -3,7 +3,6 @@ package util
 import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func TxMetaDataFromTx(tx *bt.Tx) (*meta.Data, error) {
@@ -12,23 +11,24 @@ func TxMetaDataFromTx(tx *bt.Tx) (*meta.Data, error) {
 		return nil, err
 	}
 
-	var parentTxHashes []chainhash.Hash
+	var txInpoints meta.TxInpoints
 	if tx.IsCoinbase() {
-		parentTxHashes = make([]chainhash.Hash, 0)
+		// For coinbase transactions, we do not have inputs, so we create an empty TxInpoints.
+		txInpoints = meta.TxInpoints{}
 	} else {
-		parentTxHashes = make([]chainhash.Hash, len(tx.Inputs))
-		for index, input := range tx.Inputs {
-			parentTxHashes[index] = *input.PreviousTxIDChainHash()
+		txInpoints, err = meta.NewTxInpointsFromTx(tx)
+		if err != nil {
+			return nil, err
 		}
 	}
 
 	s := meta.Data{
-		Tx:             tx,
-		ParentTxHashes: parentTxHashes,
-		BlockIDs:       make([]uint32, 0),
-		Fee:            fee,
-		IsCoinbase:     tx.IsCoinbase(),
-		LockTime:       tx.LockTime,
+		Tx:         tx,
+		TxInpoints: txInpoints,
+		BlockIDs:   make([]uint32, 0),
+		Fee:        fee,
+		IsCoinbase: tx.IsCoinbase(),
+		LockTime:   tx.LockTime,
 	}
 
 	// For partially populated utxos, we will have no inputs and possibly some nil outputs.

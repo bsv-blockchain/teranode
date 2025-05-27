@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -143,6 +144,13 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 func newTx(lockTime uint32) *bt.Tx {
 	tx := bt.NewTx()
 	tx.LockTime = lockTime
+
+	tx.Inputs = []*bt.Input{{
+		UnlockingScript:    &bscript.Script{},
+		PreviousTxOutIndex: 0,
+	}}
+
+	_ = tx.Inputs[0].PreviousTxIDAdd(&chainhash.Hash{})
 
 	return tx
 }

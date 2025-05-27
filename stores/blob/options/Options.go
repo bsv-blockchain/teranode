@@ -26,30 +26,30 @@ type Options struct {
 	BlockHeightRetention uint32
 	// DAH (Delete-At-Height) is the blockchain height at which a blob should be deleted (FileOption)
 	// When this height is reached or exceeded, the blob becomes eligible for deletion
-	DAH                  uint32
+	DAH uint32
 	// Filename is an optional custom name for storing a blob instead of using its hash
-	Filename             string
+	Filename string
 	// Extension is an optional file extension to append to blob filenames
-	Extension            string
+	Extension FileExtension
 	// SubDirectory is an optional subdirectory for organizing blobs within the store
-	SubDirectory         string
+	SubDirectory string
 	// HashPrefix controls how hash-based directory structures are created
 	// Positive: Use first N characters of hash as directory
 	// Negative: Use last N characters of hash as directory
 	// Zero: Don't use hash-based directories
-	HashPrefix           int
+	HashPrefix int
 	// AllowOverwrite determines if existing blobs can be overwritten
-	AllowOverwrite       bool
+	AllowOverwrite bool
 	// Header is optional data to prepend to the blob content
-	Header               []byte
+	Header []byte
 	// Footer is optional data and metadata to append to the blob content
-	Footer               *Footer
+	Footer *Footer
 	// GenerateSHA256 enables SHA256 checksumming for integrity verification
-	GenerateSHA256       bool
+	GenerateSHA256 bool
 	// PersistSubDir is a subdirectory for persistent storage in tiered storage models
-	PersistSubDir        string
+	PersistSubDir string
 	// LongtermStoreURL is the URL for a longterm storage backend in tiered storage models
-	LongtermStoreURL     *url.URL
+	LongtermStoreURL *url.URL
 }
 
 // StoreOption is a function type for configuring store-level options.
@@ -143,7 +143,7 @@ func WithFilename(name string) FileOption {
 }
 
 // WithFileExtension configures the file extension for the file.
-func WithFileExtension(extension string) FileOption {
+func WithFileExtension(extension FileExtension) FileOption {
 	return func(s *Options) {
 		s.Extension = extension
 	}
@@ -200,7 +200,7 @@ func WithLongtermStorage(persistSubDir string, longtermStoreURL *url.URL) StoreO
 //
 // Returns:
 //   - A new slice of FileOptions with the old extension replaced with the new extension.
-func ReplaceExtention(fileOpts []FileOption, oldExt string, newExt string) []FileOption {
+func ReplaceExtention(fileOpts []FileOption, oldExt FileExtension, newExt FileExtension) []FileOption {
 	newOpts := make([]FileOption, 0, len(fileOpts))
 
 	for _, opt := range fileOpts {
@@ -274,7 +274,7 @@ func FileOptionsToQuery(opts ...FileOption) url.Values {
 	}
 
 	if options.Extension != "" {
-		query.Set("extension", options.Extension)
+		query.Set("extension", options.Extension.String())
 	}
 
 	if options.AllowOverwrite {
@@ -308,7 +308,7 @@ func QueryToFileOptions(query url.Values) []FileOption {
 	}
 
 	if extension := query.Get("extension"); extension != "" {
-		opts = append(opts, WithFileExtension(extension))
+		opts = append(opts, WithFileExtension(FileExtension(extension)))
 	}
 
 	if allowOverwrite := query.Get("allowOverwrite"); allowOverwrite == "true" {
@@ -349,7 +349,7 @@ func (o *Options) ConstructFilename(basePath string, hash []byte) (string, error
 
 	// Create full file name
 	if o.Extension != "" {
-		filename += "." + o.Extension
+		filename += "." + o.Extension.String()
 	}
 
 	return filename, nil

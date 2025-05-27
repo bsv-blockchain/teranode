@@ -30,7 +30,7 @@ func WithAbsoluteTimeout(timeout time.Duration) QuorumOption {
 	}
 }
 
-func WithExtension(extension string) QuorumOption {
+func WithExtension(extension options.FileExtension) QuorumOption {
 	return func(q *Quorum) {
 		q.extension = extension
 	}
@@ -45,7 +45,7 @@ type Quorum struct {
 	path            string
 	timeout         time.Duration
 	absoluteTimeout time.Duration
-	extension       string
+	extension       options.FileExtension
 	exister         existerIfc
 	existerOpts     []options.FileOption
 }

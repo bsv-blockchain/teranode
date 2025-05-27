@@ -19,9 +19,15 @@ func Test_NewDataFromBytes(t *testing.T) {
 		data := &Data{
 			Fee:         100,
 			SizeInBytes: 200,
-			ParentTxHashes: []chainhash.Hash{
-				*hash3,
-				*hash4,
+			TxInpoints: TxInpoints{
+				ParentTxHashes: []chainhash.Hash{
+					*hash3,
+					*hash4,
+				},
+				Idxs: [][]uint32{
+					{1, 2},
+					{3, 4},
+				},
 			},
 			BlockIDs: []uint32{
 				123,
@@ -31,7 +37,8 @@ func Test_NewDataFromBytes(t *testing.T) {
 			IsCoinbase: true,
 		}
 
-		b := data.Bytes()
+		b, err := data.Bytes()
+		require.NoError(t, err)
 
 		d, err := NewDataFromBytes(b)
 		require.NoError(t, err)
@@ -40,10 +47,12 @@ func Test_NewDataFromBytes(t *testing.T) {
 		assert.Equal(t, data.SizeInBytes, d.SizeInBytes)
 		assert.True(t, d.IsCoinbase)
 
-		require.Len(t, data.ParentTxHashes, 2)
-		require.Equal(t, len(data.ParentTxHashes), len(d.ParentTxHashes))
-		assert.Equal(t, data.ParentTxHashes[0].String(), d.ParentTxHashes[0].String())
-		assert.Equal(t, data.ParentTxHashes[1].String(), d.ParentTxHashes[1].String())
+		require.Len(t, data.TxInpoints.ParentTxHashes, 2)
+		require.Equal(t, len(data.TxInpoints.ParentTxHashes), len(d.TxInpoints.ParentTxHashes))
+		assert.Equal(t, data.TxInpoints.ParentTxHashes[0].String(), d.TxInpoints.ParentTxHashes[0].String())
+		assert.Equal(t, data.TxInpoints.ParentTxHashes[1].String(), d.TxInpoints.ParentTxHashes[1].String())
+		assert.Equal(t, data.TxInpoints.Idxs[0], d.TxInpoints.Idxs[0])
+		assert.Equal(t, data.TxInpoints.Idxs[1], d.TxInpoints.Idxs[1])
 
 		require.Len(t, data.BlockIDs, 2)
 		require.Equal(t, len(data.BlockIDs), len(d.BlockIDs))
@@ -55,9 +64,15 @@ func Test_NewDataFromBytes(t *testing.T) {
 		data := &Data{
 			Fee:         100,
 			SizeInBytes: 200,
-			ParentTxHashes: []chainhash.Hash{
-				*hash3,
-				*hash4,
+			TxInpoints: TxInpoints{
+				ParentTxHashes: []chainhash.Hash{
+					*hash3,
+					*hash4,
+				},
+				Idxs: [][]uint32{
+					{1, 2},
+					{3, 4},
+				},
 			},
 			BlockIDs: []uint32{
 				123,
@@ -69,7 +84,8 @@ func Test_NewDataFromBytes(t *testing.T) {
 			Conflicting: true,
 		}
 
-		b := data.Bytes()
+		b, err := data.Bytes()
+		require.NoError(t, err)
 
 		d, err := NewDataFromBytes(b)
 		require.NoError(t, err)
@@ -80,10 +96,10 @@ func Test_NewDataFromBytes(t *testing.T) {
 		assert.True(t, d.Frozen)
 		assert.True(t, d.Conflicting)
 
-		require.Len(t, data.ParentTxHashes, 2)
-		require.Equal(t, len(data.ParentTxHashes), len(d.ParentTxHashes))
-		assert.Equal(t, data.ParentTxHashes[0].String(), d.ParentTxHashes[0].String())
-		assert.Equal(t, data.ParentTxHashes[1].String(), d.ParentTxHashes[1].String())
+		require.Len(t, data.TxInpoints.ParentTxHashes, 2)
+		require.Equal(t, len(data.TxInpoints.ParentTxHashes), len(d.TxInpoints.ParentTxHashes))
+		assert.Equal(t, data.TxInpoints.ParentTxHashes[0].String(), d.TxInpoints.ParentTxHashes[0].String())
+		assert.Equal(t, data.TxInpoints.ParentTxHashes[1].String(), d.TxInpoints.ParentTxHashes[1].String())
 
 		require.Len(t, data.BlockIDs, 2)
 		require.Equal(t, len(data.BlockIDs), len(d.BlockIDs))
@@ -96,9 +112,15 @@ func Benchmark_NewMetaDataFromBytes(b *testing.B) {
 	data := &Data{
 		Fee:         100,
 		SizeInBytes: 200,
-		ParentTxHashes: []chainhash.Hash{
-			*hash3,
-			*hash4,
+		TxInpoints: TxInpoints{
+			ParentTxHashes: []chainhash.Hash{
+				*hash3,
+				*hash4,
+			},
+			Idxs: [][]uint32{
+				{1, 2},
+				{3, 4},
+			},
 		},
 		BlockIDs: []uint32{
 			5,
@@ -107,13 +129,13 @@ func Benchmark_NewMetaDataFromBytes(b *testing.B) {
 		Tx: &bt.Tx{},
 	}
 
-	dataBytes := data.Bytes()
+	dataBytes, _ := data.Bytes()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		NewMetaDataFromBytes(&dataBytes, data)
+		_ = NewMetaDataFromBytes(dataBytes, data)
 	}
 }
 
@@ -121,9 +143,15 @@ func Benchmark_Bytes(b *testing.B) {
 	data := &Data{
 		Fee:         100,
 		SizeInBytes: 200,
-		ParentTxHashes: []chainhash.Hash{
-			*hash3,
-			*hash4,
+		TxInpoints: TxInpoints{
+			ParentTxHashes: []chainhash.Hash{
+				*hash3,
+				*hash4,
+			},
+			Idxs: [][]uint32{
+				{1, 2},
+				{3, 4},
+			},
 		},
 		BlockIDs: []uint32{
 			5,
@@ -136,7 +164,7 @@ func Benchmark_Bytes(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = data.Bytes()
+		_, _ = data.Bytes()
 	}
 }
 
@@ -144,9 +172,15 @@ func Benchmark_MetaBytes(b *testing.B) {
 	data := &Data{
 		Fee:         100,
 		SizeInBytes: 200,
-		ParentTxHashes: []chainhash.Hash{
-			*hash3,
-			*hash4,
+		TxInpoints: TxInpoints{
+			ParentTxHashes: []chainhash.Hash{
+				*hash3,
+				*hash4,
+			},
+			Idxs: [][]uint32{
+				{1, 2},
+				{3, 4},
+			},
 		},
 	}
 
@@ -154,6 +188,6 @@ func Benchmark_MetaBytes(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = data.MetaBytes()
+		_, _ = data.MetaBytes()
 	}
 }

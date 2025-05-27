@@ -395,6 +395,18 @@ func Test_Duplicate(t *testing.T) {
 }
 
 func TestSubtree_NodeIndex(t *testing.T) {
+	tx1 := tx.Clone()
+	tx1.Version = 1
+	hash1 := *tx1.TxIDChainHash()
+
+	tx2 := tx.Clone()
+	tx2.Version = 2
+	hash2 := *tx2.TxIDChainHash()
+
+	tx3 := tx.Clone()
+	tx3.Version = 3
+	hash3 := *tx3.TxIDChainHash()
+
 	t.Run("existing node", func(t *testing.T) {
 		st, err := NewTree(4)
 		require.NoError(t, err)
@@ -419,9 +431,7 @@ func TestSubtree_NodeIndex(t *testing.T) {
 		index := st.NodeIndex(hash3)
 		assert.Equal(t, -1, index)
 	})
-}
 
-func TestSubtree_RemoveNodeAtIndex(t *testing.T) {
 	t.Run("remove existing node", func(t *testing.T) {
 		st, err := NewTree(4)
 		require.NoError(t, err)
@@ -683,6 +693,14 @@ func BenchmarkSubtree_SerializeNodes(b *testing.B) {
 }
 
 func TestSubtree_ConflictingNodes(t *testing.T) {
+	tx1 := tx.Clone()
+	tx1.Version = 1
+	hash1 := *tx1.TxIDChainHash()
+
+	tx2 := tx.Clone()
+	tx2.Version = 2
+	hash2 := *tx2.TxIDChainHash()
+
 	st, err := NewTree(4)
 	require.NoError(t, err)
 

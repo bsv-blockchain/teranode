@@ -119,7 +119,7 @@ type IgnoreFlags struct {
 
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
-	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.ParentTxHashes, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Unspendable}
+	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Unspendable}
 	// MetaFieldsWithTx defines the set of metadata fields including the transaction data.
 	MetaFieldsWithTx = append(MetaFields, fields.Tx)
 )

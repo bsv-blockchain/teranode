@@ -373,7 +373,7 @@ func (repo *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, l
 //   - []byte: Subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
-	subtreeBytes, err := repo.SubtreeStore.Get(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
+	subtreeBytes, err := repo.SubtreeStore.Get(ctx, hash.CloneBytes(), options.WithFileExtension(options.SubtreeFileExtension))
 	if err != nil {
 		return nil, err
 	}
@@ -391,7 +391,7 @@ func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Has
 //   - io.ReadCloser: Reader for subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
-	return repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
+	return repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension(options.SubtreeFileExtension))
 }
 
 // GetSubtreeDataReaderFromBlockPersister provides a reader interface for accessing subtree data from block persister.
@@ -404,7 +404,7 @@ func (repo *Repository) GetSubtreeTxIDsReader(ctx context.Context, hash *chainha
 //   - io.ReadCloser: Reader for subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
-	return repo.BlockPersisterStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtreeData"))
+	return repo.BlockPersisterStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension(options.SubtreeDataFileExtension))
 }
 
 // GetSubtree retrieves and deserializes a complete subtree structure.
@@ -421,7 +421,7 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
 	)
 
-	subtreeBytes, err := repo.SubtreeStore.Get(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
+	subtreeBytes, err := repo.SubtreeStore.Get(ctx, hash.CloneBytes(), options.WithFileExtension(options.SubtreeFileExtension))
 	if err != nil {
 		return nil, errors.NewServiceError("error in GetSubtree Get method", err)
 	}
@@ -435,7 +435,7 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 }
 
 func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
+	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), options.WithFileExtension(options.SubtreeFileExtension))
 }
 
 // GetSubtreeHead retrieves only the head portion of a subtree, containing fees and size information.
@@ -451,7 +451,7 @@ func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Ha
 func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error) {
 	repo.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 
-	subtreeBytes, err := repo.SubtreeStore.GetHead(ctx, hash.CloneBytes(), 56, options.WithFileExtension("subtree"))
+	subtreeBytes, err := repo.SubtreeStore.GetHead(ctx, hash.CloneBytes(), 56, options.WithFileExtension(options.SubtreeFileExtension))
 	if err != nil {
 		return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method", err)
 	}

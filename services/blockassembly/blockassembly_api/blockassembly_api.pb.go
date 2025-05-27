@@ -177,12 +177,12 @@ func (x *NewChaintipAndHeightRequest) GetHeight() uint32 {
 // Request for adding a new transaction to the mining candidate block.
 type AddTxRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Txid          []byte                 `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`          // the transaction id
-	Fee           uint64                 `protobuf:"varint,3,opt,name=fee,proto3" json:"fee,omitempty"`           // the transaction fee in satoshis
-	Size          uint64                 `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`         // the size of the transaction in bytes
-	Locktime      uint32                 `protobuf:"varint,2,opt,name=locktime,proto3" json:"locktime,omitempty"` // the earliest time a transaction can be mined into a block
-	Utxos         [][]byte               `protobuf:"bytes,5,rep,name=utxos,proto3" json:"utxos,omitempty"`        // the UTXOs consumed by this transaction
-	Parents       [][]byte               `protobuf:"bytes,6,rep,name=parents,proto3" json:"parents,omitempty"`    // the parent transactions of this transaction
+	Txid          []byte                 `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`             // the transaction id
+	Fee           uint64                 `protobuf:"varint,3,opt,name=fee,proto3" json:"fee,omitempty"`              // the transaction fee in satoshis
+	Size          uint64                 `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`            // the size of the transaction in bytes
+	Locktime      uint32                 `protobuf:"varint,2,opt,name=locktime,proto3" json:"locktime,omitempty"`    // the earliest time a transaction can be mined into a block
+	Utxos         [][]byte               `protobuf:"bytes,5,rep,name=utxos,proto3" json:"utxos,omitempty"`           // the UTXOs consumed by this transaction
+	TxInpoints    []byte                 `protobuf:"bytes,6,opt,name=txInpoints,proto3" json:"txInpoints,omitempty"` // the parent transactions of this transaction
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -252,9 +252,9 @@ func (x *AddTxRequest) GetUtxos() [][]byte {
 	return nil
 }
 
-func (x *AddTxRequest) GetParents() [][]byte {
+func (x *AddTxRequest) GetTxInpoints() []byte {
 	if x != nil {
-		return x.Parents
+		return x.TxInpoints
 	}
 	return nil
 }
@@ -878,14 +878,16 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"Q\n" +
 	"\x1bNewChaintipAndHeightRequest\x12\x1a\n" +
 	"\bchaintip\x18\x01 \x01(\fR\bchaintip\x12\x16\n" +
-	"\x06height\x18\x02 \x01(\rR\x06height\"\x94\x01\n" +
+	"\x06height\x18\x02 \x01(\rR\x06height\"\x9a\x01\n" +
 	"\fAddTxRequest\x12\x12\n" +
 	"\x04txid\x18\x01 \x01(\fR\x04txid\x12\x10\n" +
 	"\x03fee\x18\x03 \x01(\x04R\x03fee\x12\x12\n" +
 	"\x04size\x18\x04 \x01(\x04R\x04size\x12\x1a\n" +
 	"\blocktime\x18\x02 \x01(\rR\blocktime\x12\x14\n" +
-	"\x05utxos\x18\x05 \x03(\fR\x05utxos\x12\x18\n" +
-	"\aparents\x18\x06 \x03(\fR\aparents\"T\n" +
+	"\x05utxos\x18\x05 \x03(\fR\x05utxos\x12\x1e\n" +
+	"\n" +
+	"txInpoints\x18\x06 \x01(\fR\n" +
+	"txInpoints\"T\n" +
 	"\x11AddTxBatchRequest\x12?\n" +
 	"\n" +
 	"txRequests\x18\x01 \x03(\v2\x1f.blockassembly_api.AddTxRequestR\n" +
@@ -989,7 +991,7 @@ var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_depIdx
 	15, // 0: blockassembly_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
 	3,  // 1: blockassembly_api.AddTxBatchRequest.txRequests:type_name -> blockassembly_api.AddTxRequest
 	0,  // 2: blockassembly_api.BlockAssemblyAPI.HealthGRPC:input_type -> blockassembly_api.EmptyMessage
-	3,  // 3: blockassembly_api.BlockAssemblyAPI.AddTx:input_type -> blockassembly_api.AddTxRequest
+	3,  // 3: blockassembly_api.BlockAssemblyAPI.addTx:input_type -> blockassembly_api.AddTxRequest
 	6,  // 4: blockassembly_api.BlockAssemblyAPI.RemoveTx:input_type -> blockassembly_api.RemoveTxRequest
 	4,  // 5: blockassembly_api.BlockAssemblyAPI.AddTxBatch:input_type -> blockassembly_api.AddTxBatchRequest
 	5,  // 6: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:input_type -> blockassembly_api.GetMiningCandidateRequest
@@ -1002,7 +1004,7 @@ var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_depIdx
 	0,  // 13: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:input_type -> blockassembly_api.EmptyMessage
 	0,  // 14: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:input_type -> blockassembly_api.EmptyMessage
 	1,  // 15: blockassembly_api.BlockAssemblyAPI.HealthGRPC:output_type -> blockassembly_api.HealthResponse
-	7,  // 16: blockassembly_api.BlockAssemblyAPI.AddTx:output_type -> blockassembly_api.AddTxResponse
+	7,  // 16: blockassembly_api.BlockAssemblyAPI.addTx:output_type -> blockassembly_api.AddTxResponse
 	0,  // 17: blockassembly_api.BlockAssemblyAPI.RemoveTx:output_type -> blockassembly_api.EmptyMessage
 	8,  // 18: blockassembly_api.BlockAssemblyAPI.AddTxBatch:output_type -> blockassembly_api.AddTxBatchResponse
 	16, // 19: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:output_type -> model.MiningCandidate

@@ -62,7 +62,7 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	}
 
 	// create the block-store .subtreeData file
-	storer, err := filestorer.NewFileStorer(context.Background(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], "subtreeData")
+	storer, err := filestorer.NewFileStorer(context.Background(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], options.SubtreeDataFileExtension)
 	require.NoError(t, err)
 
 	err = blockpersister.WriteTxs(context.Background(), ctx.logger, storer, metaDatas, nil)
@@ -114,7 +114,7 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 	// Create the subtree in the subtree store
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 	require.NoError(t, err)
 
 	// go get me a legacy block from the subtree-store and utxo-store
@@ -163,7 +163,7 @@ func TestGetLegacyWireBlockWithSubtreeStore(t *testing.T) {
 	// Create the subtree in the subtree store
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 	require.NoError(t, err)
 
 	// go get me a legacy block from the subtree-store and utxo-store

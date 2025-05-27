@@ -311,6 +311,14 @@ func Sanity(t *testing.T, db utxostore.Store) {
 
 	for i := uint64(0); i < 1_000; i++ {
 		stx := bt.NewTx()
+
+		require.NoError(t, stx.FromUTXOs(&bt.UTXO{
+			TxIDHash:      Tx.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: Tx.Inputs[0].PreviousTxScript,
+			Satoshis:      Tx.Inputs[0].PreviousTxSatoshis,
+		}))
+
 		err = stx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", i+2_000_000)
 		require.NoError(t, err)
 

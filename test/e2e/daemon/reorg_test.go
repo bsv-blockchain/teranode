@@ -264,7 +264,7 @@ func checkSubtrees(t *testing.T, td *daemon.TestDaemon, expectedTxCount int) {
 		subtreeHash := chainhash.Hash(subtreeBytes)
 
 		// // Get the subtree bytes from the store
-		subtreeData, err := td.SubtreeStore.Get(td.Ctx, subtreeHash[:], options.WithFileExtension("subtree"))
+		subtreeData, err := td.SubtreeStore.Get(td.Ctx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
 		require.NoError(t, err, "Failed to get subtree data from store")
 
 		// Parse the subtree
@@ -408,11 +408,11 @@ func TestBlockAssemblyReset(t *testing.T) {
 
 	// Start node1 and generate 100 blocks
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true, // Start without P2P to allow separate chain
-		EnableValidator: true,
+		EnableRPC:         true,
+		EnableP2P:         true, // Start without P2P to allow separate chain
+		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsContext: "docker.host.teranode1.daemon",
+		SettingsContext:   "docker.host.teranode1.daemon",
 	})
 	t.Cleanup(func() { node1.Stop(t) })
 
@@ -430,11 +430,11 @@ func TestBlockAssemblyReset(t *testing.T) {
 	node2.ResetServiceManagerContext(t)
 	// start node2 again with p2p disabled
 	node2 = daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       false,
-		EnableValidator: true,
+		EnableRPC:         true,
+		EnableP2P:         false,
+		EnableValidator:   true,
 		SkipRemoveDataDir: true,
-		SettingsContext: "docker.host.teranode2.daemon",
+		SettingsContext:   "docker.host.teranode2.daemon",
 	})
 
 	t.Cleanup(func() { node2.Stop(t) })

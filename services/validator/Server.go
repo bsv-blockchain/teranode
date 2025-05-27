@@ -64,31 +64,31 @@ type Server struct {
 	// UnsafeValidatorAPIServer is the base implementation of the validator gRPC API
 	validator_api.UnsafeValidatorAPIServer
 	// validator is the core validation engine implementing the Interface contract
-	validator                     Interface
+	validator Interface
 	// logger handles all logging operations for the server
-	logger                        ulogger.Logger
+	logger ulogger.Logger
 	// settings contains the configuration options for the validator service
-	settings                      *settings.Settings
+	settings *settings.Settings
 	// utxoStore provides access to the UTXO database for transaction input validation
-	utxoStore                     utxo.Store
+	utxoStore utxo.Store
 	// kafkaSignal is used to signal shutdown to Kafka components
-	kafkaSignal                   chan os.Signal
+	kafkaSignal chan os.Signal
 	// stats collects performance metrics for the validator service
-	stats                         *gocore.Stat
+	stats *gocore.Stat
 	// ctx is the server's main context used for operation management and cancellation
-	ctx                           context.Context
+	ctx context.Context
 	// blockchainClient connects to the blockchain service for block-related operations
-	blockchainClient              blockchain.ClientI
+	blockchainClient blockchain.ClientI
 	// consumerClient receives validation requests via Kafka
-	consumerClient                kafka.KafkaConsumerGroupI
+	consumerClient kafka.KafkaConsumerGroupI
 	// txMetaKafkaProducerClient publishes transaction metadata to Kafka
-	txMetaKafkaProducerClient     kafka.KafkaAsyncProducerI
+	txMetaKafkaProducerClient kafka.KafkaAsyncProducerI
 	// rejectedTxKafkaProducerClient publishes rejected transaction information to Kafka
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 	// blockAssemblyClient connects to the block assembly service for mining integration
-	blockAssemblyClient           blockassembly.ClientI
+	blockAssemblyClient blockassembly.ClientI
 	// httpServer handles HTTP API requests for transaction validation
-	httpServer                    *echo.Echo
+	httpServer *echo.Echo
 }
 
 // NewServer creates and initializes a new validator server instance with the specified components.
@@ -137,7 +137,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 // Parameters:
 //   - ctx: Context for the health check operation, used for cancellation and timeouts
 //   - checkLiveness: If true, performs only basic service liveness checks without dependency validation
-//                   If false, performs full readiness check including all service dependencies
+//     If false, performs full readiness check including all service dependencies
 //
 // Returns:
 //   - int: HTTP status code indicating health status (200=healthy, other codes=unhealthy)
@@ -191,7 +191,7 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 //
 // Returns:
 //   - *validator_api.HealthResponse: Health check response containing status and details
-//                                   The Ok field indicates overall health (true=healthy)
+//     The Ok field indicates overall health (true=healthy)
 //   - error: Any errors encountered during health check, wrapped appropriately for gRPC
 func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
 	prometheusHealth.Add(1)
@@ -215,7 +215,7 @@ func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) 
 //
 // Returns:
 //   - error: Any initialization errors, including configuration issues or dependency failures
-//           Returns ServiceError if blockassembly is enabled but the client is nil
+//     Returns ServiceError if blockassembly is enabled but the client is nil
 func (v *Server) Init(ctx context.Context) (err error) {
 	v.ctx = ctx
 
@@ -246,7 +246,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 //
 // Returns:
 //   - error: Any startup errors, including FSM transition failures, Kafka setup issues,
-//           or HTTP server initialization problems
+//     or HTTP server initialization problems
 func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -328,7 +328,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 //
 // Returns:
 //   - error: Any shutdown errors encountered during the cleanup process
-//           Returns nil if shutdown is successful or if no cleanup was necessary
+//     Returns nil if shutdown is successful or if no cleanup was necessary
 func (v *Server) Stop(_ context.Context) error {
 	if v.kafkaSignal != nil {
 		v.kafkaSignal <- syscall.SIGTERM
@@ -424,10 +424,18 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 
 	prometheusTransactionSize.Observe(float64(len(transactionData)))
 
+	txMetaBytes, err := txMetaData.Bytes()
+	if err != nil {
+		return &validator_api.ValidateTransactionResponse{
+			Valid: false,
+			Txid:  tx.TxIDChainHash().CloneBytes(),
+		}, errors.NewProcessingError("failed to serialize transaction metadata", err)
+	}
+
 	return &validator_api.ValidateTransactionResponse{
 		Valid:    true,
 		Txid:     tx.TxIDChainHash().CloneBytes(),
-		Metadata: txMetaData.Bytes(),
+		Metadata: txMetaBytes,
 	}, nil
 }
 
@@ -447,8 +455,8 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 //
 // Returns:
 //   - *validator_api.ValidateTransactionBatchResponse: Batch validation results including:
-//     - Individual transaction metadata
-//     - Error details for each transaction
+//   - Individual transaction metadata
+//   - Error details for each transaction
 //   - error: Batch-level errors (rare, typically nil as transaction-specific errors are in the response)
 func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "ValidateTransactionBatch",
@@ -627,10 +635,10 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 //
 // Returns:
 //   - echo.HandlerFunc: HTTP handler function that processes transaction validation requests
-//                       and returns appropriate status codes and responses:
-//                       - 200 OK: Transaction is valid
-//                       - 400 Bad Request: Invalid request body
-//                       - 500 Internal Server Error: Validation failed with specific reason
+//     and returns appropriate status codes and responses:
+//   - 200 OK: Transaction is valid
+//   - 400 Bad Request: Invalid request body
+//   - 500 Internal Server Error: Validation failed with specific reason
 func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		body, err := io.ReadAll(c.Request().Body)
@@ -685,10 +693,10 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 //
 // Returns:
 //   - echo.HandlerFunc: HTTP handler function that processes transaction validation requests
-//                       and returns appropriate status codes and responses:
-//                       - 200 OK: All transactions are valid
-//                       - 400 Bad Request: Invalid request body or transaction format
-//                       - 500 Internal Server Error: Validation failed with specific reason
+//     and returns appropriate status codes and responses:
+//   - 200 OK: All transactions are valid
+//   - 400 Bad Request: Invalid request body or transaction format
+//   - 500 Internal Server Error: Validation failed with specific reason
 func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		// Extract validation parameters from query string
@@ -741,7 +749,7 @@ func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 //
 // The server implements several endpoints:
 // - POST /tx: Single transaction validation endpoint
-// - POST /txs: Batch transaction validation endpoint 
+// - POST /txs: Batch transaction validation endpoint
 // - GET /health: Simple health check endpoint
 // - Any other path: Returns 404 Not Found
 //

@@ -39,7 +39,7 @@ type FileStorer struct {
 	key []byte
 
 	// extension represents the file extension
-	extension string
+	extension options.FileExtension
 
 	// writer is the underlying pipe writer
 	writer *io.PipeWriter
@@ -68,7 +68,7 @@ type FileStorer struct {
 // The function initiates a background goroutine that reads from a pipe and writes to blob storage.
 // Returns a pointer to the initialized FileStorer ready for use.
 // It initializes the file storage system with buffering and hashing capabilities.
-func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, extension string) (*FileStorer, error) {
+func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, extension options.FileExtension) (*FileStorer, error) {
 	exists, err := store.Exists(ctx, key, options.WithFileExtension(extension))
 	if err != nil {
 		return nil, errors.NewStorageError("error checking if %s.%s exists", key, extension, err)
@@ -197,7 +197,7 @@ func (f *FileStorer) Close(ctx context.Context) error {
 		return errors.NewStorageError("Error setting DAH on additions file", err)
 	}
 
-	if err := f.waitUntilFileIsAvailable(ctx, f.extension); err != nil {
+	if err := f.waitUntilFileIsAvailable(ctx); err != nil {
 		f.logger.Warnf("Error waiting for file to be available: %v", err)
 	}
 
@@ -222,7 +222,7 @@ func (f *FileStorer) Close(ctx context.Context) error {
 // with a fixed interval between attempts.
 // Returns an error if the file doesn't become available within the maximum number of retries.
 // It returns an error if the file doesn't become available within the timeout period.
-func (f *FileStorer) waitUntilFileIsAvailable(ctx context.Context, extension string) error {
+func (f *FileStorer) waitUntilFileIsAvailable(ctx context.Context) error {
 	maxRetries := 10
 	retryInterval := 100 * time.Millisecond
 
@@ -239,5 +239,5 @@ func (f *FileStorer) waitUntilFileIsAvailable(ctx context.Context, extension str
 		time.Sleep(retryInterval)
 	}
 
-	return errors.NewStorageError("file %s.%s is not available", utils.ReverseAndHexEncodeSlice(f.key), extension)
+	return errors.NewStorageError("file %s.%s is not available", utils.ReverseAndHexEncodeSlice(f.key), f.extension)
 }

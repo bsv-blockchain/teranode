@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/null"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -110,7 +111,7 @@ func TestRotate(t *testing.T) {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
 
-		stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, []chainhash.Hash{*hash})
+		stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 	}
 
 	<-endTestChan
@@ -147,7 +148,7 @@ func Test_RemoveTxFromSubtrees(t *testing.T) {
 		// add some random nodes to the subtrees
 		for i := uint64(0); i < 42; i++ {
 			hash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
-			_ = stp.addNode(util.SubtreeNode{Hash: hash, Fee: i}, []chainhash.Hash{hash}, true)
+			_ = stp.addNode(util.SubtreeNode{Hash: hash, Fee: i}, &meta.TxInpoints{ParentTxHashes: []chainhash.Hash{hash}}, true)
 		}
 
 		// check the length of the subtrees
@@ -195,7 +196,7 @@ func TestReChainSubtrees(t *testing.T) {
 	// add some random nodes to the subtrees
 	for i := uint64(0); i < 42; i++ {
 		hash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
-		_ = stp.addNode(util.SubtreeNode{Hash: hash, Fee: i}, []chainhash.Hash{hash}, true)
+		_ = stp.addNode(util.SubtreeNode{Hash: hash, Fee: i}, &meta.TxInpoints{ParentTxHashes: []chainhash.Hash{hash}}, true)
 	}
 
 	assert.Len(t, stp.chainedSubtrees, 10)
@@ -288,7 +289,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, []chainhash.Hash{*hash})
+				stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 			}
 		}
 
@@ -323,7 +324,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, []chainhash.Hash{*hash})
+				stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 			}
 		}
 
@@ -399,7 +400,7 @@ func TestMoveForwardBlock(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, []chainhash.Hash{*hash})
+			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 		}
 	}
 
@@ -461,7 +462,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	subtreeBytes, err := os.ReadFile("./testdata/fd61a79793c4fb02ba14b85df98f5f60f727be359089d8fa125c4ce37945106b.subtree")
 	require.NoError(t, err)
 
-	err = subtreeStore.Set(ctx, subtreeHash.CloneBytes(), subtreeBytes, options.WithFileExtension("subtree"))
+	err = subtreeStore.Set(ctx, subtreeHash.CloneBytes(), subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings()
@@ -472,7 +473,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	require.NoError(t, err)
 
 	hash, _ := chainhash.NewHashFromStr("6affcabb2013261e764a5d4286b463b11127f4fd1de05368351530ddb3f19942")
-	subtreeProcessor.Add(util.SubtreeNode{Hash: *hash, Fee: 1, SizeInBytes: 294}, []chainhash.Hash{*hash})
+	subtreeProcessor.Add(util.SubtreeNode{Hash: *hash, Fee: 1, SizeInBytes: 294}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 
 	// we should not have the transaction in the subtrees yet, it should be stuck in the queue
 	assert.Equal(t, 1, subtreeProcessor.GetCurrentLength())
@@ -535,7 +536,7 @@ func TestIncompleteSubtreeMoveForwardBlock(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, []chainhash.Hash{*hash})
+			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 		}
 	}
 
@@ -621,7 +622,7 @@ func TestSubtreeMoveForwardBlockNewCurrent(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, []chainhash.Hash{*hash})
+			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 		}
 	}
 
@@ -700,11 +701,11 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 		if i == 0 {
 			subtreeProcessor.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			subtreeProcessor.Add(util.SubtreeNode{Hash: *hash, Fee: 111}, []chainhash.Hash{*hash})
+			subtreeProcessor.Add(util.SubtreeNode{Hash: *hash, Fee: 111}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 		}
 	}
 	// add 1 more hash to create the second subtree
-	subtreeProcessor.Add(util.SubtreeNode{Hash: *hashes[0], Fee: 111}, []chainhash.Hash{*hashes[0]})
+	subtreeProcessor.Add(util.SubtreeNode{Hash: *hashes[0], Fee: 111}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*hashes[0]}})
 
 	wg.Wait()
 
@@ -789,7 +790,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		for idx, txid := range txIDs {
 			hash, _ := chainhash.NewHashFromStr(txid)
 			hashes[idx] = hash
-			_ = subtreeProcessor.addNode(util.SubtreeNode{Hash: *hash, Fee: 1}, []chainhash.Hash{*hash}, false)
+			_ = subtreeProcessor.addNode(util.SubtreeNode{Hash: *hash, Fee: 1}, &meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}}, false)
 		}
 
 		assert.Equal(t, 4, len(subtreeProcessor.chainedSubtrees))
@@ -911,7 +912,7 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < 100_000; i++ {
-		stp.Add(util.SubtreeNode{Hash: *txHashes[i], Fee: 1}, []chainhash.Hash{*txHashes[i]})
+		stp.Add(util.SubtreeNode{Hash: *txHashes[i], Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*txHashes[i]}})
 	}
 }
 
@@ -988,7 +989,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, nil, utxosStore, newSubtreeChan)
 
 		for _, txHash := range txHashes {
-			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1}, []chainhash.Hash{txHash})
+			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 
 		wg.Wait()
@@ -1007,22 +1008,22 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree")))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
 
 		subtreeMeta1 := createSubtreeMeta(t, subtree1)
 		subtreeMetaBytes, err := subtreeMeta1.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeMetaBytes, options.WithFileExtension("meta")))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
 
 		subtree2 := createSubtree(t, 4, false)
 		subtreeBytes, err = subtree2.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree")))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
 
 		subtreeMeta2 := createSubtreeMeta(t, subtree2)
 		subtreeMetaBytes, err = subtreeMeta2.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeMetaBytes, options.WithFileExtension("meta")))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
 
 		_, _ = utxosStore.Create(context.Background(), coinbaseTx, 0)
 
@@ -1109,7 +1110,7 @@ func TestMoveBackBlocks(t *testing.T) {
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, blockchainClient, utxosStore, newSubtreeChan)
 
 		for _, txHash := range txHashes {
-			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1}, []chainhash.Hash{txHash})
+			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 
 		wg.Wait()
@@ -1130,32 +1131,32 @@ func TestMoveBackBlocks(t *testing.T) {
 		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree")))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
 
 		subtreeMeta1 := createSubtreeMeta(t, subtree1)
 		subtreeMetaBytes, err := subtreeMeta1.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeMetaBytes, options.WithFileExtension("meta")))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
 
 		subtree2 := createSubtree(t, 4, false)
 		subtreeBytes, err = subtree2.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree")))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
 
 		subtreeMeta2 := createSubtreeMeta(t, subtree2)
 		subtreeMetaBytes, err = subtreeMeta2.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeMetaBytes, options.WithFileExtension("meta")))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
 
 		subtree3 := createSubtree(t, 4, true)
 		subtreeBytes, err = subtree3.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree3.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree")))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree3.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
 
 		subtreeMeta3 := createSubtreeMeta(t, subtree3)
 		subtreeMetaBytes, err = subtreeMeta3.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree3.RootHash()[:], subtreeMetaBytes, options.WithFileExtension("meta")))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree3.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
 
 		_, _ = utxosStore.Create(context.Background(), coinbaseTx, 0)
 		_, _ = utxosStore.Create(context.Background(), coinbaseTx2, 0)
@@ -1236,7 +1237,7 @@ func Test_removeMap(t *testing.T) {
 		}
 
 		for _, txHash := range txHashes {
-			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1}, []chainhash.Hash{txHash})
+			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 
 		waitForSubtreeProcessorQueueToEmpty(t, stp)
@@ -1304,10 +1305,13 @@ func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtr
 func createSubtreeMeta(t *testing.T, subtree *util.Subtree) *util.SubtreeMeta {
 	subtreeMeta := util.NewSubtreeMeta(subtree)
 
-	parents := []chainhash.Hash{chainhash.HashH([]byte("parents"))}
+	parent := chainhash.HashH([]byte("txInpoints"))
 
 	for idx := range subtree.Nodes {
-		_ = subtreeMeta.SetParentTxHashes(idx, parents)
+		_ = subtreeMeta.SetTxInpoints(idx, meta.TxInpoints{
+			ParentTxHashes: []chainhash.Hash{parent},
+			Idxs:           [][]uint32{{1}},
+		})
 	}
 
 	return subtreeMeta
@@ -1325,13 +1329,13 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 		require.NoError(t, err)
 
 		subtree2 := createSubtree(t, 4, false)
 		subtreeBytes, err = subtree2.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
 		require.NoError(t, err)
 
 		block := &model.Block{
@@ -1377,7 +1381,7 @@ func BenchmarkAddNode(b *testing.B) {
 	b.ResetTimer()
 
 	for i, txHash := range txHashes {
-		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)}, []chainhash.Hash{txHash}) // nolint:gosec
+		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}) // nolint:gosec
 	}
 
 	err := g.Wait()
@@ -1406,7 +1410,7 @@ func BenchmarkAddNodeWithMap(b *testing.B) {
 	b.ResetTimer()
 
 	for i, txHash := range txHashes {
-		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)}, []chainhash.Hash{txHash}) //nolint:gosec
+		stp.Add(util.SubtreeNode{Hash: txHash, Fee: uint64(i)}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}) //nolint:gosec
 	}
 
 	err := g.Wait()
@@ -1513,7 +1517,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 					Hash: txHash,
 				}
 
-				err = stp.addNode(node, []chainhash.Hash{txHash}, true)
+				err = stp.addNode(node, &meta.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}, true)
 				require.NoError(t, err)
 			}
 
@@ -1603,7 +1607,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 					Hash: txHash,
 				}
 
-				err = stp.addNode(node, []chainhash.Hash{txHash}, true)
+				err = stp.addNode(node, &meta.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}, true)
 				require.NoError(t, err)
 			}
 

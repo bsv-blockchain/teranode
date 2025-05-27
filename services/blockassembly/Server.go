@@ -30,6 +30,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -260,7 +261,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					if err = ba.subtreeStore.Set(ctx,
 						subtreeRetry.subtreeHash[:],
 						subtreeRetry.subtreeMetaBytes,
-						options.WithFileExtension("meta"),
+						options.WithFileExtension(options.SubtreeMetaFileExtension),
 						options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
 					); err != nil {
 						if errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -288,7 +289,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					subtreeRetry.subtreeHash[:],
 					subtreeRetry.subtreeBytes,
 					options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
-					options.WithFileExtension("subtree"),
+					options.WithFileExtension(options.SubtreeFileExtension),
 				); err != nil {
 					if errors.Is(err, errors.ErrBlobAlreadyExists) {
 						ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree already exists", subtreeRetry.subtreeHash.String())
@@ -411,7 +412,7 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 
 		for idx, node := range subtreeRequest.Subtree.Nodes {
 			if !node.Hash.Equal(util.CoinbasePlaceholderHashValue) {
-				parents, found := subtreeRequest.ParentTxMap.Get(node.Hash)
+				txInpoints, found := subtreeRequest.ParentTxMap.Get(node.Hash)
 				if !found {
 					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to find parent tx hashes for node %s", node.Hash.String(), err)
 
@@ -420,7 +421,7 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 					break
 				}
 
-				if err = subtreeMeta.SetParentTxHashes(idx, parents); err != nil {
+				if err = subtreeMeta.SetTxInpoints(idx, txInpoints); err != nil {
 					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to set parent tx hashes: %s", node.Hash.String(), err)
 
 					subtreeMetaMissingTxs = true
@@ -439,7 +440,7 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 			if err = ba.subtreeStore.Set(ctx,
 				subtree.RootHash()[:],
 				subtreeMetaBytes,
-				options.WithFileExtension("meta"),
+				options.WithFileExtension(options.SubtreeMetaFileExtension),
 				options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
 			); err != nil {
 				if errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -463,7 +464,7 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 		subtree.RootHash()[:],
 		subtreeBytes,
 		options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
-		options.WithFileExtension("subtree"),
+		options.WithFileExtension(options.SubtreeFileExtension),
 	); err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
 			ba.logger.Debugf("[BlockAssembly:Init][%s] subtree already exists", subtree.RootHash().String())
@@ -593,15 +594,9 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 			errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid)))
 	}
 
-	parents := make([]chainhash.Hash, 0, len(req.Parents))
-
-	for _, parent := range req.Parents {
-		if len(parent) != 32 {
-			return nil, errors.WrapGRPC(
-				errors.NewProcessingError("invalid parent txid length: %d for %s", len(parent), utils.ReverseAndHexEncodeSlice(parent)))
-		}
-
-		parents = append(parents, chainhash.Hash(parent))
+	txInpoints, err := meta.NewTxInpointsFromBytes(req.TxInpoints)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
 	}
 
 	if !ba.settings.BlockAssembly.Disabled {
@@ -609,7 +604,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 			Hash:        chainhash.Hash(req.Txid),
 			Fee:         req.Fee,
 			SizeInBytes: req.Size,
-		}, parents)
+		}, txInpoints)
 	}
 
 	return &blockassembly_api.AddTxResponse{
@@ -671,15 +666,9 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	for _, req := range requests {
 		startTxTime := time.Now()
 
-		parents := make([]chainhash.Hash, 0, len(req.Parents))
-
-		for _, parent := range req.Parents {
-			if len(parent) != 32 {
-				return nil, errors.WrapGRPC(
-					errors.NewProcessingError("invalid parent txid length: %d for %s", len(parent), utils.ReverseAndHexEncodeSlice(parent)))
-			}
-
-			parents = append(parents, chainhash.Hash(parent))
+		txInpoints, err := meta.NewTxInpointsFromBytes(req.TxInpoints)
+		if err != nil {
+			return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
 		}
 
 		// create the subtree node
@@ -688,7 +677,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 				Hash:        chainhash.Hash(req.Txid),
 				Fee:         req.Fee,
 				SizeInBytes: req.Size,
-			}, parents)
+			}, txInpoints)
 
 			prometheusBlockAssemblyAddTx.Observe(float64(time.Since(startTxTime).Microseconds()) / 1_000_000)
 		}
@@ -1125,7 +1114,7 @@ func (ba *BlockAssembly) removeSubtreesDAH(ctx context.Context, block *model.Blo
 
 		g.Go(func() error {
 			// TODO this would be better as a batch operation
-			if err := ba.subtreeStore.SetDAH(gCtx, subtreeHashBytes, 0, options.WithFileExtension("subtree")); err != nil {
+			if err := ba.subtreeStore.SetDAH(gCtx, subtreeHashBytes, 0, options.WithFileExtension(options.SubtreeFileExtension)); err != nil {
 				// TODO should this retry? We are in a bad state when this happens
 				ba.logger.Errorf("[removeSubtreesDAH][%s][%s] failed to update subtree DAH: %v", block.Hash().String(), subtreeHash.String(), err)
 			}

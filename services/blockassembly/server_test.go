@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	utxomemory "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -30,7 +31,7 @@ func Test_storeSubtree(t *testing.T) {
 			ErrChan:     nil,
 		}, subtreeRetryChan))
 
-		subtreeBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], options.WithFileExtension("subtree"))
+		subtreeBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], options.WithFileExtension(options.SubtreeFileExtension))
 		require.NoError(t, err)
 		require.NotNil(t, subtreeBytes)
 
@@ -43,8 +44,8 @@ func Test_storeSubtree(t *testing.T) {
 			require.Equal(t, node, subtreeFromStore.Nodes[idx])
 		}
 
-		// check that the meta data is stored
-		subtreeMetaBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], options.WithFileExtension("meta"))
+		// check that the meta-data is stored
+		subtreeMetaBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], options.WithFileExtension(options.SubtreeMetaFileExtension))
 		require.NoError(t, err)
 
 		subtreeMeta, err := util.NewSubtreeMetaFromBytes(subtreeFromStore, subtreeMetaBytes)
@@ -53,9 +54,9 @@ func Test_storeSubtree(t *testing.T) {
 
 		previousHash := chainhash.HashH([]byte("previousHash"))
 
-		for idx, subtreeMetaParents := range subtreeMeta.ParentTxHashes {
+		for idx, subtreeMetaParents := range subtreeMeta.TxInpoints {
 			parents := []chainhash.Hash{previousHash}
-			require.Equal(t, parents, subtreeMetaParents)
+			require.Equal(t, parents, subtreeMetaParents.ParentTxHashes)
 
 			previousHash = subtree.Nodes[idx].Hash
 		}
@@ -75,7 +76,7 @@ func Test_storeSubtree(t *testing.T) {
 		}, subtreeRetryChan))
 
 		// check that the meta data was not stored
-		_, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], options.WithFileExtension("meta"))
+		_, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], options.WithFileExtension(options.SubtreeMetaFileExtension))
 		require.Error(t, err)
 	})
 }
@@ -111,13 +112,13 @@ func TestCheckBlockAssembly(t *testing.T) {
 	})
 }
 
-func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *util.Subtree, *util.SyncedMap[chainhash.Hash, []chainhash.Hash]) {
+func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *util.Subtree, *util.SyncedMap[chainhash.Hash, meta.TxInpoints]) {
 	s, subtreeStore := setupServer(t)
 
 	subtree, err := util.NewTreeByLeafCount(16)
 	require.NoError(t, err)
 
-	txMap := util.NewSyncedMap[chainhash.Hash, []chainhash.Hash]()
+	txMap := util.NewSyncedMap[chainhash.Hash, meta.TxInpoints]()
 
 	previousHash := chainhash.HashH([]byte("previousHash"))
 
@@ -125,7 +126,7 @@ func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *util.Subtree, *util.S
 		txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
 		_ = subtree.AddNode(txHash, i, i)
 
-		txMap.Set(txHash, []chainhash.Hash{previousHash})
+		txMap.Set(txHash, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{previousHash}, Idxs: [][]uint32{{0, 1}}})
 		previousHash = txHash
 	}
 
