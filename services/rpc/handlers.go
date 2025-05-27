@@ -66,8 +66,7 @@ var rpcCallCache = cache.New(10*time.Second, time.Minute)
 //
 // The command supports three verbosity levels that control the amount of information returned:
 // - 0: Returns the serialized block as a hex-encoded string
-// - 1: Returns a JSON object with block header information and transaction IDs
-// - 2: Returns a JSON object with full transaction details for all transactions in the block
+// - 1: Returns a JSON object with block header information
 //
 // This handler interfaces with the blockchain service to retrieve block data and performs
 // format conversion appropriate to the requested verbosity level. Response size increases
