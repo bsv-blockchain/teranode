@@ -408,6 +408,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SavePeers:                        getBool("legacy_savePeers", false, alternativeContext...), // by default we do not save the peers
 			AllowSyncCandidateFromLocalPeers: getBool("legacy_allowSyncCandidateFromLocalPeers", false, alternativeContext...),
 			TempStore:                        getURL("temp_store", "file://./data/tempstore", alternativeContext...),
+			PeerIdleTimeout:                  getDuration("legacy_peerIdleTimeout", 125*time.Second, alternativeContext...),     // ping/pong interval is 2 mins, so we set this to 125s to be sure
+			PeerProcessingTimeout:            getDuration("legacy_peerProcessingTimeout", 3*time.Minute, alternativeContext...), // processing a block will be the largest message to process
 		},
 		Propagation: PropagationSettings{
 			IPv6Addresses:        getString("ipv6_addresses", "", alternativeContext...),

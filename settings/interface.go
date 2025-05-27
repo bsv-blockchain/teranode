@@ -407,6 +407,8 @@ type LegacySettings struct {
 	SavePeers                        bool
 	AllowSyncCandidateFromLocalPeers bool
 	TempStore                        *url.URL
+	PeerIdleTimeout                  time.Duration
+	PeerProcessingTimeout            time.Duration
 }
 
 type PropagationSettings struct {

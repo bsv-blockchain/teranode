@@ -62,10 +62,6 @@ const (
 	// peer that hasn't completed the initial version negotiation.
 	negotiateTimeout = 30 * time.Second
 
-	// idleTimeout is the duration of inactivity before we time out a peer.
-	idleTimeout       = 5 * time.Minute
-	processingTimeout = 1 * time.Minute
-
 	// stallTickInterval is the interval of time between each check for
 	// stalled peers.
 	stallTickInterval = 15 * time.Second
@@ -1425,12 +1421,12 @@ cleanup:
 // inHandler handles all incoming messages for the peer.  It must be run as a goroutine.
 func (p *Peer) inHandler() {
 	// The timer is stopped when a new message is received and reset after it is processed.
-	idleTimer := time.AfterFunc(idleTimeout, func() {
-		reason := fmt.Sprintf("No answer from peer for %s", idleTimeout)
+	idleTimer := time.AfterFunc(p.settings.Legacy.PeerIdleTimeout, func() {
+		reason := fmt.Sprintf("No answer from peer for %s", p.settings.Legacy.PeerIdleTimeout)
 		p.DisconnectWithInfo(reason)
 	})
 
-	processingTimer := time.AfterFunc(processingTimeout, func() {
+	processingTimer := time.AfterFunc(p.settings.Legacy.PeerProcessingTimeout, func() {
 		p.processingCmdMtx.Lock()
 		cmd := p.currentProcessingMsgCmd
 		p.processingCmdMtx.Unlock()
@@ -1439,7 +1435,7 @@ func (p *Peer) inHandler() {
 			cmd = "[unknown]" // Default if no specific command was being processed
 		}
 
-		reason := fmt.Sprintf("Timeout processing message '%s' from peer, waited %s", cmd, processingTimeout)
+		reason := fmt.Sprintf("Timeout processing message '%s' from peer, waited %s", cmd, p.settings.Legacy.PeerProcessingTimeout)
 		p.DisconnectWithInfo(reason)
 	})
 
@@ -1469,7 +1465,7 @@ out:
 			// error is one of the allowed errors.
 			if p.isAllowedReadError(err) {
 				p.logger.Errorf("Allowed test error from %s: %v", p, err)
-				idleTimer.Reset(idleTimeout)
+				idleTimer.Reset(p.settings.Legacy.PeerIdleTimeout)
 				continue
 			}
 
@@ -1509,7 +1505,7 @@ out:
 		p.processingCmdMtx.Lock()
 		p.currentProcessingMsgCmd = rmsg.Command()
 		p.processingCmdMtx.Unlock()
-		processingTimer.Reset(processingTimeout)
+		processingTimer.Reset(p.settings.Legacy.PeerProcessingTimeout)
 
 		atomic.StoreInt64(&p.lastRecv, time.Now().Unix())
 		p.stallControl <- stallControlMsg{sccReceiveMessage, rmsg}
@@ -1644,7 +1640,7 @@ out:
 		p.logger.Debugf("Processing %v from peer ID %v DONE", rmsg.Command(), p.ID())
 
 		// A message was received so reset the idle timer.
-		idleTimer.Reset(idleTimeout)
+		idleTimer.Reset(p.settings.Legacy.PeerIdleTimeout)
 	}
 
 	// Ensure the idle timer is stopped to avoid leaking the resource.
