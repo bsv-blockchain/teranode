@@ -70,16 +70,6 @@ jobs:
             test_filename: "tnb1_test.go"
           - test_dir: "test/tnb"
             test_tags: "test_tnb"
-            test_suite: "TestTNB2TestSuite"
-            test_func: "TestUTXOValidation"
-            test_filename: "tnb2_test.go"
-          - test_dir: "test/tnb"
-            test_tags: "test_tnb"
-            test_suite: "TestTNB2TestSuite"
-            test_func: "TestScriptValidation"
-            test_filename: "tnb2_test.go"
-          - test_dir: "test/tnb"
-            test_tags: "test_tnb"
             test_suite: "TestTNB6TestSuite"
             test_func: "TestUTXOSetManagement"
             test_filename: "tnb6_test.go"
@@ -302,6 +292,13 @@ jobs:
       - name: Run TNC2.1 Test
         run: |
           go test -v $TEST_DIR/tnc2_1_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run TNB2 Test
+        run: |
+          go test -v $TEST_DIR/tnb2_test.go
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
