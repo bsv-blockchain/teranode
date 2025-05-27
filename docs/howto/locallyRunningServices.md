@@ -27,10 +27,10 @@ Before running Teranode, ensure the required infrastructure services are started
 Execute all services in a single terminal window with the command below. Replace `[YOUR_USERNAME]` with your specific username.
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
 ```
 
-> **📝 Note:** Confirm that settings for your username are correctly established as outlined in the Installation Guide. If not yet done, please review it [here](../tutorials/developers/developerSetup.md).
+> **📝 Note:** Confirm that settings for your context are correctly established as outlined in the Installation Guide. If not yet done, please review it [here](../tutorials/developers/developerSetup.md).
 >
 > **⚠️ Warning:** When restarting services, it's recommended to clean the data directory first:
 >
@@ -149,7 +149,7 @@ For running various test suites (not typically needed for development):
 Launch the node with specific components using command-line options. This allows you to enable only the components you need for your development tasks.
 
 ```shell
-rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . [OPTIONS]
+rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike . [OPTIONS]
 ```
 
 Enable or disable components by setting the corresponding option to `1` or `0`. Options are not case-sensitive.
@@ -243,7 +243,7 @@ You can also run each service on its own:
    ```
 2. Run the service:
    ```shell
-   SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
    ```
 
 ## 📜 Running Specific Commands
@@ -256,7 +256,7 @@ For executing particular tasks, use commands found under the _cmd/_ directory:
    ```
 2. Execute the command:
    ```shell
-   SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
    ```
 
 
@@ -268,7 +268,7 @@ For UI Dashboard:
 make dev-dashboard
 ```
 
-Remember to replace `[YOUR_USERNAME]` with your actual username throughout all commands.
+Remember to replace `[YOUR_CONTEXT]` with your actual username throughout all commands.
 
 This guide aims to provide a streamlined process for running services and nodes during development.
 

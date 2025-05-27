@@ -116,7 +116,7 @@ python -c "import yaml; print(yaml.__version__)"
 ```
 This should print out the installed PyYAML version (e.g., `6.0.2` or similar).
 
-#### Alternative: Use `pipx` (for CLI tools) - Not recommended for Teranode Development
+#### Alternative: Use `pipx` (for CLI tools) - NOT recommended for Teranode Development
 
 If you need PyYAML as part of a **standalone command-line tool**, you could use [pipx](https://pypa.github.io/pipx/) instead:
 ```bash
@@ -152,58 +152,31 @@ make install
 > PYTHONPATH=$HOME/Library/Python/3.9/lib/python/site-packages make install  #Make sure the path is correct for your own python version
 > ```
 
-
-
-
 ---
 
-## 5. Configure Your Node Dev Settings (Updated Example)
+## 5. Configure Settings
 
-### 5.1 Open and Inspect `settings_local.conf`
+Teranode uses two configuration files:
+- `settings.conf` - Contains sensible defaults for all environments. You should NOT modify this file as part of the scope of this guide.
+- `settings_local.conf` - Contains developer-specific and deployment-specific settings
 
-1. In your project directory, locate the file `settings_local.conf`.
-2. Open it in your preferred editor (VSCode, IntelliJ, etc.).
-3. **Search** for all lines containing `NEW_USER_TEMPLATE`. For example, you will see things like:
+### 5.1 Introducing developer-specific settings in `settings_local.conf`
 
-   ```conf
-   clientName.dev.NEW_USER_TEMPLATE           = NEW_USER_TEMPLATE # template for future new users (referenced in documentation)
-   coinbase_arbitrary_text.dev.NEW_USER_TEMPLATE = /NEW_USER_TEMPLATE/ # template
-   asset_httpAddress.dev.NEW_USER_TEMPLATE       = http://bastion.ubsv.dev:18x90 # template for future new users
-   ...
-   ```
+1. In your project directory, create a file `settings_local.conf`. This file is used for your personal development settings, and it's not tracked in source control.
 
-### 5.2 Duplicate and Customize the Template Lines
+2. Introduce any settings override in `settings_local.conf` that you might require for your development. Use the `settings.conf` as a reference for common settings and their default values.
 
-#### **Example:**
+3. The settings you are adding will use a prefix (settings context) that identifies your context. By default, your settings context should be `dev.`. You can further refine this by using a more specific prefix, such as `dev.john` or `dev.me`. However, it is recommended to use the default prefix `dev.`, and only refine it in very specific cases.
 
-For example, if your name is **John**, you copy each line and change `NEW_USER_TEMPLATE` to `John`.
-
-- **Original**:
-  ```conf
-  clientName.dev.NEW_USER_TEMPLATE           = NEW_USER_TEMPLATE
-  coinbase_arbitrary_text.dev.NEW_USER_TEMPLATE = /NEW_USER_TEMPLATE/
-  asset_httpAddress.dev.NEW_USER_TEMPLATE       = http://bastion.ubsv.dev:18x90
-  ```
-
-- **New lines** (added below the originals):
-  ```conf
-  clientName.dev.John           = John
-  coinbase_arbitrary_text.dev.John = /John/
-  asset_httpAddress.dev.John       = http://bastion.ubsv.dev:18x90
-  ```
-
-> If there’s already a `clientName.dev.John`, pick something more specific, like `JohnDoe`.
-
-### 5.3 Set Your Environment Variable
-
-In order for your node to read **your** custom lines, you set `SETTINGS_CONTEXT` to match the prefix you used (i.e., `dev.John`).
+In order for your node to read **your** custom lines, you set `SETTINGS_CONTEXT` to match the prefix you used (i.e., `dev`).
 
 In **zsh**, open `~/.zprofile` (or `~/.zshrc`). In **bash**, open `~/.bash_profile` (or `~/.bashrc`).
+
 Add:
 ```bash
-export SETTINGS_CONTEXT=dev.John
+export SETTINGS_CONTEXT=dev
 ```
-*(Replace `John` with whatever identifier you used in your config.)*
+(If you have used a richer prefix, such as `dev.john`, you would set `SETTINGS_CONTEXT=dev.john`)
 
 After editing, **reload** your shell config:
 ```bash
@@ -211,25 +184,15 @@ source ~/.zprofile
 ```
 (or the equivalent for your shell).
 
-### 5.4 Verify
+### 5.3 Verify
 
 1. **Echo** the environment variable to ensure it’s set correctly:
    ```bash
    echo $SETTINGS_CONTEXT
    ```
-   Should print `dev.John`.
+   Should print `dev`.
 
-2. **Run** or **restart** your node. Check logs or console output to confirm it’s picking up the lines with `dev.John`.
-
-### 5.5 Commit Your Changes (Optional)
-
-If this config is in a shared repository and your team expects each dev to commit their user-specific lines, go ahead and commit them:
-
-```bash
-git add settings_local.conf
-git commit -m "Add dev.John config settings"
-git push
-```
+2. **Run** or **restart** your node. Check logs or console output to confirm it’s picking up the lines with `dev`.
 
 ----
 
@@ -273,14 +236,90 @@ These scripts will set up Docker containers with the required services configure
 
 ## 7. Run the Node
 
-
 You can run the entire node with the following command:
 
 ```bash
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
 ```
 
 If no errors are seen, you have successfully installed the project and are ready to start working on the project or running the node.
+
+Note that the node is initialized in IDLE mode by default. You'll need to transition it to RUNNING mode to start processing transactions.
+
+### 7.1. Executing the Teranode-CLI as a Developer
+
+The Teranode-CLI allows you to interact with Teranode services. You can use it to transition the node to different states, query its current state, and perform various maintenance operations. For a comprehensive guide on using the Teranode-CLI as a developer, see the [Developer's Guide to Teranode-CLI](../../howto/developersHowToTeranodeCLI.md).
+
+#### Building the Teranode-CLI
+
+Build the Teranode-CLI tool with:
+
+```bash
+go build -o teranode-cli ./cmd/teranodecli
+```
+
+#### Executing Commands
+
+Once built, you can run commands directly:
+
+```bash
+# Get current FSM state
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli getfsmstate
+
+# Set FSM state to RUNNING
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli setfsmstate --fsmstate running
+```
+
+#### Available Commands
+
+The Teranode-CLI provides several commands:
+
+| Command | Description |
+|---------|-------------|
+| `getfsmstate` | Get the current FSM State |
+| `setfsmstate` | Set the FSM State (with `--fsmstate` flag) |
+| `settings` | View system configuration |
+| `aerospikereader` | Read transaction data from Aerospike |
+| `filereader` | Read and process files |
+| `seeder` | Seed initial blockchain data |
+| `bitcoin2utxoset` | Convert Bitcoin data to UTXO set |
+| `utxopersister` | Manage UTXO persistence |
+| `export-blocks` | Export blockchain to CSV |
+| `import-blocks` | Import blockchain from CSV |
+| `checkblocktemplate` | Check block template |
+
+#### Getting Help
+
+For general help and a list of available commands:
+
+```bash
+# General help
+./teranode-cli
+
+# Command-specific help
+./teranode-cli setfsmstate --help
+```
+
+The CLI will use your development settings as specified by your `SETTINGS_CONTEXT` environment variable.
+
+#### Transitioning the Node to RUNNING Mode
+
+To transition the node from IDLE to RUNNING mode, use:
+
+```bash
+# Get current FSM state
+SETTINGS_CONTEXT=dev ./teranode-cli getfsmstate
+
+# Set FSM state to RUNNING
+SETTINGS_CONTEXT=dev ./teranode-cli setfsmstate --fsmstate running
+```
+
+After executing these commands, your log should show a successful transition:
+
+```bash
+[Blockchain Client] FSM successfully transitioned from IDLE to state:RUNNING
+```
+
 
 ---
 

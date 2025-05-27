@@ -10,9 +10,9 @@ teranode/
 │
 ├── Makefile                      # Facilitates a variety of development and build tasks for the project
 │
-├── settings.conf                 # Global settings
+├── settings.conf                 # Global settings with sensible defaults for all environments
 │
-├── settings_local.conf           # Local overridden settings
+├── settings_local.conf           # Developer-specific and deployment-specific settings. Overrides settings.conf. Not tracked in source control.
 │
 ├── Dockerfile                    # Main Dockerfile for containerization
 ├── local.Dockerfile              # Dockerfile for local development

@@ -26,15 +26,11 @@ make smoketests
 ### How to Configure Test Settings
 1. Create local settings:
 ```bash
-cp settings_example.conf settings_local.conf
+touch settings_local.conf
 ```
 
-2. Common settings to modify:
-```conf
-# Node configuration
-SETTINGS_CONTEXT=docker.ci.tc1.run
-LOG_LEVEL=DEBUG
-```
+2. Add required settings for your specific testing activity in there. Recommended to use the docker.ci.tc1.run context.
+
 
 ## Running Tests
 
@@ -43,30 +39,31 @@ LOG_LEVEL=DEBUG
 ```bash
 # Format
 cd /teranode/test/<suite-name>
-SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -tags <suite-tag>
+go test -v -tags test_<suite-code>
 
 # Examples
 # Run TNA tests
 cd /teranode/test/tna
-SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -tags tnatests
+go test -v -tags test_tna
 
 # Run TNC tests
 cd /teranode/test/tnc
-SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -tags tnctests
+go test -v -tags test_tnc
 ```
 
 2. Run specific test:
 ```bash
 # Format
-SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^<TestSuiteName>$/<TestName>$"
+go test -v -run "^<TestSuiteName>$/<TestName>$"
 
 # Example: Run specific coinbase test
-SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestTNC1TestSuite$/TestCoinbaseTXAmount$"
+go test -v -run "^TestTNC1TestSuite$/TestCoinbaseTXAmount$" -tags test_tnc
 ```
 
 3. Run with different options:
 ```bash
-# Skip build
+# Format / Skip Build
+go test -v -tags test_<suite-code> -timeout <duration>
 make smoketests no-build=1
 
 # Kill docker containers after test
@@ -75,6 +72,7 @@ make smoketests no-build=1 kill-docker=1
 # Keep data directory
 make smoketests no-build=1 kill-docker=1 no-reset=1
 ```
+
 
 ### How to Debug Failed Tests
 1. Enable verbose logging:
@@ -257,6 +255,8 @@ sudo rm -rf ../../data/test
 
 ## Other Resources
 
-- [QA Guide & Instructions for Functional Requirement Tests](../../test/README.md)
+- [QA Guide & Instructions for Functional Requirement Tests](../topics/functionalRequirementTests.md)
 - [Understanding The Testing Framework](../topics/understandingTheTestingFramework.md)
 - [Testing Technical Reference](../references/testingTechnicalReference.md)
+- [Settings Reference](../references/settings.md)
+- [Teranode Daemon Reference](../references/teranodeDaemonReference.md)

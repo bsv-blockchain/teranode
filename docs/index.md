@@ -50,6 +50,7 @@
 6. [Adding new Protobuf Services](./howto/addingNewProtobufServices.md)
 7. [Configuring gRPC Logging](./howto/configuringGrpcLogging.md)
 8. [Kubernetes - Remote Debugging Guide](./howto/howToRemoteDebugTeranode.md)
+9. [Developer's Guide to Teranode-CLI](./howto/developersHowToTeranodeCLI.md)
 
 ### Miners
 

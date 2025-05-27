@@ -28,6 +28,7 @@ nav:
       - Automated Testing: howto/automatedTestingHowTo.md
       - Makefile Guide: howto/makefile.md
       - Bug Reporting: howto/bugReporting.md
+      - Developer's Guide to Teranode-CLI: howto/developersHowToTeranodeCLI.md
       - Miners:
           - Using Test Miner: howto/miners/howToUseTheTestMiner.md
           - Installation:
