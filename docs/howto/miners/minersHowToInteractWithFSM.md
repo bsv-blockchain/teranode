@@ -11,22 +11,50 @@ This guide explains how to change and monitor Teranode's state using gRPC comman
 
 ## Methods
 
-You can manage Teranode states using either `teranode-cli` (recommended) or `grpcurl` directly.
+You can manage Teranode states using either `teranode-cli` (recommended) or `grpcurl` directly. The exact commands will depend on your deployment environment (Docker Compose or Kubernetes).
 
 ### Using teranode-cli (Recommended)
 
-#### 1. Check Current State
+#### Docker Compose Environment
+
+##### 1. Check Current State
 ```bash
 docker exec -it blockchain teranode-cli getfsmstate
 ```
 
-#### 2. Set New State
+##### 2. Set New State
 
 ```bash
 docker exec -it blockchain teranode-cli setfsmstate --fsmstate RUNNING
 ```
 
-Valid states are:
+#### Kubernetes Environment
+
+##### 1. Check Current State
+
+Access any Teranode pod and use teranode-cli directly:
+
+```bash
+# Get the name of a pod (blockchain or asset are good options)
+kubectl get pods -n teranode-operator -l app=blockchain
+
+# Access the pod and run the command
+kubectl exec -it <pod-name> -n teranode-operator -- teranode-cli getfsmstate
+
+# Alternative one-liner
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli getfsmstate
+```
+
+##### 2. Set New State
+
+```bash
+# Change state to RUNNING
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate RUNNING
+```
+
+### Valid FSM States
+
+The following states are valid for all environments:
 - IDLE
 - RUNNING
 - LEGACYSYNCING
@@ -35,13 +63,28 @@ Valid states are:
 
 ### Using grpcurl
 
+#### Docker Compose Environment
 
-#### 1. Check Current State
+##### 1. Check Current State
 
-To check the current state of Teranode:
+To check the current state of Teranode in a Docker Compose environment:
 
 ```bash
 grpcurl -plaintext rpcserver:18087 blockchain_api.BlockchainAPI.GetFSMCurrentState
+```
+
+#### Kubernetes Environment
+
+##### 1. Check Current State
+
+For Kubernetes, you need to forward the RPC server port or access it through a service:
+
+```bash
+# Port forward the RPC service
+kubectl port-forward service/rpcserver -n teranode-operator 18087:18087
+
+# In a new terminal
+grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.GetFSMCurrentState
 ```
 
 Expected output:
@@ -51,15 +94,25 @@ Expected output:
 }
 ```
 
-#### 2. Send State Transition Events
+##### 2. Send State Transition Events (Docker Compose)
 
-To start Teranode's normal operations:
+To start Teranode's normal operations in Docker Compose:
 
 ```bash
 grpcurl -plaintext rpcserver:18087 blockchain_api.BlockchainAPI.Run
 ```
 
-Available events:
+##### 2. Send State Transition Events (Kubernetes)
+
+In a Kubernetes environment with port forwarding active:
+
+```bash
+grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.Run
+```
+
+#### Available Events
+
+The following events are available for both environments:
 - `Run` - Transitions to RUNNING state
 - `LegacySync` - Transitions to LEGACYSYNCING state
 - `CatchUpBlocks` - Transitions to CATCHINGBLOCKS state

@@ -73,17 +73,43 @@ fsm_visualizer main.go.
 As part of its own initialization, the Blockchain service initializes the FSM in the **Idle** state, before it transitions to a LegacySyncing or Running state.
 
 
-### 3.1. Accessing the State Machine over gRPC
+### 3.1. Accessing the State Machine
 
-The Blockchain service exposes the following gRPC methods to interact with the FSM:
+#### 3.1.1 Access via Command-Line Interface (Recommended)
 
-* **GetFSMCurrentState** - Returns the current state of the FSM.
-* **WaitForFSMtoTransitionToGivenState** - Waits for the FSM to transition to a specific state.
-* **SendFSMEvent** - Sends an event to the FSM to trigger a state transition.
+The Teranode Command-Line Interface (teranode-cli) provides the most direct and recommended approach for interacting with the State Machine. The CLI abstracts the underlying API calls and offers a straightforward interface for both operators and developers.
 
-* **LegacySync** - Transitions the FSM to the LegacySyncing state (delegates on the SendFSMEvent method).
-* **Run** - Transitions the FSM to the Running state (delegates on the SendFSMEvent method).
-* **CatchUpBlocks** - Transitions the FSM to the CatchingBlocks state (delegates on the SendFSMEvent method).
+The CLI provides two primary commands for FSM interaction:
+
+* **getfsmstate** - Queries and displays the current state of the FSM
+* **setfsmstate** - Changes the FSM state by sending the appropriate event
+
+These commands interface with the same underlying mechanisms as the gRPC methods, but provide a more user-friendly experience with appropriate validation and feedback.
+
+#### 3.1.2 Access via HTTP (Asset Server)
+
+The Asset Server provides a RESTful HTTP interface to the State Machine, offering a web-friendly approach to FSM interaction. This interface is particularly useful for web applications and administrative dashboards that need to monitor or control node state.
+
+The Asset Server exposes the following endpoints for FSM interaction:
+
+* **GET /api/v1/fsm/state** - Retrieves the current FSM state
+* **POST /api/v1/fsm/state** - Sends a custom event to the FSM
+* **GET /api/v1/fsm/events** - Lists all available FSM events
+* **GET /api/v1/fsm/states** - Lists all possible FSM states
+
+These HTTP endpoints provide the same functionality as the CLI and gRPC methods but with a RESTful interface that can be accessed using standard HTTP clients.
+
+#### 3.1.3 Access via gRPC
+
+The Blockchain service also exposes the following gRPC methods to interact with the FSM programmatically:
+
+* **GetFSMCurrentState** - Returns the current state of the FSM
+* **WaitForFSMtoTransitionToGivenState** - Waits for the FSM to transition to a specific state
+* **SendFSMEvent** - Sends an event to the FSM to trigger a state transition
+
+* **LegacySync** - Transitions the FSM to the LegacySyncing state (delegates on the SendFSMEvent method)
+* **Run** - Transitions the FSM to the Running state (delegates on the SendFSMEvent method)
+* **CatchUpBlocks** - Transitions the FSM to the CatchingBlocks state (delegates on the SendFSMEvent method)
 
 
 ### 3.2. State Machine States
@@ -222,3 +248,16 @@ Specifically, and subject to the `fsm_state_restore` setting being enabled, the 
 - Subtree Validation
 - UTXO Persister
 - Validator
+
+---
+
+## 4. Other Resources
+
+### How-to Guides
+
+- [How to Interact with the FSM](../../howto/miners/minersHowToInteractWithFSM.md) - Practical guide for managing FSM states in test and production environments (Docker and Kubernetes)
+
+### API References
+
+- [Blockchain API Reference](../../references/services/blockchain_reference.md) - Complete reference for the Blockchain service API, including FSM methods
+- [Asset Server API Reference](../../references/services/asset_reference.md) - Reference for the Asset Server REST API, including FSM endpoints
