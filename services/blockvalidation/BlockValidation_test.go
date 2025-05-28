@@ -130,7 +130,7 @@ func setup() (utxostore.Store, subtreevalidation.Interface, blockchain.ClientI, 
 
 	httpmock.RegisterResponder(
 		"POST",
-		`=~^/txs`,
+		`=~^/subtree/[a-fA-F0-9]{64}/txs`,
 		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
 	)
 
@@ -1162,7 +1162,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 
 	httpmock.RegisterRegexpMatcherResponder(
 		"POST",
-		regexp.MustCompile("/[a-fA-F0-9]{64}/txs$"),
+		regexp.MustCompile("/subtree/[a-fA-F0-9]{64}/txs$"),
 		httpmock.Matcher{},
 		func(req *http.Request) (*http.Response, error) {
 			body, err := io.ReadAll(req.Body)

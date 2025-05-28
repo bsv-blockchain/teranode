@@ -123,7 +123,7 @@ func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store
 
 	httpmock.RegisterRegexpMatcherResponder(
 		"POST",
-		regexp.MustCompile("/[a-fA-F0-9]{64}/txs$"),
+		regexp.MustCompile("/subtree/[a-fA-F0-9]{64}/txs$"),
 		httpmock.Matcher{},
 		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
 	)
@@ -450,7 +450,7 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 
 		httpmock.RegisterRegexpMatcherResponder(
 			"POST",
-			regexp.MustCompile("/[a-fA-F0-9]{64}/txs$"),
+			regexp.MustCompile("/subtree/[a-fA-F0-9]{64}/txs$"),
 			httpmock.Matcher{},
 			func(req *http.Request) (*http.Response, error) {
 				body, err := io.ReadAll(req.Body)
@@ -656,7 +656,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 
 		httpmock.RegisterRegexpMatcherResponder(
 			"POST",
-			regexp.MustCompile("/[a-fA-F0-9]{64}/txs$"),
+			regexp.MustCompile("/subtree/[a-fA-F0-9]{64}/txs$"),
 			httpmock.Matcher{},
 			httpmock.NewBytesResponder(200, append(tx1.ExtendedBytes(), tx2.ExtendedBytes()...)),
 		)

@@ -44,7 +44,7 @@ HTTPServer --> Client : transactionData
 deactivate HTTPServer
 
 ' POST request for multiple transactions
-Client -> HTTPServer : POST /txs (List of hashes)
+Client -> HTTPServer : POST /subtree/:hash/txs (List of hashes)
 activate HTTPServer
 alt For Each Hash in List
     loop

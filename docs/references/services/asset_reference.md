@@ -405,7 +405,7 @@ The format can be selected by appending `/hex` or `/json` to the endpoint, or by
   - Parameters: `hash` - Transaction ID hash (hex string)
   - Returns: Transaction data (JSON)
 
-- **POST `/api/v1/txs`**
+- **POST `/api/v1/subtree/:hash/txs`**
   - Purpose: Batch retrieve multiple transactions
   - Request Body: Concatenated 32-byte transaction hashes
   - Returns: Concatenated transactions (binary)
@@ -618,7 +618,7 @@ GET /tx/{hash}/json
 Retrieves multiple transactions in a single request.
 
 ```
-POST /txs
+POST /subtree/:hash/txs
 ```
 
 **Request Body:** Concatenated 32-byte transaction hashes

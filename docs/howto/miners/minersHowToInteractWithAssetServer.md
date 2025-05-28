@@ -54,7 +54,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - `hash`: Transaction hash (hex string)
   - Returns: Transaction data in structured JSON format
 
-- POST `/api/v1/txs`
+- POST `/api/v1/subtree/:hash/txs`
   - Description: Batch retrieves multiple transactions
   - Request Body: Concatenated series of 32-byte transaction hashes without separators
     - Format: `[32-byte hash][32-byte hash][32-byte hash]...`
@@ -349,7 +349,7 @@ Response:
 
 Request:
 ```
-POST /api/v1/txs
+POST /api/v1/subtree/:hash/txs
 Content-Type: application/octet-stream
 
 <binary data: concatenated 32-byte transaction hashes>
@@ -403,9 +403,8 @@ Response:
     - Retrieves a subtree in hexadecimal format
 - GET `/subtree/:hash/json`
     - Retrieves a subtree in JSON format
-
-- GET `/subtree/:hash/txs/json`
-    - Retrieves transactions in a subtree in JSON format
+- GET `/subtree/:hash/txs`
+    - Retrieves transactions in a subtree in BINARY format
 
 
 

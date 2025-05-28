@@ -46,7 +46,7 @@ UIDashboard -> User: Display Transaction Details
 
 == Fetch Transactions (Stream) ==
 User -> UIDashboard: Request Transactions List
-UIDashboard -> AssetService: /txs
+UIDashboard -> AssetService: /subtree/:hash/txs
 AssetService -> AssetService: GetTransactions()
 AssetService -> TxMetaStore: Get(ctx, hash)
 TxMetaStore -> AssetService: Return Transactions List

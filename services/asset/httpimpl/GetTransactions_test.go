@@ -57,7 +57,7 @@ func TestGetTransactions(t *testing.T) {
 		transactionHashes := append(test.TX1Hash.CloneBytes(), test.TX2Hash.CloneBytes()...)
 
 		// Set up the request with subtree hash
-		echoContext.SetPath("/:hash/txs")
+		echoContext.SetPath("/subtree/:hash/txs")
 		echoContext.SetParamNames("hash")
 		echoContext.SetParamValues(subtreeHash.String())
 		echoContext.Request().Body = io.NopCloser(bytes.NewReader(transactionHashes))
