@@ -10,14 +10,15 @@
     - [AddTxResponse](#AddTxResponse)
     - [EmptyMessage](#EmptyMessage)
     - [GenerateBlocksRequest](#GenerateBlocksRequest)
+    - [GetBlockAssemblyBlockCandidateResponse](#GetBlockAssemblyBlockCandidateResponse)
     - [GetCurrentDifficultyResponse](#GetCurrentDifficultyResponse)
     - [GetMiningCandidateRequest](#GetMiningCandidateRequest)
     - [HealthResponse](#HealthResponse)
     - [NewChaintipAndHeightRequest](#NewChaintipAndHeightRequest)
+    - [OKResponse](#OKResponse)
     - [RemoveTxRequest](#RemoveTxRequest)
     - [StateMessage](#StateMessage)
     - [SubmitMiningSolutionRequest](#SubmitMiningSolutionRequest)
-    - [SubmitMiningSolutionResponse](#SubmitMiningSolutionResponse)
 
     - [BlockAssemblyAPI](#BlockAssemblyAPI)
 
@@ -243,16 +244,28 @@ Request for submitting a mining solution to the blockchain.
 
 
 
-<a name="SubmitMiningSolutionResponse"></a>
+<a name="OKResponse"></a>
 
-### SubmitMiningSolutionResponse
-Response indicating whether the submission of a mining solution was successful.
+### OKResponse
+Response indicating whether the call was successful.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  | true if the solution was successfully submitted |
+| ok | [bool](#bool) |  | true if the call was successful |
 
+
+
+
+<a name="GetBlockAssemblyBlockCandidateResponse"></a>
+
+### GetBlockAssemblyBlockCandidateResponse
+Response for the GetBlockAssemblyBlockCandidate method.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| block | [bytes](#bytes) |  | the block candidate in block assembly |
 
 
 
@@ -277,11 +290,13 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
 | AddTxBatch | [AddTxBatchRequest](#blockassembly_api-AddTxBatchRequest) | [AddTxBatchResponse](#blockassembly_api-AddTxBatchResponse) | Efficiently adds multiple transactions in a single request. Provides better performance than multiple individual AddTx calls. |
 | GetMiningCandidate | [GetMiningCandidateRequest](#blockassembly_api-GetMiningCandidateRequest) | [.model.MiningCandidate](#model-MiningCandidate) | Retrieves a block template ready for mining. Includes all necessary components for miners to begin work. |
 | GetCurrentDifficulty | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetCurrentDifficultyResponse](#blockassembly_api-GetCurrentDifficultyResponse) | Retrieves the current network mining difficulty. Used by miners to understand the current mining requirements. |
-| SubmitMiningSolution | [SubmitMiningSolutionRequest](#blockassembly_api-SubmitMiningSolutionRequest) | [SubmitMiningSolutionResponse](#blockassembly_api-SubmitMiningSolutionResponse) | Submits a solved block to the network. Includes the proof-of-work solution and block details. |
+| SubmitMiningSolution | [SubmitMiningSolutionRequest](#blockassembly_api-SubmitMiningSolutionRequest) | [OKResponse](#blockassembly_api-OKResponse) | Submits a solved block to the network. Includes the proof-of-work solution and block details. |
 | DeDuplicateBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Removes duplicate transactions from the assembly process. Ensures transaction uniqueness within blocks. |
 | ResetBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Resets the block assembly state. Useful for handling reorgs or recovering from errors. |
 | GetBlockAssemblyState | [EmptyMessage](#blockassembly_api-EmptyMessage) | [StateMessage](#blockassembly_api-StateMessage) | Retrieves the current state of block assembly. Provides detailed information about the assembly process status. |
 | GenerateBlocks | [GenerateBlocksRequest](#blockassembly_api-GenerateBlocksRequest) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Creates new blocks (typically for testing purposes). Allows specification of block count and recipient address. |
+| CheckBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [OKResponse](#blockassembly_api-OKResponse) | Checks the current state of block assembly. This verifies that the block assembly and subtree processor are functioning correctly. |
+| GetBlockAssemblyBlockCandidate | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetBlockAssemblyBlockCandidateResponse](#blockassembly_api-GetBlockAssemblyBlockCandidateResponse) | Retrieves the current block candidate from block assembly. |
 
  <!-- end services -->
 
