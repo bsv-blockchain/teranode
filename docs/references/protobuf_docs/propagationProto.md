@@ -105,6 +105,7 @@ swagger:model ProcessTransactionBatchRequest
 <a name="ProcessTransactionBatchResponse"></a>
 
 ### ProcessTransactionBatchResponse
+Contains the results of batch transaction processing.
 swagger:model ProcessTransactionBatchResponse
 
 
