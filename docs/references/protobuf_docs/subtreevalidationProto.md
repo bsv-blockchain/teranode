@@ -35,6 +35,7 @@ swagger:model CheckSubtreeFromBlockRequest
 | base_url | [string](#string) |  | Endpoint for retrieving missing transaction data |
 | block_height | [uint32](#uint32) |  | Blockchain height where the subtree is located |
 | block_hash | [bytes](#bytes) |  | Uniquely identifies the block containing the subtree |
+| previous_block_hash | [bytes](#bytes) |  | Identifies the block preceding the current block |
 
 
 
