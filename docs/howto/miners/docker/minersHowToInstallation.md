@@ -281,15 +281,19 @@ cd $YOUR_WORKING_DIR/teranode-public/docker/mainnet
    ```
 
 Force the node to transition to Run mode:
-```
-grpcurl -plaintext localhost:BLOCKCHAIN_PORT blockchain_api.BlockchainAPI.Run
+```bash
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate running
 ```
 
 or LegacySync mode:
+```bash
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate legacysyncing
 ```
-grpcurl -plaintext localhost:BLOCKCHAIN_PORT blockchain_api.BlockchainAPI.LegacySync
+
+You can verify the current state with:
+```bash
+docker exec -it blockchain teranode-cli getfsmstate
 ```
-where the BLOCKCHAIN_PORT is the port where Docker is mapping the internal port 8087. Use `docker container ls` to locate this one.
 
 
 **Step 7: Verify Services**
