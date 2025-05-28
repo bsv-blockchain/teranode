@@ -17,19 +17,20 @@
 
 ## alert_api.proto
 
-
+> Package alert_api defines the gRPC service interface for the Bitcoin SV Alert System.
 
 <a name="HealthResponse"></a>
 
 ### HealthResponse
 swagger:model HealthResponse
 
+Represents the health check response from the Alert System service.
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  |  |
-| details | [string](#string) |  |  |
-| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  |  |
+| ok | [bool](#bool) |  | Indicates whether the service is healthy (true) or unhealthy (false) |
+| details | [string](#string) |  | Provides additional information about the health status |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Indicates when the health check was performed |
 
 
 
@@ -46,10 +47,11 @@ swagger:model HealthResponse
 
 ### AlertAPI
 
+Service provides methods for interacting with the Alert System.
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [.google.protobuf.Empty](#google-protobuf-Empty) | [HealthResponse](#alert_api-HealthResponse) | Health returns the health of the API. |
+| HealthGRPC | [.google.protobuf.Empty](#google-protobuf-Empty) | [HealthResponse](#alert_api-HealthResponse) | Checks the health status of the Alert System service. It accepts an empty request and returns a HealthResponse containing the current health status of the service. |
 
  <!-- end services -->
 
