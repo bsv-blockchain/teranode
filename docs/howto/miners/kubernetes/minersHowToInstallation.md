@@ -1,6 +1,6 @@
 # How to Install Teranode with Kubernetes Helm
 
-Last modified: 6-March-2025
+Last modified: 27-May-2025
 
 # Index
 
@@ -121,9 +121,17 @@ kubectl apply -f kubernetes/nfs/
 Pull and load the required Teranode images into Minikube:
 
 ```bash
-# Set image versions
-export OPERATOR_VERSION=v0.4.3
-export TERANODE_VERSION=v0.6.42
+
+# Identify the latest available Teranode version
+aws ecr list-images \
+  --repository-name teranode-public \
+  --region eu-north-1 \
+  --query 'imageIds[*].imageTag' \
+  --output text
+
+# Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)
+export OPERATOR_VERSION=v0.4.5
+export TERANODE_VERSION=v0.8.7
 export ECR_REGISTRY=434394763103.dkr.ecr.eu-north-1.amazonaws.com
 
 # Login to ECR

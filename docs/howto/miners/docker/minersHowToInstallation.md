@@ -1,6 +1,6 @@
 # How to Install Teranode with Docker Compose
 
-Last modified: 22-January-2025
+Last modified: 26-May-2025
 
 ## Index
 
