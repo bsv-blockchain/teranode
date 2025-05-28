@@ -23,6 +23,7 @@
     - [GetBlockHeadersRequest](#GetBlockHeadersRequest)
     - [GetBlockHeadersResponse](#GetBlockHeadersResponse)
     - [GetBlockHeadersToCommonAncestorRequest](#GetBlockHeadersToCommonAncestorRequest)
+    - [GetBlockInChainByHeightHashRequest](#GetBlockInChainByHeightHashRequest)
     - [GetBlockIsMinedRequest](#GetBlockIsMinedRequest)
     - [GetBlockIsMinedResponse](#GetBlockIsMinedResponse)
     - [GetBlockLocatorRequest](#GetBlockLocatorRequest)
@@ -58,6 +59,7 @@
     - [RevalidateBlockRequest](#RevalidateBlockRequest)
     - [SendFSMEventRequest](#SendFSMEventRequest)
     - [SetBlockMinedSetRequest](#SetBlockMinedSetRequest)
+    - [SetBlockProcessedAtRequest](#SetBlockProcessedAtRequest)
     - [SetBlockSubtreesSetRequest](#SetBlockSubtreesSetRequest)
     - [SetStateRequest](#SetStateRequest)
     - [StateResponse](#StateResponse)
@@ -78,23 +80,25 @@
 
 ## blockchain_api.proto
 
+Package blockchain_api defines the gRPC service interface for blockchain operations.
+
 
 
 <a name="AddBlockRequest"></a>
 
 ### AddBlockRequest
-swagger:model AddBlockRequest
+AddBlockRequest contains data for adding a new block to the blockchain.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| header | [bytes](#bytes) |  |  |
-| subtree_hashes | [bytes](#bytes) | repeated | The fist subtree will contain the coinbase txid (not the placeholder) |
-| coinbase_tx | [bytes](#bytes) |  |  |
-| transaction_count | [uint64](#uint64) |  |  |
-| size_in_bytes | [uint64](#uint64) |  |  |
-| external | [bool](#bool) |  |  |
-| peer_id | [string](#string) |  |  |
+| header | [bytes](#bytes) |  | Block header |
+| subtree_hashes | [bytes](#bytes) | repeated | Merkle tree hashes |
+| coinbase_tx | [bytes](#bytes) |  | Coinbase transaction |
+| transaction_count | [uint64](#uint64) |  | Number of transactions |
+| size_in_bytes | [uint64](#uint64) |  | Block size |
+| external | [bool](#bool) |  | External block flag |
+| peer_id | [string](#string) |  | Peer identifier |
 
 
 
@@ -104,12 +108,12 @@ swagger:model AddBlockRequest
 <a name="CheckBlockIsCurrentChainRequest"></a>
 
 ### CheckBlockIsCurrentChainRequest
-swagger:model CheckBlockIsCurrentChainRequest
+CheckBlockIsCurrentChainRequest checks if blocks are in the main chain.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| blockIDs | [uint32](#uint32) | repeated |  |
+| blockIDs | [uint32](#uint32) | repeated | List of block IDs to check |
 
 
 
@@ -119,12 +123,12 @@ swagger:model CheckBlockIsCurrentChainRequest
 <a name="CheckBlockIsCurrentChainResponse"></a>
 
 ### CheckBlockIsCurrentChainResponse
-swagger:model CheckBlockIsCurrentChainResponse
+CheckBlockIsCurrentChainResponse indicates if blocks are in the main chain.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| isPartOfCurrentChain | [bool](#bool) |  |  |
+| isPartOfCurrentChain | [bool](#bool) |  | True if blocks are in main chain |
 
 
 
@@ -134,13 +138,13 @@ swagger:model CheckBlockIsCurrentChainResponse
 <a name="GetBestHeightAndTimeResponse"></a>
 
 ### GetBestHeightAndTimeResponse
-swagger:model GetBestHeightAndTimeResponse
+GetBestHeightAndTimeResponse contains chain tip information.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| height | [uint32](#uint32) |  |  |
-| time | [uint32](#uint32) |  |  |
+| height | [uint32](#uint32) |  | Current best height |
+| time | [uint32](#uint32) |  | Current median time |
 
 
 
@@ -150,12 +154,12 @@ swagger:model GetBestHeightAndTimeResponse
 <a name="GetBlockByHeightRequest"></a>
 
 ### GetBlockByHeightRequest
-swagger:model GetBlockByHeightRequest
+GetBlockByHeightRequest represents a request to retrieve a block at a specific height.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| height | [uint32](#uint32) |  |  |
+| height | [uint32](#uint32) |  | Block height to retrieve |
 
 
 
@@ -165,12 +169,12 @@ swagger:model GetBlockByHeightRequest
 <a name="GetBlockExistsResponse"></a>
 
 ### GetBlockExistsResponse
-swagger:model GetBlockResponse
+GetBlockExistsResponse indicates whether a block exists.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| exists | [bool](#bool) |  |  |
+| exists | [bool](#bool) |  | True if the block exists |
 
 
 
@@ -180,12 +184,12 @@ swagger:model GetBlockResponse
 <a name="GetBlockGraphDataRequest"></a>
 
 ### GetBlockGraphDataRequest
-swagger:model GetBlockGraphDataRequest
+GetBlockGraphDataRequest specifies parameters for retrieving blockchain visualization data.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| period_millis | [uint64](#uint64) |  |  |
+| period_millis | [uint64](#uint64) |  | Time period in milliseconds |
 
 
 
@@ -195,12 +199,12 @@ swagger:model GetBlockGraphDataRequest
 <a name="GetBlockHeaderIDsResponse"></a>
 
 ### GetBlockHeaderIDsResponse
-swagger:model GetBlockHeaderIDsResponse
+GetBlockHeaderIDsResponse contains block header identifiers.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ids | [uint32](#uint32) | repeated |  |
+| ids | [uint32](#uint32) | repeated | List of block header IDs |
 
 
 
@@ -210,12 +214,12 @@ swagger:model GetBlockHeaderIDsResponse
 <a name="GetBlockHeaderRequest"></a>
 
 ### GetBlockHeaderRequest
-swagger:model GetBlockHeaderRequest
+GetBlockHeaderRequest requests a specific block header.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| blockHash | [bytes](#bytes) |  |  |
+| blockHash | [bytes](#bytes) |  | Hash of the block |
 
 
 
@@ -373,12 +377,12 @@ swagger:model GetBlockHeadersResponse
 <a name="GetBlockRequest"></a>
 
 ### GetBlockRequest
-swagger:model GetBlockRequest
+GetBlockRequest represents a request to retrieve a block by its hash.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  |  |
+| hash | [bytes](#bytes) |  | Hash of the block to retrieve |
 
 
 
@@ -423,13 +427,13 @@ swagger:model GetBlocksMinedNotSetResponse
 <a name="GetBlocksRequest"></a>
 
 ### GetBlocksRequest
-swagger:model GetBlocksRequest
+GetBlocksRequest represents a request to retrieve multiple blocks.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  |  |
-| count | [uint32](#uint32) |  |  |
+| hash | [bytes](#bytes) |  | Starting block hash |
+| count | [uint32](#uint32) |  | Number of blocks to retrieve |
 
 
 
@@ -562,12 +566,12 @@ swagger:model GetLastNBlocksResponse
 <a name="GetMedianTimeRequest"></a>
 
 ### GetMedianTimeRequest
-swagger:model GetMedianTimeRequest
+GetMedianTimeRequest requests median time calculation for a block.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| blockHash | [bytes](#bytes) |  |  |
+| blockHash | [bytes](#bytes) |  | Hash of the block |
 
 
 
@@ -667,14 +671,14 @@ swagger:model GetSuitableBlockResponse
 <a name="HealthResponse"></a>
 
 ### HealthResponse
-swagger:model HealthResponse
+HealthResponse represents the health status of the blockchain service.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  |  |
-| details | [string](#string) |  |  |
-| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  |  |
+| ok | [bool](#bool) |  | Overall health status |
+| details | [string](#string) |  | Detailed health information |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Timestamp of the health check |
 
 
 
@@ -810,12 +814,25 @@ swagger:model SendFSMEventRequest
 <a name="SetBlockMinedSetRequest"></a>
 
 ### SetBlockMinedSetRequest
-swagger:model SetBlockMinedSetRequest
+SetBlockMinedSetRequest marks a block as mined.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| blockHash | [bytes](#bytes) |  |  |
+| blockHash | [bytes](#bytes) |  | Hash of the block to mark as mined |
+
+
+
+<a name="SetBlockProcessedAtRequest"></a>
+
+### SetBlockProcessedAtRequest
+SetBlockProcessedAtRequest defines parameters for setting or clearing a block's processed_at timestamp.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| block_hash | [bytes](#bytes) |  | Hash of the block |
+| clear | [bool](#bool) |  | Whether to clear the timestamp |
 
 
 
@@ -900,6 +917,32 @@ swagger:model WaitFSMToTransitionRequest
  <!-- end messages -->
 
 
+<a name="GetBlockByIDRequest"></a>
+
+### GetBlockByIDRequest
+GetBlockByIDRequest represents a request to retrieve a block by its ID.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| id | [uint64](#uint64) |  | Block ID to retrieve |
+
+
+
+<a name="GetBlockInChainByHeightHashRequest"></a>
+
+### GetBlockInChainByHeightHashRequest
+GetBlockInChainByHeightHashRequest represents a request to retrieve a block by height in a specific chain.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| height | [uint32](#uint32) |  | Target block height |
+| start_hash | [bytes](#bytes) |  | Starting block hash defining the chain |
+
+
+
+
 <a name="FSMEventType"></a>
 
 ### FSMEventType
@@ -907,24 +950,24 @@ swagger:enum FSMEventType
 
 | Name | Number | Description |
 | ---- | ------ | ----------- |
-| STOP | 0 |  |
-| RUN | 1 |  |
-| CATCHUPBLOCKS | 2 |  |
-| LEGACYSYNC | 3 |  |
+| STOP | 0 | Stop the blockchain service |
+| RUN | 1 | Run the blockchain service |
+| CATCHUPBLOCKS | 2 | Start catching up blocks |
+| LEGACYSYNC | 3 | Start legacy synchronization |
 
 
 
 <a name="FSMStateType"></a>
 
 ### FSMStateType
-swagger:enum FSMStateType
+FSMStateType defines possible states of the blockchain FSM.
 
 | Name | Number | Description |
 | ---- | ------ | ----------- |
 | IDLE | 0 | Service is idle |
-| RUNNING | 1 | Service is running normally |
+| RUNNING | 1 | Service is running |
 | CATCHINGBLOCKS | 2 | Service is catching up blocks |
-| LEGACYSYNCING | 3 | Service is in legacy sync mode |
+| LEGACYSYNCING | 3 | Service is performing legacy sync |
 
 
  <!-- end enums -->
@@ -935,7 +978,7 @@ swagger:enum FSMStateType
 <a name="BlockchainAPI"></a>
 
 ### BlockchainAPI
-
+BlockchainAPI service provides comprehensive blockchain management functionality.
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
@@ -954,7 +997,7 @@ swagger:enum FSMStateType
 | GetNextWorkRequired | [GetNextWorkRequiredRequest](#blockchain_api-GetNextWorkRequiredRequest) | [GetNextWorkRequiredResponse](#blockchain_api-GetNextWorkRequiredResponse) | Calculates the required proof of work for the next block. |
 | GetBlockExists | [GetBlockRequest](#blockchain_api-GetBlockRequest) | [GetBlockExistsResponse](#blockchain_api-GetBlockExistsResponse) | Checks if a block exists in the blockchain. |
 | GetBlockHeaders | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers for multiple blocks. |
-| GetBlockHeadersToCommonAncestor | [GetBlockHeadersToCommonAncestorRequest](#blockchain_api-GetBlockHeadersToCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers to a common ancestor. |
+| GetBlockHeadersToCommonAncestor | [GetBlockHeadersToCommonAncestorRequest](#blockchain_api-GetBlockHeadersToCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers up to a common ancestor point between chains. |
 | GetBlockHeadersFromTill | [GetBlockHeadersFromTillRequest](#blockchain_api-GetBlockHeadersFromTillRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers between two specified blocks. |
 | GetBlockHeadersFromHeight | [GetBlockHeadersFromHeightRequest](#blockchain_api-GetBlockHeadersFromHeightRequest) | [GetBlockHeadersFromHeightResponse](#blockchain_api-GetBlockHeadersFromHeightResponse) | Retrieves block headers starting from a specific height. |
 | GetBlockHeadersByHeight | [GetBlockHeadersByHeightRequest](#blockchain_api-GetBlockHeadersByHeightRequest) | [GetBlockHeadersByHeightResponse](#blockchain_api-GetBlockHeadersByHeightResponse) | Retrieves block headers between two specified heights. |
@@ -964,12 +1007,13 @@ swagger:enum FSMStateType
 | GetBlockHeader | [GetBlockHeaderRequest](#blockchain_api-GetBlockHeaderRequest) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) | Retrieves the header of a specific block. |
 | InvalidateBlock | [InvalidateBlockRequest](#blockchain_api-InvalidateBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Marks a block as invalid in the blockchain. |
 | RevalidateBlock | [RevalidateBlockRequest](#blockchain_api-RevalidateBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Restores a previously invalidated block. |
-| Subscribe | [SubscribeRequest](#blockchain_api-SubscribeRequest) | [Notification](#blockchain_api-Notification) stream | Creates a subscription for blockchain notifications. |
+| Subscribe | [SubscribeRequest](#blockchain_api-SubscribeRequest) | stream [Notification](#blockchain_api-Notification) | Creates a subscription for blockchain notifications. |
 | SendNotification | [Notification](#blockchain_api-Notification) | [.google.protobuf.Empty](#google-protobuf-Empty) | Broadcasts a notification to subscribers. |
 | GetState | [GetStateRequest](#blockchain_api-GetStateRequest) | [StateResponse](#blockchain_api-StateResponse) | Retrieves state data by key. |
 | SetState | [SetStateRequest](#blockchain_api-SetStateRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Stores state data with a key. |
 | GetBlockIsMined | [GetBlockIsMinedRequest](#blockchain_api-GetBlockIsMinedRequest) | [GetBlockIsMinedResponse](#blockchain_api-GetBlockIsMinedResponse) | Checks if a block is marked as mined. |
 | SetBlockMinedSet | [SetBlockMinedSetRequest](#blockchain_api-SetBlockMinedSetRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Marks a block as mined. |
+| SetBlockProcessedAt | [SetBlockProcessedAtRequest](#blockchain_api-SetBlockProcessedAtRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Sets or clears the processed_at timestamp for a block. |
 | GetBlocksMinedNotSet | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlocksMinedNotSetResponse](#blockchain_api-GetBlocksMinedNotSetResponse) | Retrieves blocks not marked as mined. |
 | SetBlockSubtreesSet | [SetBlockSubtreesSetRequest](#blockchain_api-SetBlockSubtreesSetRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Marks a block's subtrees as set. |
 | GetBlocksSubtreesNotSet | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlocksSubtreesNotSetResponse](#blockchain_api-GetBlocksSubtreesNotSetResponse) | Retrieves blocks with unset subtrees. |
