@@ -61,7 +61,7 @@
 
 ## Overview
 
-The RPC Service provides a JSON-RPC interface for interacting with the Bitcoin SV node. It handles various Bitcoin-related commands and manages client connections.
+The RPC Service provides a JSON-RPC interface for interacting with the Bitcoin SV node. It handles various Bitcoin-related commands and manages client connections. The service implements a standard Bitcoin protocol interface while integrating with Teranode's modular architecture to provide high-performance access to blockchain data and network operations.
 
 ## Types
 
@@ -94,6 +94,12 @@ type RPCServer struct {
 }
 ```
 
+The RPCServer provides a concurrent-safe JSON-RPC server implementation for the Bitcoin protocol. It handles client authentication, request processing, response generation, and maintains connections to other Teranode services to fulfill RPC requests.
+
+The server implements a two-tier authentication system that separates administrative capabilities from limited-user operations, providing security through proper authorization. It supports standard Bitcoin Core RPC methods and Bitcoin SV extensions for compatibility with existing tools while enhancing functionality.
+
+The RPCServer is designed for concurrent operation, employing synchronization mechanisms to handle multiple simultaneous client connections without race conditions or resource conflicts. It implements proper connection management, graceful shutdown, and health monitoring.
+
 ## Functions
 
 ### NewServer
@@ -103,6 +109,14 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 ```
 
 Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, and UTXO store.
+
+This factory function creates a fully configured RPCServer instance, setting up:
+- Authentication credentials from settings
+- Connection limits and parameters
+- Command handlers and help text
+- Client connections to required services
+
+The RPC server requires connections to several other Teranode services to function properly, as it primarily serves as an API gateway to underlying node functionality. These dependencies are injected through this constructor to maintain proper service separation and testability.
 
 ## Methods
 
@@ -114,13 +128,24 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error
 
 Starts the RPC server, begins listening for client connections, and signals readiness by closing the readyCh channel once initialization is complete.
 
+This method performs several critical initialization tasks:
+1. Validates the server has not already been started (using atomic operations)
+2. Initializes network listeners on all configured interfaces and ports
+3. Launches goroutines to accept and process incoming connections
+4. Sets up proper signal handling for clean shutdown
+5. Signals readiness through the provided channel
+
+The server supports binding to multiple addresses simultaneously, allowing both IPv4 and IPv6 connections, as well as restricting access to localhost-only if configured for development or testing environments.
+
 ### Stop
 
 ```go
 func (s *RPCServer) Stop(ctx context.Context) error
 ```
 
-Stops the RPC server and closes all client connections.
+Gracefully shuts down the RPC server and its associated resources. It ensures that any in-progress requests are allowed to complete before terminating, and that all network connections are properly closed.
+
+This method implements a thread-safe shutdown mechanism using atomic operations to prevent multiple concurrent shutdown attempts. When called, it closes the quit channel to signal all goroutines to terminate, then waits for them to exit using the wait group before returning.
 
 ### Init
 
@@ -128,7 +153,15 @@ Stops the RPC server and closes all client connections.
 func (s *RPCServer) Init(ctx context.Context) (err error)
 ```
 
-Initializes the RPC server, setting up necessary clients and configurations.
+Performs second-stage initialization of the RPC server by establishing connections to dependent services that weren't available during initial construction.
+
+This method completes the RPC server initialization by:
+1. Connecting to the Block Assembly service for mining-related operations
+2. Connecting to the P2P service for network peer management
+3. Connecting to the Legacy service for compatibility with older protocols
+4. Refreshing the help cache with complete command information
+
+The initialization is designed to be idempotent and can be safely called multiple times, though typically it's only called once after NewServer and before Start.
 
 ### Health
 
@@ -136,7 +169,17 @@ Initializes the RPC server, setting up necessary clients and configurations.
 func (s *RPCServer) Health(ctx context.Context, checkLiveness bool) (int, string, error)
 ```
 
-Performs health checks on the RPC server and its dependencies.
+Reports the operational status of the RPC service for monitoring and health checking.
+
+This method implements the standard Teranode health checking interface used across all services for consistent monitoring, alerting, and orchestration. It provides both readiness and liveness checking capabilities to support different operational scenarios:
+
+- Readiness: Indicates whether the service is ready to accept requests (listeners are bound and core dependencies are available)
+- Liveness: Indicates whether the service is functioning correctly (listeners are still working and not in a hung state)
+
+The method performs checks appropriate to the service's role, including:
+- Verifying network listeners are active
+- Checking connections to dependent services
+- Validating internal state consistency
 
 ### checkAuth
 
@@ -144,7 +187,24 @@ Performs health checks on the RPC server and its dependencies.
 func (s *RPCServer) checkAuth(r *http.Request, require bool) (bool, bool, error)
 ```
 
-Checks the HTTP Basic authentication supplied by a wallet or RPC client.
+Implements the two-tier HTTP Basic authentication system for RPC clients. It validates credentials supplied in the HTTP request against configured admin and limited-access username/password combinations.
+
+The method implements a secure authentication flow that:
+1. Extracts the Authorization header from the HTTP request
+2. Validates the credentials against both admin and limited-user authentication strings
+3. Uses time-constant comparison operations to prevent timing attacks
+4. Distinguishes between admin users (who can perform state-changing operations) and limited users (who can only perform read-only operations)
+
+Security considerations:
+- Uses SHA256 for credential hashing
+- Implements constant-time comparison to prevent timing attacks
+- Properly handles missing or malformed authentication headers
+- Can be configured to require or not require authentication based on settings
+
+Returns:
+- bool: Authentication success (true if successful)
+- bool: Authorization level (true for admin access, false for limited access). The value specifies whether the user can change the state of the node.
+- error: Authentication error if any occurred, nil on success
 
 ### jsonRPCRead
 
@@ -152,29 +212,61 @@ Checks the HTTP Basic authentication supplied by a wallet or RPC client.
 func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin bool)
 ```
 
-Handles reading and responding to RPC messages.
+Handles reading and responding to RPC messages. This method is the core request processing function that:
+
+1. Parses incoming JSON-RPC requests from HTTP request bodies
+2. Validates request format and structure
+3. Routes requests to appropriate command handlers
+4. Formats and sends responses back to clients
+5. Implements proper error handling and serialization
+6. Ensures thread-safety for concurrent request handling
+
+The method supports batch requests, proper HTTP status codes, and includes safeguards against oversized or malformed requests. It also handles authorization checking to ensure admin-only commands cannot be executed by limited-access users.
 
 ## RPC Handlers
 
-The RPC Service implements various handlers for Bitcoin-related commands. Some key handlers include:
+The RPC Service implements various handlers for Bitcoin-related commands. All handlers follow a consistent function signature:
 
-- `handleGetBlock`: Retrieves block information
+```go
+func handleCommand(ctx context.Context, s *RPCServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error)
+```
+
+Each handler receives a context for cancellation and tracing, the RPC server instance, parsed command parameters, and a close notification channel. They return a properly formatted response object or an error.
+
+Some key handlers include:
+
+- `handleGetBlock`: Retrieves block information at different verbosity levels
 - `handleGetBlockHash`: Gets the hash of a block at a specific height
 - `handleGetBestBlockHash`: Retrieves the hash of the best (most recent) block
 - `handleCreateRawTransaction`: Creates a raw transaction
 - `handleSendRawTransaction`: Broadcasts a raw transaction to the network
 - `handleGetMiningCandidate`: Retrieves a candidate block for mining
 - `handleSubmitMiningSolution`: Submits a solved block to the network
+- `handleFreeze`: Freezes specified UTXOs to prevent spending
+- `handleUnfreeze`: Unfreezes previously frozen UTXOs
+- `handleReassign`: Reassigns specified frozen UTXOs to a new address
+- `handleSetBan`: Adds or removes IP addresses/subnets from the node's ban list
+- `handleClearBanned`: Removes all bans from the node
+- `handleListBanned`: Lists all currently banned IP addresses and subnets
 
 ## Configuration
 
 The RPC Service uses various configuration values, including:
 
-- `rpc_user` and `rpc_pass`: Credentials for RPC authentication
-- `rpc_limit_user` and `rpc_limit_pass`: Credentials for limited RPC access
-- `rpc_max_clients`: Maximum number of concurrent RPC clients
-- `rpc_quirks`: Enables compatibility quirks for legacy clients
-- `rpc_listener_url`: URL for the RPC listener
+- `rpc_user` and `rpc_pass`: Credentials for RPC authentication with full admin privileges
+- `rpc_limit_user` and `rpc_limit_pass`: Credentials for limited RPC access (read-only operations)
+- `rpc_max_clients`: Maximum number of concurrent RPC clients (default: 1000)
+- `rpc_quirks`: Enables compatibility quirks for legacy clients (default: false)
+- `rpc_listener_url`: URL for the RPC listener (default: "http://localhost:8332")
+- `rpc_listeners`: List of URLs for multiple RPC listeners (overrides rpc_listener_url if set)
+- `rpc_tls_enabled`: Enables TLS for secure RPC connections (default: false)
+- `rpc_tls_cert_file`: Path to TLS certificate file
+- `rpc_tls_key_file`: Path to TLS private key file
+- `rpc_auth_timeouts_seconds`: Timeout for authentication in seconds (default: 10)
+- `rpc_disable_auth`: Disables authentication (NOT recommended for production)
+- `rpc_cross_origin`: Allows cross-origin requests (NOT recommended for production)
+
+Configuration values can be provided through the configuration file, environment variables, or command-line flags, with precedence in that order.
 
 ## Authentication
 
@@ -1335,63 +1427,117 @@ The following commands are recognized by the RPC server but are not currently im
 - `gettxoutproof` - Returns proof that transaction was included in a block
 - `node` - Attempts to add or remove a node
 - `ping` - Pings the server
-- `searchrawtransactions` - Searches for raw transactions
-- `setgenerate` - Sets if server will generate coins
-- `submitblock` - Submits a block to the network
-- `uptime` - Returns how long the server has been running
-- `validateaddress` - Validates an address
-- `verifychain` - Verifies the blockchain
-- `verifymessage` - Verifies a signed message
-- `verifytxoutproof` - Verifies proof that transaction was included in a block
-
-### Wallet-Related Commands
-
-The following wallet-related commands are recognized but explicitly not supported in this implementation (they would return an ErrRPCNoWallet error). These commands should be directed to a connected Bitcoin SV wallet service:
 
 - `addmultisigaddress` - Add a multisignature address to the wallet
 - `backupwallet` - Safely copies wallet.dat to the specified file
 - `createencryptedwallet` - Creates a new encrypted wallet
-- `createmultisig` - Creates a multi-signature address and returns the redeem script
-- `dumpprivkey` - Reveals the private key corresponding to an address
-- `dumpwallet` - Dumps all wallet keys in a human-readable format
+- `createmultisig` - Creates a multi-signature address
+- `dumpprivkey` - Reveals the private key for an address
+- `dumpwallet` - Dumps wallet keys to a file
 - `encryptwallet` - Encrypts the wallet
 - `getaccount` - Returns the account associated with an address
-- `getaccountaddress` - Returns an address for the given account
-- `getaddressesbyaccount` - Returns all addresses for the given account
-- `getbalance` - Returns total balance available
+- `getaccountaddress` - Returns the address for an account
+- `getaddressesbyaccount` - Returns addresses for an account
+- `getbalance` - Returns the wallet balance
 - `getnewaddress` - Returns a new Bitcoin address for receiving payments
-- `getrawchangeaddress` - Returns a new address for receiving change
-- `getreceivedbyaccount` - Returns total amount received for the account
-- `getreceivedbyaddress` - Returns amount received by an address
-- `gettransaction` - Returns transaction details
-- `gettxoutsetinfo` - Returns statistics about the unspent transaction output set
-- `getunconfirmedbalance` - Returns the server's unconfirmed balance
+- `getrawchangeaddress` - Returns a new Bitcoin address for receiving change
+- `getreceivedbyaccount` - Returns amount received by account
+- `getreceivedbyaddress` - Returns amount received by address
+- `gettransaction` - Returns wallet transaction details
+- `getunconfirmedbalance` - Returns unconfirmed balance
 - `getwalletinfo` - Returns wallet state information
+- `importaddress` - Adds an address to the wallet
 - `importprivkey` - Adds a private key to the wallet
 - `importwallet` - Imports keys from a wallet dump file
-- `keypoolrefill` - Fills the keypool
-- `listaccounts` - Returns all account names and their balances
-- `listaddressgroupings` - Lists groups of addresses which have had their common ownership made public
-- `listlockunspent` - Returns list of temporarily unspendable outputs
+- `keypoolrefill` - Refills the key pool
+- `listaccounts` - Lists account balances
+- `listaddressgroupings` - Lists address groupings
+- `listlockunspent` - Lists temporarily unspendable outputs
 - `listreceivedbyaccount` - Lists balances by account
 - `listreceivedbyaddress` - Lists balances by address
-- `listsinceblock` - Returns transactions since the specified block
-- `listtransactions` - Returns the most recent transactions
-- `listunspent` - Returns an array of unspent transaction outputs
-- `lockunspent` - Locks or unlocks specified transaction outputs
+- `listsinceblock` - Lists transactions since a block
+- `listtransactions` - Lists wallet transactions
+- `listunspent` - Lists unspent transaction outputs
+- `lockunspent` - Locks/unlocks unspent outputs
 - `move` - Moves funds between accounts
-- `sendfrom` - Sends an amount from an account to an address
-- `sendmany` - Sends multiple amounts to multiple addresses
-- `sendtoaddress` - Sends an amount to an address
-- `setaccount` - Sets the account associated with an address
-- `settxfee` - Sets the transaction fee per kB
-- `signmessage` - Signs a message with the private key of an address
-- `signrawtransaction` - Creates a raw transaction
-- `walletlock` - Removes the encryption key from memory, locking the wallet
-- `walletpassphrase` - Stores the wallet decryption key in memory
-- `walletpassphrasechange` - Changes the wallet passphrase
+- `sendfrom` - Sends from an account
+- `sendmany` - Sends to multiple recipients
+- `sendtoaddress` - Sends to an address
+- `setaccount` - Sets the account for an address
+- `settxfee` - Sets the transaction fee
+- `signmessage` - Signs a message with address key
+- `signrawtransaction` - Signs a raw transaction
+- `walletlock` - Locks the wallet
+- `walletpassphrase` - Unlocks wallet for sending
+- `walletpassphrasechange` - Changes wallet passphrase
+
+Additionally, the following node-related commands are recognized but return ErrRPCUnimplemented:
+
+- `addnode` - Add/remove a node from the address manager
+- `debuglevel` - Changes debug logging level
+- `decoderawtransaction` - Decodes a raw transaction
+- `decodescript` - Decodes a script
+- `estimatefee` - Estimates transaction fee
+- `getaddednodeinfo` - Returns information about added nodes
+- `getbestblock` - Returns best block hash and height
+- `getblockcount` - Returns the blockchain height
+- `getblocktemplate` - Returns data for block template creation
+- `getcfilter` - Returns a compact filter for a block
+- `getcfilterheader` - Returns a filter header for a block
+- `getconnectioncount` - Returns connection count
+- `getcurrentnet` - Returns the network (mainnet/testnet)
+- `getgenerate` - Returns if the node is generating blocks
+- `gethashespersec` - Returns mining hashrate
+- `getheaders` - Returns block headers
+- `getmempoolinfo` - Returns mempool information
+- `getnettotals` - Returns network traffic statistics
+- `getnetworkhashps` - Returns estimated network hashrate
+- `getrawmempool` - Returns mempool transaction data
+- `gettxout` - Returns transaction output information
+- `gettxoutproof` - Returns proof that transaction was included in a block
+- `node` - Attempts to add or remove a peer node
+- `ping` - Requests the node ping
+- `searchrawtransactions` - Searches for raw transactions
+- `setgenerate` - Sets if the node generates blocks
+- `submitblock` - Submits a block to the network
+- `uptime` - Returns node uptime
+- `validateaddress` - Validates a Bitcoin address
+- `verifychain` - Verifies blockchain database
+- `verifymessage` - Verifies a signed message
+- `verifytxoutproof` - Verifies proof that transaction was included in a block
 
 ## Error Handling
+
+The RPC service uses a standardized error handling system based on the Bitcoin Core JSON-RPC error codes. All errors returned to clients follow the JSON-RPC 2.0 specification format:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "request-id",
+  "error": {
+    "code": -32000,
+    "message": "Error message"
+  }
+}
+```
+
+Standard error codes include:
+- -1: General error during command handling
+- -3: Wallet error (wallet functionality not implemented)
+- -5: Invalid address or key
+- -8: Out of memory or other resource exhaustion
+- -20: Database inconsistency or corruption
+- -22: Error parsing or validating a block or transaction
+- -25: Transaction or block validation error
+- -26: Transaction rejected by policy rules
+- -27: Transaction already in chain
+- -32600: Invalid JSON-RPC request
+- -32601: Method not found
+- -32602: Invalid parameters
+- -32603: Internal JSON-RPC error
+- -32700: Parse error (invalid JSON)
+
+Each handler implements specific error checks relevant to its operation and returns appropriately formatted error responses.
 
 Errors are wrapped in `bsvjson.RPCError` structures, providing standardized error codes and messages as per the Bitcoin Core RPC specification.
 
@@ -1437,6 +1583,20 @@ These RPC commands are compatible with Bitcoin SV Teranode version 1.0.0 and lat
 
 ## Concurrency
 
+The RPC Service is designed for high-concurrency operation with multiple simultaneous client connections. Key concurrency features include:
+
+- Thread-safe request processing with proper synchronization
+- Atomic operations for tracking client connections
+- Connection limits to prevent resource exhaustion
+- Wait groups for coordinated shutdown with in-progress requests
+- Context-based cancellation for long-running operations
+- Non-blocking request handler dispatch
+- Proper mutex usage for shared data structures
+- Per-request goroutines for parallel processing
+- Response caching to reduce contention on frequently accessed data
+
+These mechanisms ensure the RPC service can safely handle many concurrent connections without race conditions or deadlocks, even under high load scenarios.
+
 The server uses goroutines to handle multiple client connections concurrently. It also employs various synchronization primitives (mutexes, atomic operations) to ensure thread-safety.
 
 ## Extensibility
@@ -1446,13 +1606,38 @@ The command handling system is designed to be extensible. New RPC commands can b
 ## Limitations
 
 - The server does not implement wallet functionality. Wallet-related commands are delegated to a separate wallet service.
-- Some commands are marked as unimplemented and will return an error if called.
+- Several commands are marked as unimplemented and will return an error if called.
+- The UTXO management commands (freeze, unfreeze, reassign) require the node to be properly configured with the necessary capabilities.
+- Memory and connection limits are enforced to prevent resource exhaustion.
 
 ## Security
 
-- The server enforces a maximum number of concurrent clients to prevent resource exhaustion.
-- It supports TLS for secure communications (when configured).
-- Authentication is required for most operations, with a distinction between admin and limited-access users.
+The RPC Service implements several security features:
+
+- HTTP Basic authentication with SHA256 credential validation
+- Two-tier authentication system separating admin from limited-access operations
+- Connection limiting to prevent denial-of-service attacks
+- Configurable binding to specific network interfaces
+- Proper HTTP request/response handling with appropriate headers
+- Input validation on all parameters
+- Authorization checking for privileged operations
+- Ban management capabilities for malicious IP addresses
+- Context timeouts to prevent resource exhaustion
+- Secure credential handling to prevent information leakage
+
+The RPC Service implements several security features:
+
+- HTTP Basic authentication with SHA256 credential validation
+- Two-tier authentication system separating admin from limited-access operations
+- Connection limiting to prevent denial-of-service attacks
+- Configurable binding to specific network interfaces
+- Proper HTTP request/response handling with appropriate headers
+- Input validation on all parameters
+- Authorization checking for privileged operations
+- Ban management capabilities for malicious IP addresses
+- Context timeouts to prevent resource exhaustion
+- Secure credential handling to prevent information leakage
+- TLS support for encrypted communications (when configured)
 
 
 # Related Documents

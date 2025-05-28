@@ -66,7 +66,7 @@ type BlockAssembler struct {
     blockchainClient blockchain.ClientI
 
     // subtreeProcessor handles the processing and organization of transaction subtrees
-    subtreeProcessor *subtreeprocessor.SubtreeProcessor
+    subtreeProcessor subtreeprocessor.Interface
 
     // miningCandidateCh coordinates requests for mining candidates
     miningCandidateCh chan chan *miningCandidateResponse
@@ -109,6 +109,9 @@ type BlockAssembler struct {
 
     // currentRunningState tracks the current operational state
     currentRunningState atomic.Value
+
+    // cleanupService manages background cleanup tasks
+    cleanupService cleanup.Service
 }
 ```
 
@@ -118,29 +121,98 @@ The `BlockAssembler` type is responsible for assembling blocks, managing the cur
 
 ```go
 type SubtreeProcessor struct {
-    currentItemsPerFile       int
-    settings                 *settings.Settings
-    txChan                    chan *[]TxIDAndFee
-    getSubtreesChan           chan chan []*util.Subtree
-    moveForwardBlockChan      chan moveBlockRequest
-    reorgBlockChan            chan reorgBlocksRequest
+    // settings contains the configuration parameters for the processor
+    settings *settings.Settings
+
+    // currentItemsPerFile specifies the maximum number of items per subtree file
+    currentItemsPerFile int
+
+    // blockStartTime tracks when the current block started
+    blockStartTime time.Time
+
+    // subtreesInBlock tracks number of subtrees created in current block
+    subtreesInBlock int
+
+    // blockIntervals tracks recent intervals per subtree in previous blocks
+    blockIntervals []time.Duration
+
+    // maxBlockSamples is the number of block samples to keep for averaging
+    maxBlockSamples int
+
+    // txChan receives transaction batches for processing
+    txChan chan *[]TxIDAndFee
+
+    // getSubtreesChan handles requests to retrieve current subtrees
+    getSubtreesChan chan chan []*util.Subtree
+
+    // moveForwardBlockChan receives requests to process new blocks
+    moveForwardBlockChan chan moveBlockRequest
+
+    // reorgBlockChan handles blockchain reorganization requests
+    reorgBlockChan chan reorgBlocksRequest
+
+    // deDuplicateTransactionsCh triggers transaction deduplication
     deDuplicateTransactionsCh chan struct{}
-    resetCh                   chan *resetBlocks
-    newSubtreeChan            chan NewSubtreeRequest
-    chainedSubtrees           []*util.Subtree
-    chainedSubtreeCount       atomic.Int32
-    currentSubtree            *util.Subtree
-    currentBlockHeader        *model.BlockHeader
+
+    // resetCh handles requests to reset the processor state
+    resetCh chan *resetBlocks
+
+    // removeTxCh receives transactions to be removed
+    removeTxCh chan chainhash.Hash
+
+    // lengthCh receives requests for the current length of the processor
+    lengthCh chan chan int
+
+    // checkSubtreeProcessorCh is used to check the subtree processor state
+    checkSubtreeProcessorCh chan chan error
+
+    // newSubtreeChan receives notifications about new subtrees
+    newSubtreeChan chan NewSubtreeRequest
+
+    // chainedSubtrees stores the ordered list of completed subtrees
+    chainedSubtrees []*util.Subtree
+
+    // chainedSubtreeCount tracks the number of chained subtrees atomically
+    chainedSubtreeCount atomic.Int32
+
+    // currentSubtree represents the subtree currently being built
+    currentSubtree *util.Subtree
+
+    // currentBlockHeader stores the current block header being processed
+    currentBlockHeader *model.BlockHeader
+
+    // Mutex provides thread-safe access to shared resources
     sync.Mutex
-    txCount                   atomic.Uint64
-    batcher                   *TxIDAndFeeBatch
-    queue                     *LockFreeQueue
-    removeMap                 *util.SwissMap
-    subtreeStore              blob.Store
-    utxoStore                 utxostore.Store
-    logger                    ulogger.Logger
-    stats                     *gocore.Stat
-    currentRunningState       atomic.Value
+
+    // txCount tracks the total number of transactions processed
+    txCount atomic.Uint64
+
+    // batcher manages transaction batching operations
+    batcher *TxIDAndFeeBatch
+
+    // queue manages the transaction processing queue
+    queue *LockFreeQueue
+
+    // currentTxMap tracks transactions currently held in the subtree processor
+    currentTxMap *util.SyncedMap[chainhash.Hash, meta.TxInpoints]
+
+    // removeMap tracks transactions marked for removal
+    removeMap *util.SwissMap
+
+    // subtreeStore manages persistent storage of transaction subtrees
+    subtreeStore blob.Store
+
+    // utxoStore manages the UTXO set storage and retrieval
+    utxoStore utxostore.Store
+
+    // logger provides logging functionality
+    logger ulogger.Logger
+
+    // stats tracks operational statistics
+    stats *gocore.Stat
+
+    // currentRunningState tracks the current operational state
+    currentRunningState atomic.Value
 }
 ```
 
@@ -208,15 +280,15 @@ Starts the block assembly service, launches concurrent processing routines, and 
 func (ba *BlockAssembly) Stop(_ context.Context) error
 ```
 
-Gracefully shuts down the BlockAssembly service, stopping all internal processes and cleaning up resources.
+Gracefully shuts down the BlockAssembly service, stopping all processing operations.
 
 #### AddTx
 
 ```go
-func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error)
+func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (*blockassembly_api.AddTxResponse, error)
 ```
 
-Adds a transaction to the block assembly process.
+Adds a transaction to the block assembly. This method accepts a transaction request and forwards it to the block assembler for processing.
 
 #### RemoveTx
 
@@ -224,7 +296,7 @@ Adds a transaction to the block assembly process.
 func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.RemoveTxRequest) (*blockassembly_api.EmptyMessage, error)
 ```
 
-Removes a transaction from the block assembly process.
+Removes a transaction from the block assembly by its hash. This prevents the transaction from being included in future blocks.
 
 #### AddTxBatch
 
@@ -232,7 +304,15 @@ Removes a transaction from the block assembly process.
 func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error)
 ```
 
-Adds a batch of transactions to the block assembly process.
+Processes a batch of transactions for block assembly. This is more efficient than adding transactions individually.
+
+#### TxCount
+
+```go
+func (ba *BlockAssembly) TxCount() uint64
+```
+
+Returns the total number of transactions processed by the block assembly service.
 
 #### GetMiningCandidate
 
@@ -240,15 +320,23 @@ Adds a batch of transactions to the block assembly process.
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassembly_api.GetMiningCandidateRequest) (*model.MiningCandidate, error)
 ```
 
-Retrieves a candidate block for mining, containing all necessary information for miners to begin the mining process.
+Retrieves a candidate block for mining. This method returns a block template that miners can use to find a valid proof-of-work solution.
 
 #### SubmitMiningSolution
 
 ```go
-func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error)
+func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.OKResponse, error)
 ```
 
 Processes a mining solution submission. It validates the solution, creates a block, and adds it to the blockchain.
+
+#### SubtreeCount
+
+```go
+func (ba *BlockAssembly) SubtreeCount() int
+```
+
+Returns the total number of subtrees managed by the block assembly service.
 
 #### DeDuplicateBlockAssembly
 
@@ -256,19 +344,15 @@ Processes a mining solution submission. It validates the solution, creates a blo
 func (ba *BlockAssembly) DeDuplicateBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error)
 ```
 
-Removes duplicate transactions from the block assembly process. This operation helps maintain block validity by ensuring no transaction is included multiple times.
+Triggers deduplication of transactions in the block assembly service to remove duplicate transactions.
 
-#### GenerateBlocks
+#### ResetBlockAssembly
 
 ```go
-func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) (*blockassembly_api.EmptyMessage, error)
+func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error)
 ```
 
-Generates the specified number of blocks, if block generation is supported by the chain configuration. Each block is mined and submitted following standard block assembly rules.
-
-Parameters:
-- `req.Count`: Number of blocks to generate
-- `req.Address`: Optional mining address
+Resets the block assembly service to a clean state, removing all transactions and subtrees. This is useful for recovery after errors or when a full reset is needed.
 
 #### GetBlockAssemblyState
 
@@ -276,15 +360,77 @@ Parameters:
 func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.StateMessage, error)
 ```
 
+Retrieves the current operational state of the block assembly service, including transaction and subtree counts, blockchain tip information, and queue metrics. This information is valuable for monitoring, debugging, and ensuring the service is operating correctly.
+
+#### GetCurrentDifficulty
+
+```go
+func (ba *BlockAssembly) GetCurrentDifficulty(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.GetCurrentDifficultyResponse, error)
+```
+
+Retrieves the current mining difficulty target required for valid proof-of-work. This value determines how much computational work is required to find a valid block solution.
+
+#### GenerateBlocks
+
+```go
+func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) (*blockassembly_api.EmptyMessage, error)
+```
+
+Generates the given number of blocks by mining them. This method is primarily used for testing and development environments. The operation requires the GenerateSupported flag to be enabled in chain configuration.
+
+Parameters:
+- `req.Count`: Number of blocks to generate
+- `req.Address`: Optional mining address
+
+#### CheckBlockAssembly
+
+```go
+func (ba *BlockAssembly) CheckBlockAssembly(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.OKResponse, error)
+```
+
+Checks the block assembly state for integrity and consistency.
+
+#### GetBlockAssemblyBlockCandidate
+
+```go
+func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.GetBlockAssemblyBlockCandidateResponse, error)
+```
+
+Retrieves the current block assembly block candidate, including detailed information about the candidate's construction.
+
 ### BlockAssembler
 
 #### NewBlockAssembler
 
 ```go
-func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Store, subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) *BlockAssembler
+func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, stats *gocore.Stat, utxoStore utxo.Store, subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) (*BlockAssembler, error)
 ```
 
-Creates a new instance of the `BlockAssembler`.
+Creates and initializes a new BlockAssembler instance with the specified dependencies.
+
+#### TxCount
+
+```go
+func (b *BlockAssembler) TxCount() uint64
+```
+
+Returns the total number of transactions in the assembler.
+
+#### QueueLength
+
+```go
+func (b *BlockAssembler) QueueLength() int64
+```
+
+Returns the current length of the transaction queue.
+
+#### SubtreeCount
+
+```go
+func (b *BlockAssembler) SubtreeCount() int
+```
+
+Returns the total number of subtrees.
 
 #### Start
 
@@ -292,15 +438,39 @@ Creates a new instance of the `BlockAssembler`.
 func (b *BlockAssembler) Start(ctx context.Context) error
 ```
 
-Starts the block assembler.
+Initializes and begins the block assembler operations, setting up channel listeners and initializing the blockchain state.
+
+#### GetState
+
+```go
+func (b *BlockAssembler) GetState(ctx context.Context) (*model.BlockHeader, uint32, error)
+```
+
+Retrieves the current state of the block assembler from the blockchain, returning the best block header and height.
+
+#### SetState
+
+```go
+func (b *BlockAssembler) SetState(ctx context.Context) error
+```
+
+Persists the current state of the block assembler to the blockchain.
+
+#### CurrentBlock
+
+```go
+func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32)
+```
+
+Returns the current best block header and height.
 
 #### AddTx
 
 ```go
-func (b *BlockAssembler) AddTx(node util.SubtreeNode)
+func (b *BlockAssembler) AddTx(node util.SubtreeNode, txInpoints meta.TxInpoints)
 ```
 
-Adds a transaction to the block assembler.
+Adds a transaction to the block assembler along with its input points.
 
 #### RemoveTx
 
@@ -308,7 +478,23 @@ Adds a transaction to the block assembler.
 func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error
 ```
 
-Removes a transaction from the block assembler.
+Removes a transaction from the block assembler by its hash.
+
+#### DeDuplicateTransactions
+
+```go
+func (b *BlockAssembler) DeDuplicateTransactions()
+```
+
+Triggers deduplication of transactions in the subtree processor.
+
+#### Reset
+
+```go
+func (b *BlockAssembler) Reset()
+```
+
+Triggers a reset of the block assembler state. This operation runs asynchronously to prevent blocking.
 
 #### GetMiningCandidate
 
@@ -316,25 +502,65 @@ Removes a transaction from the block assembler.
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error)
 ```
 
-Retrieves a mining candidate from the block assembler.
+Retrieves a candidate block for mining along with its associated subtrees.
 
 ### SubtreeProcessor
 
 #### NewSubtreeProcessor
 
 ```go
-func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, utxoStore utxostore.Store, newSubtreeChan chan NewSubtreeRequest, options ...Options) (*SubtreeProcessor, error)
+func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store, blockchainClient blockchain.ClientI, utxoStore utxostore.Store, newSubtreeChan chan NewSubtreeRequest, options ...Options) (*SubtreeProcessor, error)
 ```
 
-Creates a new instance of the `SubtreeProcessor`.
+Creates and initializes a new SubtreeProcessor instance with the specified dependencies. This is the core component responsible for organizing transactions into hierarchical subtrees for efficient block assembly.
+
+#### TxCount
+
+```go
+func (stp *SubtreeProcessor) TxCount() uint64
+```
+
+Returns the total number of transactions processed by the subtree processor.
+
+#### QueueLength
+
+```go
+func (stp *SubtreeProcessor) QueueLength() int64
+```
+
+Returns the current length of the transaction queue in the subtree processor.
+
+#### SubtreeCount
+
+```go
+func (stp *SubtreeProcessor) SubtreeCount() int
+```
+
+Returns the total number of subtrees managed by the processor. This method is primarily used for prometheus statistics.
+
+#### GetCurrentRunningState
+
+```go
+func (stp *SubtreeProcessor) GetCurrentRunningState() State
+```
+
+Returns the current operational state of the processor.
+
+#### GetCurrentLength
+
+```go
+func (stp *SubtreeProcessor) GetCurrentLength() int
+```
+
+Returns the length of the current subtree.
 
 #### Add
 
 ```go
-func (stp *SubtreeProcessor) Add(node util.SubtreeNode)
+func (stp *SubtreeProcessor) Add(node util.SubtreeNode, txInpoints meta.TxInpoints)
 ```
 
-Adds a transaction to the subtree processor.
+Adds a transaction node to the processor along with its input points.
 
 #### Remove
 
@@ -342,7 +568,15 @@ Adds a transaction to the subtree processor.
 func (stp *SubtreeProcessor) Remove(hash chainhash.Hash) error
 ```
 
-Removes a transaction from the subtree processor.
+Prevents a transaction from being processed from the queue into a subtree, and removes it if already present. This can only take place before the delay time in the queue has passed.
+
+#### DeDuplicateTransactions
+
+```go
+func (stp *SubtreeProcessor) DeDuplicateTransactions()
+```
+
+Removes duplicate transactions from the processor.
 
 #### GetCompletedSubtreesForMiningCandidate
 
@@ -350,7 +584,7 @@ Removes a transaction from the subtree processor.
 func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree
 ```
 
-Retrieves completed subtrees for mining candidate generation.
+Retrieves all completed subtrees for block mining.
 
 #### MoveForwardBlock
 
@@ -358,15 +592,31 @@ Retrieves completed subtrees for mining candidate generation.
 func (stp *SubtreeProcessor) MoveForwardBlock(block *model.Block) error
 ```
 
-Moves the subtree processor state up to a new block.
+Updates the subtrees when a new block is found.
 
 #### Reorg
 
 ```go
-func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block) error
+func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block) error
 ```
 
-Handles chain reorganization in the subtree processor.
+Handles blockchain reorganization by processing moved blocks. This method manages the complex task of reconciling the subtree state with the new blockchain state after a reorganization.
+
+#### Reset
+
+```go
+func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, isLegacySync bool) ResetResponse
+```
+
+Resets the processor to a clean state, removing all subtrees and transactions.
+
+#### CheckSubtreeProcessor
+
+```go
+func (stp *SubtreeProcessor) CheckSubtreeProcessor() error
+```
+
+Checks the integrity of the subtree processor. It verifies that all transactions in the current transaction map are present in the subtrees and that the size of the current transaction map matches the expected transaction count.
 
 ### LockFreeQueue
 
@@ -376,20 +626,28 @@ Handles chain reorganization in the subtree processor.
 func NewLockFreeQueue() *LockFreeQueue
 ```
 
-Creates a new instance of the `LockFreeQueue`.
+Creates a new instance of the LockFreeQueue, which is a lock-free FIFO queue for managing transactions in the block assembly process.
 
-#### enqueue
-
-```go
-func (q *LockFreeQueue) enqueue(v *TxIDAndFee)
-```
-
-Adds a transaction to the queue.
-
-#### dequeue
+#### Len
 
 ```go
-func (q *LockFreeQueue) dequeue(validFromMillis int64) *TxIDAndFee
+func (q *LockFreeQueue) Len() int64
 ```
 
-Removes and returns a transaction from the queue.
+Returns the current length of the queue.
+
+#### Enqueue
+
+```go
+func (q *LockFreeQueue) Enqueue(v *TxIDAndFee)
+```
+
+Adds a transaction to the queue in a thread-safe manner.
+
+#### Dequeue
+
+```go
+func (q *LockFreeQueue) Dequeue(validFromMillis int64) *TxIDAndFee
+```
+
+Removes and returns a transaction from the queue if its validation time has passed. This method implements the delay mechanism that allows transactions to be properly validated before being included in subtrees.

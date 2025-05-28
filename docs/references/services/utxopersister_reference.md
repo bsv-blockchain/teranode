@@ -2,35 +2,56 @@
 
 ## Overview
 
-The UTXO (Unspent Transaction Output) Persister Service is responsible for managing and persisting UTXO data in a blockchain system. It handles the creation, storage, and retrieval of UTXO sets, additions, and deletions.
+The UTXO (Unspent Transaction Output) Persister Service is responsible for managing and persisting UTXO data in a blockchain system. It creates and maintains up-to-date UTXO file sets for each block in the Teranode blockchain. Its primary function is to process the output of the Block Persister service (utxo-additions and utxo-deletions) and generate complete UTXO set files. The resulting UTXO set files can be exported and used to initialize the UTXO store in new Teranode instances, enabling fast synchronization of new nodes.
 
 ## Core Components
 
 ### Server
 
-The `Server` struct is the main component of the UTXO Persister Service.
+The `Server` struct is the main component of the UTXO Persister Service. It coordinates the processing of blocks, extraction of UTXOs, and their persistent storage. The server maintains the state of the UTXO set by handling additions and deletions as new blocks are processed.
 
 ```go
 type Server struct {
-    logger           ulogger.Logger
-    settings         *settings.Settings      // Configuration settings
-    blockchainClient blockchain.ClientI      // Interface to blockchain operations
-    blockchainStore  blockchain_store.Store  // Direct blockchain storage access
-    blockStore       blob.Store             // Binary large object storage
-    stats            *gocore.Stat           // Performance statistics
-    lastHeight       uint32                 // Last processed block height
-    mu               sync.Mutex             // Synchronization mutex
-    running          bool                   // Server operational state
-    triggerCh        chan string           // Channel for processing triggers
+    // logger provides logging functionality
+    logger ulogger.Logger
+
+    // settings contains configuration settings
+    settings *settings.Settings
+
+    // blockchainClient provides access to blockchain operations
+    blockchainClient blockchain.ClientI
+
+    // blockchainStore provides access to blockchain storage
+    blockchainStore blockchain_store.Store
+
+    // blockStore provides access to block storage
+    blockStore blob.Store
+
+    // stats tracks operational statistics
+    stats *gocore.Stat
+
+    // lastHeight stores the last processed block height
+    lastHeight uint32
+
+    // mu provides mutex locking for thread safety
+    mu sync.Mutex
+
+    // running indicates if the server is currently processing
+    running bool
+
+    // triggerCh is used to trigger processing operations
+    triggerCh chan string
 }
 ```
 
-#### Constructor
+#### Constructors
 
 The service provides two initialization paths depending on your architectural needs:
 
 ```go
 // Standard initialization with blockchain client
+// This constructor leverages the blockchain client interface for operations,
+// which is suitable for distributed setups where components may be on different machines.
 func New(
     ctx context.Context,
     logger ulogger.Logger,
@@ -40,6 +61,8 @@ func New(
 ) *Server
 
 // Direct initialization bypassing blockchain client
+// This constructor provides direct access to the blockchain store without using the client interface.
+// This can be more efficient when the server is running in the same process as the blockchain store.
 func NewDirect(
     ctx context.Context,
     logger ulogger.Logger,
@@ -49,67 +72,122 @@ func NewDirect(
 ) (*Server, error)
 ```
 
-Creates a new `Server` instance with the provided dependencies.
-
 #### Methods
 
-- `Health(ctx context.Context, checkLiveness bool) (int, string, error)`: Performs health checks on the server and its dependencies. It conducts both liveness and readiness checks based on the parameter.
-- `Init(ctx context.Context) error`: Initializes the server by reading the last processed height from persistent storage.
-- `Start(ctx context.Context, readyCh chan<- struct{}) error`: Starts the server, including blockchain event subscription and block processing. The readyCh is closed when initialization is complete to signal readiness.
-- `Stop(ctx context.Context) error`: Stops the server's processing operations and performs necessary cleanup.
-- `trigger(ctx context.Context, source string) error`: Triggers the processing of the next block, ensuring only one processing operation runs at a time.
-- `processNextBlock(ctx context.Context) (time.Duration, error)`: Processes the next block in the chain, extracting and persisting UTXOs.
-- `readLastHeight(ctx context.Context) (uint32, error)`: Reads the last processed block height from storage.
-- `writeLastHeight(ctx context.Context, height uint32) error`: Writes the current block height to storage for recovery purposes.
-- `verifyLastSet(ctx context.Context, hash *chainhash.Hash) error`: Verifies the integrity of the last UTXO set, ensuring it was completely written and is not corrupted.
+- `Health(ctx context.Context, checkLiveness bool) (int, string, error)`: Checks the health status of the server and its dependencies. It performs both liveness and readiness checks based on the checkLiveness parameter. Liveness checks verify that the service is running, while readiness checks also verify that dependencies like blockchain client, FSM, blockchain store, and block store are available.
+
+- `Init(ctx context.Context) error`: Initializes the server by reading the last processed height from persistent storage. It retrieves the last block height that was successfully processed and sets it as the starting point for future processing.
+
+- `Start(ctx context.Context, readyCh chan<- struct{}) error`: Starts the server's processing operations. It sets up notification channels, subscribes to blockchain updates, and starts the main processing loop. The loop processes blocks as they are received through the notification channel or on a timer. The readyCh is closed when initialization is complete to signal readiness.
+
+- `Stop(ctx context.Context) error`: Stops the server's processing operations and performs necessary cleanup for graceful termination.
+
+- `trigger(ctx context.Context, source string) error`: Initiates the processing of the next block. It ensures only one processing operation runs at a time and handles various trigger sources. The source parameter indicates what triggered the processing (blockchain, timer, startup, etc.).
+
+- `processNextBlock(ctx context.Context) (time.Duration, error)`: Processes the next block in the chain. It retrieves the next block based on the last processed height, extracts UTXOs, and persists them to storage. It also updates the last processed height. Returns a duration to wait before processing the next block and any error encountered.
+
+- `readLastHeight(ctx context.Context) (uint32, error)`: Reads the last processed block height from storage. It attempts to retrieve the height from a special file in the block store.
+
+- `writeLastHeight(ctx context.Context, height uint32) error`: Writes the current block height to storage for recovery purposes. This allows the server to resume processing from the correct point after a restart.
+
+- `verifyLastSet(ctx context.Context, hash *chainhash.Hash) error`: Verifies the integrity of the last UTXO set. It checks if the UTXO set for the given hash exists and has valid header and footer. This verification ensures that the UTXO set was completely written and is not corrupted.
 
 ### UTXOSet
 
-The `UTXOSet` struct represents a set of UTXOs for a specific block.
+The `UTXOSet` struct represents a set of UTXOs for a specific block. It provides functionality to track, store, and retrieve UTXOs. UTXOSet handles both additions (new outputs) and deletions (spent outputs) for maintaining the UTXO state.
 
 ```go
 type UTXOSet struct {
-ctx             context.Context
-logger          ulogger.Logger
-blockHash       chainhash.Hash
-blockHeight     uint32
-additionsStorer *filestorer.FileStorer
-deletionsStorer *filestorer.FileStorer
-store           blob.Store
-deletionsMap    map[[32]byte][]uint32
-txCount         uint64
-utxoCount       uint64
-deletionCount   uint64
-stats           *gocore.Stat
-mu              sync.Mutex
+    // ctx provides context for operations
+    ctx context.Context
+
+    // logger provides logging functionality
+    logger ulogger.Logger
+
+    // settings contains configuration settings
+    settings *settings.Settings
+
+    // blockHash contains the hash of the current block
+    blockHash chainhash.Hash
+
+    // blockHeight represents the height of the current block
+    blockHeight uint32
+
+    // additionsStorer manages storage of UTXO additions
+    additionsStorer *filestorer.FileStorer
+
+    // deletionsStorer manages storage of UTXO deletions
+    deletionsStorer *filestorer.FileStorer
+
+    // store provides blob storage functionality
+    store blob.Store
+
+    // deletionsMap tracks deletions by transaction ID
+    deletionsMap map[[32]byte][]uint32
+
+    // txCount tracks the number of transactions
+    txCount uint64
+
+    // utxoCount tracks the number of UTXOs
+    utxoCount uint64
+
+    // deletionCount tracks the number of deletions
+    deletionCount uint64
+
+    // stats tracks operational statistics
+    stats *gocore.Stat
+
+    // mu provides mutex locking for thread safety
+    mu sync.Mutex
 }
 ```
 
 #### Constructors
 
-- `NewUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error)`
-- `GetUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error)`
-- `GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error)`
+- `NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error)`: Creates a new UTXOSet instance for managing UTXOs. It initializes the additions and deletions storers and writes their headers. This constructor prepares the storage for a new block's UTXO additions and deletions.
+
+- `GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error)`: Creates a new UTXOSet instance for an existing block. It's used for reading existing UTXO data rather than creating new data. This method doesn't check if the UTXO set actually exists.
+
+- `GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, bool, error)`: Creates a new UTXOSet instance and checks if it exists. Unlike GetUTXOSet, this method also verifies if the UTXO set for the specified block exists in storage. Returns the UTXOSet, a boolean indicating existence, and any error encountered.
 
 #### Methods
 
-- `ProcessTx(tx *bt.Tx) error`: Processes a transaction, adding new UTXOs and marking spent ones for deletion.
-- `Close() error`: Finalizes the UTXO set, writing footers and closing file storers.
-- `GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, error)`: Returns a reader for UTXO additions.
-- `GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, error)`: Returns a reader for UTXO deletions.
-- `CreateUTXOSet(ctx context.Context, c *consolidator) error`: Creates a new UTXO set based on the previous set and current additions/deletions.
-- `GetUTXOSetReader(optionalBlockHash ...*chainhash.Hash) (io.ReadCloser, error)`: Returns a reader for the UTXO set.
+- `ProcessTx(tx *bt.Tx) error`: Processes a transaction, updating the UTXO set accordingly. It handles both spending (deletions) and creation (additions) of UTXOs. This method ensures thread-safety with a mutex lock.
+
+- `delete(deletion *UTXODeletion) error`: Records a UTXO deletion. It marks a specific UTXO as spent by writing a deletion record.
+
+- `Close() error`: Finalizes the UTXO set by writing footers and closing storers. It writes EOFMarkers and count information to the addition and deletion files.
+
+- `GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, error)`: Returns a reader for accessing UTXO additions. It creates a reader for the additions file of the current block or a specified block.
+
+- `GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, error)`: Returns a reader for accessing UTXO deletions. It creates a reader for the deletions file of the current block or a specified block.
+
+- `CreateUTXOSet(ctx context.Context, c *consolidator) error`: Generates the UTXO set for the current block, using the previous block's UTXO set and applying additions and deletions from the consolidator. It handles the creation, serialization, and storage of the complete UTXO state after processing a block or range of blocks.
+
+- `GetUTXOSetReader(optionalBlockHash ...*chainhash.Hash) (io.ReadCloser, error)`: Returns a reader for accessing the UTXO set. It creates a reader for the UTXO set file of the current block or a specified block.
+
+#### Utility Functions
+
+- `filterUTXOs(utxos []*UTXO, deletions map[UTXODeletion]struct{}, txID *chainhash.Hash) []*UTXO`: Filters out UTXOs that are present in the deletions map. It removes any UTXOs that have been spent (present in the deletions map) from the provided list.
+
+- `PadUTXOsWithNil(utxos []*UTXO) []*UTXO`: Pads a slice of UTXOs with nil values to match their indices. It creates a new slice with nil values at positions where no UTXO exists, ensuring that UTXOs are at positions matching their output index.
+
+- `UnpadSlice[T any](padded []*T) []*T`: Removes nil values from a padded slice. It creates a new slice containing only the non-nil elements from the input slice.
+
+- `checkMagic(r io.Reader, magic string) error`: Verifies the magic number in a file header. It reads and validates that the magic identifier in the header matches the expected value.
 
 ### UTXO
 
-The `UTXO` struct represents an individual Unspent Transaction Output.
+The `UTXO` struct represents an individual Unspent Transaction Output. It contains the essential components of a Bitcoin transaction output: index, value, and script.
 
 ```go
 type UTXO struct {
     // Index represents the output index in the transaction
-    Index  uint32
+    Index uint32
+
     // Value represents the amount in satoshis
-    Value  uint64
+    Value uint64
+
     // Script contains the locking script
     Script []byte
 }
@@ -117,7 +195,8 @@ type UTXO struct {
 
 #### Methods
 
-- `Bytes() []byte`: Serializes the UTXO to bytes. The serialized format includes the index (4 bytes), value (8 bytes), script length (4 bytes), and the script itself. All integers are serialized in little-endian format.
+- `Bytes() []byte`: Returns the byte representation of the UTXO. The serialized format includes the index (4 bytes), value (8 bytes), script length (4 bytes), and the script itself. All integers are serialized in little-endian format.
+
 - `String() string`: Returns a string representation of the UTXO. It includes the output index, value in satoshis, and a hexadecimal representation of the script.
 
 #### Factory Methods
@@ -126,35 +205,41 @@ type UTXO struct {
 
 ### UTXOWrapper
 
-The `UTXOWrapper` struct wraps multiple UTXOs for a single transaction.
+The `UTXOWrapper` struct wraps multiple UTXOs for a single transaction. It encapsulates a transaction ID, block height, coinbase flag, and a collection of UTXOs that belong to a single transaction.
 
 ```go
 type UTXOWrapper struct {
     // TxID contains the transaction ID
-    TxID     chainhash.Hash
+    TxID chainhash.Hash
+
     // Height represents the block height
-    Height   uint32
+    Height uint32
+
     // Coinbase indicates if this is a coinbase transaction
     Coinbase bool
+
     // UTXOs contains the unspent transaction outputs
-    UTXOs    []*UTXO
+    UTXOs []*UTXO
 }
 ```
 
 #### Methods
 
-- `Bytes() []byte`: Serializes the UTXOWrapper to bytes. The serialized format includes the transaction ID, encoded height/coinbase flag, number of UTXOs, and the serialized UTXOs themselves.
+- `Bytes() []byte`: Returns the byte representation of the UTXOWrapper. The serialized format includes the transaction ID, encoded height/coinbase flag, number of UTXOs, and the serialized UTXOs themselves.
+
 - `DeletionBytes(index uint32) [36]byte`: Returns the bytes representation for deletion of a specific output. It creates a fixed-size array containing the transaction ID and the output index.
+
 - `String() string`: Returns a string representation of the UTXOWrapper. The string includes the transaction ID, height, coinbase status, number of outputs, and a formatted representation of each UTXO.
 
 #### Factory Methods
 
-- `NewUTXOWrapperFromReader(ctx context.Context, r io.Reader) (*UTXOWrapper, error)`: Creates a new UTXOWrapper from the provided reader. It deserializes the UTXOWrapper data from a byte stream.
-- `NewUTXOWrapperFromBytes(b []byte) (*UTXOWrapper, error)`: Creates a new UTXOWrapper from the provided bytes.
+- `NewUTXOWrapperFromReader(ctx context.Context, r io.Reader) (*UTXOWrapper, error)`: Creates a new UTXOWrapper from the provided reader. It deserializes the UTXOWrapper data from a byte stream, checking for EOF markers and properly decoding the height, coinbase flag, and UTXOs.
+
+- `NewUTXOWrapperFromBytes(b []byte) (*UTXOWrapper, error)`: Creates a new UTXOWrapper from the provided bytes. It's a convenience wrapper around NewUTXOWrapperFromReader that uses a bytes.Reader.
 
 ### EOFMarker
 
-The package defines an `EOFMarker` which is a byte slice of 32 zero bytes used to identify the end of a data stream when reading UTXOs from a file.
+The package defines an `EOFMarker` which is a byte slice of 32 zero bytes used to identify the end of a data stream when reading UTXOs from a file. When serializing UTXO data to storage, this marker is placed at the end to signify a complete and valid write. When reading, encountering this marker indicates that all UTXOs have been successfully read.
 
 ```go
 var EOFMarker = make([]byte, 32) // 32 zero bytes
@@ -167,7 +252,7 @@ The `UTXODeletion` struct represents a UTXO to be deleted.
 ```go
 type UTXODeletion struct {
     // TxID contains the transaction ID of the UTXO to delete
-    TxID  chainhash.Hash
+    TxID chainhash.Hash
     // Index represents the output index to delete
     Index uint32
 }

@@ -43,7 +43,8 @@ The `Repository` type provides access to blockchain data storage and retrieval o
 ```go
 type HTTP struct {
 logger     ulogger.Logger
-repository *repository.Repository
+settings   *settings.Settings
+repository repository.Interface
 e          *echo.Echo
 startTime  time.Time
 privKey    crypto.PrivKey

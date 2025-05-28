@@ -18,23 +18,22 @@ type Server struct {
     settings                      *settings.Settings        // Configuration settings
     bitcoinProtocolID             string                    // Bitcoin protocol identifier
     blockchainClient              blockchain.ClientI        // Client for blockchain interactions
-    blockValidationClient         *blockvalidation.Client   // Client for block validation
+    blockValidationClient         blockvalidation.Interface // Client for block validation
     AssetHTTPAddressURL           string                    // HTTP address URL for assets
     e                             *echo.Echo                // Echo server instance
     notificationCh                chan *notificationMsg     // Channel for notifications
     rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
     subtreeKafkaProducerClient    kafka.KafkaAsyncProducerI // Kafka producer for subtrees
     blocksKafkaProducerClient     kafka.KafkaAsyncProducerI // Kafka producer for blocks
-    banList                       BanListI                 // Interface for banned peers
-    banChan                       chan BanEvent            // Channel for ban events
-    banManager                    *PeerBanManager          // Manager for peer banning
-    bestBlockMessageReceived      atomic.Bool              // Flag for best block message receipt
-    gCtx                          context.Context          // Context for the server
-    blockTopicName                string                   // Name of the block topic
-    subtreeTopicName              string                   // Name of the subtree topic
-    bestBlockTopicName            string                   // Name of the best block topic
-    miningOnTopicName             string                   // Name of the mining-on topic
-    rejectedTxTopicName           string                   // Name of the rejected tx topic
+    banList                       BanListI                  // Interface for banned peers
+    banChan                       chan BanEvent             // Channel for ban events
+    banManager                    *PeerBanManager           // Manager for peer banning
+    gCtx                          context.Context           // Context for the server
+    blockTopicName                string                    // Name of the block topic
+    subtreeTopicName              string                    // Name of the subtree topic
+    miningOnTopicName             string                    // Name of the mining-on topic
+    rejectedTxTopicName           string                    // Name of the rejected tx topic
+    handshakeTopicName            string                    // Name of the handshake topic
 }
 ```
 
@@ -65,6 +64,8 @@ type P2PNodeI interface {
     CurrentlyConnectedPeers() []PeerInfo
     DisconnectPeer(ctx context.Context, peerID peer.ID) error
     SendToPeer(ctx context.Context, pid peer.ID, msg []byte) error
+    SetPeerConnectedCallback(callback func(context.Context, peer.ID))
+    UpdatePeerHeight(peerID peer.ID, height int32)
 
     // Stats methods
     LastSend() time.Time
@@ -75,8 +76,6 @@ type P2PNodeI interface {
     // Additional accessors
     GetProcessName() string
     UpdateBytesReceived(bytesCount uint64)
-    UpdateLastReceived()
-    GetPeerIPs(peerID peer.ID) []string
 }
 ```
 
@@ -165,6 +164,36 @@ type BanEventHandler interface {
 The `BanEventHandler` interface allows the system to react to ban events, which is implemented by the P2P Server.
 
 ```go
+type BanListI interface {
+    // IsBanned checks if a peer is banned by its IP address
+    IsBanned(ipStr string) bool
+
+    // Add adds an IP or subnet to the ban list with an expiration time
+    Add(ctx context.Context, ipOrSubnet string, expirationTime time.Time) error
+
+    // Remove removes an IP or subnet from the ban list
+    Remove(ctx context.Context, ipOrSubnet string) error
+
+    // ListBanned returns a list of all currently banned IP addresses and subnets
+    ListBanned() []string
+
+    // Subscribe returns a channel to receive ban events
+    Subscribe() chan BanEvent
+
+    // Unsubscribe removes a subscription to ban events
+    Unsubscribe(ch chan BanEvent)
+
+    // Init initializes the ban list and starts any background processes
+    Init(ctx context.Context) error
+
+    // Clear removes all entries from the ban list and cleans up resources
+    Clear()
+}
+```
+
+The `BanListI` interface defines the contract for managing banned peers by IP address or subnet, with methods for adding, removing, listing, and checking ban status. The system uses an SQL-backed implementation that persists ban information.
+
+```go
 type PeerBanManager struct {
     ctx           context.Context
     mu            sync.RWMutex
@@ -203,7 +232,7 @@ Peer scores automatically decay over time to allow for recovery from temporary i
 
 ### Message Handlers
 
-- `handleBestBlockTopic`: Handles incoming best block messages.
+- `handleHandshakeTopic`: Handles incoming handshake messages.
 - `handleBlockTopic`: Handles incoming block messages.
 - `handleSubtreeTopic`: Handles incoming subtree messages.
 - `handleMiningOnTopic`: Handles incoming mining-on messages.
@@ -228,20 +257,27 @@ The server uses Kafka producers and consumers for efficient distribution of bloc
 The following settings can be configured for the p2p service:
 
 - `p2p_listen_addresses`: Specifies the IP addresses for the P2P service to bind to.
+- `p2p_advertise_addresses`: Addresses to advertise to other peers in the network.
 - `p2p_port`: Defines the port number on which the P2P service listens.
 - `p2p_topic_prefix`: Used as a prefix for naming P2P topics to ensure they are unique across different deployments or environments.
 - `p2p_block_topic`: The topic name used for block-related messages in the P2P network.
 - `p2p_subtree_topic`: Specifies the topic for subtree-related messages within the P2P network.
-- `p2p_bestblock_topic`: Defines the topic for broadcasting the best block information among peers.
+- `p2p_handshake_topic`: Defines the topic for peer handshake messages, used for version and verack exchanges.
 - `p2p_mining_on_topic`: The topic used for messages related to the start of mining a new block.
 - `p2p_rejected_tx_topic`: Specifies the topic for broadcasting information about rejected transactions.
 - `p2p_shared_key`: A shared key for securing P2P communications, required for private network configurations.
+- `p2p_dht_protocol_id`: Identifier for the DHT protocol used by the P2P network.
 - `p2p_dht_use_private`: A boolean flag indicating whether a private Distributed Hash Table (DHT) should be used, enhancing network privacy.
 - `p2p_optimise_retries`: A boolean setting to optimize retry behavior in P2P communications, potentially improving network efficiency.
 - `p2p_static_peers`: A list of static peer addresses to connect to, ensuring the P2P node can always reach known peers.
 - `p2p_private_key`: The private key for the P2P node, used for secure communications within the network.
-- `p2p_httpListenAddress`: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
-- `p2p_grpcListenAddress`: Specifies the gRPC listen address for the P2P service.
+- `p2p_http_address`: Specifies the HTTP address for external clients to connect to the P2P service.
+- `p2p_http_listen_address`: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
+- `p2p_grpc_address`: Specifies the gRPC address for external clients to connect to the P2P service.
+- `p2p_grpc_listen_address`: Specifies the gRPC listen address for the P2P service.
+- `p2p_bootstrap_addresses`: List of bootstrap peer addresses for initial network discovery.
+- `p2p_ban_threshold`: Score threshold at which peers are banned from the network.
+- `p2p_ban_duration`: Duration of time a peer remains banned after exceeding the ban threshold.
 - `securityLevelHTTP`: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.
 - `server_certFile` and `server_keyFile`: These settings specify the paths to the SSL certificate and key files, respectively, required for setting up HTTPS.
 - `p2p_ban_default_duration`: Specifies the default duration for peer bans (defaults to 24 hours if not set).

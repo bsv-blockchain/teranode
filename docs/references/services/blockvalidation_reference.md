@@ -47,10 +47,6 @@ type Server struct {
     // blockValidation contains the core validation logic and state
     blockValidation      *BlockValidation
 
-    // SetTxMetaQ provides a lock-free queue for handling transaction metadata
-    // operations asynchronously
-    SetTxMetaQ           *util.LockFreeQ[[][]byte]
-
     // kafkaConsumerClient handles subscription to and consumption of
     // Kafka messages for distributed coordination
     kafkaConsumerClient  kafka.KafkaConsumerGroupI
@@ -71,76 +67,73 @@ The `Server` type is the main structure for the Block Validation Service. It imp
 ```go
 type BlockValidation struct {
     // logger provides structured logging capabilities
-    logger                             ulogger.Logger
+    logger                        ulogger.Logger
 
     // settings contains operational parameters and feature flags
-    settings                           *settings.Settings
+    settings                      *settings.Settings
 
     // blockchainClient interfaces with the blockchain for operations
-    blockchainClient                   blockchain.ClientI
+    blockchainClient              blockchain.ClientI
 
     // subtreeStore provides persistent storage for block subtrees
-    subtreeStore                       blob.Store
+    subtreeStore                  blob.Store
 
-    // subtreeTTL specifies how long subtrees should be retained
-    subtreeTTL                         time.Duration
+    // subtreeBlockHeightRetention specifies how long subtrees should be retained
+    subtreeBlockHeightRetention   uint32
 
     // txStore handles permanent storage of transactions
-    txStore                            blob.Store
+    txStore                       blob.Store
 
     // utxoStore manages the UTXO set for transaction validation
-    utxoStore                          utxo.Store
+    utxoStore                     utxo.Store
 
     // recentBlocksBloomFilters maintains bloom filters for recent blocks
-    recentBlocksBloomFilters           []*model.BlockBloomFilter
+    recentBlocksBloomFilters      *util.SyncedMap[chainhash.Hash, *model.BlockBloomFilter]
 
-    // recentBlocksBloomFiltersMu protects concurrent access to bloom filters
-    recentBlocksBloomFiltersMu         sync.Mutex
-
-    // recentBlocksBloomFiltersExpiration defines bloom filter retention period
-    recentBlocksBloomFiltersExpiration time.Duration
+    // bloomFilterRetentionSize defines the number of blocks to keep the bloom filter for
+    bloomFilterRetentionSize      uint32
 
     // validatorClient handles transaction validation operations
-    validatorClient                    validator.Interface
+    validatorClient               validator.Interface
 
     // subtreeValidationClient manages subtree validation processes
-    subtreeValidationClient           subtreevalidation.Interface
+    subtreeValidationClient       subtreevalidation.Interface
 
     // subtreeDeDuplicator prevents duplicate processing of subtrees
-    subtreeDeDuplicator              *DeDuplicator
+    subtreeDeDuplicator           *DeDuplicator
 
-    // lastValidatedBlocks caches recently validated blocks
-    lastValidatedBlocks              *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
+    // lastValidatedBlocks caches recently validated blocks for 2 minutes
+    lastValidatedBlocks           *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
 
-    // blockExists tracks validated block hashes
-    blockExists                       *expiringmap.ExpiringMap[chainhash.Hash, bool]
+    // blockExists tracks validated block hashes for 2 hours
+    blockExists                   *expiringmap.ExpiringMap[chainhash.Hash, bool]
 
-    // subtreeExists tracks validated subtree hashes
-    subtreeExists                     *expiringmap.ExpiringMap[chainhash.Hash, bool]
+    // subtreeExists tracks validated subtree hashes for 10 minutes
+    subtreeExists                 *expiringmap.ExpiringMap[chainhash.Hash, bool]
 
     // subtreeCount tracks the number of subtrees being processed
-    subtreeCount                      atomic.Int32
+    subtreeCount                  atomic.Int32
 
     // blockHashesCurrentlyValidated tracks blocks in validation process
-    blockHashesCurrentlyValidated    *util.SwissMap
+    blockHashesCurrentlyValidated *util.SwissMap
 
     // blockBloomFiltersBeingCreated tracks bloom filters being generated
-    blockBloomFiltersBeingCreated    *util.SwissMap
+    blockBloomFiltersBeingCreated *util.SwissMap
 
     // bloomFilterStats collects statistics about bloom filter operations
-    bloomFilterStats                 *model.BloomStats
+    bloomFilterStats              *model.BloomStats
 
     // setMinedChan receives block hashes that need to be marked as mined
-    setMinedChan                     chan *chainhash.Hash
+    setMinedChan                  chan *chainhash.Hash
 
     // revalidateBlockChan receives blocks that need revalidation
-    revalidateBlockChan              chan revalidateBlockData
+    revalidateBlockChan           chan revalidateBlockData
 
     // stats tracks operational metrics for monitoring
-    stats                            *gocore.Stat
+    stats                         *gocore.Stat
 
     // lastUsedBaseURL stores the most recent source URL used for retrievals
-    lastUsedBaseURL                  string
+    lastUsedBaseURL               string
 }
 ```
 
@@ -344,10 +337,11 @@ Optimistic Mining is a performance optimization technique that allows faster blo
 
 The system accepts new blocks before completing full validation, provisionally adding them to the chain. While the block is being added, validation continues in the background without blocking the main processing pipeline. This behavior can be configured through settings, allowing operators to balance between performance and validation thoroughness based on their requirements.
 
-### Bloom Filter System
-The service uses Bloom filters to optimize transaction lookups and prevent duplicate processing. The system:
+### Bloom Filters
 
-Creates filters dynamically as new blocks are validated, maintaining them in memory for rapid access. Each filter has a configurable retention period (default 2 hours) after which it is automatically pruned. The service uses mutex locks to ensure thread-safe access to filters while allowing concurrent reads when possible.
+The Block Validation Service maintains bloom filters for recent blocks to optimize validation. This mechanism provides a probabilistic way to quickly determine if a transaction has been seen in a previous block without needing to perform extensive searches.
+
+Creates filters dynamically as new blocks are validated, maintaining them in memory for rapid access. The service uses a configurable retention size parameter (default set in settings) to determine how many recent blocks should maintain bloom filters. The service uses a thread-safe SyncedMap to ensure concurrent access to filters is handled properly.
 
 ## Service Configuration
 

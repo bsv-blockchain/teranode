@@ -67,7 +67,7 @@ Initializes the Propagation Server.
 func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 ```
 
-Starts the Propagation Server, including FSM state restoration (if configured), UDP6 multicast listeners, Kafka producer initialization, and gRPC server setup. Once initialized, it signals readiness by closing the readyCh channel.
+Starts the Propagation Server, including FSM state restoration (if configured), UDP6 multicast listeners, Kafka producer initialization, HTTP server, and gRPC server setup. Once initialized, it signals readiness by closing the readyCh channel. The function blocks until the gRPC server is running or an error occurs.
 
 ### Stop
 
@@ -102,7 +102,7 @@ Processes a batch of transactions.
 func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Addresses string) error
 ```
 
-Initializes IPv6 multicast listeners for transaction propagation. It creates UDP listeners on specified interfaces and addresses, processing incoming transactions in separate goroutines.
+Initializes IPv6 multicast listeners for transaction propagation. It creates UDP listeners on specified interfaces and addresses, processing incoming transactions in separate goroutines. The `ipv6Addresses` parameter is a comma-separated list of IPv6 multicast addresses to listen on.
 
 ### HTTP Server Methods
 
@@ -122,13 +122,13 @@ Handles multiple transactions on the `/txs` endpoint.
 func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses string) error
 ```
 
-Initializes and starts the HTTP server for transaction processing.
+Initializes and starts the HTTP server for transaction processing. The `httpAddresses` parameter is a comma-separated list of address:port combinations to bind to.
 
 ```go
 func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, httpAddresses string)
 ```
 
-Starts the HTTP server and monitors for shutdown.
+Starts the HTTP server and monitors for shutdown. This method launches the HTTP server in a non-blocking manner and ensures proper cleanup when the context is canceled.
 
 ### Internal Transaction Processing
 
@@ -171,16 +171,18 @@ The server listens on multiple IPv6 multicast addresses for incoming transaction
 
 - Supports configurable UDP datagram size (default: 512 bytes)
 - Uses the default IPv6 port 9999 for multicast listeners
-- Creates independent listeners for each multicast address specified
+- Creates independent listeners for each multicast address specified in `settings.Propagation.IPv6Addresses`
 - Processes incoming datagrams concurrently through separate goroutines
 
 ### HTTP Integration
 
-The server provides HTTP endpoints for transaction submission:
+The server provides HTTP endpoints for transaction submission configured through `settings.Propagation.HTTPListenAddress`:
 
 - `/tx` endpoint for single transaction submissions
 - `/txs` endpoint for batch transaction submissions
+- `/health` endpoint for service health checks
 - Supports rate limiting for API protection
+- Implements middleware for recovery, CORS, request ID tracking, and logging
 
 ### Kafka Integration
 
@@ -190,8 +192,10 @@ The server uses a Kafka producer to send transactions to a validator service for
 
 The Propagation Server is configured through the settings system instead of directly using `gocore.Config()`, including:
 
-- `settings.Propagation.UDP6MulticastAddresses`: IPv6 multicast addresses for UDP listeners
-- `settings.Propagation.HTTPAddresses`: HTTP addresses for transaction submission endpoints
+- `settings.Propagation.IPv6Addresses`: Comma-separated list of IPv6 multicast addresses for UDP listeners
+- `settings.Propagation.HTTPListenAddress`: HTTP addresses for transaction submission endpoints
+- `settings.Propagation.GRPCListenAddress`: gRPC server address for the Propagation API
+- `settings.Propagation.GRPCMaxConnectionAge`: Maximum age for gRPC connections before forced refresh
 - `settings.Validator.HTTPAddress`: HTTP address for the validator service (used for fallback validation)
 - `settings.Validator.KafkaTopic`: Kafka topic for validator transactions
 
