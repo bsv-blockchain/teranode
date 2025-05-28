@@ -21,9 +21,9 @@ type Spend struct {
     // UTXOHash is the unique identifier of this UTXO
     UTXOHash *chainhash.Hash `json:"utxoHash"`
 
-    // SpendingTxID is the transaction ID that spends this UTXO
+    // SpendingData contains information about the transaction that spends this UTXO
     // This will be nil if the UTXO is unspent
-    SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
+    SpendingData *spend.SpendingData `json:"spendingData,omitempty"`
 
     // ConflictingTxID is the transaction ID that conflicts with this UTXO
     ConflictingTxID *chainhash.Hash `json:"conflictingTxId,omitempty"`
@@ -36,6 +36,8 @@ type Spend struct {
 }
 ```
 
+The `Spend` struct also provides a `Clone()` method that creates a deep copy of the spend object.
+
 ### SpendResponse
 
 Represents the response from a GetSpend operation.
@@ -45,13 +47,17 @@ type SpendResponse struct {
     // Status indicates the current state of the UTXO
     Status int `json:"status"`
 
-    // SpendingTxID is the ID of the transaction that spent this UTXO, if any
-    SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
+    // SpendingData contains information about the transaction that spent this UTXO, if any
+    SpendingData *spend.SpendingData `json:"spendingData,omitempty"`
 
     // LockTime is the block height or timestamp until which this UTXO is locked
     LockTime uint32 `json:"lockTime,omitempty"`
 }
 ```
+
+`SpendResponse` provides serialization methods:
+- `Bytes()`: Serializes the response to a byte slice
+- `FromBytes(b []byte)`: Deserializes from a byte slice
 
 ### MinedBlockInfo
 
@@ -117,104 +123,110 @@ type CreateOptions struct {
 
 ## Store Interface
 
-The `Store` interface defines the contract for UTXO storage operations.
+The `Store` interface defines the contract for UTXO storage operations. Implementations must be thread-safe as they will be accessed concurrently.
 
 ```go
 type Store interface {
-    // Health checks the health status of the UTXO store
+    // Health checks the health status of the UTXO store.
+    // If checkLiveness is true, it performs additional liveness checks.
+    // Returns status code, status message and any error encountered.
     Health(ctx context.Context, checkLiveness bool) (int, string, error)
 
-    // Create stores a new transaction's outputs as UTXOs and returns metadata
+    // Create stores a new transaction's outputs as UTXOs and returns associated metadata.
+    // The blockHeight parameter is used to determine coinbase maturity.
+    // Additional options can be specified using CreateOption functions.
     Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error)
 
-    // Get retrieves UTXO metadata for a transaction hash
+    // Get retrieves UTXO metadata for a given transaction hash.
+    // The fields parameter can be used to specify which metadata fields to retrieve.
+    // If fields is empty, all fields will be retrieved.
     Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error)
 
-    // Delete removes a UTXO and its metadata from the store
+    // Delete removes a UTXO and its associated metadata from the store.
     Delete(ctx context.Context, hash *chainhash.Hash) error
 
-    // GetSpend retrieves information about a UTXO's spend status
+    // GetSpend retrieves information about a UTXO's spend status.
     GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error)
 
-    // GetMeta retrieves transaction metadata
+    // GetMeta retrieves transaction metadata.
     GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
 
-    // Spend marks UTXOs as spent by a transaction
+    // Spend marks all the UTXOs of the transaction as spent.
     Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
 
-    // Unspend reverses a spend operation during blockchain reorganization
+    // Unspend reverses a previous spend operation, marking UTXOs as unspent.
+    // This is used during blockchain reorganizations.
     Unspend(ctx context.Context, spends []*Spend, flagAsUnspendable ...bool) error
 
-    // SetMinedMulti updates block information for mined transactions
+    // SetMinedMulti updates the block ID for multiple transactions that have been mined.
     SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error
 
-    // BatchDecorate efficiently fetches metadata for multiple transactions
+    // BatchDecorate efficiently fetches metadata for multiple transactions.
+    // The fields parameter specifies which metadata fields to retrieve.
     BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...fields.FieldName) error
 
-    // PreviousOutputsDecorate fetches information about transaction inputs
+    // PreviousOutputsDecorate fetches information about transaction inputs' previous outputs.
     PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error
 
-    // FreezeUTXOs marks UTXOs as frozen by the alert system
+    // FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
+    // This is used by the alert system to prevent spending of UTXOs.
     FreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
-    // UnFreezeUTXOs removes the frozen status from UTXOs
+    // UnFreezeUTXOs removes the frozen status from UTXOs, allowing them to be spent again.
     UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
-    // ReAssignUTXO reassigns a UTXO to a new transaction output
+    // ReAssignUTXO reassigns a UTXO to a new transaction output.
+    // The UTXO will become spendable after ReAssignedUtxoSpendableAfterBlocks blocks.
     ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error
 
-    // GetCounterConflicting returns counter conflicting transactions
+    // GetCounterConflicting returns the counter conflicting transactions for a given transaction hash.
     GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error)
 
-    // GetConflictingChildren returns children of a conflicting transaction
+    // GetConflictingChildren returns the children of the given conflicting transaction.
     GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error)
 
-    // SetConflicting marks transactions as conflicting or not conflicting
+    // SetConflicting marks transactions as conflicting or not conflicting and returns the affected spends.
     SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error)
 
-    // SetUnspendable marks transactions as unspendable or spendable
+    // SetUnspendable marks transactions as unspendable or spendable.
     SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, value bool) error
 
-    // SetBlockHeight updates the current block height
+    // SetBlockHeight updates the current block height in the store.
     SetBlockHeight(height uint32) error
 
-    // GetBlockHeight returns the current block height
+    // GetBlockHeight returns the current block height from the store.
     GetBlockHeight() uint32
 
-    // SetMedianBlockTime updates the median block time
+    // SetMedianBlockTime updates the median block time in the store.
     SetMedianBlockTime(height uint32) error
 
-    // GetMedianBlockTime returns the current median block time
+    // GetMedianBlockTime returns the current median block time from the store.
     GetMedianBlockTime() uint32
 
-    // Close closes the UTXO store and releases resources
+    // Close closes the UTXO store and releases resources.
     Close(ctx context.Context) error
 }
 ```
 
 ## Key Functions
 
-- `Health`: Checks the health status of the UTXO store.
-- `Create`: Creates a new UTXO entry from a transaction.
-- `Get`: Retrieves UTXO metadata for specific fields.
-- `Delete`: Deletes a UTXO entry and its metadata.
-- `GetSpend`: Retrieves information about a UTXO's spend status.
-- `GetMeta`: Retrieves transaction metadata.
-- `Spend`: Marks UTXOs as spent by a transaction.
-- `Unspend`: Reverses the spent status of UTXOs during blockchain reorganization.
-- `SetMinedMulti`: Updates block information for multiple transactions that have been mined.
-- `BatchDecorate`: Efficiently fetches metadata for multiple transactions.
+- `Health`: Checks the health status of the UTXO store, optionally verifying liveness.
+- `Create`: Creates new UTXO entries from a transaction's outputs with configurable options.
+- `Get`: Retrieves UTXO metadata for specific fields with field-level filtering.
+- `Delete`: Removes a UTXO entry and its associated metadata.
+- `GetSpend`: Retrieves information about a UTXO's spend status, including spending transaction data.
+- `Spend`: Marks UTXOs as spent by a transaction, with optional flags for handling conflicts.
+- `Unspend`: Reverses spend operations during blockchain reorganization.
+- `BatchDecorate`: Efficiently fetches metadata for multiple transactions in a single operation.
+- `FreezeUTXOs`/`UnFreezeUTXOs`: Manages frozen status of UTXOs for the alert system.
+- `SetConflicting`/`SetUnspendable`: Controls transaction conflict and spendability status.
+- `GetMeta`: Retrieves transaction metadata for a single transaction.
+- `SetMinedMulti`: Updates block information for multiple mined transactions.
 - `PreviousOutputsDecorate`: Fetches information about transaction inputs' previous outputs.
-- `FreezeUTXOs`: Freezes UTXOs through the alert system.
-- `UnFreezeUTXOs`: Unfreezes UTXOs that were previously frozen.
-- `ReAssignUTXO`: Reassigns a UTXO to a new transaction output.
-- `GetCounterConflicting`: Returns counter conflicting transactions for a transaction.
-- `GetConflictingChildren`: Returns the children of a conflicting transaction.
-- `SetConflicting`: Marks transactions as conflicting or not conflicting.
-- `SetUnspendable`: Marks transactions as unspendable or spendable.
-- `SetBlockHeight` / `GetBlockHeight`: Updates and retrieves the current block height.
-- `SetMedianBlockTime` / `GetMedianBlockTime`: Updates and retrieves the median block time.
-- `Close`: Closes the UTXO store and releases resources.
+- `ReAssignUTXO`: Reassigns a UTXO to a new transaction output with safety measures.
+- `GetCounterConflicting`/`GetConflictingChildren`: Manages conflict relationships between transactions.
+- `SetBlockHeight`/`GetBlockHeight`/`SetMedianBlockTime`/`GetMedianBlockTime`: Manages blockchain state.
+- `Close`: Properly closes the UTXO store and releases associated resources.
 
 ## Create Options
 
