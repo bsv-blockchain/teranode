@@ -1,6 +1,10 @@
 # GRPC Documentation - ValidatorAPI
 <a name="top"></a>
 
+> The validator_api.proto defines the gRPC service interface for the Bitcoin SV transaction
+> validation service. It specifies the methods and message types for transaction
+> validation, health checking, and block information retrieval.
+
 ## Table of Contents
 
 - [GRPC Documentation - ValidatorAPI](#grpc-documentation---validatorapi)
