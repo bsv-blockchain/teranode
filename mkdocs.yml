@@ -106,7 +106,7 @@ nav:
       - API & Protobuf:
           - Error Handling: references/errorHandling.md
           - Glossary: references/glossary.md
-          - Naming Conventions: references/namingConventions.md
+          - Coding Conventions: references/codingConventions.md
           - Kafka Message Format: references/kafkaMessageFormat.md
           - Network Consensus Rules: references/networkConsensusRules.md
           - Protobuf API:

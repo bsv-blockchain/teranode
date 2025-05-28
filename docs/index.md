@@ -177,7 +177,7 @@
 ### Additional Reference
 - [Third Party Software Requirements](./references/thirdPartySoftwareRequirements.md)
 - [Project Structure](./references/projectStructure.md)
-- [Naming Conventions](./references/namingConventions.md)
+- [Coding Conventions](./references/codingConventions.md)
 - [Error Handling Guidelines](./references/errorHandling.md)
 - [Configuration Settings](./references/settings.md)
 - [Testing Framework Technical Reference](./references/testingTechnicalReference.md)
