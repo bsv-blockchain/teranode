@@ -80,9 +80,7 @@ func (p *TxInpoints) String() string {
 }
 
 func (p *TxInpoints) addTx(tx *bt.Tx) error {
-	if len(tx.Inputs) == 0 {
-		return errors.NewProcessingError("transaction has no inputs")
-	}
+	// Do not error out for transactions without inputs, seeded Teranodes will have txs without inputs
 
 	var (
 		hash chainhash.Hash
