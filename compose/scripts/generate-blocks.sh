@@ -5,8 +5,8 @@
 
 while true
 do
-  # Random delay between 1-3 seconds
-  DELAY=$(( ( RANDOM % 3 ) + 1 ))
+  # Random delay between 1-2 seconds
+  DELAY=$(( ( RANDOM % 2 ) + 1 ))
   echo "Generating block on teranode-1 (after $DELAY second delay)..."
   sleep $DELAY
   curl --user bitcoin:bitcoin -X POST http://localhost:19292 \

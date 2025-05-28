@@ -81,13 +81,51 @@ jobs:
         run: |
           set -e
           REQUIRED_HEIGHT=120
-          MAX_ATTEMPTS=180  # 15 minutes with 5s sleep
+          MAX_ATTEMPTS=60  # 5 minutes with 5s sleep
           SLEEP=5
+          
+          # Function to check for errors in all teranode container logs at once
+          check_errors() {
+            # Get current time for this check
+            local current_time
+            current_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            
+            # Check for errors - if last_check_time is empty, it will check all logs
+            local since_param=""
+            if [ ! -z "$last_check_time" ]; then
+              since_param="--since=$last_check_time"
+            fi
+            
+            # Single command pattern that works for both initial and subsequent checks
+            local errors
+            errors=$(docker compose -f compose/docker-compose-host.yml logs --no-color $since_param teranode-1 teranode-2 teranode-3 | grep -i "| ERROR |" || true)
+            
+            # Update timestamp for next check
+            last_check_time=$current_time
+            
+            if [[ ! -z "$errors" ]]; then
+              echo "ERROR: Found error logs in teranode containers:"
+              echo "$errors"
+              return 1
+            fi
+            return 0
+          }
+          
+          # Initialize empty for first check to get all logs
+          last_check_time=""
+          
           for ((i=1; i<=MAX_ATTEMPTS; i++)); do
             h1=$(curl -s http://localhost:18090/api/v1/bestblockheader/json | jq -r .height)
             h2=$(curl -s http://localhost:28090/api/v1/bestblockheader/json | jq -r .height)
             h3=$(curl -s http://localhost:38090/api/v1/bestblockheader/json | jq -r .height)
             echo "Attempt $i: heights: $h1 $h2 $h3"
+            
+            # Check for errors in all teranode containers
+            if ! check_errors; then
+              echo "Errors found in container logs. Exiting."
+              exit 1
+            fi
+            
             if [[ -z "$h1" || -z "$h2" || -z "$h3" ]]; then
               if [[ $i -gt 10 ]]; then
                 echo "Error: One or more nodes are not responding after 10 attempts. Exiting."
