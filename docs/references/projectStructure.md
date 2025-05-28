@@ -19,8 +19,9 @@ teranode/
 ├── docker-compose.yml            # Docker Compose configuration
 │
 ├── cmd/                          # Directory containing command-line tools and utilities
-│   ├── aerospike_reader/         # Command related to Aerospike reader functionality
+│   ├── aerospikereader/          # Command related to Aerospike reader functionality
 │   ├── bitcoin2utxoset/          # Bitcoin to UTXO set utility
+│   ├── checkblocktemplate/       # Tool to check block templates
 │   ├── filereader/               # Utility for reading files
 │   ├── getfsmstate/              # Tool to get FSM state
 │   ├── keygen/                   # Key generation utility
@@ -48,8 +49,10 @@ teranode/
 │
 ├── stores/                       # Data storage implementations
 │   ├── blob/                     # Blob storage implementation
-│   ├── utxo/                     # UTXO storage implementation
-│   └── various other stores
+│   ├── blockchain/               # Blockchain storage implementation
+│   ├── cleanup/                  # Cleanup storage utilities
+│   ├── txmetacache/             # Transaction metadata cache implementation
+│   └── utxo/                     # UTXO storage implementation
 │
 ├── docs/                         # Documentation for the project
 │   ├── architecture/             # Architectural diagrams
