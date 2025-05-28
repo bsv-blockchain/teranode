@@ -72,9 +72,11 @@ The `SetupDockerNodes` method initializes the Docker Compose environment with th
 
 ```go
 func (t *TeranodeTestEnv) SetupDockerNodes() error {
-    // Set up Docker Compose environment
-    // Create test nodes with proper settings
-    // Initialize shared storage if needed
+    // Set up Docker Compose environment with provided settings
+    // Create test directory for test-specific data
+    // Configure environment settings including TEST_ID
+    // Set up shared storage client for local docker-compose
+    // Initialize teranode and legacy node configurations
 }
 ```
 
@@ -84,11 +86,12 @@ The `InitializeTeranodeTestClients` method sets up all the necessary client conn
 
 ```go
 func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
-    // Set up blob stores
-    // Initialize blockchain clients
-    // Initialize blockassembly clients
-    // Initialize distributor clients
-    // Set up other stores and connections
+    // Set up blob stores for block and subtree data
+    // Retrieve IP addresses for containers
+    // Set up RPC and Asset service URLs
+    // Initialize blockchain, blockassembly and distributor clients
+    // Configure UTXO stores and other required connections
+    // Connect to necessary services for testing
 }
 ```
 
@@ -192,6 +195,93 @@ func (suite *BitcoinTestSuite) DefaultSettingsMap() map[string]string {
         "SETTINGS_CONTEXT_2": "docker.ci.teranode2.tc1",
         "SETTINGS_CONTEXT_3": "docker.ci.teranode3.tc1",
     }
+}
+```
+
+## Utility Methods
+
+### Node Management Methods
+```go
+// StartNode starts a specific TeraNode by name
+func (t *TeranodeTestEnv) StartNode(nodeName string) error {
+    // Start a specific node in the Docker Compose environment
+    // Wait for the node to be healthy
+}
+
+// StopNode stops a specific TeraNode by name
+func (t *TeranodeTestEnv) StopNode(nodeName string) error {
+    // Stop a specific node in the Docker Compose environment
+}
+
+// RestartDockerNodes restarts the Docker Compose services
+func (t *TeranodeTestEnv) RestartDockerNodes(envSettings map[string]string) error {
+    // Stop the current Docker Compose environment
+    // Re-initialize with potentially new settings
+    // Restart the services with the updated configuration
+}
+
+// StopDockerNodes stops the Docker Compose services and removes volumes
+func (t *TeranodeTestEnv) StopDockerNodes() error {
+    // Stop all services and clean up resources
+}
+```
+
+### Client Setup Methods
+```go
+// Sets up HTTP stores for blocks and subtrees
+func (t *TeranodeTestEnv) setupBlobStores() error {
+    // Create HTTP clients for blob stores
+    // Configure block and subtree storage access
+}
+
+// Sets up blockchain client for a node
+func (t *TeranodeTestEnv) setupBlockchainClient(node *TeranodeTestClient) error {
+    // Initialize gRPC connection to blockchain service
+    // Create and configure blockchain client
+}
+
+// Sets up block assembly client for a node
+func (t *TeranodeTestEnv) setupBlockassemblyClient(node *TeranodeTestClient) error {
+    // Initialize gRPC connection to block assembly service
+    // Create and configure block assembly client
+}
+
+// Sets up distributor client for a node
+func (t *TeranodeTestEnv) setupDistributorClient(node *TeranodeTestClient) error {
+    // Initialize gRPC connection to distributor service
+    // Create and configure distributor client
+}
+
+// GetMappedPort retrieves the mapped port for a service running in Docker Compose
+func (t *TeranodeTestEnv) GetMappedPort(nodeName string, port nat.Port) (nat.Port, error) {
+    // Find the exposed port mapping for a container service
+}
+```
+
+### Transaction Utilities
+```go
+// CreateAndSendTx creates and sends a transaction
+func (n *TeranodeTestClient) CreateAndSendTx(t *testing.T, ctx context.Context, parentTx *bt.Tx) (*bt.Tx, error) {
+    // Create a new transaction spending outputs from the parent transaction
+    // Sign the transaction with test keys
+    // Submit the transaction to the node
+    // Return the created transaction
+}
+
+// CreateAndSendTxs creates and sends a chain of transactions
+func (n *TeranodeTestClient) CreateAndSendTxs(t *testing.T, ctx context.Context, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error) {
+    // Create a series of chained transactions
+    // Each transaction spends outputs from the previous one
+    // Submit all transactions to the node
+    // Return the created transactions and their hashes
+}
+
+// CreateAndSendTxsConcurrently creates and sends transactions concurrently
+func (n *TeranodeTestClient) CreateAndSendTxsConcurrently(t *testing.T, ctx context.Context, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error) {
+    // Create multiple transactions concurrently
+    // Use goroutines to parallelize transaction creation and submission
+    // Wait for all transactions to complete
+    // Return the created transactions and their hashes
 }
 ```
 
