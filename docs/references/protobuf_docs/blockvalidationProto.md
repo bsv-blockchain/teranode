@@ -5,19 +5,11 @@
 
 - [blockvalidation_api.proto](#blockvalidation_api.proto)
     - [BlockFoundRequest](#BlockFoundRequest)
-    - [DelTxMetaRequest](#DelTxMetaRequest)
-    - [DelTxMetaResponse](#DelTxMetaResponse)
     - [EmptyMessage](#EmptyMessage)
-    - [ExistsSubtreeRequest](#ExistsSubtreeRequest)
-    - [ExistsSubtreeResponse](#ExistsSubtreeResponse)
-    - [GetSubtreeRequest](#GetSubtreeRequest)
-    - [GetSubtreeResponse](#GetSubtreeResponse)
     - [HealthResponse](#HealthResponse)
     - [ProcessBlockRequest](#ProcessBlockRequest)
-    - [SetMinedMultiRequest](#SetMinedMultiRequest)
-    - [SetMinedMultiResponse](#SetMinedMultiResponse)
-    - [SetTxMetaRequest](#SetTxMetaRequest)
-    - [SetTxMetaResponse](#SetTxMetaResponse)
+    - [ValidateBlockRequest](#ValidateBlockRequest)
+    - [ValidateBlockResponse](#ValidateBlockResponse)
 
     - [BlockValidationAPI](#BlockValidationAPI)
 
@@ -40,39 +32,9 @@ swagger:model BlockFoundRequest
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  |  |
-| base_url | [string](#string) |  |  |
-| wait_to_complete | [bool](#bool) |  |  |
-
-
-
-
-
-
-<a name="DelTxMetaRequest"></a>
-
-### DelTxMetaRequest
-swagger:model DelTxMetaRequest
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  |  |
-
-
-
-
-
-
-<a name="DelTxMetaResponse"></a>
-
-### DelTxMetaResponse
-swagger:model DelTxMetaResponse
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  |  |
+| hash | [bytes](#bytes) |  | The hash of the found block |
+| base_url | [string](#string) |  | Base URL where the block can be retrieved from |
+| wait_to_complete | [bool](#bool) |  | Whether to wait for the block processing to complete |
 
 
 
@@ -89,66 +51,6 @@ swagger:model EmptyMessage
 
 
 
-<a name="ExistsSubtreeRequest"></a>
-
-### ExistsSubtreeRequest
-swagger:model ExistsSubtreeRequest
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  |  |
-
-
-
-
-
-
-<a name="ExistsSubtreeResponse"></a>
-
-### ExistsSubtreeResponse
-swagger:model ExistsSubtreeResponse
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| exists | [bool](#bool) |  |  |
-
-
-
-
-
-
-<a name="GetSubtreeRequest"></a>
-
-### GetSubtreeRequest
-swagger:model GetSubtreeRequest
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  |  |
-
-
-
-
-
-
-<a name="GetSubtreeResponse"></a>
-
-### GetSubtreeResponse
-swagger:model GetSubtreeResponse
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| subtree | [bytes](#bytes) |  |  |
-
-
-
-
-
-
 <a name="HealthResponse"></a>
 
 ### HealthResponse
@@ -157,9 +59,9 @@ swagger:model HealthResponse
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  |  |
-| details | [string](#string) |  |  |
-| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  |  |
+| ok | [bool](#bool) |  | Indicates if the service is healthy |
+| details | [string](#string) |  | Additional health status details |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Timestamp when the health check was performed |
 
 
 
@@ -174,24 +76,40 @@ swagger:model ProcessBlockRequest
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| block | [bytes](#bytes) |  |  |
-| height | [uint32](#uint32) |  |  |
+| block | [bytes](#bytes) |  | The block data to process |
+| height | [uint32](#uint32) |  | The height of the block in the blockchain |
 
 
 
 
 
 
-<a name="SetMinedMultiRequest"></a>
+<a name="ValidateBlockRequest"></a>
 
-### SetMinedMultiRequest
-swagger:model SetMinedMultiRequest
+### ValidateBlockRequest
+swagger:model ValidateBlockRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| block_id | [uint32](#uint32) |  |  |
-| hashes | [bytes](#bytes) | repeated |  |
+| block | [bytes](#bytes) |  | The block data to validate |
+| height | [uint32](#uint32) |  | The height of the block in the blockchain |
+
+
+
+
+
+
+<a name="ValidateBlockResponse"></a>
+
+### ValidateBlockResponse
+swagger:model ValidateBlockResponse
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| ok | [bool](#bool) |  | Indicates if the block is valid |
+| message | [string](#string) |  | Additional information about validation results |
 
 
 
@@ -260,11 +178,7 @@ swagger:model SetTxMetaResponse
 | HealthGRPC | [EmptyMessage](#blockvalidation_api-EmptyMessage) | [HealthResponse](#blockvalidation_api-HealthResponse) | Returns the health status of the BlockValidation service. |
 | BlockFound | [BlockFoundRequest](#blockvalidation_api-BlockFoundRequest) | [EmptyMessage](#blockvalidation_api-EmptyMessage) | Notifies the service that a new block has been found and requires validation. |
 | ProcessBlock | [ProcessBlockRequest](#blockvalidation_api-ProcessBlockRequest) | [EmptyMessage](#blockvalidation_api-EmptyMessage) | Processes a block to validate its content and structure. |
-| Get | [GetSubtreeRequest](#blockvalidation_api-GetSubtreeRequest) | [GetSubtreeResponse](#blockvalidation_api-GetSubtreeResponse) | Retrieves a subtree by its hash. |
-| Exists | [ExistsSubtreeRequest](#blockvalidation_api-ExistsSubtreeRequest) | [ExistsSubtreeResponse](#blockvalidation_api-ExistsSubtreeResponse) | Checks if a subtree with the specified hash exists. |
-| SetTxMeta | [SetTxMetaRequest](#blockvalidation_api-SetTxMetaRequest) | [SetTxMetaResponse](#blockvalidation_api-SetTxMetaResponse) | Sets transaction metadata for one or more transactions. |
-| DelTxMeta | [DelTxMetaRequest](#blockvalidation_api-DelTxMetaRequest) | [DelTxMetaResponse](#blockvalidation_api-DelTxMetaResponse) | Deletes transaction metadata for a specific transaction hash. |
-| SetMinedMulti | [SetMinedMultiRequest](#blockvalidation_api-SetMinedMultiRequest) | [SetMinedMultiResponse](#blockvalidation_api-SetMinedMultiResponse) | Marks multiple transactions as mined in a specific block. |
+| ValidateBlock | [ValidateBlockRequest](#blockvalidation_api-ValidateBlockRequest) | [ValidateBlockResponse](#blockvalidation_api-ValidateBlockResponse) | Validates a block without processing it, returning validation results. |
 
  <!-- end services -->
 
