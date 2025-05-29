@@ -120,40 +120,22 @@ jobs:
             test_tags: "test_fsm"
             test_suite: "TestFsmTestSuite"
             test_func: "TestNodeCatchUpState_WithStartAndStopNodes"
-            test_filename: "fsm_state.go"
+            test_filename: "state_test.go"
           - test_dir: "test/fsm"
             test_tags: "test_fsm"
             test_suite: "TestFsmTestSuite"
             test_func: "TestNodeCatchUpStateSingleNode_WithP2PSwitch"
-            test_filename: "fsm_state.go"
+            test_filename: "state_test.go"
           - test_dir: "test/fsm"
             test_tags: "test_fsm"
             test_suite: "TestFsmTestSuite"
             test_func: "TestNodeCatchUpStateMultipleNodes_WithP2PSwitch"
-            test_filename: "fsm_state.go"
+            test_filename: "state_test.go"
           - test_dir: "test/fsm"
             test_tags: "test_fsm"
             test_suite: "TestFsmTestSuite"
             test_func: "TestNodeDoesNotSendMiningCandidate_CatchUpState_WithStartAndStopNodes"
-            test_filename: "fsm_state.go"
-
-          #TNx postgres tests - tna2 single tx
-          - test_dir: "test/tna/withdaemon"
-            test_tags: "test_tna"
-            test_func: "TestSingleTransactionPropagationWithUtxoPostgres"
-            test_filename: "tna2_pg_test.go"
-
-          #TNx postgres tests - tna2 multiple txs
-          - test_dir: "test/tna/withdaemon"
-            test_tags: "test_tna"
-            test_func: "TestMultipleTransactionsPropagationWithUtxoPostgres"
-            test_filename: "tna2_pg_test.go"
-
-          #TNx postgres tests - tna2 concurrent txs
-          - test_dir: "test/tna/withdaemon"
-            test_tags: "test_tna"
-            test_func: "TestConcurrentTransactionsPropagationWithUtxoPostgres"
-            test_filename: "tna2_pg_test.go"
+            test_filename: "state_test.go"
 
           #TNx postgres tests - tnb6
           - test_dir: "test/tnb/withdaemon"
@@ -285,6 +267,13 @@ jobs:
       - name: Run TNC1.3 Test
         run: |
           go test -v $TEST_DIR/tnc1_3_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run TNCA2 Postgres Test
+        run: |
+          go test -v $TEST_DIR/tna2_pg_test.go
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true

@@ -1,11 +1,10 @@
-//go:build test_tna || debug
-
 // How to run:
-// go test -v -timeout 30s -tags "test_tna" -run ^TestSingleTransactionPropagationWithUtxoPostgres$
-// go test -v -timeout 30s -tags "test_tna" -run ^TestMultipleTransactionsPropagationWithUtxoPostgres$
-// go test -v -timeout 30s -tags "test_tna" -run ^TestConcurrentTransactionsPropagationWithUtxoPostgres$
+// cd test/tna
+// go test -v -timeout 30s -run ^TestSingleTransactionPropagationWithUtxoPostgres$
+// go test -v -timeout 30s -run ^TestMultipleTransactionsPropagationWithUtxoPostgres$
+// go test -v -timeout 30s -run ^TestConcurrentTransactionsPropagationWithUtxoPostgres$
 
-package tna
+package smoke
 
 import (
 	"context"
