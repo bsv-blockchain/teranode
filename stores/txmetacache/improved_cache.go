@@ -158,23 +158,23 @@ type bucketInterface interface {
 type ImprovedCache struct {
 	// buckets is an array of bucket interfaces that store the actual data
 	// Sharding data across multiple buckets reduces lock contention
-	buckets   [BucketsCount]bucketInterface
-	
+	buckets [BucketsCount]bucketInterface
+
 	// trimRatio controls how aggressively the cache evicts entries when full
 	// Higher values result in more aggressive trimming
 	trimRatio int
 }
 
-// NewImprovedCache creates a new cache instance with the specified memory allocation strategy.
+// New creates a new cache instance with the specified memory allocation strategy.
 //
 // Parameters:
-// - maxBytes: Maximum memory capacity of the cache in bytes. This is divided evenly
-//   among all buckets.
-// - bucketType: The memory allocation strategy to use (Unallocated, Preallocated, or Trimmed)
-//   which affects performance characteristics and memory usage patterns:
-//   * Unallocated: Allocates memory on demand, suitable for caches with unpredictable usage patterns
-//   * Preallocated: Allocates all memory upfront, optimizing for predictable high-throughput scenarios
-//   * Trimmed: Uses a trimming strategy to manage memory, balancing between the other approaches
+//   - maxBytes: Maximum memory capacity of the cache in bytes. This is divided evenly
+//     among all buckets.
+//   - bucketType: The memory allocation strategy to use (Unallocated, Preallocated, or Trimmed)
+//     which affects performance characteristics and memory usage patterns:
+//   - Unallocated: Allocates memory on demand, suitable for caches with unpredictable usage patterns
+//   - Preallocated: Allocates all memory upfront, optimizing for predictable high-throughput scenarios
+//   - Trimmed: Uses a trimming strategy to manage memory, balancing between the other approaches
 //
 // Returns:
 // - A new ImprovedCache instance configured with the specified parameters
@@ -182,7 +182,7 @@ type ImprovedCache struct {
 //
 // The cache distributes data across multiple buckets to reduce lock contention,
 // with each bucket initialized according to the specified allocation strategy.
-func NewImprovedCache(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
+func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 	LogCacheSize() // log whether we are using small or large cache
 
 	if maxBytes <= 0 {
@@ -421,9 +421,9 @@ func (c *ImprovedCache) SetMulti(keys [][]byte, values [][]byte) error {
 // lookup strategy. It handles the destination buffer allocation and copying of the value.
 //
 // Parameters:
-// - dst: Pointer to a byte slice where the retrieved value will be stored
-//   The method may resize this slice as needed to accommodate the value
-// - k: Key to look up (typically a transaction hash)
+//   - dst: Pointer to a byte slice where the retrieved value will be stored
+//     The method may resize this slice as needed to accommodate the value
+//   - k: Key to look up (typically a transaction hash)
 //
 // Returns:
 // - nil if the key was found in the cache and the value was successfully retrieved
@@ -512,10 +512,10 @@ func (c *ImprovedCache) Reset() {
 // - s: Pointer to a Stats structure that will be populated with cache statistics
 //
 // Implementation details:
-// - Aggregates statistics from all bucket implementations
-// - Thread-safe for concurrent access
-// - Call s.Reset before calling UpdateStats if s is being reused to avoid
-//   mixing statistics from previous calls
+//   - Aggregates statistics from all bucket implementations
+//   - Thread-safe for concurrent access
+//   - Call s.Reset before calling UpdateStats if s is being reused to avoid
+//     mixing statistics from previous calls
 func (c *ImprovedCache) UpdateStats(s *Stats) {
 	for i := range c.buckets[:] {
 		c.buckets[i].UpdateStats(s)

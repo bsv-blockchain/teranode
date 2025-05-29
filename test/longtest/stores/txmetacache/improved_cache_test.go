@@ -32,7 +32,7 @@ func init() {
 
 func TestImprovedCache_SetGetTest(t *testing.T) {
 	// initialize improved cache with 1MB capacity
-	cache, _ := txmetacache.NewImprovedCache(256*1024*1024, txmetacache.Unallocated)
+	cache, _ := txmetacache.New(256*1024*1024, txmetacache.Unallocated)
 	err := cache.Set([]byte("key"), []byte("value"))
 	require.NoError(t, err)
 	dst := make([]byte, 0)
@@ -43,7 +43,7 @@ func TestImprovedCache_SetGetTest(t *testing.T) {
 
 func TestImprovedCache_SetGetTestUnallocated(t *testing.T) {
 	// initialize improved cache with 1MB capacity
-	cache, _ := txmetacache.NewImprovedCache(1*1024*1024, txmetacache.Unallocated)
+	cache, _ := txmetacache.New(1*1024*1024, txmetacache.Unallocated)
 	err := cache.Set([]byte("key"), []byte("value"))
 	require.NoError(t, err)
 	dst := make([]byte, 0)
@@ -51,7 +51,7 @@ func TestImprovedCache_SetGetTestUnallocated(t *testing.T) {
 	require.Equal(t, []byte("value"), dst)
 }
 func TestImprovedCache_GetBigKV(t *testing.T) {
-	cache, _ := txmetacache.NewImprovedCache(1*1024*1024, txmetacache.Unallocated)
+	cache, _ := txmetacache.New(1*1024*1024, txmetacache.Unallocated)
 	key, value := make([]byte, (1*1024)), make([]byte, (1*1024))
 	binary.LittleEndian.PutUint64(key, uint64(0))
 	hash := chainhash.Hash(key)
@@ -69,7 +69,7 @@ func TestImprovedCache_GetBigKV(t *testing.T) {
 }
 
 func TestImprovedCache_GetBigKVUnallocated(t *testing.T) {
-	cache, _ := txmetacache.NewImprovedCache(256*1024*1024, txmetacache.Unallocated)
+	cache, _ := txmetacache.New(256*1024*1024, txmetacache.Unallocated)
 	key, value, tooBigValue := make([]byte, (2048)), make([]byte, (2047)), make([]byte, (2048))
 	binary.LittleEndian.PutUint64(key, uint64(0))
 	hash := chainhash.Hash(key)
@@ -92,11 +92,11 @@ func TestImprovedCache_GetBigKVUnallocated(t *testing.T) {
 }
 
 func TestImprovedCache_GetSetMultiKeysSingleValue(t *testing.T) {
-	cache, _ := txmetacache.NewImprovedCache(256*1024*1024, txmetacache.Unallocated) //100 * 1024 * 1024)
+	cache, _ := txmetacache.New(256*1024*1024, txmetacache.Unallocated) // 100 * 1024 * 1024)
 	allKeys := make([]byte, 0)
 	value := []byte("first")
 	valueSecond := []byte("second")
-	numberOfKeys := 6 //2_00 * BucketsCount
+	numberOfKeys := 6 // 2_00 * BucketsCount
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -131,7 +131,7 @@ func TestImprovedCache_GetSetMultiKeysSingleValue(t *testing.T) {
 
 func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 	// We test appending performance, so we will use unallocated cache
-	cache, _ := txmetacache.NewImprovedCache(256*1024*1024, txmetacache.Unallocated)
+	cache, _ := txmetacache.New(256*1024*1024, txmetacache.Unallocated)
 	allKeys := make([][]byte, 0)
 	key := make([]byte, 32)
 	numberOfKeys := 2_000 * txmetacache.BucketsCount
@@ -161,7 +161,7 @@ func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 }
 
 func TestImprovedCache_SetMulti(t *testing.T) {
-	cache, _ := txmetacache.NewImprovedCache(128*1024*1024, txmetacache.Trimmed)
+	cache, _ := txmetacache.New(128*1024*1024, txmetacache.Trimmed)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	t.Logf("0) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
@@ -178,11 +178,11 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 
 	fmt.Println("BucketsCount:", txmetacache.BucketsCount, ", numberOfKeys:", numberOfKeys)
 
-	//f, err := os.Create("mem.prof")
-	//if err != nil {
+	// f, err := os.Create("mem.prof")
+	// if err != nil {
 	//	t.Fatalf("could not create memory profile: %v", err)
-	//}
-	//defer f.Close()
+	// }
+	// defer f.Close()
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -202,7 +202,7 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	require.NoError(t, err)
 	t.Log("SetMulti took:", time.Since(startTime))
 
-	//var m runtime.MemStats
+	// var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	t.Logf("2) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 
@@ -223,12 +223,12 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 		require.Equal(t, allValues[i], dst)
 	}
 
-	//err = pprof.WriteHeapProfile(f)
-	//if err != nil {
+	// err = pprof.WriteHeapProfile(f)
+	// if err != nil {
 	//	t.Fatalf("could not write memory profile: %v", err)
-	//}
+	// }
 
-	//var m runtime.MemStats
+	// var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	t.Logf("2) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 
@@ -238,7 +238,7 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 }
 
 func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
-	cache, _ := txmetacache.NewImprovedCache(128*1024*1024, txmetacache.Trimmed)
+	cache, _ := txmetacache.New(128*1024*1024, txmetacache.Trimmed)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
@@ -303,7 +303,7 @@ func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	//make sure newly added items are not expired
+	// make sure newly added items are not expired
 	hash := chainhash.HashH([]byte(string(rune(1000000000))))
 	err = cache.SetCache(&hash, &meta.Data{})
 	require.NoError(t, err)

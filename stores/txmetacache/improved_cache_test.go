@@ -20,7 +20,7 @@ func init() {
 }
 
 func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
-	cache, _ := NewImprovedCache(128*1024*1024, Trimmed)
+	cache, _ := New(128*1024*1024, Trimmed)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 
@@ -77,7 +77,7 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 	t.Log("Stats, total elements added: ", s.TotalElementsAdded)
 }
 
-// TestInitTimes measures NewImprovedCache startup across X runs and logs the average per bucket type.
+// TestInitTimes measures New startup across X runs and logs the average per bucket type.
 func TestInitTimes(t *testing.T) {
 	// testing with 256 MB cache
 	const (
@@ -100,7 +100,7 @@ func TestInitTimes(t *testing.T) {
 		for i := 0; i < runs; i++ {
 			start := time.Now()
 
-			cache, err := NewImprovedCache(maxBytes, bc.typ)
+			cache, err := New(maxBytes, bc.typ)
 			require.NoError(t, err, "init %s iteration %d", bc.name, i)
 
 			total += time.Since(start)

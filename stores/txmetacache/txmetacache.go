@@ -45,19 +45,6 @@ type metrics struct {
 	hitOldTx   atomic.Uint64 // Tracks number of cache hits for outdated transactions
 }
 
-// CachedData struct for the cached transaction metadata.
-// This struct stores the essential metadata about a transaction that needs to be
-// quickly accessible during validation and other operations.
-//
-// Important implementation note:
-// do not change field order, has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
-type CachedData struct {
-	ParentTxHashes []*chainhash.Hash `json:"parentTxHashes"` // List of parent transaction hashes for dependency tracking
-	BlockHashes    []*chainhash.Hash `json:"blockHashes"`    // List of block hashes where this transaction appears (TODO change this to use the db ids instead of the hashes)
-	Fee            uint64            `json:"fee"`            // Transaction fee in satoshis
-	SizeInBytes    uint64            `json:"sizeInBytes"`    // Size of the transaction in bytes
-}
-
 // TxMetaCache is the main struct that implements a caching layer around a UTXO store.
 // It intercepts and caches transaction metadata operations to improve performance.
 // The cache acts as a decorator around the underlying UTXO store, implementing the
@@ -136,7 +123,7 @@ func NewTxMetaCache(
 		maxMB = maxMBOverride[0]
 	}
 
-	cache, err := NewImprovedCache(maxMB*1024*1024, bucketType)
+	cache, err := New(maxMB*1024*1024, bucketType)
 	if err != nil {
 		return nil, errors.NewProcessingError("error creating cache", err)
 	}
@@ -187,20 +174,12 @@ func NewTxMetaCache(
 // Returns:
 // - Error if the cache operation fails
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {
-	txMeta.Tx = nil
-
-	txMetaBytes, err := txMeta.Bytes()
+	txMetaBytes, err := txMeta.MetaBytes()
 	if err != nil {
 		return err
 	}
 
-	if err = t.cache.Set(hash[:], t.appendHeightToValue(txMetaBytes)); err != nil {
-		return err
-	}
-
-	t.metrics.insertions.Add(1)
-
-	return nil
+	return t.SetCacheFromBytes(hash[:], txMetaBytes)
 }
 
 // SetCacheFromBytes adds or updates transaction metadata in the cache using raw byte slices.
@@ -259,44 +238,44 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 //
 // Returns:
 // - Pointer to the cached transaction metadata if found and not expired, nil otherwise
+// - Error if the cache operation fails or if the data cannot be unmarshalled
 //
 // The function performs several checks:
 // 1. Verifies the data exists in the cache
 // 2. Validates that the data is not empty
 // 3. Checks if the data has expired based on block height
 // All these conditions have corresponding metrics incremented for monitoring.
-func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *meta.Data {
+func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
 
 	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
 		t.metrics.misses.Add(1)
 
-		return nil
+		return nil, nil
 	}
 
 	if len(cachedBytes) == 0 {
 		t.metrics.misses.Add(1)
 		t.logger.Warnf("txMetaCache empty for %s", hash.String())
 
-		return nil
+		return nil, nil
 	}
 
 	if !t.returnValue(cachedBytes) {
 		t.logger.Debugf("txMetaCache has the value %s, but it is too old with height: %d, returning nil", hash.String(), readHeightFromValue(cachedBytes))
 		t.metrics.hitOldTx.Add(1)
 
-		return nil
+		return nil, nil
 	}
 
 	t.metrics.hits.Add(1)
 
 	txmetaData := meta.Data{}
 	if err := meta.NewMetaDataFromBytes(cachedBytes, &txmetaData); err != nil {
-		t.logger.Errorf("Failed to unmarshal txmetaData: %v", err)
-		return nil
+		return nil, errors.NewProcessingError("Failed to unmarshal txmetaData", err)
 	}
 
-	return &txmetaData
+	return &txmetaData, nil
 }
 
 // GetMeta retrieves transaction metadata for a given transaction hash, first checking the cache

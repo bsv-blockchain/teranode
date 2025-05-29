@@ -468,9 +468,15 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 
 	if addToBlockAssembly {
-		txInpoints, err := meta.NewTxInpointsFromTx(tx)
-		if err != nil {
-			return nil, errors.NewProcessingError("[Validate][%s] error getting tx inpoints: %v", txID, err)
+		var txInpoints meta.TxInpoints
+
+		if txMetaData.TxInpoints.ParentTxHashes != nil {
+			txInpoints = txMetaData.TxInpoints
+		} else {
+			txInpoints, err = meta.NewTxInpointsFromTx(tx)
+			if err != nil {
+				return nil, errors.NewProcessingError("[Validate][%s] error getting tx inpoints: %v", txID, err)
+			}
 		}
 
 		// first we send the tx to the block assembler

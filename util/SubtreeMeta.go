@@ -233,7 +233,7 @@ func (s *SubtreeMeta) Serialize() ([]byte, error) {
 	subtreeLen := s.Subtree.Length()
 	for i := 0; i < subtreeLen; i++ {
 		if i != 0 && s.TxInpoints[i].ParentTxHashes == nil {
-			return nil, errors.NewProcessingError("subtree length does not match parent tx hashes length")
+			return nil, errors.NewProcessingError("cannot serialize, parent tx hashes are not set for node %d: %s", i, s.Subtree.Nodes[i].Hash.String())
 		}
 	}
 
@@ -244,7 +244,7 @@ func (s *SubtreeMeta) Serialize() ([]byte, error) {
 
 	// write root hash
 	if _, err = buf.Write(s.rootHash[:]); err != nil {
-		return nil, errors.NewProcessingError("unable to write root hash", err)
+		return nil, errors.NewProcessingError("cannot serialize, unable to write root hash", err)
 	}
 
 	if err = s.serializeTxInpoints(buf); err != nil {
@@ -262,14 +262,14 @@ func (s *SubtreeMeta) serializeTxInpoints(buf *bytes.Buffer) error {
 
 	parentTxHashesLen32, err := SafeIntToUint32(s.Subtree.Length())
 	if err != nil {
-		return errors.NewProcessingError("unable to get safe uint32", err)
+		return errors.NewProcessingError("cannot serialize, unable to get safe uint32", err)
 	}
 
 	// write number of parent tx hashes
 	binary.LittleEndian.PutUint32(bytesUint32[:], parentTxHashesLen32)
 
 	if _, err = buf.Write(bytesUint32[:]); err != nil {
-		return errors.NewProcessingError("unable to write total number of nodes", err)
+		return errors.NewProcessingError("cannot serialize, unable to write total number of nodes", err)
 	}
 
 	var outpointBytes []byte
@@ -281,11 +281,11 @@ func (s *SubtreeMeta) serializeTxInpoints(buf *bytes.Buffer) error {
 
 		outpointBytes, err = outpoint.Serialize()
 		if err != nil {
-			return errors.NewProcessingError("unable to write parent tx hash", err)
+			return errors.NewProcessingError("cannot serialize, unable to write parent tx hash", err)
 		}
 
 		if _, err = buf.Write(outpointBytes); err != nil {
-			return errors.NewProcessingError("unable to write parent tx hash", err)
+			return errors.NewProcessingError("cannot serialize, unable to write parent tx hash", err)
 		}
 	}
 

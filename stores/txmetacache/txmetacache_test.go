@@ -86,6 +86,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		metaGet, err := c.GetMeta(ctx, tests.Tx.TxIDChainHash())
 		require.NoError(t, err)
 
+		metaData.Tx = nil // Tx should not be set in the cache, so we set it to nil for comparison
 		require.Equal(t, metaData, metaGet)
 
 		assert.Nil(t, metaGet.Tx) // Tx should be nil as it is not set in the cache
@@ -386,7 +387,8 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test GetMetaCached
-		metaGet := cache.GetMetaCached(ctx, hash)
+		metaGet, err := cache.GetMetaCached(ctx, *hash)
+		require.NoError(t, err)
 		require.NotNil(t, metaGet)
 		require.Equal(t, metaData.Fee, metaGet.Fee)
 		require.Equal(t, metaData.SizeInBytes, metaGet.SizeInBytes)
@@ -396,7 +398,8 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test GetMetaCached after height advancement
-		metaGet = cache.GetMetaCached(ctx, hash)
+		metaGet, err = cache.GetMetaCached(ctx, *hash)
+		require.NoError(t, err)
 		require.Nil(t, metaGet)
 	})
 
@@ -495,7 +498,8 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 		require.Nil(t, metaGet)
 
 		// Test GetMetaCached with non-existent hash
-		metaGet = cache.GetMetaCached(ctx, hash)
+		metaGet, err = cache.GetMetaCached(ctx, *hash)
+		require.Error(t, err)
 		require.Nil(t, metaGet)
 	})
 }

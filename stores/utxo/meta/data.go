@@ -253,7 +253,7 @@ func (d *Data) Bytes() ([]byte, error) {
 		buf = append(buf, d.Tx.ExtendedBytes()...)
 	}
 
-	// write a varint for the length and then all the block hashes
+	// write a varint for the length and then all the block IDs
 	var blockBytes [4]byte
 	for _, blockID := range d.BlockIDs {
 		binary.LittleEndian.PutUint32(blockBytes[:], blockID)
@@ -280,7 +280,7 @@ func (d *Data) Bytes() ([]byte, error) {
 // Use this method when you need to efficiently store or transmit just the
 // metadata portion of a transaction record.
 func (d *Data) MetaBytes() ([]byte, error) {
-	buf := make([]byte, 25, 1024) // 8 for Fee, 8 for SizeInBytes
+	buf := make([]byte, 17, 1024) // 8 for Fee, 8 for SizeInBytes, 1 for flags
 
 	binary.LittleEndian.PutUint64(buf[:8], d.Fee)
 	binary.LittleEndian.PutUint64(buf[8:16], d.SizeInBytes)

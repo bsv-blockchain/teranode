@@ -9,6 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
@@ -80,7 +81,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					}
 				}
 
-				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, "fee", "sizeInBytes", "parentTxHashes", "blockIDs"); err != nil {
+				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs); err != nil {
 					return errors.NewStorageError("error running batch decorate on utxo store for missing transactions", err)
 				}
 

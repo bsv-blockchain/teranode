@@ -157,7 +157,6 @@ func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 		switch mode {
 		case JSON:
 			response.Bins["tx"] = hex.EncodeToString(response.Bins["tx"].([]byte))
-			response.Bins["parentTxHashes"] = hex.EncodeToString(response.Bins["parentTxHashes"].([]byte))
 			record := aerospikeRecord{
 				Key:        response.Key.String(),
 				Digest:     hex.EncodeToString(response.Key.Digest()),

@@ -59,7 +59,10 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 		i := i
 
 		g.Go(func() error {
-			var txMeta *meta.Data
+			var (
+				txMeta *meta.Data
+				err    error
+			)
 
 			// cycle through the batch size, making sure not to go over the length of the txHashes
 			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
@@ -81,7 +84,13 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 						continue
 					}
 
-					txMeta = cache.GetMetaCached(gCtx, &txHash)
+					txMeta, err = cache.GetMetaCached(gCtx, txHash)
+					if err != nil {
+						u.logger.Warnf("[processTxMetaUsingCache] error retrieving txMeta for %s: %v", txHash.String(), err)
+
+						txMeta = nil // Set txMeta to nil to indicate a miss
+					}
+
 					if txMeta != nil {
 						txMetaSlice[i+j] = txMeta
 						continue
