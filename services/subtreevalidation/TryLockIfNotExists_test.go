@@ -350,7 +350,7 @@ func TestNewQuorumWithOptions(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 10*time.Second, q.timeout, "Default timeout should be 10s")
 		assert.Equal(t, time.Duration(0), q.absoluteTimeout, "Default absoluteTimeout should be 0")
-		assert.Equal(t, "", q.extension, "Default extension should be empty")
+		assert.Empty(t, q.extension, "Default extension should be empty")
 	})
 
 	t.Run("WithExtension", func(t *testing.T) {

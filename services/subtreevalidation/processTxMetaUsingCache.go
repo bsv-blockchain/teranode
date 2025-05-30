@@ -85,7 +85,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 					}
 
 					txMeta, err = cache.GetMetaCached(gCtx, txHash)
-					if err != nil {
+					if err != nil && !errors.Is(err, errors.ErrNotFound) {
 						u.logger.Warnf("[processTxMetaUsingCache] error retrieving txMeta for %s: %v", txHash.String(), err)
 
 						txMeta = nil // Set txMeta to nil to indicate a miss

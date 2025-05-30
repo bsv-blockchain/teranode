@@ -338,6 +338,11 @@ type MinedBlockStore interface {
 }
 
 func (b *Block) String() string {
+	b.subtreeSlicesMu.Lock()
+	defer func() {
+		b.subtreeSlicesMu.Unlock()
+	}()
+
 	return fmt.Sprintf("Block %s (height: %d, id: %d, txCount: %d, size: %d)", b.Hash().String(), b.Height, b.ID, b.TransactionCount, b.SizeInBytes)
 }
 

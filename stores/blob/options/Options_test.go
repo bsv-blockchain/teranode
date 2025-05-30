@@ -90,14 +90,14 @@ func TestOptionsConstructFilename(t *testing.T) {
 			name:        "With FileExtension",
 			key:         []byte("key"),
 			fileOptions: []FileOption{WithFileExtension(SubtreeMetaFileExtension)},
-			expected:    tempDir + "/79656b.meta",
+			expected:    tempDir + "/79656b.subtreeMeta",
 		},
 		{
 			name:         "With FileName and FileExtension",
 			key:          []byte("key"),
 			storeOptions: []StoreOption{WithDefaultSubDirectory("./data4/")},
 			fileOptions:  []FileOption{WithFilename("filename-1234"), WithFileExtension(SubtreeMetaFileExtension)},
-			expected:     tempDir + "/data4/filename-1234.meta",
+			expected:     tempDir + "/data4/filename-1234.subtreeMeta",
 		},
 		// WithHashPrefix
 		{
@@ -221,7 +221,7 @@ func TestFileOptionsToQuery(t *testing.T) {
 
 		assert.Equal(t, "5", query.Get("dah"))
 		assert.Equal(t, "test.txt", query.Get("filename"))
-		assert.Equal(t, SubtreeMetaFileExtension, query.Get("extension"))
+		assert.Equal(t, SubtreeMetaFileExtension.String(), query.Get("extension"))
 		assert.Equal(t, "true", query.Get("allowOverwrite"))
 	})
 }

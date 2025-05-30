@@ -251,7 +251,7 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash) (*me
 	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
 		t.metrics.misses.Add(1)
 
-		return nil, nil
+		return nil, err
 	}
 
 	if len(cachedBytes) == 0 {
@@ -294,13 +294,11 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash) (*me
 func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
 	err := t.cache.Get(&cachedBytes, hash[:])
-
 	if err != nil {
 		return nil, err
 	}
 
 	if len(cachedBytes) > 0 {
-
 		if !t.returnValue(cachedBytes) {
 			t.logger.Debugf("txMetaCache has the value %s, but it is too old with height: %d, returning nil", hash.String(), readHeightFromValue(cachedBytes))
 			t.metrics.hitOldTx.Add(1)
