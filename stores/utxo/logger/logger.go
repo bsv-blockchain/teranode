@@ -243,17 +243,29 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
 }
 
 func (s *Store) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	return nil, nil
+	conflictingHashes, err := s.store.GetCounterConflicting(ctx, txHash)
+	s.logger.Debugf("[UTXOStore][logger][GetCounterConflicting] txHash %s err %v : %s", txHash.String(), err, caller())
+
+	return conflictingHashes, err
 }
 
-func (s *Store) GetConflictingChildren(_ context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	return nil, nil
+func (s *Store) GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	conflictingHashes, err := s.store.GetConflictingChildren(ctx, txHash)
+	s.logger.Debugf("[UTXOStore][logger][GetConflictingChildren] txHash %s err %v : %s", txHash.String(), err, caller())
+
+	return conflictingHashes, err
 }
 
 func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
-	return nil, nil, nil
+	spends, conflictingHashes, err := s.store.SetConflicting(ctx, txHashes, setValue)
+	s.logger.Debugf("[UTXOStore][logger][SetConflicting] txHashes %v setValue %v err %v : %s", txHashes, setValue, err, caller())
+
+	return spends, conflictingHashes, err
 }
 
 func (s *Store) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
-	return nil
+	err := s.store.SetUnspendable(ctx, txHashes, setValue)
+	s.logger.Debugf("[UTXOStore][logger][SetUnspendable] txHashes %v setValue %v err %v : %s", txHashes, setValue, err, caller())
+
+	return err
 }
