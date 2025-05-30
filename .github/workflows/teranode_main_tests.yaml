@@ -42,6 +42,7 @@ jobs:
 
       - name: Run Go tests
         run: make test
+        continue-on-error: false
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -81,6 +82,7 @@ jobs:
         run: |
           cd test/e2e/daemon && \
           go test -v -count=1 -race -timeout=5m -run '^(TestBlockSubsidy|TestMoveUp|TestMoveDownMoveUpWhenNewBlockIsGenerated|TestMoveDownMoveUpWhenNoNewBlockIsGenerated|TestTDRestart|TestShouldAllowFairTxUseRpc)$' .
+        continue-on-error: false
         env:
           settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
 
