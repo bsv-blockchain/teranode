@@ -72,15 +72,16 @@ type Daemon struct {
 	doneCh        chan struct{}
 	closeDoneOnce sync.Once
 
-	stopCh           chan struct{} // Channel to signal when all services have stopped
-	closeStopOnce    sync.Once
-	serverMu         sync.Mutex
-	server           *http.Server // Add this field
-	ServiceManager   *servicemanager.ServiceManager
-	externalServices []*externalService
-	loggerFactory    func(serviceName string) ulogger.Logger // Factory for creating loggers
-	daemonStores     *DaemonStores
-	appCount         int
+	stopCh             chan struct{}
+	closeStopOnce      sync.Once
+	serverMu           sync.Mutex
+	server             *http.Server
+	ServiceManager     *servicemanager.ServiceManager
+	externalServices   []*externalService
+	loggerFactory      func(serviceName string) ulogger.Logger
+	daemonStores       *DaemonStores
+	appCount           int
+	blockValidationSrv *blockvalidation.Server
 }
 
 func New(opts ...Option) *Daemon {
@@ -518,6 +519,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 			rejectedTxKafkaConsumerClient,
 			subtreeKafkaProducerClient,
 			blocksKafkaProducerClient,
+			d.blockValidationSrv,
 		)
 		if err != nil {
 			return err
@@ -808,7 +810,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 				return err
 			}
 
-			if err = sm.AddService("Block Validation", blockvalidation.New(
+			d.blockValidationSrv = blockvalidation.New(
 				createLogger("bval"),
 				tSettings,
 				subtreeStore,
@@ -817,7 +819,8 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 				validatorClient,
 				blockchainClient,
 				kafkaConsumerClient,
-			)); err != nil {
+			)
+			if err = sm.AddService("Block Validation", d.blockValidationSrv); err != nil {
 				return err
 			}
 		}

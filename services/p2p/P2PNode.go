@@ -285,7 +285,7 @@ func setUpPrivateNetwork(config P2PConfig, pk *crypto.PrivKey) (host.Host, error
 
 	h, err = libp2p.New(opts...)
 	if err != nil {
-		return nil, errors.NewServiceError("[P2PNode] error creating private network", err)
+		return nil, errors.NewServiceError("[P2PNode] error creating libp2p node", err)
 	}
 
 	return h, nil
@@ -552,8 +552,8 @@ func (s *P2PNode) Publish(ctx context.Context, topicName string, msgBytes []byte
 }
 
 /* SendToPeer sends a message to a peer. It will attempt to connect to the peer if not already connected. */
-func (s *P2PNode) SendToPeer(ctx context.Context, pid peer.ID, msg []byte) (err error) {
-	h2pi := s.host.Peerstore().PeerInfo(pid)
+func (s *P2PNode) SendToPeer(ctx context.Context, peerID peer.ID, msg []byte) (err error) {
+	h2pi := s.host.Peerstore().PeerInfo(peerID)
 	s.logger.Infof("[P2PNode][SendToPeer] dialing %s", h2pi.Addrs)
 
 	if err = s.host.Connect(ctx, h2pi); err != nil {
@@ -565,7 +565,7 @@ func (s *P2PNode) SendToPeer(ctx context.Context, pid peer.ID, msg []byte) (err 
 
 	st, err = s.host.NewStream(
 		ctx,
-		pid,
+		peerID,
 		protocol.ID(s.bitcoinProtocolID),
 	)
 	if err != nil {
@@ -584,6 +584,7 @@ func (s *P2PNode) SendToPeer(ctx context.Context, pid peer.ID, msg []byte) (err 
 		return err
 	}
 
+	s.logger.Debugf("[P2PNode][SendToPeer] sent %v bytes to %s", strings.TrimSpace(string(msg)), peerID.String())
 	// Increment bytesSent using atomic operations
 	atomic.AddUint64(&s.bytesSent, uint64(len(msg)))
 
@@ -1092,16 +1093,6 @@ func (s *P2PNode) ConnectedPeers() []PeerInfo {
 	// Create a slice with zero initial length but with capacity for all peers
 	peers := make([]PeerInfo, 0, len(peerIDs))
 
-	// print out peer heights
-	for _, peerID := range peerIDs {
-		var height int32
-		if h, ok := s.peerHeights.Load(peerID); ok {
-			height = h.(int32)
-		}
-
-		s.logger.Debugf("[P2PNode] Peer height: %s %d\n", peerID.String(), height)
-	}
-
 	// Add each peer to the slice
 	for _, peerID := range peerIDs {
 		var height int32
@@ -1115,6 +1106,8 @@ func (s *P2PNode) ConnectedPeers() []PeerInfo {
 			CurrentHeight: height,
 		})
 	}
+
+	s.logger.Debugf("[P2PNode] %d peers in peerstore\n", len(peers))
 
 	return peers
 }

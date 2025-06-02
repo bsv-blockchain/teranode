@@ -103,3 +103,15 @@ func (c *Client) ListBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Lis
 func (c *Client) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ClearBannedResponse, error) {
 	return c.client.ClearBanned(ctx, &emptypb.Empty{})
 }
+
+// AddBanScore adds to a peer's ban score with the specified reason.
+// Parameters:
+//   - ctx: Context for the operation
+//   - req: AddBanScoreRequest containing peer ID and reason
+//
+// Returns:
+//   - *p2p_api.AddBanScoreResponse: Response indicating success
+//   - error: Any error encountered during the operation
+func (c *Client) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error) {
+	return c.client.AddBanScore(ctx, req)
+}

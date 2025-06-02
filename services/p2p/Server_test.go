@@ -1588,7 +1588,7 @@ func TestHandshakeFlow(t *testing.T) {
 			t.Logf("Response UserAgent: %s", response.UserAgent)
 
 			// Verify it's a verack message with the correct fields
-			assert.Equal(t, "verack", response.Type)
+			assert.Equal(t, MessageType("verack"), response.Type)
 			assert.Equal(t, selfPeerIDStr, response.PeerID)
 			assert.NotZero(t, response.BestHeight)
 			// assert.NotEmpty(t, response.UserAgent)

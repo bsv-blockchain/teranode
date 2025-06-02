@@ -10,9 +10,10 @@ repos:
     hooks:
       - id: golangci-lint
         name: Run go linter
-        entry: golangci-lint run --new
+        entry: golangci-lint run --new ./...
         language: system
         types: [ go ]
+        pass_filenames: false
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.4.0
     hooks:

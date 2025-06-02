@@ -33,13 +33,21 @@ type RejectedTxMessage struct {
 	PeerID string
 }
 
+// types
+type MessageType string
+
+const (
+	Version MessageType = "version"
+	Verack  MessageType = "verack"
+)
+
 // HandshakeMessage carries version/verack info between peers
 type HandshakeMessage struct {
-	Type       string `json:"type"`
-	PeerID     string `json:"peerID"`
-	BestHeight uint32 `json:"bestHeight"`
-	BestHash   string `json:"bestHash"`
-	DataHubURL string `json:"dataHubURL"`
-	UserAgent  string `json:"userAgent"`
-	Services   uint64 `json:"services"`
+	Type       MessageType `json:"type"`
+	PeerID     string      `json:"peerID"`
+	BestHeight uint32      `json:"bestHeight"`
+	BestHash   string      `json:"bestHash"`
+	DataHubURL string      `json:"dataHubURL"`
+	UserAgent  string      `json:"userAgent"`
+	Services   uint64      `json:"services"`
 }

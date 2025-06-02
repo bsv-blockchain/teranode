@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/interfaces/blockvalidation"
+	p2pconstants "github.com/bitcoin-sv/teranode/interfaces/p2p"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
@@ -66,6 +68,9 @@ type revalidateBlockData struct {
 type BlockValidation struct {
 	// logger provides structured logging capabilities
 	logger ulogger.Logger
+
+	// invalidBlockHandler is used to report invalid blocks to the P2P service
+	invalidBlockHandler blockvalidation.InvalidBlockHandler
 
 	// settings contains operational parameters and feature flags
 	settings *settings.Settings
@@ -148,14 +153,32 @@ type BlockValidation struct {
 //   - utxoStore: Storage for utxos and transaction metadata
 //   - validatorClient: Transaction validation interface
 //   - subtreeValidationClient: Subtree validation interface
+//   - opts: Optional parameters:
+//   - invalidBlockHandler: Handler for reporting invalid blocks to the P2P service (optional)
 //   - bloomRetentionSize: Length of last X blocks to retain bloom filters
 //
 // Returns a configured BlockValidation instance ready for use.
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txStore blob.Store, utxoStore utxo.Store, subtreeValidationClient subtreevalidation.Interface) *BlockValidation {
+	txStore blob.Store, utxoStore utxo.Store, subtreeValidationClient subtreevalidation.Interface, opts ...interface{}) *BlockValidation {
+	// Process optional parameters
+	var invalidBlockHandler interface {
+		ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error
+	}
+
+	// Check if invalidBlockHandler is provided
+	for _, opt := range opts {
+		if handler, ok := opt.(interface {
+			ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error
+		}); ok {
+			invalidBlockHandler = handler
+			break
+		}
+	}
+
 	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
 	bv := &BlockValidation{
 		logger:                        logger,
+		invalidBlockHandler:           invalidBlockHandler,
 		settings:                      tSettings,
 		blockchainClient:              blockchainClient,
 		subtreeStore:                  subtreeStore,
@@ -210,6 +233,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 					return
 				default:
 					bv.logger.Infof("[BlockValidation:setMined] subscribing to blockchain for setTxMined signal")
+
 					subscribeCtx, subscribeCancel = context.WithCancel(ctx)
 
 					blockchainSubscription, err := bv.blockchainClient.Subscribe(subscribeCtx, "blockvalidation")
@@ -754,6 +778,21 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
 				if errors.Is(err, errors.ErrBlockInvalid) {
+					// Report invalid block to P2P service if handler is available
+					if u.invalidBlockHandler != nil {
+						reason := p2pconstants.ReasonInvalidBlock.String()
+						if err != nil {
+							reason = err.Error()
+						}
+
+						reportErr := u.invalidBlockHandler.ReportInvalidBlock(callerSpan.Ctx, block.Hash().String(), reason)
+						if reportErr != nil {
+							u.logger.Warnf("[ValidateBlock][%s] failed to report invalid block in background: %v", block.Hash().String(), reportErr)
+						} else {
+							u.logger.Infof("[ValidateBlock][%s] reported invalid block to P2P service in background", block.Hash().String())
+						}
+					}
+
 					if invalidateBlockErr := u.blockchainClient.InvalidateBlock(callerSpan.Ctx, block.Header.Hash()); invalidateBlockErr != nil {
 						u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
 					}
@@ -803,6 +842,21 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 
 		if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+			// Report invalid block to P2P service if handler is available
+			if u.invalidBlockHandler != nil {
+				reason := "unknown"
+				if err != nil {
+					reason = err.Error()
+				}
+
+				reportErr := u.invalidBlockHandler.ReportInvalidBlock(ctx, block.Hash().String(), reason)
+				if reportErr != nil {
+					u.logger.Warnf("[ValidateBlock][%s] failed to report invalid block: %v", block.Hash().String(), reportErr)
+				} else {
+					u.logger.Infof("[ValidateBlock][%s] reported invalid block to P2P service", block.Hash().String())
+				}
+			}
+
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
 		}
 

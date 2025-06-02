@@ -1,3 +1,5 @@
+package p2p
+
 // Package p2p provides peer-to-peer networking functionality for the Teranode system.
 // It implements a robust distributed network for blockchain data propagation using libp2p.
 //
@@ -12,7 +14,6 @@
 // The p2p service serves as a communication backbone for Teranode, connecting
 // multiple nodes in a resilient network topology and facilitating efficient
 // propagation of blockchain data across the network.
-package p2p
 
 import (
 	"context"
@@ -68,12 +69,13 @@ const (
 // - Ban management is thread-safe across connections
 type Server struct {
 	p2p_api.UnimplementedPeerServiceServer
-	P2PNode                       P2PNodeI                  // The P2P network node instance - using interface instead of concrete type
-	logger                        ulogger.Logger            // Logger instance for the server
-	settings                      *settings.Settings        // Configuration settings
-	bitcoinProtocolID             string                    // Bitcoin protocol identifier
-	blockchainClient              blockchain.ClientI        // Client for blockchain interactions
-	blockValidationClient         blockvalidation.Interface // Client for block validation
+	P2PNode                       P2PNodeI           // The P2P network node instance - using interface instead of concrete type
+	logger                        ulogger.Logger     // Logger instance for the server
+	settings                      *settings.Settings // Configuration settings
+	bitcoinProtocolID             string             // Bitcoin protocol identifier
+	blockchainClient              blockchain.ClientI // Client for blockchain interactions
+	blockValidationClient         blockvalidation.Interface
+	blockValidationServer         *blockvalidation.Server   // Client for block validation
 	AssetHTTPAddressURL           string                    // HTTP address URL for assets
 	e                             *echo.Echo                // Echo server instance
 	notificationCh                chan *notificationMsg     // Channel for notifications
@@ -88,7 +90,8 @@ type Server struct {
 	subtreeTopicName              string
 	miningOnTopicName             string
 	rejectedTxTopicName           string
-	handshakeTopicName            string // pubsub topic for version/verack
+	handshakeTopicName            string   // pubsub topic for version/verack
+	blockPeerMap                  sync.Map // Map to track which peer sent each block (hash -> peerID)
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -114,6 +117,7 @@ func NewServer(
 	rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI,
 	subtreeKafkaProducerClient kafka.KafkaAsyncProducerI,
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
+	blockValidationServer *blockvalidation.Server,
 ) (*Server, error) {
 	logger.Debugf("Creating P2P service")
 
@@ -192,14 +196,15 @@ func NewServer(
 	}
 
 	p2pServer := &Server{
-		P2PNode:           p2pNode,
-		logger:            logger,
-		settings:          tSettings,
-		bitcoinProtocolID: "teranode/bitcoin/1.0.0",
-		notificationCh:    make(chan *notificationMsg),
-		blockchainClient:  blockchainClient,
-		banList:           banlist,
-		banChan:           banChan,
+		P2PNode:               p2pNode,
+		logger:                logger,
+		settings:              tSettings,
+		bitcoinProtocolID:     "teranode/bitcoin/1.0.0",
+		notificationCh:        make(chan *notificationMsg),
+		blockchainClient:      blockchainClient,
+		blockValidationServer: blockValidationServer,
+		banList:               banlist,
+		banChan:               banChan,
 
 		rejectedTxKafkaConsumerClient: rejectedTxKafkaConsumerClient,
 		subtreeKafkaProducerClient:    subtreeKafkaProducerClient,
@@ -296,6 +301,28 @@ func (s *Server) Init(ctx context.Context) (err error) {
 // all components have started successfully.
 //
 // Returns an error if any component fails to start, or nil on successful startup.
+
+func (s *Server) setupHTTPServer() *echo.Echo {
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
+
+	e.Use(middleware.Recover())
+
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{echo.GET},
+	}))
+
+	e.GET("/health", func(c echo.Context) error {
+		return c.String(http.StatusOK, "OK")
+	})
+
+	e.GET("/p2p-ws", s.HandleWebSocket(s.notificationCh, s.AssetHTTPAddressURL))
+
+	return e
+}
+
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -361,24 +388,20 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return errors.NewServiceError("could not create block validation client [%w]", err)
 	}
 
-	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
+	// Register the P2P server as an InvalidBlockHandler with the block validation service
+	// This allows the block validation service to notify the P2P server when a block is invalid
+	// so we can add ban score to the peer that sent the invalid block
+	if s.blockValidationServer != nil {
+		err = RegisterWithBlockValidation(ctx, s.logger, s.blockValidationServer, s)
+		if err != nil {
+			// Continue even if registration fails, as this is a new feature
+			s.logger.Warnf("Failed to register with block validation service: %v", err)
+		}
+	} else {
+		s.logger.Warnf("Block validation server is not initialized, skipping registration")
+	}
 
-	e.Use(middleware.Recover())
-
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{echo.GET},
-	}))
-
-	s.e = e
-
-	e.GET("/health", func(c echo.Context) error {
-		return c.String(http.StatusOK, "OK")
-	})
-
-	e.GET("/p2p-ws", s.HandleWebSocket(s.notificationCh, s.AssetHTTPAddressURL))
+	s.e = s.setupHTTPServer()
 
 	go func() {
 		if err := s.StartHTTP(ctx); err != nil {
@@ -415,11 +438,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	go s.listenForBanEvents(ctx)
 
 	// Disconnect any pre-existing banned peers at startup
-	go func() {
-		for _, banned := range s.banList.ListBanned() {
-			s.handleBanEvent(ctx, BanEvent{Action: banActionAdd, IP: banned})
-		}
-	}()
+	go s.disconnectPreExistingBannedPeers(ctx)
 
 	// Set up the peer connected callback to announce our best block when a new peer connects
 	s.P2PNode.SetPeerConnectedCallback(s.P2PNodeConnected)
@@ -430,19 +449,16 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	apiKey := s.settings.GRPCAdminAPIKey
 	if apiKey == "" {
 		// Generate a random API key if not provided
-		key := make([]byte, 32)
-		if _, err := rand.Read(key); err != nil {
-			return errors.WrapGRPC(errors.NewServiceNotStartedError("[P2P] failed to generate API key", err))
+		apiKey, err = generateRandomKey()
+		if err != nil {
+			return errors.NewServiceError("error generating random API key", err)
 		}
-
-		apiKey = hex.EncodeToString(key)
-		s.logger.Infof("[P2P] Generated admin API key: %s", apiKey)
 	}
 
 	// Define protected methods - use the full gRPC method path
 	protectedMethods := map[string]bool{
-		"/p2p_api.PeerService/BanPeer":   true,
-		"/p2p_api.PeerService/UnbanPeer": true,
+		"/p2p_api.PeerService/BanPeer":     true,
+		"/p2p_api.PeerService/Unba§knPeer": true,
 	}
 
 	// Create auth options
@@ -462,6 +478,23 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	<-ctx.Done()
 
 	return nil
+}
+
+func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
+	for _, banned := range s.banList.ListBanned() {
+		s.handleBanEvent(ctx, BanEvent{Action: banActionAdd, IP: banned})
+	}
+}
+
+func generateRandomKey() (string, error) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", errors.WrapGRPC(errors.NewServiceNotStartedError("[P2P] failed to generate API key", err))
+	}
+
+	apiKey := hex.EncodeToString(key)
+
+	return apiKey, nil
 }
 
 func (s *Server) sendHandshake(ctx context.Context) {
@@ -512,49 +545,10 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 	}
 
 	if hs.Type == "version" {
-		// reply with verack
-		localHeight := uint32(0)
-		bestHash := ""
-
-		if header, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil && bhMeta != nil {
-			localHeight = bhMeta.Height
-			bestHash = header.Hash().String()
-		}
-
-		ack := HandshakeMessage{
-			Type:       "verack",
-			PeerID:     s.P2PNode.HostID().String(),
-			BestHeight: localHeight,
-			BestHash:   bestHash,
-			DataHubURL: s.AssetHTTPAddressURL,
-			UserAgent:  s.bitcoinProtocolID,
-			Services:   0,
-		}
-
-		ackBytes, err := json.Marshal(ack)
+		err := s.sendVerack(ctx, from, hs)
 		if err != nil {
-			s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] json marshal error: %v", err)
-			return
+			s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] error sending verack: %v", err)
 		}
-		// if err := s.P2PNode.Publish(ctx, s.handshakeTopicName, ackBytes); err != nil {
-		// 	s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] publish error: %v", err)
-		// }
-		// Decode the 'from' peer ID string just before sending the response
-		requesterPID, err := peer.Decode(from)
-		if err != nil {
-			s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error decoding requester peerId '%s': %v", from, err)
-			return
-		}
-
-		// send best block to the requester using the decoded peer.ID
-		err = s.P2PNode.SendToPeer(ctx, requesterPID, ackBytes)
-		if err != nil {
-			s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error sending peer message: %v", err)
-			return
-		}
-
-		// Check if peer has a higher height and valid hash
-		s.SyncHeights(hs, localHeight)
 	} else if hs.Type == "verack" {
 		s.logger.Infof("[handleHandshakeTopic][p2p-handshake] received verack from %s height=%d hash=%s agent=%s services=%d",
 			hs.PeerID, hs.BestHeight, hs.BestHash, hs.UserAgent, hs.Services)
@@ -578,6 +572,53 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 		// Check if peer has a higher height and valid hash
 		s.SyncHeights(hs, localHeight)
 	}
+}
+
+func (s *Server) sendVerack(ctx context.Context, from string, hs HandshakeMessage) error {
+	localHeight := uint32(0)
+	bestHash := ""
+
+	if header, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil && bhMeta != nil {
+		localHeight = bhMeta.Height
+		bestHash = header.Hash().String()
+	}
+
+	ack := HandshakeMessage{
+		Type:       "verack",
+		PeerID:     s.P2PNode.HostID().String(),
+		BestHeight: localHeight,
+		BestHash:   bestHash,
+		DataHubURL: s.AssetHTTPAddressURL,
+		UserAgent:  s.bitcoinProtocolID,
+		Services:   0,
+	}
+
+	ackBytes, err := json.Marshal(ack)
+	if err != nil {
+		s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] json marshal error: %v", err)
+		return err
+	}
+	// if err := s.P2PNode.Publish(ctx, s.handshakeTopicName, ackBytes); err != nil {
+	// 	s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] publish error: %v", err)
+	// }
+	// Decode the 'from' peer ID string just before sending the response
+	requesterPID, err := peer.Decode(from)
+	if err != nil {
+		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error decoding requester peerId '%s': %v", from, err)
+		return err
+	}
+
+	// send best block to the requester using the decoded peer.ID
+	err = s.P2PNode.SendToPeer(ctx, requesterPID, ackBytes)
+	if err != nil {
+		s.logger.Errorf("[handleBestBlockTopic][p2p-handshake] error sending peer message: %v", err)
+		return err
+	}
+
+	// Check if peer has a higher height and valid hash
+	s.SyncHeights(hs, localHeight)
+
+	return nil
 }
 
 func (s *Server) SyncHeights(hs HandshakeMessage, localHeight uint32) {
@@ -660,6 +701,110 @@ func (s *Server) P2PNodeConnected(ctx context.Context, peerID peer.ID) {
 	s.sendHandshake(ctx)
 }
 
+func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Hash) error {
+	var msgBytes []byte
+
+	_, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
+	if err != nil {
+		return errors.NewError("error getting block header and meta for BlockMessage: %w", err)
+	}
+
+	blockMessage := BlockMessage{
+		Hash:       hash.String(),
+		Height:     meta.Height,
+		DataHubURL: s.AssetHTTPAddressURL,
+		PeerID:     s.P2PNode.HostID().String(),
+	}
+
+	msgBytes, err = json.Marshal(blockMessage)
+	if err != nil {
+		return errors.NewError("blockMessage - json marshal error: %w", err)
+	}
+
+	if err := s.P2PNode.Publish(ctx, s.blockTopicName, msgBytes); err != nil {
+		return errors.NewError("blockMessage - publish error: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Server) handleMiningOnNotification(ctx context.Context) error {
+	var msgBytes []byte
+
+	header, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewError("error getting block header for MiningOnMessage: %w", err)
+	}
+
+	miningOnMessage := MiningOnMessage{
+		Hash:         header.Hash().String(),
+		PreviousHash: header.HashPrevBlock.String(),
+		DataHubURL:   s.AssetHTTPAddressURL,
+		PeerID:       s.P2PNode.HostID().String(),
+		Height:       meta.Height,
+		Miner:        meta.Miner,
+		SizeInBytes:  meta.SizeInBytes,
+		TxCount:      meta.TxCount,
+	}
+
+	msgBytes, err = json.Marshal(miningOnMessage)
+	if err != nil {
+		return errors.NewError("miningOnMessage - json marshal error: %w", err)
+	}
+
+	s.logger.Debugf("P2P publishing miningOnMessage")
+
+	if err := s.P2PNode.Publish(ctx, s.miningOnTopicName, msgBytes); err != nil {
+		return errors.NewError("miningOnMessage - publish error: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.Hash) error {
+	var msgBytes []byte
+
+	subtreeMessage := SubtreeMessage{
+		Hash:       hash.String(),
+		DataHubURL: s.AssetHTTPAddressURL,
+		PeerID:     s.P2PNode.HostID().String(),
+	}
+
+	msgBytes, err := json.Marshal(subtreeMessage)
+	if err != nil {
+		return errors.NewError("subtreeMessage - json marshal error: %w", err)
+	}
+
+	if err := s.P2PNode.Publish(ctx, s.subtreeTopicName, msgBytes); err != nil {
+		return errors.NewError("subtreeMessage - publish error: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Server) processBlockchainNotification(ctx context.Context, notification *blockchain.Notification) error {
+	hash, err := chainhash.NewHash(notification.Hash)
+	if err != nil {
+		// Specific error about hash conversion, not logged here, but returned to caller.
+		return errors.NewError(fmt.Sprintf("error getting chainhash from notification hash %s: %%w", notification.Hash), err)
+	}
+
+	s.logger.Debugf("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+
+	switch notification.Type {
+	case model.NotificationType_Block:
+		return s.handleBlockNotification(ctx, hash) // These handlers return wrapped errors
+	case model.NotificationType_MiningOn:
+		return s.handleMiningOnNotification(ctx)
+	case model.NotificationType_Subtree:
+		return s.handleSubtreeNotification(ctx, hash)
+	default:
+		s.logger.Warnf("[processBlockchainNotification] Received unhandled notification type: %s for hash %s", notification.Type, hash.String())
+	}
+
+	return nil // For unhandled types, not an error that stops the listener
+}
+
 func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 	// Subscribe to the blockchain service
 	blockchainSubscription, err := s.blockchainClient.Subscribe(ctx, "p2pServer")
@@ -669,15 +814,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 	}
 
 	// define vars here to prevent too many allocs
-	var (
-		notification    *blockchain.Notification
-		blockMessage    BlockMessage
-		miningOnMessage MiningOnMessage
-		subtreeMessage  SubtreeMessage
-		header          *model.BlockHeader
-		meta            *model.BlockHeaderMeta
-		msgBytes        []byte
-	)
+	var notification *blockchain.Notification
 
 	for {
 		select {
@@ -689,88 +826,9 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				continue
 			}
 			// received a message
-			cHash := chainhash.Hash(notification.Hash)
-			s.logger.Debugf("P2P Received %s notification: %s", notification.Type, cHash.String())
-
-			hash, err := chainhash.NewHash(notification.Hash)
-			if err != nil {
-				s.logger.Errorf("[blockchainSubscriptionListener] error getting chainhash from notification hash %s: %v", notification.Hash, err)
-				continue
-			}
-
-			switch notification.Type {
-			case model.NotificationType_Block:
-				_, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
-				// _, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
-				// // block, err := s.blockchainClient.GetBlock(ctx, notification.Hash)
-				if err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] error getting block header and meta for BlockMessage: %v", err)
-					continue
-				}
-
-				blockMessage = BlockMessage{
-					Hash:       hash.String(),
-					Height:     meta.Height,
-					DataHubURL: s.AssetHTTPAddressURL,
-					PeerID:     s.P2PNode.HostID().String(),
-				}
-
-				msgBytes, err = json.Marshal(blockMessage)
-				if err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] blockMessage - json marshal error: %v", err)
-					continue
-				}
-
-				if err := s.P2PNode.Publish(ctx, s.blockTopicName, msgBytes); err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] blockMessage - publish error: %v", err)
-				}
-			case model.NotificationType_MiningOn:
-				header, meta, err = s.blockchainClient.GetBestBlockHeader(ctx)
-				if err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] error getting block header for MiningOnMessage: %v", err)
-					continue
-				}
-
-				miningOnMessage = MiningOnMessage{
-					Hash:         header.Hash().String(),
-					PreviousHash: header.HashPrevBlock.String(),
-					DataHubURL:   s.AssetHTTPAddressURL,
-					PeerID:       s.P2PNode.HostID().String(),
-					Height:       meta.Height,
-					Miner:        meta.Miner,
-					SizeInBytes:  meta.SizeInBytes,
-					TxCount:      meta.TxCount,
-				}
-
-				msgBytes, err = json.Marshal(miningOnMessage)
-				if err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] miningOnMessage - json marshal error: %v", err)
-					continue
-				}
-
-				s.logger.Debugf("P2P publishing miningOnMessage")
-
-				if err := s.P2PNode.Publish(ctx, s.miningOnTopicName, msgBytes); err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] miningOnMessage - publish error: %v", err)
-				}
-			case model.NotificationType_Subtree:
-				// if it's a subtree notification send it on the subtree channel.
-				subtreeMessage = SubtreeMessage{
-					Hash:       hash.String(),
-					DataHubURL: s.AssetHTTPAddressURL,
-					PeerID:     s.P2PNode.HostID().String(),
-				}
-
-				msgBytes, err = json.Marshal(subtreeMessage)
-				if err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] subtreeMessage - json marshal error: %v", err)
-
-					continue
-				}
-
-				if err := s.P2PNode.Publish(ctx, s.subtreeTopicName, msgBytes); err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] subtreeMessage - publish error: %v", err)
-				}
+			if err := s.processBlockchainNotification(ctx, notification); err != nil {
+				s.logger.Errorf("[blockchainSubscriptionListener] Error processing notification (Type: %s, Hash: %s): %v", notification.Type, notification.Hash, err)
+				continue // Continue to next notification on error
 			}
 		}
 	}
@@ -920,6 +978,10 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		s.logger.Errorf("[handleBlockTopic] error getting chainhash from string %s: %v", blockMessage.Hash, err)
 		return
 	}
+
+	// Store the peer ID that sent this block in the blockPeerMap
+	s.blockPeerMap.Store(blockMessage.Hash, from)
+	s.logger.Debugf("[handleBlockTopic] storing peer %s for block %s", from, blockMessage.Hash)
 
 	// send block to kafka, if configured
 	if s.blocksKafkaProducerClient != nil {
@@ -1137,7 +1199,26 @@ func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Cl
 }
 
 func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error) {
-	s.banManager.AddScore(req.PeerId, ReasonInvalidSubtree) // todo: add reason dynamically
+	// Map the reason string to a BanReason enum
+	reason := ReasonUnknown
+
+	switch req.Reason {
+	case "invalid_subtree":
+		reason = ReasonInvalidSubtree
+	case "protocol_violation":
+		reason = ReasonProtocolViolation
+	case "spam":
+		reason = ReasonSpam
+	case "invalid_block":
+		reason = ReasonInvalidBlock
+	default:
+		s.logger.Warnf("[AddBanScore] Unknown ban reason: %s", req.Reason)
+	}
+
+	score, banned := s.banManager.AddScore(req.PeerId, reason)
+	s.logger.Infof("[AddBanScore] Added score to peer %s for reason %s. New score: %d, Banned: %t",
+		req.PeerId, req.Reason, score, banned)
+
 	return &p2p_api.AddBanScoreResponse{Ok: true}, nil
 }
 
@@ -1163,6 +1244,7 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 	var bannedIP net.IP
 
 	var bannedSubnet *net.IPNet
+
 	if event.Subnet != nil {
 		bannedSubnet = event.Subnet
 	} else {
@@ -1173,35 +1255,40 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 		}
 	}
 
+	s.disconnectBannedPeers(ctx, bannedIP, bannedSubnet)
+}
+
+func (s *Server) disconnectBannedPeers(ctx context.Context, bannedIP net.IP, bannedSubnet *net.IPNet) {
 	// check if we're connected to the banned IP
 	peers := s.P2PNode.ConnectedPeers()
+
 	for _, peer := range peers {
 		for _, addr := range peer.Addrs {
 			peerIP, err := s.getIPFromMultiaddr(ctx, addr)
-			if err != nil {
-				s.logger.Errorf("[handleBanEvent] Error getting IP from multiaddr %s: %v", addr, err)
+			if err != nil || peerIP == nil {
+				s.logger.Errorf("[disconnectBannedPeers] PeerIP is either nil or an error occurred getting IP from multiaddr %s: %v", addr, err)
 				continue
 			}
 
-			if peerIP == nil {
-				continue
-			}
+			s.logger.Debugf("[disconnectBannedPeers] bannedSubnet: %v, bannedIP: %v, peerIP: %s", bannedSubnet, bannedIP, peerIP)
 
-			s.logger.Debugf("[handleBanEvent] bannedSubnet: %v, bannedIP: %v, peerIP: %s", bannedSubnet, bannedIP, peerIP)
-
-			if (bannedSubnet != nil && bannedSubnet.Contains(peerIP)) ||
-				(bannedIP != nil && peerIP.Equal(bannedIP)) {
-				s.logger.Infof("[handleBanEvent] Disconnecting from banned peer: %s (%s)", peer.ID, peerIP)
+			if isBanned(bannedIP, bannedSubnet, peerIP) {
+				s.logger.Infof("[disconnectBannedPeers] Disconnecting from banned peer: %s (%s)", peer.ID, peerIP)
 
 				err := s.P2PNode.DisconnectPeer(ctx, peer.ID)
 				if err != nil {
-					s.logger.Errorf("[handleBanEvent] Error disconnecting from peer %s: %v", peer.ID, err)
+					s.logger.Errorf("[disconnectBannedPeers] Error disconnecting from peer %s: %v", peer.ID, err)
 				}
 
 				break // no need to check other addresses for this peer
 			}
 		}
 	}
+}
+
+func isBanned(bannedIP net.IP, bannedSubnet *net.IPNet, peerIP net.IP) bool {
+	return (bannedSubnet != nil && bannedSubnet.Contains(peerIP)) ||
+		(bannedIP != nil && peerIP.Equal(bannedIP))
 }
 
 func (s *Server) getIPFromMultiaddr(ctx context.Context, maddr ma.Multiaddr) (net.IP, error) {
@@ -1224,6 +1311,50 @@ func (s *Server) getIPFromMultiaddr(ctx context.Context, maddr ma.Multiaddr) (ne
 	}
 
 	return nil, nil // not an IP or resolvable DNS address
+}
+
+// ReportInvalidBlock adds ban score to the peer that sent an invalid block.
+// This method is called by the block validation service when a block is found to be invalid.
+// Parameters:
+//   - ctx: Context for the operation
+//   - blockHash: Hash of the invalid block
+//   - reason: Reason for the block being invalid
+//
+// Returns an error if the peer cannot be found or the ban score cannot be added.
+func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error {
+	// Look up the peer ID that sent this block
+	peerIDVal, ok := s.blockPeerMap.Load(blockHash)
+	if !ok {
+		s.logger.Warnf("[ReportInvalidBlock] no peer found for invalid block %s", blockHash)
+		return errors.NewNotFoundError("no peer found for invalid block %s", blockHash)
+	}
+
+	peerID, ok := peerIDVal.(string)
+	if !ok {
+		s.logger.Errorf("[ReportInvalidBlock] peer ID for block %s is not a string: %v", blockHash, peerIDVal)
+		return errors.NewInvalidArgumentError("peer ID for block %s is not a string", blockHash)
+	}
+
+	// Add ban score to the peer
+	s.logger.Infof("[ReportInvalidBlock] adding ban score to peer %s for invalid block %s: %s", peerID, blockHash, reason)
+
+	// Create the request to add ban score
+	req := &p2p_api.AddBanScoreRequest{
+		PeerId: peerID,
+		Reason: "invalid_block",
+	}
+
+	// Call the AddBanScore method
+	_, err := s.AddBanScore(ctx, req)
+	if err != nil {
+		s.logger.Errorf("[ReportInvalidBlock] error adding ban score to peer %s: %v", peerID, err)
+		return errors.NewServiceError("error adding ban score to peer %s", peerID, err)
+	}
+
+	// Remove the block from the map to avoid memory leaks
+	s.blockPeerMap.Delete(blockHash)
+
+	return nil
 }
 
 func (s *Server) resolveDNS(ctx context.Context, dnsAddr ma.Multiaddr) (net.IP, error) {

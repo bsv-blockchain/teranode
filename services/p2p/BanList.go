@@ -1,3 +1,5 @@
+package p2p
+
 // Package p2p provides peer-to-peer networking functionality for the Teranode system.
 // The ban management subsystem in this package implements mechanisms to protect
 // the network from malicious or misbehaving peers by temporarily or permanently
@@ -9,7 +11,6 @@
 // - Persistent storage of ban information across restarts
 // - Event notifications for ban-related actions
 // - Thread-safe operations for concurrent access
-package p2p
 
 import (
 	"context"

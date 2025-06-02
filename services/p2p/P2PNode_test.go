@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,8 +49,11 @@ func generateTestPrivateKey(t *testing.T) string {
 }
 
 func TestSendToPeer(t *testing.T) {
-	t.Skip("Fails in CI, but works locally")
+	// t.Skip("Fails in CI, but works locally")
 	// logger := ulogger.NewVerboseTestLogger(t)
+	// Use a unique DHT protocol ID to prevent interference with other tests
+	protocolID := "teranode/bitcoin/1.0.0"
+
 	logger := ulogger.TestLogger{}
 	tSettings := settings.NewSettings()
 
@@ -87,49 +92,35 @@ func TestSendToPeer(t *testing.T) {
 		err          error
 	)
 
-	maxRetries := 3
-
 	// Create node1 with retries
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := time.Duration(100+rand.Intn(300)) * time.Millisecond // nolint:gosec
-			t.Logf("Retrying node1 creation after delay of %v (attempt %d)", delay, attempt+1)
-			time.Sleep(delay)
-
-			// Try a different port if previous attempt failed
-			config1.Port = findAvailablePort(t)
-		}
-
-		node1, err = NewP2PNode(context.Background(), logger, tSettings, config1, nil)
-		if err == nil {
-			break
-		}
-
-		t.Logf("Failed to create node1 on attempt %d: %v", attempt+1, err)
-	}
-
-	require.NoError(t, err, "Failed to create node1 after %d attempts", maxRetries)
+	node1, err = createTestNode(t, &config1, logger, tSettings)
+	require.NoError(t, err)
 
 	// Create node2 with retries
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := time.Duration(100+rand.Intn(300)) * time.Millisecond // nolint:gosec
-			t.Logf("Retrying node2 creation after delay of %v (attempt %d)", delay, attempt+1)
-			time.Sleep(delay)
+	node2, err = createTestNode(t, &config2, logger, tSettings)
+	require.NoError(t, err)
 
-			// Try a different port if previous attempt failed
-			config2.Port = findAvailablePort(t)
-		}
+	// After node2 is created, before starting nodes or connecting:
+	node2.host.SetStreamHandler(protocol.ID(protocolID), func(stream network.Stream) {
+		defer stream.Close()
+		buf, err := io.ReadAll(stream)
+		require.NoError(t, err, "Failed to read from stream")
+		require.True(t, len(buf) > 0, "Received empty message")
 
-		node2, err = NewP2PNode(context.Background(), logger, tSettings, config2, nil)
-		if err == nil {
-			break
-		}
+		var receivedMsg HandshakeMessage
+		err = json.Unmarshal(buf, &receivedMsg)
+		require.NoError(t, err, "Failed to unmarshal handshake message: %s", string(buf))
 
-		t.Logf("Failed to create node2 on attempt %d: %v", attempt+1, err)
-	}
+		// Assertions on the received message can be added here, for example:
+		// require.Equal(t, Version, receivedMsg.Type, "Handshake message type should be 'version'")
+		// require.Equal(t, node1.HostID().String(), receivedMsg.PeerID, "Handshake message PeerID should match sender")
+		// For now, just log it
+		t.Logf("Node2 received handshake: %+v from %s", receivedMsg, stream.Conn().RemotePeer().String())
 
-	require.NoError(t, err, "Failed to create node2 after %d attempts", maxRetries)
+		// Update receiver metrics
+		node2.UpdateBytesReceived(uint64(len(buf)))
+		node2.UpdateLastReceived()
+	})
 
 	// Create a context with a timeout for the entire test
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -204,7 +195,17 @@ func TestSendToPeer(t *testing.T) {
 
 	t.Logf("Connected to: %s\n", connectionString)
 
-	message := []byte("{}")
+	hshakeMsg := HandshakeMessage{
+		Type:       Version, // "version"
+		PeerID:     node1.HostID().String(),
+		BestHeight: 0,
+		BestHash:   "",
+		DataHubURL: "",
+		UserAgent:  "test-agent/0.0.1",
+		Services:   0,
+	}
+	message, err := json.Marshal(hshakeMsg)
+	require.NoError(t, err, "Failed to marshal handshake message")
 
 	// Use WaitGroup to ensure message sending completes
 	var msgWg sync.WaitGroup
@@ -214,8 +215,9 @@ func TestSendToPeer(t *testing.T) {
 	sendMessage := func() {
 		defer msgWg.Done()
 
+		// Send message from node1 to node2 using P2PNode's method
 		err := node1.SendToPeer(ctx, node2.HostID(), message)
-		require.NoError(t, err)
+		require.NoError(t, err, "Node1 failed to send message to Node2")
 	}
 	go sendMessage()
 	msgWg.Wait()
@@ -231,6 +233,44 @@ func TestSendToPeer(t *testing.T) {
 	assert.NotZero(t, node1.lastSend, "Node1 should have updated the lastSend timestamp")
 }
 
+func createTestNode(t *testing.T, config *P2PConfig, logger ulogger.Logger, tSettings *settings.Settings) (node *P2PNode, err error) {
+	maxRetries := 3
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(100+rand.Intn(300)) * time.Millisecond // nolint:gosec
+			t.Logf("Retrying node creation after delay of %v (attempt %d)", delay, attempt+1)
+			time.Sleep(delay)
+
+			// Try a different port if previous attempt failed
+			config.Port = findAvailablePort(t)
+		}
+
+		node, err = NewP2PNode(context.Background(), logger, tSettings, *config, nil)
+		if err == nil {
+			// After node creation, update config.Port to the actual port
+			updateConfigPortFromNode(node, config)
+
+			return node, nil
+		}
+
+		t.Logf("Failed to create node on attempt %d: %v", attempt+1, err)
+	}
+
+	return nil, err
+}
+
+func updateConfigPortFromNode(node *P2PNode, config *P2PConfig) {
+	for _, addr := range node.host.Addrs() {
+		if portStr, err := addr.ValueForProtocol(multiaddr.P_TCP); err == nil {
+			if port, err := strconv.Atoi(portStr); err == nil {
+				config.Port = port
+
+				break
+			}
+		}
+	}
+}
 func TestSendBlockMessageToPeer(t *testing.T) {
 	t.Skip("Skipping blockmessage peer test")
 
@@ -255,15 +295,28 @@ func TestSendBlockMessageToPeer(t *testing.T) {
 	bestBlockTopicName := fmt.Sprintf("%s-%s", topicPrefix, bbtn)
 
 	// Generate valid Ed25519 private keys for both nodes
-	privKey1 := generateTestPrivateKey(t)
-	privKey2 := generateTestPrivateKey(t)
+	priv1, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	require.NoError(t, err)
 
-	// Create two P2PNode instances
+	priv2, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+	require.NoError(t, err)
+	// Convert private keys to hex strings for the config
+	priv1Bytes, err := priv1.Raw()
+	require.NoError(t, err)
+
+	priv2Bytes, err := priv2.Raw()
+	require.NoError(t, err)
+
+	// Find available ports for both nodes
+	port1 := findAvailablePort(t)
+	port2 := findAvailablePort(t)
+
+	// Create two P2PNode instances with dynamic ports
 	config1 := P2PConfig{
 		ProcessName:     "test1",
 		ListenAddresses: []string{"127.0.0.1"},
-		Port:            12345,
-		PrivateKey:      privKey1,
+		Port:            port1,
+		PrivateKey:      hex.EncodeToString(priv1Bytes),
 		SharedKey:       "",
 		UsePrivateDHT:   false,
 		OptimiseRetries: false,
@@ -274,8 +327,8 @@ func TestSendBlockMessageToPeer(t *testing.T) {
 	config2 := P2PConfig{
 		ProcessName:     "test2",
 		ListenAddresses: []string{"127.0.0.1"},
-		Port:            12346,
-		PrivateKey:      privKey2,
+		Port:            port2,
+		PrivateKey:      hex.EncodeToString(priv2Bytes),
 		SharedKey:       "",
 		UsePrivateDHT:   false,
 		OptimiseRetries: false,
@@ -283,38 +336,53 @@ func TestSendBlockMessageToPeer(t *testing.T) {
 		StaticPeers:     []string{},
 	}
 
-	node1, err := NewP2PNode(context.Background(), logger, tSettings, config1, nil)
-	if err != nil {
-		panic(err)
+	// Create nodes with retries in case of port conflicts
+	var (
+		node1, node2 *P2PNode
+		err2         error
+	)
+
+	// Create node1 with retries
+	node1, err2 = createTestNode(t, &config1, logger, tSettings)
+	if err2 != nil {
+		panic(err2)
 	}
 
-	node2, err := NewP2PNode(context.Background(), logger, tSettings, config2, nil)
-	if err != nil {
-		panic(err)
+	// Create node2 with retries
+	node2, err2 = createTestNode(t, &config2, logger, tSettings)
+	if err2 != nil {
+		panic(err2)
 	}
 
 	// Start both nodes
-	err = node1.Start(ctx, nil, bestBlockTopicName)
+	err = node1.Start(context.Background(), nil, bestBlockTopicName)
 	assert.NoError(t, err)
 
-	err = node2.Start(ctx, nil, bestBlockTopicName)
+	err = node2.Start(context.Background(), nil, bestBlockTopicName)
 	assert.NoError(t, err)
 
-	// Before connecting, log the HostID and connection string
-	t.Logf("Node1 HostID: %s\n", node1.HostID())
-	t.Logf("Node2 HostID: %s\n", node2.HostID())
-	connectionString := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", node2.config.Port, node2.HostID())
-	t.Logf("Connecting to: %s\n", connectionString)
+	// Log HostIDs
+	t.Logf("Node1 HostID: %s", node1.HostID())
+	t.Logf("Node2 HostID: %s", node2.HostID())
 
-	// Create a context with a 5-second timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Retrieve node2's real listen address
+	addrs := node2.host.Addrs()
+
+	var peerAddr string
+	for _, addr := range addrs {
+		peerAddr = fmt.Sprintf("%s/p2p/%s", addr.String(), node2.HostID())
+		t.Logf("Connecting to: %s", peerAddr)
+
+		break // use the first address
+	}
+
+	ctxConn, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Attempt to connect
-	connected := node1.connectToStaticPeers(ctx, []string{connectionString})
+	connected := node1.connectToStaticPeers(ctxConn, []string{peerAddr})
 	assert.True(t, connected)
 
-	t.Logf("Connected to: %s\n", connectionString)
+	t.Logf("Connected to: %s", peerAddr)
 
 	blockMessage := BlockMessage{
 		Hash:       "0000000000000000024a7e7cfa9191b3a4cd03b875c298b7f9bb7bf7e74a5ef7",
@@ -393,52 +461,22 @@ func TestSendBestBlockMessage(t *testing.T) {
 		err          error
 	)
 
-	maxRetries := 3
-
 	// Create node1 with retries
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := time.Duration(100+rand.Intn(300)) * time.Millisecond // nolint:gosec
-			t.Logf("Retrying node1 creation after delay of %v (attempt %d)", delay, attempt+1)
-			time.Sleep(delay)
-		}
+	node1, err = createTestNode(t, &config1, logger, tSettings)
+	require.NoError(t, err)
 
-		config1.Port = findAvailablePort(t)
-
-		node1, err = NewP2PNode(context.Background(), logger, tSettings, config1, nil)
-		if err == nil {
-			break
-		}
-
-		t.Logf("Failed to create node1 on attempt %d: %v", attempt+1, err)
-	}
-
-	require.NoError(t, err, "Failed to create node1 after %d attempts", maxRetries)
-
-	// Create node2 with retries
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := time.Duration(100+rand.Intn(300)) * time.Millisecond // nolint:gosec
-			t.Logf("Retrying node2 creation after delay of %v (attempt %d)", delay, attempt+1)
-			time.Sleep(delay)
-		}
-
-		config2.Port = findAvailablePort(t)
-
-		node2, err = NewP2PNode(context.Background(), logger, tSettings, config2, nil)
-		if err == nil {
-			break
-		}
-
-		t.Logf("Failed to create node2 on attempt %d: %v", attempt+1, err)
-	}
-
-	require.NoError(t, err, "Failed to create node2 after %d attempts", maxRetries)
+	config1.Port = node1.config.Port
 
 	// Create a WaitGroup to track all goroutines
 	var wg sync.WaitGroup
 
-	// Start both nodes
+	// Create node2 with retries
+	node2, err = createTestNode(t, &config2, logger, tSettings)
+	require.NoError(t, err)
+
+	config2.Port = node2.config.Port
+
+	// Start the nodes
 	wg.Add(2)
 
 	startNode1 := func() {
@@ -489,8 +527,18 @@ func TestSendBestBlockMessage(t *testing.T) {
 	// Before connecting, log the HostID and connection string
 	t.Logf("Node1 HostID: %s\n", node1.HostID())
 	t.Logf("Node2 HostID: %s\n", node2.HostID())
-	connectionString := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", node2.config.Port, node2.HostID())
-	t.Logf("Connecting to: %s\n", connectionString)
+	addrs := node2.host.Addrs()
+
+	var connectionString string
+
+	for _, addr := range addrs {
+		connectionString = fmt.Sprintf("%s/p2p/%s", addr.String(), node2.HostID())
+		t.Logf("Connecting to: %s", connectionString)
+
+		break // use the first address
+	}
+	// connectionString := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", node2.config.Port, node2.HostID())
+	// t.Logf("Connecting to: %s\n", connectionString)
 
 	// Attempt to connect
 	connected := node1.connectToStaticPeers(t.Context(), []string{connectionString})
@@ -725,18 +773,12 @@ func TestStartStaticPeerConnector(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Find an available port for the node
-			port := findAvailablePort(t)
-
-			// logger := ulogger.NewVerboseTestLogger(t)
 			logger := ulogger.TestLogger{}
 			tSettings := settings.NewSettings()
 
-			// Create a P2PNode with dynamic port
 			config := P2PConfig{
 				ProcessName:     "test",
 				ListenAddresses: []string{"127.0.0.1"},
-				Port:            port,
 				PrivateKey:      "",
 				SharedKey:       "",
 				UsePrivateDHT:   false,
@@ -755,45 +797,16 @@ func TestStartStaticPeerConnector(t *testing.T) {
 				err  error
 			)
 
-			maxRetries := 3
-
-			for attempt := 0; attempt < maxRetries; attempt++ {
-				if attempt > 0 {
-					delay := time.Duration(100+rand.Intn(300)) * time.Millisecond // nolint:gosec
-					t.Logf("Retrying node creation after delay of %v (attempt %d)", delay, attempt+1)
-					time.Sleep(delay)
-
-					// Try a different port if previous attempt failed
-					config.Port = findAvailablePort(t)
-				}
-
-				node, err = NewP2PNode(context.Background(), logger, tSettings, config, nil)
-				if err == nil {
-					break
-				}
-
-				t.Logf("Failed to create node on attempt %d: %v", attempt+1, err)
-			}
-
-			require.NoError(t, err, "Failed to create node after %d attempts", maxRetries)
+			node, err = createTestNode(t, &config, logger, tSettings)
+			require.NoError(t, err)
 
 			// Create a context that will be used for the test
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			// Start node with retries
-			for attempt := 0; attempt < maxRetries; attempt++ {
-				err = node.Start(ctx, nil)
-				if err == nil {
-					break
-				}
+			maxRetries := 3
 
-				if attempt < maxRetries-1 {
-					t.Logf("Failed to start node on attempt %d: %v, retrying...", attempt+1, err)
-					time.Sleep(time.Duration(100+rand.Intn(300)) * time.Millisecond) // nolint:gosec
-				}
-			}
-
+			err = startNodeWithRetries(ctx, t, maxRetries, node)
 			require.NoError(t, err, "Failed to start node after multiple attempts")
 
 			defer func() {
@@ -807,6 +820,22 @@ func TestStartStaticPeerConnector(t *testing.T) {
 			node.startStaticPeerConnector(ctx)
 		})
 	}
+}
+
+func startNodeWithRetries(ctx context.Context, t *testing.T, maxRetries int, node *P2PNode, topicNames ...string) (err error) {
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err = node.Start(ctx, nil, topicNames...)
+		if err == nil {
+			break
+		}
+
+		if attempt < maxRetries-1 {
+			t.Logf("Failed to start node on attempt %d: %v, retrying...", attempt+1, err)
+			time.Sleep(time.Duration(100+rand.Intn(300)) * time.Millisecond) // nolint:gosec
+		}
+	}
+
+	return err
 }
 
 func TestInitGossipSub(t *testing.T) {
@@ -838,21 +867,7 @@ func TestInitGossipSub(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Find an available port for the node
-			port := findAvailablePort(t)
-
-			// Create a P2PNode with dynamic port
-			config := P2PConfig{
-				ProcessName:     "test",
-				ListenAddresses: []string{"127.0.0.1"},
-				Port:            port,
-				PrivateKey:      "",
-				SharedKey:       "",
-				UsePrivateDHT:   false,
-				OptimiseRetries: false,
-				Advertise:       false,
-				StaticPeers:     []string{},
-			}
+			config := createNodeConfig(t, "test", []string{"127.0.0.1"}, false, false, []string{})
 
 			// Create the node with retries in case of port conflicts
 			var (
@@ -862,43 +877,14 @@ func TestInitGossipSub(t *testing.T) {
 
 			maxRetries := 3
 
-			for attempt := 0; attempt < maxRetries; attempt++ {
-				if attempt > 0 {
-					delay := time.Duration(100+rand.Intn(300)) * time.Millisecond // nolint:gosec
-					t.Logf("Retrying node creation after delay of %v (attempt %d)", delay, attempt+1)
-					time.Sleep(delay)
-
-					// Try a different port if previous attempt failed
-					config.Port = findAvailablePort(t)
-				}
-
-				node, err = NewP2PNode(context.Background(), logger, tSettings, config, nil)
-				if err == nil {
-					break
-				}
-
-				t.Logf("Failed to create node on attempt %d: %v", attempt+1, err)
-			}
-
-			require.NoError(t, err, "Failed to create node after %d attempts", maxRetries)
+			node, err = createTestNode(t, &config, logger, tSettings)
+			require.NoError(t, err)
 
 			// Create a context with timeout for operations
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			// Start node with retries
-			for attempt := 0; attempt < maxRetries; attempt++ {
-				err = node.Start(ctx, nil, tt.topicNames...)
-				if err == nil {
-					break
-				}
-
-				if attempt < maxRetries-1 {
-					t.Logf("Failed to start node on attempt %d: %v, retrying...", attempt+1, err)
-					time.Sleep(time.Duration(100+rand.Intn(300)) * time.Millisecond) // nolint:gosec
-				}
-			}
-
+			err = startNodeWithRetries(ctx, t, maxRetries, node, tt.topicNames...)
 			require.NoError(t, err, "Failed to start node after multiple attempts")
 
 			defer func() {
@@ -966,6 +952,18 @@ func TestDecodeHexEd25519PrivateKey(t *testing.T) {
 	})
 }
 
+func createNodeConfig(t *testing.T, name string, listenAddresses []string, usePrivateDHT bool, advertise bool, staticPeers []string) P2PConfig {
+	return P2PConfig{
+		ProcessName:     name,
+		ListenAddresses: listenAddresses,
+		PrivateKey:      generateTestPrivateKey(t),
+		SharedKey:       "",
+		UsePrivateDHT:   usePrivateDHT,
+		Advertise:       advertise,
+		StaticPeers:     staticPeers,
+	}
+}
+
 func TestConnectedPeers(t *testing.T) {
 	// logger := ulogger.NewVerboseTestLogger(t)
 	logger := ulogger.TestLogger{}
@@ -976,31 +974,11 @@ func TestConnectedPeers(t *testing.T) {
 	// Use a unique DHT protocol ID to prevent interference with other tests
 	tSettings.P2P.DHTProtocolID = fmt.Sprintf("/teranode/test/dht/%d", time.Now().UnixNano())
 
-	// Find available ports for both nodes
-	port1 := findAvailablePort(t)
-	port2 := findAvailablePort(t)
-
 	// Create first node
-	config1 := P2PConfig{
-		ProcessName:     "test3",
-		ListenAddresses: []string{"127.0.0.1"},
-		Port:            port1,
-		PrivateKey:      generateTestPrivateKey(t),
-		UsePrivateDHT:   false,
-		Advertise:       false,
-		StaticPeers:     []string{},
-	}
+	config1 := createNodeConfig(t, "test3", []string{"127.0.0.1"}, false, false, []string{})
 
 	// Create second node
-	config2 := P2PConfig{
-		ProcessName:     "test4",
-		ListenAddresses: []string{"127.0.0.1"},
-		Port:            port2,
-		PrivateKey:      generateTestPrivateKey(t),
-		UsePrivateDHT:   false,
-		Advertise:       false,
-		StaticPeers:     []string{},
-	}
+	config2 := createNodeConfig(t, "test4", []string{"127.0.0.1"}, false, false, []string{})
 
 	// Create nodes with retries in case of port conflicts
 	var (
@@ -1010,47 +988,12 @@ func TestConnectedPeers(t *testing.T) {
 
 	maxRetries := 3
 
-	// Create node1 with retries
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := time.Duration(100+rand.Intn(300)) * time.Millisecond // nolint:gosec
-			t.Logf("Retrying node1 creation after delay of %v (attempt %d)", delay, attempt+1)
-			time.Sleep(delay)
-
-			// Try a different port if previous attempt failed
-			config1.Port = findAvailablePort(t)
-		}
-
-		node1, err = NewP2PNode(context.Background(), logger, tSettings, config1, nil)
-		if err == nil {
-			break
-		}
-
-		t.Logf("Failed to create node1 on attempt %d: %v", attempt+1, err)
-	}
-
-	require.NoError(t, err, "Failed to create node1 after %d attempts", maxRetries)
+	node1, err = createTestNode(t, &config1, logger, tSettings)
+	require.NoError(t, err)
 
 	// Create node2 with retries
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := time.Duration(100+rand.Intn(300)) * time.Millisecond // nolint:gosec
-			t.Logf("Retrying node2 creation after delay of %v (attempt %d)", delay, attempt+1)
-			time.Sleep(delay)
-
-			// Try a different port if previous attempt failed
-			config2.Port = findAvailablePort(t)
-		}
-
-		node2, err = NewP2PNode(context.Background(), logger, tSettings, config2, nil)
-		if err == nil {
-			break
-		}
-
-		t.Logf("Failed to create node2 on attempt %d: %v", attempt+1, err)
-	}
-
-	require.NoError(t, err, "Failed to create node2 after %d attempts", maxRetries)
+	node2, err = createTestNode(t, &config2, logger, tSettings)
+	require.NoError(t, err)
 
 	// Create separate parent context we can cancel explicitly for cleanup
 	parentCtx, parentCancel := context.WithCancel(context.Background())
@@ -1077,33 +1020,10 @@ func TestConnectedPeers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
 	defer cancel()
 
-	// Start the nodes with retries
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		err = node1.Start(ctx, nil)
-		if err == nil {
-			break
-		}
-
-		if attempt < maxRetries-1 {
-			t.Logf("Failed to start node1 on attempt %d: %v, retrying...", attempt+1, err)
-			time.Sleep(time.Duration(100+rand.Intn(300)) * time.Millisecond) // nolint:gosec
-		}
-	}
-
+	err = startNodeWithRetries(ctx, t, maxRetries, node1)
 	require.NoError(t, err, "Failed to start node1 after multiple attempts")
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		err = node2.Start(ctx, nil)
-		if err == nil {
-			break
-		}
-
-		if attempt < maxRetries-1 {
-			t.Logf("Failed to start node2 on attempt %d: %v, retrying...", attempt+1, err)
-			time.Sleep(time.Duration(100+rand.Intn(300)) * time.Millisecond) // nolint:gosec
-		}
-	}
-
+	err = startNodeWithRetries(ctx, t, maxRetries, node2)
 	require.NoError(t, err, "Failed to start node2 after multiple attempts")
 
 	// Wait for a moment to let the nodes initialize
@@ -1119,18 +1039,7 @@ func TestConnectedPeers(t *testing.T) {
 		Addrs: node2.host.Addrs(),
 	}
 
-	// Connect with retries
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		err = node1.host.Connect(ctx, peerInfo)
-		if err == nil {
-			break
-		}
-
-		if attempt < maxRetries-1 {
-			t.Logf("Failed to connect to peer on attempt %d: %v, retrying...", attempt+1, err)
-			time.Sleep(time.Duration(100+rand.Intn(300)) * time.Millisecond) // nolint:gosec
-		}
-	}
+	err = connectWithRetries(ctx, t, maxRetries, node1, peerInfo)
 
 	require.NoError(t, err, "Failed to connect to peer after multiple attempts")
 
@@ -1201,11 +1110,28 @@ func TestConnectedPeers(t *testing.T) {
 	t.Logf("Note: Peerstore still contains previously seen peers, even after disconnection")
 }
 
+func connectWithRetries(ctx context.Context, t *testing.T, maxRetries int, node1 *P2PNode, peerInfo peer.AddrInfo) (err error) {
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err = node1.host.Connect(ctx, peerInfo)
+		if err == nil {
+			break
+		}
+
+		if attempt < maxRetries-1 {
+			t.Logf("Failed to connect to peer on attempt %d: %v, retrying...", attempt+1, err)
+			time.Sleep(time.Duration(100+rand.Intn(300)) * time.Millisecond) // nolint:gosec
+		}
+	}
+
+	return err
+}
+
 func TestAtomicMetrics(t *testing.T) {
 	// logger := ulogger.NewVerboseTestLogger(t)
 	logger := ulogger.TestLogger{}
 	tSettings := settings.NewSettings()
 
+	// Create a test node with the config
 	config := P2PConfig{
 		ProcessName:     "test5",
 		ListenAddresses: []string{"127.0.0.1"},
@@ -1214,6 +1140,7 @@ func TestAtomicMetrics(t *testing.T) {
 		UsePrivateDHT:   false,
 	}
 
+	// Create a test node with the config
 	node, err := NewP2PNode(context.Background(), logger, tSettings, config, nil)
 	require.NoError(t, err)
 
@@ -1247,6 +1174,15 @@ func TestInitDHT(t *testing.T) {
 	// Set required settings for the DHT test
 	tSettings.P2P.BootstrapAddresses = []string{"/ip4/127.0.0.1/tcp/12345/p2p/12D3KooWQvCkC8YiCTjRYXdyhNnncFRPKVxjE9u7rQKh2oaEXxQ6"}
 	tSettings.P2P.DHTProtocolID = "/teranode/test/dht/1.0.0"
+
+	// Create a config for DHT test
+	dhtConfig := P2PConfig{
+		ProcessName:     "test-dht",
+		ListenAddresses: []string{"127.0.0.1"},
+		Port:            findAvailablePort(t),
+		UsePrivateDHT:   false,
+	}
+	_ = dhtConfig // Use the variable to avoid unused variable warning
 
 	t.Run("DHT init basic functionality", func(t *testing.T) {
 		testSettings := settings.NewSettings()
@@ -1818,6 +1754,9 @@ func TestDisconnectPeerWithConnect(t *testing.T) {
 	for _, p := range peers {
 		if p.ID == h2.ID() {
 			foundInPeerstore = true
+
+			assert.NotEmpty(t, p.Addrs, "Added peer should have addresses")
+
 			break
 		}
 	}
@@ -1841,6 +1780,7 @@ func TestConnectedPeersFiltering(t *testing.T) {
 		libp2p.DisableRelay(),
 	)
 	require.NoError(t, err)
+
 	defer h.Close()
 
 	// Create a P2PNode
@@ -1884,6 +1824,7 @@ func TestConnectedPeersFiltering(t *testing.T) {
 		libp2p.DisableRelay(),
 	)
 	require.NoError(t, err)
+
 	defer h2.Close()
 
 	// Add host2 to host1's peerstore
@@ -1929,6 +1870,7 @@ func TestHostID(t *testing.T) {
 		libp2p.DisableRelay(),
 	)
 	require.NoError(t, err)
+
 	defer h.Close()
 
 	// Create a P2PNode
@@ -1996,6 +1938,7 @@ func TestConnectedPeers_Old(t *testing.T) {
 		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port2)),
 	)
 	require.NoError(t, err)
+
 	defer h2.Close()
 
 	// Create a P2PNode with just the host
@@ -2009,9 +1952,20 @@ func TestConnectedPeers_Old(t *testing.T) {
 	t.Logf("Initial peer count: %d", initialPeerCount)
 
 	// Connect h1 to h2
-	peerInfo, err := peer.AddrInfoFromP2pAddr(
-		multiaddr.StringCast(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", port2, h2.ID())),
-	)
+	addrs := h2.Addrs()
+
+	var peerAddr string
+
+	for _, addr := range addrs {
+		peerAddr = fmt.Sprintf("%s/p2p/%s", addr.String(), h2.ID())
+		t.Logf("Connecting to: %s", peerAddr)
+
+		break // use the first address
+	}
+
+	maddr, err := multiaddr.NewMultiaddr(peerAddr)
+	require.NoError(t, err)
+	peerInfo, err := peer.AddrInfoFromP2pAddr(maddr)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2332,66 +2286,45 @@ func TestGeneratePrivateKey(t *testing.T) {
 	require.NotNil(t, pubKey, "should be able to derive public key")
 }
 
+func createTestAddrInfo(id peer.ID, addrs []multiaddr.Multiaddr) *peer.AddrInfo {
+	return &peer.AddrInfo{
+		ID:    id,
+		Addrs: addrs,
+	}
+}
+
+func createTestPeers() map[string]*peer.AddrInfo {
+	return map[string]*peer.AddrInfo{
+		"localhost-peer": createTestAddrInfo(peer.ID("localhost-peer"), []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/127.0.0.1/tcp/12345")}),
+		"multi-addr-peer": createTestAddrInfo(peer.ID("multi-addr-peer"), []multiaddr.Multiaddr{
+			multiaddr.StringCast("/ip4/127.0.0.1/tcp/12346"),
+			multiaddr.StringCast("/ip4/192.168.1.5/tcp/12346"),
+		}),
+		"mismatch-peer":  createTestAddrInfo(peer.ID("mismatch-peer"), []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/192.168.1.1/tcp/12345")}),
+		"no-addr-peer":   createTestAddrInfo(peer.ID("no-addr-peer"), []multiaddr.Multiaddr{}),
+		"good-peer":      createTestAddrInfo(peer.ID("good-peer"), []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/192.168.1.2/tcp/12345")}),
+		"self-peer":      createTestAddrInfo(peer.ID("self-peer"), []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/192.168.1.3/tcp/12345")}),
+		"connected-peer": createTestAddrInfo(peer.ID("connected-peer"), []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/192.168.1.4/tcp/12345")}),
+	}
+}
+
 func TestPeerDiscoveryFiltering(t *testing.T) {
 	// Create a logger, settings, and a mock host
 	// logger := ulogger.NewVerboseTestLogger(t)
 	logger := ulogger.TestLogger{}
 	testSettings := settings.NewSettings()
 
-	// Create test peers
-
-	// Create a peer with "no good addresses" error with a single localhost address
-	localhostPeerID := peer.ID("localhost-peer")
-	localhostPeer := peer.AddrInfo{
-		ID:    localhostPeerID,
-		Addrs: []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/127.0.0.1/tcp/12345")},
+	// Create a config for discovery test
+	discoveryConfig := P2PConfig{
+		ProcessName:     "test-discovery",
+		ListenAddresses: []string{"127.0.0.1"},
+		Port:            findAvailablePort(t),
+		UsePrivateDHT:   false,
 	}
+	_ = discoveryConfig // Use the variable to avoid unused variable warning
 
-	// Create a peer with multiple addresses including one localhost and a public IP
-	// Even with "no good addresses" error, it should still attempt to connect because of the non-localhost address
-	multiAddrPeerID := peer.ID("multi-addr-peer")
-	multiAddrPeer := peer.AddrInfo{
-		ID: multiAddrPeerID,
-		Addrs: []multiaddr.Multiaddr{
-			multiaddr.StringCast("/ip4/127.0.0.1/tcp/12346"),
-			multiaddr.StringCast("/ip4/192.168.1.5/tcp/12346"),
-		},
-	}
-
-	// Create a peer with "peer id mismatch" error
-	mismatchPeerID := peer.ID("mismatch-peer")
-	mismatchPeer := peer.AddrInfo{
-		ID:    mismatchPeerID,
-		Addrs: []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/192.168.1.1/tcp/12345")},
-	}
-
-	// Create a peer with no addresses
-	noAddrPeerID := peer.ID("no-addr-peer")
-	noAddrPeer := peer.AddrInfo{
-		ID:    noAddrPeerID,
-		Addrs: []multiaddr.Multiaddr{},
-	}
-
-	// Create a good peer
-	goodPeerID := peer.ID("good-peer")
-	goodPeer := peer.AddrInfo{
-		ID:    goodPeerID,
-		Addrs: []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/192.168.1.2/tcp/12345")},
-	}
-
-	// Create a self peer
-	selfPeerID := peer.ID("self-peer")
-	selfPeer := peer.AddrInfo{
-		ID:    selfPeerID,
-		Addrs: []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/192.168.1.3/tcp/12345")},
-	}
-
-	// Create a connected peer
-	connectedPeerID := peer.ID("connected-peer")
-	connectedPeer := peer.AddrInfo{
-		ID:    connectedPeerID,
-		Addrs: []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/192.168.1.4/tcp/12345")},
-	}
+	// Create test peers map
+	testPeers := createTestPeers()
 
 	// Create a map to track peer connection attempts
 	connectionAttempts := make(map[string]bool)
@@ -2404,10 +2337,10 @@ func TestPeerDiscoveryFiltering(t *testing.T) {
 
 	// Create a mock host with our custom peer ID and network
 	mockHost := &mockHostImpl{
-		peerID:         selfPeerID,
-		connectedPeers: map[peer.ID]bool{connectedPeerID: true},
+		peerID:         testPeers["self-peer"].ID,
+		connectedPeers: map[peer.ID]bool{testPeers["connected-peer"].ID: true},
 		connFunc:       connectFunc,
-		network:        &mockNetworkImpl{connectedPeers: map[peer.ID]bool{connectedPeerID: true}},
+		network:        &mockNetworkImpl{connectedPeers: map[peer.ID]bool{testPeers["connected-peer"].ID: true}},
 	}
 
 	// Create P2PNode with our mock host
@@ -2422,57 +2355,9 @@ func TestPeerDiscoveryFiltering(t *testing.T) {
 	// Create a map to track errors for peer addresses
 	peerAddrErrorMap := &sync.Map{}
 	// Set errors for specific test peers
-	peerAddrErrorMap.Store(localhostPeerID.String(), "no good addresses")
-	peerAddrErrorMap.Store(multiAddrPeerID.String(), "no good addresses")
-	peerAddrErrorMap.Store(mismatchPeerID.String(), "peer id mismatch")
-
-	// Create a function that directly tests the filtering logic
-	testPeerFiltering := func(addr peer.AddrInfo) bool {
-		// Skip self connection
-		if addr.ID == mockHost.ID() {
-			return false
-		}
-
-		// Skip already connected peers
-		if mockHost.Network().Connectedness(addr.ID) == network.Connected {
-			return false
-		}
-
-		// Skip peers with no addresses
-		if len(addr.Addrs) == 0 {
-			return false
-		}
-
-		// Check OptimiseRetries logic
-		if node.config.OptimiseRetries {
-			if errorString, ok := peerAddrErrorMap.Load(addr.ID.String()); ok {
-				if strings.Contains(errorString.(string), "no good addresses") {
-					numAddresses := len(addr.Addrs)
-					switch numAddresses {
-					case 0:
-						// Peer has no addresses, no point trying to connect to it
-						return false
-					case 1:
-						address := addr.Addrs[0].String()
-						if strings.Contains(address, "127.0.0.1") {
-							// Peer has a single localhost address
-							return false
-						}
-					}
-				}
-
-				if strings.Contains(errorString.(string), "peer id mismatch") {
-					return false
-				}
-			}
-		}
-
-		// If we got here, we would attempt to connect
-		// Actually make the connection attempt to update the connectionAttempts map
-		_ = mockHost.Connect(context.Background(), addr)
-
-		return true
-	}
+	peerAddrErrorMap.Store(testPeers["localhost-peer"].ID.String(), "no good addresses")
+	peerAddrErrorMap.Store(testPeers["multi-addr-peer"].ID.String(), "no good addresses")
+	peerAddrErrorMap.Store(testPeers["mismatch-peer"].ID.String(), "peer id mismatch")
 
 	// Run test cases on each test peer
 	tests := []struct {
@@ -2482,50 +2367,111 @@ func TestPeerDiscoveryFiltering(t *testing.T) {
 	}{
 		{
 			name:          "Self",
-			peer:          selfPeer,
+			peer:          *testPeers["self-peer"],
 			shouldConnect: false,
 		},
 		{
 			name:          "Connected",
-			peer:          connectedPeer,
+			peer:          *testPeers["connected-peer"],
 			shouldConnect: false,
 		},
 		{
 			name:          "No addresses",
-			peer:          noAddrPeer,
+			peer:          *testPeers["no-addr-peer"],
 			shouldConnect: false,
 		},
 		{
 			name:          "Localhost with error",
-			peer:          localhostPeer,
+			peer:          *testPeers["localhost-peer"],
 			shouldConnect: false,
 		},
 		{
 			name:          "Multiple addresses with error",
-			peer:          multiAddrPeer,
+			peer:          *testPeers["multi-addr-peer"],
 			shouldConnect: true,
 		},
 		{
 			name:          "ID mismatch",
-			peer:          mismatchPeer,
+			peer:          *testPeers["mismatch-peer"],
 			shouldConnect: false,
 		},
 		{
 			name:          "Good",
-			peer:          goodPeer,
+			peer:          *testPeers["good-peer"],
 			shouldConnect: true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := testPeerFiltering(tc.peer)
+			result := testPeerFiltering(tc.peer,
+				mockHost.ID(),
+				mockHost.Network(),
+				node.config.OptimiseRetries,
+				peerAddrErrorMap,
+				mockHost)
 			assert.Equal(t, tc.shouldConnect, result, "Filtering logic mismatch for %s", tc.peer.ID)
 
 			connected := connectionAttempts[tc.peer.ID.String()]
 			assert.Equal(t, tc.shouldConnect, connected, "Connection attempt mismatch for %s", tc.peer.ID)
 		})
 	}
+}
+
+// a function that directly tests the filtering logic
+func testPeerFiltering(addr peer.AddrInfo, selfID peer.ID,
+	mockNetwork network.Network, optimiseRetries bool,
+	peerAddrErrorMap *sync.Map, mockHost *mockHostImpl) bool {
+	// Skip self connection
+	if addr.ID == selfID {
+		return false
+	}
+
+	// Skip already connected peers
+	if mockNetwork.Connectedness(addr.ID) == network.Connected {
+		return false
+	}
+
+	// Skip peers with no addresses
+	if len(addr.Addrs) == 0 {
+		return false
+	}
+
+	// Check OptimiseRetries logic
+	if optimiseRetries && shouldSkipForOptimiseRetries(peerAddrErrorMap, addr) {
+		return false
+	}
+
+	// If we got here, we would attempt to connect
+	// Actually make the connection attempt to update the connectionAttempts map
+	_ = mockHost.Connect(context.Background(), addr)
+
+	return true
+}
+
+func shouldSkipForOptimiseRetries(peerAddrErrorMap *sync.Map, addr peer.AddrInfo) bool {
+	if errorString, ok := peerAddrErrorMap.Load(addr.ID.String()); ok {
+		if strings.Contains(errorString.(string), "no good addresses") {
+			numAddresses := len(addr.Addrs)
+			switch numAddresses {
+			case 0:
+				// Peer has no addresses, no point trying to connect to it
+				return true
+			case 1:
+				address := addr.Addrs[0].String()
+				if strings.Contains(address, "127.0.0.1") {
+					// Peer has a single localhost address
+					return true
+				}
+			}
+		}
+
+		if strings.Contains(errorString.(string), "peer id mismatch") {
+			return true
+		}
+	}
+
+	return false
 }
 
 type mockHostImpl struct {
@@ -3072,8 +3018,6 @@ func findAvailablePort(t *testing.T) int {
 		testListener.Close()
 
 		// Port is available
-		t.Logf("Found available port: %d", port)
-
 		return port
 	}
 

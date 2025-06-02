@@ -24,6 +24,7 @@ const (
 	ReasonInvalidSubtree
 	ReasonProtocolViolation
 	ReasonSpam
+	ReasonInvalidBlock
 )
 
 func (r BanReason) String() string {
@@ -34,6 +35,8 @@ func (r BanReason) String() string {
 		return "protocol_violation"
 	case ReasonSpam:
 		return "spam"
+	case ReasonInvalidBlock:
+		return "invalid_block"
 	default:
 		return "unknown"
 	}
@@ -115,6 +118,7 @@ func NewPeerBanManager(ctx context.Context, handler BanEventHandler, tSettings *
 			ReasonInvalidSubtree:    10,
 			ReasonProtocolViolation: 20,
 			ReasonSpam:              50,
+			ReasonInvalidBlock:      10, // Using the same ban score value as SVNode
 		},
 		banThreshold:  tSettings.P2P.BanThreshold,
 		banDuration:   tSettings.P2P.BanDuration,

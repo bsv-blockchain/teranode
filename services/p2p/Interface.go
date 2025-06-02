@@ -76,4 +76,7 @@ type ClientI interface {
 	//
 	// Returns confirmation of the clear operation or an error if it fails.
 	ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ClearBannedResponse, error)
+	// AddBanScore adds to a peer's ban score with the specified reason.
+	// Returns an AddBanScoreResponse indicating success or an error if the operation fails.
+	AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error)
 }

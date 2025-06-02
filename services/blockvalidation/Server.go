@@ -175,6 +175,9 @@ func New(
 		kafkaConsumerClient:  kafkaConsumerClient,
 	}
 
+	// Set the global server instance for the blockvalidation package
+	SetServer(bVal)
+
 	return bVal
 }
 
@@ -905,7 +908,7 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 	return blocks, nil
 }
 
-func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, height uint32, baseURL string) ([]*model.BlockHeader, error) {
+func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, _ uint32, baseURL string) ([]*model.BlockHeader, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlockHeaders",
 		tracing.WithParentStat(u.stats),
 	)
