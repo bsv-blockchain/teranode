@@ -84,7 +84,7 @@ jobs:
             test_tags: "test_tnd"
             test_suite: "TestTND1_1TestSuite"
             test_func: "TestBlockPropagationWithNotifications"
-            test_filename: "tnd_1_test.go"
+            test_filename: "tnd1_1_test.go"
 
           # TNE Tests
           - test_dir: "test/tne"
