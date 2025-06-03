@@ -44,8 +44,6 @@ type Store interface {
     Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
     // Get retrieves a blob from the store
     Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
-    // GetHead retrieves the first n bytes of a blob
-    GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error)
     // GetIoReader returns an io.ReadCloser for streaming blob data
     GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error)
     // Set stores a blob in the store
@@ -58,10 +56,6 @@ type Store interface {
     GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error)
     // Del deletes a blob from the store
     Del(ctx context.Context, key []byte, opts ...options.FileOption) error
-    // GetHeader retrieves the header of a blob
-    GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
-    // GetFooterMetaData retrieves metadata from the footer of a blob
-    GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
     // Close closes the blob store and releases any resources
     Close(ctx context.Context) error
 }

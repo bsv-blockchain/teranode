@@ -30,6 +30,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
@@ -484,11 +485,11 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 
 	// Remove the previous block's UTXOSet
 	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() && !s.settings.Block.SkipUTXODelete {
-		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], options.WithFileExtension(utxosetExtension)); err != nil {
+		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet); err != nil {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
 		}
 
-		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], options.WithFileExtension(utxosetExtension+".sha256")); err != nil {
+		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet+".sha256"); err != nil {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
 		}
 	}
@@ -515,7 +516,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 // Other errors during reading or parsing are returned to the caller.
 func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 	// Read the file content as a byte slice
-	b, err := s.blockStore.Get(ctx, nil, options.WithFilename("lastProcessed"), options.WithFileExtension("dat"))
+	b, err := s.blockStore.Get(ctx, nil, fileformat.FileTypeDat, options.WithFilename("lastProcessed"))
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
 			s.logger.Warnf("lastProcessed.dat does not exist, starting from height 0")
@@ -567,9 +568,9 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 	return s.blockStore.Set(
 		ctx,
 		nil,
+		fileformat.FileTypeDat,
 		[]byte(heightStr),
 		options.WithFilename("lastProcessed"),
-		options.WithFileExtension("dat"),
 		options.WithAllowOverwrite(true),
 	)
 }
@@ -608,12 +609,8 @@ func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error 
 	}
 	defer r.Close()
 
-	if _, _, _, _, err := GetUTXOSetHeaderFromReader(r); err != nil {
+	if _, err := fileformat.ReadHeader(r); err != nil {
 		return err
-	}
-
-	if _, _, err := GetFooter(r); err != nil {
-		return errors.NewProcessingError("error seeking to EOF marker", err)
 	}
 
 	return nil

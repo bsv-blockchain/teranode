@@ -63,6 +63,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/aerospike/aerospike-client-go/v8/types"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -365,7 +366,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 				timeStart := time.Now()
 
-				setOptions := []options.FileOption{options.WithFileExtension("outputs")}
+				setOptions := []options.FileOption{}
 
 				if !hasUtxos {
 					// add a DAH to the external file, since there were no spendable utxos in the transaction
@@ -376,6 +377,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				if err = s.externalStore.Set(
 					ctx,
 					bItem.txHash[:],
+					fileformat.FileTypeOutputs,
 					wrapper.Bytes(),
 					setOptions...,
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -390,10 +392,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			} else {
 				timeStart := time.Now()
 
-				setOptions := []options.FileOption{
-					options.WithFileExtension(ExternalTxFileExtension),
-					// options.WithAllowOverwrite(true),
-				}
+				setOptions := []options.FileOption{}
 
 				if !hasUtxos {
 					// add a DAH to the external file, since there were no spendable utxos in the transaction
@@ -405,6 +404,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				if err = s.externalStore.Set(
 					ctx,
 					bItem.txHash[:],
+					fileformat.FileTypeTx,
 					bItem.tx.ExtendedBytes(),
 					setOptions...,
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -729,10 +729,7 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStoreItem, binsToStore [][]*aerospike.Bin, hasUtxos bool) {
 	timeStart := time.Now()
 
-	opts := []options.FileOption{
-		options.WithFileExtension(ExternalTxFileExtension),
-		// options.WithAllowOverwrite(true),
-	}
+	opts := []options.FileOption{}
 
 	if !hasUtxos {
 		// add a DAH to the external file, since there were no spendable utxos in the transaction
@@ -743,6 +740,7 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 	if err := s.externalStore.Set(
 		ctx,
 		bItem.txHash[:],
+		fileformat.FileTypeTx,
 		bItem.tx.ExtendedBytes(),
 		opts...,
 	); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -835,10 +833,7 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 
 	timeStart := time.Now()
 
-	opts := []options.FileOption{
-		options.WithFileExtension("outputs"),
-		// options.WithAllowOverwrite(true),
-	}
+	opts := []options.FileOption{}
 
 	if !hasUtxos {
 		// add a DAH to the external file, since there were no spendable utxos in the transaction
@@ -849,6 +844,7 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 	if err := s.externalStore.Set(
 		ctx,
 		bItem.txHash[:],
+		fileformat.FileTypeOutputs,
 		wrapper.Bytes(),
 		opts...,
 	); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {

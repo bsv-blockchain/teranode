@@ -142,7 +142,7 @@ test:
 # run tests in the test/longtest directory
 .PHONY: longtest
 longtest:
-	SETTINGS_CONTEXT=test go test -race -tags "testtxmetacache" -count=1 -timeout 180 -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
+	SETTINGS_CONTEXT=test go test -race -tags "testtxmetacache" -count=1 -timeout=180s -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
 
 # run tests in the test/sequentialtest directory in order, one by one
 .PHONY: sequentialtest
@@ -155,7 +155,7 @@ testall: test longtest sequentialtest
 # run tests in the test/e2e/daemon directory
 .PHONY: smoketest
 smoketest:
-	SETTINGS_CONTEXT=test go test -race -tags "testtxmetacache" -count=1 -timeout 180 -coverprofile=coverage.out ./test/e2e/daemon/... 2>&1 | grep -v "ld: warning:"
+	SETTINGS_CONTEXT=test go test -race -tags "testtxmetacache" -count=1 -timeout=180s -coverprofile=coverage.out ./test/e2e/daemon/... 2>&1 | grep -v "ld: warning:"
 
 .PHONY: nightly-tests
 nightly-tests:

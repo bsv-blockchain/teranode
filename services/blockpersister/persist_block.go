@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/tracing"
@@ -16,18 +17,18 @@ import (
 )
 
 // persistBlock stores a block and its associated data to persistent storage.
-// 
+//
 // This is a core function of the blockpersister service that handles the complete persistence
 // workflow for a single block. It ensures all components of a block (header, transactions,
 // and UTXO changes) are properly stored in a consistent and recoverable manner.
 //
 // The function implements a multi-stage persistence process:
-//   1. Convert raw block bytes into a structured block model
-//   2. Create a new UTXO difference set for tracking changes
-//   3. Process the coinbase transaction if no subtrees are present
-//   4. For blocks with subtrees, process each subtree concurrently according to configured limits
-//   5. Close and finalize the UTXO difference set once all transactions are processed
-//   6. Write the complete block to persistent storage
+//  1. Convert raw block bytes into a structured block model
+//  2. Create a new UTXO difference set for tracking changes
+//  3. Process the coinbase transaction if no subtrees are present
+//  4. For blocks with subtrees, process each subtree concurrently according to configured limits
+//  5. Close and finalize the UTXO difference set once all transactions are processed
+//  6. Write the complete block to persistent storage
 //
 // Concurrency is managed through errgroup with configurable parallel processing limits
 // to optimize performance while avoiding resource exhaustion.
@@ -101,10 +102,12 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	// Now, write the block file
 	u.logger.Infof("[BlockPersister] Writing block %s to disk", block.Header.Hash().String())
 
-	storer, err := filestorer.NewFileStorer(ctx, u.logger, u.settings, u.blockStore, hash[:], "block")
+	storer, err := filestorer.NewFileStorer(ctx, u.logger, u.settings, u.blockStore, hash[:], fileformat.FileTypeBlock)
 	if err != nil {
 		return errors.NewStorageError("error creating block file", err)
 	}
+
+	// TODO Write header extra
 
 	if _, err = storer.Write(blockBytes); err != nil {
 		return errors.NewStorageError("error writing block to disk", err)

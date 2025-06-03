@@ -66,7 +66,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/tracing"
@@ -618,15 +618,15 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 func (s *Store) setDAHExternalTransaction(ctx context.Context, txid *chainhash.Hash, newDAH uint32) error {
 	if err := s.externalStore.SetDAH(ctx,
 		txid[:],
+		fileformat.FileTypeTx,
 		newDAH,
-		options.WithFileExtension("tx"),
 	); err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
 			// did not find the tx, try the outputs
 			if err := s.externalStore.SetDAH(ctx,
 				txid[:],
+				fileformat.FileTypeOutputs,
 				newDAH,
-				options.WithFileExtension("outputs"),
 			); err != nil {
 				return errors.NewStorageError("[ttlExternalTransaction][%s] failed to %s DAH for external transaction outputs",
 					txid,

@@ -7,38 +7,33 @@ package memory
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 )
 
+// blobData holds the complete blob data (header + payload + footer) and its DAH
+type blobData struct {
+	data []byte
+	dah  uint32
+}
+
 // Memory implements the blob.Store interface using in-memory data structures.
 // It provides a fast, non-persistent storage solution primarily for testing and development.
-// The implementation uses maps to store blob data, headers, footers, and Delete-At-Height values.
+// The implementation uses a map to store blob data as a single byte slice (header + payload + footer).
 type Memory struct {
-	// mu protects concurrent access to all maps and shared data
 	mu                 sync.RWMutex
-	// headers stores blob header data by key
-	headers            map[string][]byte
-	// footers stores blob footer data by key
-	footers            map[string][]byte
-	// keys tracks known blob keys
+	blobs              map[string]*blobData
 	keys               map[string][]byte
-	// blobs stores the actual blob content by key
-	blobs              map[string][]byte
-	// dahs stores Delete-At-Height values by key
-	dahs               map[string]uint32
-	// options contains default options for blob operations
 	options            *options.Options
-	// Counters tracks operation metrics (exported for testing)
 	Counters           map[string]int
-	// countersMu protects access to Counters map
 	countersMu         sync.Mutex
-	// currentBlockHeight tracks current blockchain height for DAH processing
 	currentBlockHeight uint32
 }
 
@@ -54,10 +49,7 @@ type Memory struct {
 func New(opts ...options.StoreOption) *Memory {
 	m := &Memory{
 		keys:     make(map[string][]byte),
-		blobs:    make(map[string][]byte),
-		dahs:     make(map[string]uint32),
-		headers:  make(map[string][]byte),
-		footers:  make(map[string][]byte),
+		blobs:    make(map[string]*blobData),
 		options:  options.NewStoreOptions(opts...),
 		Counters: make(map[string]int),
 	}
@@ -106,16 +98,14 @@ func cleanExpiredFiles(m *Memory, blockHeight uint32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for key, dah := range m.dahs {
-		if dah == 0 {
+	for key, bd := range m.blobs {
+		if bd.dah == 0 {
 			continue
 		}
 
-		if dah <= blockHeight {
+		if bd.dah <= blockHeight {
 			delete(m.blobs, key)
-			delete(m.dahs, key)
-			delete(m.headers, key)
-			delete(m.footers, key)
+			delete(m.keys, key)
 		}
 	}
 }
@@ -163,14 +153,14 @@ func (m *Memory) Close(_ context.Context) error {
 	return nil
 }
 
-func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
+func (m *Memory) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
 	defer reader.Close()
 
 	merged := options.MergeOptions(m.options, opts)
 
 	if !merged.AllowOverwrite {
 		// for consistency with other stores, check if the blob already exists and throw BlobAlreadyExistsError if it does
-		if exists, err := m.Exists(ctx, key); err != nil {
+		if exists, err := m.Exists(ctx, key, fileType, opts...); err != nil {
 			return err
 		} else if exists {
 			return errors.NewBlobAlreadyExistsError("blob already exists")
@@ -182,17 +172,15 @@ func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 		return errors.NewStorageError("failed to read data from reader", err)
 	}
 
-	return m.Set(ctx, key, b, opts...)
+	return m.Set(ctx, key, fileType, b, opts...)
 }
 
-func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...options.FileOption) error {
+func (m *Memory) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	merged := options.MergeOptions(m.options, opts)
-
-	storeKey := hashKey(hash, merged)
+	storeKey := hashKey(key, fileType, merged)
 
 	if !merged.AllowOverwrite {
-		// for consistency with other stores, check if the blob already exists and throw BlobAlreadyExistsError if it does
-		if exists, err := m.Exists(ctx, hash); err != nil {
+		if exists, err := m.Exists(ctx, key, fileType, opts...); err != nil {
 			return err
 		} else if exists {
 			return errors.NewBlobAlreadyExistsError("blob already exists")
@@ -205,75 +193,59 @@ func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...opt
 	m.countersMu.Lock()
 	m.Counters["set"]++
 	m.countersMu.Unlock()
-
-	m.keys[string(hash)] = []byte{}
-	m.blobs[storeKey] = value
+	m.keys[storeKey] = key
 
 	dah := merged.DAH
+
 	if dah == 0 && merged.BlockHeightRetention > 0 {
 		dah = m.currentBlockHeight + merged.BlockHeightRetention
 	}
 
-	m.dahs[storeKey] = dah
+	var data []byte
 
-	if merged.Header != nil {
-		m.headers[storeKey] = merged.Header
-	}
+	header := fileformat.NewHeader(fileType)
+	data = append(data, header.Bytes()...)
 
-	if merged.Footer != nil {
-		footer, err := merged.Footer.GetFooter()
-		if err != nil {
-			return err
-		}
+	data = append(data, value...)
 
-		m.footers[storeKey] = footer
+	m.blobs[storeKey] = &blobData{
+		data: data,
+		dah:  dah,
 	}
 
 	return nil
 }
 
-func (m *Memory) SetDAH(_ context.Context, hash []byte, newDAH uint32, opts ...options.FileOption) error {
+func (m *Memory) SetDAH(_ context.Context, key []byte, fileType fileformat.FileType, newDAH uint32, opts ...options.FileOption) error {
 	merged := options.MergeOptions(m.options, opts)
-
-	storeKey := hashKey(hash, merged)
+	storeKey := hashKey(key, fileType, merged)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if newDAH > 0 {
-		m.dahs[storeKey] = newDAH
-	} else {
-		delete(m.dahs, storeKey)
+	if bd, ok := m.blobs[storeKey]; ok {
+		bd.dah = newDAH
 	}
 
 	return nil
 }
 
-func (m *Memory) GetDAH(_ context.Context, hash []byte, opts ...options.FileOption) (uint32, error) {
+func (m *Memory) GetDAH(_ context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
 	merged := options.MergeOptions(m.options, opts)
-
-	storeKey := hashKey(hash, merged)
+	storeKey := hashKey(key, fileType, merged)
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	dah, ok := m.dahs[storeKey]
-	if !ok {
-		return 0, nil
+	if bd, ok := m.blobs[storeKey]; ok {
+		return bd.dah, nil
 	}
 
-	return dah, nil
+	return 0, nil
 }
 
-func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
-	setOptions := options.NewFileOptions(opts...)
-
-	storeKey := key
-	if setOptions.Extension != "" {
-		storeKey = append(storeKey, []byte(setOptions.Extension)...)
-	}
-
-	b, err := m.Get(ctx, storeKey)
+func (m *Memory) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+	b, err := m.Get(ctx, key, fileType, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -281,10 +253,9 @@ func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.Fi
 	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
-func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+func (m *Memory) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
 	merged := options.MergeOptions(m.options, opts)
-
-	storeKey := hashKey(hash, merged)
+	storeKey := hashKey(key, fileType, merged)
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -293,35 +264,19 @@ func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.FileOption)
 	m.Counters["get"]++
 	m.countersMu.Unlock()
 
-	bytes, ok := m.blobs[storeKey]
+	bd, ok := m.blobs[storeKey]
 	if !ok {
 		return nil, errors.ErrNotFound
 	}
 
-	return bytes, nil
+	header := fileformat.NewHeader(fileType)
+
+	return bd.data[header.Size():], nil
 }
 
-func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
-	b, err := m.Get(context.Background(), hash, opts...)
-	if err != nil {
-		return nil, err
-	}
-
-	if nrOfBytes > len(b) {
-		return b, nil
-	}
-
-	m.countersMu.Lock()
-	m.Counters["getHead"]++
-	m.countersMu.Unlock()
-
-	return b[:nrOfBytes], nil
-}
-
-func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
+func (m *Memory) Exists(_ context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
 	merged := options.MergeOptions(m.options, opts)
-
-	storeKey := hashKey(hash, merged)
+	storeKey := hashKey(key, fileType, merged)
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -335,10 +290,9 @@ func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.FileOpti
 	return ok, nil
 }
 
-func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.FileOption) error {
+func (m *Memory) Del(_ context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
 	merged := options.MergeOptions(m.options, opts)
-
-	storeKey := hashKey(hash, merged)
+	storeKey := hashKey(key, fileType, merged)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -348,46 +302,23 @@ func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.FileOption)
 	m.countersMu.Unlock()
 
 	delete(m.blobs, storeKey)
-	delete(m.keys, string(hash))
-	delete(m.dahs, storeKey)
+	delete(m.keys, storeKey)
 
 	return nil
 }
 
-func hashKey(key []byte, options *options.Options) string {
-	var storeKey []byte
+func hashKey(key []byte, fileType fileformat.FileType, options *options.Options) string {
+	var storeKey string
 
 	if len(options.Filename) > 0 {
-		storeKey = []byte(options.Filename)
+		storeKey = options.Filename
 	} else {
-		storeKey = key
+		storeKey = hex.EncodeToString(key)
 	}
 
-	if len(options.Extension) > 0 {
-		storeKey = append(storeKey, []byte(options.Extension)...)
-	}
+	storeKey += "_" + fileType.String()
 
-	return string(storeKey)
-}
-
-func (m *Memory) GetHeader(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	merged := options.MergeOptions(m.options, opts)
-
-	storeKey := hashKey(hash, merged)
-
-	return m.headers[storeKey], nil
-}
-
-func (m *Memory) GetFooterMetaData(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	merged := options.MergeOptions(m.options, opts)
-
-	if merged.Footer == nil {
-		return nil, nil
-	}
-
-	storeKey := hashKey(hash, merged)
-
-	return merged.Footer.GetFooterMetaData(m.footers[storeKey]), nil
+	return storeKey
 }
 
 func (m *Memory) ListKeys() [][]byte {
@@ -395,8 +326,8 @@ func (m *Memory) ListKeys() [][]byte {
 	defer m.mu.RUnlock()
 
 	keys := make([][]byte, 0, len(m.keys))
-	for k := range m.keys {
-		keys = append(keys, []byte(k))
+	for _, k := range m.keys {
+		keys = append(keys, k)
 	}
 
 	return keys

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -27,13 +27,13 @@ func getBatchFiles(t *testing.T, store *memory.Memory) ([]byte, []byte) {
 	}
 
 	// Get the data
-	data, err := store.Get(context.Background(), keys[0], options.WithFileExtension("data"))
+	data, err := store.Get(context.Background(), keys[0], fileformat.FileTypeBatchData)
 	if err != nil {
 		t.Fatalf("failed to get batch data: %v", err)
 	}
 
 	// Get the keys
-	keysData, err := store.Get(context.Background(), keys[0], options.WithFileExtension("keys"))
+	keysData, err := store.Get(context.Background(), keys[0], fileformat.FileTypeBatchKeys)
 	if err != nil {
 		t.Fatalf("failed to get batch keys: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestBatcher_Set(t *testing.T) {
 	hash := chainhash.Hash{}
 	value := []byte("test data")
 
-	err := batcher.Set(context.Background(), hash[:], value)
+	err := batcher.Set(context.Background(), hash[:], fileformat.FileTypeUtxoSet, value)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestBatcher_SetFromReader(t *testing.T) {
 	testData := []byte("test data")
 	reader := io.NopCloser(bytes.NewReader(testData))
 
-	err := batcher.SetFromReader(context.Background(), hash[:], reader)
+	err := batcher.SetFromReader(context.Background(), hash[:], fileformat.FileTypeUtxoSet, reader)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestBatcher_BatchSizeLimit(t *testing.T) {
 	value := make([]byte, batchSize+5)
 	binary.BigEndian.PutUint32(value, uint32(1234))
 
-	err := batcher.Set(context.Background(), hash[:], value)
+	err := batcher.Set(context.Background(), hash[:], fileformat.FileTypeUtxoSet, value)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -216,12 +216,12 @@ func TestBatcher_BatchingBehavior(t *testing.T) {
 	value2 := []byte("test data 2")
 
 	// Add data to batcher
-	err := batcher.Set(context.Background(), hash1[:], value1)
+	err := batcher.Set(context.Background(), hash1[:], fileformat.FileTypeUtxoSet, value1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	err = batcher.Set(context.Background(), hash2[:], value2)
+	err = batcher.Set(context.Background(), hash2[:], fileformat.FileTypeUtxoSet, value2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -262,65 +262,44 @@ func TestBatcher_UnsupportedOperations(t *testing.T) {
 	batcher := New(ulogger.TestLogger{}, store, 1024, true)
 
 	t.Run("Get", func(t *testing.T) {
-		_, err := batcher.Get(context.Background(), []byte("key"))
+		_, err := batcher.Get(context.Background(), []byte("key"), fileformat.FileTypeUtxoSet)
 		if err == nil {
 			t.Error("expected error for unsupported Get operation")
 		}
 	})
 
-	t.Run("GetHead", func(t *testing.T) {
-		_, err := batcher.GetHead(context.Background(), []byte("key"), 10)
-		if err == nil {
-			t.Error("expected error for unsupported GetHead operation")
-		}
-	})
-
 	t.Run("Exists", func(t *testing.T) {
-		_, err := batcher.Exists(context.Background(), []byte("key"))
+		_, err := batcher.Exists(context.Background(), []byte("key"), fileformat.FileTypeUtxoSet)
 		if err == nil {
 			t.Error("expected error for unsupported Exists operation")
 		}
 	})
 
 	t.Run("Del", func(t *testing.T) {
-		err := batcher.Del(context.Background(), []byte("key"))
+		err := batcher.Del(context.Background(), []byte("key"), fileformat.FileTypeUtxoSet)
 		if err == nil {
 			t.Error("expected error for unsupported Del operation")
 		}
 	})
 
 	t.Run("SetDAH", func(t *testing.T) {
-		err := batcher.SetDAH(context.Background(), []byte("key"), 1)
+		err := batcher.SetDAH(context.Background(), []byte("key"), fileformat.FileTypeUtxoSet, 1)
 		if err == nil {
 			t.Error("expected error for unsupported SetDAH operation")
 		}
 	})
 
 	t.Run("GetDAH", func(t *testing.T) {
-		_, err := batcher.GetDAH(context.Background(), []byte("key"))
+		_, err := batcher.GetDAH(context.Background(), []byte("key"), fileformat.FileTypeUtxoSet)
 		if err == nil {
 			t.Error("expected error for unsupported GetDAH operation")
 		}
 	})
 
 	t.Run("GetIoReader", func(t *testing.T) {
-		_, err := batcher.GetIoReader(context.Background(), []byte("key"))
+		_, err := batcher.GetIoReader(context.Background(), []byte("key"), fileformat.FileTypeUtxoSet)
 		if err == nil {
 			t.Error("expected error for unsupported GetIoReader operation")
-		}
-	})
-
-	t.Run("GetHeader", func(t *testing.T) {
-		_, err := batcher.GetHeader(context.Background(), []byte("key"))
-		if err == nil {
-			t.Error("expected error for unsupported GetHeader operation")
-		}
-	})
-
-	t.Run("GetFooterMetaData", func(t *testing.T) {
-		_, err := batcher.GetFooterMetaData(context.Background(), []byte("key"))
-		if err == nil {
-			t.Error("expected error for unsupported GetFooterMetaData operation")
 		}
 	})
 }

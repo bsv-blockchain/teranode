@@ -13,10 +13,10 @@ import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	blob_memory "github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blockchain/sql"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -241,7 +241,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = ctx.subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	err = ctx.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
 	subtreeHashes := make([]*chainhash.Hash, 0)

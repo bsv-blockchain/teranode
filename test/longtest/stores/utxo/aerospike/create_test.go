@@ -9,7 +9,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/daemon"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
@@ -204,12 +204,12 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		assert.Nil(t, value.Bins[fields.Inputs.String()])
 		assert.Nil(t, value.Bins[fields.Outputs.String()])
 
-		exists, err := s.GetExternalStore().Exists(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("tx"))
+		exists, err := s.GetExternalStore().Exists(ctx, bItem.GetTxHash().CloneBytes(), fileformat.FileTypeTx)
 		require.NoError(t, err)
 		assert.True(t, exists)
 
 		// check that the file does not have a DAH
-		dah, err := s.GetExternalStore().GetDAH(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("tx"))
+		dah, err := s.GetExternalStore().GetDAH(ctx, bItem.GetTxHash().CloneBytes(), fileformat.FileTypeTx)
 		require.NoError(t, err)
 		assert.Equal(t, uint32(0), dah)
 	})
@@ -243,12 +243,12 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		assert.Nil(t, value.Bins[fields.Inputs.String()])
 		assert.Nil(t, value.Bins[fields.Outputs.String()])
 
-		exists, err := s.GetExternalStore().Exists(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("tx"))
+		exists, err := s.GetExternalStore().Exists(ctx, bItem.GetTxHash().CloneBytes(), fileformat.FileTypeTx)
 		require.NoError(t, err)
 		assert.True(t, exists)
 
 		// check that the file has a DAH
-		dah, err := s.GetExternalStore().GetDAH(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("tx"))
+		dah, err := s.GetExternalStore().GetDAH(ctx, bItem.GetTxHash().CloneBytes(), fileformat.FileTypeTx)
 		require.NoError(t, err)
 		assert.NotEqual(t, uint32(0), dah)
 	})
@@ -291,7 +291,7 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 		assert.Nil(t, value.Bins[fields.Inputs.String()])
 		assert.Nil(t, value.Bins[fields.Outputs.String()])
 
-		exists, err := s.GetExternalStore().Exists(ctx, bItem.GetTxHash().CloneBytes(), options.WithFileExtension("outputs"))
+		exists, err := s.GetExternalStore().Exists(ctx, bItem.GetTxHash().CloneBytes(), fileformat.FileTypeOutputs)
 		require.NoError(t, err)
 		assert.True(t, exists)
 	})

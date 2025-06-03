@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 )
 
@@ -40,11 +41,12 @@ type Store interface {
 	// Parameters:
 	//   - ctx: The context for the operation
 	//   - key: The key identifying the blob
+	//   - fileType: The type of the file
 	//   - opts: Optional file options
 	// Returns:
 	//   - bool: True if the blob exists, false otherwise
 	//   - error: Any error that occurred during the check
-	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
+	Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error)
 
 	// Get retrieves a blob from the store.
 	// Parameters:
@@ -54,18 +56,7 @@ type Store interface {
 	// Returns:
 	//   - []byte: The blob data
 	//   - error: Any error that occurred during retrieval
-	Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
-
-	// GetHead retrieves the first n bytes of a blob.
-	// Parameters:
-	//   - ctx: The context for the operation
-	//   - key: The key identifying the blob
-	//   - nrOfBytes: Number of bytes to retrieve from the start
-	//   - opts: Optional file options
-	// Returns:
-	//   - []byte: The requested portion of the blob
-	//   - error: Any error that occurred during retrieval
-	GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error)
+	Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error)
 
 	// GetIoReader returns an io.ReadCloser for streaming blob data.
 	// Parameters:
@@ -75,75 +66,61 @@ type Store interface {
 	// Returns:
 	//   - io.ReadCloser: Reader for streaming the blob data
 	//   - error: Any error that occurred during setup
-	GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error)
+	GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error)
 
 	// Set stores a blob in the store.
 	// Parameters:
 	//   - ctx: The context for the operation
 	//   - key: The key identifying the blob
+	//   - fileType: The type of the file
 	//   - value: The blob data to store
 	//   - opts: Optional file options
 	// Returns:
 	//   - error: Any error that occurred during storage
-	Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error
+	Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error
 
 	// SetFromReader stores a blob from an io.ReadCloser.
 	// Parameters:
 	//   - ctx: The context for the operation
 	//   - key: The key identifying the blob
-	//   - value: Reader providing the blob data
+	//   - fileType: The type of the file
+	//   - reader: Reader providing the blob data
 	//   - opts: Optional file options
 	// Returns:
 	//   - error: Any error that occurred during storage
-	SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.FileOption) error
+	SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error
 
 	// SetDAH sets the delete at height for a blob.
 	// Parameters:
 	//   - ctx: The context for the operation
 	//   - key: The key identifying the blob
+	//   - fileType: The type of the file
 	//   - dah: The delete at height
 	//   - opts: Optional file options
 	// Returns:
 	//   - error: Any error that occurred during DAH setting
-	SetDAH(ctx context.Context, key []byte, dah uint32, opts ...options.FileOption) error
+	SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error
 
 	// GetDAH retrieves the remaining time-to-live for a blob.
 	// Parameters:
 	//   - ctx: The context for the operation
 	//   - key: The key identifying the blob
+	//   - fileType: The type of the file
 	//   - opts: Optional file options
 	// Returns:
 	//   - uint32: The delete at height value
 	//   - error: Any error that occurred during retrieval
-	GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error)
+	GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error)
 
 	// Del deletes a blob from the store.
 	// Parameters:
 	//   - ctx: The context for the operation
 	//   - key: The key identifying the blob to delete
+	//   - fileType: The type of the file
 	//   - opts: Optional file options
 	// Returns:
 	//   - error: Any error that occurred during deletion
-	Del(ctx context.Context, key []byte, opts ...options.FileOption) error
-	// GetHeader retrieves the header portion of a blob.
-	// Parameters:
-	//   - ctx: The context for the operation
-	//   - key: The key identifying the blob
-	//   - opts: Optional file options
-	// Returns:
-	//   - []byte: The header data
-	//   - error: Any error that occurred during retrieval
-	GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
-
-	// GetFooterMetaData retrieves the footer metadata of a blob.
-	// Parameters:
-	//   - ctx: The context for the operation
-	//   - key: The key identifying the blob
-	//   - opts: Optional file options
-	// Returns:
-	//   - []byte: The footer metadata
-	//   - error: Any error that occurred during retrieval
-	GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+	Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error
 
 	// Close closes the blob store and releases any resources.
 	// Parameters:

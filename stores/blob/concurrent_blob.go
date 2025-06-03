@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	blob_options "github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -34,7 +35,7 @@ type ConcurrentBlob[K chainhash.Hash] struct {
 }
 
 // NewConcurrentBlob creates a new ConcurrentBlob instance with the specified blob store and options.
-// 
+//
 // Parameters:
 //   - blobStore: The underlying blob store implementation to use for data storage. For automatic
 //     expiration of blobs, use a store with Default-At-Height (DAH) functionality configured.
@@ -63,7 +64,7 @@ func NewConcurrentBlob[K chainhash.Hash](blobStore Store, options ...blob_option
 // Returns:
 //   - io.ReadCloser: A reader for the blob data
 //   - error: Any error that occurred during the operation
-func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, getBlobReader func() (io.ReadCloser, error)) (io.ReadCloser, error) {
+func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, fileType fileformat.FileType, getBlobReader func() (io.ReadCloser, error)) (io.ReadCloser, error) {
 	var (
 		found bool
 		err   error
@@ -74,9 +75,9 @@ func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, getBlobReader func()
 	c.mu.RLock()
 
 	// Check if the value is already in the cache
-	if found, err = c.blobStore.Exists(ctx, key[:], c.options...); found && err == nil {
+	if found, err = c.blobStore.Exists(ctx, key[:], fileType, c.options...); found && err == nil {
 		c.mu.RUnlock()
-		return c.blobStore.GetIoReader(ctx, key[:], c.options...)
+		return c.blobStore.GetIoReader(ctx, key[:], fileType, c.options...)
 	}
 
 	// Upgrade to a write lock if the value is not found
@@ -84,9 +85,9 @@ func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, getBlobReader func()
 	c.mu.Lock()
 
 	// Check again to avoid race conditions
-	if found, err = c.blobStore.Exists(ctx, key[:], c.options...); found && err == nil {
+	if found, err = c.blobStore.Exists(ctx, key[:], fileType, c.options...); found && err == nil {
 		c.mu.Unlock()
-		return c.blobStore.GetIoReader(ctx, key[:], c.options...)
+		return c.blobStore.GetIoReader(ctx, key[:], fileType, c.options...)
 	}
 
 	// If not, check if there is an ongoing request
@@ -94,8 +95,8 @@ func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, getBlobReader func()
 		c.mu.Unlock()
 		wg.Wait() // Wait for the other goroutine to finish
 
-		if found, err = c.blobStore.Exists(ctx, key[:], c.options...); found && err == nil {
-			return c.blobStore.GetIoReader(ctx, key[:], c.options...)
+		if found, err = c.blobStore.Exists(ctx, key[:], fileType, c.options...); found && err == nil {
+			return c.blobStore.GetIoReader(ctx, key[:], fileType, c.options...)
 		}
 
 		return nil, errors.NewProcessingError("failed to get blob while waiting for another goroutine to finish")
@@ -126,7 +127,7 @@ func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, getBlobReader func()
 	}
 
 	// Cache the result
-	err = c.blobStore.SetFromReader(ctx, key[:], resultReader, c.options...)
+	err = c.blobStore.SetFromReader(ctx, key[:], fileType, resultReader, c.options...)
 	if err != nil {
 		return nil, err
 	}
@@ -134,5 +135,5 @@ func (c *ConcurrentBlob[K]) Get(ctx context.Context, key K, getBlobReader func()
 	_ = resultReader.Close()
 
 	// Return a reader to the cached blob
-	return c.blobStore.GetIoReader(ctx, key[:], c.options...)
+	return c.blobStore.GetIoReader(ctx, key[:], fileType, c.options...)
 }

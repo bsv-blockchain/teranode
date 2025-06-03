@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/jellydator/ttlcache/v3"
@@ -78,7 +78,7 @@ func TestOneTransaction(t *testing.T) {
 	subtreeStore := memory.New()
 
 	subtreeBytes, _ := subtrees[0].Serialize()
-	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 
 	// loads the subtrees into the block
 	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, nil)
@@ -139,7 +139,7 @@ func TestTwoTransactions(t *testing.T) {
 	subtreeStore := memory.New()
 
 	subtreeBytes, _ := subtrees[0].Serialize()
-	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 
 	// loads the subtrees into the block
 	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, nil)
@@ -208,7 +208,7 @@ func TestMerkleRoot(t *testing.T) {
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 
 		subtreeBytes, _ := subTree.Serialize()
-		_ = subtreeStore.Set(ctx, rootHash[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+		_ = subtreeStore.Set(ctx, rootHash[:], fileformat.FileTypeSubtree, subtreeBytes)
 	}
 
 	nBits, _ := model.NewNBitFromSlice(bits)

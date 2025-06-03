@@ -23,6 +23,7 @@ import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -465,10 +466,11 @@ func (td *TestDaemon) VerifyBlockByHash(t *testing.T, expectedBlock *model.Block
 }
 
 func (td *TestDaemon) VerifyConflictingInSubtrees(t *testing.T, subtreeHash *chainhash.Hash, expectedConflicts ...*bt.Tx) {
-	latestSubtreeBytes, err := td.SubtreeStore.Get(td.Ctx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
+	latestSubtreeReader, err := td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	require.NoError(t, err, "Failed to get subtree")
 
-	latestSubtree, err := util.NewSubtreeFromBytes(latestSubtreeBytes)
+	latestSubtree, err := util.NewSubtreeFromReader(latestSubtreeReader)
+	_ = latestSubtreeReader.Close() // Ensure the reader is closed after use
 	require.NoError(t, err, "Failed to parse subtree bytes")
 
 	require.Len(t, latestSubtree.ConflictingNodes, len(expectedConflicts),
@@ -494,10 +496,11 @@ func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	require.NoError(t, err)
 
 	for _, subtreeHash := range candidate.SubtreeHashes {
-		subtreeBytes, err := td.SubtreeStore.Get(td.Ctx, subtreeHash, options.WithFileExtension(options.SubtreeFileExtension))
+		subtreeReader, err := td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash, fileformat.FileTypeSubtree)
 		require.NoError(t, err, "Failed to get subtree")
 
-		subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
+		subtree, err := util.NewSubtreeFromReader(subtreeReader)
+		_ = subtreeReader.Close() // Ensure the reader is closed after use
 		require.NoError(t, err, "Failed to parse subtree bytes")
 
 		for _, tx := range txs {
@@ -524,10 +527,11 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	}
 
 	for _, subtreeHash := range candidate.SubtreeHashes {
-		subtreeBytes, err := td.SubtreeStore.Get(td.Ctx, subtreeHash, options.WithFileExtension(options.SubtreeFileExtension))
+		subtreeReader, err := td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash, fileformat.FileTypeSubtree)
 		require.NoError(t, err, "Failed to get subtree")
 
-		subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
+		subtree, err := util.NewSubtreeFromReader(subtreeReader)
+		_ = subtreeReader.Close() // Ensure the reader is closed after use
 		require.NoError(t, err, "Failed to parse subtree bytes")
 
 		for _, tx := range txs {
@@ -825,8 +829,8 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *ut
 	err = subtreeStore.Set(
 		ctx,
 		subtree.RootHash()[:],
+		fileformat.FileTypeSubtree,
 		subtreeBytes,
-		options.WithFileExtension("subtreeToCheck"),
 		options.WithDeleteAt(100),
 		options.WithAllowOverwrite(true),
 	)
@@ -842,8 +846,8 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *ut
 	err = subtreeStore.Set(
 		ctx,
 		subtreeData.RootHash()[:],
+		fileformat.FileTypeSubtreeData,
 		subtreeDataBytes,
-		options.WithFileExtension(options.SubtreeDataFileExtension),
 		options.WithDeleteAt(100),
 		options.WithAllowOverwrite(true),
 	)
@@ -859,8 +863,8 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *ut
 	err = subtreeStore.Set(
 		ctx,
 		subtree.RootHash()[:],
+		fileformat.FileTypeSubtreeMeta,
 		subtreeMetaBytes,
-		options.WithFileExtension(options.SubtreeMetaFileExtension),
 		options.WithDeleteAt(100),
 		options.WithAllowOverwrite(true),
 	)

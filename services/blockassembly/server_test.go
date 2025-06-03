@@ -5,11 +5,11 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	utxomemory "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -31,7 +31,7 @@ func Test_storeSubtree(t *testing.T) {
 			ErrChan:     nil,
 		}, subtreeRetryChan))
 
-		subtreeBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], options.WithFileExtension(options.SubtreeFileExtension))
+		subtreeBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree)
 		require.NoError(t, err)
 		require.NotNil(t, subtreeBytes)
 
@@ -45,7 +45,7 @@ func Test_storeSubtree(t *testing.T) {
 		}
 
 		// check that the meta-data is stored
-		subtreeMetaBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], options.WithFileExtension(options.SubtreeMetaFileExtension))
+		subtreeMetaBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta)
 		require.NoError(t, err)
 
 		subtreeMeta, err := util.NewSubtreeMetaFromBytes(subtreeFromStore, subtreeMetaBytes)
@@ -76,7 +76,7 @@ func Test_storeSubtree(t *testing.T) {
 		}, subtreeRetryChan))
 
 		// check that the meta data was not stored
-		_, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], options.WithFileExtension(options.SubtreeMetaFileExtension))
+		_, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta)
 		require.Error(t, err)
 	})
 }

@@ -17,12 +17,12 @@ import (
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/testdata"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	blobmemory "github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -205,8 +205,8 @@ func TestBlockValidationValidateSubtreeInternalLegacy(t *testing.T) {
 	err = subtreeStore.Set(
 		t.Context(),
 		subtree.RootHash()[:],
+		fileformat.FileTypeSubtreeToCheck,
 		nodeBytes,
-		options.WithFileExtension("subtreeToCheck"),
 	)
 	require.NoError(t, err)
 
@@ -215,8 +215,8 @@ func TestBlockValidationValidateSubtreeInternalLegacy(t *testing.T) {
 	err = subtreeStore.Set(
 		t.Context(),
 		subtree.RootHash()[:],
+		fileformat.FileTypeSubtreeData,
 		subtreeDataBytes,
-		options.WithFileExtension(options.SubtreeDataFileExtension),
 	)
 	require.NoError(t, err)
 
@@ -699,8 +699,8 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 
 		err = subtreeStore.Set(t.Context(),
 			subtree.RootHash()[:],
+			fileformat.FileTypeSubtreeData,
 			subtreeDataBytes,
-			options.WithFileExtension(options.SubtreeDataFileExtension),
 		)
 		require.NoError(t, err)
 
@@ -750,8 +750,8 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 
 		err = subtreeStore.Set(t.Context(),
 			coinbaseSubtree.RootHash()[:],
+			fileformat.FileTypeSubtreeData,
 			subtreeDataBytes,
-			options.WithFileExtension(options.SubtreeDataFileExtension),
 		)
 		require.NoError(t, err)
 
@@ -813,8 +813,8 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 		err = subtreeStore.Set(
 			t.Context(),
 			subtreeHash[:],
+			fileformat.FileTypeSubtreeData,
 			subtreeDataBytes,
-			options.WithFileExtension(options.SubtreeDataFileExtension),
 		)
 		require.NoError(t, err)
 
@@ -884,8 +884,8 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 		err = subtreeStore.Set(
 			t.Context(),
 			subtreeHash[:],
+			fileformat.FileTypeSubtreeData,
 			subtreeDataBytes,
-			options.WithFileExtension(options.SubtreeDataFileExtension),
 		)
 		require.NoError(t, err)
 

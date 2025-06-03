@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -69,7 +70,7 @@ type MockTxStore struct {
 }
 
 // Store implements a mock Store method
-func (s *MockTxStore) Store(ctx context.Context, key []byte, value []byte) error {
+func (s *MockTxStore) Store(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	s.storeCalled.Store(true)
 	s.txIDs = append(s.txIDs, key)
 
@@ -77,27 +78,12 @@ func (s *MockTxStore) Store(ctx context.Context, key []byte, value []byte) error
 }
 
 // Get implements a mock Get method for blob.Store interface
-func (s *MockTxStore) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
-	return s.Fetch(ctx, key)
-}
-
-// GetHead implements a mock method for blob.Store interface
-func (s *MockTxStore) GetHead(ctx context.Context, key []byte, length int, opts ...options.FileOption) ([]byte, error) {
-	return []byte{}, nil
-}
-
-// GetHeader implements a mock method for blob.Store interface
-func (s *MockTxStore) GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
-	return []byte{}, nil
-}
-
-// GetFooterMetaData implements a mock method for blob.Store interface
-func (s *MockTxStore) GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
-	return nil, nil
+func (s *MockTxStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
+	return s.Fetch(ctx, key, fileType, opts...)
 }
 
 // Exists implements a mock Exists method matching blob.Store interface
-func (s *MockTxStore) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
+func (s *MockTxStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
 	for _, id := range s.txIDs {
 		if bytes.Equal(id, key) {
 			return true, nil
@@ -108,17 +94,17 @@ func (s *MockTxStore) Exists(ctx context.Context, key []byte, opts ...options.Fi
 }
 
 // Fetch implements a mock Fetch method matching blob.Store interface
-func (s *MockTxStore) Fetch(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+func (s *MockTxStore) Fetch(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
 	return []byte{}, nil
 }
 
 // GetIoReader implements a mock method for blob.Store interface
-func (s *MockTxStore) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+func (s *MockTxStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader([]byte{})), nil
 }
 
 // GetDAH implements a mock method for blob.Store interface
-func (s *MockTxStore) GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error) {
+func (s *MockTxStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
 	return 0, nil
 }
 
@@ -128,18 +114,18 @@ func (s *MockTxStore) Health(ctx context.Context, checkLiveness bool) (int, stri
 }
 
 // Set implements a mock method for blob.Store interface
-func (s *MockTxStore) Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error {
-	return s.Store(ctx, key, value)
+func (s *MockTxStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
+	return s.Store(ctx, key, fileType, value)
 }
 
 // SetFromReader implements a mock method for blob.Store interface
-func (s *MockTxStore) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
+func (s *MockTxStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
 	// Just return success for the mock
 	return nil
 }
 
 // SetDAH implements a mock method for blob.Store interface
-func (s *MockTxStore) SetDAH(ctx context.Context, key []byte, dah uint32, opts ...options.FileOption) error {
+func (s *MockTxStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error {
 	// Just return success for the mock
 	return nil
 }
@@ -150,7 +136,7 @@ func (s *MockTxStore) Delete(ctx context.Context, key []byte) error {
 }
 
 // Del implements the blob.Store Del method
-func (s *MockTxStore) Del(ctx context.Context, key []byte, opts ...options.FileOption) error {
+func (s *MockTxStore) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
 	return s.Delete(ctx, key)
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -30,14 +31,15 @@ type Batcher struct {
 }
 
 type BatchItem struct {
-	hash  chainhash.Hash
-	value []byte
+	hash     chainhash.Hash
+	fileType fileformat.FileType
+	value    []byte
 	// next  atomic.Pointer[BatchItem]
 }
 
 type blobStoreSetter interface {
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
-	Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error
+	Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error
 }
 
 func New(logger ulogger.Logger, blobStore blobStoreSetter, sizeInBytes int, writeKeys bool) *Batcher {
@@ -80,6 +82,7 @@ func New(logger ulogger.Logger, blobStore blobStoreSetter, sizeInBytes int, writ
 						b.logger.Errorf("error writing final batch during shutdown: %v", err)
 					}
 				}
+
 				return
 			default:
 				batchItem = b.queue.Dequeue()
@@ -168,7 +171,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 	g.Go(func() error {
 		b.logger.Debugf("flushing batch of %d bytes", len(currentBatch))
 		// we need to reverse the bytes of the key, since this is not a transaction ID
-		if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), currentBatch, options.WithFileExtension("data")); err != nil {
+		if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), fileformat.FileTypeBatchData, currentBatch); err != nil {
 			return errors.NewStorageError("error putting batch", err)
 		}
 
@@ -179,7 +182,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 		// flush current batch keys
 		g.Go(func() error {
 			// we need to reverse the bytes of the key, since this is not a transaction ID, but a batch ID
-			if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), batchKeys, options.WithFileExtension("keys")); err != nil {
+			if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), fileformat.FileTypeBatchKeys, batchKeys); err != nil {
 				return errors.NewStorageError("error putting batch keys", err)
 			}
 
@@ -209,7 +212,7 @@ func (b *Batcher) Close(_ context.Context) error {
 	return nil
 }
 
-func (b *Batcher) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
+func (b *Batcher) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
 	defer reader.Close()
 
 	bb, err := io.ReadAll(reader)
@@ -217,50 +220,39 @@ func (b *Batcher) SetFromReader(ctx context.Context, key []byte, reader io.ReadC
 		return errors.NewStorageError("failed to read data from reader", err)
 	}
 
-	return b.Set(ctx, key, bb, opts...)
+	return b.Set(ctx, key, fileType, bb, opts...)
 }
 
-func (b *Batcher) Set(_ context.Context, hash []byte, value []byte, opts ...options.FileOption) error {
+func (b *Batcher) Set(_ context.Context, hash []byte, fileType fileformat.FileType, value []byte, _ ...options.FileOption) error {
 	b.queue.Enqueue(BatchItem{
-		hash:  chainhash.Hash(hash),
-		value: value,
+		hash:     chainhash.Hash(hash),
+		fileType: fileType,
+		value:    value,
 	})
 
 	return nil
 }
 
-func (b *Batcher) SetDAH(_ context.Context, _ []byte, _ uint32, opts ...options.FileOption) error {
+func (b *Batcher) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ uint32, _ ...options.FileOption) error {
 	return errors.NewProcessingError("DAH is not supported in a batcher store")
 }
 
-func (b *Batcher) GetDAH(_ context.Context, _ []byte, opts ...options.FileOption) (uint32, error) {
+func (b *Batcher) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (uint32, error) {
 	return 0, errors.NewProcessingError("DAH is not supported in a batcher store")
 }
 
-func (b *Batcher) GetIoReader(_ context.Context, _ []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+func (b *Batcher) GetIoReader(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (io.ReadCloser, error) {
 	return nil, errors.NewStorageError("getIoReader is not supported in a batcher store")
 }
 
-func (b *Batcher) Get(_ context.Context, _ []byte, opts ...options.FileOption) ([]byte, error) {
+func (b *Batcher) Get(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) ([]byte, error) {
 	return nil, errors.NewStorageError("get is not supported in a batcher store")
 }
 
-func (b *Batcher) GetHead(_ context.Context, _ []byte, _ int, opts ...options.FileOption) ([]byte, error) {
-	return nil, errors.NewStorageError("get head is not supported in a batcher store")
-}
-
-func (b *Batcher) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
+func (b *Batcher) Exists(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (bool, error) {
 	return false, errors.NewStorageError("exists is not supported in a batcher store")
 }
 
-func (b *Batcher) Del(_ context.Context, hash []byte, opts ...options.FileOption) error {
+func (b *Batcher) Del(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) error {
 	return errors.NewStorageError("del is not supported in a batcher store")
-}
-
-func (b *Batcher) GetHeader(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
-	return nil, errors.NewStorageError("get header is not supported in a batcher store")
-}
-
-func (b *Batcher) GetFooterMetaData(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
-	return nil, errors.NewStorageError("get meta data is not supported in a batcher store")
 }

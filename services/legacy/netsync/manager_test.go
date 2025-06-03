@@ -399,7 +399,9 @@ func setupQueueInvTests() (chan interface{}, chan *kafka.Message, *SyncManager, 
 // Test blockchain syncing protocol. SyncManager should request, processes, and
 // relay blocks to/from peers.
 // TODO: Test is timing out, needs to be fixed.
-func xTestBlockchainSync(t *testing.T) {
+func TestBlockchainSync(t *testing.T) {
+	t.Skip("skipping")
+
 	chainParams := chaincfg.RegressionNetParams
 	chainParams.CoinbaseMaturity = 1
 

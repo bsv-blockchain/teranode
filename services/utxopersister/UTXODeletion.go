@@ -10,7 +10,6 @@
 package utxopersister
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
@@ -55,26 +54,26 @@ type UTXODeletion struct {
 // This function is used when reading deletion records from persistent storage to reconstruct
 // the set of spent outputs that need to be excluded from the UTXO set.
 func NewUTXODeletionFromReader(r io.Reader) (*UTXODeletion, error) {
-	// Read all the fixed size fields
-	b := make([]byte, 32+4)
+	// Read all the next txid field
+	b := make([]byte, 32)
 
 	_, err := io.ReadFull(r, b)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check if all the bytes are zero
-	if bytes.Equal(b[:32], EOFMarker) {
-		// We return an empty UTXODeletion and io.EOF to signal the end of the stream
-		// The empty UTXODeletion indicates an EOF where the eofMarker was written
-		return &UTXODeletion{}, io.EOF
+	var indexBytes [4]byte
+
+	_, err = io.ReadFull(r, indexBytes[:])
+	if err != nil {
+		return nil, err
 	}
 
 	u := &UTXODeletion{
-		Index: uint32(b[32]) | uint32(b[33])<<8 | uint32(b[34])<<16 | uint32(b[35])<<24,
+		Index: uint32(indexBytes[0]) | uint32(indexBytes[1])<<8 | uint32(indexBytes[2])<<16 | uint32(indexBytes[3])<<24,
 	}
 
-	copy(u.TxID[:], b[:32])
+	copy(u.TxID[:], b)
 
 	return u, nil
 }

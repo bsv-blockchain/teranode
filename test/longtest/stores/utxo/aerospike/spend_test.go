@@ -5,7 +5,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
@@ -32,7 +32,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 
 	t.Run("Spent tx id", func(t *testing.T) {
 		// clean up the externalStore, if needed
-		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 
 		// create a tx
 		_, err := store.Create(ctx, tx, 101)
@@ -63,7 +63,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		store.SetUtxoBatchSize(1)
 
 		// clean up the externalStore, if needed
-		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 
 		// create a tx
 		_, err := store.Create(ctx, tx, 101)
@@ -123,12 +123,12 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		}
 
 		// check we created the tx in the external store
-		exists, err := store.GetExternalStore().Exists(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		exists, err := store.GetExternalStore().Exists(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 		require.NoError(t, err)
 		require.True(t, exists)
 
 		// check that the DAH is not set on the external store
-		dah, err := store.GetExternalStore().GetDAH(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		dah, err := store.GetExternalStore().GetDAH(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 		require.NoError(t, err)
 		require.Equal(t, uint32(0), dah)
 
@@ -165,7 +165,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		assert.Equal(t, 4, resp.Bins[fields.SpentExtraRecs.String()])
 
 		// check the external file DAH has been set
-		dah, err = store.GetExternalStore().GetDAH(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		dah, err = store.GetExternalStore().GetDAH(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 		require.NoError(t, err)
 		assert.Greater(t, dah, uint32(0))
 	})
@@ -349,7 +349,7 @@ func TestStore_Unspend(t *testing.T) {
 
 	t.Run("Successfully unspend a spent tx", func(t *testing.T) {
 		// Clean up any existing data
-		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 
 		// Create a tx
 		_, err := store.Create(ctx, tx, 101)
@@ -375,7 +375,7 @@ func TestStore_Unspend(t *testing.T) {
 		cleanDB(t, client)
 
 		// Clean up any existing data
-		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), options.WithFileExtension("tx"))
+		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 
 		// Create a tx
 		_, err := store.Create(ctx, tx, 101)

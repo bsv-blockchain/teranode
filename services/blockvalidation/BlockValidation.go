@@ -27,6 +27,7 @@ import (
 	"github.com/bitcoin-sv/teranode/interfaces/blockvalidation"
 	p2pconstants "github.com/bitcoin-sv/teranode/interfaces/p2p"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
 	"github.com/bitcoin-sv/teranode/services/validator"
@@ -502,7 +503,7 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 		return true, nil
 	}
 
-	exists, err := u.subtreeStore.Exists(ctx, hash[:], options.WithFileExtension(options.SubtreeFileExtension))
+	exists, err := u.subtreeStore.Exists(ctx, hash[:], fileformat.FileTypeSubtree)
 	if err != nil {
 		return false, err
 	}
@@ -887,7 +888,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase in tx store: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 
 	if u.txStore != nil {
-		if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
+		if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], fileformat.FileTypeTx, block.CoinbaseTx.Bytes()); err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%s]", block.Hash().String(), err)
 		}
 	}
@@ -1024,7 +1025,7 @@ func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context
 
 func (u *BlockValidation) getBloomFilterFromSubtreeStore(ctx context.Context, hash *chainhash.Hash) *model.BlockBloomFilter {
 	// try to get from the subtree store
-	bloomFilterBytes, err := u.subtreeStore.Get(ctx, hash[:], options.WithFileExtension("bloomfilter"))
+	bloomFilterBytes, err := u.subtreeStore.Get(ctx, hash[:], fileformat.FileTypeBloomFilter)
 	if err != nil || len(bloomFilterBytes) == 0 {
 		return nil
 	}
@@ -1157,7 +1158,7 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 	}
 
 	// record the bloom filter in the subtreestore
-	err = u.subtreeStore.Set(ctx, block.Hash()[:], filterBytes, options.WithDeleteAt(u.bloomFilterRetentionSize), options.WithFileExtension("bloomfilter"))
+	err = u.subtreeStore.Set(ctx, block.Hash()[:], fileformat.FileTypeBloomFilter, filterBytes, options.WithDeleteAt(u.bloomFilterRetentionSize))
 	if err != nil {
 		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to record bloom filter in subtree store: %s", block.Hash().String(), err)
 	}
@@ -1203,7 +1204,7 @@ func (u *BlockValidation) pruneBloomFilters(ctx context.Context, block *model.Bl
 		// background pruning of disk storage
 		go func(pruneList []chainhash.Hash) {
 			for _, hash := range pruneList {
-				if err := u.subtreeStore.Del(ctx, hash[:], options.WithFileExtension("bloomfilter")); err != nil {
+				if err := u.subtreeStore.Del(ctx, hash[:], fileformat.FileTypeBloomFilter); err != nil {
 					u.logger.Errorf("[pruneBloomFilters][%s] failed to prune filter %s from store: %s",
 						block.Hash().String(), hash.String(), err)
 				}
@@ -1237,7 +1238,7 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 		g.Go(func() error {
 			u.logger.Debugf("[updateSubtreesDAH][%s] updating subtree DAH for %s", block.Hash().String(), subtreeHash.String())
 
-			if err := u.subtreeStore.SetDAH(gCtx, subtreeHash[:], 0, options.WithFileExtension(options.SubtreeFileExtension)); err != nil {
+			if err := u.subtreeStore.SetDAH(gCtx, subtreeHash[:], fileformat.FileTypeSubtree, 0); err != nil {
 				return errors.NewStorageError("[updateSubtreesDAH][%s] failed to update subtree DAH for %s", block.Hash().String(), subtreeHash.String(), err)
 			}
 

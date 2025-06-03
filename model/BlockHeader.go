@@ -265,7 +265,7 @@ func (bh *BlockHeader) StringDump() string {
 func (bh *BlockHeader) ToWireBlockHeader() *wire.BlockHeader {
 	bitsUint32 := binary.LittleEndian.Uint32(bh.Bits.CloneBytes())
 	wireBlockHeader := wire.NewBlockHeader(
-		int32(bh.Version),
+		int32(bh.Version), // nolint: gosec
 		bh.HashPrevBlock,
 		bh.HashMerkleRoot,
 		bitsUint32,

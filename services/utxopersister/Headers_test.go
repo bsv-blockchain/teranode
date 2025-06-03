@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,13 +43,13 @@ func TestReadWrite(t *testing.T) {
 	bi2, err := NewUTXOHeaderFromReader(buf)
 	require.NoError(t, err)
 
-	require.Equal(t, bi.Hash, bi2.Hash)
-	require.Equal(t, bi.Height, bi2.Height)
-	require.Equal(t, bi.TxCount, bi2.TxCount)
-	require.Equal(t, bi.BlockHeader.Version, bi2.BlockHeader.Version)
-	require.Equal(t, bi.BlockHeader.HashPrevBlock, bi2.BlockHeader.HashPrevBlock)
-	require.Equal(t, bi.BlockHeader.HashMerkleRoot, bi2.BlockHeader.HashMerkleRoot)
-	require.Equal(t, bi.BlockHeader.Timestamp, bi2.BlockHeader.Timestamp)
-	require.Equal(t, bi.BlockHeader.Bits, bi2.BlockHeader.Bits)
-	require.Equal(t, bi.BlockHeader.Nonce, bi2.BlockHeader.Nonce)
+	assert.Equal(t, bi.Hash, bi2.Hash)
+	assert.Equal(t, bi.Height, bi2.Height)
+	assert.Equal(t, bi.TxCount, bi2.TxCount)
+	assert.Equal(t, bi.BlockHeader.Version, bi2.BlockHeader.Version)
+	assert.Equal(t, bi.BlockHeader.HashPrevBlock, bi2.BlockHeader.HashPrevBlock)
+	assert.Equal(t, bi.BlockHeader.HashMerkleRoot, bi2.BlockHeader.HashMerkleRoot)
+	assert.Equal(t, bi.BlockHeader.Timestamp, bi2.BlockHeader.Timestamp)
+	assert.Equal(t, bi.BlockHeader.Bits, bi2.BlockHeader.Bits)
+	assert.Equal(t, bi.BlockHeader.Nonce, bi2.BlockHeader.Nonce)
 }

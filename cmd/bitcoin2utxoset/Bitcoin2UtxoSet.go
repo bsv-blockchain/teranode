@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/teranode/cmd/bitcoin2utxoset/bitcoin/btcleveldb"
 	"github.com/bitcoin-sv/teranode/cmd/bitcoin2utxoset/bitcoin/keys"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -201,14 +202,24 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	bufferedWriter := bufio.NewWriter(io.MultiWriter(file, hasher))
 	defer bufferedWriter.Flush()
 
-	header, err := utxopersister.BuildHeaderBytes("U-S-1.0", blockHash, blockHeight, previousBlockHash)
-	if err != nil {
-		return errors.NewProcessingError("Couldn't build UTXO set header", err)
+	header := fileformat.NewHeader(fileformat.FileTypeUtxoSet)
+
+	if err := header.Write(bufferedWriter); err != nil {
+		return errors.NewProcessingError("Couldn't write header to file", err)
 	}
 
-	_, err = bufferedWriter.Write(header)
+	if _, err := bufferedWriter.Write(blockHash[:]); err != nil {
+		return errors.NewProcessingError("error writing header hash", err)
+	}
+
+	if err := binary.Write(bufferedWriter, binary.LittleEndian, blockHeight); err != nil {
+		return errors.NewProcessingError("error writing header number", err)
+	}
+
+	// With UTXOSets, we also write the previous block hash before we start writing the UTXOs
+	_, err = bufferedWriter.Write(previousBlockHash[:])
 	if err != nil {
-		return errors.NewProcessingError("Couldn't write header to file", err)
+		return errors.NewProcessingError("Couldn't write previous block hash to file", err)
 	}
 
 	// Iterate over LevelDB keys
@@ -545,11 +556,6 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 		txWritten++
 		utxosWritten += uint64(len(currentUTXOWrapper.UTXOs))
-	}
-
-	// Write the eof marker
-	if _, err := bufferedWriter.Write(utxopersister.EOFMarker); err != nil {
-		return errors.NewProcessingError("Couldn't write EOF marker", err)
 	}
 
 	// Write the number of txs and utxos written

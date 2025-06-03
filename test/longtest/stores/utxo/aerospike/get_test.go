@@ -13,13 +13,13 @@ import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	blockchain2 "github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/netsync"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/file"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/blockchain"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -64,7 +64,7 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 		txHash := txFromFile.TxIDChainHash()
 		txBytes := txFromFile.Bytes()
 
-		err = s.GetExternalStore().Set(ctx, txHash.CloneBytes(), txBytes, options.WithFileExtension("tx"))
+		err = s.GetExternalStore().Set(ctx, txHash.CloneBytes(), fileformat.FileTypeTx, txBytes)
 		require.NoError(t, err)
 
 		// Test fetching the transaction from the external store
@@ -97,7 +97,7 @@ func TestStore_GetTxFromExternalStore(t *testing.T) {
 		txHash := txFromFile.TxIDChainHash()
 		txBytes := txFromFile.Bytes()
 
-		err = s.GetExternalStore().Set(ctx, txHash.CloneBytes(), txBytes, options.WithFileExtension("tx"))
+		err = s.GetExternalStore().Set(ctx, txHash.CloneBytes(), fileformat.FileTypeTx, txBytes)
 		require.NoError(t, err)
 
 		// Test fetching the transaction from the external store concurrently
@@ -376,7 +376,7 @@ func ProcessTx(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoind, s *
 func fetchTransaction(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoind, txIDHex string) (*bt.Tx, error) {
 	// try the blob store
 	txHash, _ := chainhash.NewHashFromStr(txIDHex)
-	txBytes, _ := txStore.Get(ctx, txHash[:], options.WithFileExtension("tx"))
+	txBytes, _ := txStore.Get(ctx, txHash[:], fileformat.FileTypeTx)
 	if txBytes != nil {
 		return bt.NewTxFromBytes(txBytes)
 	}
@@ -392,7 +392,7 @@ func fetchTransaction(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoi
 	}
 
 	// store the tx in the blob store
-	err = txStore.Set(ctx, txHash[:], tx.Bytes(), options.WithFileExtension("tx"))
+	err = txStore.Set(ctx, txHash[:], fileformat.FileTypeTx, tx.Bytes())
 	if err != nil {
 		return nil, err
 	}

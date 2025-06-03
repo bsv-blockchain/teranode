@@ -4,9 +4,9 @@ import (
 	"io"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockpersister"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
@@ -21,7 +21,7 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 		ctx, subtree, metaDatas := setupSubtreeReaderTest(t)
 
 		// create the block-store .subtree file
-		storer, err := filestorer.NewFileStorer(t.Context(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], options.SubtreeDataFileExtension)
+		storer, err := filestorer.NewFileStorer(t.Context(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], fileformat.FileTypeSubtreeData)
 		require.NoError(t, err)
 
 		err = blockpersister.WriteTxs(t.Context(), ctx.logger, storer, metaDatas, nil)
@@ -46,7 +46,7 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 		require.NoError(t, err)
 
 		// write the subtree to the subtree store
-		err = ctx.repo.SubtreeStore.Set(t.Context(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+		err = ctx.repo.SubtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 		require.NoError(t, err)
 
 		// should be able to get the subtree from the block-store (should NOT be looking at subtree-store)

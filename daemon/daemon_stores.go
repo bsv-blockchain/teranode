@@ -14,7 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
-	utxofactory "github.com/bitcoin-sv/teranode/stores/utxo/_factory"
+	utxofactory "github.com/bitcoin-sv/teranode/stores/utxo/factory"
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
 

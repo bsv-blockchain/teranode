@@ -3,8 +3,6 @@ package s3
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -21,7 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/stores/blob/helper"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -52,25 +50,6 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.StoreOption) (*S
 
 	if s3URL == nil {
 		return nil, errors.NewConfigurationError("[S3] URL is nil")
-	}
-
-	// Add header/footer handling
-	if header := s3URL.Query().Get("header"); header != "" {
-		headerBytes, err := base64.StdEncoding.DecodeString(header)
-		if err != nil {
-			headerBytes = []byte(header)
-		}
-
-		opts = append(opts, options.WithHeader(headerBytes))
-	}
-
-	if eofMarker := s3URL.Query().Get("eofmarker"); eofMarker != "" {
-		eofMarkerBytes, err := hex.DecodeString(eofMarker)
-		if err != nil {
-			eofMarkerBytes = []byte(eofMarker)
-		}
-
-		opts = append(opts, options.WithFooter(options.NewFooter(len(eofMarkerBytes), eofMarkerBytes, nil)))
 	}
 
 	// Extract bucket name from host instead of path
@@ -136,7 +115,7 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.StoreOption) (*S
 }
 
 func (g *S3) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	_, err := g.Exists(ctx, []byte("Health"))
+	_, err := g.Exists(ctx, []byte("Health"), "check")
 	if err != nil {
 		return http.StatusServiceUnavailable, "S3 Store unavailable", err
 	}
@@ -156,7 +135,7 @@ func (g *S3) Close(_ context.Context) error {
 	return nil
 }
 
-func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
+func (g *S3) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		_ = reader.Close()
@@ -169,7 +148,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 
 	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, merged)
+	objectKey := g.getObjectKey(key, fileType, merged)
 
 	if !merged.AllowOverwrite {
 		// Check if the object already exists
@@ -184,28 +163,14 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	// Create a new buffer to hold header + content + footer
 	var buf bytes.Buffer
 
-	// Write header if present
-	if merged.Header != nil {
-		if _, err := buf.Write(merged.Header); err != nil {
-			return errors.NewStorageError("[S3][SetFromReader] failed to write header", err)
-		}
+	header := fileformat.NewHeader(fileType)
+	if err := header.Write(&buf); err != nil {
+		return errors.NewStorageError("[S3][SetFromReader] failed to write header", err)
 	}
 
 	// Copy the reader content
 	if _, err := io.Copy(&buf, reader); err != nil {
 		return errors.NewStorageError("[S3][SetFromReader] failed to write content", err)
-	}
-
-	// Write footer if present
-	if merged.Footer != nil {
-		footer, err := merged.Footer.GetFooter()
-		if err != nil {
-			return errors.NewStorageError("[S3][SetFromReader] failed to get footer", err)
-		}
-
-		if _, err := buf.Write(footer); err != nil {
-			return errors.NewStorageError("[S3][SetFromReader] failed to write footer", err)
-		}
 	}
 
 	uploadInput := &s3.PutObjectInput{
@@ -228,7 +193,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	return nil
 }
 
-func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error {
+func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Set").AddTime(start)
@@ -239,7 +204,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 
 	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, merged)
+	objectKey := g.getObjectKey(key, fileType, merged)
 
 	if !merged.AllowOverwrite {
 		// Check if the object already exists
@@ -253,20 +218,12 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 
 	// Prepare the full content with header and footer
 	var content []byte
-	if merged.Header != nil {
-		content = append(content, merged.Header...)
-	}
+
+	header := fileformat.NewHeader(fileType)
+
+	content = append(content, header.Bytes()...)
 
 	content = append(content, value...)
-
-	if merged.Footer != nil {
-		footer, err := merged.Footer.GetFooter()
-		if err != nil {
-			return errors.NewStorageError("[S3][Set] failed to get footer", err)
-		}
-
-		content = append(content, footer...)
-	}
 
 	uploadInput := &s3.PutObjectInput{
 		Bucket: aws.String(g.bucket),
@@ -287,12 +244,12 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data", g.bucket, objectKey, err)
 	}
 
-	cache.Set(*objectKey, value)
+	cache.Set(*objectKey, value) // We store the value without header
 
 	return nil
 }
 
-func (g *S3) SetDAH(ctx context.Context, key []byte, dah uint32, opts ...options.FileOption) error {
+func (g *S3) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("SetDAH").AddTime(start)
@@ -305,7 +262,7 @@ func (g *S3) SetDAH(ctx context.Context, key []byte, dah uint32, opts ...options
 	return nil
 }
 
-func (g *S3) GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error) {
+func (g *S3) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetDAH").AddTime(start)
@@ -318,7 +275,7 @@ func (g *S3) GetDAH(ctx context.Context, key []byte, opts ...options.FileOption)
 	return 0, nil
 }
 
-func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+func (g *S3) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetIoReader").AddTime(start)
@@ -327,9 +284,9 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOp
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
-	o := options.MergeOptions(g.options, opts)
+	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, o)
+	objectKey := g.getObjectKey(key, fileType, merged)
 
 	result, err := g.client.GetObject(traceSpan.Ctx, &s3.GetObjectInput{
 		Bucket: aws.String(g.bucket),
@@ -340,15 +297,23 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOp
 			return nil, errors.ErrNotFound
 		}
 
-		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get s3 data", g.bucket, objectKey, err)
+		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] failed to get s3 data", g.bucket, objectKey, err)
 	}
 
-	merged := options.MergeOptions(g.options, opts)
+	// Consume the fileformat.Header before returning the rest of the stream
+	header := &fileformat.Header{}
+	if err := header.Read(result.Body); err != nil {
+		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] missing or invalid header: %v", g.bucket, objectKey, err)
+	}
+	// Optionally, verify the header matches the expected fileType
+	if header.FileType() != fileType {
+		return nil, errors.NewStorageError("[S3][GetIoReader] [%s/%s] header filetype mismatch: got %s, want %s", g.bucket, objectKey, header.FileType(), fileType)
+	}
 
-	return helper.ReaderWithHeaderAndFooterRemoved(result.Body, merged.Header, merged.Footer)
+	return result.Body, nil
 }
 
-func (g *S3) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Get").AddTime(start)
@@ -357,9 +322,9 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
-	o := options.MergeOptions(g.options, opts)
+	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, o)
+	objectKey := g.getObjectKey(key, fileType, merged)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	// g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
@@ -389,87 +354,22 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([
 	}
 
 	// Remove header and footer from the downloaded content
-	merged := options.MergeOptions(g.options, opts)
+	content := buf.Bytes()
 
-	content, err := helper.BytesWithHeadAndFooterRemoved(buf.Bytes(), merged.Header, merged.Footer)
+	// Skip the header bytes
+	header, err := fileformat.ReadHeaderFromBytes(content)
 	if err != nil {
-		return nil, errors.NewStorageError("[S3][Get] failed to remove header and footer", err)
+		return nil, errors.NewStorageError("[S3] [%s/%s] failed to read header", g.bucket, objectKey, err)
 	}
+
+	content = content[len(header.Bytes()):]
 
 	cache.Set(*objectKey, content)
 
 	return content, err
 }
 
-func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("GetHead").AddTime(start)
-	}()
-
-	traceSpan := tracing.Start(ctx, "s3:GetHead")
-	defer traceSpan.Finish()
-
-	merged := options.MergeOptions(g.options, opts)
-
-	objectKey := g.getObjectKey(key, merged)
-
-	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
-	// g.logger.Warnf("[S3][%s] Getting object head from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
-
-	// check cache
-	cached, ok := cache.Get(*objectKey)
-	if ok {
-		g.logger.Debugf("[S3] Cache hit for: %s", *objectKey)
-
-		if len(cached) < nrOfBytes {
-			return cached, nil
-		}
-
-		return cached[:nrOfBytes], nil
-	}
-
-	// Adjust the range to account for header length
-	headerLen := 0
-	if merged.Header != nil {
-		headerLen = len(merged.Header)
-	}
-
-	// Request enough bytes to include header plus desired content
-	rangeStr := fmt.Sprintf("bytes=0-%d", headerLen+nrOfBytes-1)
-
-	buf := manager.NewWriteAtBuffer([]byte{})
-	input := &s3.GetObjectInput{
-		Bucket: aws.String(g.bucket),
-		Key:    objectKey,
-		Range:  aws.String(rangeStr),
-	}
-	_, err := g.client.Download(traceSpan.Ctx, buf, input)
-
-	if err != nil {
-		if strings.Contains(err.Error(), "NoSuchKey") {
-			return nil, errors.ErrNotFound
-		}
-
-		traceSpan.RecordError(err)
-
-		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get data head", g.bucket, objectKey, err)
-	}
-
-	// Remove header and get requested bytes
-	content, err := helper.BytesWithHeadAndFooterRemoved(buf.Bytes(), merged.Header, nil) // No footer needed for head
-	if err != nil {
-		return nil, errors.NewStorageError("[S3][GetHead] failed to remove header", err)
-	}
-
-	if len(content) > nrOfBytes {
-		content = content[:nrOfBytes]
-	}
-
-	return content, nil
-}
-
-func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
+func (g *S3) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Exists").AddTime(start)
@@ -478,9 +378,9 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.FileOption)
 	traceSpan := tracing.Start(ctx, "s3:Exists")
 	defer traceSpan.Finish()
 
-	o := options.MergeOptions(g.options, opts)
+	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, o)
+	objectKey := g.getObjectKey(key, fileType, merged)
 
 	// check cache
 	_, ok := cache.Get(*objectKey)
@@ -512,7 +412,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.FileOption)
 	return true, nil
 }
 
-func (g *S3) Del(ctx context.Context, key []byte, opts ...options.FileOption) error {
+func (g *S3) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Del").AddTime(start)
@@ -521,9 +421,9 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.FileOption) er
 	traceSpan := tracing.Start(ctx, "s3:Del")
 	defer traceSpan.Finish()
 
-	o := options.MergeOptions(g.options, opts)
+	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, o)
+	objectKey := g.getObjectKey(key, fileType, merged)
 
 	cache.Delete(*objectKey)
 
@@ -549,16 +449,14 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.FileOption) er
 	return nil
 }
 
-func (g *S3) getObjectKey(hash []byte, o *options.Options) *string {
+func (g *S3) getObjectKey(hash []byte, fileType fileformat.FileType, o *options.Options) *string {
 	var (
 		key    string
 		prefix string
 		ext    string
 	)
 
-	if o.Extension != "" {
-		ext = "." + o.Extension.String()
-	}
+	ext = "." + fileType.String()
 
 	if o.Filename != "" {
 		key = o.Filename
@@ -591,132 +489,4 @@ func getQueryParamDuration(url *url.URL, key string, defaultValue int, duration 
 	result, err := strconv.Atoi(value)
 
 	return time.Duration(result) * duration, err
-}
-
-func (g *S3) GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("GetMetaData").AddTime(start)
-	}()
-
-	traceSpan := tracing.Start(ctx, "s3:GetMetaData")
-	defer traceSpan.Finish()
-
-	merged := options.MergeOptions(g.options, opts)
-
-	// If there's no footer configured, return nil
-	if merged.Footer == nil {
-		return nil, nil
-	}
-
-	objectKey := g.getObjectKey(key, merged)
-
-	// First get the object size using HeadObject
-	headResult, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(g.bucket),
-		Key:    objectKey,
-	})
-	if err != nil {
-		if strings.Contains(err.Error(), "NotFound") {
-			return nil, errors.ErrNotFound
-		}
-
-		return nil, errors.NewStorageError("[S3][GetMetaData] failed to get object head", err)
-	}
-
-	contentLength := headResult.ContentLength
-	if contentLength == nil || *contentLength == int64(0) {
-		return nil, errors.NewStorageError("[S3][GetMetaData] object is empty")
-	}
-
-	// Calculate the range for the footer
-	footerSize := merged.Footer.Size()
-	if *contentLength < int64(footerSize) {
-		return nil, errors.NewStorageError("[S3][GetMetaData] object size smaller than footer size")
-	}
-
-	// Create range string to get only the footer bytes
-	rangeStr := fmt.Sprintf("bytes=%d-%d", *contentLength-int64(footerSize), *contentLength-1)
-
-	// Get only the footer bytes
-	result, err := g.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(g.bucket),
-		Key:    objectKey,
-		Range:  aws.String(rangeStr),
-	})
-	if err != nil {
-		return nil, errors.NewStorageError("[S3][GetMetaData] failed to get footer bytes", err)
-	}
-	defer result.Body.Close()
-
-	// Read exactly footerSize bytes into a fixed buffer
-	footerBytes := make([]byte, footerSize)
-
-	n, err := io.ReadFull(result.Body, footerBytes)
-	if err != nil {
-		return nil, errors.NewStorageError("[S3][GetMetaData] failed to read footer bytes (read %d of %d bytes): %v", n, footerSize, err)
-	}
-
-	// check if the footer is valid
-	if !merged.Footer.IsFooter(footerBytes) {
-		return nil, errors.NewStorageError("[S3][GetMetaData] footer not found", err)
-	}
-
-	// Get metadata from the footer bytes
-	metadata := merged.Footer.GetFooterMetaData(footerBytes)
-
-	return metadata, nil
-}
-
-func (g *S3) GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("GetHeader").AddTime(start)
-	}()
-
-	traceSpan := tracing.Start(ctx, "s3:GetHeader")
-	defer traceSpan.Finish()
-
-	merged := options.MergeOptions(g.options, opts)
-
-	// If there's no header configured, return nil
-	if merged.Header == nil {
-		return nil, nil
-	}
-
-	objectKey := g.getObjectKey(key, merged)
-
-	headerSize := len(merged.Header)
-	// Create range string to get only the header bytes
-	rangeStr := fmt.Sprintf("bytes=0-%d", headerSize-1)
-
-	// Get only the header bytes
-	result, err := g.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(g.bucket),
-		Key:    objectKey,
-		Range:  aws.String(rangeStr),
-	})
-	if err != nil {
-		if strings.Contains(err.Error(), "NoSuchKey") {
-			return nil, errors.ErrNotFound
-		}
-
-		return nil, errors.NewStorageError("[S3][GetHeader] failed to get header bytes", err)
-	}
-	defer result.Body.Close()
-
-	// Read exactly headerSize bytes into a fixed buffer
-	headerBytes := make([]byte, headerSize)
-
-	n, err := io.ReadFull(result.Body, headerBytes)
-	if err != nil {
-		return nil, errors.NewStorageError("[S3][GetHeader] failed to read header bytes (read %d of %d bytes): %v", n, headerSize, err)
-	}
-
-	// Verify the header matches what we expect
-	if !bytes.Equal(headerBytes, merged.Header) {
-		return nil, errors.NewStorageError("[S3][GetHeader] header mismatch")
-	}
-
-	return headerBytes, nil
 }

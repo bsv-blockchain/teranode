@@ -71,12 +71,11 @@ func TestPadUTXOs(t *testing.T) {
 
 func TestNewUTXOSet(t *testing.T) {
 	store := memory.New()
-	// store, err := file.New(ulogger.TestLogger{}, "utxo")
-	// require.NoError(t, err)
 
 	ctx := context.Background()
 
 	tSettings := test.CreateBaseTestSettings()
+
 	ud1, err := NewUTXOSet(ctx, ulogger.TestLogger{}, tSettings, store, &hash1, 0)
 	require.NoError(t, err)
 
@@ -105,9 +104,6 @@ func checkAdditions(t *testing.T, ud *UTXOSet) {
 
 	defer r.Close()
 
-	_, _, _, err = GetHeaderFromReader(r)
-	require.NoError(t, err)
-
 	for {
 		utxoWrapper, err := NewUTXOWrapperFromReader(context.Background(), r)
 		if err != nil {
@@ -135,8 +131,8 @@ func checkDeletions(t *testing.T, ud *UTXOSet) {
 
 	defer r.Close()
 
-	_, _, _, err = GetHeaderFromReader(r)
-	require.NoError(t, err)
+	// _, err = fileformat.ReadHeader(r)
+	// // require.NoError(t, err)
 
 	// Read the deletion caused by the processTX of tx
 	_, err = NewUTXODeletionFromReader(r)

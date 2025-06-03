@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/settings"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -264,11 +264,12 @@ func checkSubtrees(t *testing.T, td *daemon.TestDaemon, expectedTxCount int) {
 		subtreeHash := chainhash.Hash(subtreeBytes)
 
 		// // Get the subtree bytes from the store
-		subtreeData, err := td.SubtreeStore.Get(td.Ctx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
+		subtreeReader, err := td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 		require.NoError(t, err, "Failed to get subtree data from store")
 
 		// Parse the subtree
-		subtree, err := util.NewSubtreeFromBytes(subtreeData)
+		subtree, err := util.NewSubtreeFromReader(subtreeReader)
+		_ = subtreeReader.Close() // Ensure we close the reader
 		require.NoError(t, err, "Failed to parse subtree from bytes")
 
 		t.Logf("Subtree %d - Root hash: %s", i+1, subtree.RootHash())

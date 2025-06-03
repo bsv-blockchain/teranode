@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,14 +17,15 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
-	"gotest.tools/assert"
 	"k8s.io/apimachinery/pkg/util/rand"
 )
 
@@ -51,15 +51,15 @@ func TestFileGetWithAbsolutePath(t *testing.T) {
 		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
-		err = f.Set(context.Background(), []byte("key"), []byte("value"))
+		err = f.Set(context.Background(), []byte("key"), fileformat.FileTypeTesting, []byte("value"))
 		require.NoError(t, err)
 
-		value, err := f.Get(context.Background(), []byte("key"))
+		value, err := f.Get(context.Background(), []byte("key"), fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
 		require.Equal(t, []byte("value"), value)
 
-		err = f.Del(context.Background(), []byte("key"))
+		err = f.Del(context.Background(), []byte("key"), fileformat.FileTypeTesting)
 		require.NoError(t, err)
 	})
 }
@@ -84,15 +84,15 @@ func TestFileGetWithRelativePath(t *testing.T) {
 	_, err = os.Stat("/" + relativePath)
 	require.Error(t, err)
 
-	err = f.Set(ctx, []byte("key"), []byte("value"))
+	err = f.Set(ctx, []byte("key"), fileformat.FileTypeTesting, []byte("value"))
 	require.NoError(t, err)
 
-	value, err := f.Get(ctx, []byte("key"))
+	value, err := f.Get(ctx, []byte("key"), fileformat.FileTypeTesting)
 	require.NoError(t, err)
 
 	require.Equal(t, []byte("value"), value)
 
-	err = f.Del(ctx, []byte("key"))
+	err = f.Del(ctx, []byte("key"), fileformat.FileTypeTesting)
 	require.NoError(t, err)
 
 	// cleanup
@@ -160,17 +160,17 @@ func TestFileLoadDAHs(t *testing.T) {
 		f, err := newStore(ulogger.TestLogger{}, u, dahInterval)
 		require.NoError(t, err)
 
-		err = f.Set(ctx, key, value, options.WithDeleteAt(10))
+		err = f.Set(ctx, key, fileformat.FileTypeTesting, value)
 		require.NoError(t, err)
 
-		err = f.SetDAH(ctx, key, 11)
+		err = f.SetDAH(ctx, key, fileformat.FileTypeTesting, 11)
 		require.NoError(t, err)
 
 		var fileDAHs map[string]uint32
 
 		f.fileDAHsMu.Lock()
 		fileDAHs = f.fileDAHs
-		require.Contains(t, fileDAHs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
+		require.Contains(t, fileDAHs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key))+"."+fileformat.FileTypeTesting.String())
 		f.fileDAHsMu.Unlock()
 
 		f.SetCurrentBlockHeight(11)
@@ -180,7 +180,7 @@ func TestFileLoadDAHs(t *testing.T) {
 		require.NotContains(t, f.fileDAHs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
 		f.fileDAHsMu.Unlock()
 
-		err = f.Del(ctx, key)
+		err = f.Del(ctx, key, fileformat.FileTypeTesting)
 		require.Error(t, err)
 	})
 }
@@ -206,10 +206,10 @@ func BenchmarkFileLoadDAHs(b *testing.B) {
 		key := chainhash.HashH([]byte(fmt.Sprintf("key-%d", i)))
 		value := []byte("value")
 
-		err = f.Set(ctx, key[:], value, options.WithDeleteAt(10))
+		err = f.Set(ctx, key[:], fileformat.FileTypeTesting, value, options.WithDeleteAt(10))
 		require.NoError(b, err)
 
-		err = f.SetDAH(ctx, key[:], 11)
+		err = f.SetDAH(ctx, key[:], fileformat.FileTypeTesting, 11)
 		require.NoError(b, err)
 
 		keys[i] = key[:]
@@ -220,7 +220,7 @@ func BenchmarkFileLoadDAHs(b *testing.B) {
 	for _, key := range keys {
 		// unset all the DAH
 		g.Go(func() error {
-			return f.SetDAH(ctx, key, 0)
+			return f.SetDAH(ctx, key, fileformat.FileTypeTesting, 0)
 		})
 	}
 
@@ -265,10 +265,10 @@ func TestFileConcurrentAccess(t *testing.T) {
 				key := []byte(fmt.Sprintf("key-%d", i))
 				value := []byte(fmt.Sprintf("value-%d", i))
 
-				err := f.Set(context.Background(), key, value)
+				err := f.Set(context.Background(), key, fileformat.FileTypeTesting, value)
 				require.NoError(t, err)
 
-				retrievedValue, err := f.Get(context.Background(), key)
+				retrievedValue, err := f.Get(context.Background(), key, fileformat.FileTypeTesting)
 				require.NoError(t, err)
 				require.Equal(t, value, retrievedValue)
 			}(i)
@@ -296,14 +296,13 @@ func TestFileSetWithSubdirectoryOptionIgnored(t *testing.T) {
 		key := []byte("key")
 		value := []byte("value")
 
-		err = f.Set(context.Background(), key, value)
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, value)
 		require.NoError(t, err)
 
 		// Construct the expected file path in the subdirectory
 		expectedDir := filepath.Join(tempDir, subDir)
-		expectedFilePath := filepath.Join(expectedDir, utils.ReverseAndHexEncodeSlice(key))
+		expectedFilePath := filepath.Join(expectedDir, utils.ReverseAndHexEncodeSlice(key)+"."+fileformat.FileTypeTesting.String())
 
-		// Check if the file was NOT created in the subdirectory (it is supposed to be ignored)
 		_, err = os.Stat(expectedFilePath)
 		require.NoError(t, err)
 	})
@@ -327,12 +326,12 @@ func TestFileSetWithSubdirectoryOption(t *testing.T) {
 		key := []byte("key")
 		value := []byte("value")
 
-		err = f.Set(context.Background(), key, value, options.WithFilename("filename"))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, value, options.WithFilename("filename"))
 		require.NoError(t, err)
 
 		// Construct the expected file path in the subdirectory
 		expectedDir := filepath.Join(tempDir, subDir)
-		expectedFilePath := filepath.Join(expectedDir, "filename")
+		expectedFilePath := filepath.Join(expectedDir, "filename"+"."+fileformat.FileTypeTesting.String())
 
 		// Check if the file was created in the subdirectory
 		_, err = os.Stat(expectedFilePath)
@@ -350,34 +349,32 @@ func TestFileWithHeader(t *testing.T) {
 		u, err := url.Parse("file://" + tempDir)
 		require.NoError(t, err)
 
-		header := "This is the header"
-
-		f, err := New(ulogger.TestLogger{}, u, options.WithHeader([]byte(header)))
+		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
 		key := []byte("key-with-header")
 		content := "This is the main content"
 
 		// Test setting content with header using Set
-		err = f.Set(context.Background(), key, []byte(content))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte(content))
 		require.NoError(t, err)
 
 		// Verify content using Get
-		value, err := f.Get(context.Background(), key)
+		value, err := f.Get(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
-		require.Equal(t, content, string(value))
+		assert.Equal(t, content, string(value))
 
 		// Verify content using GetIoReader
-		reader, err := f.GetIoReader(context.Background(), key)
+		reader, err := f.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
 		// Read all the content from the reader
 		readContent, err := io.ReadAll(reader)
 		require.NoError(t, err)
-		require.Equal(t, content, string(readContent))
+		assert.Equal(t, content, string(readContent))
 
 		// delete the file
-		err = f.Del(context.Background(), key)
+		err = f.Del(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
 		// Test setting content with header using SetFromReader
@@ -386,24 +383,24 @@ func TestFileWithHeader(t *testing.T) {
 		contentReader := strings.NewReader(newContent)
 		readCloser := io.NopCloser(contentReader)
 
-		err = f.SetFromReader(context.Background(), key, readCloser)
+		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser)
 		require.NoError(t, err)
 
 		// Verify new content using Get
-		value, err = f.Get(context.Background(), key)
+		value, err = f.Get(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
-		require.Equal(t, newContent, string(value))
+		assert.Equal(t, newContent, string(value))
 
 		// Verify new content using GetIoReader
-		reader, err = f.GetIoReader(context.Background(), key)
+		reader, err = f.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
 		readContent, err = io.ReadAll(reader)
 		require.NoError(t, err)
-		require.Equal(t, newContent, string(readContent))
+		assert.Equal(t, newContent, string(readContent))
 
 		// delete the file
-		err = f.Del(context.Background(), key)
+		err = f.Del(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 	})
 }
@@ -418,33 +415,32 @@ func TestFileWithFooter(t *testing.T) {
 		u, err := url.Parse("file://" + tempDir)
 		require.NoError(t, err)
 
-		footerStr := "This is the footer"
-		f, err := New(ulogger.TestLogger{}, u, options.WithFooter(options.NewFooter(len(footerStr), []byte(footerStr), nil)))
+		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
 		key := []byte("key-with-footer")
 		content := "This is the main content"
 
 		// Test setting content with footer using Set
-		err = f.Set(context.Background(), key, []byte(content))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte(content))
 		require.NoError(t, err)
 
 		// Verify content using Get
-		value, err := f.Get(context.Background(), key)
+		value, err := f.Get(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
-		require.Equal(t, content, string(value))
+		assert.Equal(t, content, string(value))
 
 		// Verify content using GetIoReader
-		reader, err := f.GetIoReader(context.Background(), key)
+		reader, err := f.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
 		// Read all the content from the reader
 		readContent, err := io.ReadAll(reader)
 		require.NoError(t, err)
-		require.Equal(t, content, string(readContent))
+		assert.Equal(t, content, string(readContent))
 
 		// delete the file
-		err = f.Del(context.Background(), key)
+		err = f.Del(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
 		// Test setting content with footer using SetFromReader
@@ -452,24 +448,24 @@ func TestFileWithFooter(t *testing.T) {
 		contentReader := strings.NewReader(newContent)
 		readCloser := io.NopCloser(contentReader)
 
-		err = f.SetFromReader(context.Background(), key, readCloser)
+		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser)
 		require.NoError(t, err)
 
 		// Verify new content using Get
-		value, err = f.Get(context.Background(), key)
+		value, err = f.Get(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
-		require.Equal(t, newContent, string(value))
+		assert.Equal(t, newContent, string(value))
 
 		// Verify new content using GetIoReader
-		reader, err = f.GetIoReader(context.Background(), key)
+		reader, err = f.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
 		readContent, err = io.ReadAll(reader)
 		require.NoError(t, err)
-		require.Equal(t, newContent, string(readContent))
+		assert.Equal(t, newContent, string(readContent))
 
 		// delete the file
-		err = f.Del(context.Background(), key)
+		err = f.Del(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 	})
 }
@@ -494,17 +490,17 @@ func TestFileSetFromReaderAndGetIoReader(t *testing.T) {
 		// Wrap the reader to satisfy the io.ReadCloser interface
 		readCloser := io.NopCloser(reader)
 
-		err = f.SetFromReader(context.Background(), key, readCloser)
+		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser)
 		require.NoError(t, err)
 
 		// Verify the content was correctly stored
-		storedReader, err := f.GetIoReader(context.Background(), key)
+		storedReader, err := f.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
 		// Read all the content from the storedReader
 		storedContent, err := io.ReadAll(storedReader)
 		require.NoError(t, err)
-		require.Equal(t, content, string(storedContent))
+		assert.Equal(t, content, string(storedContent))
 	})
 }
 
@@ -529,14 +525,19 @@ func TestFileGetHead(t *testing.T) {
 		readCloser := io.NopCloser(reader)
 
 		// First, set the content
-		err = f.SetFromReader(context.Background(), key, readCloser)
+		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser)
 		require.NoError(t, err)
 
 		// Get metadata using GetHead
-		head, err := f.GetHead(context.Background(), key, 1)
+		headReader, err := f.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
-		require.NotNil(t, head)
-		require.Equal(t, content[:1], string(head), "head content doesn't match")
+
+		head := make([]byte, 1) // Read only the first byte
+		_, err = headReader.Read(head)
+		require.NoError(t, err)
+
+		assert.NotNil(t, head)
+		assert.Equal(t, content[:1], string(head), "head content doesn't match")
 	})
 }
 
@@ -550,7 +551,7 @@ func TestFileGetHeadWithHeader(t *testing.T) {
 		u, err := url.Parse("file://" + tempDir)
 		require.NoError(t, err)
 
-		f, err := New(ulogger.TestLogger{}, u, options.WithHeader([]byte("This is header")))
+		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
 		key := []byte("key")
@@ -561,14 +562,19 @@ func TestFileGetHeadWithHeader(t *testing.T) {
 		readCloser := io.NopCloser(reader)
 
 		// First, set the content
-		err = f.SetFromReader(context.Background(), key, readCloser)
+		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser)
 		require.NoError(t, err)
 
 		// Get metadata using GetHead
-		head, err := f.GetHead(context.Background(), key, 1)
+		headReader, err := f.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
-		require.NotNil(t, head)
-		require.Equal(t, content[:1], string(head), "head content doesn't match")
+
+		head := make([]byte, 1) // Read only the first byte
+		_, err = headReader.Read(head)
+		require.NoError(t, err)
+
+		assert.NotNil(t, head)
+		assert.Equal(t, content[:1], string(head), "head content doesn't match")
 	})
 }
 
@@ -590,7 +596,7 @@ func TestFileExists(t *testing.T) {
 		reader := strings.NewReader(content)
 
 		// Content should not exist before setting
-		exists, err := f.Exists(context.Background(), key)
+		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.False(t, exists)
 
@@ -598,11 +604,11 @@ func TestFileExists(t *testing.T) {
 		readCloser := io.NopCloser(reader)
 
 		// Set the content
-		err = f.SetFromReader(context.Background(), key, readCloser)
+		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser)
 		require.NoError(t, err)
 
 		// Now content should exist
-		exists, err = f.Exists(context.Background(), key)
+		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.True(t, exists)
 	})
@@ -626,7 +632,7 @@ func TestFileDAHUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
 		reader := strings.NewReader(content)
 
 		// Content should not exist before setting
-		exists, err := f.Exists(context.Background(), key)
+		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.False(t, exists)
 
@@ -634,24 +640,24 @@ func TestFileDAHUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
 		readCloser := io.NopCloser(reader)
 
 		// Set the content
-		err = f.SetFromReader(context.Background(), key, readCloser)
+		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser)
 		require.NoError(t, err)
 
 		// Now content should exist
-		exists, err = f.Exists(context.Background(), key)
+		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.True(t, exists)
 
 		// Set DAH to 0
-		err = f.SetDAH(context.Background(), key, 0)
+		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, 0)
 		require.NoError(t, err)
 
 		// Set the content again with overwrite disabled
-		err = f.SetFromReader(context.Background(), key, readCloser, options.WithAllowOverwrite(false))
+		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser, options.WithAllowOverwrite(false))
 		require.Error(t, err)
 
 		// Check the DAH again, should still be 0
-		dah, err := f.GetDAH(context.Background(), key)
+		dah, err := f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.Equal(t, uint32(0), dah)
 	})
@@ -672,29 +678,29 @@ func TestFileDAHUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
 		content := "This is test content for set"
 
 		// Content should not exist before setting
-		exists, err := f.Exists(context.Background(), key)
+		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.False(t, exists)
 
 		// Set the content
-		err = f.Set(context.Background(), key, []byte(content))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte(content))
 		require.NoError(t, err)
 
 		// Now content should exist
-		exists, err = f.Exists(context.Background(), key)
+		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.True(t, exists)
 
 		// Set DAH to 0
-		err = f.SetDAH(context.Background(), key, 0)
+		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, 0)
 		require.NoError(t, err)
 
 		// Set the content again with overwrite disabled
-		err = f.Set(context.Background(), key, []byte(content), options.WithAllowOverwrite(false))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte(content), options.WithAllowOverwrite(false))
 		require.Error(t, err)
 
 		// Check the DAH again, should still be 0
-		dah, err := f.GetDAH(context.Background(), key)
+		dah, err := f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.Equal(t, uint32(0), dah)
 	})
@@ -855,34 +861,33 @@ func TestFileWithURLHeaderFooter(t *testing.T) {
 		content := "test content"
 
 		// Test Set
-		err = f.Set(context.Background(), key, []byte(content))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte(content))
 		require.NoError(t, err)
 
 		// Read raw file to verify header and footer
-		filename, err := f.options.ConstructFilename(tempDir, key)
+		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
 		rawData, err := os.ReadFile(filename)
 		require.NoError(t, err)
 
 		// Verify header and footer are present in raw data
-		expectedData := append([]byte("START"), []byte(content)...)
-		expectedData = append(expectedData, []byte("END")...)
-		require.Equal(t, expectedData, rawData)
+		expectedData := append([]byte("TESTING "), []byte(content)...)
+		assert.Equal(t, expectedData, rawData)
 
 		// Test Get - should return content without header/footer
-		value, err := f.Get(context.Background(), key)
+		value, err := f.Get(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
-		require.Equal(t, content, string(value))
+		assert.Equal(t, content, string(value))
 
 		// Test GetIoReader - should return content without header/footer
-		reader, err := f.GetIoReader(context.Background(), key)
+		reader, err := f.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		defer reader.Close()
 
 		readContent, err := io.ReadAll(reader)
 		require.NoError(t, err)
-		require.Equal(t, content, string(readContent))
+		assert.Equal(t, content, string(readContent))
 	})
 }
 
@@ -894,101 +899,65 @@ func TestWithSHA256Checksum(t *testing.T) {
 
 	logger := ulogger.TestLogger{}
 
-	tests := []struct {
-		name           string
-		storeURL       string
-		opts           []options.StoreOption
-		data           []byte
-		key            []byte
-		extension      options.FileExtension
-		expectSHA256   bool
-		expectedFormat string
-	}{
-		{
-			name:         "SHA256 enabled via option",
-			storeURL:     "file://" + tempDir,
-			opts:         []options.StoreOption{options.WithSHA256Checksum()},
-			data:         []byte("test data"),
-			key:          []byte("testkey123"),
-			extension:    "txt",
-			expectSHA256: true,
-		},
-		{
-			name:         "SHA256 enabled via URL",
-			storeURL:     "file://" + tempDir + "?checksum=true",
-			opts:         nil,
-			data:         []byte("test data"),
-			key:          []byte("testkey456"),
-			extension:    "txt",
-			expectSHA256: true,
-		},
-		{
-			name:         "SHA256 disabled (default)",
-			storeURL:     "file://" + tempDir,
-			opts:         nil,
-			data:         []byte("test data"),
-			key:          []byte("testkey789"),
-			extension:    "txt",
-			expectSHA256: false,
-		},
-	}
+	storeURL := "file://" + tempDir
+	value := []byte("test data")
+	key := []byte("testkey123")
+	fileType := fileformat.FileTypeTesting
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Parse URL
-			u, err := url.Parse(tt.storeURL)
-			require.NoError(t, err)
+	// Parse URL
+	u, err := url.Parse(storeURL)
+	require.NoError(t, err)
 
-			// Create file store
-			store, err := New(logger, u, tt.opts...)
-			require.NoError(t, err)
+	// Create file store
+	store, err := New(logger, u)
+	require.NoError(t, err)
 
-			// Set data with extension
-			err = store.Set(context.Background(), tt.key, tt.data, options.WithFileExtension(tt.extension))
-			require.NoError(t, err)
+	// Set data with extension
+	err = store.Set(context.Background(), key, fileType, value)
+	require.NoError(t, err)
 
-			// Construct expected filename
-			merged := options.MergeOptions(store.options, []options.FileOption{options.WithFileExtension(tt.extension)})
-			filename, err := merged.ConstructFilename(tempDir, tt.key)
-			require.NoError(t, err)
+	// Construct expected filename
+	filename, err := store.options.ConstructFilename(tempDir, key, fileType)
+	require.NoError(t, err)
 
-			// Verify main file exists and contains correct data
-			data, err := os.ReadFile(filename)
-			require.NoError(t, err)
-			require.Equal(t, tt.data, data)
+	// Verify main file exists and contains correct data
+	data, err := os.ReadFile(filename)
+	require.NoError(t, err)
 
-			// Check SHA256 file
-			sha256Filename := filename + checksumExtension
-			_, err = os.Stat(sha256Filename)
+	expectedData := make([]byte, len(fileType.ToMagicBytes())+len(value))
+	ft := fileType.ToMagicBytes()
+	copy(expectedData, ft[:])
+	copy(expectedData[len(ft):], value)
 
-			if tt.expectSHA256 {
-				require.NoError(t, err, "SHA256 file should exist")
+	require.Equal(t, expectedData, data)
 
-				// Read and verify SHA256 file content
-				hashFileContent, err := os.ReadFile(sha256Filename)
-				require.NoError(t, err)
+	// Check SHA256 file
+	sha256Filename := filename + checksumExtension
+	_, err = os.Stat(sha256Filename)
 
-				// Calculate expected hash
-				hasher := sha256.New()
-				hasher.Write(tt.data)
-				expectedHash := fmt.Sprintf("%x", hasher.Sum(nil))
+	require.NoError(t, err, "SHA256 file should exist")
 
-				// Verify hash file format
-				hashFileStr := string(hashFileContent)
-				parts := strings.Fields(hashFileStr)
-				require.Len(t, parts, 2, "Hash file should have hash and filename separated by two spaces")
+	// Read and verify SHA256 file content
+	hashFileContent, err := os.ReadFile(sha256Filename)
+	require.NoError(t, err)
 
-				// Verify hash matches
-				require.Equal(t, expectedHash, parts[0], "Hash in file should match calculated hash")
+	// Calculate expected hash
+	hasher := sha256.New()
+	hasher.Write(ft[:])
+	hasher.Write(value)
+	expectedHash := fmt.Sprintf("%x", hasher.Sum(nil))
 
-				// Verify filename part
-				expectedFilename := fmt.Sprintf("%x.%s", bt.ReverseBytes(tt.key), tt.extension)
-				require.Equal(t, expectedFilename, parts[1], "Filename in hash file should match expected format")
-			} else {
-				require.True(t, os.IsNotExist(err), "SHA256 file should not exist")
-			}
-		})
-	}
+	// Verify hash file format
+	hashFileStr := string(hashFileContent)
+	parts := strings.Fields(hashFileStr)
+	require.Len(t, parts, 2, "Hash file should have hash and filename separated by two spaces")
+
+	// Verify hash matches
+	require.Equal(t, expectedHash, parts[0], "Hash in file should match calculated hash")
+
+	// Verify filename part
+	expectedFilename := fmt.Sprintf("%x.%s", bt.ReverseBytes(key), fileType)
+	require.Equal(t, expectedFilename, parts[1], "Filename in hash file should match expected format")
 }
 
 func TestSetFromReaderWithSHA256(t *testing.T) {
@@ -1000,30 +969,35 @@ func TestSetFromReaderWithSHA256(t *testing.T) {
 	u, err := url.Parse("file://" + tempDir)
 	require.NoError(t, err)
 
-	store, err := New(logger, u, options.WithSHA256Checksum())
+	store, err := New(logger, u)
 	require.NoError(t, err)
 
 	// Test data
 	testData := []byte("test data for SetFromReader")
 	key := []byte("testreaderkey")
-	extension := options.FileExtension("txt")
 
 	// Create reader
 	reader := io.NopCloser(bytes.NewReader(testData))
 
 	// Set data
-	err = store.SetFromReader(context.Background(), key, reader, options.WithFileExtension(extension))
+	err = store.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, reader)
 	require.NoError(t, err)
 
 	// Construct filename
-	merged := options.MergeOptions(store.options, []options.FileOption{options.WithFileExtension(extension)})
-	filename, err := merged.ConstructFilename(tempDir, key)
+	merged := options.MergeOptions(store.options, []options.FileOption{})
+	filename, err := merged.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
 	require.NoError(t, err)
 
 	// Verify main file
 	data, err := os.ReadFile(filename)
 	require.NoError(t, err)
-	require.Equal(t, testData, data)
+
+	expectedData := make([]byte, len(fileformat.FileTypeTesting.ToMagicBytes())+len(testData))
+	ft := fileformat.FileTypeTesting.ToMagicBytes()
+	copy(expectedData, ft[:])
+	copy(expectedData[len(ft):], testData)
+
+	require.Equal(t, expectedData, data)
 
 	// Verify SHA256 file
 	sha256Filename := filename + checksumExtension
@@ -1032,6 +1006,7 @@ func TestSetFromReaderWithSHA256(t *testing.T) {
 
 	// Calculate expected hash
 	hasher := sha256.New()
+	hasher.Write(ft[:])
 	hasher.Write(testData)
 	expectedHash := fmt.Sprintf("%x", hasher.Sum(nil))
 
@@ -1042,7 +1017,7 @@ func TestSetFromReaderWithSHA256(t *testing.T) {
 	require.Equal(t, expectedHash, parts[0])
 
 	// Verify filename part
-	expectedFilename := fmt.Sprintf("%x.%s", bt.ReverseBytes(key), extension)
+	expectedFilename := fmt.Sprintf("%x.%s", bt.ReverseBytes(key), fileformat.FileTypeTesting)
 	require.Equal(t, expectedFilename, parts[1])
 }
 
@@ -1055,35 +1030,32 @@ func TestSHA256WithHeaderFooter(t *testing.T) {
 	u, err := url.Parse("file://" + tempDir)
 	require.NoError(t, err)
 
-	header := []byte("header-")
-	footerBytes := []byte("-footer")
-
-	store, err := New(logger, u,
-		options.WithSHA256Checksum(),
-		options.WithHeader(header),
-		options.WithFooter(options.NewFooter(len(footerBytes), footerBytes, nil)))
+	store, err := New(logger, u)
 	require.NoError(t, err)
 
 	// Test data
 	data := []byte("test data")
 	key := []byte("testheaderfooter")
-	extension := options.FileExtension("txt")
 
 	// Set data
-	err = store.Set(context.Background(), key, data, options.WithFileExtension(extension))
+	err = store.Set(context.Background(), key, fileformat.FileTypeTesting, data)
 	require.NoError(t, err)
 
 	// Construct filename
-	merged := options.MergeOptions(store.options, []options.FileOption{options.WithFileExtension(extension)})
-	filename, err := merged.ConstructFilename(tempDir, key)
+	merged := options.MergeOptions(store.options, []options.FileOption{})
+	filename, err := merged.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
 	require.NoError(t, err)
 
 	// Verify main file includes header and footer
 	fileContent, err := os.ReadFile(filename)
 	require.NoError(t, err)
 
-	expectedContent := append(append(header, data...), footerBytes...)
-	require.Equal(t, expectedContent, fileContent)
+	expectedData := make([]byte, len(fileformat.FileTypeTesting.ToMagicBytes())+len(data))
+	ft := fileformat.FileTypeTesting.ToMagicBytes()
+	copy(expectedData, ft[:])
+	copy(expectedData[len(ft):], data)
+
+	assert.Equal(t, expectedData, fileContent)
 
 	// Verify SHA256 file
 	sha256Filename := filename + checksumExtension
@@ -1092,7 +1064,7 @@ func TestSHA256WithHeaderFooter(t *testing.T) {
 
 	// Calculate expected hash (including header and footer)
 	hasher := sha256.New()
-	hasher.Write(expectedContent)
+	hasher.Write(expectedData)
 	expectedHash := fmt.Sprintf("%x", hasher.Sum(nil))
 
 	// Verify hash file format
@@ -1112,8 +1084,6 @@ func TestFile_SetFromReader_WithHeaderAndFooter(t *testing.T) {
 	q := storeURL.Query()
 	q.Set("header", "header")
 
-	eofMarkerStr := "footer"
-	q.Set("eofmarker", eofMarkerStr)
 	storeURL.RawQuery = q.Encode()
 
 	store, err := New(logger, storeURL)
@@ -1125,17 +1095,23 @@ func TestFile_SetFromReader_WithHeaderAndFooter(t *testing.T) {
 	reader := io.NopCloser(bytes.NewReader(data))
 
 	// Set data
-	err = store.SetFromReader(context.Background(), key, reader)
+	err = store.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, reader)
 	require.NoError(t, err)
 
 	// Read file directly
-	filename := filepath.Join(dir, hex.EncodeToString(bt.ReverseBytes(key)))
+	filename, err := store.options.ConstructFilename(dir, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
 	content, err := os.ReadFile(filename)
 	require.NoError(t, err)
 
-	// Verify content includes header and footer
-	expected := append(append([]byte("header"), data...), []byte("footer")...)
-	require.Equal(t, expected, content)
+	// Verify content includes header
+	expectedData := make([]byte, len(fileformat.FileTypeTesting.ToMagicBytes())+len(data))
+	ft := fileformat.FileTypeTesting.ToMagicBytes()
+	copy(expectedData, ft[:])
+	copy(expectedData[len(ft):], data)
+
+	assert.Equal(t, expectedData, content)
 }
 
 func TestFile_Set_WithHeaderAndFooter(t *testing.T) {
@@ -1143,9 +1119,7 @@ func TestFile_Set_WithHeaderAndFooter(t *testing.T) {
 
 	store, err := New(
 		ulogger.TestLogger{},
-		&url.URL{Path: dir},
-		options.WithHeader([]byte("header")),
-		options.WithFooter(options.NewFooter(len([]byte("footer")), []byte("footer"), nil)))
+		&url.URL{Path: dir})
 	require.NoError(t, err)
 
 	// Test data
@@ -1153,28 +1127,31 @@ func TestFile_Set_WithHeaderAndFooter(t *testing.T) {
 	data := []byte("test data")
 
 	// Set data
-	err = store.Set(context.Background(), key, data)
+	err = store.Set(context.Background(), key, fileformat.FileTypeTesting, data)
 	require.NoError(t, err)
 
 	// Read file directly
-	filename := filepath.Join(dir, hex.EncodeToString(bt.ReverseBytes(key)))
+	filename, err := store.options.ConstructFilename(dir, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
 	content, err := os.ReadFile(filename)
 	require.NoError(t, err)
 
 	// Verify content includes header and footer
-	expected := append(append([]byte("header"), data...), []byte("footer")...)
-	require.Equal(t, expected, content)
+	expectedData := make([]byte, len(fileformat.FileTypeTesting.ToMagicBytes())+len(data))
+	ft := fileformat.FileTypeTesting.ToMagicBytes()
+	copy(expectedData, ft[:])
+	copy(expectedData[len(ft):], data)
+
+	assert.Equal(t, expectedData, content)
 }
 
 func TestFile_Get_WithHeaderAndFooter(t *testing.T) {
 	dir := t.TempDir()
 
-	eofMarkerBytes := []byte("footer")
 	store, err := New(
 		ulogger.TestLogger{},
-		&url.URL{Path: dir},
-		options.WithHeader([]byte("header")),
-		options.WithFooter(options.NewFooter(len(eofMarkerBytes), eofMarkerBytes, nil)))
+		&url.URL{Path: dir})
 	require.NoError(t, err)
 
 	// Test data
@@ -1182,26 +1159,23 @@ func TestFile_Get_WithHeaderAndFooter(t *testing.T) {
 	data := []byte("test data")
 
 	// Set data
-	err = store.Set(context.Background(), key, data)
+	err = store.Set(context.Background(), key, fileformat.FileTypeTesting, data)
 	require.NoError(t, err)
 
 	// Get data
-	retrieved, err := store.Get(context.Background(), key)
+	retrieved, err := store.Get(context.Background(), key, fileformat.FileTypeTesting)
 	require.NoError(t, err)
 
-	// Verify retrieved data matches original (without header/footer)
-	require.Equal(t, data, retrieved)
+	// Verify retrieved data matches original (without header)
+	assert.Equal(t, data, retrieved)
 }
 
 func TestFile_GetIoReader_WithHeaderAndFooter(t *testing.T) {
 	dir := t.TempDir()
 
-	footerBytes := []byte("footer")
 	store, err := New(
 		ulogger.TestLogger{},
-		&url.URL{Path: dir},
-		options.WithHeader([]byte("header")),
-		options.WithFooter(options.NewFooter(len(footerBytes), footerBytes, nil)))
+		&url.URL{Path: dir})
 	require.NoError(t, err)
 
 	// Test data
@@ -1209,11 +1183,11 @@ func TestFile_GetIoReader_WithHeaderAndFooter(t *testing.T) {
 	data := []byte("test data")
 
 	// Set data
-	err = store.Set(context.Background(), key, data)
+	err = store.Set(context.Background(), key, fileformat.FileTypeTesting, data)
 	require.NoError(t, err)
 
 	// Get reader
-	reader, err := store.GetIoReader(context.Background(), key)
+	reader, err := store.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 	require.NoError(t, err)
 	defer reader.Close()
 
@@ -1222,325 +1196,7 @@ func TestFile_GetIoReader_WithHeaderAndFooter(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify retrieved data matches original (without header/footer)
-	require.Equal(t, data, retrieved)
-}
-
-func TestFileGetMetaData(t *testing.T) {
-	t.Run("get metadata for existing file", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test-metadata")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		eofMarker := []byte("eof marker")
-		metaData := []byte("meta data")
-
-		f, err := New(ulogger.TestLogger{}, u, options.WithFooter(options.NewFooter(len(eofMarker)+len(metaData), eofMarker, func() []byte {
-			return metaData
-		})))
-		require.NoError(t, err)
-
-		key := []byte("metadata-test-key")
-		content := []byte("test content for metadata")
-
-		// Set content
-		err = f.Set(context.Background(), key, content)
-		require.NoError(t, err)
-
-		// Get metadata
-		metaBytes, err := f.GetFooterMetaData(context.Background(), key)
-		require.NoError(t, err)
-		require.Equal(t, metaData, metaBytes)
-	})
-
-	t.Run("get metadata for non-existent file", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-metadata-nonexistent")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u, options.WithFooter(options.NewFooter(len([]byte("footer")), []byte("eof marker"), nil)))
-		require.NoError(t, err)
-
-		key := []byte("nonexistent-key")
-
-		// Try to get metadata for non-existent file
-		_, err = f.GetFooterMetaData(context.Background(), key)
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrNotFound), "error should indicate file does not exist")
-	})
-
-	t.Run("get metadata with header and footer", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-metadata-header-footer")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		header := []byte("header-")
-		eofMarker := []byte("-eof marker")
-		metaData := []byte("meta data")
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u,
-			options.WithHeader(header),
-			options.WithFooter(options.NewFooter(len(eofMarker)+len(metaData), eofMarker, func() []byte {
-				return metaData
-			})))
-		require.NoError(t, err)
-
-		key := []byte("metadata-test-key-hf")
-		content := []byte("test content for metadata")
-
-		// Set content
-		err = f.Set(context.Background(), key, content)
-		require.NoError(t, err)
-
-		// Get metadata
-		metaBytes, err := f.GetFooterMetaData(context.Background(), key)
-		require.NoError(t, err)
-		require.Equal(t, metaData, metaBytes)
-
-		// Verify actual file size on disk includes header and footer
-		filename, err := f.options.ConstructFilename(tempDir, key)
-		require.NoError(t, err)
-
-		fileInfo, err := os.Stat(filename)
-		require.NoError(t, err)
-		require.Equal(t, int64(len(header)+len(content)+len(eofMarker)+len(metaData)), fileInfo.Size(),
-			"actual file size should include header and footer")
-	})
-
-	t.Run("get metadata for file with content that include exact eof marker", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test-metadata-eof")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		eofMarker := []byte("EOF_MARKER")
-		metaData := []byte("meta data")
-
-		f, err := New(ulogger.TestLogger{}, u, options.WithFooter(options.NewFooter(len(eofMarker)+len(metaData), eofMarker, func() []byte {
-			return metaData
-		})))
-		require.NoError(t, err)
-
-		key := []byte("metadata-test-key-eof")
-		// Create content that includes the exact EOF marker
-		content := []byte("This is some content with EOF_MARKER in the middle and more content after")
-
-		// Set content
-		err = f.Set(context.Background(), key, content)
-		require.NoError(t, err)
-
-		// Get metadata
-		metaBytes, err := f.GetFooterMetaData(context.Background(), key)
-		require.NoError(t, err)
-		require.Equal(t, metaData, metaBytes, "metadata should be correctly extracted even when content contains EOF marker")
-
-		// Verify the content is still retrievable
-		retrievedContent, err := f.Get(context.Background(), key)
-		require.NoError(t, err)
-		require.Equal(t, content, retrievedContent, "content should be retrieved correctly even with EOF marker in it")
-	})
-
-	t.Run("get metadata for file with content that include exact eof marker", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test-metadata-eof")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		eofMarker := []byte("EOF_MARKER")
-		metaData := []byte("meta data")
-
-		f, err := New(ulogger.TestLogger{}, u, options.WithFooter(options.NewFooter(len(eofMarker)+len(metaData), eofMarker, func() []byte {
-			return metaData
-		})))
-		require.NoError(t, err)
-
-		key := []byte("metadata-test-key-eof")
-		// Create content that includes the exact EOF marker
-		content := []byte("This is some content with market at then end of the content")
-		content = append(content, eofMarker...)
-
-		// Set content
-		err = f.Set(context.Background(), key, content)
-		require.NoError(t, err)
-
-		// Get metadata
-		metaBytes, err := f.GetFooterMetaData(context.Background(), key)
-		require.NoError(t, err)
-		require.Equal(t, metaData, metaBytes, "metadata should be correctly extracted even when content contains EOF marker")
-
-		// Verify the content is still retrievable
-		retrievedContent, err := f.Get(context.Background(), key)
-		require.NoError(t, err)
-		require.Equal(t, content, retrievedContent, "content should be retrieved correctly even with EOF marker in it")
-	})
-
-	t.Run("get metadata for file with content that include exact eof marker", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test-metadata-eof")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		eofMarker := []byte("EOF_MARKER")
-		metaData := []byte("meta data")
-
-		f, err := New(ulogger.TestLogger{}, u, options.WithFooter(options.NewFooter(len(eofMarker)+len(metaData), eofMarker, func() []byte {
-			return metaData
-		})))
-		require.NoError(t, err)
-
-		key := []byte("metadata-test-key-eof")
-		// Create content that includes what looks like a marker + meta data at the end of the content
-		content := []byte("This is some content with marker + meta data at then end of the content")
-		content = append(content, eofMarker...)
-		content = append(content, metaData...)
-
-		// Set content
-		err = f.Set(context.Background(), key, content)
-		require.NoError(t, err)
-
-		// Get metadata
-		metaBytes, err := f.GetFooterMetaData(context.Background(), key)
-		require.NoError(t, err)
-		require.Equal(t, metaData, metaBytes, "metadata should be correctly extracted even when content contains EOF marker")
-
-		// Verify the content is still retrievable
-		retrievedContent, err := f.Get(context.Background(), key)
-		require.NoError(t, err)
-		require.Equal(t, content, retrievedContent, "content should be retrieved correctly even with EOF marker in it")
-	})
-}
-
-func TestFileGetHeader(t *testing.T) {
-	t.Run("get header from file with header", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test-header")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		header := []byte("custom-header-")
-		f, err := New(ulogger.TestLogger{}, u, options.WithHeader(header))
-		require.NoError(t, err)
-
-		key := []byte("header-test-key")
-		content := []byte("test content")
-
-		// Set content
-		err = f.Set(context.Background(), key, content)
-		require.NoError(t, err)
-
-		// Get header
-		retrievedHeader, err := f.GetHeader(context.Background(), key)
-		require.NoError(t, err)
-		require.Equal(t, header, retrievedHeader, "retrieved header should match original header")
-
-		// Verify the content is still retrievable and correct
-		retrievedContent, err := f.Get(context.Background(), key)
-		require.NoError(t, err)
-		require.Equal(t, content, retrievedContent, "content should be retrieved correctly")
-	})
-
-	t.Run("get header from file without header", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-no-header")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		// Create store without header option
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("no-header-key")
-		content := []byte("test content")
-
-		err = f.Set(context.Background(), key, content)
-		require.NoError(t, err)
-
-		// Get header should return empty bytes
-		header, err := f.GetHeader(context.Background(), key)
-		require.NoError(t, err)
-		require.Empty(t, header, "header should be empty for file without header")
-	})
-
-	t.Run("get header from non-existent file", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-nonexistent")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u, options.WithHeader([]byte("header-")))
-		require.NoError(t, err)
-
-		key := []byte("nonexistent-key")
-
-		// Try to get header from non-existent file
-		_, err = f.GetHeader(context.Background(), key)
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrNotFound), "error should indicate file does not exist")
-	})
-
-	t.Run("get header with both header and footer", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-header-footer")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		header := []byte("header-")
-		footer := []byte("-footer")
-
-		f, err := New(ulogger.TestLogger{}, u,
-			options.WithHeader(header),
-			options.WithFooter(options.NewFooter(len(footer), footer, nil)))
-		require.NoError(t, err)
-
-		key := []byte("header-footer-key")
-		content := []byte("test content")
-
-		// Set content
-		err = f.Set(context.Background(), key, content)
-		require.NoError(t, err)
-
-		// Get header
-		retrievedHeader, err := f.GetHeader(context.Background(), key)
-		require.NoError(t, err)
-		require.Equal(t, header, retrievedHeader, "retrieved header should match original header")
-
-		// Verify file on disk contains header, content, and footer
-		filename, err := f.options.ConstructFilename(tempDir, key)
-		require.NoError(t, err)
-
-		fileContent, err := os.ReadFile(filename)
-		require.NoError(t, err)
-
-		expectedFileContent := append(append(header, content...), footer...)
-		require.Equal(t, expectedFileContent, fileContent, "file should contain header, content, and footer")
-	})
+	assert.Equal(t, data, retrieved)
 }
 
 func TestFileGetAndSetDAH(t *testing.T) {
@@ -1560,30 +1216,30 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		content := []byte("test content")
 
 		// Set initial content without DAH
-		err = f.Set(context.Background(), key, content)
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content)
 		require.NoError(t, err)
 
 		// Initially there should be no DAH
-		dah, err := f.GetDAH(context.Background(), key)
+		dah, err := f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.Zero(t, dah)
 
 		// Set a DAH
 		newDAH := uint32(10)
-		err = f.SetDAH(context.Background(), key, newDAH)
+		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, newDAH)
 		require.NoError(t, err)
 
 		// Get and verify DAH
-		dah, err = f.GetDAH(context.Background(), key)
+		dah, err = f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.Equal(t, newDAH, dah)
 
 		// Remove DAH by setting it to 0
-		err = f.SetDAH(context.Background(), key, 0)
+		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, 0)
 		require.NoError(t, err)
 
 		// Verify DAH is removed
-		dah, err = f.GetDAH(context.Background(), key)
+		dah, err = f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.Zero(t, dah)
 	})
@@ -1602,7 +1258,7 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		key := []byte("nonexistent-key-1")
 
 		// Try to get DAH for non-existent key
-		_, err = f.GetDAH(context.Background(), key)
+		_, err = f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound))
 	})
@@ -1619,10 +1275,10 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		require.NoError(t, err)
 
 		key := []byte("nonexistent-key-2")
-		newDAH := 6
+		newDAH := uint32(6)
 
 		// Try to set DAH for non-existent key
-		err = f.SetDAH(context.Background(), key, uint32(newDAH)) // nolint: gosec
+		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, newDAH)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound))
 	})
@@ -1643,11 +1299,11 @@ func TestFileGetAndSetDAH(t *testing.T) {
 
 		// Set content with a short DAH
 		shortDAH := uint32(200)
-		err = f.Set(context.Background(), key, content, options.WithDeleteAt(shortDAH))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(shortDAH))
 		require.NoError(t, err)
 
 		// Verify content exists initially
-		exists, err := f.Exists(context.Background(), key)
+		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.True(t, exists)
 
@@ -1656,12 +1312,12 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		f.cleanupExpiredFiles()
 
 		// Verify content is removed after DAH expiration
-		exists, err = f.Exists(context.Background(), key)
+		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.False(t, exists)
 
 		// Verify DAH file is also removed
-		filename, err := f.options.ConstructFilename(tempDir, key)
+		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		_, err = os.Stat(filename + ".dah")
 		require.True(t, os.IsNotExist(err))
@@ -1681,33 +1337,33 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		key := []byte("updating-key-1")
 		content := []byte("test content")
 
-		err = f.Set(context.Background(), key, content, options.WithDeleteAt(10))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(10))
 		require.NoError(t, err)
 
-		exists, err := f.Exists(context.Background(), key)
+		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.True(t, exists)
 
-		dah, err := f.GetDAH(context.Background(), key)
+		dah, err := f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		assert.Equal(t, uint32(10), dah)
 
 		// Update DAH
 		newDAH := uint32(100)
-		err = f.SetDAH(context.Background(), key, newDAH)
+		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, newDAH)
 		require.NoError(t, err)
 
 		f.SetCurrentBlockHeight(12)
 		f.cleanupExpiredFiles()
 
-		exists, err = f.Exists(context.Background(), key)
+		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.True(t, exists)
 
 		f.SetCurrentBlockHeight(100)
 		f.cleanupExpiredFiles()
 
-		exists, err = f.Exists(context.Background(), key)
+		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.False(t, exists)
 	})
@@ -1726,17 +1382,17 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		content := []byte("test content")
 
 		// Set content with initial short DAH
-		err = f.Set(context.Background(), key, content, options.WithDeleteAt(101))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(101))
 		require.NoError(t, err)
 
 		f.cleanupExpiredFiles()
 
-		exists, err := f.Exists(context.Background(), key)
+		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.True(t, exists)
 
 		// delete DAH file
-		filename, err := f.options.ConstructFilename(tempDir, key)
+		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		err = os.Remove(filename + ".dah")
 		require.NoError(t, err)
@@ -1744,7 +1400,7 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		f.SetCurrentBlockHeight(102)
 		f.cleanupExpiredFiles()
 
-		exists, err = f.Exists(context.Background(), key)
+		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.True(t, exists)
 	})
@@ -1763,11 +1419,11 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		content := []byte("test content")
 
 		initialDAH := uint32(200)
-		err = f.Set(context.Background(), key, content, options.WithDeleteAt(initialDAH))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(initialDAH))
 		require.NoError(t, err)
 
 		// change DAH file
-		filename, err := f.options.ConstructFilename(tempDir, key)
+		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
 		err = os.WriteFile(filename+".dah", []byte(strconv.FormatUint(uint64(initialDAH+10), 10)), 0644) // nolint:gosec
@@ -1776,7 +1432,7 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		f.SetCurrentBlockHeight(initialDAH + 9)
 		f.cleanupExpiredFiles()
 
-		exists, err := f.Exists(context.Background(), key)
+		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.True(t, exists)
 
@@ -1786,7 +1442,7 @@ func TestFileGetAndSetDAH(t *testing.T) {
 
 		f.cleanupExpiredFiles()
 
-		exists, err = f.Exists(context.Background(), key)
+		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.True(t, exists)
 	})
@@ -1826,11 +1482,11 @@ func TestFileCleanupExpiredFiles(t *testing.T) {
 
 		// Set up test files
 		for _, tc := range tests {
-			err := f.Set(context.Background(), tc.key, tc.content, options.WithDeleteAt(tc.dah))
+			err := f.Set(context.Background(), tc.key, fileformat.FileTypeTesting, tc.content, options.WithDeleteAt(tc.dah))
 			require.NoError(t, err)
 
 			if tc.modifyDAH {
-				err = f.SetDAH(context.Background(), tc.key, tc.dah+100)
+				err = f.SetDAH(context.Background(), tc.key, fileformat.FileTypeTesting, tc.dah+100)
 				require.NoError(t, err)
 			}
 		}
@@ -1841,10 +1497,10 @@ func TestFileCleanupExpiredFiles(t *testing.T) {
 
 		// Verify results
 		for _, tc := range tests {
-			exists, err := f.Exists(context.Background(), tc.key)
+			exists, err := f.Exists(context.Background(), tc.key, fileformat.FileTypeTesting)
 			require.NoError(t, err)
 
-			filename, err := f.options.ConstructFilename(tempDir, tc.key)
+			filename, err := f.options.ConstructFilename(tempDir, tc.key, fileformat.FileTypeTesting)
 			require.NoError(t, err)
 
 			if tc.modifyDAH {
@@ -1878,7 +1534,7 @@ func TestFileCleanupExpiredFiles(t *testing.T) {
 		content := []byte("concurrent content")
 
 		// Set initial content with DAH
-		err = f.Set(context.Background(), key, content, options.WithDeleteAt(600))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(600))
 		require.NoError(t, err)
 
 		// Start multiple goroutines to modify DAH
@@ -1899,7 +1555,7 @@ func TestFileCleanupExpiredFiles(t *testing.T) {
 					dah = 200
 				}
 
-				err := f.SetDAH(context.Background(), key, dah)
+				err := f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, dah)
 				require.NoError(t, err)
 			}(i)
 		}
@@ -1913,11 +1569,11 @@ func TestFileCleanupExpiredFiles(t *testing.T) {
 		f.cleanupExpiredFiles()
 
 		// Verify final state
-		exists, err := f.Exists(context.Background(), key)
+		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.False(t, exists, "file should be removed after DAH expiration")
 
-		filename, err := f.options.ConstructFilename(tempDir, key)
+		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		_, err = os.Stat(filename + ".dah")
 		require.True(t, os.IsNotExist(err), "DAH file should be removed")
@@ -1938,11 +1594,11 @@ func TestFileCleanupExpiredFiles(t *testing.T) {
 		content := []byte("content")
 
 		// Set content with DAH
-		err = f.Set(context.Background(), key, content, options.WithDeleteAt(800))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(800))
 		require.NoError(t, err)
 
 		// Manually delete the content file but leave DAH file
-		filename, err := f.options.ConstructFilename(tempDir, key)
+		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		err = os.Remove(filename)
 		require.NoError(t, err)
@@ -1987,11 +1643,11 @@ func TestFileURLParameters(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set content with DAH
-		err = f.Set(context.Background(), key, content, options.WithDeleteAt(1000))
+		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(1000))
 		require.NoError(t, err)
 
 		// Verify content exists
-		exists, err := f.Exists(context.Background(), key)
+		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.True(t, exists)
 
@@ -2000,7 +1656,7 @@ func TestFileURLParameters(t *testing.T) {
 		f.cleanupExpiredFiles()
 
 		// Content should be removed due to shorter cleaner interval
-		exists, err = f.Exists(context.Background(), key)
+		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		require.False(t, exists)
 	})
@@ -2041,12 +1697,12 @@ func TestFileGetNonExistent(t *testing.T) {
 
 		// Try to get non-existent file
 		key := []byte("nonexistent-key-1")
-		_, err = f.Get(context.Background(), key)
+		_, err = f.Get(context.Background(), key, fileformat.FileTypeTesting)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound))
 
 		// Try to get non-existent file with options
-		_, err = f.Get(context.Background(), key, options.WithFileExtension("txt"))
+		_, err = f.Get(context.Background(), key, fileformat.FileTypeTesting)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound))
 	})
@@ -2065,13 +1721,13 @@ func TestFileGetNonExistent(t *testing.T) {
 
 		// Try to get reader for non-existent file
 		key := []byte("nonexistent-key-2")
-		reader, err := f.GetIoReader(context.Background(), key)
+		reader, err := f.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound))
 		require.Nil(t, reader)
 
 		// Try to get reader for non-existent file with options
-		reader, err = f.GetIoReader(context.Background(), key, options.WithFileExtension("txt"))
+		reader, err = f.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound))
 		require.Nil(t, reader)
@@ -2087,19 +1743,19 @@ func TestFileChecksumNotDeletedOnTTLExpiry(t *testing.T) {
 	u, err := url.Parse("file://" + tempDir)
 	require.NoError(t, err)
 
-	f, err := New(ulogger.TestLogger{}, u, options.WithSHA256Checksum())
+	f, err := New(ulogger.TestLogger{}, u)
 	require.NoError(t, err)
 
 	key := "test-key-ttl-checksum"
 	content := []byte("test content")
 
 	// Put a file with checksum
-	err = f.Set(context.Background(), []byte(key), content, options.WithDeleteAt(1))
+	err = f.Set(context.Background(), []byte(key), fileformat.FileTypeTesting, content, options.WithDeleteAt(1))
 	require.NoError(t, err)
 
 	// Construct filename
-	merged := options.MergeOptions(f.options, []options.FileOption{options.WithFileExtension("sha256")})
-	filename, err := merged.ConstructFilename(tempDir, []byte(key))
+	merged := options.MergeOptions(f.options, []options.FileOption{})
+	filename, err := merged.ConstructFilename(tempDir, []byte(key), fileformat.FileTypeTesting)
 	require.NoError(t, err)
 
 	// Verify the checksum file exists
@@ -2111,7 +1767,7 @@ func TestFileChecksumNotDeletedOnTTLExpiry(t *testing.T) {
 	f.cleanupExpiredFiles()
 
 	// Check if the file has expired
-	exists, err := f.Exists(context.Background(), []byte(key))
+	exists, err := f.Exists(context.Background(), []byte(key), fileformat.FileTypeTesting)
 	require.NoError(t, err)
 	require.False(t, exists, "file should be expired due to TTL")
 
@@ -2129,19 +1785,19 @@ func TestFileChecksumNotDeletedOnDelete(t *testing.T) {
 	u, err := url.Parse("file://" + tempDir)
 	require.NoError(t, err)
 
-	f, err := New(ulogger.TestLogger{}, u, options.WithSHA256Checksum())
+	f, err := New(ulogger.TestLogger{}, u)
 	require.NoError(t, err)
 
 	key := "test-key-delete-checksum"
 	content := []byte("test content")
 
 	// Put a file with checksum
-	err = f.Set(context.Background(), []byte(key), content)
+	err = f.Set(context.Background(), []byte(key), fileformat.FileTypeTesting, content)
 	require.NoError(t, err)
 
 	// Construct filename
-	merged := options.MergeOptions(f.options, []options.FileOption{options.WithFileExtension("sha256")})
-	filename, err := merged.ConstructFilename(tempDir, []byte(key))
+	merged := options.MergeOptions(f.options, []options.FileOption{})
+	filename, err := merged.ConstructFilename(tempDir, []byte(key), fileformat.FileTypeTesting)
 	require.NoError(t, err)
 
 	// Verify the checksum file exists
@@ -2149,7 +1805,7 @@ func TestFileChecksumNotDeletedOnDelete(t *testing.T) {
 	require.NoError(t, err, "checksum file should exist")
 
 	// Delete the file
-	err = f.Del(context.Background(), []byte(key))
+	err = f.Del(context.Background(), []byte(key), fileformat.FileTypeTesting)
 	require.NoError(t, err, "file deletion should succeed")
 
 	// Check if checksum file still exists - this is the bug

@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	teranodeblockchain "github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
@@ -1824,9 +1825,9 @@ out:
 						sm.logger.Debugf("[blockHandler][%s] writing block to disk", msg.block.Hash())
 						if err := sm.tempStore.SetFromReader(ctx,
 							msg.block.Hash().CloneBytes(),
+							fileformat.FileTypeMsgBlock,
 							bufferedReader,
 							options.WithDeleteAt(10),
-							options.WithFileExtension("msgBlock"),
 							options.WithSubDirectory("blocks"),
 							options.WithAllowOverwrite(true),
 						); err != nil {
@@ -2256,13 +2257,14 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 					// we just got notified of a new subtree internally, announce all the transactions to our peers
 					sm.logger.Debugf("[Legacy Manager] received new subtree notification: %v", notification)
 
-					subtreeBytes, err := sm.subtreeStore.Get(ctx, notification.Hash, options.WithFileExtension(options.SubtreeFileExtension))
+					subtreeReader, err := sm.subtreeStore.GetIoReader(ctx, notification.Hash, fileformat.FileTypeSubtree)
 					if err != nil {
 						sm.logger.Errorf("[Legacy Manager] failed to get subtree from store: %v", err)
 						continue
 					}
 
-					subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
+					subtree, err := util.NewSubtreeFromReader(subtreeReader)
+					_ = subtreeReader.Close()
 					if err != nil {
 						sm.logger.Errorf("[Legacy Manager] failed to create subtree from bytes: %v", err)
 						continue

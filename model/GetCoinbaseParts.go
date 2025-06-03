@@ -196,7 +196,7 @@ func makeCoinbase1(height uint32, coinbaseText string) []byte {
 	buf = append(buf, make([]byte, 32)...)               // Transaction hash - 4 bytes all bits are zero
 	buf = append(buf, []byte{0xff, 0xff, 0xff, 0xff}...) // Coinbase data size - 4 bytes - All bits are ones: 0xFFFFFFFF (ffffffff)
 
-	buf = append(buf, VarInt(uint64(len(arbitraryData)+spaceForExtraNonce))...) // Length of the coinbase data, from 2 to 100 bytes
+	buf = append(buf, VarInt(uint64(len(arbitraryData)+spaceForExtraNonce))...) // nolint: gosec // Length of the coinbase data, from 2 to 100 bytes
 	buf = append(buf, arbitraryData...)
 
 	return buf

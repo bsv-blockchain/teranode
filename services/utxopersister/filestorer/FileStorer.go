@@ -7,20 +7,17 @@ package filestorer
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"fmt"
-	"hash"
 	"io"
 	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/bytesize"
-	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 )
 
@@ -38,17 +35,14 @@ type FileStorer struct {
 	// key represents the unique identifier for the file
 	key []byte
 
-	// extension represents the file extension
-	extension options.FileExtension
+	// fileType represents the file fileType
+	fileType fileformat.FileType
 
 	// writer is the underlying pipe writer
 	writer *io.PipeWriter
 
 	// bufferedWriter provides buffered writing capabilities
 	bufferedWriter *bufio.Writer
-
-	// hasher provides hashing functionality
-	hasher hash.Hash
 
 	// wg manages goroutine synchronization
 	wg sync.WaitGroup
@@ -68,14 +62,14 @@ type FileStorer struct {
 // The function initiates a background goroutine that reads from a pipe and writes to blob storage.
 // Returns a pointer to the initialized FileStorer ready for use.
 // It initializes the file storage system with buffering and hashing capabilities.
-func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, extension options.FileExtension) (*FileStorer, error) {
-	exists, err := store.Exists(ctx, key, options.WithFileExtension(extension))
+func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, fileType fileformat.FileType, fileOptions ...options.FileOption) (*FileStorer, error) {
+	exists, err := store.Exists(ctx, key, fileType, fileOptions...)
 	if err != nil {
-		return nil, errors.NewStorageError("error checking if %s.%s exists", key, extension, err)
+		return nil, errors.NewStorageError("error checking if %s.%s exists", key, fileType, err)
 	}
 
 	if exists {
-		return nil, errors.NewBlobAlreadyExistsError("%s.%s already exists", key, extension)
+		return nil, errors.NewBlobAlreadyExistsError("%s.%s already exists", utils.ReverseAndHexEncodeSlice(key), fileType)
 	}
 
 	utxopersisterBufferSize := tSettings.Block.UTXOPersisterBufferSize
@@ -94,15 +88,13 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	bufferedReader := io.NopCloser(bufio.NewReaderSize(reader, bufferSize.Int()))
 
-	hasher := sha256.New()
-	bufferedWriter := bufio.NewWriterSize(io.MultiWriter(writer, hasher), bufferSize.Int())
+	bufferedWriter := bufio.NewWriterSize(writer, bufferSize.Int())
 
 	fs := &FileStorer{
 		logger:         logger,
 		store:          store,
 		key:            key,
-		extension:      extension,
-		hasher:         hasher,
+		fileType:       fileType,
 		writer:         writer,
 		bufferedWriter: bufferedWriter,
 		done:           make(chan struct{}),
@@ -116,7 +108,7 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 			fs.wg.Done()   // Decrement the WaitGroup counter
 		}()
 
-		err := store.SetFromReader(ctx, key, bufferedReader, options.WithFileExtension(extension), options.WithDeleteAt(0))
+		err := store.SetFromReader(ctx, key, fileType, bufferedReader, fileOptions...)
 		if err != nil {
 			logger.Errorf("%s", errors.NewStorageError("[BlockPersister] error setting additions reader", err))
 			fs.mu.Lock()
@@ -193,25 +185,12 @@ func (f *FileStorer) Close(ctx context.Context) error {
 	}
 
 	// Set DAH to 0 (no expiration) as per the memory about Aerospike DAH usage
-	if err := f.store.SetDAH(ctx, f.key, 0, options.WithFileExtension(f.extension)); err != nil {
+	if err := f.store.SetDAH(ctx, f.key, f.fileType, 0); err != nil {
 		return errors.NewStorageError("Error setting DAH on additions file", err)
 	}
 
 	if err := f.waitUntilFileIsAvailable(ctx); err != nil {
 		f.logger.Warnf("Error waiting for file to be available: %v", err)
-	}
-
-	hashData := fmt.Sprintf("%x  %x.%s\n", f.hasher.Sum(nil), bt.ReverseBytes(f.key), f.extension) // N.B. The 2 spaces is important for the hash to be valid
-
-	if err := f.store.Set(
-		ctx,
-		f.key,
-		[]byte(hashData),
-		options.WithFileExtension(f.extension+".sha256"),
-		options.WithDeleteAt(0),
-		options.WithAllowOverwrite(true),
-	); err != nil {
-		return errors.NewStorageError("error setting sha256 hash", err)
 	}
 
 	return nil
@@ -227,7 +206,7 @@ func (f *FileStorer) waitUntilFileIsAvailable(ctx context.Context) error {
 	retryInterval := 100 * time.Millisecond
 
 	for i := 0; i < maxRetries; i++ {
-		exists, err := f.store.Exists(ctx, f.key, options.WithFileExtension(f.extension))
+		exists, err := f.store.Exists(ctx, f.key, f.fileType)
 		if err != nil {
 			return err
 		}
@@ -239,5 +218,5 @@ func (f *FileStorer) waitUntilFileIsAvailable(ctx context.Context) error {
 		time.Sleep(retryInterval)
 	}
 
-	return errors.NewStorageError("file %s.%s is not available", utils.ReverseAndHexEncodeSlice(f.key), f.extension)
+	return errors.NewStorageError("file %s.%s is not available", utils.ReverseAndHexEncodeSlice(f.key), f.fileType)
 }

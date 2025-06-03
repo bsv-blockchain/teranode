@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/http"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -58,15 +59,15 @@ func TestServerOperations(t *testing.T) {
 		key := []byte("testKey1")
 		value := []byte("testValue1")
 
-		err := client.Set(context.Background(), key, value)
+		err := client.Set(context.Background(), key, fileformat.FileTypeTesting, value)
 		require.NoError(t, err)
 
-		retrievedValue, err := client.Get(context.Background(), key)
+		retrievedValue, err := client.Get(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
 		assert.Equal(t, value, retrievedValue)
 
-		err = client.Del(context.Background(), key)
+		err = client.Del(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 	})
 
@@ -74,10 +75,10 @@ func TestServerOperations(t *testing.T) {
 		key := []byte("testKey2")
 		value := []byte("testValue2")
 
-		err := client.Set(t.Context(), key, value)
+		err := client.Set(t.Context(), key, fileformat.FileTypeTesting, value)
 		require.NoError(t, err)
 
-		err = client.SetDAH(t.Context(), key, 1)
+		err = client.SetDAH(t.Context(), key, fileformat.FileTypeTesting, 1)
 		require.NoError(t, err)
 
 		err = blobServer.setCurrentBlockHeight(2)
@@ -85,7 +86,7 @@ func TestServerOperations(t *testing.T) {
 
 		time.Sleep(200 * time.Millisecond)
 
-		_, err = client.Get(context.Background(), key)
+		_, err = client.Get(context.Background(), key, fileformat.FileTypeTesting)
 		assert.Error(t, err)
 	})
 
@@ -93,17 +94,17 @@ func TestServerOperations(t *testing.T) {
 		key := []byte("testKey3")
 		value := []byte("testValue3")
 
-		err := client.Set(context.Background(), key, value)
+		err := client.Set(context.Background(), key, fileformat.FileTypeTesting, value)
 		require.NoError(t, err)
 
-		exists, err := client.Exists(context.Background(), key)
+		exists, err := client.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		err = client.Del(context.Background(), key)
+		err = client.Del(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
-		exists, err = client.Exists(context.Background(), key)
+		exists, err = client.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		assert.False(t, exists)
 	})
@@ -118,11 +119,11 @@ func TestServerOperations(t *testing.T) {
 
 		reader := bytes.NewReader(largeData)
 
-		err := client.SetFromReader(context.Background(), key, io.NopCloser(reader))
+		err := client.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, io.NopCloser(reader))
 		require.NoError(t, err)
 
 		// Retrieve the data
-		retrievedReader, err := client.GetIoReader(context.Background(), key)
+		retrievedReader, err := client.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		defer retrievedReader.Close()
 
@@ -132,7 +133,7 @@ func TestServerOperations(t *testing.T) {
 		assert.Equal(t, largeData, retrievedData)
 
 		// Clean up
-		err = client.Del(context.Background(), key)
+		err = client.Del(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 	})
 
@@ -140,18 +141,18 @@ func TestServerOperations(t *testing.T) {
 		key := []byte("testKey5")
 		value := []byte("testValue5")
 
-		err := client.Set(context.Background(), key, value, options.WithFilename("testFilename"))
+		err := client.Set(context.Background(), key, fileformat.FileTypeTesting, value, options.WithFilename("testFilename"))
 		require.NoError(t, err)
 
-		exists, err := client.Exists(context.Background(), key)
+		exists, err := client.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		assert.False(t, exists)
 
-		exists, err = client.Exists(context.Background(), key, options.WithFilename("testFilename"))
+		exists, err = client.Exists(context.Background(), key, fileformat.FileTypeTesting, options.WithFilename("testFilename"))
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		err = client.Del(context.Background(), key, options.WithFilename("testFilename"))
+		err = client.Del(context.Background(), key, fileformat.FileTypeTesting, options.WithFilename("testFilename"))
 		require.NoError(t, err)
 	})
 
@@ -159,18 +160,14 @@ func TestServerOperations(t *testing.T) {
 		key := []byte("testKey5")
 		value := []byte("testValue5")
 
-		err := client.Set(context.Background(), key, value, options.WithFileExtension("ext"))
+		err := client.Set(context.Background(), key, fileformat.FileTypeTesting, value)
 		require.NoError(t, err)
 
-		exists, err := client.Exists(context.Background(), key)
-		require.NoError(t, err)
-		assert.False(t, exists)
-
-		exists, err = client.Exists(context.Background(), key, options.WithFileExtension("ext"))
+		exists, err := client.Exists(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		err = client.Del(context.Background(), key, options.WithFileExtension("ext"))
+		err = client.Del(context.Background(), key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 	})
 }

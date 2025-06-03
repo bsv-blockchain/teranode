@@ -1,4 +1,4 @@
-// Package _factory provides a factory for creating UTXO store implementations.
+// Package factory provides a factory for creating UTXO store implementations.
 // It supports multiple database backends through build tags and connection URLs.
 //
 // # Supported Backends
@@ -13,12 +13,12 @@
 // # Usage
 //
 //	import (
-//	    "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
+//	    "github.com/bitcoin-sv/ubsv/stores/utxo/factory"
 //	    "github.com/bitcoin-sv/ubsv/settings"
 //	)
 //
 //	// Initialize from settings
-//	store, err := _factory.NewStore(ctx, logger, settings, "service-name")
+//	store, err := factory.NewStore(ctx, logger, settings, "service-name")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
@@ -60,7 +60,7 @@
 //   - Duration
 //   - Error status
 
-package _factory
+package factory
 
 import (
 	"context"

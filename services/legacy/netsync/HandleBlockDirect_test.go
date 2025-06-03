@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -101,8 +102,8 @@ func Test_HandleBlockDirect(t *testing.T) {
 
 	err = subtreeStore.Set(ctx,
 		block.Hash().CloneBytes(),
+		fileformat.FileTypeMsgBlock,
 		blockBytes,
-		options.WithFileExtension("msgBlock"),
 		options.WithSubDirectory("blocks"),
 	)
 	require.NoError(t, err)

@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockpersister"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/settings"
 	memory_blob "github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	memory_utxo "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
@@ -62,7 +62,7 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	}
 
 	// create the block-store .subtreeData file
-	storer, err := filestorer.NewFileStorer(context.Background(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], options.SubtreeDataFileExtension)
+	storer, err := filestorer.NewFileStorer(context.Background(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], fileformat.FileTypeSubtreeData)
 	require.NoError(t, err)
 
 	err = blockpersister.WriteTxs(context.Background(), ctx.logger, storer, metaDatas, nil)
@@ -114,7 +114,7 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 	// Create the subtree in the subtree store
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
 	// go get me a legacy block from the subtree-store and utxo-store
@@ -163,7 +163,7 @@ func TestGetLegacyWireBlockWithSubtreeStore(t *testing.T) {
 	// Create the subtree in the subtree store
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
 	// go get me a legacy block from the subtree-store and utxo-store
@@ -277,7 +277,7 @@ func setup(t *testing.T) *testContext {
 	tSettings := test.CreateBaseTestSettings()
 
 	repo, err := NewRepository(logger, tSettings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	return &testContext{
 		repo:     repo,

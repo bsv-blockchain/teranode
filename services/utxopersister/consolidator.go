@@ -16,6 +16,7 @@ import (
 	"io"
 	"sort"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
@@ -199,7 +200,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		previousHash := header.HashPrevBlock
 		height := meta.Height
 
-		c.logger.Infof("Processing header at height %d", height)
+		c.logger.Infof("Processing header at height %d (%s)", height, hash.String())
 
 		if hash.String() == c.settings.ChainCfgParams.GenesisHash.String() {
 			continue
@@ -245,10 +246,6 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 // for future conflict resolution.
 // Returns an error if processing fails.
 func (c *consolidator) processDeletionsFromReader(ctx context.Context, r io.Reader) error {
-	if err := checkMagic(r, "U-D-1.0"); err != nil {
-		return err
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -256,7 +253,7 @@ func (c *consolidator) processDeletionsFromReader(ctx context.Context, r io.Read
 		default:
 			outpoint, err := NewUTXODeletionFromReader(r)
 			if err != nil {
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					return nil
 				}
 
@@ -277,10 +274,6 @@ func (c *consolidator) processDeletionsFromReader(ctx context.Context, r io.Read
 // Each addition is tracked unless it has already been marked as spent in the deletions map.
 // Returns an error if processing fails.
 func (c *consolidator) processAdditionsFromReader(ctx context.Context, r io.ReadCloser) error {
-	if err := checkMagic(r, "U-A-1.0"); err != nil {
-		return err
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -288,7 +281,7 @@ func (c *consolidator) processAdditionsFromReader(ctx context.Context, r io.Read
 		default:
 			wrapper, err := NewUTXOWrapperFromReader(ctx, r)
 			if err != nil {
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					return nil
 				}
 

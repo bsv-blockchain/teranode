@@ -8,6 +8,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -25,7 +26,7 @@ import (
 
 type MockExister struct{}
 
-func (m MockExister) Exists(_ context.Context, _ []byte, _ ...options.FileOption) (bool, error) {
+func (m MockExister) Exists(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (bool, error) {
 	return false, nil
 }
 
@@ -48,13 +49,13 @@ func TestLock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	gotLock, _, releaseFn, err := q.TryLockIfNotExists(ctx, &hash)
+	gotLock, _, releaseFn, err := q.TryLockIfNotExists(ctx, &hash, fileformat.FileTypeSubtree)
 	require.NoError(t, err)
 	assert.True(t, gotLock)
 
 	defer releaseFn()
 
-	gotLock, _, releaseFn, err = q.TryLockIfNotExists(ctx, &hash)
+	gotLock, _, releaseFn, err = q.TryLockIfNotExists(ctx, &hash, fileformat.FileTypeSubtree)
 	require.NoError(t, err)
 	assert.False(t, gotLock)
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
@@ -119,11 +120,11 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 		binary.LittleEndian.PutUint64(txID, uint64(i)) // nolint:gosec
 		hash = chainhash.Hash(txID)
 
-		if err = subtree.AddNode(hash, uint64(i), uint64(i)); err != nil {
+		if err = subtree.AddNode(hash, uint64(i), uint64(i)); err != nil { // nolint:gosec
 			return nil, err
 		}
 
-		n, err = WriteTxMeta(txMetastoreWriter, hash, uint64(i), uint64(i))
+		n, err = WriteTxMeta(txMetastoreWriter, hash, uint64(i), uint64(i)) // nolint:gosec
 		if err != nil {
 			return nil, err
 		}
@@ -132,7 +133,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 			return nil, errors.NewProcessingError("expected to write 48 bytes, wrote %d", n)
 		}
 
-		fees += uint64(i)
+		fees += uint64(i) // nolint:gosec
 
 		if subtree.IsComplete() {
 			// write subtree bytes to file
@@ -223,7 +224,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 				return nil, err
 			}
 
-			replacedCoinbaseSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+			replacedCoinbaseSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) // nolint:gosec
 
 			rootHash := replacedCoinbaseSubtree.RootHash()
 			merkleRootsubtreeHashes = append(merkleRootsubtreeHashes, rootHash)
@@ -462,7 +463,7 @@ func (l TestLocalSubtreeStore) Health(_ context.Context, _ bool) (int, string, e
 	return 0, "", nil
 }
 
-func (l TestLocalSubtreeStore) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
+func (l TestLocalSubtreeStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
 	if len(key) == 0 {
 		return false, errors.NewProcessingError("key cannot be empty")
 	}
@@ -475,9 +476,7 @@ func (l TestLocalSubtreeStore) Exists(ctx context.Context, key []byte, opts ...o
 
 	// Check if it exists in the FileData map
 	keyString := string(key)
-	if opt.Extension != "" {
-		keyString = keyString + "." + opt.Extension.String()
-	}
+	keyString = keyString + "." + fileType.String()
 
 	if l.FileData != nil {
 		if _, ok := l.FileData[keyString]; ok {
@@ -487,25 +486,18 @@ func (l TestLocalSubtreeStore) Exists(ctx context.Context, key []byte, opts ...o
 
 	// Check if it exists in the Files map
 	_, ok := l.Files[chainhash.Hash(key)]
+
 	return ok, nil
 }
 
-func (l TestLocalSubtreeStore) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+func (l TestLocalSubtreeStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
 	if len(key) == 0 {
 		return nil, errors.NewProcessingError("key cannot be empty")
 	}
 
-	// Parse options
-	var opt options.Options
-	for _, o := range opts {
-		o(&opt)
-	}
-
 	// Try to find the data in the FileData map first (for bloom filters and other data)
 	keyString := string(key)
-	if opt.Extension != "" {
-		keyString = keyString + "." + opt.Extension.String()
-	}
+	keyString = keyString + "." + fileType.String()
 
 	if l.FileData != nil {
 		if data, ok := l.FileData[keyString]; ok {
@@ -518,14 +510,16 @@ func (l TestLocalSubtreeStore) Get(ctx context.Context, key []byte, opts ...opti
 	if !ok {
 		return nil, errors.NewProcessingError("file not found")
 	}
+
 	subtreeBytes, err := os.ReadFile(fmt.Sprintf(TestFileNameTemplate, file))
 	if err != nil {
 		return nil, err
 	}
+
 	return subtreeBytes, nil
 }
 
-func (l TestLocalSubtreeStore) GetIoReader(_ context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+func (l TestLocalSubtreeStore) GetIoReader(_ context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	file, ok := l.Files[chainhash.Hash(key)]
 	if !ok {
 		return nil, errors.NewProcessingError("file not found")
@@ -539,7 +533,7 @@ func (l TestLocalSubtreeStore) GetIoReader(_ context.Context, key []byte, opts .
 	return subtreeFile, nil
 }
 
-func (l *TestLocalSubtreeStore) Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error {
+func (l *TestLocalSubtreeStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	if len(key) == 0 {
 		return errors.NewProcessingError("key cannot be empty")
 	}
@@ -549,17 +543,9 @@ func (l *TestLocalSubtreeStore) Set(ctx context.Context, key []byte, value []byt
 		l.FileData = make(map[string][]byte)
 	}
 
-	// Parse options
-	var opt options.Options
-	for _, o := range opts {
-		o(&opt)
-	}
-
 	// Create a storage key based on the hash and extension
 	keyString := string(key)
-	if opt.Extension != "" {
-		keyString = keyString + "." + opt.Extension.String()
-	}
+	keyString = keyString + "." + fileType.String()
 
 	// Store the data in memory
 	l.FileData[keyString] = make([]byte, len(value))
@@ -568,31 +554,19 @@ func (l *TestLocalSubtreeStore) Set(ctx context.Context, key []byte, value []byt
 	return nil
 }
 
-func (l TestLocalSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ io.ReadCloser, _ ...options.FileOption) error {
+func (l TestLocalSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ fileformat.FileType, _ io.ReadCloser, _ ...options.FileOption) error {
 	panic(notImplemented)
 }
 
-func (l TestLocalSubtreeStore) SetDAH(_ context.Context, _ []byte, _ uint32, opts ...options.FileOption) error {
+func (l TestLocalSubtreeStore) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ uint32, _ ...options.FileOption) error {
 	panic(notImplemented)
 }
 
-func (l TestLocalSubtreeStore) GetDAH(_ context.Context, _ []byte, opts ...options.FileOption) (uint32, error) {
+func (l TestLocalSubtreeStore) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (uint32, error) {
 	panic(notImplemented)
 }
 
-func (l TestLocalSubtreeStore) Del(_ context.Context, _ []byte, opts ...options.FileOption) error {
-	panic(notImplemented)
-}
-
-func (l TestLocalSubtreeStore) GetHead(_ context.Context, _ []byte, _ int, opts ...options.FileOption) ([]byte, error) {
-	panic(notImplemented)
-}
-
-func (l TestLocalSubtreeStore) GetHeader(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
-	return nil, nil
-}
-
-func (l TestLocalSubtreeStore) GetFooterMetaData(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
+func (l TestLocalSubtreeStore) Del(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) error {
 	panic(notImplemented)
 }
 
@@ -620,23 +594,23 @@ func (n *BlobStoreStub) Close(_ context.Context) error {
 	return nil
 }
 
-func (n *BlobStoreStub) SetFromReader(_ context.Context, _ []byte, _ io.ReadCloser, _ ...options.FileOption) error {
+func (n *BlobStoreStub) SetFromReader(_ context.Context, _ []byte, _ fileformat.FileType, _ io.ReadCloser, _ ...options.FileOption) error {
 	return nil
 }
 
-func (n *BlobStoreStub) Set(_ context.Context, _ []byte, _ []byte, _ ...options.FileOption) error {
+func (n *BlobStoreStub) Set(_ context.Context, _ []byte, _ fileformat.FileType, _ []byte, _ ...options.FileOption) error {
 	return nil
 }
 
-func (n *BlobStoreStub) SetDAH(_ context.Context, _ []byte, _ uint32, _ ...options.FileOption) error {
+func (n *BlobStoreStub) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ uint32, _ ...options.FileOption) error {
 	return nil
 }
 
-func (n *BlobStoreStub) GetDAH(_ context.Context, _ []byte, _ ...options.FileOption) (uint32, error) {
+func (n *BlobStoreStub) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (uint32, error) {
 	return 0, nil
 }
 
-func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (io.ReadCloser, error) {
 	path := filepath.Join("testdata", "testSubtreeHex.bin")
 
 	// read the file
@@ -648,7 +622,7 @@ func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte, opts ...options
 	return subtreeReader, nil
 }
 
-func (n *BlobStoreStub) Get(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+func (n *BlobStoreStub) Get(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) ([]byte, error) {
 	path := filepath.Join("testdata", "testSubtreeHex.bin")
 
 	// read the file
@@ -660,22 +634,10 @@ func (n *BlobStoreStub) Get(_ context.Context, hash []byte, opts ...options.File
 	return subtreeBytes, nil
 }
 
-func (n *BlobStoreStub) Exists(_ context.Context, _ []byte, opts ...options.FileOption) (bool, error) {
+func (n *BlobStoreStub) Exists(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (bool, error) {
 	return false, nil
 }
 
-func (n *BlobStoreStub) Del(_ context.Context, _ []byte, opts ...options.FileOption) error {
+func (n *BlobStoreStub) Del(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) error {
 	return nil
-}
-
-func (n *BlobStoreStub) GetHead(_ context.Context, _ []byte, _ int, opts ...options.FileOption) ([]byte, error) {
-	return nil, nil
-}
-
-func (n *BlobStoreStub) GetHeader(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
-	return nil, nil
-}
-
-func (n *BlobStoreStub) GetFooterMetaData(_ context.Context, _ []byte, _ ...options.FileOption) ([]byte, error) {
-	return nil, nil
 }

@@ -21,14 +21,6 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// EOFMarker represents the end-of-file marker (32 zero bytes).
-// This marker is used to identify the end of a data stream when reading UTXOs from a file.
-// When serializing UTXO data to storage, this marker is placed at the end to signify
-// a complete and valid write. When reading, encountering this marker indicates
-// that all UTXOs have been successfully read. This supports integrity verification
-// and helps detect truncated or corrupted files.
-var EOFMarker = make([]byte, 32) // 32 zero bytes
-
 // UTXOWrapper wraps transaction outputs with additional metadata.
 // It encapsulates a transaction ID, block height, coinbase flag, and a collection of UTXOs
 // that belong to a single transaction.
@@ -87,6 +79,7 @@ type UTXO struct {
 // - Bytes 32-35: Encoded height and coinbase flag (4 bytes)
 //   - The height is shifted left by 1 bit to leave space for the coinbase flag
 //   - The least significant bit indicates whether this is a coinbase transaction
+//
 // - Bytes 36-39: Number of UTXOs (4 bytes)
 // - Bytes 40+: Serialized UTXOs (variable length)
 //
@@ -182,15 +175,13 @@ func NewUTXOWrapperFromReader(ctx context.Context, r io.Reader) (*UTXOWrapper, e
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
-		if n, err := io.ReadFull(r, uw.TxID[:]); err != nil || n != 32 {
-			return nil, errors.NewStorageError("failed to read txid, expected 32 bytes got %d", n, err)
-		}
+		n, err := io.ReadFull(r, uw.TxID[:])
+		if err != nil {
+			if err == io.EOF {
+				return nil, io.EOF
+			}
 
-		// Check if all the bytes are zero
-		if bytes.Equal(uw.TxID[:], EOFMarker) {
-			// We return an empty UTXOWrapper and io.EOF to signal the end of the stream
-			// The empty UTXOWrapper indicates an EOF where the eofMarker was written
-			return &UTXOWrapper{}, io.EOF
+			return nil, errors.NewStorageError("failed to read txid, expected 32 bytes got %d", n, err)
 		}
 
 		// Read the encoded height/coinbase + number of UTXOs
@@ -205,8 +196,6 @@ func NewUTXOWrapperFromReader(ctx context.Context, r io.Reader) (*UTXOWrapper, e
 		uw.Height = encodedHeight >> 1
 		uw.Coinbase = (encodedHeight & 1) == 1
 		uw.UTXOs = make([]*UTXO, numUTXOs)
-
-		var err error
 
 		for i := uint32(0); i < numUTXOs; i++ {
 			if uw.UTXOs[i], err = NewUTXOFromReader(r); err != nil {

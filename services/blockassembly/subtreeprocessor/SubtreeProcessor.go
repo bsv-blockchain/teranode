@@ -29,6 +29,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
@@ -664,7 +665,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 			// get the conflicting transactions from the block subtrees
 			for _, subtreeHash := range block.Subtrees {
 				// get the conflicting transactions from the subtree
-				subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
+				subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 				if err != nil {
 					return errors.NewProcessingError("[moveForwardBlock][%s] error getting subtree %s from store", block.String(), subtreeHash.String(), err)
 				}
@@ -1349,7 +1350,7 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 		subtreeHash := subtreeHash
 
 		g.Go(func() error {
-			subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
+			subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
 			if err != nil {
 				return errors.NewServiceError("[moveBackBlock][%s] error getting subtree %s", block.String(), subtreeHash.String(), err)
 			}
@@ -1367,7 +1368,7 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 			// TODO add metrics about how many txs we are reading per second
 			subtreesNodes[idx] = subtree.Nodes
 
-			subtreeMetaReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension(options.SubtreeMetaFileExtension))
+			subtreeMetaReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 			if err != nil {
 				return errors.NewServiceError("[moveBackBlock][%s] error getting subtree meta %s", block.String(), subtreeHash.String(), err)
 			}
@@ -1557,7 +1558,7 @@ func (stp *SubtreeProcessor) moveBackBlockProcessBlock(ctx context.Context, bloc
 		subtreeHash := subtreeHash
 
 		g.Go(func() error {
-			subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
+			subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
 			if err != nil {
 				return errors.NewServiceError("[moveBackBlocks][%s], block %d (block hash: %v), error getting subtree %s", block.String(), i, block.Hash(), subtreeHash.String(), err)
 			}
@@ -1575,7 +1576,7 @@ func (stp *SubtreeProcessor) moveBackBlockProcessBlock(ctx context.Context, bloc
 			// TODO add metrics about how many txs we are reading per second
 			subtreesNodes[idx] = subtree.Nodes
 
-			subtreeMetaReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension(options.SubtreeMetaFileExtension))
+			subtreeMetaReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 			if err != nil {
 				return errors.NewServiceError("[moveBackBlock][%s] error getting subtree meta %s", block.String(), subtreeHash.String(), err)
 			}
@@ -2178,7 +2179,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 		g.Go(func() error {
 			stp.logger.Debugf("getting subtree: %s", st.String())
 
-			subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, st[:], options.WithFileExtension(options.SubtreeFileExtension))
+			subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, st[:], fileformat.FileTypeSubtree)
 			if err != nil {
 				return errors.NewServiceError("error getting subtree: %s", st.String(), err)
 			}
@@ -2291,7 +2292,7 @@ func (stp *SubtreeProcessor) markConflictingTxsInSubtrees(ctx context.Context, l
 			subtreeHash := subtreeHash
 
 			g.Go(func() error {
-				subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
+				subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 				if err != nil {
 					return errors.NewServiceError("error getting subtree %s", subtreeHash.String())
 				}
@@ -2337,8 +2338,8 @@ func (stp *SubtreeProcessor) markConflictingTxsInSubtrees(ctx context.Context, l
 
 					if err = stp.subtreeStore.Set(gCtx,
 						subtreeHash[:],
+						fileformat.FileTypeSubtree,
 						subtreeBytes,
-						options.WithFileExtension(options.SubtreeFileExtension),
 						options.WithAllowOverwrite(true),
 					); err != nil {
 						return errors.NewServiceError("error saving subtree %s", subtreeHash.String(), err)

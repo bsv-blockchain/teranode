@@ -6,20 +6,22 @@ import (
 	"net/http"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/libsv/go-bt/v2"
 )
 
 type Null struct {
-	logger ulogger.Logger
+	logger  ulogger.Logger
+	options *options.Options
 }
 
 func New(logger ulogger.Logger, opts ...options.StoreOption) (*Null, error) {
 	logger = logger.New("null")
 
 	return &Null{
-		logger: logger,
+		options: options.NewStoreOptions(opts...),
+		logger:  logger,
 	}, nil
 }
 
@@ -31,46 +33,42 @@ func (n *Null) Close(_ context.Context) error {
 	return nil
 }
 
-func (n *Null) SetFromReader(_ context.Context, _ []byte, _ io.ReadCloser, _ ...options.FileOption) error {
+func (n *Null) SetFromReader(_ context.Context, _ []byte, _ fileformat.FileType, _ io.ReadCloser, _ ...options.FileOption) error {
 	return nil
 }
 
-func (n *Null) Set(_ context.Context, _ []byte, _ []byte, _ ...options.FileOption) error {
+func (n *Null) Set(_ context.Context, _ []byte, _ fileformat.FileType, _ []byte, _ ...options.FileOption) error {
 	return nil
 }
 
-func (n *Null) SetDAH(_ context.Context, _ []byte, _ uint32, opts ...options.FileOption) error {
+func (n *Null) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ uint32, opts ...options.FileOption) error {
 	return nil
 }
 
-func (n *Null) GetDAH(_ context.Context, _ []byte, opts ...options.FileOption) (uint32, error) {
+func (n *Null) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, opts ...options.FileOption) (uint32, error) {
 	return 0, nil
 }
 
-func (n *Null) GetIoReader(_ context.Context, _ []byte, opts ...options.FileOption) (io.ReadCloser, error) {
-	return nil, errors.NewStorageError("failed to read data from file: no such file or directory")
+func (n *Null) GetIoReader(_ context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+	merged := options.MergeOptions(n.options, opts)
+
+	fileName, err := merged.ConstructFilename("", key, fileType)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, errors.NewStorageError("failed to read data from file: no such file or directory: %s", fileName)
 }
 
-func (n *Null) Get(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	return nil, errors.NewStorageError("failed to read data from file: no such file or directory: %x", bt.ReverseBytes(hash))
+func (n *Null) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
+	_, err := n.GetIoReader(ctx, key, fileType, opts...)
+	return nil, err
 }
 
-func (n *Null) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
-	return nil, errors.NewStorageError("failed to read data from file: no such file or directory: %x", bt.ReverseBytes(hash))
-}
-
-func (n *Null) Exists(_ context.Context, _ []byte, opts ...options.FileOption) (bool, error) {
+func (n *Null) Exists(_ context.Context, _ []byte, _ fileformat.FileType, opts ...options.FileOption) (bool, error) {
 	return false, nil
 }
 
-func (n *Null) Del(_ context.Context, _ []byte, opts ...options.FileOption) error {
+func (n *Null) Del(_ context.Context, _ []byte, _ fileformat.FileType, opts ...options.FileOption) error {
 	return nil
-}
-
-func (n *Null) GetHeader(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	return nil, nil
-}
-
-func (n *Null) GetFooterMetaData(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	return nil, nil
 }

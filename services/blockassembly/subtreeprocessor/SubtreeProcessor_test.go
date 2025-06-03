@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	blob_memory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/null"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -462,7 +462,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	subtreeBytes, err := os.ReadFile("./testdata/fd61a79793c4fb02ba14b85df98f5f60f727be359089d8fa125c4ce37945106b.subtree")
 	require.NoError(t, err)
 
-	err = subtreeStore.Set(ctx, subtreeHash.CloneBytes(), subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	err = subtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings()
@@ -1008,22 +1008,22 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 		subtreeMeta1 := createSubtreeMeta(t, subtree1)
 		subtreeMetaBytes, err := subtreeMeta1.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 		subtree2 := createSubtree(t, 4, false)
 		subtreeBytes, err = subtree2.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 		subtreeMeta2 := createSubtreeMeta(t, subtree2)
 		subtreeMetaBytes, err = subtreeMeta2.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 		_, _ = utxosStore.Create(context.Background(), coinbaseTx, 0)
 
@@ -1131,32 +1131,32 @@ func TestMoveBackBlocks(t *testing.T) {
 		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 		subtreeMeta1 := createSubtreeMeta(t, subtree1)
 		subtreeMetaBytes, err := subtreeMeta1.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 		subtree2 := createSubtree(t, 4, false)
 		subtreeBytes, err = subtree2.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 		subtreeMeta2 := createSubtreeMeta(t, subtree2)
 		subtreeMetaBytes, err = subtreeMeta2.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 		subtree3 := createSubtree(t, 4, true)
 		subtreeBytes, err = subtree3.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree3.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree3.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 		subtreeMeta3 := createSubtreeMeta(t, subtree3)
 		subtreeMetaBytes, err = subtreeMeta3.Serialize()
 		require.NoError(t, err)
-		require.NoError(t, subtreeStore.Set(context.Background(), subtree3.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+		require.NoError(t, subtreeStore.Set(context.Background(), subtree3.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 		_, _ = utxosStore.Create(context.Background(), coinbaseTx, 0)
 		_, _ = utxosStore.Create(context.Background(), coinbaseTx2, 0)
@@ -1329,13 +1329,13 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 		require.NoError(t, err)
 
 		subtree2 := createSubtree(t, 4, false)
 		subtreeBytes, err = subtree2.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 		require.NoError(t, err)
 
 		block := &model.Block{

@@ -30,6 +30,7 @@ import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
@@ -340,13 +341,13 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
 
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
 
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes)
 	require.NoError(t, err)
 
 	// require.NoError(t, err)
@@ -655,11 +656,11 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	subtreeHashes := make([]*chainhash.Hash, 0)
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
@@ -777,7 +778,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 
 		subtreeBytes, err := subtree.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+		err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes, options.WithAllowOverwrite(true))
 		require.NoError(t, err)
 
 		subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
@@ -905,11 +906,11 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	// Create subtree hashes and calculate merkle root
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
@@ -1404,7 +1405,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 				subtreeBytes, err := subtree1.Serialize()
 				require.NoError(t, err)
 
-				require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+				require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 			})
 
 		// Second call - for subtree2 - fail with ErrSubtreeError
@@ -1515,7 +1516,7 @@ func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore ut
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
@@ -1629,7 +1630,7 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
 
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtreeToCheck"))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes)
 	require.NoError(t, err)
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
@@ -1738,11 +1739,11 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
@@ -1846,11 +1847,11 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
@@ -2069,7 +2070,7 @@ func Test_createAppendBloomFilter(t *testing.T) {
 		subtreeBytes, err := subtree.Serialize()
 		require.NoError(t, err)
 
-		err = blockValidation.subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+		err = blockValidation.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 		require.NoError(t, err)
 
 		// clone the block
@@ -2205,12 +2206,12 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
 
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
@@ -2308,11 +2309,11 @@ func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
@@ -2426,7 +2427,7 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
@@ -2541,7 +2542,7 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
 	block := &model.Block{
@@ -2703,12 +2704,12 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
@@ -2803,7 +2804,7 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 	// Store the subtree in the subtreeStore to prevent nil dereference panics
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
@@ -2942,7 +2943,7 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
 	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
@@ -3012,11 +3013,11 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
@@ -3134,11 +3135,11 @@ func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
@@ -3246,11 +3247,11 @@ func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 

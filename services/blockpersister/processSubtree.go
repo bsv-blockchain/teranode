@@ -7,9 +7,9 @@ import (
 	"encoding/binary"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -95,7 +95,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 		return errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get %d of %d tx meta from store", subtreeHash.String(), missed, len(txHashes))
 	}
 
-	storer, err := filestorer.NewFileStorer(context.Background(), u.logger, u.settings, u.blockStore, subtreeHash[:], options.SubtreeDataFileExtension)
+	storer, err := filestorer.NewFileStorer(context.Background(), u.logger, u.settings, u.blockStore, subtreeHash[:], fileformat.FileTypeSubtreeData)
 	if err != nil {
 		return errors.NewStorageError("error creating subtree file", err)
 	}
@@ -110,7 +110,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 
 func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash) (*util.SubtreeData, error) {
 	// 1. get the subtree from the subtree store
-	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension(options.SubtreeFileExtension))
+	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree)
 	if err != nil {
 		return nil, errors.NewStorageError("[BlockPersister] failed to get subtree from store", err)
 	}
@@ -122,7 +122,7 @@ func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash
 	}
 
 	// 2 get the subtree data from the subtree store
-	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension(options.SubtreeDataFileExtension))
+	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData)
 	if err != nil {
 		return nil, errors.NewStorageError("[BlockPersister] error getting subtree data for %s from store", subtreeHash.String(), err)
 	}

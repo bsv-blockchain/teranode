@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,11 +21,11 @@ func TestConcurrentBlob_GetBlobExists(t *testing.T) {
 	key := [32]byte{1, 2, 3}
 	blobStore := memory.New()
 
-	err := blobStore.Set(ctx, key[:], []byte("existing data"))
+	err := blobStore.Set(ctx, key[:], fileformat.FileTypeTesting, []byte("existing data"))
 	require.NoError(t, err)
 
 	cb := NewConcurrentBlob(blobStore)
-	reader, err := cb.Get(ctx, key, func() (io.ReadCloser, error) {
+	reader, err := cb.Get(ctx, key, fileformat.FileTypeTesting, func() (io.ReadCloser, error) {
 		return nil, errors.NewStorageError("should not be called")
 	})
 
@@ -40,7 +41,7 @@ func TestConcurrentBlob_GetBlobNotExists(t *testing.T) {
 	blobStore := memory.New()
 
 	cb := NewConcurrentBlob(blobStore)
-	reader, err := cb.Get(ctx, key, func() (io.ReadCloser, error) {
+	reader, err := cb.Get(ctx, key, fileformat.FileTypeTesting, func() (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader("new data")), nil
 	})
 
@@ -49,7 +50,7 @@ func TestConcurrentBlob_GetBlobNotExists(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "new data", string(data))
 
-	reader, err = cb.Get(ctx, key, func() (io.ReadCloser, error) {
+	reader, err = cb.Get(ctx, key, fileformat.FileTypeTesting, func() (io.ReadCloser, error) {
 		return nil, errors.NewStorageError("should not be called")
 	})
 
@@ -72,7 +73,7 @@ func TestConcurrentBlob_GetBlobReader_Multi(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		wg.Go(func() error {
-			reader, err := cb.Get(ctx, key, func() (io.ReadCloser, error) {
+			reader, err := cb.Get(ctx, key, fileformat.FileTypeTesting, func() (io.ReadCloser, error) {
 				accessCount.Add(1)
 				return io.NopCloser(strings.NewReader("blob data")), nil
 			})
@@ -104,7 +105,7 @@ func TestConcurrentBlob_GetBlobFetchError(t *testing.T) {
 	blobStore := memory.New()
 
 	cb := NewConcurrentBlob(blobStore)
-	_, err := cb.Get(ctx, key, func() (io.ReadCloser, error) {
+	_, err := cb.Get(ctx, key, fileformat.FileTypeTesting, func() (io.ReadCloser, error) {
 		return nil, errors.NewStorageError("fetch error")
 	})
 
@@ -117,7 +118,7 @@ func TestConcurrentBlob_GetBlobSetError(t *testing.T) {
 	blobStore := memory.New()
 
 	cb := NewConcurrentBlob(blobStore)
-	_, err := cb.Get(ctx, key, func() (io.ReadCloser, error) {
+	_, err := cb.Get(ctx, key, fileformat.FileTypeTesting, func() (io.ReadCloser, error) {
 		return io.NopCloser(&errorReader{}), nil
 	})
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -191,7 +192,7 @@ func TestBlock(t *testing.T) {
 	err := persister.persistBlock(context.Background(), mockUTXOStore.subtrees[0].RootHash(), blockBytes)
 	require.NoError(t, err)
 
-	newBlockBytes, err := blockStore.Get(context.Background(), mockUTXOStore.subtrees[0].RootHash()[:], options.WithFileExtension("block"))
+	newBlockBytes, err := blockStore.Get(context.Background(), mockUTXOStore.subtrees[0].RootHash()[:], fileformat.FileTypeBlock)
 	require.NoError(t, err)
 
 	newBlockModel, err := model.NewBlockFromBytes(newBlockBytes, tSettings)
@@ -212,12 +213,12 @@ func TestFileStorer(t *testing.T) {
 
 	ctx := context.Background()
 	key := []byte("test")
-	ext := options.FileExtension("dat")
+	fileType := fileformat.FileTypeDat
 
 	// Delete the key if it exists.
-	_ = blockStore.Del(ctx, key, options.WithFileExtension(ext))
+	_ = blockStore.Del(ctx, key, fileType)
 
-	storer, err := filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, ext)
+	storer, err := filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, fileType)
 	require.NoError(t, err)
 
 	if _, err = storer.Write([]byte("hello")); err != nil {
@@ -228,7 +229,7 @@ func TestFileStorer(t *testing.T) {
 		t.Errorf("error closing block file: %v", err)
 	}
 
-	_, err = filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, ext)
+	_, err = filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, fileType)
 	require.ErrorIs(t, err, errors.NewBlobAlreadyExistsError(""))
 }
 
@@ -291,7 +292,7 @@ func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *MockStore, *memory.Me
 	// Create the .subtree file
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
 	// Create the .subtreeData file
@@ -304,7 +305,7 @@ func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *MockStore, *memory.Me
 
 	subtreeDataBytes, err := subtreeData.Serialize()
 	require.NoError(t, err)
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeDataBytes, options.WithFileExtension(options.SubtreeDataFileExtension))
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes)
 	require.NoError(t, err)
 
 	blockStore := memory.New()

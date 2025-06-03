@@ -1,4 +1,6 @@
-// Package _factory provides a factory for creating UTXO store implementations.
+// //go:build aerospike
+
+// Package factory provides a factory for creating UTXO store implementations.
 // It supports multiple database backends through build tags and connection URLs.
 //
 // # Supported Backends
@@ -13,12 +15,12 @@
 // # Usage
 //
 //	import (
-//	    "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
+//	    "github.com/bitcoin-sv/ubsv/stores/utxo/factory"
 //	    "github.com/bitcoin-sv/ubsv/settings"
 //	)
 //
 //	// Initialize from settings
-//	store, err := _factory.NewStore(ctx, logger, settings, "service-name")
+//	store, err := factory.NewStore(ctx, logger, settings, "service-name")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
@@ -43,6 +45,7 @@
 // Example URLs:
 //
 //	postgres://user:pass@localhost:5432/utxo?sslmode=disable&logging=true
+//	aerospike://localhost:3000/test/utxos?logging=true
 //
 // # Block Height Management
 //
@@ -59,7 +62,7 @@
 //   - Parameters
 //   - Duration
 //   - Error status
-package _factory
+package factory
 
 import (
 	"context"
@@ -67,12 +70,12 @@ import (
 
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
 func init() {
-	availableDatabases["memory"] = func(_ context.Context, logger ulogger.Logger, _ *settings.Settings, _ *url.URL) (utxo.Store, error) {
-		return memory.New(logger), nil
+	availableDatabases["aerospike"] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error) {
+		return aerospike.New(ctx, logger, tSettings, url)
 	}
 }

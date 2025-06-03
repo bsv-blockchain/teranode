@@ -5,16 +5,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
-	utxostore_factory "github.com/bitcoin-sv/teranode/stores/utxo/_factory"
+	utxostore_factory "github.com/bitcoin-sv/teranode/stores/utxo/factory"
 	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -246,32 +248,37 @@ func checkNodeIntegrity(nodeContext string, checkInterval int, alertThreshold in
 			transactionMap[*block.CoinbaseTx.TxIDChainHash()] = BlockSubtree{Block: *block.Hash()}
 
 			// check subtrees
-			var subtreeBytes []byte
-
-			var subtree *util.Subtree
+			var (
+				subtreeReader io.ReadCloser
+				subtree       *util.Subtree
+			)
 
 			logger.Debugf("[%s] checking subtrees: %d", loggerContext, len(block.Subtrees))
 
 			for _, subtreeHash := range block.Subtrees {
 				logger.Debugf("[%s] checking subtree %s", loggerContext, subtreeHash)
 
-				subtreeBytes, err = subtreeStore.Get(ctx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
+				subtreeReader, err = subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 				if err != nil {
 					logger.Errorf("[%s] failed to get subtree %s for block %s: %s", loggerContext, subtreeHash, block, err)
 					logger.Debugf("[%s] block dump: %s", block.Header.StringDump())
 				}
 
-				subtree, err = util.NewSubtreeFromBytes(subtreeBytes)
-				if err != nil || subtree == nil {
+				if subtree, err = util.NewSubtreeFromReader(subtreeReader); err != nil || subtree == nil {
 					logger.Errorf("[%s] failed to parse subtree %s for block %s: %s", loggerContext, subtreeHash, block, err)
+
+					_ = subtreeReader.Close()
+
 					continue
 				}
 
-				var tx []byte
+				_ = subtreeReader.Close()
 
-				var btTx *bt.Tx
-
-				subtreeFees := uint64(0)
+				var (
+					tx          []byte
+					btTx        *bt.Tx
+					subtreeFees = uint64(0)
+				)
 
 				for nodeIdx, node := range subtree.Nodes {
 					nodeIdx := nodeIdx
@@ -292,7 +299,7 @@ func checkNodeIntegrity(nodeContext string, checkInterval int, alertThreshold in
 						}
 
 						// check that the transaction exists in the tx store
-						tx, err = txStore.Get(ctx, node.Hash[:])
+						tx, err = txStore.Get(ctx, node.Hash[:], fileformat.FileTypeTx)
 						if err != nil {
 							txMeta, err := utxoStore.Get(ctx, &node.Hash)
 							if err != nil {

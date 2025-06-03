@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
@@ -56,10 +57,10 @@ func (s *HTTPStore) Health(ctx context.Context, checkLiveness bool) (int, string
 	return resp.StatusCode, "HTTP Store", nil
 }
 
-func (s *HTTPStore) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
-	encodedKey := base64.URLEncoding.EncodeToString(key)
+func (s *HTTPStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
+	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
-	query := options.FileOptionsToQuery(opts...)
+	query := options.FileOptionsToQuery(fileType, opts...)
 	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
 
 	resp, err := s.httpClient.Head(url)
@@ -71,8 +72,8 @@ func (s *HTTPStore) Exists(ctx context.Context, key []byte, opts ...options.File
 	return resp.StatusCode == http.StatusOK, nil
 }
 
-func (s *HTTPStore) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
-	rc, err := s.GetIoReader(ctx, key, opts...)
+func (s *HTTPStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
+	rc, err := s.GetIoReader(ctx, key, fileType, opts...)
 	if err != nil {
 		return nil, errors.NewStorageError("[HTTPStore] Get failed", err)
 	}
@@ -81,40 +82,10 @@ func (s *HTTPStore) Get(ctx context.Context, key []byte, opts ...options.FileOpt
 	return io.ReadAll(rc)
 }
 
-func (s *HTTPStore) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
-	encodedKey := base64.URLEncoding.EncodeToString(key)
+func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
-	query := options.FileOptionsToQuery(opts...)
-	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, errors.NewStorageError("[HTTPStore] GetHead failed to create request", err)
-	}
-
-	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", nrOfBytes-1))
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return nil, errors.NewStorageError("[HTTPStore] GetHead failed", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, errors.ErrNotFound
-	}
-
-	if resp.StatusCode != http.StatusPartialContent {
-		return nil, errors.NewStorageError(fmt.Sprintf("[HTTPStore] GetHead failed with status code %d", resp.StatusCode), nil)
-	}
-
-	return io.ReadAll(resp.Body)
-}
-
-func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
-	encodedKey := base64.URLEncoding.EncodeToString(key)
-
-	query := options.FileOptionsToQuery(opts...)
+	query := options.FileOptionsToQuery(fileType, opts...)
 	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
 
 	resp, err := s.httpClient.Get(url)
@@ -135,17 +106,17 @@ func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, opts ...options
 	return resp.Body, nil
 }
 
-func (s *HTTPStore) Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error {
+func (s *HTTPStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	rc := io.NopCloser(bytes.NewReader(value))
 	defer rc.Close()
 
-	return s.SetFromReader(ctx, key, rc, opts...)
+	return s.SetFromReader(ctx, key, fileType, rc, opts...)
 }
 
-func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.FileOption) error {
-	encodedKey := base64.URLEncoding.EncodeToString(key)
+func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, value io.ReadCloser, opts ...options.FileOption) error {
+	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
-	query := options.FileOptionsToQuery(opts...)
+	query := options.FileOptionsToQuery(fileType, opts...)
 	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, value)
@@ -168,10 +139,10 @@ func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, value io.Read
 	return nil
 }
 
-func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, dah uint32, opts ...options.FileOption) error {
-	encodedKey := base64.URLEncoding.EncodeToString(key)
+func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error {
+	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
-	query := options.FileOptionsToQuery(opts...)
+	query := options.FileOptionsToQuery(fileType, opts...)
 	url := fmt.Sprintf(blobURLFormatWithDAH, s.baseURL, encodedKey, query.Encode(), dah)
 
 	req, err := http.NewRequestWithContext(ctx, "PATCH", url, nil)
@@ -192,10 +163,10 @@ func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, dah uint32, opts ...
 	return nil
 }
 
-func (s *HTTPStore) GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error) {
-	encodedKey := base64.URLEncoding.EncodeToString(key)
+func (s *HTTPStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
+	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
-	query := options.FileOptionsToQuery(opts...)
+	query := options.FileOptionsToQuery(fileType, opts...)
 	url := fmt.Sprintf(blobURLFormatGetDAH, s.baseURL, encodedKey, query.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, "PATCH", url, nil)
@@ -232,10 +203,10 @@ func (s *HTTPStore) GetDAH(ctx context.Context, key []byte, opts ...options.File
 	return uint32(dahInt), nil
 }
 
-func (s *HTTPStore) Del(ctx context.Context, key []byte, opts ...options.FileOption) error {
-	encodedKey := base64.URLEncoding.EncodeToString(key)
+func (s *HTTPStore) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
+	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
-	query := options.FileOptionsToQuery(opts...)
+	query := options.FileOptionsToQuery(fileType, opts...)
 	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
@@ -254,14 +225,6 @@ func (s *HTTPStore) Del(ctx context.Context, key []byte, opts ...options.FileOpt
 	}
 
 	return nil
-}
-
-func (s *HTTPStore) GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
-	return nil, errors.NewStorageError("get header is not supported in a http store")
-}
-
-func (s *HTTPStore) GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
-	return nil, errors.NewStorageError("get meta data is not supported in a http store")
 }
 
 func (s *HTTPStore) Close(ctx context.Context) error {

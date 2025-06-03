@@ -54,7 +54,7 @@ func (m *mockHeaderIfc) GetBlockHeadersByHeight(ctx context.Context, startHeight
 func TestConsolidateBlockRange(t *testing.T) {
 	ctx := context.Background()
 	// logger := ulogger.New("test")
-	logger := ulogger.TestLogger{}
+	logger := ulogger.NewVerboseTestLogger(t)
 
 	storeURL, err := url.Parse("file://./data/blockstore")
 	require.NoError(t, err)

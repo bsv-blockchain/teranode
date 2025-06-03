@@ -15,10 +15,10 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
@@ -900,7 +900,7 @@ func getParentTxMeta(gCtx context.Context, txMetaStore utxo.Store, parentTxStruc
 	return parentTxMeta, nil
 }
 
-// nolint:unused
+//nolint:unused
 func (b *Block) getFromAerospike(logger ulogger.Logger, parentTxStruct missingParentTx) error {
 	defer func() {
 		err := recover()
@@ -1004,14 +1004,14 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 				subtree := &util.Subtree{}
 
 				findSubtree := func() (io.ReadCloser, error) {
-					readCloser, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
+					readCloser, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
 					if err != nil {
 						if errors.Is(err, errors.ErrNotFound) && fallbackGetFunc != nil {
 							if err := fallbackGetFunc(*subtreeHash); err != nil {
 								return nil, errors.NewSubtreeNotFoundError("failed to get subtree via fallback method", err)
 							}
 
-							return subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension(options.SubtreeFileExtension))
+							return subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
 						}
 					}
 
@@ -1042,7 +1042,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 				b.SubtreeSlices[i] = subtree
 
 				sizeInBytes.Add(subtree.SizeInBytes)
-				txCount.Add(uint64(subtree.Length()))
+				txCount.Add(uint64(subtree.Length())) // nolint: gosec
 
 				_ = subtreeReader.Close()
 
@@ -1073,7 +1073,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 
 	b.TransactionCount = txCount.Load()
 	// header + transaction count + size in bytes + coinbase tx size
-	b.SizeInBytes = sizeInBytes.Load() + 80 + util.VarintSize(b.TransactionCount) + uint64(b.CoinbaseTx.Size())
+	b.SizeInBytes = sizeInBytes.Load() + 80 + util.VarintSize(b.TransactionCount) + uint64(b.CoinbaseTx.Size()) // nolint: gosec
 
 	// TODO something with conflicts
 
@@ -1082,7 +1082,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 
 func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore blob.Store, subtreeHash chainhash.Hash, subtree *util.Subtree) (*util.SubtreeMeta, error) {
 	// get subtree meta
-	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], options.WithFileExtension(options.SubtreeMetaFileExtension))
+	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 	if err != nil {
 		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to get subtree meta", b.String(), subtreeHash.String(), err)
 	}
@@ -1116,7 +1116,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		subtree := b.SubtreeSlices[sIdx]
 		if sIdx == 0 {
 			// We need to inject the coinbase tx id into the first position of the first subtree
-			rootHash, err := subtree.RootHashWithReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size()))
+			rootHash, err := subtree.RootHashWithReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size())) // nolint: gosec
 			if err != nil {
 				return errors.NewProcessingError("[BLOCK][%s] error replacing root node in subtree", b.String(), err)
 			}

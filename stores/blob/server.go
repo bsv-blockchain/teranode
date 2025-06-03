@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
@@ -39,7 +40,7 @@ const NotFoundMsg = "Not found"
 // range requests, and DAH management.
 type HTTPBlobServer struct {
 	// store is the underlying blob storage implementation
-	store  Store
+	store Store
 	// logger provides structured logging for server operations
 	logger ulogger.Logger
 }
@@ -100,14 +101,14 @@ func (s *HTTPBlobServer) Start(ctx context.Context, addr string) error {
 
 // ServeHTTP handles HTTP requests to the blob server, implementing the http.Handler interface.
 // It routes requests to the appropriate handler function based on the HTTP method and path.
-// 
+//
 // The server supports the following endpoints:
 // - GET /health: Health check endpoint
-// - GET /blob/{key}: Retrieve a blob
-// - HEAD /blob/{key}: Check if a blob exists
-// - POST /blob/{key}: Store a new blob
-// - PATCH /blob/{key}: Update blob's Delete-At-Height value
-// - DELETE /blob/{key}: Delete a blob
+// - GET /blob/{key}.{fileType}: Retrieve a blob
+// - HEAD /blob/{key}.{fileType}: Check if a blob exists
+// - POST /blob/{key}.{fileType}: Store a new blob
+// - PATCH /blob/{key}.{fileType}: Update blob's Delete-At-Height value
+// - DELETE /blob/{key}.{fileType}: Delete a blob
 //
 // Parameters:
 //   - w: HTTP response writer for sending the response
@@ -186,13 +187,13 @@ func (s *HTTPBlobServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 //   - r: HTTP request containing the blob key in the path
 //   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleExists(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
-	key, err := getKeyFromPath(r.URL.Path)
+	key, fileType, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	exists, err := s.store.Exists(r.Context(), key, opts...)
+	exists, err := s.store.Exists(r.Context(), key, fileType, opts...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -215,9 +216,10 @@ func (s *HTTPBlobServer) handleExists(w http.ResponseWriter, r *http.Request, op
 // Parameters:
 //   - w: HTTP response writer for sending the blob data response
 //   - r: HTTP request containing the blob key in the path
+//   - fileType: The file type of the blob
 //   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
-	key, err := getKeyFromPath(r.URL.Path)
+	key, fileType, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -225,11 +227,11 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 
 	rangeHeader := r.Header.Get("Range")
 	if rangeHeader != "" {
-		s.handleRangeRequest(w, r, key, opts...)
+		s.handleRangeRequest(w, r, key, fileType, opts...)
 		return
 	}
 
-	rc, err := s.store.GetIoReader(r.Context(), key, opts...)
+	rc, err := s.store.GetIoReader(r.Context(), key, fileType, opts...)
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
 			http.Error(w, NotFoundMsg, http.StatusNotFound)
@@ -255,8 +257,9 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 //   - w: HTTP response writer for sending the partial content response
 //   - r: HTTP request containing the Range header
 //   - key: The blob key to retrieve partial content from
+//   - fileType: The type of the blob
 //   - opts: Optional file options derived from the query parameters
-func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Request, key []byte, opts ...options.FileOption) {
+func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Request, key []byte, fileType fileformat.FileType, opts ...options.FileOption) {
 	rangeHeader := r.Header.Get("Range")
 
 	start, end, err := parseRange(rangeHeader)
@@ -265,7 +268,7 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	data, err := s.store.GetHead(r.Context(), key, end-start, opts...)
+	dataReader, err := s.store.GetIoReader(r.Context(), key, fileType, opts...)
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
 			http.Error(w, NotFoundMsg, http.StatusNotFound)
@@ -276,22 +279,34 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if start >= len(data) {
-		http.Error(w, "Range Not Satisfiable", http.StatusRequestedRangeNotSatisfiable)
+	// seek the reader to the start position
+	if start > 0 {
+		if seeker, ok := dataReader.(io.Seeker); ok {
+			_, err = seeker.Seek(int64(start), io.SeekStart)
+			if err != nil {
+				http.Error(w, "Failed to seek in blob", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			http.Error(w, "Store does not support seeking", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// read the requested range
+	data := make([]byte, end-start)
+
+	_, err = io.ReadFull(dataReader, data)
+	if err != nil && err != io.EOF {
+		http.Error(w, "Failed to read blob data", http.StatusInternalServerError)
 		return
 	}
 
-	if end > len(data) || end == 0 {
-		end = len(data)
-	}
-
-	rangeData := data[start:end]
-
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.Itoa(len(rangeData)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end-1, len(data)))
 	w.WriteHeader(http.StatusPartialContent)
-	_, _ = w.Write(rangeData)
+	_, _ = w.Write(data)
 }
 
 // parseRange parses the Range header from HTTP requests.
@@ -340,14 +355,14 @@ func parseRange(rangeHeader string) (int, int, error) {
 //   - r: HTTP request containing the blob key in the path and content in the body
 //   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
-	key, err := getKeyFromPath(r.URL.Path)
+	key, fileType, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// Use SetFromReader to handle streaming data
-	err = s.store.SetFromReader(r.Context(), key, r.Body, opts...)
+	err = s.store.SetFromReader(r.Context(), key, fileType, r.Body, opts...)
 	if err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
 			http.Error(w, "Blob already exists", http.StatusConflict)
@@ -371,7 +386,7 @@ func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts 
 //   - r: HTTP request containing the blob key in the path and DAH value in query parameters
 //   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleSetDAH(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
-	key, err := getKeyFromPath(r.URL.Path)
+	key, fileType, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -385,7 +400,7 @@ func (s *HTTPBlobServer) handleSetDAH(w http.ResponseWriter, r *http.Request, op
 		return
 	}
 
-	err = s.store.SetDAH(r.Context(), key, uint32(dah), opts...) // nolint: gosec
+	err = s.store.SetDAH(r.Context(), key, fileType, uint32(dah), opts...) // nolint: gosec
 	if err != nil {
 		if err == errors.ErrNotFound {
 			http.Error(w, NotFoundMsg, http.StatusNotFound)
@@ -408,13 +423,13 @@ func (s *HTTPBlobServer) handleSetDAH(w http.ResponseWriter, r *http.Request, op
 //   - r: HTTP request containing the blob key in the path
 //   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, opts ...options.FileOption) {
-	key, err := getKeyFromPath(r.URL.Path)
+	key, fileType, err := getKeyFromPath(r.URL.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	err = s.store.Del(r.Context(), key, opts...)
+	err = s.store.Del(r.Context(), key, fileType, opts...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -429,10 +444,28 @@ func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, op
 //
 // Returns:
 //   - []byte: Decoded key
+//   - fileType: The file type
 //   - error: Any error that occurred during extraction
-func getKeyFromPath(path string) ([]byte, error) {
-	// Assuming the path is in the format "/blob/{key}"
-	encodedKey := path[6:]
+func getKeyFromPath(path string) ([]byte, fileformat.FileType, error) {
+	// Assuming the path is in the format "/blob/{key}.{fileType}"
+	pos := strings.LastIndex(path, ".")
+	if pos == -1 {
+		return nil, "", errors.NewInvalidArgumentError("invalid path format")
+	}
 
-	return base64.URLEncoding.DecodeString(encodedKey)
+	ext := path[pos+1:]
+
+	fileType, err := fileformat.FileTypeFromExtension(ext)
+	if err != nil {
+		return nil, "", errors.NewInvalidArgumentError("invalid file type", err)
+	}
+
+	encodedKey := path[6:pos]
+
+	key, err := base64.URLEncoding.DecodeString(encodedKey)
+	if err != nil {
+		return nil, "", errors.NewInvalidArgumentError("invalid key format")
+	}
+
+	return key, fileType, nil
 }

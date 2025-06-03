@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	st "github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	blob_memory "github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -225,7 +225,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 			subtree := createSubtree(t, subtreeSize, i == 0)
 			subtreeBytes, err := subtree.Serialize()
 			require.NoError(t, err)
-			err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension))
+			err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 			require.NoError(t, err)
 
 			block.Subtrees = append(block.Subtrees, subtree.RootHash())

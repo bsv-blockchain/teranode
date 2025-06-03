@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/tracing"
@@ -503,7 +503,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	}()
 
 	// Note we are not giving up, we either need to see the file exists or we get the lock
-	gotLock, exists, releaseLockFunc, err := q.TryLockIfNotExistsWithTimeout(ctx, hash)
+	gotLock, exists, releaseLockFunc, err := q.TryLockIfNotExistsWithTimeout(ctx, hash, fileformat.FileTypeSubtree)
 	if err != nil {
 		return false, errors.NewError("[CheckSubtree] error getting lock for Subtree %s", hash.String(), err)
 	}
@@ -538,16 +538,17 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	// Check if the base URL is "legacy", which indicates that the subtree is coming from a block from the legacy service.
 	if request.BaseUrl == "legacy" {
 		// read from legacy store
-		subtreeBytes, err := u.subtreeStore.Get(
+		subtreeReader, err := u.subtreeStore.GetIoReader(
 			ctx,
 			hash[:],
-			options.WithFileExtension("subtreeToCheck"),
+			fileformat.FileTypeSubtreeToCheck,
 		)
 		if err != nil {
 			return false, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to get subtree from store", hash.String(), err)
 		}
 
-		subtree, err = util.NewSubtreeFromBytes(subtreeBytes)
+		subtree, err = util.NewSubtreeFromReader(subtreeReader)
+		_ = subtreeReader.Close() // close the reader after use
 		if err != nil {
 			return false, errors.NewProcessingError("[CheckSubtree] Failed to create subtree from bytes", err)
 		}

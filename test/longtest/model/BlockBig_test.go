@@ -14,8 +14,8 @@ import (
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/model"
 	teranode_model "github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/settings"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -332,11 +332,11 @@ func Test_NewOptimizedBloomFilter(t *testing.T) {
 	require.NotNil(t, bloomFilterBytes)
 
 	// record the bloom filter in the subtreestore
-	err = subtreeStore.Set(context.Background(), block.Hash()[:], bloomFilterBytes, options.WithFileExtension("bloomfilter"))
+	err = subtreeStore.Set(context.Background(), block.Hash()[:], fileformat.FileTypeBloomFilter, bloomFilterBytes)
 	require.NoError(t, err)
 
 	// get the bloom filter from the subtreestore
-	retrievedBloomFilterBytes, err := subtreeStore.Get(context.Background(), block.Hash()[:], options.WithFileExtension("bloomfilter"))
+	retrievedBloomFilterBytes, err := subtreeStore.Get(context.Background(), block.Hash()[:], fileformat.FileTypeBloomFilter)
 	require.NoError(t, err)
 
 	fmt.Println("retrievedBloomFilterBytes Length: ", len(retrievedBloomFilterBytes))

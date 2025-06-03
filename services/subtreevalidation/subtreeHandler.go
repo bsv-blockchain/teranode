@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
@@ -111,7 +112,7 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 		u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseURL.String())
 		defer u.logger.Infof("Finished processing subtree message for %s", hash.String())
 
-		gotLock, _, releaseLockFunc, err := q.TryLockIfNotExists(ctx, hash)
+		gotLock, _, releaseLockFunc, err := q.TryLockIfNotExists(ctx, hash, fileformat.FileTypeSubtree)
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
 			return errors.NewProcessingError("error getting lock for Subtree %s", hash.String(), err)

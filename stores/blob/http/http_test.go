@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
@@ -149,7 +150,7 @@ func TestExists(t *testing.T) {
 	}
 	defer server.Close()
 
-	exists, err := store.Exists(context.Background(), []byte("test-key"))
+	exists, err := store.Exists(context.Background(), []byte("test-key"), fileformat.FileTypeTesting)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -166,30 +167,13 @@ func TestGet(t *testing.T) {
 	}
 	defer server.Close()
 
-	data, err := store.Get(context.Background(), []byte("test-key"))
+	data, err := store.Get(context.Background(), []byte("test-key"), fileformat.FileTypeTesting)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
 	if string(data) != "test data" {
 		t.Errorf("expected 'test data', got %s", string(data))
-	}
-}
-
-func TestGetHead(t *testing.T) {
-	server, store, err := setupTestServer()
-	if err != nil {
-		t.Fatalf("failed to setup test server: %v", err)
-	}
-	defer server.Close()
-
-	data, err := store.GetHead(context.Background(), []byte("test-key"), 10)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	if string(data) != "partial" {
-		t.Errorf("expected 'partial', got %s", string(data))
 	}
 }
 
@@ -200,7 +184,7 @@ func TestSet(t *testing.T) {
 	}
 	defer server.Close()
 
-	err = store.Set(context.Background(), []byte("test-key"), []byte("test data"))
+	err = store.Set(context.Background(), []byte("test-key"), fileformat.FileTypeTesting, []byte("test data"))
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -213,7 +197,7 @@ func TestSetTTL(t *testing.T) {
 	}
 	defer server.Close()
 
-	err = store.SetDAH(context.Background(), []byte("test-key"), 100)
+	err = store.SetDAH(context.Background(), []byte("test-key"), fileformat.FileTypeTesting, 100)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -226,7 +210,7 @@ func TestGetTTL(t *testing.T) {
 	}
 	defer server.Close()
 
-	dah, err := store.GetDAH(context.Background(), []byte("test-key"))
+	dah, err := store.GetDAH(context.Background(), []byte("test-key"), fileformat.FileTypeTesting)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -243,27 +227,9 @@ func TestDel(t *testing.T) {
 	}
 	defer server.Close()
 
-	err = store.Del(context.Background(), []byte("test-key"))
+	err = store.Del(context.Background(), []byte("test-key"), fileformat.FileTypeTesting)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestUnsupportedOperations(t *testing.T) {
-	server, store, err := setupTestServer()
-	if err != nil {
-		t.Fatalf("failed to setup test server: %v", err)
-	}
-	defer server.Close()
-
-	_, err = store.GetHeader(context.Background(), []byte("test-key"))
-	if err == nil {
-		t.Error("expected error for GetHeader")
-	}
-
-	_, err = store.GetFooterMetaData(context.Background(), []byte("test-key"))
-	if err == nil {
-		t.Error("expected error for GetFooterMetaData")
 	}
 }
 

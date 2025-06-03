@@ -21,14 +21,13 @@ import (
 	"github.com/bitcoin-sv/go-sdk/script"
 	"github.com/bitcoin-sv/teranode/errors"
 	block_model "github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	ba "github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/mining"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
-	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -188,7 +187,7 @@ func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store,
 		}
 
 		stHash, _ := chainhash.NewHashFromStr(fileWithoutExtension)
-		stReader, err := storeSubtree.GetIoReader(ctx, stHash[:], options.WithFileExtension(options.FileExtension(ext)))
+		stReader, err := storeSubtree.GetIoReader(ctx, stHash[:], fileformat.FileType(ext))
 
 		if err != nil {
 			return false, errors.NewProcessingError("error getting subtree reader from store", err)
@@ -233,7 +232,7 @@ func isTxInSubtree(l ulogger.Logger, stReader io.Reader, queryTxId chainhash.Has
 }
 
 func GetBlockSubtreeHashes(ctx context.Context, l ulogger.Logger, blockHash []byte, storeBlock blob.Store) ([]*chainhash.Hash, error) {
-	blockReader, err := storeBlock.GetIoReader(ctx, blockHash, options.WithFileExtension("block"))
+	blockReader, err := storeBlock.GetIoReader(ctx, blockHash, fileformat.FileTypeBlock)
 	if err != nil {
 		return nil, errors.NewProcessingError("error getting block reader", err)
 	}
@@ -1013,7 +1012,7 @@ func GenerateBlocks(ctx context.Context, node TeranodeTestClient, numBlocks int,
 }
 
 func TestTxInBlock(ctx context.Context, logger ulogger.Logger, storeBlock blob.Store, storeSubtree blob.Store, blockHash []byte, tx chainhash.Hash) (bool, error) {
-	blockReader, err := storeBlock.GetIoReader(ctx, blockHash, options.WithFileExtension("block"))
+	blockReader, err := storeBlock.GetIoReader(ctx, blockHash, fileformat.FileTypeBlock)
 	if err != nil {
 		return false, errors.NewProcessingError("error getting block reader", err)
 	}
@@ -1026,7 +1025,7 @@ func TestTxInBlock(ctx context.Context, logger ulogger.Logger, storeBlock blob.S
 }
 
 func TestTxInSubtree(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, subtree []byte, tx chainhash.Hash) (bool, error) {
-	subtreeReader, err := subtreeStore.GetIoReader(ctx, subtree, options.WithFileExtension(options.SubtreeFileExtension))
+	subtreeReader, err := subtreeStore.GetIoReader(ctx, subtree, fileformat.FileTypeSubtree)
 	if err != nil {
 		return false, errors.NewProcessingError("error getting subtree reader", err)
 	}
@@ -1298,10 +1297,7 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 func SendEventRun(ctx context.Context, blockchainClient blockchain.ClientI, logger ulogger.Logger) error {
 	var (
 		err error
-		// status int
 	)
-
-	const readiness = false // we don't need readiness check here, just liveness
 
 	timeout := time.After(30 * time.Second)
 	// wait for Blockchain GRPC to be ready and send FSM RUN event
@@ -1337,63 +1333,9 @@ func SendEventRun(ctx context.Context, blockchainClient blockchain.ClientI, logg
 	}
 }
 
-// ValidateUTXODiff validates that a UTXO diff file contains the expected transaction outputs
-func ValidateUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash chainhash.Hash, diffType string, tx bt.Tx) (bool, error) {
-	if diffType != "additions" && diffType != "deletions" {
-		return false, errors.NewProcessingError("invalid diff type: %s, must be 'additions' or 'deletions'", diffType)
-	}
-
-	r, err := store.GetIoReader(context.Background(), blockHash[:], options.WithFileExtension(options.FileExtension(fmt.Sprintf("utxo-%s", diffType))))
-	if err != nil {
-		return false, errors.NewProcessingError("error getting reader from store", err)
-	}
-
-	br := bufio.NewReaderSize(r, 1024*1024)
-
-	// Read the file header
-	_, hash, _, err := utxopersister.GetHeaderFromReader(br)
-	if err != nil {
-		return false, errors.NewProcessingError("failed to read UTXO %s header: %v", diffType, err)
-	}
-
-	// Verify block hash matches
-	if hash.String() != blockHash.String() {
-		return false, errors.NewProcessingError("block hash mismatch: expected %s, got %s", blockHash.String(), hash.String())
-	}
-
-	wrapper, err := utxopersister.NewUTXOWrapperFromReader(ctx, br)
-	if err != nil {
-		return false, errors.NewProcessingError("failed to read UTXO wrapper: %v", err)
-	}
-
-	// Check if this wrapper contains our transaction
-	if wrapper.TxID.String() == tx.TxIDChainHash().String() {
-		logger.Infof("Found transaction %s in UTXO %s", tx.TxIDChainHash().String(), diffType)
-		// Verify each UTXO matches the transaction outputs
-		for _, utxo := range wrapper.UTXOs {
-			if int(utxo.Index) >= len(tx.Outputs) {
-				return false, errors.NewProcessingError("UTXO index %d out of range for tx with %d outputs", utxo.Index, len(tx.Outputs))
-			}
-
-			output := tx.Outputs[utxo.Index]
-			if !output.LockingScript.EqualsBytes(utxo.Script) {
-				return false, errors.NewProcessingError("UTXO script mismatch at index %d", utxo.Index)
-			}
-
-			if output.Satoshis != utxo.Value {
-				return false, errors.NewProcessingError("UTXO value mismatch at index %d: expected %d, got %d", utxo.Index, output.Satoshis, utxo.Value)
-			}
-		}
-
-		return true, nil
-	}
-
-	return false, errors.NewProcessingError("transaction %s not found in UTXO %s", tx.TxIDChainHash().String(), diffType)
-}
-
 // VerifyUTXOFileExists checks if a UTXO-related file exists in the block store
-func VerifyUTXOFileExists(ctx context.Context, store blob.Store, blockHash chainhash.Hash, fileType options.FileExtension) error {
-	exists, err := store.Exists(ctx, blockHash[:], options.WithFileExtension(fileType))
+func VerifyUTXOFileExists(ctx context.Context, store blob.Store, blockHash chainhash.Hash, fileType fileformat.FileType) error {
+	exists, err := store.Exists(ctx, blockHash[:], fileType)
 	if err != nil {
 		return errors.NewProcessingError("failed to check if %s exists: %v", fileType, err)
 	}

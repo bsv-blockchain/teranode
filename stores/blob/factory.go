@@ -18,6 +18,16 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
+var (
+	_ Store = (*batcher.Batcher)(nil)
+	_ Store = (*file.File)(nil)
+	_ Store = (*http.HTTPStore)(nil)
+	_ Store = (*localdah.LocalDAH)(nil)
+	_ Store = (*memory.Memory)(nil)
+	_ Store = (*null.Null)(nil)
+	_ Store = (*s3.S3)(nil)
+)
+
 // NewStore creates a new blob store based on the provided URL scheme and options.
 // It supports various storage backends including null, memory, file, http, and s3.
 // Parameters:
@@ -92,7 +102,7 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 //   - logger: Logger instance for DAH operations and error reporting
 //   - opts: Store options to be passed to the DAH store and cache store
 //   - store: The base store to wrap with DAH functionality
-// 
+//
 // Returns:
 //   - Store: The DAH-enabled store instance
 //   - error: Any error that occurred during creation, particularly if the local DAH cache
@@ -140,7 +150,7 @@ func createDAHStore(storeURL *url.URL, logger ulogger.Logger, opts []options.Sto
 //   - storeURL: URL containing batch configuration parameters
 //   - store: The base store to wrap with batching capabilities
 //   - logger: Logger instance for batch operations, monitoring, and error reporting
-// 
+//
 // Returns:
 //   - Store: The batched store instance with configured batch parameters
 //   - error: Any error that occurred during creation, particularly if the batcher

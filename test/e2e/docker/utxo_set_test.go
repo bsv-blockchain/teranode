@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
@@ -172,10 +173,10 @@ func (suite *UTXOVerificationTestSuite) TestVerifyUTXOSetConsistency() {
 		t.Logf("Verifying UTXO files for block %s", blockModel.Hash().String())
 
 		// Verify UTXO additions and deletions files exist
-		err = helper.VerifyUTXOFileExists(ctx, framework.Nodes[0].ClientBlockstore, *blockModel.Hash(), "utxo-additions")
+		err = helper.VerifyUTXOFileExists(ctx, framework.Nodes[0].ClientBlockstore, *blockModel.Hash(), fileformat.FileTypeUtxoAdditions)
 		require.NoError(t, err, "Failed to verify UTXO additions file")
 
-		err = helper.VerifyUTXOFileExists(ctx, framework.Nodes[0].ClientBlockstore, *blockModel.Hash(), "utxo-deletions")
+		err = helper.VerifyUTXOFileExists(ctx, framework.Nodes[0].ClientBlockstore, *blockModel.Hash(), fileformat.FileTypeUtxoDeletions)
 		require.NoError(t, err, "Failed to verify UTXO deletions file")
 	}
 }

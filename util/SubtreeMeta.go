@@ -272,19 +272,19 @@ func (s *SubtreeMeta) serializeTxInpoints(buf *bytes.Buffer) error {
 		return errors.NewProcessingError("cannot serialize, unable to write total number of nodes", err)
 	}
 
-	var outpointBytes []byte
+	var txInPointBytes []byte
 
-	// write parent outpoints
-	// for _, outpoint := range s.TxInpoints {
+	// write parent txInpoints
+	// for _, txInpoint := range s.TxInpoints {
 	for i := uint32(0); i < parentTxHashesLen32; i++ {
-		outpoint := s.TxInpoints[i]
+		txInpoint := s.TxInpoints[i]
 
-		outpointBytes, err = outpoint.Serialize()
+		txInPointBytes, err = txInpoint.Serialize()
 		if err != nil {
 			return errors.NewProcessingError("cannot serialize, unable to write parent tx hash", err)
 		}
 
-		if _, err = buf.Write(outpointBytes); err != nil {
+		if _, err = buf.Write(txInPointBytes); err != nil {
 			return errors.NewProcessingError("cannot serialize, unable to write parent tx hash", err)
 		}
 	}

@@ -65,8 +65,8 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -1090,22 +1090,22 @@ func (s *Store) GetTxFromExternalStore(ctx context.Context, previousTxHash chain
 }
 
 func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
-	ext := ExternalTxFileExtension
+	fileType := fileformat.FileTypeTx
 
 	// Get the raw transaction from the externalStore...
 	txBytes, err := s.externalStore.Get(
 		ctx,
 		previousTxHash[:],
-		options.WithFileExtension(ext),
+		fileType,
 	)
 	if err != nil {
 		// Try to get the data from an output file instead
-		ext = ExternalTxOutputsFileExtension
+		fileType = fileformat.FileTypeOutputs
 
 		txBytes, err = s.externalStore.Get(
 			ctx,
 			previousTxHash[:],
-			options.WithFileExtension(ext),
+			fileType,
 		)
 		if err != nil {
 			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] could not get tx from external store", previousTxHash.String(), err)
@@ -1114,7 +1114,7 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 
 	tx := &bt.Tx{}
 
-	if ext == ExternalTxFileExtension {
+	if fileType == fileformat.FileTypeTx {
 		tx, err = bt.NewTxFromBytes(txBytes)
 		if err != nil {
 			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read tx from bytes", previousTxHash.String(), err)

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
@@ -670,7 +671,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	dah := u.utxoStore.GetBlockHeight() + u.settings.GlobalBlockHeightRetention
 
-	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeMetaBytes, options.WithDeleteAt(dah), options.WithFileExtension(options.SubtreeMetaFileExtension))
+	err = u.subtreeStore.Set(ctx, merkleRoot[:], fileformat.FileTypeSubtreeMeta, completeSubtreeMetaBytes, options.WithDeleteAt(dah))
 
 	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
 
@@ -698,9 +699,9 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	err = u.subtreeStore.Set(ctx,
 		merkleRoot[:],
+		fileformat.FileTypeSubtree,
 		completeSubtreeBytes,
 		options.WithDeleteAt(u.settings.GlobalBlockHeightRetention),
-		options.WithFileExtension(options.SubtreeFileExtension),
 	)
 
 	stat.NewStat("8. storeSubtree").AddTime(start)
@@ -934,7 +935,7 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 	// first check whether we have the subtreeData file for this subtree and use that for the missing transactions
 	subtreeDataExists, err := u.subtreeStore.Exists(ctx,
 		subtreeHash[:],
-		options.WithFileExtension(options.SubtreeDataFileExtension),
+		fileformat.FileTypeSubtreeData,
 	)
 	if err != nil {
 		return nil, errors.NewProcessingError("[validateSubtree][%s] failed to check if subtreeData exists", subtreeHash.String(), err)
@@ -955,8 +956,8 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 			} else {
 				if subtreeDataErr = u.subtreeStore.SetFromReader(ctx,
 					subtreeHash[:],
+					fileformat.FileTypeSubtreeData,
 					body,
-					options.WithFileExtension(options.SubtreeDataFileExtension),
 				); subtreeDataErr != nil {
 					u.logger.Errorf("[validateSubtree][%s] failed to store subtree data: %v", subtreeHash.String(), subtreeDataErr)
 				} else {
@@ -1111,13 +1112,13 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 		// load the subtree
 		subtreeReader, err := u.subtreeStore.GetIoReader(ctx,
 			subtreeHash[:],
-			options.WithFileExtension(options.SubtreeFileExtension),
+			fileformat.FileTypeSubtree,
 		)
 		if err != nil {
 			// try getting the subtree from the store, marked as to be checked from the legacy service
 			subtreeReader, err = u.subtreeStore.GetIoReader(ctx,
 				subtreeHash[:],
-				options.WithFileExtension("subtreeToCheck"),
+				fileformat.FileTypeSubtreeToCheck,
 			)
 			if err != nil {
 				return nil, errors.NewStorageError("[getMissingTransactionsFromFile] failed to get subtree from store", err)
@@ -1153,7 +1154,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	// get the subtreeData
 	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx,
 		subtreeHash[:],
-		options.WithFileExtension(options.SubtreeDataFileExtension),
+		fileformat.FileTypeSubtreeData,
 	)
 	if err != nil {
 		return nil, errors.NewStorageError("[getMissingTransactionsFromFile] failed to get subtreeData from store", err)

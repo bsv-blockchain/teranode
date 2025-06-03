@@ -531,7 +531,7 @@ func TestServerHandlers(t *testing.T) {
 
 		err := json.Unmarshal(publishedMsg, &hs)
 		assert.NoError(t, err)
-		assert.Equal(t, "version", hs.Type)
+		assert.Equal(t, MessageType("version"), hs.Type)
 		assert.Equal(t, pid.String(), hs.PeerID)
 		assert.Equal(t, uint32(123), hs.BestHeight)
 		assert.NotEmpty(t, hs.BestHash)

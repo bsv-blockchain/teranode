@@ -13,6 +13,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	teranodeUtil "github.com/bitcoin-sv/teranode/util"
 	"github.com/btcsuite/goleveldb/leveldb/util"
@@ -148,14 +149,18 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 	bufferedWriter := bufio.NewWriter(io.MultiWriter(file, hasher))
 	defer bufferedWriter.Flush()
 
-	header, err := utxopersister.BuildHeaderBytes("U-H-1.0", bestBlock.Hash, bestBlock.Height)
-	if err != nil {
-		return nil, errors.NewProcessingError("Couldn't build UTXO set header", err)
+	header := fileformat.NewHeader(fileformat.FileTypeUtxoHeaders)
+
+	if err := header.Write(bufferedWriter); err != nil {
+		return nil, errors.NewProcessingError("Couldn't write header to file", err)
 	}
 
-	_, err = bufferedWriter.Write(header)
-	if err != nil {
-		return nil, errors.NewProcessingError("Couldn't write header to file", err)
+	if _, err := bufferedWriter.Write(bestBlock.Hash[:]); err != nil {
+		return nil, errors.NewProcessingError("Couldn't write block header to file", err)
+	}
+
+	if err := binary.Write(bufferedWriter, binary.LittleEndian, bestBlock.Height); err != nil {
+		return nil, errors.NewProcessingError("error writing header number", err)
 	}
 
 	var (
@@ -170,11 +175,6 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 
 		recordCount++
 		txCount += block.TxCount
-	}
-
-	// Write the eof marker
-	if _, err := bufferedWriter.Write(utxopersister.EOFMarker); err != nil {
-		return nil, errors.NewProcessingError("Couldn't write EOF marker", err)
 	}
 
 	// Write the number of txs and utxos written

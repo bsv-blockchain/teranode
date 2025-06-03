@@ -7,13 +7,14 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type existerIfc interface {
-	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
+	Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error)
 }
 
 type QuorumOption func(*Quorum)
@@ -30,12 +31,6 @@ func WithAbsoluteTimeout(timeout time.Duration) QuorumOption {
 	}
 }
 
-func WithExtension(extension options.FileExtension) QuorumOption {
-	return func(q *Quorum) {
-		q.extension = extension
-	}
-}
-
 var noopFunc = func() {
 	// NOOP
 }
@@ -45,7 +40,7 @@ type Quorum struct {
 	path            string
 	timeout         time.Duration
 	absoluteTimeout time.Duration
-	extension       options.FileExtension
+	fileType        fileformat.FileType
 	exister         existerIfc
 	existerOpts     []options.FileOption
 }
@@ -66,10 +61,6 @@ func NewQuorum(logger ulogger.Logger, exister existerIfc, path string, quorumOpt
 		option(q)
 	}
 
-	if q.extension != "" {
-		q.existerOpts = append(q.existerOpts, options.WithFileExtension(q.extension))
-	}
-
 	logger.Infof("Creating subtree quorum path: %s", q.path)
 
 	if err := os.MkdirAll(q.path, 0755); err != nil {
@@ -79,8 +70,8 @@ func NewQuorum(logger ulogger.Logger, exister existerIfc, path string, quorumOpt
 	return q, nil
 }
 
-func (q *Quorum) TryLockIfNotExists(ctx context.Context, hash *chainhash.Hash) (locked bool, exists bool, release func(), err error) {
-	b, err := q.exister.Exists(ctx, hash[:], q.existerOpts...)
+func (q *Quorum) TryLockIfNotExists(ctx context.Context, hash *chainhash.Hash, fileType fileformat.FileType) (locked bool, exists bool, release func(), err error) {
+	b, err := q.exister.Exists(ctx, hash[:], fileType)
 	if err != nil {
 		return false, false, noopFunc, err
 	}
@@ -183,7 +174,7 @@ func (q *Quorum) autoReleaseLock(ctx context.Context, cancel context.CancelFunc,
 // TryLockIfNotExistsWithTimeout attempts to acquire a lock for the given hash.
 // Knowing a lock has a timeout, it keeps retrying just beyond the lock timeout or until the file exists.
 // In theory it will always succeed in getting a lock or returning that the file exists.
-func (q *Quorum) TryLockIfNotExistsWithTimeout(ctx context.Context, hash *chainhash.Hash) (locked bool, exists bool, release func(), err error) {
+func (q *Quorum) TryLockIfNotExistsWithTimeout(ctx context.Context, hash *chainhash.Hash, fileType fileformat.FileType) (locked bool, exists bool, release func(), err error) {
 	t := q.timeout
 	if q.absoluteTimeout > t {
 		t = q.absoluteTimeout
@@ -199,7 +190,7 @@ func (q *Quorum) TryLockIfNotExistsWithTimeout(ctx context.Context, hash *chainh
 	retryCount := 0
 
 	for {
-		locked, exists, release, err = q.TryLockIfNotExists(ctx, hash)
+		locked, exists, release, err = q.TryLockIfNotExists(ctx, hash, fileType)
 		if err != nil || locked || exists {
 			if retryCount > 1 && locked {
 				q.logger.Warnf("[TryLockIfNotExistsWithTimeout][%s] New lock acquired after waiting for previous lock to expire. Two potential issues. 1) Whatever acquired the previous lock is taking longer than lock timeout to process therefore we are about to duplicate effort or 2) whatever acquired the previous lock is stuck", hash)

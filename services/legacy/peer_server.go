@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
@@ -1332,7 +1333,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
 	// use a concurrent store to make sure we do not request the legacy block multiple times
 	// for different peers. This makes sure we serve the block from a local cache store and not from the utxo store.
-	reader, err := s.concurrentStore.Get(s.ctx, *hash, func() (io.ReadCloser, error) {
+	reader, err := s.concurrentStore.Get(s.ctx, *hash, fileformat.FileTypeMsgBlock, func() (io.ReadCloser, error) {
 		url := fmt.Sprintf("%s/block_legacy/%s?wire=1", s.assetHTTPAddress, hash.String())
 		return util.DoHTTPRequestBodyReader(s.ctx, url)
 	})
@@ -2729,7 +2730,6 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		concurrentStore: blob.NewConcurrentBlob[chainhash.Hash](
 			tempStore,
 			blob_options.WithDeleteAt(10),
-			blob_options.WithFileExtension("msgBlock"),
 			blob_options.WithSubDirectory("blocks"),
 			blob_options.WithAllowOverwrite(true),
 		),

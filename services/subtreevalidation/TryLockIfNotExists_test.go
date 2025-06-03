@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -29,7 +30,7 @@ func newMockExister(exists bool) *mockExister {
 	return &mockExister{exists: exists}
 }
 
-func (m *mockExister) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
+func (m *mockExister) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -86,7 +87,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), testLoopTimeout)
 		defer cancel()
 
-		locked, exists, release, err := q.TryLockIfNotExistsWithTimeout(ctx, testHash)
+		locked, exists, release, err := q.TryLockIfNotExistsWithTimeout(ctx, testHash, fileformat.FileTypeSubtree)
 
 		require.NoError(t, err)
 		assert.True(t, locked)
@@ -112,7 +113,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), testLoopTimeout)
 		defer cancel()
 
-		locked, exists, release, err := q.TryLockIfNotExistsWithTimeout(ctx, testHash)
+		locked, exists, release, err := q.TryLockIfNotExistsWithTimeout(ctx, testHash, fileformat.FileTypeSubtree)
 
 		// Expect no error, exists=true, locked=false
 		require.NoError(t, err)
@@ -135,7 +136,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		// Acquire and release first
 		exister.SetExists(false)
 
-		locked1, _, release1, err1 := q.TryLockIfNotExistsWithTimeout(ctx, testHash)
+		locked1, _, release1, err1 := q.TryLockIfNotExistsWithTimeout(ctx, testHash, fileformat.FileTypeSubtree)
 		require.NoError(t, err1)
 		require.True(t, locked1)
 		release1()
@@ -147,7 +148,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		// Try acquire again
 		exister.SetExists(false) // Mock still says false
 
-		locked2, exists2, release2, err2 := q.TryLockIfNotExistsWithTimeout(ctx, testHash)
+		locked2, exists2, release2, err2 := q.TryLockIfNotExistsWithTimeout(ctx, testHash, fileformat.FileTypeSubtree)
 		require.NoError(t, err2)
 		assert.True(t, locked2)
 		assert.False(t, exists2)
@@ -166,7 +167,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		ctxCancelled, cancel := context.WithCancel(context.Background())
 		defer cancel() // Cancel eventually, though it shouldn't matter
 
-		locked, exists, release, lockErr := q.TryLockIfNotExistsWithTimeout(ctxCancelled, testHash)
+		locked, exists, release, lockErr := q.TryLockIfNotExistsWithTimeout(ctxCancelled, testHash, fileformat.FileTypeSubtree)
 
 		// Expect no error, exists=true, locked=false
 		require.NoError(t, lockErr)
@@ -193,7 +194,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), shortQuorumOpTimeout*10)
 		defer cancel()
 
-		locked, exists, release, err := q.TryLockIfNotExistsWithTimeout(ctx, testHash)
+		locked, exists, release, err := q.TryLockIfNotExistsWithTimeout(ctx, testHash, fileformat.FileTypeSubtree)
 
 		// Expect the lock to be acquired successfully after the initial file becomes stale
 		require.NoError(t, err, "Error should be nil as stale lock should be removed and lock acquired")
@@ -240,7 +241,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 			defer cancelTest()
 
 			// Pass the cancellable context ctxTest here
-			locked, exists, release, lockErr = q.TryLockIfNotExistsWithTimeout(ctxTest, testHash)
+			locked, exists, release, lockErr = q.TryLockIfNotExistsWithTimeout(ctxTest, testHash, fileformat.FileTypeSubtree)
 		}()
 
 		// Allow the goroutine to enter the wait loop, but cancel BEFORE the lock becomes stale.
@@ -267,7 +268,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), testLoopTimeout)
 		defer cancel()
 
-		locked, exists, releaseFunc, err := q.TryLockIfNotExistsWithTimeout(ctx, testHash)
+		locked, exists, releaseFunc, err := q.TryLockIfNotExistsWithTimeout(ctx, testHash, fileformat.FileTypeSubtree)
 
 		// Expect no error, exists=true, locked=false
 		require.NoError(t, err)
@@ -276,7 +277,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		assert.NotNil(t, releaseFunc) // Expect noopFunc, not nil
 
 		// Attempt to lock again
-		lockedAgain, existsAgain, releaseFuncAgain, errAgain := q.TryLockIfNotExistsWithTimeout(ctx, testHash)
+		lockedAgain, existsAgain, releaseFuncAgain, errAgain := q.TryLockIfNotExistsWithTimeout(ctx, testHash, fileformat.FileTypeSubtree)
 		assert.NoError(t, errAgain, "Should not error when lock already exists")
 		assert.False(t, lockedAgain, "Should not acquire lock when it already exists")
 		assert.True(t, existsAgain, "Exists should still be true on second check") // Add assertion for existsAgain
@@ -321,7 +322,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 		defer cancel()
 
-		locked, exists, release, err := q.TryLockIfNotExistsWithTimeout(ctx, localTestHash)
+		locked, exists, release, err := q.TryLockIfNotExistsWithTimeout(ctx, localTestHash, fileformat.FileTypeSubtree)
 
 		require.NoError(t, err, "TryLockIfNotExistsWithTimeout returned an error")
 		assert.True(t, locked, "Lock should have been acquired after previous one expired")
@@ -350,14 +351,7 @@ func TestNewQuorumWithOptions(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 10*time.Second, q.timeout, "Default timeout should be 10s")
 		assert.Equal(t, time.Duration(0), q.absoluteTimeout, "Default absoluteTimeout should be 0")
-		assert.Empty(t, q.extension, "Default extension should be empty")
-	})
-
-	t.Run("WithExtension", func(t *testing.T) {
-		ext := options.FileExtension("customlock")
-		q, err := NewQuorum(logger, mockExister, path, WithExtension(ext))
-		require.NoError(t, err)
-		assert.Equal(t, ext, q.extension)
+		assert.Equal(t, "", q.fileType.String(), "Default extension should be empty")
 	})
 
 	t.Run("WithAbsoluteTimeout", func(t *testing.T) {

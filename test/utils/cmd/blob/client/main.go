@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/http"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -57,11 +58,11 @@ func testSetAndGet(client *http.HTTPStore) error {
 	key := []byte("testKey1")
 	value := []byte("testValue1")
 
-	if err := client.Set(context.Background(), key, value); err != nil {
+	if err := client.Set(context.Background(), key, fileformat.FileTypeTesting, value); err != nil {
 		return err
 	}
 
-	if retrievedValue, err := client.Get(context.Background(), key); err != nil {
+	if retrievedValue, err := client.Get(context.Background(), key, fileformat.FileTypeTesting); err != nil {
 		return err
 	} else {
 		if !bytes.Equal(value, retrievedValue) {
@@ -69,7 +70,7 @@ func testSetAndGet(client *http.HTTPStore) error {
 		}
 	}
 
-	if err := client.Del(context.Background(), key); err != nil {
+	if err := client.Del(context.Background(), key, fileformat.FileTypeTesting); err != nil {
 		return err
 	}
 
@@ -82,11 +83,11 @@ func testExists(client *http.HTTPStore) error {
 	key := []byte("testKey3")
 	value := []byte("testValue3")
 
-	if err := client.Set(context.Background(), key, value); err != nil {
+	if err := client.Set(context.Background(), key, fileformat.FileTypeTesting, value); err != nil {
 		return err
 	}
 
-	if exists, err := client.Exists(context.Background(), key); err != nil {
+	if exists, err := client.Exists(context.Background(), key, fileformat.FileTypeTesting); err != nil {
 		return err
 	} else {
 		if !exists {
@@ -94,11 +95,11 @@ func testExists(client *http.HTTPStore) error {
 		}
 	}
 
-	if err := client.Del(context.Background(), key); err != nil {
+	if err := client.Del(context.Background(), key, fileformat.FileTypeTesting); err != nil {
 		return err
 	}
 
-	if exists, err := client.Exists(context.Background(), key); err != nil {
+	if exists, err := client.Exists(context.Background(), key, fileformat.FileTypeTesting); err != nil {
 		return err
 	} else {
 		if exists {
@@ -115,17 +116,17 @@ func testSetTTL(client *http.HTTPStore) error {
 	key := []byte("testKey2")
 	value := []byte("testValue2")
 
-	if err := client.Set(context.Background(), key, value); err != nil {
+	if err := client.Set(context.Background(), key, fileformat.FileTypeTesting, value); err != nil {
 		return err
 	}
 
-	if err := client.SetDAH(context.Background(), key, 1); err != nil {
+	if err := client.SetDAH(context.Background(), key, fileformat.FileTypeTesting, 1); err != nil {
 		return err
 	}
 
 	time.Sleep(200 * time.Millisecond)
 
-	if _, err := client.Get(context.Background(), key); err == nil {
+	if _, err := client.Get(context.Background(), key, fileformat.FileTypeTesting); err == nil {
 		return errors.NewUnknownError("expected error but got nil")
 	}
 
@@ -144,12 +145,12 @@ func testSetFromReader(client *http.HTTPStore) error {
 
 	reader := bytes.NewReader(largeData)
 
-	if err := client.SetFromReader(context.Background(), key, io.NopCloser(reader)); err != nil {
+	if err := client.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, io.NopCloser(reader)); err != nil {
 		return err
 	}
 
 	// Retrieve the data
-	retrievedReader, err := client.GetIoReader(context.Background(), key)
+	retrievedReader, err := client.GetIoReader(context.Background(), key, fileformat.FileTypeTesting)
 	if err != nil {
 		return err
 	}
@@ -164,7 +165,7 @@ func testSetFromReader(client *http.HTTPStore) error {
 		return errors.NewUnknownError("inconsistent input/output")
 	}
 
-	if err := client.Del(context.Background(), key); err != nil {
+	if err := client.Del(context.Background(), key, fileformat.FileTypeTesting); err != nil {
 		return err
 	}
 
@@ -177,11 +178,11 @@ func testWithFilename(client *http.HTTPStore) error {
 	key := []byte("testKey5")
 	value := []byte("testValue5")
 
-	if err := client.Set(context.Background(), key, value, options.WithFilename("testFilename")); err != nil {
+	if err := client.Set(context.Background(), key, fileformat.FileTypeTesting, value, options.WithFilename("testFilename")); err != nil {
 		return err
 	}
 
-	if exists, err := client.Exists(context.Background(), key); err != nil {
+	if exists, err := client.Exists(context.Background(), key, fileformat.FileTypeTesting); err != nil {
 		return err
 	} else {
 		if exists {
@@ -189,7 +190,7 @@ func testWithFilename(client *http.HTTPStore) error {
 		}
 	}
 
-	if exists, err := client.Exists(context.Background(), key, options.WithFilename("testFilename")); err != nil {
+	if exists, err := client.Exists(context.Background(), key, fileformat.FileTypeTesting, options.WithFilename("testFilename")); err != nil {
 		return err
 	} else {
 		if !exists {
@@ -197,7 +198,7 @@ func testWithFilename(client *http.HTTPStore) error {
 		}
 	}
 
-	if err := client.Del(context.Background(), key, options.WithFilename("testFilename")); err != nil {
+	if err := client.Del(context.Background(), key, fileformat.FileTypeTesting, options.WithFilename("testFilename")); err != nil {
 		return err
 	}
 

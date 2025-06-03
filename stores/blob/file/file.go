@@ -9,7 +9,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"hash"
 	"io"
@@ -27,7 +26,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/stores/blob/helper"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/ordishs/go-utils"
@@ -41,23 +40,23 @@ const checksumExtension = ".sha256"
 // The implementation includes background processes for tracking and cleaning expired blobs.
 type File struct {
 	// path is the base directory path where blob files are stored
-	path               string
+	path string
 	// logger provides structured logging for file operations and errors
-	logger             ulogger.Logger
+	logger ulogger.Logger
 	// options contains default options for blob operations
-	options            *options.Options
+	options *options.Options
 	// fileDAHs maps filenames to their Delete-At-Height values for expiration tracking
-	fileDAHs           map[string]uint32
+	fileDAHs map[string]uint32
 	// fileDAHsMu protects concurrent access to the fileDAHs map
-	fileDAHsMu         sync.Mutex
+	fileDAHsMu sync.Mutex
 	// fileDAHsCtxCancel is used to stop the DAH cleanup background process on close
-	fileDAHsCtxCancel  context.CancelFunc
+	fileDAHsCtxCancel context.CancelFunc
 	// currentBlockHeight tracks the current blockchain height for DAH processing
 	currentBlockHeight atomic.Uint32
 	// persistSubDir is an optional subdirectory for organization within the base path
-	persistSubDir      string
+	persistSubDir string
 	// longtermClient is an optional secondary storage backend for hybrid storage models
-	longtermClient     longtermStore
+	longtermClient longtermStore
 }
 
 // longtermStore defines the interface for a secondary storage backend that can be used
@@ -66,15 +65,11 @@ type File struct {
 // tiered storage architectures with different retention policies and access patterns.
 type longtermStore interface {
 	// Get retrieves a blob from the longterm store
-	Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+	Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error)
 	// GetIoReader provides streaming access to a blob in the longterm store
-	GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error)
+	GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error)
 	// Exists checks if a blob exists in the longterm store
-	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
-	// GetFooterMetaData retrieves footer metadata from the longterm store
-	GetFooterMetaData(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
-	// GetHeader retrieves header data from the longterm store
-	GetHeader(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+	Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error)
 }
 
 // fileSemaphore is a global limiting semaphore for file operations to prevent excessive
@@ -105,34 +100,6 @@ var fileSemaphore = make(chan struct{}, 1024)
 func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*File, error) {
 	if storeURL == nil {
 		return nil, errors.NewConfigurationError("storeURL is nil")
-	}
-
-	// Add header/footer handling
-	if header := storeURL.Query().Get("header"); header != "" {
-		// Try hex decode first
-		headerBytes, err := hex.DecodeString(header)
-		if err != nil {
-			// If hex decode fails, use as plain text
-			headerBytes = []byte(header)
-		}
-
-		opts = append(opts, options.WithHeader(headerBytes))
-	}
-
-	if eofMarker := storeURL.Query().Get("eofmarker"); eofMarker != "" {
-		// Try hex decode first
-		eofMarkerBytes, err := hex.DecodeString(eofMarker)
-		if err != nil {
-			// If hex decode fails, use as plain text
-			eofMarkerBytes = []byte(eofMarker)
-		}
-
-		opts = append(opts, options.WithFooter(options.NewFooter(len(eofMarkerBytes), eofMarkerBytes, nil)))
-	}
-
-	// Add SHA256 handling from URL query parameter
-	if storeURL.Query().Get("checksum") == "true" {
-		opts = append(opts, options.WithSHA256Checksum())
 	}
 
 	if storeURL.Query().Get("dahCleanerInterval") != "" {
@@ -477,13 +444,13 @@ func (s *File) errorOnOverwrite(filename string, opts *options.Options) error {
 	return nil
 }
 
-func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
+func (s *File) SetFromReader(_ context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
 	fileSemaphore <- struct{}{}
 	defer func() {
 		<-fileSemaphore
 	}()
 
-	filename, err := s.constructFilename(key, opts)
+	filename, err := s.constructFilename(key, fileType, opts)
 	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
 	}
@@ -510,27 +477,16 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 	defer file.Close()
 
 	// Set up the writer and hasher
-	writer, hasher := s.createWriter(file, merged)
+	writer, hasher := s.createWriter(file)
 
-	if merged.Header != nil {
-		if _, err = writer.Write(merged.Header); err != nil {
-			return errors.NewStorageError("[File][SetFromReader] [%s] failed to write header to file", filename, err)
-		}
+	header := fileformat.NewHeader(fileType)
+
+	if err := header.Write(writer); err != nil {
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write header to file", filename, err)
 	}
 
 	if _, err = io.Copy(writer, reader); err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write data to file", filename, err)
-	}
-
-	if merged.Footer != nil {
-		b, err := merged.Footer.GetFooter()
-		if err != nil {
-			return errors.NewStorageError("[File][SetFromReader] [%s] failed to write footer to file", filename, err)
-		}
-
-		if _, err = writer.Write(b); err != nil {
-			return errors.NewStorageError("[File][SetFromReader] [%s] failed to write footer to file", filename, err)
-		}
 	}
 
 	// rename the file to remove the .tmp extension
@@ -546,36 +502,15 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 	return nil
 }
 
-func (s *File) createWriter(file *os.File, opts *options.Options) (io.Writer, hash.Hash) {
+func (s *File) createWriter(file *os.File) (io.Writer, hash.Hash) {
 	// Then set up the writer and hasher
 	var (
 		writer io.Writer
 		hasher hash.Hash
 	)
 
-	// Only create hasher if SHA256 is enabled
-	if opts.GenerateSHA256 {
-		hasher = sha256.New()
-		writer = io.MultiWriter(file, hasher)
-	} else {
-		writer = file
-	}
-
-	return writer, hasher
-}
-
-func (s *File) createWriterToBuffer(buf *bytes.Buffer, opts *options.Options) (io.Writer, hash.Hash) {
-	// Set up the writer and hasher
-	var (
-		writer io.Writer = buf
-		hasher hash.Hash
-	)
-
-	// Only create hasher if SHA256 is enabled
-	if opts.GenerateSHA256 {
-		hasher = sha256.New()
-		writer = io.MultiWriter(writer, hasher)
-	}
+	hasher = sha256.New()
+	writer = io.MultiWriter(file, hasher)
 
 	return writer, hasher
 }
@@ -613,78 +548,13 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 	return nil
 }
 
-func (s *File) Set(_ context.Context, key []byte, value []byte, opts ...options.FileOption) error {
-	fileSemaphore <- struct{}{}
-	defer func() {
-		<-fileSemaphore
-	}()
+func (s *File) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
+	reader := io.NopCloser(bytes.NewReader(value))
 
-	filename, err := s.constructFilename(key, opts)
-	if err != nil {
-		return errors.NewStorageError("[File][Set] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
-	}
-
-	merged := options.MergeOptions(s.options, opts)
-
-	if err := s.errorOnOverwrite(filename, merged); err != nil {
-		return err
-	}
-
-	// Generate a cryptographically secure random number
-	randNum, err := rand.Int(rand.Reader, big.NewInt(1<<63-1))
-	if err != nil {
-		return errors.NewStorageError("[File][Set] failed to generate random number", err)
-	}
-
-	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, randNum)
-
-	// Set up writers
-	var buf bytes.Buffer
-	writer, hasher := s.createWriterToBuffer(&buf, merged)
-
-	// Write header if present
-	if merged.Header != nil {
-		if _, err := writer.Write(merged.Header); err != nil {
-			return errors.NewStorageError("[File][Set] [%s] failed to write header", filename, err)
-		}
-	}
-
-	// Write main content
-	if _, err := writer.Write(value); err != nil {
-		return errors.NewStorageError("[File][Set] [%s] failed to write content", filename, err)
-	}
-
-	// Write footer if present
-	if merged.Footer != nil {
-		b, err := merged.Footer.GetFooter()
-		if err != nil {
-			return errors.NewStorageError("[File][Set] [%s] failed to get footer", filename, err)
-		}
-
-		if _, err := writer.Write(b); err != nil {
-			return errors.NewStorageError("[File][Set] [%s] failed to write footer", filename, err)
-		}
-	}
-
-	// Write bytes to file
-	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err = os.WriteFile(tmpFilename, buf.Bytes(), 0644); err != nil {
-		return errors.NewStorageError("[File][Set] [%s] failed to write data to file", filename, err)
-	}
-
-	if err = os.Rename(tmpFilename, filename); err != nil {
-		return errors.NewStorageError("[File][Set] [%s] failed to rename file from tmp", filename, err)
-	}
-
-	// Write SHA256 hash file
-	if err = s.writeHashFile(hasher, filename); err != nil {
-		return errors.NewStorageError("[File][Set] failed to write hash file", err)
-	}
-
-	return nil
+	return s.SetFromReader(ctx, key, fileType, reader, opts...)
 }
 
-func (s *File) constructFilename(hash []byte, opts []options.FileOption) (string, error) {
+func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts []options.FileOption) (string, error) {
 	fileSemaphore <- struct{}{}
 	defer func() {
 		<-fileSemaphore
@@ -698,7 +568,7 @@ func (s *File) constructFilename(hash []byte, opts []options.FileOption) (string
 		}
 	}
 
-	fileName, err := merged.ConstructFilename(s.path, hash)
+	fileName, err := merged.ConstructFilename(s.path, key, fileType)
 	if err != nil {
 		return "", err
 	}
@@ -739,7 +609,7 @@ func (s *File) constructFilename(hash []byte, opts []options.FileOption) (string
 	return fileName, nil
 }
 
-func (s *File) SetDAH(_ context.Context, key []byte, newDAH uint32, opts ...options.FileOption) error {
+func (s *File) SetDAH(_ context.Context, key []byte, fileType fileformat.FileType, newDAH uint32, opts ...options.FileOption) error {
 	// limit the number of concurrent file operations
 	fileSemaphore <- struct{}{}
 	defer func() {
@@ -748,7 +618,7 @@ func (s *File) SetDAH(_ context.Context, key []byte, newDAH uint32, opts ...opti
 
 	merged := options.MergeOptions(s.options, opts)
 
-	fileName, err := merged.ConstructFilename(s.path, key)
+	fileName, err := merged.ConstructFilename(s.path, key, fileType)
 	if err != nil {
 		return errors.NewStorageError("[File] failed to get file name", err)
 	}
@@ -799,16 +669,16 @@ func (s *File) SetDAH(_ context.Context, key []byte, newDAH uint32, opts ...opti
 	return nil
 }
 
-func (s *File) GetDAH(ctx context.Context, key []byte, opts ...options.FileOption) (uint32, error) {
+func (s *File) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
 	merged := options.MergeOptions(s.options, opts)
 
-	fileName, err := merged.ConstructFilename(s.path, key)
+	fileName, err := merged.ConstructFilename(s.path, key, fileType)
 	if err != nil {
 		return 0, err
 	}
 
 	// Check if the file (not the DAH file) exists
-	exists, err := s.Exists(ctx, key, opts...)
+	exists, err := s.Exists(ctx, key, fileType, opts...)
 	if err != nil {
 		return 0, err
 	}
@@ -830,7 +700,7 @@ func (s *File) GetDAH(ctx context.Context, key []byte, opts ...options.FileOptio
 	return dah, nil
 }
 
-func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	fileSemaphore <- struct{}{}
 	defer func() {
 		<-fileSemaphore
@@ -838,263 +708,131 @@ func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.FileO
 
 	merged := options.MergeOptions(s.options, opts)
 
-	fileName, err := merged.ConstructFilename(s.path, hash)
+	fileName, err := merged.ConstructFilename(s.path, key, fileType)
 	if err != nil {
 		return nil, err
 	}
 
+	f, err := s.openFileWithFallback(ctx, merged, fileName, key, fileType, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.validateFileHeader(f, fileName, fileType); err != nil {
+		f.Close()
+		return nil, err
+	}
+
+	return f, nil
+}
+
+// validateFileHeader reads and validates the file header.
+func (s *File) validateFileHeader(f io.Reader, fileName string, fileType fileformat.FileType) error {
+	header := &fileformat.Header{}
+	if err := header.Read(f); err != nil {
+		return errors.NewStorageError("[File][GetIoReader] [%s] missing or invalid header: %v", fileName, err)
+	}
+
+	if header.FileType() != fileType {
+		return errors.NewStorageError("[File][GetIoReader] [%s] header filetype mismatch: got %s, want %s", fileName, header.FileType(), fileType)
+	}
+
+	return nil
+}
+
+// openFileWithFallback tries to open the primary file, then persistSubDir, then longtermClient if available.
+func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options, fileName string, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	f, err := os.Open(fileName)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, errors.NewStorageError("[File][GetIoReader] [%s] failed to open file", fileName, err)
+	if err == nil {
+		return f, nil
+	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.NewStorageError("[File][GetIoReader] [%s] failed to open file", fileName, err)
+	}
+
+	// Try persistSubDir if set
+	if s.persistSubDir != "" {
+		persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), key, fileType)
+		if err != nil {
+			return nil, err
 		}
 
-		if s.persistSubDir != "" {
-			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
-			if err != nil {
-				return nil, err
-			}
+		persistFile, err := os.Open(persistedFilename)
+		if err == nil {
+			return persistFile, nil
+		}
 
-			f, err = os.Open(persistedFilename)
-			if err != nil {
-				if !errors.Is(err, os.ErrNotExist) {
-					return nil, errors.NewStorageError("[File][GetIoReader] [%s] failed to open file in persist directory", persistedFilename, err)
-				}
-
-				if s.longtermClient != nil {
-					fileReader, err := s.longtermClient.GetIoReader(context.Background(), hash, opts...)
-					if err != nil {
-						if errors.Is(err, os.ErrNotExist) {
-							return nil, errors.ErrNotFound
-						}
-
-						return nil, errors.NewStorageError("[File][GetIoReader] [%s] unable to open longterm storage file", fileName, err)
-					}
-
-					return helper.ReaderWithHeaderAndFooterRemoved(fileReader, merged.Header, merged.Footer)
-				}
-
-				return nil, errors.ErrNotFound
-			}
-		} else {
-			if s.longtermClient != nil {
-				fileReader, err := s.longtermClient.GetIoReader(context.Background(), hash, opts...)
-				if err != nil {
-					if errors.Is(err, os.ErrNotExist) {
-						return nil, errors.ErrNotFound
-					}
-
-					return nil, errors.NewStorageError("[File][GetIoReader] [%s] unable to open longterm storage file", fileName, err)
-				}
-
-				return helper.ReaderWithHeaderAndFooterRemoved(fileReader, merged.Header, merged.Footer)
-			}
-
-			return nil, errors.ErrNotFound
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, errors.NewStorageError("[File][GetIoReader] [%s] failed to open file in persist directory", persistedFilename, err)
 		}
 	}
 
-	return helper.ReaderWithHeaderAndFooterRemoved(f, merged.Header, merged.Footer)
+	// Try longterm storage if available
+	if s.longtermClient != nil {
+		fileReader, err := s.longtermClient.GetIoReader(ctx, key, fileType, opts...)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, errors.ErrNotFound
+			}
+
+			return nil, errors.NewStorageError("[File][GetIoReader] [%s] unable to open longterm storage file", fileName, err)
+		}
+
+		return fileReader, nil
+	}
+
+	return nil, errors.ErrNotFound
 }
 
-func (s *File) Get(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	fileSemaphore <- struct{}{}
-	defer func() {
-		<-fileSemaphore
-	}()
-
-	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
-
-	merged := options.MergeOptions(s.options, opts)
-
-	filename, err := merged.ConstructFilename(s.path, hash)
+func (s *File) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
+	fileReader, err := s.GetIoReader(ctx, key, fileType, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	b, err := os.ReadFile(filename)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, errors.NewStorageError("[File][Get] [%s] failed to read data from file", filename, err)
-		}
+	defer fileReader.Close()
 
-		// If file not found in primary location, check persistent directory
-		if s.persistSubDir != "" {
-			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
-			if err != nil {
-				return nil, err
-			}
+	// Read all bytes from the reader
+	var fileData bytes.Buffer
 
-			b, err = os.ReadFile(persistedFilename)
-			if err != nil {
-				if !errors.Is(err, os.ErrNotExist) {
-					return nil, errors.NewStorageError("[File][Get] [%s] failed to read data from persist file", persistedFilename, err)
-				}
-
-				// If longterm client is configured, try to get from longterm storage
-				if s.longtermClient != nil {
-					b, err = s.longtermClient.Get(context.Background(), hash, opts...)
-					if err != nil {
-						if errors.Is(err, os.ErrNotExist) {
-							return nil, errors.ErrNotFound
-						}
-
-						return nil, errors.NewStorageError("[File][Get] [%s] unable to open longterm storage file", filename, err)
-					}
-				} else {
-					return nil, errors.ErrNotFound
-				}
-			}
-		} else {
-			// If longterm client is configured but no persist directory, try longterm storage directly
-			if s.longtermClient != nil {
-				b, err = s.longtermClient.Get(context.Background(), hash, opts...)
-				if err != nil {
-					if errors.Is(err, os.ErrNotExist) {
-						return nil, errors.ErrNotFound
-					}
-
-					return nil, errors.NewStorageError("[File][Get] [%s] unable to open longterm storage file", filename, err)
-				}
-			} else {
-				return nil, errors.ErrNotFound
-			}
-		}
+	if _, err = io.Copy(&fileData, fileReader); err != nil {
+		return nil, errors.NewStorageError("[File][Get] failed to read data from file reader", err)
 	}
 
-	b, err = helper.BytesWithHeadAndFooterRemoved(b, merged.Header, merged.Footer)
-	if err != nil {
-		return nil, errors.NewStorageError("[File][Get] [%s] failed to remove header and footer", filename, err)
-	}
-
-	return b, nil
+	return fileData.Bytes(), nil
 }
 
-func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
-	fileSemaphore <- struct{}{}
-	defer func() {
-		<-fileSemaphore
-	}()
-
-	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
-
-	merged := options.MergeOptions(s.options, opts)
-
-	fileName, err := merged.ConstructFilename(s.path, hash)
+func (s *File) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
+	// The GetIOReader method will handle file locking and error handling,
+	// This method is not updated to require fileType, as Exists is not a getter/setter for content.
+	fileReader, err := s.GetIoReader(ctx, key, fileType, opts...)
 	if err != nil {
-		return nil, err
-	}
-
-	file, err := os.Open(fileName)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, errors.ErrNotFound
+		if errors.Is(err, errors.ErrNotFound) {
+			// If the file does not exist, return false
+			return false, nil
 		}
 
-		return nil, errors.NewStorageError("[File] [%s] failed to open file", fileName, err)
-	}
-
-	if len(merged.Header) > 0 {
-		if _, err = file.Seek(int64(len(merged.Header)), 0); err != nil {
-			return nil, err // nolint:gosec
-		}
-	}
-
-	bytes := make([]byte, nrOfBytes)
-
-	nRead, err := file.Read(bytes)
-	if err != nil {
-		return nil, errors.NewStorageError("[File][GetHead] [%s] failed to read data from file", fileName, err)
-	}
-
-	return bytes[:nRead], err
-}
-
-func (s *File) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
-	fileSemaphore <- struct{}{}
-	defer func() {
-		<-fileSemaphore
-	}()
-
-	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
-
-	merged := options.MergeOptions(s.options, opts)
-
-	fileName, err := merged.ConstructFilename(s.path, hash)
-	if err != nil {
 		return false, err
 	}
 
-	_, err = os.Stat(fileName)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return false, errors.NewStorageError("[File][Exists] [%s] failed to read data from file", fileName, err)
-		}
+	defer fileReader.Close()
 
-		// If file not found in primary location, check persistent directory
-		if s.persistSubDir != "" {
-			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
-			if err != nil {
-				return false, err
-			}
-
-			_, err = os.Stat(persistedFilename)
-			if err != nil {
-				if !os.IsNotExist(err) {
-					return false, errors.NewStorageError("[File][Exists] [%s] failed to read data from persist file", persistedFilename, err)
-				}
-
-				// If longterm client is configured, check longterm storage
-				if s.longtermClient != nil {
-					exists, err := s.longtermClient.Exists(context.Background(), hash, opts...)
-					if err != nil {
-						if errors.Is(err, os.ErrNotExist) {
-							return false, nil
-						}
-
-						return false, errors.NewStorageError("[File][Exists] failed to read data from longterm storage file", err)
-					}
-
-					return exists, nil
-				}
-
-				return false, nil
-			}
-
-			return true, nil
-		} else {
-			// If longterm client is configured but no persist directory, check longterm storage directly
-			if s.longtermClient != nil {
-				exists, err := s.longtermClient.Exists(context.Background(), hash, opts...)
-				if err != nil {
-					if errors.Is(err, os.ErrNotExist) {
-						return false, nil
-					}
-
-					return false, errors.NewStorageError("[File][Exists] failed to read data from longterm storage file", err)
-				}
-
-				return exists, nil
-			}
-
-			return false, nil
-		}
-	}
-
+	// If we can read from the fileReader, the file exists
 	return true, nil
 }
 
-func (s *File) Del(_ context.Context, hash []byte, opts ...options.FileOption) error {
+func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
 	fileSemaphore <- struct{}{}
 	defer func() {
 		<-fileSemaphore
 	}()
 
-	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
+	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(key))
 
 	merged := options.MergeOptions(s.options, opts)
 
-	fileName, err := merged.ConstructFilename(s.path, hash)
+	fileName, err := merged.ConstructFilename(s.path, key, fileType)
 	if err != nil {
 		return err
 	}
@@ -1157,124 +895,4 @@ func findFilesByExtension(root, ext string) ([]string, error) {
 	}
 
 	return a, nil
-}
-
-func (s *File) GetFooterMetaData(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	fileSemaphore <- struct{}{}
-	defer func() {
-		<-fileSemaphore
-	}()
-
-	merged := options.MergeOptions(s.options, opts)
-
-	if merged.Footer == nil {
-		return nil, nil
-	}
-
-	fileName, err := merged.ConstructFilename(s.path, hash)
-	if err != nil {
-		return nil, err
-	}
-
-	f, err := os.Open(fileName)
-	if err == nil {
-		defer f.Close()
-		return helper.FooterMetaData(f, merged.Footer)
-	}
-
-	if !errors.Is(err, os.ErrNotExist) {
-		return nil, errors.NewStorageError("[File][GetMetaData] [%s] unable to open file", fileName, err)
-	}
-
-	if s.persistSubDir != "" {
-		persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
-		if err != nil {
-			return nil, err
-		}
-
-		f, err = os.Open(persistedFilename)
-		if err == nil {
-			defer f.Close()
-			return helper.FooterMetaData(f, merged.Footer)
-		}
-
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, errors.NewStorageError("[File][GetMetaData] [%s] unable to open persist file", persistedFilename, err)
-		}
-	}
-
-	if s.longtermClient != nil {
-		b, err := s.longtermClient.GetFooterMetaData(ctx, hash, opts...)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil, errors.ErrNotFound
-			}
-
-			return nil, errors.NewStorageError("[File][GetMetaData] [%s] unable to open longterm storage file", fileName, err)
-		}
-
-		return b, nil
-	}
-
-	return nil, errors.ErrNotFound
-}
-
-func (s *File) GetHeader(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	fileSemaphore <- struct{}{}
-	defer func() {
-		<-fileSemaphore
-	}()
-
-	merged := options.MergeOptions(s.options, opts)
-
-	if merged.Header == nil {
-		return nil, nil
-	}
-
-	fileName, err := merged.ConstructFilename(s.path, hash)
-	if err != nil {
-		return nil, err
-	}
-
-	f, err := os.Open(fileName)
-	if err == nil {
-		defer f.Close()
-		return helper.HeaderMetaData(f, len(merged.Header))
-	}
-
-	if !errors.Is(err, os.ErrNotExist) {
-		return nil, errors.NewStorageError("[File][GetHeader] [%s] unable to open file", fileName, err)
-	}
-
-	if s.persistSubDir != "" {
-		persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
-		if err != nil {
-			return nil, err
-		}
-
-		f, err = os.Open(persistedFilename)
-		if err == nil {
-			defer f.Close()
-			return helper.HeaderMetaData(f, len(merged.Header))
-		}
-
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, errors.NewStorageError("[File][GetHeader] [%s] unable to open persist file", persistedFilename, err)
-		}
-	}
-
-	if s.longtermClient != nil {
-		b, err := s.longtermClient.GetHeader(ctx, hash, opts...)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil, errors.ErrNotFound
-			}
-
-			return nil, errors.NewStorageError("[File][GetHeader] [%s] unable to open longterm storage file", fileName, err)
-		}
-
-		return b, nil
-	}
-
-	return nil, errors.ErrNotFound
 }

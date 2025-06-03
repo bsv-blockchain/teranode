@@ -11,12 +11,12 @@ import (
 
 	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -160,7 +160,7 @@ func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees 
 		subtreeBytes, err := subtree.Serialize()
 		require.NoError(t, err)
 
-		require.NoError(t, subtreeStore.Set(t.Context(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension(options.SubtreeFileExtension)))
+		require.NoError(t, subtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 		subtreeMeta := util.NewSubtreeMeta(subtree)
 		for idx, node := range subtree.Nodes {
@@ -176,7 +176,7 @@ func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees 
 		subtreeMetaBytes, err := subtreeMeta.Serialize()
 		require.NoError(t, err)
 
-		require.NoError(t, subtreeStore.Set(t.Context(), subtree.RootHash()[:], subtreeMetaBytes, options.WithFileExtension(options.SubtreeMetaFileExtension)))
+		require.NoError(t, subtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
 		subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	}

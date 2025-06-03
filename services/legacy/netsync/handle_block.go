@@ -10,10 +10,12 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/peer"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
@@ -57,7 +59,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		// read block from disk
 		blockReader, err = sm.tempStore.GetIoReader(ctx,
 			blockHash.CloneBytes(),
-			options.WithFileExtension("msgBlock"),
+			fileformat.FileTypeMsgBlock,
 			options.WithSubDirectory("blocks"),
 		)
 		if err != nil {
@@ -81,7 +83,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 			// delete the temporarily saved block from disk after this function completes
 			if err = sm.tempStore.Del(ctx,
 				blockHash.CloneBytes(),
-				options.WithFileExtension("msgBlock"),
+				fileformat.FileTypeMsgBlock,
 				options.WithSubDirectory("blocks"),
 			); err != nil {
 				sm.logger.Errorf("failed to delete block from disk: %v", err)
@@ -394,9 +396,9 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 		tracing.WithLogMessage(sm.logger, "[writeSubtree][%s] writing subtree for block %s height %d", subtree.RootHash().String(), block.Hash().String(), block.Height()),
 	)
 
-	subtreeFileExtension := options.SubtreeToCheckFileExtension
+	subtreeFileExtension := fileformat.FileTypeSubtreeToCheck
 	if quickValidationMode {
-		subtreeFileExtension = options.SubtreeFileExtension
+		subtreeFileExtension = fileformat.FileTypeSubtree
 	}
 
 	defer deferFn()
@@ -411,33 +413,61 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 
 		dah := uint32(block.Height()) + sm.settings.GlobalBlockHeightRetention // nolint: gosec
 
-		if err = sm.subtreeStore.Set(gCtx,
+		storer, err := filestorer.NewFileStorer(
+			gCtx,
+			sm.logger,
+			sm.settings,
+			sm.subtreeStore,
 			subtree.RootHash()[:],
-			subtreeBytes,
-			options.WithFileExtension(subtreeFileExtension),
+			subtreeFileExtension,
 			options.WithDeleteAt(dah),
-		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-			return errors.NewStorageError("[writeSubtree][%s] failed to store subtree", subtree.RootHash().String(), err)
+		)
+		if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+			return errors.NewStorageError("[writeSubtree][%s] failed to create subtree file", subtree.RootHash().String(), err)
+		}
+
+		// TODO Write header extra - *subtree.RootHash(), uint32(block.Height())
+
+		if _, err = storer.Write(subtreeBytes); err != nil {
+			return errors.NewStorageError("error writing subtree to disk", err)
+		}
+
+		if err = storer.Close(ctx); err != nil {
+			return errors.NewStorageError("error closing subtree file", err)
 		}
 
 		return nil
 	})
 
 	g.Go(func() error {
-		subtreeBytes, err := subtreeData.Serialize()
+		subtreeDataBytes, err := subtreeData.Serialize()
 		if err != nil {
 			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
 		}
 
 		dah := uint32(block.Height()) + sm.settings.GlobalBlockHeightRetention // nolint: gosec
 
-		if err = sm.subtreeStore.Set(gCtx,
+		storer, err := filestorer.NewFileStorer(
+			gCtx,
+			sm.logger,
+			sm.settings,
+			sm.subtreeStore,
 			subtreeData.RootHash()[:],
-			subtreeBytes,
-			options.WithFileExtension(options.SubtreeDataFileExtension),
+			fileformat.FileTypeSubtreeData,
 			options.WithDeleteAt(dah),
-		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-			return errors.NewStorageError("[writeSubtree][%s] failed to store subtree data", subtree.RootHash().String(), err)
+		)
+		if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+			return errors.NewStorageError("[writeSubtree][%s] failed to create subtree data file", subtree.RootHash().String(), err)
+		}
+
+		// TODO Write header extra - , *subtreeData.RootHash(), uint32(block.Height())
+
+		if _, err := storer.Write(subtreeDataBytes); err != nil {
+			return errors.NewStorageError("error writing subtree data to disk", err)
+		}
+
+		if err = storer.Close(ctx); err != nil {
+			return errors.NewStorageError("error closing subtree data file", err)
 		}
 
 		return nil
@@ -454,13 +484,27 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 
 			dah := uint32(block.Height()) + sm.settings.GlobalBlockHeightRetention // nolint: gosec
 
-			if err = sm.subtreeStore.Set(ctx,
+			storer, err := filestorer.NewFileStorer(
+				gCtx,
+				sm.logger,
+				sm.settings,
+				sm.subtreeStore,
 				subtreeData.RootHash()[:],
-				subtreeBytes,
-				options.WithFileExtension(options.SubtreeMetaFileExtension),
+				fileformat.FileTypeSubtreeMeta,
 				options.WithDeleteAt(dah),
-			); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+			)
+			if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 				return errors.NewStorageError("[writeSubtree][%s] failed to store subtree meta data", subtree.RootHash().String(), err)
+			}
+
+			// TODO Write header extra - , *subtree.RootHash(), uint32(block.Height())
+
+			if _, err = storer.Write(subtreeBytes); err != nil {
+				return errors.NewStorageError("error writing subtree meta to disk", err)
+			}
+
+			if err = storer.Close(gCtx); err != nil {
+				return errors.NewStorageError("error closing subtree meta file", err)
 			}
 
 			return nil

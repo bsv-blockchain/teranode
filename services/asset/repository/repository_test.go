@@ -6,10 +6,10 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/asset/repository"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -52,7 +52,7 @@ func TestTransaction(t *testing.T) {
 
 	txHash := tx.TxIDChainHash()
 
-	err = txStore.Set(context.Background(), txHash.CloneBytes(), tx.Bytes())
+	err = txStore.Set(context.Background(), txHash.CloneBytes(), fileformat.FileTypeTx, tx.Bytes())
 	require.NoError(t, err)
 
 	// Create a new repository
@@ -163,7 +163,7 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	value, err := subtree.Serialize()
 	require.NoError(t, err)
 
-	err = subtreeStore.Set(context.Background(), key.CloneBytes(), value, options.WithFileExtension(options.SubtreeFileExtension))
+	err = subtreeStore.Set(context.Background(), key.CloneBytes(), fileformat.FileTypeSubtree, value)
 	require.NoError(t, err)
 
 	// Create a new repository

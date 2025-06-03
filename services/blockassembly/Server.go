@@ -22,6 +22,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/mining"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
@@ -260,8 +261,8 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					// store the subtree meta
 					if err = ba.subtreeStore.Set(ctx,
 						subtreeRetry.subtreeHash[:],
+						fileformat.FileTypeSubtreeMeta,
 						subtreeRetry.subtreeMetaBytes,
-						options.WithFileExtension(options.SubtreeMetaFileExtension),
 						options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
 					); err != nil {
 						if errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -287,9 +288,9 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 
 				if err = ba.subtreeStore.Set(ctx,
 					subtreeRetry.subtreeHash[:],
+					fileformat.FileTypeSubtree,
 					subtreeRetry.subtreeBytes,
 					options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
-					options.WithFileExtension(options.SubtreeFileExtension),
 				); err != nil {
 					if errors.Is(err, errors.ErrBlobAlreadyExists) {
 						ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree already exists", subtreeRetry.subtreeHash.String())
@@ -388,7 +389,7 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 
 	// start1, stat1, _ := util.NewStatFromContext(ctx, "newSubtreeChan", channelStats)
 	// check whether this subtree already exists in the store, which would mean it has already been announced
-	if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:]); ok {
+	if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree); ok {
 		// subtree already exists, nothing to do
 		ba.logger.Debugf("[BlockAssembly:Init][%s] subtree already exists", subtree.RootHash().String())
 		return
@@ -439,8 +440,8 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 
 			if err = ba.subtreeStore.Set(ctx,
 				subtree.RootHash()[:],
+				fileformat.FileTypeSubtreeMeta,
 				subtreeMetaBytes,
-				options.WithFileExtension(options.SubtreeMetaFileExtension),
 				options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
 			); err != nil {
 				if errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -462,9 +463,9 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 
 	if err = ba.subtreeStore.Set(ctx,
 		subtree.RootHash()[:],
+		fileformat.FileTypeSubtree,
 		subtreeBytes,
 		options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
-		options.WithFileExtension(options.SubtreeFileExtension),
 	); err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
 			ba.logger.Debugf("[BlockAssembly:Init][%s] subtree already exists", subtree.RootHash().String())
@@ -973,7 +974,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	ba.logger.Infof("[BlockAssembly][%s][%s] validating block DONE in %s", jobID, block.Header.Hash(), time.Since(startTime).String())
 
 	// TODO context was being canceled, is this hiding a different problem?
-	err = ba.txStore.Set(context.Background(), block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
+	err = ba.txStore.Set(context.Background(), block.CoinbaseTx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, block.CoinbaseTx.ExtendedBytes())
 	if err != nil {
 		ba.logger.Errorf("[BlockAssembly][%s][%s] error storing coinbase tx in tx store: %v", jobID, block.Hash().String(), err)
 	}
@@ -1114,7 +1115,7 @@ func (ba *BlockAssembly) removeSubtreesDAH(ctx context.Context, block *model.Blo
 
 		g.Go(func() error {
 			// TODO this would be better as a batch operation
-			if err := ba.subtreeStore.SetDAH(gCtx, subtreeHashBytes, 0, options.WithFileExtension(options.SubtreeFileExtension)); err != nil {
+			if err := ba.subtreeStore.SetDAH(gCtx, subtreeHashBytes, fileformat.FileTypeSubtree, 0); err != nil {
 				// TODO should this retry? We are in a bad state when this happens
 				ba.logger.Errorf("[removeSubtreesDAH][%s][%s] failed to update subtree DAH: %v", block.Hash().String(), subtreeHash.String(), err)
 			}

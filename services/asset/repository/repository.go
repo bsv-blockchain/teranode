@@ -12,10 +12,10 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/tracing"
@@ -156,7 +156,7 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 
 	repo.logger.Warnf("[Repository] GetTransaction: %s not found in txmeta store: %v", hash.String(), err)
 
-	tx, err := repo.TxStore.Get(ctx, hash.CloneBytes())
+	tx, err := repo.TxStore.Get(ctx, hash.CloneBytes(), fileformat.FileTypeTx)
 	if err != nil {
 		return nil, err
 	}
@@ -373,15 +373,26 @@ func (repo *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, l
 //   - []byte: Subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
-	subtreeBytes, err := repo.SubtreeStore.Get(ctx, hash.CloneBytes(), options.WithFileExtension(options.SubtreeFileExtension))
+	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
 	if err != nil {
 		return nil, err
+	}
+
+	defer func() {
+		_ = subtreeReader.Close()
+	}()
+
+	var subtreeBytes []byte
+
+	subtreeBytes, err = io.ReadAll(subtreeReader)
+	if err != nil {
+		return nil, errors.NewServiceError("error reading subtree bytes", err)
 	}
 
 	return subtreeBytes, nil
 }
 
-// GetSubtreeReader provides a reader interface for accessing subtree data.
+// GetSubtreeTxIDsReader provides a reader interface for accessing subtree data.
 //
 // Parameters:
 //   - ctx: Context for the operation
@@ -391,7 +402,7 @@ func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Has
 //   - io.ReadCloser: Reader for subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
-	return repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension(options.SubtreeFileExtension))
+	return repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
 }
 
 // GetSubtreeDataReaderFromBlockPersister provides a reader interface for accessing subtree data from block persister.
@@ -404,7 +415,7 @@ func (repo *Repository) GetSubtreeTxIDsReader(ctx context.Context, hash *chainha
 //   - io.ReadCloser: Reader for subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
-	return repo.BlockPersisterStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension(options.SubtreeDataFileExtension))
+	return repo.BlockPersisterStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeData)
 }
 
 // GetSubtree retrieves and deserializes a complete subtree structure.
@@ -421,12 +432,16 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
 	)
 
-	subtreeBytes, err := repo.SubtreeStore.Get(ctx, hash.CloneBytes(), options.WithFileExtension(options.SubtreeFileExtension))
+	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
 	if err != nil {
 		return nil, errors.NewServiceError("error in GetSubtree Get method", err)
 	}
 
-	subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
+	defer func() {
+		_ = subtreeReader.Close()
+	}()
+
+	subtree, err := util.NewSubtreeFromReader(subtreeReader)
 	if err != nil {
 		return nil, errors.NewProcessingError("error in NewSubtreeFromBytes", err)
 	}
@@ -435,7 +450,7 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 }
 
 func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), options.WithFileExtension(options.SubtreeFileExtension))
+	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
 }
 
 // GetSubtreeHead retrieves only the head portion of a subtree, containing fees and size information.
@@ -451,17 +466,28 @@ func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Ha
 func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error) {
 	repo.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 
-	subtreeBytes, err := repo.SubtreeStore.GetHead(ctx, hash.CloneBytes(), 56, options.WithFileExtension(options.SubtreeFileExtension))
+	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
 	if err != nil {
 		return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method", err)
 	}
 
-	if len(subtreeBytes) != 56 {
+	defer func() {
+		_ = subtreeReader.Close()
+	}()
+
+	var subtreeBytes [56]byte
+
+	n, err := io.ReadFull(subtreeReader, subtreeBytes[:])
+	if err != nil {
+		return nil, 0, errors.NewServiceError("error reading subtree head bytes", err)
+	}
+
+	if n != 56 {
 		return nil, 0, errors.ErrNotFound
 	}
 
 	subtree := &util.Subtree{}
-	buf := bytes.NewBuffer(subtreeBytes)
+	buf := bytes.NewBuffer(subtreeBytes[:])
 
 	// read root hash
 	_, err = chainhash.NewHash(buf.Next(32))

@@ -493,6 +493,7 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 		// Test Get with non-existent hash
 		hash, err := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
 		require.NoError(t, err)
+
 		metaGet, err := cache.Get(ctx, hash)
 		require.Error(t, err)
 		require.Nil(t, metaGet)

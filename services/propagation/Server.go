@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/services/propagation/propagation_api"
@@ -509,9 +510,10 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 // 1. Creates an Echo server instance with context for graceful shutdown
 // 2. Registers essential middleware (recover, CORS, request ID, logging)
 // 3. Configures transaction processing endpoints:
-//    - POST /tx for single transaction processing
-//    - POST /txs for batch transaction processing
-//    - GET /health for service health checks
+//   - POST /tx for single transaction processing
+//   - POST /txs for batch transaction processing
+//   - GET /health for service health checks
+//
 // 4. Sets up listener configuration with appropriate address binding
 // 5. Starts the server in a non-blocking mode with proper error handling
 //
@@ -607,11 +609,11 @@ func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, http
 //
 // The method is designed to handle high transaction throughput while providing
 // detailed error reporting for various failure scenarios.
-// 
+//
 // Parameters:
 //   - ctx: Context for the transaction processing with tracing information
 //   - req: Transaction processing request containing raw transaction data
-// 
+//
 // Returns:
 //   - *propagation_api.EmptyMessage: Empty response on successful processing
 //   - error: Error with specific details if transaction processing fails
@@ -636,11 +638,11 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 //
 // This concurrent processing approach significantly improves throughput for batch submission
 // while maintaining proper error isolation between transactions.
-// 
+//
 // Parameters:
 //   - ctx: Context for the batch processing operation with cancellation support
 //   - req: Batch request containing multiple raw transactions
-// 
+//
 // Returns:
 //   - *propagation_api.ProcessTransactionBatchResponse: Response containing per-transaction error status
 //   - error: Error if overall batch processing fails (size limits, context canceled)
@@ -730,10 +732,10 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 // 2. Verifies the transaction is in extended format (required for proper processing)
 // 3. Stores the transaction in the configured blob store with proper tracing context decoupling
 // 4. Routes the transaction to the appropriate validation path based on size and configuration:
-//    - If Kafka is configured, uses size-based routing:
-//      - Small transactions go through Kafka for async validation
-//      - Large transactions that exceed Kafka size limits use HTTP fallback
-//    - If no Kafka is configured, uses direct synchronous validation
+//   - If Kafka is configured, uses size-based routing:
+//   - Small transactions go through Kafka for async validation
+//   - Large transactions that exceed Kafka size limits use HTTP fallback
+//   - If no Kafka is configured, uses direct synchronous validation
 //
 // Parameters:
 //   - ctx: Context for transaction processing with tracing information
@@ -905,11 +907,11 @@ func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
 // The storage mechanism is critical for transaction durability and enables
 // transaction lookup for subsequent processing stages. Using the chain hash
 // as key ensures consistent and efficient transaction retrieval.
-// 
+//
 // Parameters:
 //   - ctx: Context for the storage operation with tracing and timeout
 //   - btTx: Bitcoin transaction to store (must be properly parsed)
-// 
+//
 // Returns:
 //   - error: Error with detailed context if the storage operation fails
 func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) error {
@@ -917,7 +919,7 @@ func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) 
 	defer deferFn()
 
 	if ps.txStore != nil {
-		if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
+		if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, btTx.ExtendedBytes()); err != nil {
 			// TODO make this resilient to errors
 			// write it to secondary store (Kafka) and retry?
 			return err

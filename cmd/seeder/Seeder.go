@@ -3,6 +3,7 @@ package seeder
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockpersister"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -25,10 +27,11 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blockchain"
 	blockchain_options "github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	utxo_factory "github.com/bitcoin-sv/teranode/stores/utxo/_factory"
+	utxo_factory "github.com/bitcoin-sv/teranode/stores/utxo/factory"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -188,13 +191,26 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *setti
 
 	reader := bufio.NewReader(f)
 
-	magic, hash, height, err := utxopersister.GetHeaderFromReader(reader)
+	header, err := fileformat.ReadHeader(reader)
 	if err != nil {
 		return errors.NewProcessingError("Failed to read UTXO set header", err)
 	}
 
-	if magic != "U-H-1.0" {
-		return errors.NewProcessingError("Invalid magic number: %s", magic)
+	if header.FileType() != fileformat.FileTypeUtxoHeaders {
+		return errors.NewProcessingError("Invalid file type: %s", header.FileType())
+	}
+
+	var (
+		hash   *chainhash.Hash
+		height uint32
+	)
+
+	if err := binary.Read(reader, binary.LittleEndian, hash); err != nil {
+		return errors.NewProcessingError("Failed to read UTXO set header", err)
+	}
+
+	if err := binary.Read(reader, binary.LittleEndian, &height); err != nil {
+		return errors.NewProcessingError("Failed to read UTXO set header", err)
 	}
 
 	// Write the last block height and hash to the blockpersister_state.txt file
@@ -269,7 +285,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *setting
 		return errors.NewStorageError("Failed to create blockStore", err)
 	}
 
-	exists, err := blockStore.Exists(ctx, nil, blob_options.WithFilename("lastProcessed"), blob_options.WithFileExtension("dat"))
+	exists, err := blockStore.Exists(ctx, nil, fileformat.FileTypeDat, blob_options.WithFilename("lastProcessed"))
 	if err != nil {
 		return errors.NewStorageError("Failed to check if lastProcessed.dat exists", err)
 	}
@@ -313,13 +329,32 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *setting
 
 	reader := bufio.NewReader(f)
 
-	magic, _, height, _, err := utxopersister.GetUTXOSetHeaderFromReader(reader)
+	header, err := fileformat.ReadHeader(reader)
 	if err != nil {
 		return errors.NewProcessingError("Failed to read UTXO set header", err)
 	}
 
-	if magic != "U-S-1.0" {
-		return errors.NewProcessingError("Invalid magic number: %s", magic)
+	if header.FileType() != fileformat.FileTypeUtxoSet {
+		return errors.NewProcessingError("Invalid file type: %s", header.FileType)
+	}
+
+	var hash *chainhash.Hash
+
+	if err := binary.Read(reader, binary.LittleEndian, &hash); err != nil {
+		return errors.NewProcessingError("Failed to read UTXO set header", err)
+	}
+
+	var height uint32
+	if err := binary.Read(reader, binary.LittleEndian, &height); err != nil {
+		return errors.NewProcessingError("Failed to read UTXO set header", err)
+	}
+
+	// With UTXOSets, we also read the previous block hash before we start reading the UTXOs
+	var previousBlockHash [32]byte
+
+	_, err = reader.Read(previousBlockHash[:])
+	if err != nil {
+		return errors.NewProcessingError("Couldn't read previous block hash from file", err)
 	}
 
 	var (
@@ -383,7 +418,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *setting
 
 	heightStr := fmt.Sprintf("%d\n", height)
 
-	if err := blockStore.Set(ctx, nil, []byte(heightStr), blob_options.WithFilename("lastProcessed"), blob_options.WithFileExtension("dat")); err != nil {
+	if err := blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(heightStr), blob_options.WithFilename("lastProcessed")); err != nil {
 		return errors.NewStorageError("Failed to write height of %d to lastProcessed.dat", height, err)
 	}
 

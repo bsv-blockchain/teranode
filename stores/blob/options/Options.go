@@ -12,6 +12,7 @@ import (
 	"strconv"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/ordishs/go-utils"
 )
 
@@ -29,8 +30,6 @@ type Options struct {
 	DAH uint32
 	// Filename is an optional custom name for storing a blob instead of using its hash
 	Filename string
-	// Extension is an optional file extension to append to blob filenames
-	Extension FileExtension
 	// SubDirectory is an optional subdirectory for organizing blobs within the store
 	SubDirectory string
 	// HashPrefix controls how hash-based directory structures are created
@@ -40,12 +39,6 @@ type Options struct {
 	HashPrefix int
 	// AllowOverwrite determines if existing blobs can be overwritten
 	AllowOverwrite bool
-	// Header is optional data to prepend to the blob content
-	Header []byte
-	// Footer is optional data and metadata to append to the blob content
-	Footer *Footer
-	// GenerateSHA256 enables SHA256 checksumming for integrity verification
-	GenerateSHA256 bool
 	// PersistSubDir is a subdirectory for persistent storage in tiered storage models
 	PersistSubDir string
 	// LongtermStoreURL is the URL for a longterm storage backend in tiered storage models
@@ -70,9 +63,8 @@ type FileOption func(*Options)
 // Returns:
 //   - *Options: A configured Options instance with store-level defaults
 func NewStoreOptions(opts ...StoreOption) *Options {
-	options := &Options{
-		GenerateSHA256: false,
-	}
+	options := &Options{}
+
 	for _, opt := range opts {
 		opt(options)
 	}
@@ -142,13 +134,6 @@ func WithFilename(name string) FileOption {
 	}
 }
 
-// WithFileExtension configures the file extension for the file.
-func WithFileExtension(extension FileExtension) FileOption {
-	return func(s *Options) {
-		s.Extension = extension
-	}
-}
-
 // WithSubDirectory configures the subdirectory for the file.
 func WithSubDirectory(subDirectory string) FileOption {
 	return func(s *Options) {
@@ -160,18 +145,6 @@ func WithSubDirectory(subDirectory string) FileOption {
 func WithAllowOverwrite(allowOverwrite bool) FileOption {
 	return func(s *Options) {
 		s.AllowOverwrite = allowOverwrite
-	}
-}
-
-func WithHeader(header []byte) StoreOption {
-	return func(s *Options) {
-		s.Header = header
-	}
-}
-
-func WithFooter(footer *Footer) StoreOption {
-	return func(o *Options) {
-		o.Footer = footer
 	}
 }
 
@@ -190,31 +163,6 @@ func WithLongtermStorage(persistSubDir string, longtermStoreURL *url.URL) StoreO
 
 		s.LongtermStoreURL = longtermStoreURL
 	}
-}
-
-// ReplaceExtention replaces the file extension in the given FileOptions.
-// Parameters:
-//   - fileOpts: The FileOptions to replace the extension in.
-//   - oldExt: The old file extension to replace.
-//   - newExt: The new file extension to replace with.
-//
-// Returns:
-//   - A new slice of FileOptions with the old extension replaced with the new extension.
-func ReplaceExtention(fileOpts []FileOption, oldExt FileExtension, newExt FileExtension) []FileOption {
-	newOpts := make([]FileOption, 0, len(fileOpts))
-
-	for _, opt := range fileOpts {
-		tempOpt := &Options{}
-		opt(tempOpt)
-
-		if tempOpt.Extension == oldExt {
-			newOpts = append(newOpts, WithFileExtension(newExt))
-		} else {
-			newOpts = append(newOpts, opt)
-		}
-	}
-
-	return newOpts
 }
 
 // MergeOptions combines StoreOptions and FileOptions into a single MergedOptions struct
@@ -236,9 +184,6 @@ func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 		options.BlockHeightRetention = storeOpts.BlockHeightRetention
 		options.SubDirectory = storeOpts.SubDirectory
 		options.HashPrefix = storeOpts.HashPrefix
-		options.Header = storeOpts.Header
-		options.Footer = storeOpts.Footer
-		options.GenerateSHA256 = storeOpts.GenerateSHA256
 		options.PersistSubDir = storeOpts.PersistSubDir
 		options.LongtermStoreURL = storeOpts.LongtermStoreURL
 	}
@@ -257,13 +202,16 @@ func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 // on the receiving end.
 //
 // Parameters:
+//   - fileType: The file type to use
 //   - opts: The file options to convert
 //
 // Returns:
 //   - url.Values: URL query parameters representing the options
-func FileOptionsToQuery(opts ...FileOption) url.Values {
+func FileOptionsToQuery(fileType fileformat.FileType, opts ...FileOption) url.Values {
 	options := NewFileOptions(opts...)
 	query := url.Values{}
+
+	query.Set("fileType", fileType.String())
 
 	if options.DAH > 0 {
 		query.Set("dah", strconv.FormatUint(uint64(options.DAH), 10))
@@ -271,10 +219,6 @@ func FileOptionsToQuery(opts ...FileOption) url.Values {
 
 	if options.Filename != "" {
 		query.Set("filename", options.Filename)
-	}
-
-	if options.Extension != "" {
-		query.Set("extension", options.Extension.String())
 	}
 
 	if options.AllowOverwrite {
@@ -307,10 +251,6 @@ func QueryToFileOptions(query url.Values) []FileOption {
 		opts = append(opts, WithFilename(filename))
 	}
 
-	if extension := query.Get("extension"); extension != "" {
-		opts = append(opts, WithFileExtension(FileExtension(extension)))
-	}
-
 	if allowOverwrite := query.Get("allowOverwrite"); allowOverwrite == "true" {
 		opts = append(opts, WithAllowOverwrite(true))
 	}
@@ -318,7 +258,7 @@ func QueryToFileOptions(query url.Values) []FileOption {
 	return opts
 }
 
-func (o *Options) ConstructFilename(basePath string, hash []byte) (string, error) {
+func (o *Options) ConstructFilename(basePath string, key []byte, fileType fileformat.FileType) (string, error) {
 	var (
 		filename string
 		prefix   string
@@ -327,7 +267,7 @@ func (o *Options) ConstructFilename(basePath string, hash []byte) (string, error
 	if len(o.Filename) > 0 {
 		filename = o.Filename
 	} else {
-		filename = utils.ReverseAndHexEncodeSlice(hash)
+		filename = utils.ReverseAndHexEncodeSlice(key)
 	}
 
 	// For negative HashPrefix, take characters from the end
@@ -345,12 +285,7 @@ func (o *Options) ConstructFilename(basePath string, hash []byte) (string, error
 		}
 	}
 
-	filename = filepath.Join(folder, filename)
-
-	// Create full file name
-	if o.Extension != "" {
-		filename += "." + o.Extension.String()
-	}
+	filename = filepath.Join(folder, filename) + "." + fileType.String()
 
 	return filename, nil
 }
@@ -377,10 +312,4 @@ func (o *Options) CalculatePrefix(filename string) string {
 	}
 
 	return prefix
-}
-
-func WithSHA256Checksum() StoreOption {
-	return func(o *Options) {
-		o.GenerateSHA256 = true
-	}
 }
