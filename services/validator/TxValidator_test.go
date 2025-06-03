@@ -248,6 +248,163 @@ func TestMaxScriptSizePolicy(t *testing.T) {
 	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ops per script policy limit exceeded"))
 }
 
+func TestMaxPubKeysPerMultiSigPolicy(t *testing.T) {
+	// TxID := 52bde64f77c31417721f63a3b9c24d4e8b0be8853c95ec0017bd496471bac432
+	testTxHex := "010000000000000000ef03fecf3b19ae909ad1e808164adb055a2f21eacc4cf94fd3d8294fbae0beb2f86f0b0000006a47304402200120f4c1460b9a1063dde41960436e204ab5caa03e6a76533b68fd39157b105d02207b31ba2f093c63453962d9a86c4b99cc30169125ea3aa034db61fcbd084d389e412102293474e46f71eeb59baf53731a17ba28fd60c8ee960a9e529bbba085e82095baffffffff6f000000000000001976a914fee86b11cb1412b5beb2b89d4c47f29a75d4775188ac33c38cd6fdd327f224f25be360255ee4b4315da334ad8cdee380cfd5c9384ee704000000490047304402202666318f36de707a784be991f53b11c9fa92d2fa405e420065fa70837353eaf202203ba5f173a2488321fd7f0e48868931163a3a143d1f1bfe9959c5bd353dd6a5a841ffffffff010000000000000069512102293474e46f71eeb59baf53731a17ba28fd60c8ee960a9e529bbba085e82095ba2102b5697bc3cdf0a72b34614f1932f9759e802f2ae0d7aa54c1efa756f6cf7cb9ce2102cb560e47b1ae629416b4293256443cef4427cd5e5f233a8fd2a92f1912ece4a453ae33c38cd6fdd327f224f25be360255ee4b4315da334ad8cdee380cfd5c9384ee7050000006a47304402201bdbbdefe8caa2e36103fd1be6c22aac1500e52568276d36bdf134137d3ef34a02201d9987c9dd0de7181fc29d7546760b9221bf98a5615b9cfc77c9bd4f156219bb412103c599a0306be976db09cc22d98d1f899fca72500dec7ff2d1c50f593501b74767ffffffff351d0100000000001976a9141f8b7afba54277eab442e9797167971898b191a288ac060000000000000000fd6e03006a034c6f554d65031f8b0800000000000003dd566d6fdb3610fe2fc43e2a185f25cadf3a230d0a2ca993b868872208c8e3d111e2488e24b77603f7b7ef28e7c5c3bacd485f360cb001d3473ef7dc3d0f4fba63151bbd3f10197d78262e32d6d0fa8ec56ade63cb4677ac5f2fb0632399b1cf6cc4a693d79397dbd82663bd6b67d88f9b65ddb391c8588bb7cbaac56ed236370bfaab6f9798b145b5c084f43cccae77330c03a99f68731ea3f5d22372ef749465b041e9184b0d00e8a490d1386e82d74ee4dca20da2742577284ae52146bc548c7210d091bbc1c9dcad53d68b0722892971a89b1a88b2d864ffc94efc1ddd80f1bc9aa5fa4ece7f163c55fba9a929cace7b07d7b484a6eedb663eafead9b6fe5784c9c4e9e1ad3eaba379fb515d5d8bf34fab97c7ebb76d3817d76a7d323d391cb3c7448a5cd256b3aaa6735c83f236f7b6d0bc301af32064698bbc50a0ad953e46c325775af102bdb7bae428f2600d0f068c2bf152b0447b466a0c3c4cd09c30cc8173ce1ee8e8e997c778a0ace742800d32a69a1603f3eed116a2f08581b4c317a5214790f8cefbe8a516de23404453c4921c212418914b27731f413b6b40440d97f20bb6c8beafe548cf7eb0032cdb16eb7eba6ca9a33a7b584fae5c97847bb3b8465c240cda70bac4250e65ef9cba07a536a87747ddaf8bb117ab651d56c7d377bf9d4a84e3aefde5a8adbadb26c154dd9bba69fbab2634ab6dcee8e61da672bf88b98f33fe0a735b26f92e3176be9a577d85ddce6a9d1af0c700345dffa4ac8e0683f32a180df495a5e1da491d8bc2594f6a4a0f421ae5a5b12072654005574a2e9c92655e4a7c54763aa3bbd4f543eb7773a79863db2b7576fcc2b34dda81241c0c34ee6fdb1976cdfc038e5dd7bfb83fbdc9be3557f127ae890b38eaf68359be499e5d478e1fd1a99ee663bdbf9112afe1d23ecd9aedcceabefbb8be9f442699f659b6c242a3b250d2188a96a30a68c11137a74c50c26bd406a5c929627c94d45b298ba06208b905504afd485b7d35d73d6df5d579fed956fbcc927fdf56f9b36df5236db1afacff1b590a2a70fb147cdd8644fcfd7eccf718664925e8ab0f78b8abc4f0e83a49c95fd50157c42063b1696f0615a98b75a09e3cbd1749bef36204aaf0211a5d185b442c5d2c65e4a5c90be1734941a79d0617a5ce214405de78e7a388c07363699687f46274b1f91de9a84363a00b000001000000000000001976a914fee86b11cb1412b5beb2b89d4c47f29a75d4775188ac01000000000000001976a914fee86b11cb1412b5beb2b89d4c47f29a75d4775188ac6f000000000000001976a914fee86b11cb1412b5beb2b89d4c47f29a75d4775188ac010000000000000069512102293474e46f71eeb59baf53731a17ba28fd60c8ee960a9e529bbba085e82095ba2102b5697bc3cdf0a72b34614f1932f9759e802f2ae0d7aa54c1efa756f6cf7cb9ce2102cb560e47b1ae629416b4293256443cef4427cd5e5f233a8fd2a92f1912ece4a453aedd1c0100000000001976a9141f8b7afba54277eab442e9797167971898b191a288ac00000000"
+	testTx, errTx := bt.NewTxFromString(testTxHex)
+	assert.NoError(t, errTx)
+
+	testBlockHeight := uint32(766657)
+	testUtxoHeights := []uint32{766656, 766656, 766656}
+
+	t.Run("low max pubkeys per multisig policy must fail", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.Policy.MaxPubKeysPerMultisigPolicy = 2
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max pubkeys per multisig policy limit exceeded"))
+	})
+
+	t.Run("hight max pubkeys per multisig policy must pass", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.Policy.MaxPubKeysPerMultisigPolicy = 3 // low
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		assert.NoError(t, err)
+	})
+}
+
+func TestMaxStackMemoryUsagePolicy(t *testing.T) {
+	// GetMaxStackMemoryUsage :
+	// 	if utxo before genesis : return max_uint64
+	// 	if utxo  after genesis :
+	// 	- If     SkipPolicyChecks/consensus : return MaxStackMemoryUsageConsensus
+	// 	- If not SkipPolicyChecks/consensus : return MaxStackMemoryUsage
+	t.Run("set MaxStackMemoryUsageConsensus lower must fail", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("Expected panic, but function did not panic")
+			}
+		}()
+
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.Policy.MaxStackMemoryUsagePolicy = 2
+		tSettings.Policy.MaxStackMemoryUsageConsensus = 1
+
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		assert.Nil(t, txValidator)
+	})
+
+	// TxID := cc2f3e03d014f8aeb1b7a68ed69191dd4fca708589a6a89b35200f194c70ea16
+	testTxHex := "010000000000000000ef012406151a100b01a5a552058ee09335e3757fe0d889540375ccd71b1f6a12b3df323d00006a47304402201bfe18b51551d6185ebf3062d63465d9f7eafb8256e5b264a638bc13811eddfa0220245a04733acef8bd4819ae9ddd4bcc2bb3693a36501c042dd63ba621b0a40951412102105c84ff3f71aa06f3c232b820addb416f7f965e9c3b05d95f1cecfe4e4e9de7ffffffff01000000000000001976a9141fbb02bf34941726bc83b88fd8ed105698bd3bb088ac0100000000000000000a006a0762697461696c7300000000"
+	testTx, errTx := bt.NewTxFromString(testTxHex)
+	assert.NoError(t, errTx)
+
+	testBlockHeight := uint32(815351)
+	testUtxoHeights := []uint32{815262}
+
+	t.Run("low MaxStackMemoryUsageConsensus must fail", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.Policy.MaxStackMemoryUsagePolicy = 1
+		tSettings.Policy.MaxStackMemoryUsageConsensus = 271
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: true})
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max stack memory usage consensus policy limit exceeded"))
+	})
+
+	t.Run("high MaxStackMemoryUsageConsensus must pass", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.Policy.MaxStackMemoryUsagePolicy = 1
+		tSettings.Policy.MaxStackMemoryUsageConsensus = 272
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: true})
+		assert.NoError(t, err)
+	})
+
+	t.Run("low MaxStackMemoryUsage must fail", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.Policy.MaxStackMemoryUsagePolicy = 271
+		tSettings.Policy.MaxStackMemoryUsageConsensus = 1000000
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max stack memory usage policy limit exceeded"))
+	})
+
+	t.Run("high MaxStackMemoryUsage must pass", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.Policy.MaxStackMemoryUsagePolicy = 272
+		tSettings.Policy.MaxStackMemoryUsageConsensus = 1000000
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		assert.NoError(t, err)
+	})
+}
+
+// MaxScriptNumLengthPolicy :
+// 	if utxo before genesis : return 4
+// 	if utxo  after genesis :
+// 	- If     SkipPolicyChecks/consensus
+// 	           - If before chronicle : 750000
+// 	           - If  after chronicle : max_uint64
+// 	- If not SkipPolicyChecks/consensus : return custom MaxScriptNumLength
+
+// Since the policy is triggered if an only if the transaction is non standard and have big number arithmetic operations
+// We can not find it on chain, we created a simple transaction with append to the scriptPubkey, it becomes non standard
+//
+//	scriptPubkey : OP_DUP OP_HASH160 20 <data20> OP_EQUALVERIFY OP_CHECKSIG <BigNum1> <BigNum2> OP_NUMEQUALVERIFY
+//
+// The two big number a identical array of length 6 with all values 1
+// So
+//
+//	MaxScriptNumLengthPolicy = 5 --> fail
+//	MaxScriptNumLengthPolicy = 6 --> pass
+//
+// TxID := no need
+func TestMaxScriptNumLengthPolicy(t *testing.T) {
+	testTxHex := "010000000000000000ef01905d0e9cfb36fb99b2e1cb0c2c6cff609c565a0e9a3dd27a07ecaadf2b35105c000000008a47304402200384b288c18d0c4a65139db537d7e1b89abb137ad38da930066e740bfe66f03a02202826f5ef0e2e970db785aecc08d74976ed99b1026ef968aa074873d42d472f5b4141040b4c866585dd868a9d62348a9cd008d6a312937048fff31670e7e920cfc7a7447b5f0bba9e01e6fe4735c8383e6e7a3347a0fd72381b8f797a19f694054e5a69ffffffff40420f00000000002876a914ff197b14e502ab41f3bc8ccb48c4abac9eab35bc88ac06010101010101060101010101019d0140420f00000000000000000000"
+	testTx, errTx := bt.NewTxFromString(testTxHex)
+	assert.NoError(t, errTx)
+
+	testBlockHeight := uint32(820540)
+	testUtxoHeights := []uint32{820539}
+
+	t.Run("low MaxScriptNumLengthPolicy must fail", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.Policy.MaxScriptNumLengthPolicy = 5
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "max ScriptNum length policy limit exceeded"))
+	})
+
+	t.Run("high MaxScriptNumLengthPolicy must pass", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.Policy.MaxScriptNumLengthPolicy = 6
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		err := txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: false})
+		assert.NoError(t, err)
+	})
+}
+
 func TestMaxTxSigopsCountsPolicy(t *testing.T) {
 	t.Skip("Skipping this test as we've disabled the method sigOpsCheck")
 
