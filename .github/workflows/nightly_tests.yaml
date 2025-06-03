@@ -86,13 +86,6 @@ jobs:
             test_func: "TestBlockPropagationWithNotifications"
             test_filename: "tnd1_1_test.go"
 
-          # TNE Tests
-          - test_dir: "test/tne"
-            test_tags: "test_tne"
-            test_suite: "TestTNE1_1TestSuite"
-            test_func: "TestNode_DoNotVerifyTransactionsIfAlreadyVerified"
-            test_filename: "tne1_1_test.go"
-
           # TNA Tests
           - test_dir: "test/tna"
             test_tags: "test_tna"
@@ -288,6 +281,13 @@ jobs:
       - name: Run TNB2 Test
         run: |
           go test -v $TEST_DIR/tnb2_test.go
+        env:
+          GITHUB_ACTIONS: true
+        continue-on-error: true
+
+      - name: Run TNE1.1 Test
+        run: |
+          go test -v $TEST_DIR/tne1_1_test.go
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
