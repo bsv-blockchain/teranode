@@ -531,20 +531,6 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
 	}
 
-	// Reject outbound peers that are not full nodes.
-	wantServices := wire.SFNodeNetwork
-	if !isInbound && !hasServices(msg.Services, wantServices) {
-		missingServices := wantServices & ^msg.Services
-		sp.server.logger.Debugf("Rejecting peer %s with services %v due to not "+
-			"providing desired services %v", sp.Peer, msg.Services,
-			missingServices)
-
-		reason := fmt.Sprintf("required services %#x not offered",
-			uint64(missingServices))
-
-		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
-	}
-
 	// Update the address manager and request known addresses from the
 	// remote peer for outbound connections.  This is skipped when running
 	// on the simulation test network since it is only intended to connect
