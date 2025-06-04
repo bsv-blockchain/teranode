@@ -4,7 +4,12 @@
 
 package chaincfg
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 // TestInvalidHashStr ensures the newShaHashFromStr function panics when used to
 // with an invalid hash string.
@@ -22,8 +27,7 @@ func TestInvalidHashStr(t *testing.T) {
 func TestMustRegisterPanic(t *testing.T) {
 	t.Parallel()
 
-	// Setup a defer to catch the expected panic to ensure it actually
-	// paniced.
+	// Set up a "defer function" to catch the expected panic to ensure it actually panicked.
 	defer func() {
 		if err := recover(); err == nil {
 			t.Error("mustRegister did not panic as expected")
@@ -56,4 +60,41 @@ func TestSeeds(t *testing.T) {
 			return
 		}
 	}
+}
+
+// TestGetChainParams tests GetChainParams for all supported and unsupported networks.
+func TestGetChainParams(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+		wantPtr *Params
+	}{
+		{"mainnet", "mainnet", false, &MainNetParams},
+		{"testnet", "testnet", false, &TestNetParams},
+		{"regtest", "regtest", false, &RegressionNetParams},
+		{"stn", "stn", false, &StnParams},
+		{"teratestnet", "teratestnet", false, &TeraTestNetParams},
+		{"tstn", "tstn", false, &TeraScalingTestNetParams},
+		{"unknown", "unknown", true, nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := GetChainParams(tc.input)
+			if tc.wantErr {
+				require.Error(t, err, "expected error for input %q", tc.input)
+				assert.Nil(t, got, "expected nil result for input %q", tc.input)
+			} else {
+				require.NoError(t, err, "unexpected error for input %q", tc.input)
+				assert.Equal(t, tc.wantPtr, got, "expected pointer for input %q", tc.input)
+			}
+		})
+	}
+}
+
+// TestDNSSeedString tests the String method of the DNSSeed type.
+func TestDNSSeedString(t *testing.T) {
+	seed := DNSSeed{Host: "example.com", HasFiltering: true}
+	assert.Equal(t, "example.com", seed.String(), "DNSSeed.String() should return the Host field")
 }

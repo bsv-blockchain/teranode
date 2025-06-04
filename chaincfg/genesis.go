@@ -1,3 +1,10 @@
+// Package chaincfg provides network parameters and genesis block definitions for Bitcoin SV and related networks.
+//
+// It includes constants, variables, and structures that define the initial state and consensus rules for mainnet,
+// testnet, regtest, STN, and other supported networks. This package exposes the genesis block, coinbase transaction,
+// network-specific checkpoints, proof-of-work limits, and activation heights for protocol upgrades. It is essential
+// for initializing and configuring the blockchain state and consensus behavior in Bitcoin SV node implementations.
+//
 // Copyright (c) 2014-2016 The btcsuite developers
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
@@ -12,9 +19,11 @@ import (
 )
 
 var (
+	// GenesisActivationHeight is the block height at which the genesis block
 	GenesisActivationHeight = uint32(620538)
 )
 
+// init initializes the genesis activation height from the chain parameters
 func init() {
 	params := GetChainParamsFromConfig()
 	if params != nil {
@@ -66,7 +75,7 @@ var genesisCoinbaseTx = wire.MsgTx{
 	LockTime: 0,
 }
 
-// genesisHash is the hash of the first block in the block chain for the main
+// genesisHash is the hash of the first block in the blockchain for the main
 // network (genesis block).
 var genesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
 	0x6f, 0xe2, 0x8c, 0x0a, 0xb6, 0xf1, 0xb3, 0x72,
@@ -84,7 +93,7 @@ var genesisMerkleRoot = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet 
 	0x3a, 0x9f, 0xb8, 0xaa, 0x4b, 0x1e, 0x5e, 0x4a,
 })
 
-// genesisBlock defines the genesis block of the block chain which serves as the
+// genesisBlock defines the genesis block of the blockchain which serves as the
 // public transaction ledger for the main network.
 var genesisBlock = wire.MsgBlock{
 	Header: wire.BlockHeader{
@@ -103,9 +112,9 @@ var genesisBlock = wire.MsgBlock{
 // the main network.
 var regTestGenesisMerkleRoot = genesisMerkleRoot
 
-// regTestGenesisBlock defines the genesis block of the block chain which serves
+// regTestGenesisBlock defines the genesis block of the blockchain which serves
 // as the public transaction ledger for the local regression test network.
-// Please note the the coinbase is the same as the mainnet genesis block, but the timestamp, nonce and
+// Please note the coinbase is the same as the mainnet genesis block, but the timestamp, nonce and
 // difficulty are different.
 var regTestGenesisBlock = wire.MsgBlock{
 	Header: wire.BlockHeader{
@@ -119,7 +128,7 @@ var regTestGenesisBlock = wire.MsgBlock{
 	Transactions: []*wire.MsgTx{&genesisCoinbaseTx},
 }
 
-// testNetGenesisHash is the hash of the first block in the block chain for the
+// testNetGenesisHash is the hash of the first block in the blockchain for the
 // test network (version 3).
 var testNetGenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
 	0x43, 0x49, 0x7f, 0xd7, 0xf8, 0x26, 0x95, 0x71,
@@ -133,7 +142,7 @@ var testNetGenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet
 // for the main network.
 var testNetGenesisMerkleRoot = genesisMerkleRoot
 
-// testNetGenesisBlock defines the genesis block of the block chain which
+// testNetGenesisBlock defines the genesis block of the blockchain which
 // serves as the public transaction ledger for the test network (version 3).
 var testNetGenesisBlock = wire.MsgBlock{
 	Header: wire.BlockHeader{
@@ -147,7 +156,7 @@ var testNetGenesisBlock = wire.MsgBlock{
 	Transactions: []*wire.MsgTx{&genesisCoinbaseTx},
 }
 
-// stnGenesisHash is the hash of the first block in the block chain for the
+// stnGenesisHash is the hash of the first block in the blockchain for the
 // stn network.
 var stnGenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
 	0x43, 0x49, 0x7f, 0xd7, 0xf8, 0x26, 0x95, 0x71,
@@ -156,9 +165,12 @@ var stnGenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet hap
 	0x01, 0xea, 0x33, 0x09, 0x00, 0x00, 0x00, 0x00,
 })
 
+// stnGenesisMerkleRoot is the hash of the first transaction in the genesis
+// block for the stn network.  It is the same as the merkle root for the main
+// network.
 var stnGenesisMerkleRoot = genesisMerkleRoot
 
-// regTestGenesisBlock defines the genesis block of the block chain which serves
+// regTestGenesisBlock defines the genesis block of the blockchain which serves
 // as the public transaction ledger for the regression test network.
 var stnGenesisBlock = wire.MsgBlock{
 	Header: wire.BlockHeader{

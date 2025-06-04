@@ -32,7 +32,7 @@ func TestGenesisBlock(t *testing.T) {
 			spew.Sdump(genesisBlockBytes))
 	}
 
-	// Check hash of the block against expected hash.
+	// Check the hash of the block against the expected hash.
 	hash := MainNetParams.GenesisBlock.BlockHash()
 	if !MainNetParams.GenesisHash.IsEqual(&hash) {
 		t.Fatalf("TestGenesisBlock: Genesis block hash does not "+
@@ -60,7 +60,7 @@ func TestRegTestGenesisBlock(t *testing.T) {
 			spew.Sdump(regTestGenesisBlockBytes))
 	}
 
-	// Check hash of the block against expected hash.
+	// Check the hash of the block against the expected hash.
 	hash := RegressionNetParams.GenesisBlock.BlockHash()
 	if !RegressionNetParams.GenesisHash.IsEqual(&hash) {
 		t.Fatalf("TestRegTestGenesisBlock: Genesis block hash does "+
@@ -88,7 +88,7 @@ func TestTestNetGenesisBlock(t *testing.T) {
 			spew.Sdump(testNetGenesisBlockBytes))
 	}
 
-	// Check hash of the block against expected hash.
+	// Check the hash of the block against the expected hash.
 	hash := TestNetParams.GenesisBlock.BlockHash()
 	if !TestNetParams.GenesisHash.IsEqual(&hash) {
 		t.Fatalf("TestTestNetGenesisBlock: Genesis block hash does "+
@@ -97,6 +97,7 @@ func TestTestNetGenesisBlock(t *testing.T) {
 	}
 }
 
+// TestGenesisCoinbase tests the genesis coinbase transaction of the main
 func TestGenesisCoinbase(t *testing.T) {
 	expectedCoinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000"
 	gcb := MainNetParams.GenesisBlock.Transactions[0]
@@ -113,6 +114,7 @@ func TestGenesisCoinbase(t *testing.T) {
 	}
 }
 
+// TestGenesisCoinbaseBytes tests the genesis coinbase transaction of the
 func TestGenesisCoinbaseBytes(t *testing.T) {
 	expected := MainNetParams.GenesisBlock.Transactions[0].TxHash().String()
 	expectedCoinbaseHash := "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
@@ -138,7 +140,7 @@ func TestGenesisCoinbaseBytes(t *testing.T) {
 	}
 }
 
-// genesisBlockBytes are the wire encoded bytes for the genesis block of the
+// genesisBlockBytes are the wire-encoded bytes for the genesis block of the
 // main network as of protocol version 60002.
 var genesisBlockBytes = []byte{
 	0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* |........| */
@@ -179,7 +181,7 @@ var genesisBlockBytes = []byte{
 	0xac, 0x00, 0x00, 0x00, 0x00, /* |.....|    */
 }
 
-// regTestGenesisBlockBytes are the wire encoded bytes for the genesis block of
+// regTestGenesisBlockBytes are the wire-encoded bytes for the genesis block of
 // the regression test network as of protocol version 60002.
 var regTestGenesisBlockBytes = []byte{
 	0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* |........| */
@@ -220,7 +222,7 @@ var regTestGenesisBlockBytes = []byte{
 	0xac, 0x00, 0x00, 0x00, 0x00, /* |.....|    */
 }
 
-// testNetGenesisBlockBytes are the wire encoded bytes for the genesis block of
+// testNetGenesisBlockBytes are the wire-encoded bytes for the genesis block of
 // the test network (version 3) as of protocol version 60002.
 var testNetGenesisBlockBytes = []byte{
 	0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* |........| */
@@ -261,6 +263,7 @@ var testNetGenesisBlockBytes = []byte{
 	0xac, 0x00, 0x00, 0x00, 0x00, /* |.....|    */
 }
 
+// TestRegtestGenesisBlock tests the genesis block of the regression test
 func TestRegtestGenesisBlock(t *testing.T) {
 	assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", regTestGenesisBlock.Header.BlockHash().String())
 }

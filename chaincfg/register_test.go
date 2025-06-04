@@ -2,9 +2,10 @@ package chaincfg
 
 import (
 	"bytes"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // Define some of the required parameters for a user-registered
@@ -21,6 +22,7 @@ var mockNetParams = Params{
 	CashAddressPrefix:      "bsvmock",
 }
 
+// TestRegister ensures that the Register function works as expected for
 func TestRegister(t *testing.T) {
 	type registerTest struct {
 		name   string
@@ -412,47 +414,34 @@ func TestRegister(t *testing.T) {
 	for _, test := range tests {
 		for _, regTest := range test.register {
 			err := Register(regTest.params)
-			if err != regTest.err {
-				t.Errorf("%s:%s: Registered network with unexpected error: got %v expected %v",
-					test.name, regTest.name, err, regTest.err)
+			if regTest.err != nil {
+				assert.ErrorIs(t, err, regTest.err, "%s:%s: Registered network with unexpected error", test.name, regTest.name)
+			} else {
+				assert.NoError(t, err, "%s:%s: Unexpected error registering network", test.name, regTest.name)
 			}
 		}
 
 		for i, magTest := range test.p2pkhMagics {
 			valid := IsPubKeyHashAddrID(magTest.magic)
-			if valid != magTest.valid {
-				t.Errorf("%s: P2PKH magic %d valid mismatch: got %v expected %v",
-					test.name, i, valid, magTest.valid)
-			}
+			assert.Equalf(t, magTest.valid, valid, "%s: P2PKH magic %d valid mismatch", test.name, i)
 		}
 
 		for i, magTest := range test.p2shMagics {
 			valid := IsScriptHashAddrID(magTest.magic)
-			if valid != magTest.valid {
-				t.Errorf("%s: P2SH magic %d valid mismatch: got %v expected %v",
-					test.name, i, valid, magTest.valid)
-			}
+			assert.Equalf(t, magTest.valid, valid, "%s: P2SH magic %d valid mismatch", test.name, i)
 		}
 
 		for i, prxTest := range test.cashAddrPrefixes {
 			valid := IsCashAddressPrefix(prxTest.prefix)
-			if valid != prxTest.valid {
-				t.Errorf("%s: segwit prefix %s (%d) valid mismatch: got %v expected %v",
-					test.name, prxTest.prefix, i, valid, prxTest.valid)
-			}
+			assert.Equalf(t, prxTest.valid, valid, "%s: cash address prefix %s (%d) valid mismatch", test.name, prxTest.prefix, i)
 		}
 
 		for i, magTest := range test.hdMagics {
 			pubKey, err := HDPrivateKeyToPublicKeyID(magTest.priv)
-			if !reflect.DeepEqual(err, magTest.err) {
-				t.Errorf("%s: HD magic %d mismatched error: got %v expected %v ",
-					test.name, i, err, magTest.err)
-				continue
-			}
+			assert.Equalf(t, magTest.err, err, "%s: HD magic %d mismatched error", test.name, i)
 
-			if magTest.err == nil && !bytes.Equal(pubKey, magTest.want) {
-				t.Errorf("%s: HD magic %d private and public mismatch: got %v expected %v ",
-					test.name, i, pubKey, magTest.want)
+			if magTest.err == nil {
+				assert.Truef(t, bytes.Equal(pubKey, magTest.want), "%s: HD magic %d private and public mismatch: got %v expected %v ", test.name, i, pubKey, magTest.want)
 			}
 		}
 	}

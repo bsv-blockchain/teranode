@@ -28,7 +28,7 @@ var (
 	mainPowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 224), bigOne)
 
 	// regressionPowLimit is the highest proof of work value a Bitcoin block
-	// can have for the regression test network.  It is the value 2^255 - 1.
+	// can have for the regression test network.  It is equal to (2^{255} - 1).
 	regressionPowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 255), bigOne)
 
 	// testNetPowLimit is the highest proof of work value a Bitcoin block
@@ -41,6 +41,7 @@ var (
 	stnPowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 224), bigOne)
 )
 
+// Checkpoint represents a block height and hash pair
 type Checkpoint struct {
 	Height int32
 	Hash   *chainhash.Hash
@@ -89,6 +90,7 @@ const (
 	DefinedDeployments
 )
 
+// Params defines the network parameters for a Bitcoin network.
 type Params struct {
 	// Name defines a human-readable identifier for the network.
 	Name string
@@ -128,9 +130,9 @@ type Params struct {
 	// Block height at which CSV (BIP68, BIP112 and BIP113) becomes active
 	CSVHeight uint32
 
-	// The following are the heights at which the Bitcoin specific forks
+	// The following are the heights at which the Bitcoin-specific forks
 	// became active.
-	UahfForkHeight          uint32 // August 1, 2017 hard fork
+	UahfForkHeight          uint32 // August 1, 2017, hard fork
 	DaaForkHeight           uint32 // November 13, 2017 hard fork
 	GenesisActivationHeight uint32 // Genesis activation height
 
@@ -147,7 +149,7 @@ type Params struct {
 
 	// TargetTimespan is the desired amount of time that should elapse
 	// before the block difficulty requirement is examined to determine how
-	// it should be changed in order to maintain the desired block
+	// it should be changed to maintain the desired block
 	// generation rate.
 	// TargetTimespan time.Duration
 
@@ -176,7 +178,7 @@ type Params struct {
 	// NOTE: This only applies if ReduceMinDifficulty is true.
 	MinDiffReductionTime time.Duration
 
-	// GenerateSupported specifies whether or not CPU mining is allowed.
+	// GenerateSupported specifies whether CPU mining is allowed.
 	GenerateSupported bool
 
 	// Checkpoints ordered from oldest to newest.
@@ -187,7 +189,7 @@ type Params struct {
 	//
 	// RuleChangeActivationThreshold is the number of blocks in a threshold
 	// state retarget window for which a positive vote for a rule change
-	// must be cast in order to lock in a rule change. It should typically
+	// must be cast to lock in a rule change. It should typically
 	// be 95% for the main network and 75% for test networks.
 	//
 	// MinerConfirmationWindow is the number of blocks in each threshold
@@ -239,10 +241,12 @@ var MainNetParams = Params{
 	BIP0066Height: 363725, // 00000000000000000379eaa19dce8c9b722d46ae6a57c2f1a988119488b50931
 	CSVHeight:     419328, // 000000000000000004a1b34462cb8aeebd5799177f7a29cf28f2d1961716b5b5
 
-	// August 1, 2017 hard fork
+	// August 1, 2017, hard fork
 	UahfForkHeight: 478558, // 0000000000000000011865af4122fe3b144e2cbeea86142e8ff2fb4107352d43
-	// November 13, 2017 hard fork
-	DaaForkHeight:            504031, // 0000000000000000011ebf65b60d0a3de80b8175be709d653b4c1a1beeb6ab9c
+
+	// November 13, 2017, hard fork
+	DaaForkHeight: 504031, // 0000000000000000011ebf65b60d0a3de80b8175be709d653b4c1a1beeb6ab9c
+
 	GenesisActivationHeight:  620538,
 	MaxCoinbaseScriptSigSize: 100,
 	CoinbaseMaturity:         100,
@@ -299,8 +303,8 @@ var MainNetParams = Params{
 	Deployments: [DefinedDeployments]ConsensusDeployment{
 		DeploymentTestDummy: {
 			BitNumber:  28,
-			StartTime:  1199145601, // January 1, 2008 UTC
-			ExpireTime: 1230767999, // December 31, 2008 UTC
+			StartTime:  1199145601, // January 1, 2008, UTC
+			ExpireTime: 1230767999, // December 31, 2008, UTC
 		},
 		DeploymentCSV: {
 			BitNumber:  0,
@@ -349,9 +353,10 @@ var StnParams = Params{
 	BIP0066Height:            1251,      // Used by regression tests
 	CSVHeight:                0,         // Always active on stn
 
-	// August 1, 2017 hard fork
+	// August 1, 2017, hard fork
 	UahfForkHeight: 15,
-	// November 13, 2017 hard fork
+
+	// November 13, 2017, hard fork
 	DaaForkHeight: 2200, // must be > 2016
 
 	GenesisActivationHeight: 100,
@@ -371,17 +376,17 @@ var StnParams = Params{
 	//
 	// The miner confirmation window is defined as:
 	//   target proof of work timespan / target proof of work spacing
-	RuleChangeActivationThreshold: 108, // 75%  of MinerConfirmationWindow
+	RuleChangeActivationThreshold: 108, // 75% of MinerConfirmationWindow
 	MinerConfirmationWindow:       144,
 	Deployments: [DefinedDeployments]ConsensusDeployment{
 		DeploymentTestDummy: {
 			BitNumber:  28,
-			StartTime:  0,             // Always available for vote
+			StartTime:  0,             // Always available for votes
 			ExpireTime: math.MaxInt64, // Never expires
 		},
 		DeploymentCSV: {
 			BitNumber:  0,
-			StartTime:  0,             // Always available for vote
+			StartTime:  0,             // Always available for votes
 			ExpireTime: math.MaxInt64, // Never expires
 		},
 	},
@@ -429,8 +434,9 @@ var RegressionNetParams = Params{
 	CSVHeight:                576,       // Used by regression tests
 
 	// UAHF is always enabled on regtest.
-	UahfForkHeight: 0, // August 1, 2017 hard fork
-	// November 13, 2017 hard fork is always on on regtest.
+	UahfForkHeight: 0, // August 1, 2017, hard fork
+
+	// November 13, 2017, hard fork is always on regtest.
 	DaaForkHeight: 0,
 
 	GenesisActivationHeight: 10000,
@@ -450,17 +456,17 @@ var RegressionNetParams = Params{
 	//
 	// The miner confirmation window is defined as:
 	//   target proof of work timespan / target proof of work spacing
-	RuleChangeActivationThreshold: 108, // 75%  of MinerConfirmationWindow
+	RuleChangeActivationThreshold: 108, // 75% of MinerConfirmationWindow
 	MinerConfirmationWindow:       144,
 	Deployments: [DefinedDeployments]ConsensusDeployment{
 		DeploymentTestDummy: {
 			BitNumber:  28,
-			StartTime:  0,             // Always available for vote
+			StartTime:  0,             // Always available for votes
 			ExpireTime: math.MaxInt64, // Never expires
 		},
 		DeploymentCSV: {
 			BitNumber:  0,
-			StartTime:  0,             // Always available for vote
+			StartTime:  0,             // Always available for votes
 			ExpireTime: math.MaxInt64, // Never expires
 		},
 	},
@@ -507,10 +513,12 @@ var TestNetParams = Params{
 	BIP0066Height: 330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
 	CSVHeight:     770112, // 00000000025e930139bac5c6c31a403776da130831ab85be56578f3fa75369bb
 
-	// August 1, 2017 hard fork
+	// August 1, 2017, hard fork
 	UahfForkHeight: 1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
-	// November 13, 2017 hard fork
-	DaaForkHeight:            1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
+
+	// November 13, 2017, hard fork
+	DaaForkHeight: 1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
+
 	GenesisActivationHeight:  1344302,
 	MaxCoinbaseScriptSigSize: 100,
 	CoinbaseMaturity:         100,
@@ -553,8 +561,8 @@ var TestNetParams = Params{
 	Deployments: [DefinedDeployments]ConsensusDeployment{
 		DeploymentTestDummy: {
 			BitNumber:  28,
-			StartTime:  1199145601, // January 1, 2008 UTC
-			ExpireTime: 1230767999, // December 31, 2008 UTC
+			StartTime:  1199145601, // January 1, 2008, UTC
+			ExpireTime: 1230767999, // December 31, 2008, UTC
 		},
 		DeploymentCSV: {
 			BitNumber:  0,
@@ -625,12 +633,12 @@ var TeraTestNetParams = Params{
 	Deployments: [DefinedDeployments]ConsensusDeployment{
 		DeploymentTestDummy: {
 			BitNumber:  28,
-			StartTime:  0,             // Always available for vote
+			StartTime:  0,             // Always available for votes
 			ExpireTime: math.MaxInt64, // Never expires
 		},
 		DeploymentCSV: {
 			BitNumber:  0,
-			StartTime:  0,             // Always available for vote
+			StartTime:  0,             // Always available for votes
 			ExpireTime: math.MaxInt64, // Never expires
 		},
 	},
@@ -697,12 +705,12 @@ var TeraScalingTestNetParams = Params{
 	Deployments: [DefinedDeployments]ConsensusDeployment{
 		DeploymentTestDummy: {
 			BitNumber:  28,
-			StartTime:  0,             // Always available for vote
+			StartTime:  0,             // Always available for votes
 			ExpireTime: math.MaxInt64, // Never expires
 		},
 		DeploymentCSV: {
 			BitNumber:  0,
-			StartTime:  0,             // Always available for vote
+			StartTime:  0,             // Always available for votes
 			ExpireTime: math.MaxInt64, // Never expires
 		},
 	},
@@ -752,6 +760,7 @@ func (d DNSSeed) String() string {
 	return d.Host
 }
 
+// Register registers the passed network parameters for a Bitcoin network.  It
 func Register(params *Params) error {
 	if _, ok := registeredNets[params.Net]; ok {
 		return ErrDuplicateNet
@@ -775,16 +784,20 @@ func mustRegister(params *Params) {
 		panic("failed to register network: " + err.Error())
 	}
 }
+
+// IsPubKeyHashAddrID returns whether the passed id is found
 func IsPubKeyHashAddrID(id byte) bool {
 	_, ok := pubKeyHashAddrIDs[id]
 	return ok
 }
 
+// IsScriptHashAddrID returns whether the passed id is found
 func IsScriptHashAddrID(id byte) bool {
 	_, ok := scriptHashAddrIDs[id]
 	return ok
 }
 
+// IsCashAddressPrefix returns whether the passed prefix is a valid cashaddress
 func IsCashAddressPrefix(prefix string) bool {
 	prefix = strings.ToLower(prefix)
 	_, ok := cashAddressPrefixes[prefix]
@@ -792,6 +805,7 @@ func IsCashAddressPrefix(prefix string) bool {
 	return ok
 }
 
+// HDPrivateKeyToPublicKeyID converts the passed hierarchical deterministic key to a public key id.
 func HDPrivateKeyToPublicKeyID(id []byte) ([]byte, error) {
 	if len(id) != 4 {
 		return nil, ErrUnknownHDKeyID
@@ -822,6 +836,7 @@ func newHashFromStr(hexStr string) *chainhash.Hash {
 	return hash
 }
 
+// GetChainParams returns the chain parameters for the specified network.
 func GetChainParams(network string) (*Params, error) {
 	switch network {
 	case "mainnet":
@@ -841,6 +856,7 @@ func GetChainParams(network string) (*Params, error) {
 	}
 }
 
+// GetChainParamsFromConfig retrieves the chain parameters from the configuration
 func GetChainParamsFromConfig() *Params {
 	network, _ := gocore.Config().Get("network", "mainnet")
 	chainParams, _ := GetChainParams(network)
@@ -848,6 +864,7 @@ func GetChainParamsFromConfig() *Params {
 	return chainParams
 }
 
+// init registers all default networks when the package is initialized.
 func init() {
 	// Register all default networks when the package is initialized.
 	mustRegister(&MainNetParams)
