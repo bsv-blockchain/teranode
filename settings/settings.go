@@ -24,7 +24,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		panic(err)
 	}
 
-	globalBlockHeightRetention := getUint32("global_blockHeightRetention", 100, alternativeContext...)
+	globalBlockHeightRetention := getUint32("global_blockHeightRetention", 288, alternativeContext...)
 
 	doubleSpendWindowMillis := getInt("double_spend_window_millis", 0, alternativeContext...)
 	doubleSpendWindow := time.Duration(doubleSpendWindowMillis) * time.Millisecond
