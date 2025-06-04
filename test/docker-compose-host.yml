@@ -201,7 +201,7 @@ services:
       test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
     volumes:
       - ./config/svnode-1.conf:/data/bitcoin.conf
-      - ./data/test/${TEST_ID:-default}/svnode1:/data
+      # - ./data/test/${TEST_ID:-default}/svnode1:/data
     command: [ "/entrypoint.sh", "bitcoind"]
 
   svnode2:
@@ -215,7 +215,7 @@ services:
       test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
     volumes:
       - ./config/svnode-2.conf:/data/bitcoin.conf
-      - ./data/test/${TEST_ID:-default}/svnode2:/data
+      # - ./data/test/${TEST_ID:-default}/svnode2:/data
     command: [ "/entrypoint.sh", "bitcoind"]
 
   svnode3:
@@ -229,5 +229,5 @@ services:
       test: [ "CMD", "/entrypoint.sh", "bitcoin-cli", "getinfo" ]
     volumes:
       - ./config/svnode-3.conf:/data/bitcoin.conf
-      - ./data/test/${TEST_ID:-default}/svnode3:/data
+      # - ./data/test/${TEST_ID:-default}/svnode3:/data
     command: [ "/entrypoint.sh", "bitcoind"]

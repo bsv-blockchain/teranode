@@ -25,10 +25,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
-	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
-
-	q := `
+	const q = `
 		SELECT
 			 b.version
 			,b.block_time
@@ -64,6 +61,9 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 		)
 		ORDER BY height DESC
 	`
+
+	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
+	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
 
 	rows, err := s.db.QueryContext(ctx, q, blockHashFrom[:], numberOfHeaders)
 	if err != nil {

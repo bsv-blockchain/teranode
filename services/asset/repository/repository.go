@@ -38,7 +38,7 @@ type Interface interface {
 	GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error)
 	GetBlocks(ctx context.Context, hash *chainhash.Hash, n uint32) ([]*model.Block, error)
 	GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-	GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
 	GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
@@ -337,8 +337,8 @@ func (repo *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Has
 	return blockHeaders, blockHeaderMetas, nil
 }
 
-func (repo *Repository) GetBlockHeadersToCommonAncestor(ctx context.Context, hasTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return repo.BlockchainClient.GetBlockHeadersToCommonAncestor(ctx, hasTarget, blockLocatorHashes)
+func (repo *Repository) GetBlockHeadersToCommonAncestor(ctx context.Context, hasTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return repo.BlockchainClient.GetBlockHeadersToCommonAncestor(ctx, hasTarget, blockLocatorHashes, maxHeaders)
 }
 
 // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.

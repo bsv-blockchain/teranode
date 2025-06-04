@@ -903,6 +903,7 @@ type GetBlockHeadersToCommonAncestorRequest struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	TargetHash         []byte                 `protobuf:"bytes,1,opt,name=targetHash,proto3" json:"targetHash,omitempty"`
 	BlockLocatorHashes [][]byte               `protobuf:"bytes,2,rep,name=blockLocatorHashes,proto3" json:"blockLocatorHashes,omitempty"`
+	MaxHeaders         uint32                 `protobuf:"varint,3,opt,name=maxHeaders,proto3" json:"maxHeaders,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -949,6 +950,13 @@ func (x *GetBlockHeadersToCommonAncestorRequest) GetBlockLocatorHashes() [][]byt
 		return x.BlockLocatorHashes
 	}
 	return nil
+}
+
+func (x *GetBlockHeadersToCommonAncestorRequest) GetMaxHeaders() uint32 {
+	if x != nil {
+		return x.MaxHeaders
+	}
+	return 0
 }
 
 // GetBlockHeadersResponse contains multiple block headers and their metadata.
@@ -3231,12 +3239,15 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\tblockHash\x18\x01 \x01(\fR\tblockHash\"`\n" +
 	"\x16GetBlockHeadersRequest\x12\x1c\n" +
 	"\tstartHash\x18\x01 \x01(\fR\tstartHash\x12(\n" +
-	"\x0fnumberOfHeaders\x18\x02 \x01(\x04R\x0fnumberOfHeaders\"x\n" +
+	"\x0fnumberOfHeaders\x18\x02 \x01(\x04R\x0fnumberOfHeaders\"\x98\x01\n" +
 	"&GetBlockHeadersToCommonAncestorRequest\x12\x1e\n" +
 	"\n" +
 	"targetHash\x18\x01 \x01(\fR\n" +
 	"targetHash\x12.\n" +
-	"\x12blockLocatorHashes\x18\x02 \x03(\fR\x12blockLocatorHashes\"S\n" +
+	"\x12blockLocatorHashes\x18\x02 \x03(\fR\x12blockLocatorHashes\x12\x1e\n" +
+	"\n" +
+	"maxHeaders\x18\x03 \x01(\rR\n" +
+	"maxHeaders\"S\n" +
 	"\x17GetBlockHeadersResponse\x12\"\n" +
 	"\fblockHeaders\x18\x01 \x03(\fR\fblockHeaders\x12\x14\n" +
 	"\x05metas\x18\x02 \x03(\fR\x05metas\"X\n" +

@@ -16,6 +16,7 @@
 package blockchain
 
 import (
+	"container/ring"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -194,13 +195,13 @@ func (b *Blockchain) ResetFSMS() {
 // and readiness (whether the service and its dependencies are ready to accept requests).
 // The behavior changes based on the checkLiveness parameter:
 //
-// - Liveness check (checkLiveness=true): Verifies only the internal service state,
-//   used by orchestration systems to determine if the service needs to be restarted.
-//   A service might be alive but not ready to accept requests.
+//   - Liveness check (checkLiveness=true): Verifies only the internal service state,
+//     used by orchestration systems to determine if the service needs to be restarted.
+//     A service might be alive but not ready to accept requests.
 //
-// - Readiness check (checkLiveness=false): Verifies both the service and its dependencies
-//   (Kafka, blockchain store) are operational and ready to accept requests. Used for
-//   determining if traffic should be routed to this service instance.
+//   - Readiness check (checkLiveness=false): Verifies both the service and its dependencies
+//     (Kafka, blockchain store) are operational and ready to accept requests. Used for
+//     determining if traffic should be routed to this service instance.
 //
 // Parameters:
 // - ctx: Context for the operation with timeout and cancellation support
@@ -1182,7 +1183,7 @@ func (b *Blockchain) GetBlockHeadersToCommonAncestor(ctx context.Context, req *b
 		}
 	}
 
-	blockHeaders, blockHeaderMetas, err := getBlockHeadersToCommonAncestor(ctx, b.store, targetHash, blockLocatorHashes)
+	blockHeaders, blockHeaderMetas, err := getBlockHeadersToCommonAncestor(ctx, b.store, targetHash, blockLocatorHashes, req.MaxHeaders)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -1932,7 +1933,7 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 	return locator, nil
 }
 
-func getBlockHeadersToCommonAncestor(ctx context.Context, store blockchain_store.Store, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+func getBlockHeadersToCommonAncestor(ctx context.Context, store blockchain_store.Store, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	const (
 		numberOfHeaders = 100
 		searchLimit     = 10
@@ -1942,37 +1943,37 @@ func getBlockHeadersToCommonAncestor(ctx context.Context, store blockchain_store
 		commonAncestorMeta *model.BlockHeaderMeta
 	)
 
-	hashStart := hashTarget
-	headerHistory := make([]*model.BlockHeader, 0, searchLimit*numberOfHeaders)
-	headerMetaHistory := make([]*model.BlockHeaderMeta, 0, searchLimit*numberOfHeaders)
+	blockLocatorMap := make(map[chainhash.Hash]struct{}, len(blockLocatorHashes))
+	for _, hash := range blockLocatorHashes {
+		blockLocatorMap[*hash] = struct{}{}
+	}
 
+	max := int(maxHeaders)
+	hashStart := hashTarget
+	lastNHeaders := ring.New(max)
+	lastNMetas := ring.New(max)
+
+out:
 	for searchCount := 0; searchCount < searchLimit; searchCount++ {
 		headers, headerMetas, err := store.GetBlockHeaders(ctx, hashStart, numberOfHeaders)
 		if err != nil {
 			return nil, nil, errors.NewStorageError("failed to get block headers", err)
 		}
 
-		headerMap := make(map[chainhash.Hash]int, len(headers))
-		for idx, header := range headers {
-			headerMap[*header.Hash()] = idx
-		}
-
-		headerHistory = append(headerHistory, headers...)
-		headerMetaHistory = append(headerMetaHistory, headerMetas...)
-
-		for _, hash := range blockLocatorHashes {
-			if idx, ok := headerMap[*hash]; ok {
-				commonAncestorMeta = headerMetas[idx]
-				break
-			}
-		}
-
-		if commonAncestorMeta != nil {
-			break
-		}
-
 		if len(headers) <= 1 {
 			break
+		}
+
+		for idx, header := range headers {
+			lastNHeaders.Value = header
+			lastNHeaders = lastNHeaders.Next()
+			lastNMetas.Value = headerMetas[idx]
+			lastNMetas = lastNMetas.Next()
+
+			if _, ok := blockLocatorMap[*header.Hash()]; ok {
+				commonAncestorMeta = headerMetas[idx]
+				break out
+			}
 		}
 
 		// start over with the next 100 block headers
@@ -1984,14 +1985,22 @@ func getBlockHeadersToCommonAncestor(ctx context.Context, store blockchain_store
 		return nil, nil, errors.NewNotFoundError("common ancestor hash not found after scanning last %d headers", searchLimit*numberOfHeaders)
 	}
 
-	_, metaTarget, err := store.GetBlockHeader(ctx, hashTarget)
-	if err != nil {
-		return nil, nil, errors.NewStorageError("failed to get block header", err)
-	}
+	headerHistory := sliceFromRing[*model.BlockHeader](lastNHeaders)
+	headerMetaHistory := sliceFromRing[*model.BlockHeaderMeta](lastNMetas)
 
-	numberOfMissingHeaders := uint64(metaTarget.Height - commonAncestorMeta.Height + 1)
+	return headerHistory, headerMetaHistory, nil
+}
 
-	return headerHistory[:numberOfMissingHeaders], headerMetaHistory[:numberOfMissingHeaders], nil
+func sliceFromRing[T any](ring *ring.Ring) []T {
+	slice := make([]T, 0, ring.Len())
+
+	ring.Do(func(value interface{}) {
+		if value != nil {
+			slice = append(slice, value.(T))
+		}
+	})
+
+	return slice
 }
 
 // SetBlockProcessedAt sets or clears the processed_at timestamp for a block.

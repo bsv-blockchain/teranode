@@ -409,6 +409,7 @@ func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
 		name          string
 		targetHash    *chainhash.Hash
 		locatorHashes []*chainhash.Hash
+		maxHeaders    uint32
 		expectedLen   int
 		expectError   bool
 		errorType     string
@@ -417,6 +418,7 @@ func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
 			name:          "common ancestor found in first batch",
 			targetHash:    headers[99].Hash(),
 			locatorHashes: []*chainhash.Hash{headers[50].Hash()},
+			maxHeaders:    100,
 			expectedLen:   50,
 			expectError:   false,
 		},
@@ -424,13 +426,23 @@ func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
 			name:          "common ancestor found in second batch",
 			targetHash:    headers[149].Hash(),
 			locatorHashes: []*chainhash.Hash{headers[20].Hash()},
+			maxHeaders:    1000,
 			expectedLen:   130,
+			expectError:   false,
+		},
+		{
+			name:          "common ancestor found in second batch",
+			targetHash:    headers[149].Hash(),
+			locatorHashes: []*chainhash.Hash{headers[20].Hash()},
+			maxHeaders:    100,
+			expectedLen:   100,
 			expectError:   false,
 		},
 		{
 			name:          "no common ancestor found",
 			targetHash:    headers[149].Hash(),
 			locatorHashes: []*chainhash.Hash{new(chainhash.Hash)},
+			maxHeaders:    100,
 			expectError:   true,
 			errorType:     "common ancestor hash not found",
 		},
@@ -438,6 +450,7 @@ func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
 			name:          "empty locator hashes",
 			targetHash:    headers[99].Hash(),
 			locatorHashes: nil,
+			maxHeaders:    100,
 			expectError:   true,
 			errorType:     "common ancestor hash not found",
 		},
@@ -445,6 +458,7 @@ func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
 			name:          "verify last header in locator hashes",
 			targetHash:    headers[99].Hash(),
 			locatorHashes: []*chainhash.Hash{headers[50].Hash(), headers[40].Hash(), headers[30].Hash()},
+			maxHeaders:    100,
 			expectedLen:   50,
 			expectError:   false,
 		},
@@ -457,6 +471,7 @@ func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
 				ctx.server.store,
 				tt.targetHash,
 				tt.locatorHashes,
+				tt.maxHeaders,
 			)
 
 			if tt.expectError {

@@ -54,16 +54,16 @@ type ServicePort struct {
 }
 
 func NewTestContainer(t *testing.T, config TestContainersConfig) (*TestContainer, error) {
-	err := os.RemoveAll(filepath.Join(config.Path, "../data"))
+	err := os.RemoveAll(filepath.Join(config.Path, "data"))
 	require.NoError(t, err)
 
 	// Wait for directory removal to complete
-	err = helper.WaitForDirRemoval(filepath.Join(config.Path, "../data"), 2*time.Second)
+	err = helper.WaitForDirRemoval(filepath.Join(config.Path, "data"), 2*time.Second)
 	require.NoError(t, err)
 
 	// Ensure the required Docker mount paths exist
 	requiredDirs := []string{
-		filepath.Join(config.Path, "../data/postgres"),
+		// filepath.Join(config.Path, "data/postgres"),
 		// 	filepath.Join(config.Path, "data/test/default/legacy/svnode1-data"),
 		// 	filepath.Join(config.Path, "data/test/default/legacy/svnode2-data"),
 		// 	filepath.Join(config.Path, "data/test/default/legacy/svnode3-data"),

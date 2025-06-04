@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/test/testcontainers"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
@@ -155,6 +156,68 @@ func TestCatchUpWithLegacy(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSVNodeCatchUpFromLegacy(t *testing.T) {
+	legacyTestLock.Lock()
+	defer legacyTestLock.Unlock()
+
+	tc, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
+		Path:        "../..",
+		ComposeFile: "docker-compose-host.yml",
+		Profiles:    []string{"svnode1"},
+		ServicesToWaitFor: []testcontainers.ServicePort{
+			{ServiceName: "svnode1", Port: svNodeRPCPort},
+		},
+	})
+	require.NoError(t, err)
+
+	defer tc.Cleanup(t)
+
+	// Important note: svnode won't accept blocks from a pruned node (teranode)
+	// until it has at least 1 block on top of genesis
+	_, err = helper.CallRPC(svNodeRPCURL, "generate", []any{1})
+	require.NoError(t, err, "Failed to generate blocks")
+
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableLegacy:    true,
+		EnableValidator: true,
+		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode1.daemon",
+		SettingsOverrideFunc: func(settings *settings.Settings) {
+			settings.Legacy.ConnectPeers = []string{svNodeHost}
+			settings.P2P.StaticPeers = []string{}
+		},
+	})
+
+	defer td.Stop(t)
+
+	err = helper.WaitForNodeBlockHeight(td.Ctx, td.BlockchainClient, 1, 30*time.Second)
+	require.NoError(t, err)
+
+	var (
+		blockHeight = uint32(4)
+	)
+
+	// generate a few blocks on teranode
+	// Note: if you generate 4 blocks in one go, svnode will not accept them
+	// complaining that the block timestamps are too old
+	for i := uint32(1); i < blockHeight; i++ {
+		time.Sleep(500 * time.Millisecond) // 250ms seems to be the smallest wait that works consistently
+
+		_, err = td.CallRPC("generate", []any{1})
+		require.NoError(t, err, "Failed to generate blocks")
+	}
+
+	// check blockheight on teranode
+	err = helper.WaitForNodeBlockHeight(td.Ctx, td.BlockchainClient, blockHeight, 30*time.Second)
+	require.NoError(t, err)
+
+	// check blockheight on svnode
+	err = waitForSvNode(t, svNodeRPCURL, "blocks", float64(blockHeight))
+	require.NoError(t, err)
+}
+
 func TestSendTxToLegacy(t *testing.T) {
 	legacyTestLock.Lock()
 	defer legacyTestLock.Unlock()
@@ -247,4 +310,37 @@ CONTINUE:
 	time.Sleep(10 * time.Second)
 
 	node1.VerifyInBlockAssembly(t, tx)
+}
+
+func waitForSvNode(t *testing.T, svNodeRPCURL string, key string, value any) error {
+	timeout := time.After(15 * time.Second)
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return errors.NewProcessingError("Timeout waiting for svnode to catch up")
+		case <-ticker.C:
+			resp, err := helper.CallRPC(svNodeRPCURL, "getblockchaininfo", []interface{}{})
+			require.NoError(t, err)
+
+			var blockchainInfo map[string]interface{}
+			err = json.Unmarshal([]byte(resp), &blockchainInfo)
+			require.NoError(t, err)
+
+			// t.Logf("blockchainInfo: %s", resp)
+
+			resultMap, ok := blockchainInfo["result"].(map[string]interface{})
+			if ok {
+				v, ok := resultMap[key]
+				if ok {
+					if v == value {
+						return nil
+					}
+				}
+			}
+		}
+	}
 }

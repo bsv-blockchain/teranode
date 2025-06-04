@@ -138,8 +138,8 @@ func (m *Mock) GetBlockHeaders(_ context.Context, hash *chainhash.Hash, numberOf
 	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
 }
 
-func (m *Mock) GetBlockHeadersToCommonAncestor(_ context.Context, hasTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	args := m.Called(hasTarget, blockLocatorHashes)
+func (m *Mock) GetBlockHeadersToCommonAncestor(_ context.Context, hasTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(hasTarget, blockLocatorHashes, maxHeaders)
 
 	if args.Error(2) != nil {
 		return nil, nil, args.Error(2)

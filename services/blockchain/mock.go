@@ -188,8 +188,8 @@ func (m *Mock) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, n
 }
 
 // GetBlockHeadersToCommonAncestor mocks the GetBlockHeadersToCommonAncestor method
-func (m *Mock) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	args := m.Called(ctx, hashTarget, blockLocatorHashes)
+func (m *Mock) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, hashTarget, blockLocatorHashes, maxHeaders)
 
 	if args.Error(2) != nil {
 		return nil, nil, args.Error(2)

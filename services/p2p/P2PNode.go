@@ -424,7 +424,7 @@ func (s *P2PNode) Start(ctx context.Context, streamHandler func(network.Stream),
 	s.startStaticPeerConnector(ctx)
 
 	go func() {
-		if err := s.discoverPeers(ctx, topicNames); err != nil {
+		if err := s.discoverPeers(ctx, topicNames); err != nil && !errors.Is(err, context.Canceled) {
 			s.logger.Errorf("[P2PNode] error discovering peers: %v", err)
 		}
 	}()

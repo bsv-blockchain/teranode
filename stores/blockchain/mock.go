@@ -21,17 +21,17 @@ import (
 // The implementation is thread-safe with a read-write mutex protecting all operations.
 type MockStore struct {
 	// Blocks maps block hashes to block objects for direct hash-based lookups
-	Blocks        map[chainhash.Hash]*model.Block
+	Blocks map[chainhash.Hash]*model.Block
 	// BlockExists maps block hashes to boolean existence flags for quick existence checks
-	BlockExists   map[chainhash.Hash]bool
+	BlockExists map[chainhash.Hash]bool
 	// BlockByHeight maps heights to block objects for height-based lookups
 	BlockByHeight map[uint32]*model.Block
 	// BestBlock represents the current best block in the chain (highest height)
-	BestBlock     *model.Block
+	BestBlock *model.Block
 	// state tracks the current state of the mock store (e.g., IDLE)
-	state         string
+	state string
 	// mu provides thread-safe access to all MockStore fields
-	mu            sync.RWMutex
+	mu sync.RWMutex
 }
 
 // NewMockStore creates and initializes a new MockStore instance with empty maps and default state.
@@ -250,7 +250,7 @@ func (m *MockStore) StoreBlock(ctx context.Context, block *model.Block, peerID s
 //   - *model.BlockHeader: The header of the best block in the chain
 //   - *model.BlockHeaderMeta: Minimal metadata including just the height
 //   - error: Always nil in this implementation
-// 
+//
 // Note: This implementation does not check if BestBlock is nil, which could cause a panic.
 // In a production implementation, this should be handled.
 func (m *MockStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {

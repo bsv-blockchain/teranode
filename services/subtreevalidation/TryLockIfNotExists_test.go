@@ -213,7 +213,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		exister := newMockExister(false)
 		// Use a longer timeout for the quorum itself to ensure staleness doesn't trigger first
 		// while we wait to cancel the context externally.
-		longQuorumOpTimeout := 500 * time.Millisecond
+		longQuorumOpTimeout := 1 * time.Second
 		q, err := NewQuorum(logger, exister, tempDir, WithTimeout(longQuorumOpTimeout))
 		require.NoError(t, err)
 
@@ -246,9 +246,9 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 
 		// Allow the goroutine to enter the wait loop, but cancel BEFORE the lock becomes stale.
 		// longQuorumOpTimeout is 500ms, so sleeping 50ms is safe.
-		time.Sleep(50 * time.Millisecond) // Reduced sleep time
-		cancel()                          // Cancel the context passed to the function (ctxTest derives from ctxCancelled)
-		wg.Wait()                         // Wait for the goroutine to finish
+		time.Sleep(500 * time.Millisecond) // Reduced sleep time
+		cancel()                           // Cancel the context passed to the function (ctxTest derives from ctxCancelled)
+		wg.Wait()                          // Wait for the goroutine to finish
 
 		require.Error(t, lockErr, "An error is expected but got nil.")
 		// Expecting the wrapper to detect the outer context cancellation

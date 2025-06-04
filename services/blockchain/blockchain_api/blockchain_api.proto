@@ -244,6 +244,7 @@ message GetBlockHeadersRequest {
 message GetBlockHeadersToCommonAncestorRequest {
   bytes targetHash = 1;
   repeated bytes blockLocatorHashes = 2;
+  uint32 maxHeaders = 3;
 }
 
 // swagger:model GetBlockHeadersResponse

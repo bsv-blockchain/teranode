@@ -911,6 +911,10 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, parents *meta.TxInpo
 		stp.currentTxMap.Set(node.Hash, *parents)
 	}
 
+	if parents == nil {
+		return errors.NewProcessingError("error adding node to subtree: parents not found in currentTxMap for %s", node.Hash.String())
+	}
+
 	if stp.currentSubtree.IsComplete() {
 		if err = stp.processCompleteSubtree(skipNotification); err != nil {
 			return err

@@ -321,7 +321,7 @@ type ClientI interface {
 	// - Array of BlockHeader objects from target to common ancestor (inclusive)
 	// - Array of corresponding BlockHeaderMeta objects with additional metadata
 	// - Error if the header retrieval or ancestor finding fails
-	GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
 	// GetBlockHeadersFromTill retrieves block headers between two blocks.
 	//

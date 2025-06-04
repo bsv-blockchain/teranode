@@ -11,11 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-// DEBUG DEBUG DEBUG
-// blockWait = 30 * time.Second
-)
-
 func TestUtxoStore(t *testing.T) {
 	_, err := testcontainers.NewTestContainer(t, testcontainers.TestContainersConfig{
 		Path:        "..",
@@ -44,7 +39,8 @@ func TestUtxoStore(t *testing.T) {
 		td.Stop(t)
 	})
 
-	_, _ = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC("generate", []any{101})
+	require.NoError(t, err)
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
@@ -60,7 +56,7 @@ func TestUtxoStore(t *testing.T) {
 	delay := td.Settings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(delay * time.Millisecond)
+		time.Sleep(delay)
 	}
 
 	utxoMeta, err := td.UtxoStore.Get(td.Ctx, newTx.TxIDChainHash())

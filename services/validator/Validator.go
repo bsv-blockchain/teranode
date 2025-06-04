@@ -579,24 +579,12 @@ func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID str
 		idxs := idxs
 
 		g.Go(func() error {
-			txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, fields.BlockIDs, fields.BlockHeights)
-			if err != nil {
+			if err := v.getUtxoBlockHeight(gCtx, parentTxHash, idxs, utxoHeights); err != nil {
 				if errors.Is(err, errors.ErrTxNotFound) {
 					return errors.NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
 				}
 
 				return errors.NewProcessingError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
-			}
-
-			if len(txMeta.BlockHeights) == 0 {
-				// the parent has not been mined yet, which means it's recent
-				for _, idx := range idxs {
-					utxoHeights[idx] = v.utxoStore.GetBlockHeight()
-				}
-			} else {
-				for _, idx := range idxs {
-					utxoHeights[idx] = txMeta.BlockHeights[0]
-				}
 			}
 
 			return nil
@@ -608,6 +596,25 @@ func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID str
 	}
 
 	return utxoHeights, nil
+}
+
+func (v *Validator) getUtxoBlockHeight(gCtx context.Context, parentTxHash chainhash.Hash, idxs []int, utxoHeights []uint32) error {
+	txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, fields.BlockIDs, fields.BlockHeights)
+	if err != nil {
+		return err
+	}
+
+	if len(txMeta.BlockHeights) == 0 {
+		for _, idx := range idxs {
+			utxoHeights[idx] = v.utxoStore.GetBlockHeight()
+		}
+	} else {
+		for _, idx := range idxs {
+			utxoHeights[idx] = txMeta.BlockHeights[0]
+		}
+	}
+
+	return nil
 }
 
 func (v *Validator) TriggerBatcher() {

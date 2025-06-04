@@ -930,18 +930,37 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 	// over with the genesis block if unknown block locators are provided.
 	//
 	// This mirrors the behavior in the reference implementation.
-	blockHeaders, err := sp.server.blockchainClient.LocateBlockHeaders(sp.ctx, msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
+
+	bestHeader, _, err := sp.server.blockchainClient.GetBestBlockHeader(sp.ctx)
 	if err != nil {
-		sp.server.logger.Errorf("Failed to fetch locator block hashes: %v", err)
+		sp.server.logger.Errorf("Failed to fetch best block header: %v", err)
+		return
+	}
+
+	blockHeaders, _, err := sp.server.blockchainClient.GetBlockHeadersToCommonAncestor(sp.ctx, bestHeader.Hash(), msg.BlockLocatorHashes, wire.MaxBlockHeadersPerMsg)
+	if err != nil {
+		sp.server.logger.Errorf("Failed to fetch block headers to common ancestor: %v", err)
 	}
 
 	// Send found headers to the requesting peer.
-	wireBlockHeaders := make([]*wire.BlockHeader, len(blockHeaders))
-	for i, blockHeader := range blockHeaders {
-		wireBlockHeaders[i] = blockHeader.ToWireBlockHeader()
+	wireBlockHeaders := make([]*wire.BlockHeader, 0, len(blockHeaders))
+
+	for _, blockHeader := range blockHeaders {
+		if blockHeader.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+			// skip genesis block
+			continue
+		}
+
+		wireBlockHeaders = append(wireBlockHeaders, blockHeader.ToWireBlockHeader())
+
+		if len(wireBlockHeaders) >= wire.MaxBlockHeadersPerMsg {
+			break
+		}
 	}
 
-	sp.QueueMessage(&wire.MsgHeaders{Headers: wireBlockHeaders}, nil)
+	if len(wireBlockHeaders) > 0 {
+		sp.QueueMessage(&wire.MsgHeaders{Headers: wireBlockHeaders}, nil)
+	}
 }
 
 // OnGetCFilters is invoked when a peer receives a getcfilters bitcoin message.
@@ -2654,8 +2673,10 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	// cfg.NoCFilters
 	services &^= wire.SFNodeCF
 	// cfg.Prune
+
 	services &^= wire.SFNodeNetwork
 	services |= wire.SFNodeNetworkLimited
+	// services |= wire.SFNodeNetwork
 
 	peersDir := cfg.DataDir
 	if !tSettings.Legacy.SavePeers {

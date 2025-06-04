@@ -532,7 +532,7 @@ func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash,
 	return c.returnBlockHeaders(resp)
 }
 
-func (c *Client) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+func (c *Client) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	locatorBytes := make([][]byte, 0, len(blockLocatorHashes))
 	for _, hash := range blockLocatorHashes {
 		locatorBytes = append(locatorBytes, hash.CloneBytes())
@@ -541,6 +541,7 @@ func (c *Client) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget
 	resp, err := c.client.GetBlockHeadersToCommonAncestor(ctx, &blockchain_api.GetBlockHeadersToCommonAncestorRequest{
 		TargetHash:         hashTarget.CloneBytes(),
 		BlockLocatorHashes: locatorBytes,
+		MaxHeaders:         maxHeaders,
 	})
 	if err != nil {
 		return nil, nil, errors.UnwrapGRPC(err)
