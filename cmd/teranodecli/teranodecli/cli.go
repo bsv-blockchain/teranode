@@ -151,7 +151,7 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Invalid txid: %s", args[0])
 			}
 
-			aerospikereader.AerospikeReader(logger, tSettings, args[0])
+			aerospikereader.ReadAerospike(logger, tSettings, args[0])
 
 			return nil
 		}
