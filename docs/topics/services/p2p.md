@@ -445,7 +445,7 @@ The P2P service serves as the communication backbone of the Teranode network, en
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
 | `p2p_listen_addresses` | []string | [] | Network addresses for the P2P service to listen on | Controls which interfaces and ports the service binds to for accepting connections |
-| `p2p_advertise_addresses` | []string | [] | Addresses to advertise to other peers | Affects how other peers discover and connect to this node |
+| `p2p_advertise_addresses` | []string | [] | Addresses to advertise to other peers | Affects how other peers discover and connect to this node. Supports both IP addresses and domain names with optional port specification (e.g., `192.168.1.1`, `example.com:9906`). When port is omitted, the `p2p_port` value is used. |
 | `p2p_port` | int | 9906 | Default port for P2P communication | Used as the fallback port when addresses don't specify a port |
 | `p2p_bootstrapAddresses` | []string | [] | Initial peer addresses for bootstrapping the DHT | Helps new nodes join the network by providing entry points |
 | `p2p_static_peers` | []string | [] | Peer addresses to connect to on startup | Ensures connections to specific peers regardless of discovery |
@@ -499,6 +499,9 @@ The P2P service's network presence is controlled by several interrelated setting
 
 - `p2p_listen_addresses` determines which interfaces/ports the service listens on
 - `p2p_advertise_addresses` controls what addresses are advertised to peers
+  - Each address can be specified with or without a port (e.g., `192.168.1.1` or `example.com:9906`)
+  - For addresses without a port, the system automatically uses the value from `p2p_port`
+  - Both IP addresses and domain names are supported with proper multiaddress formatting
 - `p2p_port` provides a default when addresses don't specify ports
 - If no `p2p_listen_addresses` are specified, the service may not be reachable
 - The gRPC and HTTP listen addresses control how other services can interact with the P2P service
