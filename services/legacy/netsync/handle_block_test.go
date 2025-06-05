@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/services/legacy/testdata"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -194,5 +195,27 @@ func Test_calculateTransactionFee(t *testing.T) {
 
 			assert.Equal(t, tt.want, got)
 		})
+	}
+}
+
+func Benchmark_createSubtree(b *testing.B) {
+	block, err := testdata.ReadBlockFromFile("../testdata/00000000000000000488eecd93d6f3767b1ba38668200a6a5349af2e0d4fad3f.bin")
+	require.NoError(b, err)
+
+	sm := &SyncManager{}
+
+	txMap, err := sm.createTxMap(b.Context(), block)
+	require.NoError(b, err)
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		subtree, err := util.NewIncompleteTreeByLeafCount(len(block.Transactions()))
+		require.NoError(b, err)
+
+		subtreeData := util.NewSubtreeData(subtree)
+		subtreeMeta := util.NewSubtreeMeta(subtree)
+
+		_ = sm.createSubtree(b.Context(), block, txMap, subtree, subtreeData, subtreeMeta)
 	}
 }

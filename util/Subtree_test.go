@@ -641,6 +641,7 @@ func BenchmarkSubtree_AddNode(b *testing.B) {
 	hashes := make([]chainhash.Hash, b.N)
 
 	b32 := make([]byte, 32)
+
 	for i := 0; i < b.N; i++ {
 		// create random 32 bytes
 		_, _ = rand.Read(b32)
@@ -733,6 +734,7 @@ func TestSubtree_ConflictingNodes(t *testing.T) {
 func BenchmarkSubtree_Deserialize(b *testing.B) {
 	// populate subtree for test
 	subtree, _ := NewTreeByLeafCount(1024 * 1024)
+
 	for i := uint64(0); i < 1024*1024; i++ {
 		hash, _ := chainhash.NewHashFromStr(fmt.Sprintf("%x", i))
 		_ = subtree.AddNode(*hash, i, i)
@@ -751,6 +753,7 @@ func BenchmarkSubtree_Deserialize(b *testing.B) {
 func BenchmarkSubtree_DeserializeNodesFromReader(b *testing.B) {
 	// populate subtree for test
 	subtree, _ := NewTreeByLeafCount(1024 * 1024)
+
 	for i := uint64(0); i < 1024*1024; i++ {
 		hash, _ := chainhash.NewHashFromStr(fmt.Sprintf("%x", i))
 		_ = subtree.AddNode(*hash, i, i)
@@ -773,6 +776,7 @@ func BenchmarkSubtree_DeserializeNodesFromReader(b *testing.B) {
 func BenchmarkSubtree_DeserializeFromReader(b *testing.B) {
 	// populate subtree for test
 	subtree, _ := NewTreeByLeafCount(1024 * 1024)
+
 	for i := uint64(0); i < 1024*1024; i++ {
 		hash, _ := chainhash.NewHashFromStr(fmt.Sprintf("%x", i))
 		_ = subtree.AddNode(*hash, i, i)
@@ -790,5 +794,24 @@ func BenchmarkSubtree_DeserializeFromReader(b *testing.B) {
 
 		// reset the subtree reader for the next loop
 		_, _ = subtreeReader.Seek(0, 0)
+	}
+}
+
+func Benchmark_SubtreeNodeIndex(b *testing.B) {
+	// populate subtree for test
+	subtree, _ := NewTreeByLeafCount(1024 * 1024)
+
+	for i := uint64(0); i < 1024*1024; i++ {
+		hash := chainhash.HashH([]byte(fmt.Sprintf("tx_%x", i)))
+		_ = subtree.AddNode(hash, i, i)
+	}
+
+	subtreeLength := subtree.Length()
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		index := subtree.NodeIndex(subtree.Nodes[i%subtreeLength].Hash)
+		require.GreaterOrEqual(b, index, 0)
 	}
 }

@@ -34,7 +34,8 @@ type Subtree struct {
 	feeBytes     []byte
 	feeHashBytes []byte
 
-	mu sync.RWMutex // protects Nodes slice
+	mu        sync.RWMutex           // protects Nodes slice
+	nodeIndex map[chainhash.Hash]int // maps txid to index in Nodes slice
 }
 
 // NewTree creates a new Subtree with a fixed height
@@ -203,13 +204,13 @@ func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes
 
 func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
 	st.mu.Lock()
+	defer st.mu.Unlock()
+
 	if (len(st.Nodes) + 1) > st.treeSize {
-		st.mu.Unlock()
 		return errors.NewSubtreeError("subtree is full")
 	}
 
 	if node.Hash.Equal(CoinbasePlaceholder) {
-		st.mu.Unlock()
 		return errors.NewSubtreeError("[AddSubtreeNode] coinbase placeholder node should be added with AddCoinbaseNode, tree length is %d", len(st.Nodes))
 	}
 
@@ -226,7 +227,11 @@ func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
 	st.rootHash = nil // reset rootHash
 	st.Fees += node.Fee
 	st.SizeInBytes += node.SizeInBytes
-	st.mu.Unlock()
+
+	if st.nodeIndex != nil {
+		// node index map exists, add the node to it
+		st.nodeIndex[node.Hash] = len(st.Nodes) - 1
+	}
 
 	return nil
 }
@@ -279,6 +284,16 @@ func (st *Subtree) AddConflictingNode(newConflictingNode chainhash.Hash) error {
 	return nil
 }
 
+// AddNode adds a node to the subtree
+// NOTE: this function is not concurrency safe, so it should be called from a single goroutine
+//
+// Parameters:
+//   - node: the transaction id of the node to add
+//   - fee: the fee of the node
+//   - sizeInBytes: the size of the node in bytes
+//
+// Returns:
+//   - error: an error if the node could not be added
 func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
 		return errors.NewSubtreeError("subtree is full")
@@ -306,11 +321,19 @@ func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) 
 	st.Fees += fee
 	st.SizeInBytes += sizeInBytes
 
+	if st.nodeIndex != nil {
+		// node index map exists, add the node to it
+		st.nodeIndex[node] = len(st.Nodes) - 1
+	}
+
 	return nil
 }
 
 // RemoveNodeAtIndex removes a node at the given index and makes sure the subtree is still valid
 func (st *Subtree) RemoveNodeAtIndex(index int) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
 	if index >= len(st.Nodes) {
 		return errors.NewSubtreeError("index out of range")
 	}
@@ -320,6 +343,11 @@ func (st *Subtree) RemoveNodeAtIndex(index int) error {
 
 	st.Nodes = append(st.Nodes[:index], st.Nodes[index+1:]...)
 	st.rootHash = nil // reset rootHash
+
+	if st.nodeIndex != nil {
+		// remove the node from the node index map
+		delete(st.nodeIndex, st.Nodes[index].Hash)
+	}
 
 	return nil
 }
@@ -375,10 +403,21 @@ func (st *Subtree) GetMap() (TxMap, error) {
 }
 
 func (st *Subtree) NodeIndex(hash chainhash.Hash) int {
-	for idx, node := range st.Nodes {
-		if node.Hash.Equal(hash) {
-			return idx
+	if st.nodeIndex == nil {
+		// create the node index map
+		st.mu.Lock()
+		st.nodeIndex = make(map[chainhash.Hash]int, len(st.Nodes))
+
+		for idx, node := range st.Nodes {
+			st.nodeIndex[node.Hash] = idx
 		}
+
+		st.mu.Unlock()
+	}
+
+	nodeIndex, ok := st.nodeIndex[hash]
+	if ok {
+		return nodeIndex
 	}
 
 	return -1
@@ -389,10 +428,9 @@ func (st *Subtree) HasNode(hash chainhash.Hash) bool {
 }
 
 func (st *Subtree) GetNode(hash chainhash.Hash) (*SubtreeNode, error) {
-	for _, subtreeNode := range st.Nodes {
-		if subtreeNode.Hash.Equal(hash) {
-			return &subtreeNode, nil
-		}
+	nodeIndex := st.NodeIndex(hash)
+	if nodeIndex != -1 {
+		return &st.Nodes[nodeIndex], nil
 	}
 
 	return nil, errors.NewSubtreeError("node not found")
