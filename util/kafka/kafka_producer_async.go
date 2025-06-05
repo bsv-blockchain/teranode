@@ -223,7 +223,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 				key := c.decodeKeyOrValue(s.Key)
 				value := c.decodeKeyOrValue(s.Value)
 
-				c.Config.Logger.Infof("Successfully sent message to topic %s, offset: %d, key: %v, value: %v",
+				c.Config.Logger.Debugf("Successfully sent message to topic %s, offset: %d, key: %v, value: %v",
 					s.Topic, s.Offset, key, value)
 			}
 		}()

@@ -242,7 +242,7 @@ func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSetti
 	// Check to see if the utxo-set already exists
 	exists, err := store.Exists(ctx, blockHash[:], fileformat.FileTypeUtxoSet)
 	if err != nil {
-		return nil, false, errors.NewStorageError("error checking if %s.%s exists", blockHash, fileformat.FileTypeUtxoSet, err)
+		return nil, false, errors.NewStorageError("error checking if %v.%s exists", blockHash, fileformat.FileTypeUtxoSet, err)
 	}
 
 	return us, exists, nil

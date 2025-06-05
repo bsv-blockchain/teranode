@@ -456,7 +456,11 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			fileformat.FileTypeSubtreeData,
 			options.WithDeleteAt(dah),
 		)
-		if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		if err != nil {
+			if errors.Is(err, errors.ErrBlobAlreadyExists) {
+				return nil
+			}
+
 			return errors.NewStorageError("[writeSubtree][%s] failed to create subtree data file", subtree.RootHash().String(), err)
 		}
 
