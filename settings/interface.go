@@ -234,7 +234,6 @@ type BlockValidationSettings struct {
 	ArePreviousBlocksProcessedMaxRetry               int
 	ArePreviousBlocksProcessedRetryBackoffMultiplier int
 	PreviousBlockHeaderCount                         uint64
-	BloomFilterRetentionSize                         uint32
 }
 
 type ValidatorSettings struct {
@@ -378,7 +377,6 @@ type SubtreeValidationSettings struct {
 	SubtreeValidationAbandonThreshold         int
 	TxMetaCacheEnabled                        bool
 	TxMetaCacheMaxMB                          int
-	TxMetaCacheNoOfBlocksToKeep               uint32
 	ValidationMaxRetries                      int
 	ValidationRetrySleep                      string
 	TxChanBufferSize                          int

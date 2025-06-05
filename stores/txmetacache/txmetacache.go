@@ -128,12 +128,22 @@ func NewTxMetaCache(
 		return nil, errors.NewProcessingError("error creating cache", err)
 	}
 
+	const percentageOfGlobalBlockHeightRetentionToKeep = 10
+
+	var noOfBlocksToKeepInTxMetaCache uint32
+
+	if tSettings.GlobalBlockHeightRetention < percentageOfGlobalBlockHeightRetentionToKeep {
+		noOfBlocksToKeepInTxMetaCache = 1
+	} else {
+		noOfBlocksToKeepInTxMetaCache = tSettings.GlobalBlockHeightRetention / percentageOfGlobalBlockHeightRetentionToKeep
+	}
+
 	m := &TxMetaCache{
 		utxoStore:                     utxoStore,
 		cache:                         cache,
 		metrics:                       metrics{},
 		logger:                        logger,
-		noOfBlocksToKeepInTxMetaCache: tSettings.SubtreeValidation.TxMetaCacheNoOfBlocksToKeep,
+		noOfBlocksToKeepInTxMetaCache: noOfBlocksToKeepInTxMetaCache,
 	}
 
 	go func() {

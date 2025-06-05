@@ -188,7 +188,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		txStore:                       txStore,
 		utxoStore:                     utxoStore,
 		recentBlocksBloomFilters:      util.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-		bloomFilterRetentionSize:      tSettings.BlockValidation.BloomFilterRetentionSize,
+		bloomFilterRetentionSize:      tSettings.GlobalBlockHeightRetention + 2, // Needs to be larger than global value but not orders of magnitude larger
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(tSettings.GlobalBlockHeightRetention),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),

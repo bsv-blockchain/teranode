@@ -346,7 +346,7 @@ func Test_Server_processBlockFound(t *testing.T) {
 	kafkaConsumerClient := &kafka.KafkaConsumerGroup{}
 
 	subtreeStore := memory.New()
-	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(1)
+	tSettings.GlobalBlockHeightRetention = uint32(1)
 
 	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient)
 	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil)
@@ -418,7 +418,7 @@ func TestServer_catchup(t *testing.T) {
 		utxoStore := utxostore.New(ulogger.TestLogger{})
 		_ = utxoStore.SetBlockHeight(200)
 
-		settings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+		settings.GlobalBlockHeightRetention = uint32(0)
 
 		server := &Server{
 			logger:           logger,
@@ -487,7 +487,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
 		require.NoError(t, err)
 
-		settings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+		settings.GlobalBlockHeightRetention = uint32(0)
 
 		server := &Server{
 			logger:           logger,
@@ -537,7 +537,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
 		require.NoError(t, err)
 
-		settings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+		settings.GlobalBlockHeightRetention = uint32(0)
 
 		server := &Server{
 			logger:           logger,
@@ -566,7 +566,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
 		require.NoError(t, err)
 
-		settings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+		settings.GlobalBlockHeightRetention = uint32(0)
 		server := &Server{
 			logger:           logger,
 			settings:         settings,

@@ -274,7 +274,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 	start := time.Now()
 
@@ -408,7 +408,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 	start := time.Now()
 
@@ -498,7 +498,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 
 	tSettings := test.CreateBaseTestSettings()
 
-	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 	start := time.Now()
 	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
@@ -591,7 +591,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 	start := time.Now()
 	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
@@ -711,7 +711,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 	start := time.Now()
 
@@ -830,7 +830,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 
 	// When: The last block in the chain is validated
@@ -963,7 +963,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	// Create block validation instance
 	tSettings.BlockValidation.OptimisticMining = false
 
-	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 
 	// Test valid merkle root
@@ -1189,7 +1189,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 
 	// Create block validation instance with optimistic mining disabled
 	tSettings.BlockValidation.OptimisticMining = false
-	tSettings.BlockValidation.BloomFilterRetentionSize = uint32(0)
+	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 
 	// Test block validation - it should request the missing transaction
@@ -1275,7 +1275,7 @@ func TestBlockValidationExcessiveBlockSize(t *testing.T) {
 			blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
 			require.NoError(t, err)
 
-			tSettings.BlockValidation.BloomFilterRetentionSize = uint32(1)
+			tSettings.GlobalBlockHeightRetention = uint32(1)
 
 			// Create block validator with 10 minute bloom filter expiration
 			blockValidator := NewBlockValidation(

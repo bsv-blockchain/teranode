@@ -24,7 +24,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 		panic(err)
 	}
 
-	globalBlockHeightRetention := getUint32("global_blockHeightRetention", 288, alternativeContext...)
+	const blocksInADayOnAverage = 144
+
+	globalBlockHeightRetention := getUint32("global_blockHeightRetention", blocksInADayOnAverage*2, alternativeContext...)
 
 	doubleSpendWindowMillis := getInt("double_spend_window_millis", 0, alternativeContext...)
 	doubleSpendWindow := time.Duration(doubleSpendWindowMillis) * time.Millisecond
@@ -252,7 +254,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CheckSubtreeFromBlockRetryBackoffDuration:        getDuration("blockvalidation_check_subtree_from_block_retry_backoff_duration", 30*time.Second),
 			SecretMiningThreshold:                            getUint32("blockvalidation_secret_mining_threshold", 10, alternativeContext...),
 			PreviousBlockHeaderCount:                         getUint64("blockvalidation_previous_block_header_count", 100, alternativeContext...),
-			BloomFilterRetentionSize:                         getUint32("blockvalidation_bloom_filter_retention_size", 100, alternativeContext...),
 		},
 		Validator: ValidatorSettings{
 			GRPCAddress:               getString("validator_grpcAddress", "localhost:8081", alternativeContext...),
@@ -380,7 +381,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SubtreeValidationAbandonThreshold:         getInt("subtreevalidation_subtree_validation_abandon_threshold", 1, alternativeContext...),
 			TxMetaCacheEnabled:                        getBool("subtreevalidation_txMetaCacheEnabled", true, alternativeContext...),
 			TxMetaCacheMaxMB:                          getInt("txMetaCacheMaxMB", 256, alternativeContext...),
-			TxMetaCacheNoOfBlocksToKeep:               getUint32("txMetaCacheNoOfBlocksToKeep", 5, alternativeContext...),
 			ValidationMaxRetries:                      getInt("subtreevalidation_validation_max_retries", 30, alternativeContext...),
 			ValidationRetrySleep:                      getString("subtreevalidation_validation_retry_sleep", "5s", alternativeContext...),
 			TxChanBufferSize:                          getInt("subtreevalidation_txChanBufferSize", 0, alternativeContext...),

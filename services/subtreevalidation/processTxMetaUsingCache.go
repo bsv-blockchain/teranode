@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -52,64 +53,87 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 		return len(txHashes), nil // As there was no cache, we "missed" all the txHashes
 	}
 
-	missed := atomic.Int32{}
+	p := &TxMetaProcessor{
+		ctx:                                gCtx,
+		logger:                             u.logger,
+		batchSize:                          batchSize,
+		validateSubtreeInternalConcurrency: validateSubtreeInternalConcurrency,
+		missingTxThreshold:                 uint32(missingTxThreshold), //nolint: gosec // G601: Integer overflow (gosec)
+		cache:                              cache,
+		txHashes:                           txHashes,
+		txMetaSlice:                        txMetaSlice,
+		failFast:                           failFast,
+	}
 
 	// cycle through batches of 1024 txHashes at a time
 	for i := 0; i < len(txHashes); i += batchSize {
 		i := i
 
 		g.Go(func() error {
-			var (
-				txMeta *meta.Data
-				err    error
-			)
-
-			// cycle through the batch size, making sure not to go over the length of the txHashes
-			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
-				// check whether the txMetaSlice has already been populated
-				if txMetaSlice[i+j] != nil {
-					continue
-				}
-
-				select {
-				case <-gCtx.Done(): // Listen for cancellation signal
-					// Return the error that caused the cancellation
-					return errors.NewContextCanceledError("[processTxMetaUsingCache context cancelled]", gCtx.Err())
-
-				default:
-					txHash := txHashes[i+j]
-
-					if txHash.Equal(*util.CoinbasePlaceholderHash) {
-						// coinbase placeholder is not in the store
-						continue
-					}
-
-					txMeta, err = cache.GetMetaCached(gCtx, txHash)
-					if err != nil && !errors.Is(err, errors.ErrNotFound) {
-						u.logger.Warnf("[processTxMetaUsingCache] error retrieving txMeta for %s: %v", txHash.String(), err)
-
-						txMeta = nil // Set txMeta to nil to indicate a miss
-					}
-
-					if txMeta != nil {
-						txMetaSlice[i+j] = txMeta
-						continue
-					}
-
-					newMissed := missed.Add(1)
-					if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
-						return errors.NewThresholdExceededError("threshold exceeded for missing txs: %d > %d", newMissed, missingTxThreshold)
-					}
-				}
-			}
-
-			return nil
+			return p.processTxMetaUsingCache(i)
 		})
 	}
 
 	if err := g.Wait(); err != nil {
-		return int(missed.Load()), errors.NewProcessingError("error processing txMeta using cache", err)
+		return int(p.missed.Load()), errors.NewProcessingError("error processing txMeta using cache", err)
 	}
 
-	return int(missed.Load()), nil
+	return int(p.missed.Load()), nil
+}
+
+type TxMetaProcessor struct {
+	ctx                                context.Context
+	logger                             ulogger.Logger
+	batchSize                          int
+	validateSubtreeInternalConcurrency int
+	missingTxThreshold                 uint32
+	cache                              *txmetacache.TxMetaCache
+	txHashes                           []chainhash.Hash
+	txMetaSlice                        []*meta.Data
+	failFast                           bool
+	missed                             atomic.Uint32
+}
+
+func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
+	var (
+		txMeta *meta.Data
+		err    error
+	)
+
+	for j := 0; j < util.Min(p.batchSize, len(p.txHashes)-i); j++ {
+		if p.txMetaSlice[i+j] != nil {
+			continue
+		}
+
+		select {
+		case <-p.ctx.Done():
+			return errors.NewContextCanceledError("[processTxMetaUsingCache context cancelled]", p.ctx.Err())
+		default:
+		}
+
+		txHash := p.txHashes[i+j]
+
+		if txHash.Equal(*util.CoinbasePlaceholderHash) {
+			continue
+		}
+
+		txMeta, err = p.cache.GetMetaCached(p.ctx, txHash)
+		if err != nil && !errors.Is(err, errors.ErrNotFound) {
+			p.logger.Warnf("[processTxMetaUsingCache] error retrieving txMeta for %s: %v", txHash.String(), err)
+
+			txMeta = nil
+		}
+
+		if txMeta != nil {
+			p.txMetaSlice[i+j] = txMeta
+			continue
+		}
+
+		newMissed := p.missed.Add(1)
+		if p.failFast && p.missingTxThreshold > 0 && newMissed > p.missingTxThreshold {
+			return errors.NewThresholdExceededError("threshold exceeded for missing txs: %d > %d", newMissed, p.missingTxThreshold)
+		}
+	}
+
+	return nil
 }
