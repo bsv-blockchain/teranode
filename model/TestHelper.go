@@ -574,6 +574,10 @@ func (l TestLocalSubtreeStore) Close(_ context.Context) error {
 	panic(notImplemented)
 }
 
+func (l TestLocalSubtreeStore) SetCurrentBlockHeight(_ uint32) {
+	// noop
+}
+
 type BlobStoreStub struct {
 	logger ulogger.Logger
 }
@@ -640,4 +644,8 @@ func (n *BlobStoreStub) Exists(_ context.Context, _ []byte, _ fileformat.FileTyp
 
 func (n *BlobStoreStub) Del(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) error {
 	return nil
+}
+
+func (n *BlobStoreStub) SetCurrentBlockHeight(_ uint32) {
+	// noop
 }

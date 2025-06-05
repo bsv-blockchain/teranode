@@ -129,4 +129,9 @@ type Store interface {
 	// Returns:
 	//   - error: Any error that occurred during closure
 	Close(ctx context.Context) error
+
+	// SetCurrentBlockHeight sets the current block height for the store.
+	// Parameters:
+	//   - height: The current block height
+	SetCurrentBlockHeight(height uint32)
 }

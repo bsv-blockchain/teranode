@@ -332,3 +332,7 @@ func (m *Memory) ListKeys() [][]byte {
 
 	return keys
 }
+
+func (m *Memory) SetCurrentBlockHeight(height uint32) {
+	m.currentBlockHeight = height
+}

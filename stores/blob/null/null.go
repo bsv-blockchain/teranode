@@ -72,3 +72,7 @@ func (n *Null) Exists(_ context.Context, _ []byte, _ fileformat.FileType, opts .
 func (n *Null) Del(_ context.Context, _ []byte, _ fileformat.FileType, opts ...options.FileOption) error {
 	return nil
 }
+
+func (n *Null) SetCurrentBlockHeight(height uint32) {
+	// noop
+}

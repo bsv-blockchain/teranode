@@ -449,6 +449,12 @@ func (g *S3) Del(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	return nil
 }
 
+func (g *S3) SetCurrentBlockHeight(_ uint32) {
+	// This method is intentionally left empty because the S3 backend does not
+	// support or require block height functionality. Block height is not relevant
+	// for this storage implementation.
+}
+
 func (g *S3) getObjectKey(hash []byte, fileType fileformat.FileType, o *options.Options) *string {
 	var (
 		key    string

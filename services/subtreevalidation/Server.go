@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation/subtreevalidation_api"
@@ -196,6 +197,70 @@ func New(
 		}
 	} else {
 		u.utxoStore = utxoStore
+	}
+
+	if u.blockchainClient != nil {
+		var (
+			subscribeCtx    context.Context
+			subscribeCancel context.CancelFunc
+			height          uint32
+		)
+
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					if subscribeCancel != nil {
+						u.logger.Infof("[SubtreeValidation:DAH] cancelling blockchain subscription")
+
+						subscribeCancel()
+					}
+
+					u.logger.Warnf("[SubtreeValidation:DAH] exiting setMined goroutine: %s", ctx.Err())
+
+					return
+				default:
+					u.logger.Infof("[SubtreeValidation:DAH] subscribing to blockchain for setTxMined signal")
+
+					subscribeCtx, subscribeCancel = context.WithCancel(ctx)
+
+					blockchainSubscription, err := u.blockchainClient.Subscribe(subscribeCtx, "subtreevalidation")
+					if err != nil {
+						u.logger.Errorf("[SubtreeValidation:DAH] failed to subscribe to blockchain: %s", err)
+
+						// backoff for 5 seconds and try again
+						time.Sleep(5 * time.Second)
+
+						continue
+					}
+
+					for notification := range blockchainSubscription {
+						if notification == nil {
+							continue
+						}
+
+						if notification.Type == model.NotificationType_Block {
+							cHash := chainhash.Hash(notification.Hash)
+							u.logger.Infof("[SubtreeValidation:DAH] received Block notification: %s", cHash.String())
+
+							block, err := u.blockchainClient.GetBlock(ctx, &cHash)
+							if err != nil {
+								u.logger.Errorf("[SubtreeValidation:DAH] failed to get block: %s", err)
+
+								continue
+							}
+
+							if block.Height > height {
+								height = block.Height
+								u.subtreeStore.SetCurrentBlockHeight(block.Height)
+							}
+						}
+					}
+
+					subscribeCancel()
+				}
+			}
+		}()
 	}
 
 	return u, nil

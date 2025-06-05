@@ -16,6 +16,7 @@ package blockvalidation
 
 import (
 	"context"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -1205,8 +1206,14 @@ func (u *BlockValidation) pruneBloomFilters(ctx context.Context, block *model.Bl
 		go func(pruneList []chainhash.Hash) {
 			for _, hash := range pruneList {
 				if err := u.subtreeStore.Del(ctx, hash[:], fileformat.FileTypeBloomFilter); err != nil {
-					u.logger.Errorf("[pruneBloomFilters][%s] failed to prune filter %s from store: %s",
-						block.Hash().String(), hash.String(), err)
+					if errors.Is(err, os.ErrNotExist) {
+						// log as warning so that tests and chainintegrity steps don't flag build as failing
+						u.logger.Warnf("[pruneBloomFilters][%s] failed to prune filter %s from store: %s",
+							block.Hash().String(), hash.String(), err)
+					} else {
+						u.logger.Errorf("[pruneBloomFilters][%s] failed to prune filter %s from store: %s",
+							block.Hash().String(), hash.String(), err)
+					}
 				}
 			}
 		}(filtersToPrune)

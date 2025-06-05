@@ -150,6 +150,11 @@ func (s *MockTxStore) Close(ctx context.Context) error {
 	return nil
 }
 
+// SetCurrentBlockHeight implements a mock SetCurrentBlockHeight method
+func (s *MockTxStore) SetCurrentBlockHeight(_ uint32) {
+	// noop
+}
+
 // WasStoreCalled returns true if the Store method was called
 func (s *MockTxStore) WasStoreCalled() bool {
 	return s.storeCalled.Load()

@@ -22,6 +22,7 @@ type blobStore interface {
 	GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error)
 	Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error
 	Close(ctx context.Context) error
+	SetCurrentBlockHeight(height uint32)
 }
 
 type LocalDAH struct {
@@ -181,4 +182,9 @@ func (l *LocalDAH) Exists(ctx context.Context, key []byte, fileType fileformat.F
 func (l *LocalDAH) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
 	_ = l.dahStore.Del(ctx, key, fileType, opts...)
 	return l.blobStore.Del(ctx, key, fileType, opts...)
+}
+
+func (l *LocalDAH) SetCurrentBlockHeight(height uint32) {
+	l.dahStore.SetCurrentBlockHeight(height)
+	l.blobStore.SetCurrentBlockHeight(height)
 }

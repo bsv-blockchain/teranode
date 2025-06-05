@@ -231,3 +231,7 @@ func (s *HTTPStore) Close(ctx context.Context) error {
 	// No need to close anything for HTTP client
 	return nil
 }
+
+func (s *HTTPStore) SetCurrentBlockHeight(_ uint32) {
+	// noop
+}

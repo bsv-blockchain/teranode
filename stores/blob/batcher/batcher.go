@@ -256,3 +256,7 @@ func (b *Batcher) Exists(_ context.Context, _ []byte, _ fileformat.FileType, _ .
 func (b *Batcher) Del(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) error {
 	return errors.NewStorageError("del is not supported in a batcher store")
 }
+
+func (b *Batcher) SetCurrentBlockHeight(_ uint32) {
+	// noop
+}
