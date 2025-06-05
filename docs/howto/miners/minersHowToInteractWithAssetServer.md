@@ -1,6 +1,6 @@
 # How to Interact with the Asset Server
 
-Last Modified: 4-May-2025
+Last Modified: 28-May-2025
 
 There are 2 primary ways to interact with the node, using the RPC Server, and using the Asset Server. This document will focus on the Asset Server. The Asset Server provides an HTTP API for interacting with the node. Below is a list of implemented endpoints with their parameters and return values.
 
@@ -135,7 +135,15 @@ Many endpoints support multiple response formats, indicated by the URL path or a
   - Parameters:
     - `n` (optional): Number of blocks to retrieve (default: 10)
     - `includeorphans` (optional): Whether to include orphaned blocks (default: false)
-    - `height` (optional): Start retrieval from this height
+    - `height` (optional): Start retrieval from this specific height instead of the latest height
+    - `offset` (optional): Skip this many blocks before starting to return blocks
+  - Response Format: JSON array of block objects including:
+    - `hash`: Block hash
+    - `height`: Block height
+    - `time`: Block timestamp
+    - `txCount`: Number of transactions in the block
+    - `size`: Block size in bytes
+    - `orphan`: Boolean indicating if the block is an orphan
   - Returns: JSON array of recent block information
 
 - GET `/api/v1/blockstats`
@@ -287,27 +295,117 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - `query` (required): Search query (hash or block height)
   - Returns: JSON object with search results and entity type
 
+### Block Management Endpoints
+
+- POST `/api/v1/block/invalidate`
+  - Description: Marks a block as invalid, forcing a chain reorganization
+  - Parameters:
+    - Request body: JSON object with block hash information
+      ```json
+      {
+        "hash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+      }
+      ```
+  - Returns: JSON object with status of the invalidation operation
+
+- POST `/api/v1/block/revalidate`
+  - Description: Reconsiders a previously invalidated block
+  - Parameters:
+    - Request body: JSON object with block hash information
+      ```json
+      {
+        "hash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+      }
+      ```
+  - Returns: JSON object with status of the revalidation operation
+
+- GET `/api/v1/blocks/invalid`
+  - Description: Retrieves a list of currently invalidated blocks
+  - Parameters:
+    - `limit` (optional): Maximum number of blocks to retrieve
+  - Returns: Array of invalid block information
+
 ### Finite State Machine (FSM) Endpoints
 
 - GET `/api/v1/fsm/state`
   - Description: Returns current blockchain FSM state
   - Parameters: None
-  - Returns: JSON object with current state information
+  - Returns: JSON object with current state information including:
+    - `state`: Current state name
+    - `metadata`: Additional state information
+    - `allowedTransitions`: Events that can be triggered from this state
+    - Example response:
+      ```json
+      {
+        "state": "Running",
+        "metadata": {
+          "syncedHeight": 700001,
+          "bestHeight": 700001,
+          "isSynchronized": true
+        },
+        "allowedTransitions": ["stop", "pause"]
+      }
+      ```
 
 - POST `/api/v1/fsm/state`
-  - Description: Sends an event to the blockchain FSM
+  - Description: Sends an event to the blockchain FSM to trigger a state transition
   - Parameters: JSON object with event details
-  - Returns: JSON object with updated state information
+    - `event` (string, required): The event name to trigger
+    - `data` (object, optional): Additional data for the event
+    - Example request:
+      ```json
+      {
+        "event": "pause",
+        "data": {
+          "reason": "maintenance"
+        }
+      }
+      ```
+  - Returns: JSON object with updated state information and transition result
 
 - GET `/api/v1/fsm/events`
   - Description: Lists all possible FSM events
   - Parameters: None
-  - Returns: JSON array of available events
+  - Returns: JSON array of available events with descriptions
+    - Example response:
+      ```json
+      [
+        {
+          "name": "start",
+          "description": "Start the blockchain service"
+        },
+        {
+          "name": "stop",
+          "description": "Stop the blockchain service"
+        },
+        {
+          "name": "pause",
+          "description": "Temporarily pause operations"
+        }
+      ]
+      ```
 
 - GET `/api/v1/fsm/states`
   - Description: Lists all possible FSM states
   - Parameters: None
-  - Returns: JSON array of available states
+  - Returns: JSON array of available states with descriptions
+    - Example response:
+      ```json
+      [
+        {
+          "name": "Idle",
+          "description": "Service is idle and not processing blocks"
+        },
+        {
+          "name": "Running",
+          "description": "Service is active and processing blocks"
+        },
+        {
+          "name": "Paused",
+          "description": "Service is temporarily paused"
+        }
+      ]
+      ```
 
 ## Error Handling
 

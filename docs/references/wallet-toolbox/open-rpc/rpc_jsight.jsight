@@ -145,10 +145,13 @@ URL /rpc
       []
     Result
       {
-        "version": "0.22.1", // Server version string
-        "subversion": "/Satoshi:0.22.1/", // User agent string
-        "protocolversion": 70016 // Protocol version number
+        "version": "0.22.1", // Server version string (Major.Minor.Patch)
+        "subversion": "/Teranode:0.22.1/", // User agent string in Bitcoin standard format
+        "protocolversion": 70016, // Protocol version number for P2P communications
+        "commit": "abc123def", // Git commit hash (optional, implementation specific)
+        "builddate": "2025-05-28 12:00:00 +0000" // Build date (optional, implementation specific)
       }
+    // Note: The version information helps clients determine compatibility and available features
 
   # Block Info Commands
 
@@ -227,17 +230,25 @@ URL /rpc
       ]
     Result
       "a08e6907dbdb6e3c44a10b901b31f2f95e2ff8c732320bdb5d7105b98b2f96a0" // The transaction hash
+    // Note: The method performs several validation checks including:
+    // - Transaction syntax and structure validation
+    // - Script validation rules
+    // - Fee policy enforcement (unless allowhighfees=true)
+    // - Mempool acceptance rules
+    // Common errors: Rejected transaction (code: -26), Missing inputs (code: -25), Already in blockchain (code: -27)
 
   Method getrawtransaction // Gets raw transaction data.
     Params
       [
         "a08e6907dbdb6e3c44a10b901b31f2f95e2ff8c732320bdb5d7105b98b2f96a0", // The transaction id
-        true // Verbose output (true=json object, false=hex-encoded data), default=false
+        true, // Verbose output (true=json object, false=hex-encoded data), default=false
+        "00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09" // Optional block hash for retrieving confirmed transactions efficiently
       ]
     Result
       @RawTransaction // When verbose=true
       // OR
       "0200000001a0962f8bb905715ddb0b3232c7f82f5ef9f2311b900ba1443c6edbdb0769e60a0000000000ffffffff0140420f00000000001976a914ae56cbe296ec9035fc4a284b6a42555abb27cb5a88ac00000000" // When verbose=false
+    // Note: Retrieves transactions from both mempool and blockchain. Returns error if transaction not found.
 
   # Mining Commands
 
@@ -257,7 +268,8 @@ URL /rpc
   Method getminingcandidate // Returns data needed to construct a block to work on.
     Params
       [
-        true // Calculate merkle proof (optional), default=false
+        true, // Calculate merkle proof (optional), default=false
+        1000000 // Coinbase value in satoshis (optional), allows customizing coinbase reward
       ]
     Result
       {
@@ -274,54 +286,107 @@ URL /rpc
     Params
       [
         {
-          "id": "12345", // Mining candidate id
-          "nonce": 1431655, // Block nonce
-          "coinbase": "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff025151feffffff0100f2052a010000001976a914dd957cdbcd61fce5f8d9e81766a8baf38263ab4688ac00000000", // Coinbase transaction
-          "time": 1596223904, // Block time
-          "version": 536870912 // Block version
+          "id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", // Block ID corresponding to a previous getminingcandidate result
+          "nonce": 123, // Nonce value that satisfies the proof-of-work requirement
+          "coinbase": "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0f5104", // Coinbase transaction data
+          "time": 1622802552 // Block timestamp (optional)
         }
       ]
     Result
-      true // Whether submission was valid and accepted
+      true // Whether the solution was accepted
+    // Note: Returns true if the solution was accepted, false if invalid
+    // Common errors: Block not found (code: -8), Block solution invalid (code: -5), Duplicate block (code: -8)
+
+  Method getmininginfo // Returns mining-related information.
+    Params
+      []
+    Result
+      {
+        "blocks": 680000, // Current block count
+        "currentblocksize": 43560, // Last block size in bytes
+        "currentblocktx": 120, // Number of transactions in the last block
+        "difficulty": 21865558044610.55, // Current difficulty
+        "networkhashps": 193806209315858.78, // Estimated network hashes per second
+        "pooledtx": 10478, // Count of transactions waiting to be confirmed
+        "chain": "main" // Chain name (main, test, regtest)
+      }
 
   Method generate // Generates blocks (for testing purposes).
     Params
       [
-        2, // Number of blocks to generate
-        1000 // Maximum iterations, default=1000000
+        2, // Number of blocks to generate (required)
+        1000 // Maximum iterations before giving up, default=1000000
       ]
     Result
       [
-        "blockhash1", // Hashes of generated blocks
-        "blockhash2"
+        "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", // Block hash
+        "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048" // Block hash
       ]
+    // Note: This method is intended primarily for testing and development environments
+    // Blocks are generated using local CPU mining and immediately added to the blockchain
+    // Rewards are sent to a default address controlled by the node
 
   Method generatetoaddress // Generates blocks to a specified address (for testing).
     Params
       [
-        2, // Number of blocks to generate
-        "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", // Bitcoin address to send coinbase rewards to
-        1000 // Maximum iterations, default=1000000
+        2, // Number of blocks to generate (required)
+        "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", // Bitcoin address to send coinbase rewards to (required)
+        1000 // Maximum iterations before giving up, default=1000000
       ]
     Result
       [
-        "blockhash1", // Hashes of generated blocks
-        "blockhash2"
+        "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", // Block hash
+        "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048" // Block hash
       ]
+    // Note: Similar to generate but allows specifying the beneficiary address for block rewards
+    // Intended primarily for testing and development environments
+    // Warning: Block rewards will only be spendable after coinbase maturity (100 blocks)
 
   # Network & Node Info Commands
 
-  Method getblockchaininfo // Returns state information about blockchain processing.
+  Method getblockchaininfo // Returns information about blockchain processing state.
     Params
       []
     Result
-      @BlockchainInfo
+      {
+        "chain": "main", // Current network name (main, test, regtest)
+        "blocks": 680000, // The current number of blocks processed in the server
+        "headers": 680000, // The current number of headers we have validated
+        "bestblockhash": "000000000000000000035c80f3a4414b6da66e9ef98f8122e89691d8c6d2cbe0", // The hash of the currently best block
+        "difficulty": 21865558044610.55, // The current difficulty
+        "mediantime": 1620374451, // Median time for the current best block
+        "verificationprogress": 0.9999953, // Estimate of verification progress [0..1]
+        "initialblockdownload": false, // Estimate of whether this node is in Initial Block Download mode
+        "chainwork": "00000000000000000000000000000000000000001f6a65c7cd10e5491b7b7501", // Total amount of work in active chain, in hexadecimal
+        "size_on_disk": 379219829822, // The estimated size of the block and undo files on disk
+        "pruned": false, // If the blocks are subject to pruning
+        "subtree_count": 1024 // Number of active subtrees (Teranode specific)
+      }
+    // Note: This method provides crucial information about the blockchain's current state
+    // The subtree_count field is specific to Teranode's implementation, which uses subtrees instead of a traditional mempool
 
   Method getinfo // Returns general information about the node and blockchain.
     Params
       []
     Result
-      @NodeInfo
+      {
+        "version": 100000, // The server version
+        "protocolversion": 70015, // The protocol version
+        "blocks": 680000, // The current number of blocks processed
+        "timeoffset": 0, // The time offset in seconds
+        "connections": 8, // The number of connections
+        "proxy": "", // The proxy used by the server
+        "difficulty": 21865558044610.55, // The current difficulty
+        "testnet": false, // Whether the server is using testnet
+        "relayfee": 0.00001, // Minimum relay fee for transactions in BSV/kB
+        "errors": "", // Any current errors
+        "network": "main", // Current network (main, test, regtest)
+        "subtrees": 1024, // Number of active subtrees (Teranode specific)
+        "maxblocksize": 4294967295 // Maximum block size in bytes
+      }
+    // Note: This is a convenience method that returns a summary of node state
+    // For more detailed information, use the specific commands like getblockchaininfo, getnetworkinfo, etc.
+    // The subtrees field is specific to Teranode's implementation which uses subtrees instead of a traditional mempool
 
   Method getpeerinfo // Returns data about each connected network node.
     Params
@@ -394,21 +459,32 @@ URL /rpc
 
   # Block Management Commands
 
-  Method invalidateblock // Permanently marks a block as invalid.
+  Method invalidateblock // Permanently marks a block as invalid, forcing a chain reorganization.
     Params
       [
         "00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09" // Block hash to invalidate
       ]
     Result
       null // No data returned
+    // Note: When a block is invalidated, the node will:
+    // - Mark the specified block as invalid in the block index
+    // - Disconnect it and all blocks built on top of it from the active chain
+    // - Rewind the chain state to the last valid block before the invalidation point
+    // - Attempt to find an alternative chain to follow
+    // Administrative operation that requires elevated permissions
 
-  Method reconsiderblock // Removes invalidation status from a block.
+  Method reconsiderblock // Removes invalidation status from a block, allowing it to be reconsidered for the blockchain.
     Params
       [
         "00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09" // Block hash to reconsider
       ]
     Result
       null // No data returned
+    // Note: This reverses the effect of invalidateblock by:
+    // - Removing the specified block from the invalid block list
+    // - Triggering revalidation of the block and its descendants
+    // - Potentially reorganizing the chain if the reconsidered block belongs to a stronger chain
+    // Administrative operation that requires elevated permissions
 
   # UTXO Control Commands
 
@@ -420,6 +496,9 @@ URL /rpc
       ]
     Result
       true // Whether freeze was successful
+    // Note: Frozen UTXOs will be rejected by sendrawtransaction if included as inputs
+    // Can only freeze UTXOs that exist in the UTXO set (confirmed transactions)
+    // Administrative operation that requires elevated permissions
 
   Method unfreeze // Unfreezes a previously frozen UTXO.
     Params
@@ -429,6 +508,9 @@ URL /rpc
       ]
     Result
       true // Whether unfreeze was successful
+    // Note: Only works on UTXOs that were previously frozen with the freeze command
+    // Administrative operation that requires elevated permissions
+    // Returns false if the UTXO was not previously frozen
 
   Method reassign // Reassigns ownership of a UTXO to a different address.
     Params
@@ -439,6 +521,10 @@ URL /rpc
       ]
     Result
       true // Whether reassignment was successful
+    // Note: Permanently changes the destination of a UTXO without requiring a transaction
+    // Administrative operation that requires elevated permissions
+    // Can only reassign UTXOs that exist in the UTXO set (confirmed transactions)
+    // Warning: This modifies blockchain state outside of normal consensus rules
 
   # Help Command
 

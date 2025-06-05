@@ -687,17 +687,19 @@ Submits a raw transaction to the network.
 
 ### getminingcandidate
 
-Returns data needed to construct a block to work on.
+Returns information for creating a new block.
 
-**Parameters:** none
+**Parameters:**
+1. `parameters` (object, optional):
+   - `coinbaseValue` (numeric, optional): Custom coinbase value in satoshis
 
 **Returns:**
 ```json
 {
-    "id": "string",              // Mining candidate ID
-    "prevhash": "string",        // Previous block hash
-    "coinbase": "string",        // Coinbase transaction
-    "coinbaseValue": number,     // Value of the coinbase transaction in satoshis
+    "id": "string",         // Mining candidate ID
+    "prevhash": "string",   // Previous block hash
+    "coinbase": "string",   // Coinbase transaction
+    "coinbaseValue": number,  // Coinbase value in satoshis
     "version": number,           // Block version
     "nBits": "string",          // Compressed difficulty target
     "time": number,             // Current timestamp
@@ -708,13 +710,23 @@ Returns data needed to construct a block to work on.
 }
 ```
 
-**Example Request:**
+**Example Request (standard):**
 ```json
 {
     "jsonrpc": "1.0",
     "id": "curltest",
     "method": "getminingcandidate",
     "params": []
+}
+```
+
+**Example Request (with custom coinbase value):**
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getminingcandidate",
+    "params": [{"coinbaseValue": 5000000000}]
 }
 ```
 

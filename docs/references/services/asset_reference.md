@@ -337,15 +337,40 @@ Signs the HTTP response.
 
 The Asset Service uses configuration values from the `gocore.Config()` function, including:
 
-- `asset_httpListenAddress`: HTTP listen address
-- `asset_centrifuge_disable`: Whether to disable Centrifuge server
-- `asset_centrifugeListenAddress`: Centrifuge listen address
-- `http_sign_response`: Whether to sign HTTP responses
-- `p2p_private_key`: Private key for signing responses
+### Network and API Configuration
+- `asset_httpListenAddress`: HTTP listen address (default: ":8090")
 - `asset_apiPrefix`: API prefix (default: "/api/v1")
 - `securityLevelHTTP`: Security level for HTTP (0 for HTTP, non-zero for HTTPS)
 - `server_certFile`: Certificate file for HTTPS
 - `server_keyFile`: Key file for HTTPS
+
+### Centrifuge Configuration (Real-time Updates)
+- `asset_centrifuge_disable`: Whether to disable Centrifuge server (default: false)
+- `asset_centrifugeListenAddress`: Centrifuge listen address (default: ":8000")
+
+### Security
+- `http_sign_response`: Whether to sign HTTP responses (default: false)
+- `p2p_private_key`: Private key for signing responses
+
+### Dashboard Configuration
+- `dashboard.enabled`: Whether to enable the web dashboard (default: false)
+- `dashboard.auth.enabled`: Whether to enable authentication for the dashboard (default: true)
+- `dashboard.auth.username`: Dashboard admin username
+- `dashboard.auth.password`: Dashboard admin password (stored as hash)
+
+### Debug Configuration
+- `asset_echoDebug`: Enable debug logging for HTTP server (default: false)
+- `statsPrefix`: Prefix for stats endpoints (default: "/debug/")
+
+The Asset Service dashboard provides a visual interface for monitoring blockchain status, viewing blocks and transactions, and managing the node. When enabled, it provides:
+
+1. Real-time blockchain statistics
+2. Block explorer functionality
+3. Transaction viewer
+4. FSM state visualization and control
+5. Node management capabilities including block invalidation/revalidation
+
+The dashboard is particularly useful for monitoring the unique subtree-based transaction management system used in Teranode, which replaces the traditional mempool architecture found in other Bitcoin implementations.
 
 ## Dependencies
 
@@ -376,6 +401,23 @@ Most endpoints support multiple response formats:
 - **JSON**: Structured JSON data (`application/json`)
 
 The format can be selected by appending `/hex` or `/json` to the endpoint, or by setting the appropriate `Accept` header. If not specified, the binary format is used as the default.
+
+### Error Handling
+
+All endpoints return appropriate HTTP status codes to indicate success or failure:
+
+- 200 OK: Request successful
+- 400 Bad Request: Invalid input parameters
+- 404 Not Found: Resource not found
+- 500 Internal Server Error: Server-side error
+
+Error responses include a JSON object with an error message:
+
+```json
+{
+  "error": "Error message description"
+}
+```
 
 ### Health and Status Endpoints
 
@@ -507,6 +549,76 @@ The format can be selected by appending `/hex` or `/json` to the endpoint, or by
 - **GET `/api/v1/bestblockheader`**
   - Purpose: Get best block header (binary)
   - Returns: Best block header (binary)
+
+### Block Management Endpoints
+
+- **POST `/api/v1/block/invalidate`**
+  - Purpose: Mark a block as invalid, forcing a chain reorganization
+  - Parameters: JSON object in request body with block hash information
+    ```json
+    {
+      "hash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+    }
+    ```
+  - Returns: JSON object with status of the invalidation operation
+  - Security: This is an administrative operation that can affect blockchain consensus
+
+- **POST `/api/v1/block/revalidate`**
+  - Purpose: Reconsider a previously invalidated block
+  - Parameters: JSON object in request body with block hash information
+    ```json
+    {
+      "hash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+    }
+    ```
+  - Returns: JSON object with status of the revalidation operation
+  - Security: This is an administrative operation that can affect blockchain consensus
+
+- **GET `/api/v1/blocks/invalid`**
+  - Purpose: Retrieve a list of currently invalidated blocks
+  - Parameters:
+    - `limit` (optional): Maximum number of blocks to retrieve
+  - Returns: Array of invalid block information
+
+### Finite State Machine (FSM) Endpoints
+
+- **GET `/api/v1/fsm/state`**
+  - Purpose: Get current blockchain FSM state
+  - Returns: JSON object with current state information including state name, metadata, and allowed transitions
+  - Example response:
+    ```json
+    {
+      "state": "Running",
+      "metadata": {
+        "syncedHeight": 700001,
+        "bestHeight": 700001,
+        "isSynchronized": true
+      },
+      "allowedTransitions": ["stop", "pause"]
+    }
+    ```
+
+- **POST `/api/v1/fsm/state`**
+  - Purpose: Send an event to the blockchain FSM to trigger a state transition
+  - Parameters: JSON object in request body with event details
+    ```json
+    {
+      "event": "pause",
+      "data": {
+        "reason": "maintenance"
+      }
+    }
+    ```
+  - Returns: JSON object with updated state information and transition result
+  - Security: This is an administrative operation that can affect blockchain operation
+
+- **GET `/api/v1/fsm/events`**
+  - Purpose: List all possible FSM events
+  - Returns: JSON array of available events with descriptions
+
+- **GET `/api/v1/fsm/states`**
+  - Purpose: List all possible FSM states
+  - Returns: JSON array of available states with descriptions
 
 ### UTXO Endpoints
 
