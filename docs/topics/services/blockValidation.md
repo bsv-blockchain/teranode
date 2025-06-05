@@ -151,6 +151,46 @@ Effectively, the following validations are performed:
 
 - The Coinbase transaction amount may not exceed block subsidy and all transaction fees (block reward).
 
+#### 2.2.5. Transaction Re-presentation Detection
+
+The Block Validation service implements a robust mechanism for detecting re-presented transactions using bloom filters. This mechanism, implemented in the `validOrderAndBlessed` function, is critical for preventing double-spending and ensuring transaction integrity in the blockchain.
+
+![bloom_filter_validation.svg](img/plantuml/blockvalidation/bloom_filter_validation.svg)
+
+##### Bloom Filter Implementation
+
+Teranode maintains bloom filters for recent blocks to efficiently detect re-presented transactions:
+
+- **Creation**: Each validated block generates a bloom filter containing all of its transaction hashes
+- **Storage**: Bloom filters are stored in both memory (for active validation) and in the subtree store (for persistence)
+- **Retention**: Filters are maintained for a configurable number of recent blocks (`blockvalidation_bloom_filter_retention_size`)
+- **TTL Ordering**: The system enforces a strict TTL (Time-To-Live) ordering: txmetacache < utxo store < bloom filter
+  - This ensures that even if a transaction is pruned from txmetacache, the bloom filter can still detect its re-presentation
+  - The longer retention period for bloom filters provides an extended window for detecting re-presented transactions
+
+##### The validOrderAndBlessed Mechanism
+
+The `validOrderAndBlessed` function performs several critical validations during block processing:
+
+1. **Transaction Ordering Validation**:
+   - Ensures child transactions appear after their parent transactions within the same block
+   - For each transaction, verifies that all of its parent transactions either appear earlier in the same block or exist in a previous block on the current chain
+
+2. **Re-presented Transaction Detection**:
+   - Efficiently checks if transactions have already been mined in the current chain using bloom filters
+   - For potential matches in the bloom filter (which may include false positives), performs definitive verification against the txMetaStore
+   - Rejects blocks containing transactions that have already been mined in the current chain
+
+3. **Duplicate Input Prevention**:
+   - Tracks all inputs being spent within the block to detect duplicate spends
+   - Ensures no two transactions in the block spend the same input
+
+4. **Orphaned Transaction Prevention**:
+   - Verifies that parent transactions of each transaction either exist in the current block (before the child) or in a previous block on the current chain
+   - Prevents situations where transactions depend on parents that don't exist or aren't accessible
+
+This comprehensive validation mechanism operates with high concurrency (configurable via `block_validOrderAndBlessedConcurrency`) to maintain performance while ensuring the integrity of the blockchain by preventing double-spends and transaction re-presentations.
+
 ### 2.3. Marking Txs as mined
 
 When a block is validated, the transactions in the block are marked as mined in the UTXO store. This process includes:

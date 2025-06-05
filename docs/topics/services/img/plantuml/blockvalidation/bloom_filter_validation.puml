@@ -1,0 +1,153 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam database {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam collections {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+database "Subtree Store" as SubtreeStore
+database "UTXO Store" as UTXOStore
+collections "Block Bloom Filters" as BloomFilters
+entity "Block" as Block
+entity "Transaction" as Tx
+entity "Validation Context" as ValidationContext
+
+' Two phases - creation and usage
+group Block Validation
+  Block -> Block: validOrderAndBlessed()
+  activate Block
+
+  ' Phase 1: Prepare validation context
+  Block -> ValidationContext: Initialize transaction map
+  Block -> ValidationContext: Load current chain block headers
+  Block -> BloomFilters: Collect bloom filters for current chain
+  activate BloomFilters
+
+  alt Bloom filter not in memory
+    BloomFilters -> SubtreeStore: Retrieve bloom filter
+    activate SubtreeStore
+    SubtreeStore --> BloomFilters: Bloom filter bytes
+    deactivate SubtreeStore
+    BloomFilters -> BloomFilters: Deserialize bloom filter
+  else Bloom filter missing
+    BloomFilters -> BloomFilters: Create new bloom filter
+  end
+
+  BloomFilters --> Block: Collected bloom filters
+  deactivate BloomFilters
+
+  ' Phase 2: Validate each transaction
+  Block -> Block: For each subtree and transaction
+
+  loop For each transaction in block
+    ' Check if already mined using bloom filters
+    Block -> Tx: Get transaction hash
+    activate Tx
+    Tx --> Block: Transaction hash
+    deactivate Tx
+
+    Block -> BloomFilters: Check if hash exists in any filter
+    activate BloomFilters
+    BloomFilters --> Block: Potential match (true/false)
+    deactivate BloomFilters
+
+    alt Potential match found (possible re-presentation)
+      Block -> UTXOStore: Verify with txMetaStore
+      activate UTXOStore
+      UTXOStore --> Block: Transaction metadata
+      deactivate UTXOStore
+
+      alt Transaction already mined in current chain
+        Block --> Block: Invalid - transaction already mined
+      else False positive
+        Block --> Block: Continue validation
+      end
+    end
+
+    ' Check parent-child ordering
+    Block -> Tx: Get parent transaction hashes
+    activate Tx
+    Tx --> Block: Parent tx hashes
+    deactivate Tx
+
+    loop For each parent transaction
+      alt Parent in same block
+        Block -> Block: Verify parent comes before child
+        alt Parent after child
+          Block --> Block: Invalid - wrong transaction order
+        end
+      else Parent in previous block
+        Block -> UTXOStore: Check parent exists on chain
+        activate UTXOStore
+        UTXOStore --> Block: Parent status
+        deactivate UTXOStore
+        alt Parent not on chain
+          Block --> Block: Invalid - parent not on chain
+        end
+      end
+    end
+
+    ' Check for duplicate inputs
+    Block -> Block: Track input spends
+    alt Duplicate input found
+      Block --> Block: Invalid - duplicate input
+    end
+  end
+
+  deactivate Block
+end
+
+group Bloom Filter Creation and Maintenance
+  Block -> Block: NewOptimizedBloomFilter()
+  activate Block
+
+  Block -> BloomFilters: Create filter with optimal parameters
+  activate BloomFilters
+
+  loop For each transaction in block
+    Block -> Tx: Get transaction hash
+    activate Tx
+    Tx --> Block: Transaction hash
+    deactivate Tx
+    Block -> BloomFilters: Add hash to filter
+  end
+
+  BloomFilters --> Block: New bloom filter
+  deactivate BloomFilters
+
+  Block -> Block: Prune old filters based on retention size
+  Block -> SubtreeStore: Store serialized bloom filter
+  activate SubtreeStore
+  SubtreeStore --> Block: Stored
+  deactivate SubtreeStore
+
+  deactivate Block
+end
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml
