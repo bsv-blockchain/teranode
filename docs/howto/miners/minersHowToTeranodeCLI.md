@@ -18,8 +18,11 @@ Usage: teranode-cli <command> [options]
     Available Commands:
     aerospikereader      Aerospike Reader
     bitcoin2utxoset      Bitcoin 2 Utxoset
+    checkblocktemplate   Check block template
+    export-blocks        Export blockchain to CSV
     filereader           File Reader
     getfsmstate          Get the current FSM State
+    import-blocks        Import blockchain from CSV
     seeder               Seeder
     setfsmstate          Set the FSM State
     settings             Settings
@@ -48,22 +51,25 @@ Usage: teranode-cli <command> [options]
 |                   |                                       | `--skipUTXOs` - Skip processing UTXOs           |
 |                   |                                       | `--blockHash` - Block hash to start from         |
 |                   |                                       | `--blockHeight` - Block height to start from     |
+| `export-blocks`   | Export blockchain data to CSV         | `--file` - CSV file path to export               |
+| `import-blocks`   | Import blockchain data from CSV       | `--file` - CSV file path to import               |
 | `utxopersister`   | Manage UTXO persistence               | None                                             |
 
 ### System Tools
 
-| Command        | Description                      | Key Options                                      |
-|----------------|----------------------------------|--------------------------------------------------|
-| `seeder`       | Seed initial blockchain data     | `--inputDir` - Input directory for data          |
-|                |                                  | `--hash` - Hash of the data to process          |
-|                |                                  | `--skipHeaders` - Skip processing headers       |
-|                |                                  | `--skipUTXOs` - Skip processing UTXOs          |
-| `filereader`   | Read and process files           | `--verbose` - Enable verbose output              |
-|                |                                  | `--checkHeights` - Check heights in UTXO headers |
-|                |                                  | `--useStore` - Use store                        |
-| `getfsmstate`  | Get the current FSM state        | None                                             |
-| `setfsmstate`  | Set the FSM state                | `--fsmstate` - Target FSM state                  |
-|                |                                  | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
+| Command              | Description                      | Key Options                                      |
+|----------------------|----------------------------------|--------------------------------------------------|
+| `checkblocktemplate` | Check block template validity     | None                                             |
+| `seeder`             | Seed initial blockchain data     | `--inputDir` - Input directory for data          |
+|                      |                                  | `--hash` - Hash of the data to process          |
+|                      |                                  | `--skipHeaders` - Skip processing headers       |
+|                      |                                  | `--skipUTXOs` - Skip processing UTXOs          |
+| `filereader`         | Read and process files           | `--verbose` - Enable verbose output              |
+|                      |                                  | `--checkHeights` - Check heights in UTXO headers |
+|                      |                                  | `--useStore` - Use store                        |
+| `getfsmstate`        | Get the current FSM state        | None                                             |
+| `setfsmstate`        | Set the FSM state                | `--fsmstate` - Target FSM state                  |
+|                      |                                  | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
 
 ## Detailed Command Reference
 
@@ -108,6 +114,30 @@ teranode-cli setfsmstate --fsmstate=<state>
 Options:
 - `--fsmstate`: Target FSM state (required)
   - Valid values: running, idle, catchingblocks, legacysyncing
+
+### Export Blocks
+```bash
+teranode-cli export-blocks --file=<path>
+```
+Exports blockchain data to a CSV file.
+
+Options:
+- `--file`: CSV file path to export (required)
+
+### Import Blocks
+```bash
+teranode-cli import-blocks --file=<path>
+```
+Imports blockchain data from a CSV file.
+
+Options:
+- `--file`: CSV file path to import (required)
+
+### Check Block Template
+```bash
+teranode-cli checkblocktemplate
+```
+Validates the current block template. Useful for miners to ensure block templates are correctly formed.
 
 ### Seeder
 ```bash
