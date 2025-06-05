@@ -209,9 +209,9 @@ func (m *TimePartitionedMap[K, V]) Count() int {
 }
 
 // BatcherWithDedup is a utility that batches items together with deduplication support.
-// It extends the basic Batcher2 functionality by adding deduplication of items.
+// It extends the basic Batcher functionality by adding deduplication of items.
 type BatcherWithDedup[T comparable] struct {
-	Batcher2[T]
+	Batcher[T]
 
 	// Deduplication related fields
 	deduplicationWindow time.Duration
@@ -225,7 +225,7 @@ func NewWithDeduplication[T comparable](size int, timeout time.Duration, fn func
 	deduplicationWindow := time.Minute // 1-minute deduplication window
 
 	b := &BatcherWithDedup[T]{
-		Batcher2: Batcher2[T]{
+		Batcher: Batcher[T]{
 			fn:         fn,
 			size:       size,
 			timeout:    timeout,
@@ -246,7 +246,7 @@ func NewWithDeduplication[T comparable](size int, timeout time.Duration, fn func
 
 // Put adds an item to the batch with deduplication. If the item is a duplicate
 // within the deduplication window, it will be ignored.
-// This method overrides the Put method from Batcher2.
+// This method overrides the Put method from Batcher.
 func (b *BatcherWithDedup[T]) Put(item *T) {
 	if item == nil {
 		return

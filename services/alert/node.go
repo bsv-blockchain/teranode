@@ -1,5 +1,5 @@
 // Package alert implements the Bitcoin SV alert system server and related functionality.
-// 
+//
 // The node.go file contains the Node implementation that provides integration
 // with the Bitcoin network for the alert system. It enables interactions with
 // blockchain data, UTXO management, and peer communication, supporting the
@@ -22,9 +22,9 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bn/models"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"

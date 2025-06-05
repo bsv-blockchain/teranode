@@ -55,7 +55,7 @@ type Client struct {
 	batchCh chan []*batchItem
 
 	// batcher manages transaction batching
-	batcher batcher.Batcher2[batchItem]
+	batcher batcher.Batcher[batchItem]
 }
 
 // NewClient creates a new block assembly client.

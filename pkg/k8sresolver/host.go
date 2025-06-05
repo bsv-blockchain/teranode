@@ -1,20 +1,19 @@
 package k8sresolver
 
 import (
+	"fmt"
 	"net"
 	"net/url"
-
-	"github.com/bitcoin-sv/teranode/errors"
 )
 
 var (
-	errMissingAddr = errors.NewConfigurationError("k8s resolver: missing address")
+	errMissingAddr = fmt.Errorf("k8s resolver: missing address")
 
 	// Addresses ending with a colon that is supposed to be the separator
 	// between host and port is not allowed.  E.g. "::" is a valid address as
 	// it is an IPv6 address (host only) and "[::]:" is invalid as it ends with
 	// a colon as the host and port separator
-	errEndsWithColon = errors.NewConfigurationError("k8s resolver: missing port after port-separator colon")
+	errEndsWithColon = fmt.Errorf("k8s resolver: missing port after port-separator colon")
 )
 
 // parseTarget takes the user input target string and default port, returns formatted host and port info.
@@ -66,5 +65,5 @@ func parseTarget(target, defaultPort string) (host, port string, err error) {
 		return host, port, nil
 	}
 
-	return "", "", errors.NewConfigurationError("invalid target address %v, error info", target, err)
+	return "", "", fmt.Errorf("invalid target address %v, error info: %v", target, err)
 }

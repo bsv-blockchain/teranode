@@ -3,7 +3,7 @@ package util
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 )
 
 func TestGetBlockSubsidyForHeight(t *testing.T) {

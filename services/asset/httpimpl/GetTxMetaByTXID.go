@@ -5,8 +5,8 @@ import (
 	"net/http"
 
 	aero "github.com/aerospike/aerospike-client-go/v8"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"

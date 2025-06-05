@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 )
 
 func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {

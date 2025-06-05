@@ -4,9 +4,9 @@ import (
 	"time"
 )
 
-// Batcher2 is a utility that batches items together and then invokes the provided function
+// Batcher is a utility that batches items together and then invokes the provided function
 // on that whenever it reaches the specified size or the timeout is reached.
-type Batcher2[T any] struct {
+type Batcher[T any] struct {
 	fn         func([]*T)
 	size       int
 	timeout    time.Duration
@@ -19,8 +19,8 @@ type Batcher2[T any] struct {
 // New creates a new Batcher that will invoke the provided function when the batch size is reached.
 // The size is the maximum number of items that can be batched before processing the batch.
 // The timeout is the duration that will be waited before processing the batch.
-func New[T any](size int, timeout time.Duration, fn func(batch []*T), background bool) *Batcher2[T] {
-	b := &Batcher2[T]{
+func New[T any](size int, timeout time.Duration, fn func(batch []*T), background bool) *Batcher[T] {
+	b := &Batcher[T]{
 		fn:         fn,
 		size:       size,
 		timeout:    timeout,
@@ -37,16 +37,16 @@ func New[T any](size int, timeout time.Duration, fn func(batch []*T), background
 
 // Put adds an item to the batch. If the batch is full, or the timeout is reached
 // the batch will be processed.
-func (b *Batcher2[T]) Put(item *T, payloadSize ...int) { // Payload size is not used in this implementation
+func (b *Batcher[T]) Put(item *T, payloadSize ...int) { // Payload size is not used in this implementation
 	b.ch <- item
 }
 
 // Trigger will force the batch to be processed immediately.
-func (b *Batcher2[T]) Trigger() {
+func (b *Batcher[T]) Trigger() {
 	b.triggerCh <- struct{}{}
 }
 
-func (b *Batcher2[T]) worker() {
+func (b *Batcher[T]) worker() {
 	for {
 		expire := time.After(b.timeout)
 

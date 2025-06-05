@@ -9,7 +9,7 @@ Based off the DNS resolver, rather than making DNS queries, the k8s resolver que
 
 Using a headless service can be slow to update and the reverse proxies in service meshes may increase latency. By using the endpoints Kubernetes, updating the client with new or removing old server endpoints can be much faster.
 
-![overview](./overview.png)
+![overview](overview.png)
 
 ## Example
 ```go

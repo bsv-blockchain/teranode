@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 )
 
 type Settings struct {

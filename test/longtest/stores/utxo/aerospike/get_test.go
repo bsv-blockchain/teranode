@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	blockchain2 "github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/netsync"
 	"github.com/bitcoin-sv/teranode/services/validator"

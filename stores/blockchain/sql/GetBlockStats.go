@@ -6,8 +6,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 )
 
 func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {

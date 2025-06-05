@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

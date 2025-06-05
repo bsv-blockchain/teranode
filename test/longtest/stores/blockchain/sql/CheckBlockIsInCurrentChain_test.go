@@ -5,8 +5,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/settings"
 	storesql "github.com/bitcoin-sv/teranode/stores/blockchain/sql"
 	helper "github.com/bitcoin-sv/teranode/test/utils"

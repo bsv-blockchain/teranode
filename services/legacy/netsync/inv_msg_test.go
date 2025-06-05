@@ -3,8 +3,8 @@ package netsync
 import (
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	peerpkg "github.com/bitcoin-sv/teranode/services/legacy/peer"
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"

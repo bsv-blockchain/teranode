@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -22,13 +22,13 @@ import (
 // ensuring each subsequent header properly links to form a valid blockchain.
 //
 // Parameters:
-//  - headers: Slice of block headers to verify, in sequential order from oldest to newest
-//  - lastHash: Hash of the known-valid block that precedes the first header in the sequence
+//   - headers: Slice of block headers to verify, in sequential order from oldest to newest
+//   - lastHash: Hash of the known-valid block that precedes the first header in the sequence
 //
 // Returns an error if any validation check fails, detailing the specific failure reason:
-//  - Broken chain linkage (header's PrevBlock doesn't match previous hash)
-//  - Serialization failures
-//  - Insufficient proof-of-work (difficulty target not met)
+//   - Broken chain linkage (header's PrevBlock doesn't match previous hash)
+//   - Serialization failures
+//   - Insufficient proof-of-work (difficulty target not met)
 func verifyHeadersChain(headers []*wire.BlockHeader, lastHash *chainhash.Hash) error {
 	prevHash := lastHash
 
@@ -71,11 +71,11 @@ func verifyHeadersChain(headers []*wire.BlockHeader, lastHash *chainhash.Hash) e
 // a simple boolean result indicating whether the proof-of-work requirement was met.
 //
 // Parameters:
-//  - header: The block header to check for proof-of-work validity
+//   - header: The block header to check for proof-of-work validity
 //
 // Returns:
-//  - true if the header meets the proof-of-work requirement
-//  - false if the header fails validation or any error occurs during processing
+//   - true if the header meets the proof-of-work requirement
+//   - false if the header fails validation or any error occurs during processing
 func checkProofOfWork(header *wire.BlockHeader) bool {
 	// Serialize the header
 	var buf bytes.Buffer

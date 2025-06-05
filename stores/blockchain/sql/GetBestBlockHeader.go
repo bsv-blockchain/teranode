@@ -9,8 +9,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -33,8 +33,8 @@ import (
 //   - *model.BlockHeader: The header of the best block in the chain, if found
 //   - *model.BlockHeaderMeta: Metadata about the best block including height, tx count, etc.
 //   - error: Any error encountered during retrieval, specifically:
-//     * BlockNotFoundError if no valid blocks exist in the database
-//     * StorageError for other database or processing errors
+//   - BlockNotFoundError if no valid blocks exist in the database
+//   - StorageError for other database or processing errors
 func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBestBlockHeader")
 	defer deferFn()

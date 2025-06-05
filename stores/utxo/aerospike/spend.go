@@ -69,8 +69,8 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -537,7 +537,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah uint32) error {
 	errs := make([]error, childCount)
 
-	for i := uint32(0); i < uint32(childCount); i++ { //nolint: gosec
+	for i := uint32(0); i < uint32(childCount); i++ { // nolint: gosec
 		errCh := make(chan error)
 
 		go func() {

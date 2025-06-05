@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	_ "github.com/bitcoin-sv/teranode/k8sresolver"
+	"github.com/bitcoin-sv/teranode/pkg/k8sresolver"
 	"github.com/bitcoin-sv/teranode/settings"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	prometheus_golang "github.com/prometheus/client_golang/prometheus"
 	"github.com/sercand/kuberesolver/v5"
@@ -403,9 +403,11 @@ func InitGRPCResolver(logger ulogger.Logger, grpcResolver string) {
 	switch grpcResolver {
 	case "k8s":
 		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
+		resolver.Register(k8sresolver.NewBuilder(logger))
 		resolver.SetDefaultScheme("k8s")
 	case "kubernetes":
 		logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")
+		resolver.Register(k8sresolver.NewBuilder(logger))
 		kuberesolver.RegisterInClusterWithSchema("k8s")
 	default:
 		logger.Infof("[VALIDATOR] Using default resolver for clients")

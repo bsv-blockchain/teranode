@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 )
 
 func (s *SQL) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {

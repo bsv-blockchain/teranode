@@ -65,7 +65,7 @@ Microservice configurations can be influenced by settings. There are 2 ways to p
 
 ### Kubernetes Resolver for gRPC
 
-* [Kubernetes Resolver for gRPC](../../../k8sresolver/README.md)
+* [Kubernetes Resolver for gRPC](../../../pkg/k8sresolver/README.md)
 
 
 ## How to

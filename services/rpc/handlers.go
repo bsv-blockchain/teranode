@@ -41,16 +41,16 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/peer_api"
 	"github.com/bitcoin-sv/teranode/services/legacy/txscript"
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/services/p2p/p2p_api"
 	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -1342,6 +1342,7 @@ func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan str
 
 	return help, nil
 }
+
 // handleIsBanned implements the isbanned command, which checks if a specific IP address
 // or subnet is currently banned from connecting to the node.
 //
@@ -1521,6 +1522,7 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 	return true, nil
 }
+
 // handleSetBan implements the setban command, which adds or removes an IP address or subnet
 // from the node's ban list, controlling which peers can connect to the node.
 //
@@ -1847,7 +1849,8 @@ func (s *RPCServer) messageToHex(msg wire.Message) (string, error) {
 //
 // This utility function implements the standard formula for estimating the
 // Bitcoin network's total hash rate:
-//   hashRate = difficulty * 2^32 / blockTimeInSeconds
+//
+//	hashRate = difficulty * 2^32 / blockTimeInSeconds
 //
 // The result represents the estimated hashes per second being performed
 // by all miners on the network combined. This is a key metric reported

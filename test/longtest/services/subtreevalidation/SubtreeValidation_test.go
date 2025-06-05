@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	stv "github.com/bitcoin-sv/teranode/services/subtreevalidation"
 	"github.com/bitcoin-sv/teranode/services/validator"

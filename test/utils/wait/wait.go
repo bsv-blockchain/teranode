@@ -1,4 +1,4 @@
-package testutil
+package wait
 
 import (
 	"bytes"
@@ -14,10 +14,10 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 )
 
-// WaitForPortsReady polls a list of TCP ports on a given host until they become available
+// ForPortsReady polls a list of TCP ports on a given host until they become available
 // or the context times out.
 // It returns an error if the context times out before all ports are ready.
-func WaitForPortsReady(ctx context.Context, host string, ports []int, maxWait time.Duration, checkInterval time.Duration) error {
+func ForPortsReady(ctx context.Context, host string, ports []int, maxWait time.Duration, checkInterval time.Duration) error {
 	if len(ports) == 0 {
 		return nil // Nothing to wait for
 	}
@@ -93,10 +93,10 @@ func WaitForPortsReady(ctx context.Context, host string, ports []int, maxWait ti
 	return nil // All ports are ready
 }
 
-// WaitForPortsFree polls a list of TCP ports on a given host until they become unavailable
+// ForPortsFree polls a list of TCP ports on a given host until they become unavailable
 // (connection attempts fail), indicating they are likely free.
 // It returns an error if the context times out before all ports are free.
-func WaitForPortsFree(ctx context.Context, host string, ports []int, maxWait time.Duration, checkInterval time.Duration) error {
+func ForPortsFree(ctx context.Context, host string, ports []int, maxWait time.Duration, checkInterval time.Duration) error {
 	if len(ports) == 0 {
 		return nil // Nothing to wait for
 	}
@@ -173,10 +173,10 @@ func WaitForPortsFree(ctx context.Context, host string, ports []int, maxWait tim
 	return nil
 }
 
-// WaitForDockerComposeProjectDown polls docker to check if any containers
+// ForDockerComposeProjectDown polls docker to check if any containers
 // belonging to the specified compose project name are still running or exist.
 // It waits until no containers are found or the timeout is reached.
-func WaitForDockerComposeProjectDown(ctx context.Context, projectName string, timeout time.Duration, checkInterval time.Duration) error {
+func ForDockerComposeProjectDown(ctx context.Context, projectName string, timeout time.Duration, checkInterval time.Duration) error {
 	// log.Printf("Waiting up to %v for Docker Compose project '%s' containers to disappear...", timeout, projectName)
 
 	startTime := time.Now()

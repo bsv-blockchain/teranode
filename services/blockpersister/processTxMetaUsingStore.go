@@ -10,8 +10,8 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )
@@ -24,11 +24,11 @@ import (
 // for validation and persistence.
 //
 // The function implements two distinct retrieval strategies:
-//   1. Batched mode: Collects missing transaction hashes into batches and retrieves them
-//      in bulk operations, significantly reducing the number of store requests for high
-//      transaction volumes
-//   2. Individual mode: Retrieves transaction metadata one by one, which may be more
-//      efficient for small numbers of transactions or when batch retrieval is not supported
+//  1. Batched mode: Collects missing transaction hashes into batches and retrieves them
+//     in bulk operations, significantly reducing the number of store requests for high
+//     transaction volumes
+//  2. Individual mode: Retrieves transaction metadata one by one, which may be more
+//     efficient for small numbers of transactions or when batch retrieval is not supported
 //
 // The method employs concurrency through goroutines to parallelize retrieval operations,
 // with configurable batch sizes and concurrency limits to optimize performance based on

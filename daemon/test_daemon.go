@@ -20,10 +20,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -35,10 +35,10 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
-	"github.com/bitcoin-sv/teranode/testutil"
-	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/test/utils/wait"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -309,7 +309,7 @@ func (td *TestDaemon) StopDaemonDependencies() {
 }
 
 func WaitForPortsFree(t *testing.T, ctx context.Context, settings *settings.Settings) {
-	require.NoError(t, testutil.WaitForPortsFree(ctx, "localhost", GetPorts(settings), 30*time.Second, 100*time.Millisecond))
+	require.NoError(t, wait.ForPortsFree(ctx, "localhost", GetPorts(settings), 30*time.Second, 100*time.Millisecond))
 }
 
 func GetPorts(tSettings *settings.Settings) []int {
@@ -1038,7 +1038,7 @@ func StartDaemonDependencies(t *testing.T, removeDataDir bool, dependencies []da
 	}
 
 	// Wait for dependent services to become ready
-	if err := testutil.WaitForPortsReady(t.Context(), "localhost", ports, 5*time.Second, 100*time.Millisecond); err != nil {
+	if err := wait.ForPortsReady(t.Context(), "localhost", ports, 5*time.Second, 100*time.Millisecond); err != nil {
 		// If the wait fails (timeout), stop the docker stack before failing the test
 		log.Printf("Services failed to start, attempting to stop docker stack...")
 
@@ -1090,7 +1090,7 @@ func StopDaemonDependencies(ctx context.Context, compose tc.ComposeStack) {
 
 	log.Printf("Checking if containers for project '%s' are gone...", projectName)
 
-	if err := testutil.WaitForDockerComposeProjectDown(containerWaitCtx, projectName, containerWaitTimeout, containerCheckInterval); err != nil {
+	if err := wait.ForDockerComposeProjectDown(containerWaitCtx, projectName, containerWaitTimeout, containerCheckInterval); err != nil {
 		// Log potentially more severe error, but don't necessarily fail the test run here
 		log.Printf("ERROR: %v", err)
 	} else {
@@ -1103,13 +1103,13 @@ func StopDaemonDependencies(ctx context.Context, compose tc.ComposeStack) {
 	waitTimeout := 30 * time.Second
 	waitInterval := 500 * time.Millisecond
 
-	log.Printf("Calling WaitForPortsFree (timeout %s, interval %s)...", waitTimeout, waitInterval)
+	log.Printf("Calling ForPortsFree (timeout %s, interval %s)...", waitTimeout, waitInterval)
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), waitTimeout)
 
 	defer cancelWait()
 
-	if err := testutil.WaitForPortsFree(waitCtx, "localhost", portsToCheck, waitTimeout, waitInterval); err != nil {
-		log.Printf("Warning during WaitForPortsFree: %v", err)
+	if err := wait.ForPortsFree(waitCtx, "localhost", portsToCheck, waitTimeout, waitInterval); err != nil {
+		log.Printf("Warning during ForPortsFree: %v", err)
 	} else {
 		log.Printf("Confirmed dependent service ports are free.")
 	}

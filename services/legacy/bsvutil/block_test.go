@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/libsv/go-bt/v2/chainhash"
 )

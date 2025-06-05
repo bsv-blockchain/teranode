@@ -120,6 +120,7 @@ type Store interface {
 	//   - opts: Optional file options
 	// Returns:
 	//   - error: Any error that occurred during deletion
+
 	Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error
 
 	// Close closes the blob store and releases any resources.

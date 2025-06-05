@@ -15,8 +15,8 @@ import (
 
 	gobdk "github.com/bitcoin-sv/bdk/module/gobdk"
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
-	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"

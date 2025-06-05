@@ -8,7 +8,7 @@ import (
 	"bytes"
 	"io"
 
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

@@ -77,7 +77,7 @@ type Client struct {
 	batchTimeout int
 
 	// batcher handles the batching of transaction validation requests
-	batcher batcher.Batcher2[batchItem]
+	batcher batcher.Batcher[batchItem]
 
 	// validatorHTTPAddr holds the HTTP endpoint address for validator fallback
 	validatorHTTPAddr *url.URL

@@ -7,7 +7,7 @@ package bsvutil_test
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
 	. "github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 )

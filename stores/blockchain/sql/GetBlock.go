@@ -10,7 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -19,7 +19,7 @@ import (
 // It stores both the block object and its height to avoid additional database queries.
 type getBlockCache struct {
 	block  *model.Block // Complete block data including header and transaction information
-	height uint32      // Block height in the blockchain
+	height uint32       // Block height in the blockchain
 }
 
 // GetBlock retrieves a complete block from the database by its hash.
@@ -38,8 +38,8 @@ type getBlockCache struct {
 //   - *model.Block: The complete block data if found
 //   - uint32: The height of the block in the blockchain
 //   - error: Any error encountered during retrieval, specifically:
-//     * BlockNotFoundError if the block does not exist
-//     * StorageError for other database or processing errors
+//   - BlockNotFoundError if the block does not exist
+//   - StorageError for other database or processing errors
 func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlock")
 	defer deferFn()

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -40,7 +40,7 @@ func TestDifficultyAdjustmentShouldNotChangeDifficultyIfBlocksAreMinedInTime(t *
 	t.Logf("difficulty: %v", d.powLimitnBits.String())
 	require.NoError(t, err)
 
-	//nolint: gosec
+	// nolint: gosec
 	header := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
@@ -66,7 +66,7 @@ func TestDifficultyAdjustmentShouldNotChangeDifficultyIfBlocksAreMinedInTime(t *
 		currentTime += int64(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds())
 		// t.Logf("current time: %v", currentTime)
 
-		//nolint: gosec
+		// nolint: gosec
 		header := &model.BlockHeader{
 			Version:        1,
 			Timestamp:      uint32(currentTime),

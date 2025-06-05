@@ -5,13 +5,13 @@
 package chaincfg
 
 import (
+	"fmt"
 	"math"
 	"math/big"
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
@@ -739,12 +739,12 @@ var (
 	// ErrDuplicateNet describes an error where the parameters for a Bitcoin
 	// network could not be set due to the network already being a standard
 	// network or previously-registered into this package.
-	ErrDuplicateNet = errors.New(errors.ERR_INVALID_ARGUMENT, "duplicate Bitcoin network")
+	ErrDuplicateNet = fmt.Errorf("duplicate Bitcoin network")
 
 	// ErrUnknownHDKeyID describes an error where the provided id which
 	// is intended to identify the network for a hierarchical deterministic
 	// private extended key is not registered.
-	ErrUnknownHDKeyID = errors.New(errors.ERR_INVALID_ARGUMENT, "unknown hd private extended key bytes")
+	ErrUnknownHDKeyID = fmt.Errorf("unknown hd private extended key bytes")
 )
 
 var (
@@ -852,7 +852,7 @@ func GetChainParams(network string) (*Params, error) {
 	case "tstn":
 		return &TeraScalingTestNetParams, nil
 	default:
-		return nil, errors.NewProcessingError("unknown network %s", network)
+		return nil, fmt.Errorf("unknown network %s", network)
 	}
 }
 

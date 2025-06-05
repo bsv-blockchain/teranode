@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	blockchain_service "github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"

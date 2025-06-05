@@ -8,7 +8,7 @@ import (
 	"database/sql"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -26,8 +26,8 @@ import (
 // Returns:
 //   - uint32: The height of the block in the blockchain (0 if not found)
 //   - error: Any error encountered during retrieval, specifically:
-//     * BlockNotFoundError if the block does not exist
-//     * StorageError for other database errors
+//   - BlockNotFoundError if the block does not exist
+//   - StorageError for other database errors
 func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeight")
 	defer deferFn()

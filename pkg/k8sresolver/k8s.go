@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/jellydator/ttlcache/v3"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,22 +24,22 @@ type serviceEndpointResolver interface {
 type serviceClient struct {
 	k8s          kubernetes.Interface
 	namespace    string
-	logger       ulogger.Logger
+	logger       logger
 	resolveCache *ttlcache.Cache[string, []string]
 }
 
-func newInClusterClient(logger ulogger.Logger, namespace string) (*serviceClient, error) {
+func newInClusterClient(logger logger, namespace string) (*serviceClient, error) {
 	logger.Debugf("[k8s] newInClusterClient called with namespace: %s", namespace)
 
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		return nil, errors.NewServiceError("k8s resolver: failed to build in-cluster kuberenets config: %s", err)
+		return nil, fmt.Errorf("k8s resolver: failed to build in-cluster kuberenets config: %s", err)
 	}
 
 	// creates the clientset
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, errors.NewConfigurationError("k8s resolver: failed to provisiong Kubernetes client set: %s", err)
+		return nil, fmt.Errorf("k8s resolver: failed to provisiong Kubernetes client set: %s", err)
 	}
 
 	return &serviceClient{
@@ -68,7 +66,7 @@ func (s *serviceClient) Resolve(ctx context.Context, host string, port string) (
 
 	ep, err := s.k8s.CoreV1().Endpoints(s.namespace).Get(ctx, host, metav1.GetOptions{})
 	if err != nil {
-		return eps, errors.NewServiceError("k8s resolver: failed to fetch service endpoint: %s", host, err)
+		return eps, fmt.Errorf("k8s resolver: failed to fetch service endpoint %s: %s", host, err)
 	}
 
 	for _, v := range ep.Subsets {

@@ -30,10 +30,10 @@ import (
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/servicemanager"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -433,7 +433,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSett
 
 		serviceName := tSettings.ServiceName
 
-		closer, err := tracing.InitOpenTracer(serviceName, samplingRate, tSettings)
+		closer, err := tracing.InitTracer(serviceName, samplingRate, true, nil)
 		if err != nil {
 			logger.Warnf("failed to initialize tracer: %v", err)
 		}

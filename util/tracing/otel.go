@@ -2,11 +2,11 @@ package tracing
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"net/url"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/settings"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -18,10 +18,9 @@ import (
 // InitOtelTracer initializes the OpenTelemetry tracer
 // serviceName: the name of the service
 // samplingRate: the rate at which to sample traces (0.0 - 1.0)
-func InitOtelTracer(serviceName string, samplingRate float64, tSettings *settings.Settings) (io.Closer, error) {
-	tracerURL := tSettings.TracingCollectorURL
+func InitOtelTracer(serviceName string, samplingRate float64, tracerURL *url.URL) (io.Closer, error) {
 	if tracerURL == nil {
-		return nil, errors.NewConfigurationError("tracing_collector_url not found in config", nil)
+		return nil, fmt.Errorf("tracing_collector_url not found in config")
 	}
 
 	headers := map[string]string{

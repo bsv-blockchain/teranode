@@ -2,11 +2,10 @@ package k8sresolver
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc/resolver"
@@ -18,7 +17,7 @@ const (
 )
 
 var (
-	errNoEndpoints = errors.NewConfigurationError("no endpoints available")
+	errNoEndpoints = fmt.Errorf("no endpoints available")
 	resolveTTL     time.Duration
 	resolveCache   *ttlcache.Cache[string, *resolver.State]
 )
@@ -44,7 +43,7 @@ type k8sResolver struct {
 	// will warns lookup (READ the lookup function pointers) inside watcher() goroutine
 	// has data race with replaceNetFunc (WRITE the lookup function pointers).
 	wg     sync.WaitGroup
-	logger ulogger.Logger
+	logger logger
 }
 
 // ResolveNow invoke an immediate resolution of the target that this k8sResolver watches.
@@ -73,7 +72,7 @@ func (k *k8sResolver) watcher() {
 	for {
 		we, stop, err = k.k8sC.Watch(k.ctx, k.host)
 		if err != nil {
-			logger.Errorf("unable to watch service endpoints (%s:%s): %s - retry in %s", k.host, k.port, err, watcherRetryDuration)
+			k.logger.Errorf("unable to watch service endpoints (%s:%s): %s - retry in %s", k.host, k.port, err, watcherRetryDuration)
 			time.Sleep(watcherRetryDuration)
 
 			continue

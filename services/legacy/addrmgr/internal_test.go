@@ -7,7 +7,7 @@ package addrmgr
 import (
 	"time"
 
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 )
 
 func TstKnownAddressIsBad(ka *KnownAddress) bool {

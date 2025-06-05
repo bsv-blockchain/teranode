@@ -8,7 +8,7 @@ import (
 	"bytes"
 	"errors"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/base58"
 	"github.com/libsv/go-bt/v2/chainhash"

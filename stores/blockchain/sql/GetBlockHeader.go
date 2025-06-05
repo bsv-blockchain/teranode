@@ -9,8 +9,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -31,9 +31,9 @@ import (
 //   - *model.BlockHeader: The complete block header data if found
 //   - *model.BlockHeaderMeta: Metadata about the block including height, transaction count, and chainwork
 //   - error: Any error encountered during retrieval, specifically:
-//     * BlockNotFoundError if the block does not exist
-//     * StorageError for database errors
-//     * ProcessingError for data conversion errors
+//   - BlockNotFoundError if the block does not exist
+//   - StorageError for database errors
+//   - ProcessingError for data conversion errors
 func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeader")
 	defer deferFn()

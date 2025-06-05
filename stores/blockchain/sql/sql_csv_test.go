@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/settings"
 	bcsql "github.com/bitcoin-sv/teranode/stores/blockchain/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -205,16 +205,30 @@ func TestImportWithExistingGenesis(t *testing.T) {
 		`SELECT height, lower(hex(hash)) FROM blocks ORDER BY height`)
 	require.NoError(t, err)
 	defer rRows.Close()
-	var got []struct{ H int64; Hex string }
+
+	var got []struct {
+		H   int64
+		Hex string
+	}
+
 	for rRows.Next() {
-		var h int64; var hx string
+		var h int64
+		var hx string
 		require.NoError(t, rRows.Scan(&h, &hx))
-		got = append(got, struct{ H int64; Hex string }{h, hx})
+		got = append(got, struct {
+			H   int64
+			Hex string
+		}{h, hx})
 	}
 	require.NoError(t, rRows.Err())
-	want := []struct{ H int64; Hex string }{
+
+	want := []struct {
+		H   int64
+		Hex string
+	}{
 		{0, hex.EncodeToString(genesisHash)},
 		{1, "0a"}, {2, "0b"},
 	}
+
 	require.Equal(t, want, got)
 }

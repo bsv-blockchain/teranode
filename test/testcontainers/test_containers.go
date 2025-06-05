@@ -23,7 +23,7 @@ import (
 	distributor "github.com/bitcoin-sv/teranode/services/rpc"
 	"github.com/bitcoin-sv/teranode/settings"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
-	"github.com/bitcoin-sv/teranode/testutil"
+	"github.com/bitcoin-sv/teranode/test/utils/wait"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/docker/go-connections/nat"
@@ -100,7 +100,7 @@ func NewTestContainer(t *testing.T, config TestContainersConfig) (*TestContainer
 	require.NoError(t, daemon.WaitForHealthLiveness(ports, 10*time.Second))
 
 	ports = getPorts(ctx, t, compose, config.ServicesToWaitFor)
-	require.NoError(t, testutil.WaitForPortsReady(ctx, "localhost", ports, 10*time.Second, 1*time.Second))
+	require.NoError(t, wait.ForPortsReady(ctx, "localhost", ports, 10*time.Second, 1*time.Second))
 
 	return container, nil
 }

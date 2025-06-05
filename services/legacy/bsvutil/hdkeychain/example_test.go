@@ -7,7 +7,7 @@ package hdkeychain_test
 import (
 	"fmt"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/hdkeychain"
 )
 

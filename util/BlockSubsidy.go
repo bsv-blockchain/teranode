@@ -1,6 +1,8 @@
 package util
 
-import "github.com/bitcoin-sv/teranode/chaincfg"
+import (
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+)
 
 // GetBlockSubsidyForHeight func
 func GetBlockSubsidyForHeight(height uint32, params *chaincfg.Params) uint64 {

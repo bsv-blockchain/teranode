@@ -33,11 +33,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
 	"github.com/bitcoin-sv/teranode/services/legacy/peer_api"
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -125,16 +125,16 @@ type Server struct {
 // or begin listening for connections until the Start method is called.
 //
 // Parameters:
-//  - logger: Provides structured logging capabilities for the server
-//  - tSettings: Contains all configuration settings for the server and its components
-//  - blockchainClient: Interface to the blockchain service for querying and submitting blocks
-//  - validationClient: Interface to the transaction validation service
-//  - subtreeStore: Blob storage interface for merkle subtree data
-//  - tempStore: Temporary blob storage for ephemeral data
-//  - utxoStore: Interface to the UTXO (Unspent Transaction Output) database
-//  - subtreeValidation: Interface to the subtree validation service
-//  - blockValidation: Interface to the block validation service
-//  - blockAssemblyClient: Client for the block assembly service (used for mining)
+//   - logger: Provides structured logging capabilities for the server
+//   - tSettings: Contains all configuration settings for the server and its components
+//   - blockchainClient: Interface to the blockchain service for querying and submitting blocks
+//   - validationClient: Interface to the transaction validation service
+//   - subtreeStore: Blob storage interface for merkle subtree data
+//   - tempStore: Temporary blob storage for ephemeral data
+//   - utxoStore: Interface to the UTXO (Unspent Transaction Output) database
+//   - subtreeValidation: Interface to the subtree validation service
+//   - blockValidation: Interface to the block validation service
+//   - blockAssemblyClient: Client for the block assembly service (used for mining)
 //
 // Returns a properly configured Server instance that is ready to be initialized and started.
 func New(logger ulogger.Logger,
@@ -169,23 +169,23 @@ func New(logger ulogger.Logger,
 // It implements the health.Checker interface for integration with Teranode's health monitoring system.
 //
 // The Health method performs two types of checks depending on the checkLiveness parameter:
-// 1. Liveness checks: Verify if the service is running and responsive but do not check dependencies.
-//    These are used to determine if the service should be restarted.
-// 2. Readiness checks: Verify if the service and all its dependencies are operational.
-//    These are used to determine if the service can accept traffic.
+//  1. Liveness checks: Verify if the service is running and responsive but do not check dependencies.
+//     These are used to determine if the service should be restarted.
+//  2. Readiness checks: Verify if the service and all its dependencies are operational.
+//     These are used to determine if the service can accept traffic.
 //
 // The method aggregates health status from all dependent services including the blockchain client,
 // validation client, stores, and connected peers. It also performs custom checks like verifying
 // peer connections and recent peer activity.
 //
 // Parameters:
-//  - ctx: Context for cancellation and timeouts
-//  - checkLiveness: If true, performs only liveness checks; if false, performs readiness checks
+//   - ctx: Context for cancellation and timeouts
+//   - checkLiveness: If true, performs only liveness checks; if false, performs readiness checks
 //
 // Returns:
-//  - HTTP status code (200 for healthy, 503 for unhealthy)
-//  - A human-readable status message
-//  - Error details if the check failed
+//   - HTTP status code (200 for healthy, 503 for unhealthy)
+//   - A human-readable status message
+//   - Error details if the check failed
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -286,7 +286,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // Start is called.
 //
 // Parameters:
-//  - ctx: Context for cancellation and timeout control
+//   - ctx: Context for cancellation and timeout control
 //
 // Returns an error if any part of initialization fails, particularly if required
 // configuration settings are missing or network setup fails.
@@ -345,12 +345,12 @@ func (s *Server) Init(ctx context.Context) error {
 // a simple count of currently connected peers to the legacy server.
 //
 // Parameters:
-//  - ctx: Context for cancellation and timeout control
-//  - _: Empty message parameter (required by gRPC interface)
+//   - ctx: Context for cancellation and timeout control
+//   - _: Empty message parameter (required by gRPC interface)
 //
 // Returns:
-//  - GetPeerCountResponse containing the peer count
-//  - Error if the operation fails (nil on success)
+//   - GetPeerCountResponse containing the peer count
+//   - Error if the operation fails (nil on success)
 func (s *Server) GetPeerCount(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetPeerCountResponse, error) {
 	pc := s.server.ConnectedCount()
 
@@ -372,12 +372,12 @@ func (s *Server) GetPeerCount(ctx context.Context, _ *emptypb.Empty) (*peer_api.
 // - Ban score and whitelisting status
 //
 // Parameters:
-//  - ctx: Context for cancellation and timeout control
-//  - _: Empty message parameter (required by gRPC interface)
+//   - ctx: Context for cancellation and timeout control
+//   - _: Empty message parameter (required by gRPC interface)
 //
 // Returns:
-//  - GetPeersResponse containing detailed information about all peers
-//  - Error if the operation fails, particularly if the server is not initialized
+//   - GetPeersResponse containing detailed information about all peers
+//   - Error if the operation fails, particularly if the server is not initialized
 func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetPeersResponse, error) {
 	s.logger.Debugf("GetPeers called")
 
@@ -430,12 +430,12 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 // a way to query the ban status of a specific network address.
 //
 // Parameters:
-//  - ctx: Context for cancellation and timeout control
-//  - peer: Request containing the IP address or subnet to check
+//   - ctx: Context for cancellation and timeout control
+//   - peer: Request containing the IP address or subnet to check
 //
 // Returns:
-//  - IsBannedResponse containing a boolean indicating ban status
-//  - Error if the operation fails (nil on success)
+//   - IsBannedResponse containing a boolean indicating ban status
+//   - Error if the operation fails (nil on success)
 func (s *Server) IsBanned(ctx context.Context, peer *peer_api.IsBannedRequest) (*peer_api.IsBannedResponse, error) {
 	return &peer_api.IsBannedResponse{IsBanned: s.server.banList.IsBanned(peer.IpOrSubnet)}, nil
 }
@@ -446,12 +446,12 @@ func (s *Server) IsBanned(ctx context.Context, peer *peer_api.IsBannedRequest) (
 // a complete view of all banned network addresses.
 //
 // Parameters:
-//  - ctx: Context for cancellation and timeout control
-//  - _: Empty message parameter (required by gRPC interface)
+//   - ctx: Context for cancellation and timeout control
+//   - _: Empty message parameter (required by gRPC interface)
 //
 // Returns:
-//  - ListBannedResponse containing a list of all banned addresses
-//  - Error if the operation fails (nil on success)
+//   - ListBannedResponse containing a list of all banned addresses
+//   - Error if the operation fails (nil on success)
 func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*peer_api.ListBannedResponse, error) {
 	return &peer_api.ListBannedResponse{Banned: s.server.banList.ListBanned()}, nil
 }
@@ -463,12 +463,12 @@ func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*peer_api.Li
 // a way to reset the ban list, typically used for administrative purposes.
 //
 // Parameters:
-//  - ctx: Context for cancellation and timeout control
-//  - _: Empty message parameter (required by gRPC interface)
+//   - ctx: Context for cancellation and timeout control
+//   - _: Empty message parameter (required by gRPC interface)
 //
 // Returns:
-//  - ClearBannedResponse with Ok=true to indicate success
-//  - Error if the operation fails (nil on success)
+//   - ClearBannedResponse with Ok=true to indicate success
+//   - Error if the operation fails (nil on success)
 func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*peer_api.ClearBannedResponse, error) {
 	s.server.banList.Clear()
 	return &peer_api.ClearBannedResponse{Ok: true}, nil
@@ -482,14 +482,14 @@ func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*peer_api.C
 // ban expires.
 //
 // Parameters:
-//  - ctx: Context for cancellation and timeout control
-//  - peer: Request containing the peer address and ban duration
-//    - Addr: The peer's network address (IP:Port)
-//    - Until: Unix timestamp when the ban should expire (seconds since epoch)
+//   - ctx: Context for cancellation and timeout control
+//   - peer: Request containing the peer address and ban duration
+//   - Addr: The peer's network address (IP:Port)
+//   - Until: Unix timestamp when the ban should expire (seconds since epoch)
 //
 // Returns:
-//  - BanPeerResponse with Ok=true if the ban was successful, Ok=false otherwise
-//  - Error if the ban operation fails, particularly if the peer address is invalid
+//   - BanPeerResponse with Ok=true if the ban was successful, Ok=false otherwise
+//   - Error if the ban operation fails, particularly if the peer address is invalid
 func (s *Server) BanPeer(ctx context.Context, peer *peer_api.BanPeerRequest) (*peer_api.BanPeerResponse, error) {
 	err := s.banPeer(peer.Addr, peer.Until)
 	if err != nil {
@@ -506,13 +506,13 @@ func (s *Server) BanPeer(ctx context.Context, peer *peer_api.BanPeerRequest) (*p
 // through a channel to the internal server component.
 //
 // Parameters:
-//  - ctx: Context for cancellation and timeout control
-//  - peer: Request containing the peer address to unban
-//    - Addr: The peer's network address (IP:Port) or subnet
+//   - ctx: Context for cancellation and timeout control
+//   - peer: Request containing the peer address to unban
+//   - Addr: The peer's network address (IP:Port) or subnet
 //
 // Returns:
-//  - UnbanPeerResponse with Ok=true to indicate the request was received
-//  - Error if the operation fails (nil on success)
+//   - UnbanPeerResponse with Ok=true to indicate the request was received
+//   - Error if the operation fails (nil on success)
 //
 // Note: The Ok=true response indicates only that the request was received and processed,
 // not necessarily that the unban operation was successful. The actual unban operation
@@ -532,8 +532,8 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *peer_api.UnbanPeerRequest)
 // the peer and initiating the ban process.
 //
 // Parameters:
-//  - peerAddr: The network address of the peer to ban (IP:Port)
-//  - until: Unix timestamp indicating when the ban should expire (seconds since epoch)
+//   - peerAddr: The network address of the peer to ban (IP:Port)
+//   - until: Unix timestamp indicating when the ban should expire (seconds since epoch)
 //
 // Returns an error if the peer couldn't be found by the provided address
 func (s *Server) banPeer(peerAddr string, until int64) error {
@@ -572,7 +572,7 @@ func (s *Server) banPeer(peerAddr string, until int64) error {
 // and debugging communication issues between nodes.
 //
 // Parameters:
-//  - ctx: Context that controls when logging should stop
+//   - ctx: Context that controls when logging should stop
 func (s *Server) logPeerStats(ctx context.Context) {
 	for {
 		select {
@@ -624,8 +624,8 @@ func (s *Server) logPeerStats(ctx context.Context) {
 // - The gRPC service runs in the current goroutine and blocks until completion
 //
 // Parameters:
-//  - ctx: Context for cancellation and timeout control
-//  - readyCh: Channel to signal when the server is ready to accept connections
+//   - ctx: Context for cancellation and timeout control
+//   - readyCh: Channel to signal when the server is ready to accept connections
 //
 // Returns an error if any component fails to start, particularly if the blockchain
 // service isn't ready or the gRPC server fails to initialize
@@ -698,7 +698,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // to complete if they're taking too long.
 //
 // Parameters:
-//  - _: Context parameter (unused in the current implementation)
+//   - _: Context parameter (unused in the current implementation)
 //
 // Returns an error if the shutdown process encounters problems, or nil on successful shutdown
 func (s *Server) Stop(_ context.Context) error {

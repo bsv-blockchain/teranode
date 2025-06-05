@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/tracing"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -71,23 +71,23 @@ import (
 //     - Version (4 bytes): Transaction version number as a little-endian uint32
 //     - Input count (VarInt): Number of inputs in the transaction
 //     - Inputs (variable length): Each consisting of:
-//       * Previous transaction hash (32 bytes, little-endian)
-//       * Previous output index (4 bytes, little-endian uint32)
-//       * Script length (VarInt)
-//       * Unlocking script (variable length)
-//       * Sequence number (4 bytes, little-endian uint32)
+//     * Previous transaction hash (32 bytes, little-endian)
+//     * Previous output index (4 bytes, little-endian uint32)
+//     * Script length (VarInt)
+//     * Unlocking script (variable length)
+//     * Sequence number (4 bytes, little-endian uint32)
 //     - Output count (VarInt): Number of outputs in the transaction
 //     - Outputs (variable length): Each consisting of:
-//       * Value (8 bytes, little-endian uint64, in satoshis)
-//       * Script length (VarInt)
-//       * Locking script (variable length)
+//     * Value (8 bytes, little-endian uint64, in satoshis)
+//     * Script length (VarInt)
+//     * Locking script (variable length)
 //     - Locktime (4 bytes): Transaction locktime as a little-endian uint32
 //
 //  3. Hex (mode = HEX):
 //     Status: 200 OK
 //     Content-Type: text/plain
 //     Body: Hexadecimal string representation of the raw binary transaction format
-//           Each byte is encoded as two hex characters (0-9, a-f)
+//     Each byte is encoded as two hex characters (0-9, a-f)
 //
 // Error Responses:
 //
@@ -102,9 +102,12 @@ import (
 //
 //   - 500 Internal Server Error:
 //     Returned for various internal errors:
-//     - Repository access failures
-//     - Transaction deserialization errors for JSON mode
-//     - Storage system unavailability
+//
+//   - Repository access failures
+//
+//   - Transaction deserialization errors for JSON mode
+//
+//   - Storage system unavailability
 //     Example: {"message": "error parsing transaction"}
 //
 // Security Considerations:
@@ -119,14 +122,14 @@ import (
 //
 // Example Usage:
 //
-//   # Get transaction in JSON format (for human-readable exploration)
-//   GET /tx/{hash}/json
+//	# Get transaction in JSON format (for human-readable exploration)
+//	GET /tx/{hash}/json
 //
-//   # Get raw binary transaction (for efficient machine processing)
-//   GET /tx/{hash}
+//	# Get raw binary transaction (for efficient machine processing)
+//	GET /tx/{hash}
 //
-//   # Get transaction in hex format (for verification or debugging)
-//   GET /tx/{hash}/hex
+//	# Get transaction in hex format (for verification or debugging)
+//	GET /tx/{hash}/hex
 func (h *HTTP) GetTransaction(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashStr := c.Param("hash")

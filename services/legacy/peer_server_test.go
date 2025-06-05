@@ -4,9 +4,9 @@ import (
 	"net"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/addrmgr"
 	"github.com/bitcoin-sv/teranode/services/legacy/netsync"
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

@@ -9,9 +9,9 @@ import (
 	"math"
 	"sync"
 
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/txscript"
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -143,7 +143,7 @@ func (bf *Filter) matches(data []byte) bool {
 	// equivalent of:
 	//   arrayIndex := idx / 8     (idx >> 3)
 	//   bitOffset := idx % 8      (idx & 7)
-	///  if filter[arrayIndex] & 1<<bitOffset == 0 { ... }
+	// /  if filter[arrayIndex] & 1<<bitOffset == 0 { ... }
 	for i := uint32(0); i < bf.msgFilterLoad.HashFuncs; i++ {
 		idx := bf.hash(i, data)
 		if bf.msgFilterLoad.Filter[idx>>3]&(1<<(idx&7)) == 0 {
@@ -206,7 +206,7 @@ func (bf *Filter) add(data []byte) {
 	// of:
 	//   arrayIndex := idx / 8    (idx >> 3)
 	//   bitOffset := idx % 8     (idx & 7)
-	///  filter[arrayIndex] |= 1<<bitOffset
+	// /  filter[arrayIndex] |= 1<<bitOffset
 	for i := uint32(0); i < bf.msgFilterLoad.HashFuncs; i++ {
 		idx := bf.hash(i, data)
 		bf.msgFilterLoad.Filter[idx>>3] |= (1 << (7 & idx))

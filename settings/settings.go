@@ -4,7 +4,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/ordishs/gocore"
 )
 

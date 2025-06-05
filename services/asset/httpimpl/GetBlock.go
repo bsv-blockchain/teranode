@@ -11,8 +11,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -20,7 +20,7 @@ import (
 // BlockExtended represents a block with additional information about the next block
 // in the blockchain. It embeds the base Block model and adds the next block hash.
 //
-// This structure extends the standard Block model to provide additional blockchain traversal 
+// This structure extends the standard Block model to provide additional blockchain traversal
 // capabilities by including a reference to the next block in the chain. This is particularly
 // useful for blockchain explorers and analysis tools that need to navigate the chain in
 // a forward direction.

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/ulogger"
 	"google.golang.org/grpc/resolver"
 )
 
@@ -15,28 +14,26 @@ const (
 	minK8SResRate    = 5 * time.Second
 )
 
-var (
-	logger = ulogger.New("k8sres")
-)
-
-func init() {
-	logger.Infof("[k8s] GRPC k8sresolver init")
-	resolver.Register(NewBuilder(logger))
+type logger interface {
+	Debugf(format string, args ...interface{})
+	Errorf(format string, args ...interface{})
+	Infof(format string, args ...interface{})
+	Warnf(format string, args ...interface{})
 }
 
 // NewBuilder creates a k8sBuilder which is used to factory K8S service resolvers.
-func NewBuilder(l ulogger.Logger) resolver.Builder {
+func NewBuilder(l logger) resolver.Builder {
 	return &k8sBuilder{
 		logger: l,
 	}
 }
 
 type k8sBuilder struct {
-	logger ulogger.Logger
+	logger logger
 }
 
 func (b *k8sBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {
-	logger.Debugf("[k8s] Build called with target: %v", target)
+	b.logger.Debugf("[k8s] Build called with target: %v", target)
 
 	host, port, err := parseTarget(target.Endpoint(), defaultPort)
 	if err != nil {
@@ -45,7 +42,7 @@ func (b *k8sBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts 
 
 	namespace, host := getNamespaceFromHost(host)
 
-	k8sc, err := newInClusterClient(logger, namespace)
+	k8sc, err := newInClusterClient(b.logger, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +56,7 @@ func (b *k8sBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts 
 		cancel: cancel,
 		cc:     cc,
 		rn:     make(chan struct{}, 1),
-		logger: logger,
+		logger: b.logger,
 	}
 
 	k.wg.Add(1)

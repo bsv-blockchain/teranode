@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
-	"github.com/bitcoin-sv/teranode/services/legacy/wire"
 )
 
 // ScriptFlags is a bitmask defining additional operations or tests that will be
@@ -106,8 +106,8 @@ type Engine struct {
 	lastCodeSep     int
 	dstack          stack // data stack
 	astack          stack // alt stack
-	tx              wire.MsgTx
-	txIdx           int
+	tx    wire.MsgTx
+	txIdx int
 	condStack       []int
 	numOps          int
 	flags           ScriptFlags
