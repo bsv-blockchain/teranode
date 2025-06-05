@@ -475,7 +475,7 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	}
 
 	// add to cache, but only if the blockIDs have not been set
-	if len(txMeta.BlockIDs) == 0 {
+	if len(txMeta.BlockIDs) == 0 && !txMeta.Conflicting {
 		txMeta.Tx = nil
 		_ = t.SetCache(txHash, txMeta)
 	}

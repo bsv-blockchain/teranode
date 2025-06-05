@@ -34,7 +34,8 @@ import (
 // The function uses BatchDecorate when batched is true, otherwise falls back to
 // individual GetMeta calls. It will return a ThresholdExceededError if failFast
 // is true and the number of missing transactions exceeds the configured threshold.
-func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data, batched bool, failFast bool) (int, error) {
+func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data,
+	blockIds map[uint32]bool, batched bool, failFast bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, errors.NewInvalidArgumentError("txHashes and txMetaSlice must be the same length")
 	}
@@ -81,7 +82,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					}
 				}
 
-				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs); err != nil {
+				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs); err != nil {
 					return errors.NewStorageError("error running batch decorate on utxo store for missing transactions", err)
 				}
 
@@ -107,6 +108,12 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 						}
 
 						txMetaSlice[data.Idx] = data.Data
+
+						if txMetaSlice[data.Idx].Conflicting {
+							if err = u.checkCounterConflictingOnCurrentChain(ctx, data.Hash, blockIds); err != nil {
+								return errors.NewProcessingError("[processTxMetaUsingStore][%s] failed to check counter conflicting tx on current chain", data.Hash.String(), err)
+							}
+						}
 					}
 
 					return nil

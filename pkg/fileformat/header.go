@@ -40,22 +40,23 @@ func (f FileType) ToMagicBytes() [8]byte {
 
 // Magic header types for file identification - exactly 8 ASCII characters (8 bytes)
 var (
-	magicUtxoAdditions = [8]byte{'U', '-', 'A', '-', '1', '.', '0', ' '} // U-A-1.0
-	magicUtxoDeletions = [8]byte{'U', '-', 'D', '-', '1', '.', '0', ' '} // U-D-1.0
-	magicUtxoHeaders   = [8]byte{'U', '-', 'H', '-', '1', '.', '0', ' '} // U-H-1.0
-	magicUtxoSet       = [8]byte{'U', '-', 'S', '-', '1', '.', '0', ' '} // U-S-1.0
-	magicBlock         = [8]byte{'B', '-', '1', '.', '0', ' ', ' ', ' '} // B-1.0
-	magicSubtree       = [8]byte{'S', '-', '1', '.', '0', ' ', ' ', ' '} // S-1.0
-	magicSubtreeData   = [8]byte{'S', 'D', '-', '1', '.', '0', ' ', ' '} // SD-1.0
-	magicSubtreeMeta   = [8]byte{'S', 'M', '-', '1', '.', '0', ' ', ' '} // SM-1.0
-	magicTx            = [8]byte{'T', '-', '1', '.', '0', ' ', ' ', ' '} // T-1.0
-	magicOutputs       = [8]byte{'O', '-', '1', '.', '0', ' ', ' ', ' '} // O-1.0
-	magicBloomFilter   = [8]byte{'B', 'F', '-', '1', '.', '0', ' ', ' '} // BF-1.0
-	magicMsgBlock      = [8]byte{'M', 'B', '-', '1', '.', '0', ' ', ' '} // MB-1.0
-	magicDat           = [8]byte{'D', 'A', 'T', '-', '1', '.', '0', ' '} // DAT-1.0
-	magicTesting       = [8]byte{'T', 'E', 'S', 'T', 'I', 'N', 'G', ' '} // TESTING
-	magicBatchData     = [8]byte{'B', 'D', '-', '1', '.', '0', ' ', ' '} // BD-1.0
-	magicBatchKeys     = [8]byte{'B', 'K', '-', '1', '.', '0', ' ', ' '} // BK-1.0
+	magicUtxoAdditions  = [8]byte{'U', '-', 'A', '-', '1', '.', '0', ' '} // U-A-1.0
+	magicUtxoDeletions  = [8]byte{'U', '-', 'D', '-', '1', '.', '0', ' '} // U-D-1.0
+	magicUtxoHeaders    = [8]byte{'U', '-', 'H', '-', '1', '.', '0', ' '} // U-H-1.0
+	magicUtxoSet        = [8]byte{'U', '-', 'S', '-', '1', '.', '0', ' '} // U-S-1.0
+	magicBlock          = [8]byte{'B', '-', '1', '.', '0', ' ', ' ', ' '} // B-1.0
+	magicSubtree        = [8]byte{'S', '-', '1', '.', '0', ' ', ' ', ' '} // S-1.0
+	magicSubtreeToCheck = [8]byte{'S', 'C', '-', '1', '.', '0', ' ', ' '} // SC-1.0
+	magicSubtreeData    = [8]byte{'S', 'D', '-', '1', '.', '0', ' ', ' '} // SD-1.0
+	magicSubtreeMeta    = [8]byte{'S', 'M', '-', '1', '.', '0', ' ', ' '} // SM-1.0
+	magicTx             = [8]byte{'T', '-', '1', '.', '0', ' ', ' ', ' '} // T-1.0
+	magicOutputs        = [8]byte{'O', '-', '1', '.', '0', ' ', ' ', ' '} // O-1.0
+	magicBloomFilter    = [8]byte{'B', 'F', '-', '1', '.', '0', ' ', ' '} // BF-1.0
+	magicMsgBlock       = [8]byte{'M', 'B', '-', '1', '.', '0', ' ', ' '} // MB-1.0
+	magicDat            = [8]byte{'D', 'A', 'T', '-', '1', '.', '0', ' '} // DAT-1.0
+	magicTesting        = [8]byte{'T', 'E', 'S', 'T', 'I', 'N', 'G', ' '} // TESTING
+	magicBatchData      = [8]byte{'B', 'D', '-', '1', '.', '0', ' ', ' '} // BD-1.0
+	magicBatchKeys      = [8]byte{'B', 'K', '-', '1', '.', '0', ' ', ' '} // BK-1.0
 )
 
 var fileTypeToMagic = map[FileType][8]byte{
@@ -65,7 +66,7 @@ var fileTypeToMagic = map[FileType][8]byte{
 	FileTypeUtxoSet:        magicUtxoSet,
 	FileTypeBlock:          magicBlock,
 	FileTypeSubtree:        magicSubtree,
-	FileTypeSubtreeToCheck: magicSubtree,
+	FileTypeSubtreeToCheck: magicSubtreeToCheck,
 	FileTypeSubtreeData:    magicSubtreeData,
 	FileTypeSubtreeMeta:    magicSubtreeMeta,
 	FileTypeTx:             magicTx,
@@ -79,22 +80,23 @@ var fileTypeToMagic = map[FileType][8]byte{
 }
 
 var magicToFileType = map[[8]byte]FileType{
-	magicUtxoAdditions: FileTypeUtxoAdditions,
-	magicUtxoDeletions: FileTypeUtxoDeletions,
-	magicUtxoHeaders:   FileTypeUtxoHeaders,
-	magicUtxoSet:       FileTypeUtxoSet,
-	magicBlock:         FileTypeBlock,
-	magicSubtree:       FileTypeSubtree,
-	magicSubtreeData:   FileTypeSubtreeData,
-	magicSubtreeMeta:   FileTypeSubtreeMeta,
-	magicTx:            FileTypeTx,
-	magicOutputs:       FileTypeOutputs,
-	magicBloomFilter:   FileTypeBloomFilter,
-	magicMsgBlock:      FileTypeMsgBlock,
-	magicDat:           FileTypeDat,
-	magicTesting:       FileTypeTesting,
-	magicBatchData:     FileTypeBatchData,
-	magicBatchKeys:     FileTypeBatchKeys,
+	magicUtxoAdditions:  FileTypeUtxoAdditions,
+	magicUtxoDeletions:  FileTypeUtxoDeletions,
+	magicUtxoHeaders:    FileTypeUtxoHeaders,
+	magicUtxoSet:        FileTypeUtxoSet,
+	magicBlock:          FileTypeBlock,
+	magicSubtree:        FileTypeSubtree,
+	magicSubtreeToCheck: FileTypeSubtreeToCheck,
+	magicSubtreeData:    FileTypeSubtreeData,
+	magicSubtreeMeta:    FileTypeSubtreeMeta,
+	magicTx:             FileTypeTx,
+	magicOutputs:        FileTypeOutputs,
+	magicBloomFilter:    FileTypeBloomFilter,
+	magicMsgBlock:       FileTypeMsgBlock,
+	magicDat:            FileTypeDat,
+	magicTesting:        FileTypeTesting,
+	magicBatchData:      FileTypeBatchData,
+	magicBatchKeys:      FileTypeBatchKeys,
 }
 
 type Header struct {
@@ -132,7 +134,7 @@ func (h Header) Bytes() []byte {
 
 func (h Header) Write(w io.Writer) error {
 	if _, err := w.Write(h.magic[:]); err != nil {
-		//nolint: forbidigo
+		// nolint: forbidigo
 		return fmt.Errorf("error writing magic: %w", err)
 	}
 
@@ -142,12 +144,12 @@ func (h Header) Write(w io.Writer) error {
 func (h *Header) Read(r io.Reader) error {
 	n, err := r.Read(h.magic[:])
 	if err != nil {
-		//nolint: forbidigo
+		// nolint: forbidigo
 		return fmt.Errorf("error reading magic: %w", err)
 	}
 
 	if n != 8 {
-		//nolint: forbidigo
+		// nolint: forbidigo
 		return fmt.Errorf("expected to read 8 bytes, got %d", n)
 	}
 
@@ -161,7 +163,7 @@ func (h *Header) Read(r io.Reader) error {
 	}
 
 	if _, ok := magicToFileType[h.magic]; !ok {
-		//nolint: forbidigo
+		// nolint: forbidigo
 		return fmt.Errorf("unknown magic: %v", h.magic)
 	}
 
@@ -181,7 +183,7 @@ func ReadHeader(r io.Reader) (Header, error) {
 
 func ReadHeaderFromBytes(b []byte) (Header, error) {
 	if len(b) < 8 {
-		//nolint: forbidigo
+		// nolint: forbidigo
 		return Header{}, fmt.Errorf("not enough bytes to read header")
 	}
 
@@ -191,7 +193,7 @@ func ReadHeaderFromBytes(b []byte) (Header, error) {
 	}
 
 	if _, ok := magicToFileType[header.magic]; !ok {
-		//nolint: forbidigo
+		// nolint: forbidigo
 		return Header{}, fmt.Errorf("unknown magic: %v", header.magic)
 	}
 
@@ -204,7 +206,7 @@ func (h Header) FileType() FileType {
 
 func FileTypeFromExtension(ext string) (FileType, error) {
 	if _, ok := fileTypeToMagic[FileType(ext)]; !ok {
-		//nolint: forbidigo
+		// nolint: forbidigo
 		return "", fmt.Errorf("unknown file type: %s", ext)
 	}
 

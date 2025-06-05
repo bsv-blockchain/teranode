@@ -601,11 +601,14 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 	}
 
 	if contains(bins, fields.Utxos) {
-		var idx int
+		var (
+			idx    int
+			frozen bool
+		)
 
 		// get all the spending tx ids for this tx
 		q := `
-			SELECT o.idx, o.spending_data
+			SELECT o.idx, o.spending_data, o.frozen
 			FROM transactions as t, outputs as o
 			WHERE t.hash = $1 
 			  AND t.id = o.transaction_id
@@ -622,11 +625,13 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		data.SpendingDatas = make([]*spendpkg.SpendingData, len(tx.Outputs)) // needs to be nullable
 
 		for rows.Next() {
-			if err = rows.Scan(&idx, &spendingDataBytes); err != nil {
+			if err = rows.Scan(&idx, &spendingDataBytes, &frozen); err != nil {
 				return nil, err
 			}
 
-			if spendingDataBytes != nil {
+			if data.Frozen || frozen {
+				data.SpendingDatas[idx] = spendpkg.NewSpendingData(&util.FrozenBytesTxHash, idx)
+			} else if spendingDataBytes != nil {
 				data.SpendingDatas[idx], err = spendpkg.NewSpendingDataFromBytes(spendingDataBytes)
 				if err != nil {
 					return nil, errors.NewProcessingError("failed to create hash from bytes", err)
@@ -1188,6 +1193,8 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 
 	if frozen {
 		utxoStatus = utxo.Status_FROZEN
+		// this is needed in for instance conflict resolution where we check the spending data
+		spendingData = spendpkg.NewSpendingData(&util.FrozenBytesTxHash, int(spend.Vout))
 	}
 
 	if conflicting {
@@ -1221,7 +1228,7 @@ func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*ut
 				continue
 			}
 
-			data, err := s.Get(ctx, &unresolvedMetaData.Hash)
+			data, err := s.Get(ctx, &unresolvedMetaData.Hash, fields...)
 			if err != nil {
 				unresolvedMetaData.Err = err
 			} else {

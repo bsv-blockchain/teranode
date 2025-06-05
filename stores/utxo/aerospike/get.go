@@ -222,7 +222,8 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	// check if frozen
 	if frozen || (spendingData != nil && bytes.Equal(spendingData.Bytes(), frozenUTXOBytes)) {
 		utxoStatus = utxo.Status_FROZEN
-		spendingData = nil
+		// this is needed in for instance conflict resolution where we check the spending data
+		spendingData = spendpkg.NewSpendingData(&util.FrozenBytesTxHash, int(spend.Vout))
 	}
 
 	if conflicting {
@@ -456,7 +457,7 @@ NEXT_BATCH_RECORD:
 		if err := batchRecord.BatchRec().Err; err != nil {
 			items[idx].Data = nil
 
-			if !util.CoinbasePlaceholderHash.Equal(items[idx].Hash) {
+			if !util.CoinbasePlaceholderHashValue.Equal(items[idx].Hash) {
 				if errors.Is(err, aerospike.ErrKeyNotFound) {
 					items[idx].Err = errors.NewTxNotFoundError("%v not found", items[idx].Hash)
 				} else {

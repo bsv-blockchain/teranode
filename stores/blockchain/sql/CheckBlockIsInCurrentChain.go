@@ -34,7 +34,11 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 
 	for i, id := range blockIDs {
 		placeholder := fmt.Sprintf("$%d", i+1)
-		blockIDPlaceholders[i] = fmt.Sprintf("SELECT %s::INTEGER AS id", placeholder)
+		if s.engine == "sqlite" || s.engine == "sqlitememory" {
+			blockIDPlaceholders[i] = fmt.Sprintf("SELECT CAST(%s as int) AS id", placeholder)
+		} else {
+			blockIDPlaceholders[i] = fmt.Sprintf("SELECT %s::INTEGER AS id", placeholder)
+		}
 
 		args = append(args, id)
 	}

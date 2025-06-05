@@ -341,12 +341,13 @@ func (st *Subtree) RemoveNodeAtIndex(index int) error {
 	st.Fees -= st.Nodes[index].Fee
 	st.SizeInBytes -= st.Nodes[index].SizeInBytes
 
+	hash := st.Nodes[index].Hash
 	st.Nodes = append(st.Nodes[:index], st.Nodes[index+1:]...)
 	st.rootHash = nil // reset rootHash
 
 	if st.nodeIndex != nil {
 		// remove the node from the node index map
-		delete(st.nodeIndex, st.Nodes[index].Hash)
+		delete(st.nodeIndex, hash)
 	}
 
 	return nil

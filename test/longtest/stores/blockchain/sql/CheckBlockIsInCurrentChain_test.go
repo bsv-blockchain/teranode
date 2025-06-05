@@ -305,3 +305,45 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		assert.True(t, isInChain)
 	})
 }
+
+func TestSQLiteCheckIfBlockIsInCurrentChain(t *testing.T) {
+	t.Run("multiple blocks in chain", func(t *testing.T) {
+		tSettings := settings.NewSettings()
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
+
+		storeURL, err := url.Parse("sqlitememory://")
+		require.NoError(t, err)
+
+		s, err := storesql.New(ulogger.TestLogger{}, storeURL, tSettings)
+		require.NoError(t, err)
+
+		// Store block1 and block2
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
+		require.NoError(t, err)
+
+		// get metas for block1 and block2
+		_, metas, err := s.GetBlockHeaders(context.Background(), block2.Hash(), 2)
+		require.NoError(t, err)
+
+		// Check if block1 and block2 are in the chain, should return true
+		blockIDs := []uint32{metas[0].ID, metas[1].ID}
+		isInChain, err := s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
+		require.NoError(t, err)
+		assert.True(t, isInChain)
+
+		// Check if any of the blockIDs are in the chain, should return true
+		blockIDs = []uint32{metas[0].ID}
+		isInChain, err = s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
+		require.NoError(t, err)
+		assert.True(t, isInChain)
+
+		// Check if any of the blockIDs are in the chain, should return false
+		blockIDs = []uint32{9999, 99999}
+		isInChain, err = s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
+		require.NoError(t, err)
+		assert.False(t, isInChain)
+	})
+}

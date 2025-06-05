@@ -323,6 +323,11 @@ func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHa
 
 	for idx, counterConflictingTxHash := range counterConflictingTxHashes {
 		g.Go(func() error {
+			// if a transaction is frozen, the counter-transaction will be the same as the coinbase placeholder
+			if counterConflictingTxHash.Equal(util.CoinbasePlaceholderHashValue) {
+				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] counter conflicting tx is frozen", txHash.String())
+			}
+
 			counterConflictingTxMeta, err := u.utxoStore.GetMeta(gCtx, &counterConflictingTxHash)
 			if err != nil {
 				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get counter conflicting tx meta", txHash.String(), err)
@@ -340,6 +345,20 @@ func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHa
 
 	if err = g.Wait(); err != nil {
 		return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get counter conflicting tx meta", txHash.String(), err)
+	}
+
+	// check whether the child transactions of the counter-conflicting transactions are frozen
+	for _, counterConflictingTxHash := range counterConflictingTxHashes {
+		childTransactionHashes, err := utxo.GetConflictingChildren(ctx, u.utxoStore, counterConflictingTxHash)
+		if err != nil {
+			return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get child transactions", txHash.String(), err)
+		}
+
+		for _, childTransactionHash := range childTransactionHashes {
+			if childTransactionHash.Equal(util.CoinbasePlaceholderHashValue) {
+				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] child transaction is frozen", txHash.String())
+			}
+		}
 	}
 
 	// check whether the counter-conflicting transactions have already been mined on our chain
@@ -550,7 +569,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			batched := u.settings.SubtreeValidation.BatchMissingTransactions
 
 			// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
-			missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, batched, failFast)
+			missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, failFast)
 			if err != nil {
 				// Don't wrap the error again, processTxMetaUsingStore returns the correctly formated error.
 				return err

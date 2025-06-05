@@ -108,7 +108,7 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 	batchID := s.batchID.Add(1)
 
 	batchPolicy := util.GetAerospikeBatchPolicy(tSettings)
-	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+	if err = s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
 		return errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to batch freeze %d aerospike utxos", batchID, len(spends), err)
 	}
 

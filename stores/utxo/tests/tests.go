@@ -151,6 +151,9 @@ func Freeze(t *testing.T, db utxostore.Store) {
 	resp, err := db.GetSpend(ctx, testSpend0)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore.Status_FROZEN), resp.Status)
+	require.NotNil(t, resp.SpendingData)
+	require.Equal(t, *resp.SpendingData.TxID, util.FrozenBytesTxHash)
+	require.Equal(t, 0, resp.SpendingData.Vin)
 
 	err = db.UnFreezeUTXOs(ctx, spends, tSettings)
 	require.NoError(t, err)

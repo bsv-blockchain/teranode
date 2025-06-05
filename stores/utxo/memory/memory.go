@@ -254,6 +254,8 @@ func (m *Memory) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResp
 	// check if frozen
 	if txMemoryData.frozenMap[*spend.UTXOHash] {
 		utxoStatus = utxo.Status_FROZEN
+		// this is needed in for instance conflict resolution where we check the spending data
+		txSpend = spendpkg.NewSpendingData(&util.FrozenBytesTxHash, int(spend.Vout))
 	}
 
 	return &utxo.SpendResponse{

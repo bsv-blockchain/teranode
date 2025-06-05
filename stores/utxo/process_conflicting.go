@@ -8,7 +8,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
-	"github.com/bitcoin-sv/teranode/test/txregistry"
 	"github.com/bitcoin-sv/teranode/tracing"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
@@ -48,16 +47,6 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 
 	defer deferFn()
 
-	// TODO - Remove this before release
-	if txregistry.GetTagByHash(&conflictingTxHashes[0]) == "txA" {
-		_ = ""
-	}
-
-	// TODO - Remove this before release
-	if txregistry.GetTagByHash(&conflictingTxHashes[0]) == "txB" {
-		_ = ""
-	}
-
 	// 0. Get the transactions, check they are conflicting
 	winningTxs := make([]*bt.Tx, len(conflictingTxHashes))
 
@@ -71,6 +60,11 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 	for idx, txHash := range conflictingTxHashes {
 		idx := idx
 		txHash := txHash
+
+		if txHash.Equal(util.CoinbasePlaceholderHashValue) {
+			// the counter-conflicting tx is frozen, we should not process anything further
+			return nil, errors.NewProcessingError("[ProcessConflicting][%s] tx is frozen", txHash.String())
+		}
 
 		g.Go(func() error {
 			txMeta, err := s.Get(gCtx, &txHash, fields.Tx, fields.BlockIDs, fields.Conflicting)
@@ -199,6 +193,11 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 
 	defer deferFn()
 
+	if hash.Equal(util.CoinbasePlaceholderHashValue) {
+		// skip the coinbase placeholder hash
+		return nil, nil
+	}
+
 	txMeta, err := s.Get(ctx, &hash, fields.Utxos, fields.ConflictingChildren)
 	if err != nil {
 		return nil, err
@@ -311,6 +310,10 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 				}
 
 				for _, childHash := range childHashes {
+					if childHash.Equal(util.FrozenBytesTxHash) {
+						return nil, errors.NewProcessingError("[GetCounterConflictingTxHashes][%s] tx has frozen child", spendingTxID.String())
+					}
+
 					counterConflictingMap[childHash] = struct{}{}
 				}
 			}

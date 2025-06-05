@@ -550,18 +550,26 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	}
 }
 
-func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx) *bt.Tx {
+func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, useInput ...uint64) *bt.Tx {
 	tx := bt.NewTx()
 
-	useParentOutput, _ := rand.Int(rand.Reader, big.NewInt(int64(len(parentTx.Outputs))))
+	parentOutput := uint64(0)
 
-	if useParentOutput.Int64() == int64(len(parentTx.Outputs)-1) {
-		// if the last input was selected (the OP_RETURN output), use the first output instead
-		useParentOutput = big.NewInt(0)
+	if len(useInput) > 0 {
+		parentOutput = useInput[0]
+	} else {
+		useParentOutput, _ := rand.Int(rand.Reader, big.NewInt(int64(len(parentTx.Outputs))))
+
+		if useParentOutput.Int64() == int64(len(parentTx.Outputs)-1) {
+			// if the last input was selected (the OP_RETURN output), use the first output instead
+			useParentOutput = big.NewInt(0)
+		}
+
+		parentOutput = useParentOutput.Uint64()
 	}
 
 	// convert to uint32
-	useParentOutputUint32, err := util.SafeUint64ToUint32(useParentOutput.Uint64())
+	useParentOutputUint32, err := util.SafeUint64ToUint32(parentOutput)
 	require.NoError(t, err)
 
 	err = tx.FromUTXOs(&bt.UTXO{
@@ -829,7 +837,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *ut
 	err = subtreeStore.Set(
 		ctx,
 		subtree.RootHash()[:],
-		fileformat.FileTypeSubtree,
+		fileformat.FileTypeSubtreeToCheck,
 		subtreeBytes,
 		options.WithDeleteAt(100),
 		options.WithAllowOverwrite(true),

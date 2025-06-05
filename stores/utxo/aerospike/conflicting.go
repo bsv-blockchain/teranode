@@ -47,6 +47,11 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		idx := idx
 		txHash := txHash
 
+		if txHash.Equal(util.CoinbasePlaceholderHashValue) {
+			// skip coinbase placeholder
+			continue
+		}
+
 		g.Go(func() error {
 			txMeta, err := s.get(gCtx, &txHash, []fields.FieldName{fields.Tx, fields.ConflictingChildren, fields.Utxos})
 			if err != nil {
