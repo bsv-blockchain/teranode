@@ -27,6 +27,7 @@
 | `teranode_asset_http_get_best_block_header` | CounterVec | Number of Get best block header ops |
 | `teranode_asset_http_get_block`             | CounterVec | Number of Get block ops             |
 | `teranode_asset_http_get_block_legacy`      | CounterVec | Number of Get legacy block ops      |
+| `teranode_asset_http_get_subtree_data`      | CounterVec | Number of Get subtree data ops      |
 | `teranode_asset_http_get_last_n_blocks`     | CounterVec | Number of Get last N blocks ops     |
 | `teranode_asset_http_get_utxo`              | CounterVec | Number of Get UTXO ops              |
 
@@ -40,7 +41,7 @@
 | `teranode_blockassembly_get_mining_candidate_duration`        | Histogram | Histogram of GetMiningCandidate in the blockassembly service                     |
 | `teranode_blockassembly_submit_mining_solution_ch`            | Gauge     | Number of items in the SubmitMiningSolution channel in the blockassembly service |
 | `teranode_blockassembly_submit_mining_solution`               | Histogram | Histogram of SubmitMiningSolution in the blockassembly service                   |
-| `teranode_blockassembly_update_subtrees_ttl`                  | Histogram | Histogram of updating subtrees TTL in the blockassembly service                  |
+| `teranode_blockassembly_update_subtrees_dah`                  | Histogram | Histogram of updating subtrees DAH in the blockassembly service                  |
 | `teranode_blockassembly_block_assembler_get_mining_candidate` | Counter   | Number of calls to GetMiningCandidate in the block assembler                     |
 | `teranode_blockassembly_subtree_created`                      | Counter   | Number of subtrees created in the block assembler                                |
 | `teranode_blockassembly_transactions`                         | Gauge     | Number of transactions currently in the block assembler subtree processor        |
@@ -54,6 +55,7 @@
 | `teranode_blockassembly_best_block_height`                    | Gauge     | Best block height in block assembly                                              |
 | `teranode_blockassembly_current_block_height`                 | Gauge     | Current block height in block assembly                                           |
 | `teranode_blockassembly_generate_blocks`                      | Histogram | Histogram of generating blocks in block assembler                                |
+| `teranode_blockassembly_current_state`                       | Gauge     | Current state of the block assembly process                                     |
 
 
 ## Block Service Metrics
@@ -89,6 +91,7 @@
 | `teranode_blockchain_get_get_block_headers`             | Histogram | Histogram of GetBlockHeaders calls to the blockchain service            |
 | `teranode_blockchain_get_get_block_headers_from_height` | Histogram | Histogram of GetBlockHeadersFromHeight calls to the blockchain service  |
 | `teranode_blockchain_get_get_block_headers_by_height`   | Histogram | Histogram of GetBlockHeadersByHeight calls to the blockchain service    |
+| `teranode_blockchain_get_block_is_mined`                | Histogram | Histogram of GetBlockIsMined calls to the blockchain service            |
 | `teranode_blockchain_subscribe`                         | Histogram | Histogram of Subscribe calls to the blockchain service                  |
 | `teranode_blockchain_get_state`                         | Histogram | Histogram of GetState calls to the blockchain service                   |
 | `teranode_blockchain_set_state`                         | Histogram | Histogram of SetState calls to the blockchain service                   |
@@ -179,9 +182,9 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_legacy_netsync_process_block`                     | Histogram | The time taken to process a block                         |
 | `teranode_legacy_netsync_prepare_subtrees`                  | Histogram | The time taken to prepare the subtrees                    |
 | `teranode_legacy_netsync_validate_transactions_legacy_mode` | Histogram | The time taken to validate transactions in legacy mode    |
-| `teranode_legacy_netsync_extend_transactions`               | Histogram | The time taken to extend transactions                     |
 | `teranode_legacy_netsync_pre_validate_transactions`         | Histogram | The time taken to pre-validate transactions               |
 | `teranode_legacy_netsync_validate_transactions`             | Histogram | The time taken to validate transactions                   |
+| `teranode_legacy_netsync_extend_transactions`               | Histogram | The time taken to extend transactions                     |
 | `teranode_legacy_netsync_create_utxos`                      | Histogram | The time taken to create UTXOs                            |
 | `teranode_legacy_netsync_block_tx_size`                     | Histogram | The size of the transactions in the block being processed |
 | `teranode_legacy_netsync_block_tx_nr_inputs`                | Histogram | The number of inputs in the block being processed         |
@@ -191,12 +194,21 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_legacy_netsync_orphans`                           | Gauge     | The number of orphan transactions                         |
 | `teranode_legacy_netsync_orphan_time`                       | Histogram | The time taken to process an orphan transaction           |
 
+
 ## Propagation Service Metrics
 
-| Metric Name                                 | Type      | Description                                                          |
-|---------------------------------------------|-----------|----------------------------------------------------------------------|
-| `teranode_propagation_health`               | Histogram | Histogram of calls to the health endpoint of the propagation service |
-| `teranode_propagation_transactions`         | Histogram | Histogram of transaction processing by the propagation service       |
+| Metric Name                                      | Type      | Description                                                           |
+|--------------------------------------------------|-----------|-----------------------------------------------------------------------|
+| `teranode_propagation_health`                    | Histogram | Histogram of calls to the health endpoint of the propagation service  |
+| `teranode_propagation_transactions`              | Histogram | Histogram of transaction processing by the propagation service        |
+| `teranode_propagation_internal_tx_count`         | Counter   | Count of internal transactions processed by the propagation service   |
+| `teranode_propagation_transaction_notifications` | Histogram | Histogram of transaction notifications by the propagation service     |
+| `teranode_propagation_submit_subtree`            | Histogram | Histogram of subtree submissions by the propagation service          |
+| `teranode_propagation_reject_tx`                 | Counter   | Count of rejected transactions by the propagation service             |
+| `teranode_propagation_tx_rejected`               | Counter   | Count of transactions rejected by the propagation service             |
+| `teranode_propagation_peer_stats`                | Gauge     | Gauge of peer statistics for the propagation service                   |
+| `teranode_propagation_peer_latency`              | Histogram | Histogram of peer latency for the propagation service                |
+| `teranode_propagation_current_state`             | Gauge     | Gauge of the current state of the propagation service                |
 | `teranode_propagation_transactions_batch`   | Histogram | Histogram of transaction processing by the propagation service       |
 | `teranode_propagation_transactions_size`    | Histogram | Size of transactions processed by the propagation service            |
 | `teranode_propagation_invalid_transactions` | Counter   | Number of transactions found invalid by the propagation service      |
@@ -225,6 +237,7 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_rpc_reconsider_block`       | Histogram | Histogram of calls to handleReconsiderBlock in the rpc service      |
 | `teranode_rpc_help`                   | Histogram | Histogram of calls to handleHelp in the rpc service                 |
 | `teranode_rpc_set_ban`                | Histogram | Histogram of calls to handleSetBan in the rpc service               |
+| `teranode_rpc_is_banned`              | Histogram | Histogram of calls to handleIsBanned in the rpc service             |
 | `teranode_rpc_get_mining_info`        | Histogram | Histogram of calls to handleGetMiningInfo in the rpc service        |
 | `teranode_rpc_list_banned`            | Histogram | Histogram of calls to handleListBanned in the rpc service           |
 | `teranode_rpc_clear_banned`           | Histogram | Histogram of calls to handleClearBanned in the rpc service          |
@@ -250,16 +263,18 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 
 ## Validator Service Metrics
 
-| Metric Name                                        | Type      | Description                                                   |
-|----------------------------------------------------|-----------|---------------------------------------------------------------|
-| `teranode_validator_health`                        | Counter   | Number of calls to the health endpoint                        |
-| `teranode_validator_invalid_transactions`          | Counter   | Number of transactions found invalid by the validator service |
-| `teranode_validator_transactions_validate_total`   | Histogram | Histogram of total transaction validation                     |
-| `teranode_validator_transactions_validate`         | Histogram | Histogram of transaction validation                           |
-| `teranode_validator_transactions_validate_batch`   | Histogram | Histogram of transaction batch validation                     |
-| `teranode_validator_transactions_spend_utxos`      | Histogram | Histogram of transaction spending utxos                       |
-| `teranode_validator_transactions`                  | Histogram | Histogram of transaction processing by the validator service  |
-| `teranode_validator_transactions_size`             | Histogram | Size of transactions processed by the validator service       |
+| Metric Name                                | Type      | Description                                                             |
+|--------------------------------------------|-----------|-------------------------------------------------------------------------|
+| `teranode_validator_health`                | Counter   | Number of calls to the health endpoint                                  |
+| `teranode_validator_transaction`           | Histogram | Histogram of transaction validation by the validator service            |
+| `teranode_validator_transactions`          | Histogram | Histogram of batch transaction validation by the validator service      |
+| `teranode_validator_transactions_deadline` | Histogram | Histogram of batch transaction validation by deadline                   |
+| `teranode_validator_nblocks`               | Gauge     | Number of blocks processed by the validator service                     |
+| `teranode_validator_transactions_size`     | Histogram | Size of transactions being validated by the validator service           |
+| `teranode_validator_transactions_extended` | Histogram | The number of transactions extended per call to the validator service   |
+| `teranode_validator_transactions_validate_scripts` | Histogram | Time taken to validate scripts in transactions                         |
+| `teranode_validator_transactions_input_block_heights` | Histogram | Distribution of input block heights in transactions                    |
+| `teranode_validator_transactions_2phase_commit` | Histogram | Time taken for two-phase commit of transactions                        |
 | `teranode_validator_send_to_block_assembly`        | Histogram | Histogram of sending transactions to block assembly           |
 | `teranode_validator_send_to_blockvalidation_kafka` | Histogram | Histogram of sending transactions to block validation kafka   |
 | `teranode_validator_send_to_p2p_kafka`             | Histogram | Histogram of sending rejected transactions to p2p kafka       |
@@ -303,6 +318,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_aerospike_utxo_spend_batch_size`        | Histogram  | Size of utxo spend batch                                        |
 | `teranode_aerospike_get_external`                 | Histogram  | Duration of getting an external transaction from the blob store |
 | `teranode_aerospike_set_external`                 | Histogram  | Duration of setting an external transaction to the blob store   |
+| `teranode_aerospike_txmeta_get_counter_conflicting` | Counter    | Counter of conflicting TxMeta GET operations using Aerospike    |
+| `teranode_aerospike_txmeta_get_conflicting`        | Histogram  | Histogram of conflicting TxMeta GET operations using Aerospike  |
 
 ## SQL Service Metrics
 
@@ -313,6 +330,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_sql_utxo_reset`  | Counter    | Number of utxo reset calls done to sql  |
 | `teranode_sql_utxo_delete` | Counter    | Number of utxo delete calls done to sql |
 | `teranode_sql_utxo_errors` | CounterVec | Number of utxo errors                   |
+| `teranode_sql_utxo_get_counter_conflicting` | Counter | Counter of conflicting UTXO GET operations using SQL |
+| `teranode_sql_utxo_get_conflicting` | Histogram | Histogram of conflicting UTXO GET operations using SQL |
 
 
 ## Subtree Processor Service Metrics
@@ -330,3 +349,5 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_subtreeprocessor_transaction_map_duration`     | Histogram | Duration of creating transaction map in subtree processor         |
 | `teranode_subtreeprocessor_remove_tx`                    | Histogram | Duration of removing tx in subtree processor                      |
 | `teranode_subtreeprocessor_reset`                        | Histogram | Duration of resetting subtree processor                           |
+| `teranode_subtreeprocessor_dynamic_subtree_size`         | Gauge     | Size of the dynamic subtree in the subtree processor              |
+| `teranode_subtreeprocessor_current_state`                | Gauge     | Current state of the subtree processor                           |
