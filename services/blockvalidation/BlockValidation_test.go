@@ -2946,7 +2946,7 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats(), false)
 	require.NoError(t, err)
 
 	// Wait for the goroutine to call InvalidateBlock

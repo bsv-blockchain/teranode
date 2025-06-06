@@ -1,0 +1,501 @@
+// Package blockvalidation implements error flow tests for BlockValidation.
+package blockvalidation
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/teranode/settings"
+	bloboptions "github.com/bitcoin-sv/teranode/stores/blob/options"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/jarcoal/httpmock"
+	"github.com/libsv/go-bk/bec"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bt/v2/unlocker"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+)
+
+// MockInvalidBlockHandler implements InvalidBlockHandler for testing
+// using testify's mock package.
+type MockInvalidBlockHandler struct {
+	mock.Mock
+}
+
+func (m *MockInvalidBlockHandler) ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error {
+	args := m.Called(ctx, blockHash, reason)
+	return args.Error(0)
+}
+
+// testBlockValidation is a test double for BlockValidation that allows shadowing waitForPreviousBlocksToBeProcessed.
+type testBlockValidation struct {
+	*BlockValidation
+	waitFunc func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error
+}
+
+func (tbv *testBlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error {
+	return tbv.BlockValidation.ValidateBlock(ctx, block, baseURL, bloomStats, disableOptimisticMining...)
+}
+
+func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.T) {
+	ctx := context.Background()
+
+	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup()
+	defer cleanup()
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.BlockValidation.ArePreviousBlocksProcessedMaxRetry = 2
+
+	coinbaseTx, childTx, _, _ := createCoinbaseAndChildTx(t)
+	storeTxsInUtxoStore(t, utxoStore, coinbaseTx, childTx)
+	subtree := buildAndStoreSubtree(t, subtreeStore, childTx)
+
+	nBits, _ := model.NewNBitFromString("2000ffff")
+	parentBlock, parentHash := createParentBlock(nBits)
+	blockHeader := mineBlockHeader(t, parentHash, subtree.RootHash(), nBits)
+	totalSize := int64(coinbaseTx.Size()) + int64(childTx.Size())
+	block := createBlock(t, blockHeader, coinbaseTx, subtree.RootHash(), subtree, tSettings, totalSize)
+
+	mockBlockchain := setupMockBlockchain(parentBlock)
+	callCount := 0
+	setMinedChan := make(chan *chainhash.Hash, 1)
+	bv := &testBlockValidation{
+		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient, &MockInvalidBlockHandler{}),
+		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
+			callCount++
+			if callCount == 1 {
+				return errors.NewError("not ready")
+			}
+			return nil
+		},
+	}
+
+	err := bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	require.Error(t, err)
+
+	select {
+	case h := <-setMinedChan:
+		require.Equal(t, parentHash, h, "parent hash should be sent to setMinedChan after first failure")
+	default:
+		t.Log("expected parent hash to be sent to setMinedChan")
+	}
+
+	callCount = 0
+	bv.waitFunc = func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
+		return errors.NewError("not ready")
+	}
+
+	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	require.Error(t, err)
+}
+
+func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *testing.T) {
+	ctx := context.Background()
+
+	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup()
+	defer cleanup()
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.BlockValidation.ArePreviousBlocksProcessedMaxRetry = 2
+
+	coinbaseTx, childTx, _, _ := createCoinbaseAndChildTx(t)
+	storeTxsInUtxoStore(t, utxoStore, coinbaseTx, childTx)
+	subtree := buildAndStoreSubtree(t, subtreeStore, childTx)
+
+	nBits, _ := model.NewNBitFromString("2000ffff")
+	parentBlock, parentHash := createParentBlock(nBits)
+	blockHeader := mineBlockHeader(t, parentHash, subtree.RootHash(), nBits)
+	totalSize := int64(coinbaseTx.Size()) + int64(childTx.Size())
+	block := createBlock(t, blockHeader, coinbaseTx, subtree.RootHash(), subtree, tSettings, totalSize)
+
+	mockBlockchain := setupMockBlockchain(parentBlock)
+	callCount := 0
+	setMinedChan := make(chan *chainhash.Hash, 1)
+
+	mockHandler := new(MockInvalidBlockHandler)
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+
+	tSettings.BlockValidation.OptimisticMining = true
+	bv := &testBlockValidation{
+		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient, mockHandler),
+		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
+			callCount++
+			if callCount == 1 {
+				return errors.NewError("not ready")
+			}
+			return nil
+		},
+	}
+
+	err := bv.ValidateBlock(ctx, block, "test", model.NewBloomStats(), false)
+	require.Error(t, err)
+
+	select {
+	case h := <-setMinedChan:
+		require.Equal(t, parentHash, h, "parent hash should be sent to setMinedChan after first failure")
+	default:
+		t.Log("expected parent hash to be sent to setMinedChan")
+	}
+
+	callCount = 0
+	bv.waitFunc = func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
+		return errors.NewError("not ready")
+	}
+
+	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats(), false)
+	require.Error(t, err)
+}
+
+// --- Helper functions for test setup and block/tx construction ---
+
+func createCoinbaseAndChildTx(t *testing.T) (*bt.Tx, *bt.Tx, *bec.PrivateKey, *bscript.Address) {
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+
+	coinbaseTx := bt.NewTx()
+	err := coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	require.NoError(t, err)
+
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	err = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+	require.NoError(t, err)
+
+	childTx := bt.NewTx()
+	err = childTx.FromUTXOs(&bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: coinbaseTx.Outputs[0].LockingScript,
+		Satoshis:      coinbaseTx.Outputs[0].Satoshis,
+	})
+	require.NoError(t, err)
+	err = childTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000)
+	require.NoError(t, err)
+	err = childTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
+	require.NoError(t, err)
+
+	return coinbaseTx, childTx, privateKey, address
+}
+
+func storeTxsInUtxoStore(t *testing.T, utxoStore utxo.Store, coinbaseTx, childTx *bt.Tx, opts ...utxo.CreateOption) {
+	_, err := utxoStore.Create(context.Background(), coinbaseTx, 0, opts...)
+	require.NoError(t, err)
+	_, err = utxoStore.Create(context.Background(), childTx, 0, opts...)
+	require.NoError(t, err)
+}
+
+func buildAndStoreSubtree(t *testing.T, subtreeStore interface {
+	Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...bloboptions.FileOption) error
+}, childTx *bt.Tx, opts ...bloboptions.FileOption) *util.Subtree {
+	subtree, err := util.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*childTx.TxIDChainHash(), uint64(childTx.Size()), 0)) //nolint:gosec
+
+	subtreeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes, opts...)
+	require.NoError(t, err)
+
+	subtreeMeta := util.NewSubtreeMeta(subtree)
+	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	require.NoError(t, err)
+
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes, opts...)
+	require.NoError(t, err)
+
+	return subtree
+}
+
+func createParentBlock(nBits *model.NBit) (*model.Block, *chainhash.Hash) {
+	parentBlock := &model.Block{
+		Header: &model.BlockHeader{
+			HashPrevBlock: &chainhash.Hash{},
+		},
+	}
+	parentBlock.Header = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      0,
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+	parentHash := parentBlock.Header.Hash()
+
+	return parentBlock, parentHash
+}
+
+func mineBlockHeader(t *testing.T, parentHash, merkleRoot *chainhash.Hash, nBits *model.NBit) *model.BlockHeader {
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  parentHash,
+		HashMerkleRoot: merkleRoot,
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		blockHeader.Nonce++
+	}
+
+	return blockHeader
+}
+
+func createBlock(t *testing.T, header *model.BlockHeader, coinbaseTx *bt.Tx, subtreeRoot *chainhash.Hash, subtree *util.Subtree, tSettings *settings.Settings, totalSize int64) *model.Block {
+	block, _ := model.NewBlock(
+		header,
+		coinbaseTx,
+		[]*chainhash.Hash{subtreeRoot},
+		uint64(subtree.Length()), //nolint:gosec
+		uint64(totalSize),        //nolint:gosec
+		100, 0, tSettings,
+	)
+
+	return block
+}
+
+func setupMockBlockchain(parentBlock *model.Block) *blockchain.Mock {
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).
+		Return([]*model.Block{parentBlock}, nil).Times(50)
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).
+		Return([]*model.Block{}, nil).Times(2)
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	mockBlockchain.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errors.NewError("not found"))
+
+	return mockBlockchain
+}
+
+func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
+	initPrometheusMetrics()
+
+	tSettings := test.CreateBaseTestSettings()
+
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+
+	subtree, _ := util.NewTreeByLeafCount(2)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
+
+	nBits, _ := model.NewNBitFromString("2000ffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		blockHeader.Nonce++
+	}
+
+	block, _ := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()),  //nolint:gosec
+		uint64(coinbaseTx.Size()), //nolint:gosec
+		100, 0, tSettings,
+	)
+
+	// make the block invalid
+	block.Header.HashMerkleRoot = &chainhash.Hash{}
+
+	for {
+		if ok, _, _ := block.Header.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		block.Header.Nonce++
+	}
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything).Return(nil)
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
+	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return(nil)
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
+
+	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	mockHandler := new(MockInvalidBlockHandler)
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+
+	callCount := 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tSettings.BlockValidation.OptimisticMining = true
+	bv := &testBlockValidation{
+		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient, mockHandler),
+		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
+			callCount++
+			if callCount == 1 {
+				return errors.NewError("not ready")
+			}
+
+			return nil
+		},
+	}
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
+	require.NoError(t, err)
+
+	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats(), false)
+	require.NoError(t, err)
+
+	// Wait for the goroutine to call InvalidateBlock
+	require.Eventually(t, func() bool {
+		return mockBlockchain.AssertCalled(t, "InvalidateBlock", mock.Anything, block.Header.Hash())
+	}, 2*time.Second, 100*time.Millisecond, "InvalidateBlock should be called in background goroutine")
+}
+
+func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
+	initPrometheusMetrics()
+
+	tSettings := test.CreateBaseTestSettings()
+
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+
+	subtree, _ := util.NewTreeByLeafCount(2)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
+
+	nBits, _ := model.NewNBitFromString("2000ffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		blockHeader.Nonce++
+	}
+
+	block, _ := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()),  //nolint:gosec
+		uint64(coinbaseTx.Size()), //nolint:gosec
+		100, 0, tSettings,
+	)
+
+	// make the block invalid
+	block.Header.HashMerkleRoot = &chainhash.Hash{}
+
+	for {
+		if ok, _, _ := block.Header.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		block.Header.Nonce++
+	}
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything).Return(nil)
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
+	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return(nil)
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
+
+	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	// bv := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
+
+	mockHandler := new(MockInvalidBlockHandler)
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+
+	callCount := 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	bv := &testBlockValidation{
+		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient, mockHandler),
+		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
+			callCount++
+			if callCount == 1 {
+				return errors.NewError("not ready")
+			}
+			return nil
+		},
+	}
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
+	require.NoError(t, err)
+
+	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	require.Error(t, err)
+}

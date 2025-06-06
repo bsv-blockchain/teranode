@@ -331,7 +331,7 @@ lint:
 	golangci-lint run ./... --new-from-rev origin/main
 
 # lint-new will only check only your unstaged/untracked changes (not committed changes), or fallback to check last commit if no changes in checkout
-# It is useful for quickly checking that your current, uncommitted work doesn’t introduce new lint errors.
+# It is useful for quickly checking that your current, uncommitted work doesn't introduce new lint errors.
 .PHONY: lint-new
 lint-new:
 	golangci-lint run ./... --new
