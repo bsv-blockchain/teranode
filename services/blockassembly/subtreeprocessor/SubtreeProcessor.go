@@ -904,8 +904,10 @@ func (stp *SubtreeProcessor) addNode(node util.SubtreeNode, parents *meta.TxInpo
 
 	// parent can only be set to nil, when they are already in the map
 	if parents == nil {
-		if _, ok := stp.currentTxMap.Get(node.Hash); !ok {
+		if nilParents, ok := stp.currentTxMap.Get(node.Hash); !ok {
 			return errors.NewProcessingError("error adding node to subtree: txInpoints not found in currentTxMap for %s", node.Hash.String())
+		} else {
+			parents = &nilParents
 		}
 	} else {
 		stp.currentTxMap.Set(node.Hash, *parents)
@@ -1426,9 +1428,7 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 	// add all the transactions from the previous state
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
-			if !node.Hash.Equal(*util.CoinbasePlaceholderHash) {
-				_ = stp.addNode(node, nil, true)
-			}
+			_ = stp.addNode(node, nil, true)
 		}
 	}
 

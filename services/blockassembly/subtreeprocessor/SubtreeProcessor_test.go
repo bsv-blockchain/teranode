@@ -391,7 +391,10 @@ func TestMoveForwardBlock(t *testing.T) {
 	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
-	stp, _ := NewSubtreeProcessor(context.Background(), logger, settings, subtreeStore, nil, utxosStore, newSubtreeChan)
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	stp, _ := NewSubtreeProcessor(context.Background(), logger, settings, subtreeStore, blockchainClient, utxosStore, newSubtreeChan)
 
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -446,7 +449,7 @@ func TestMoveForwardBlock(t *testing.T) {
 	assert.Equal(t, 1, stp.currentSubtree.Length())
 
 	// check the currentTxMap, it will have 1 less than the tx count, which has the coinbase placeholder
-	assert.Equal(t, stp.TxCount(), uint64(stp.currentTxMap.Length())+1) //nolint:gosec
+	assert.Equal(t, int(stp.TxCount()), stp.currentTxMap.Length()+1) // nolint:gosec
 }
 
 // TestMoveForwardBlock tests the moveForwardBlock method
@@ -469,7 +472,10 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	tSettings.BlockAssembly.DoubleSpendWindow = 2 * time.Second
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 32
 
-	subtreeProcessor, err := NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, nil, utxosStore, nil)
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	subtreeProcessor, err := NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxosStore, nil)
 	require.NoError(t, err)
 
 	hash, _ := chainhash.NewHashFromStr("6affcabb2013261e764a5d4286b463b11127f4fd1de05368351530ddb3f19942")
@@ -527,7 +533,10 @@ func TestIncompleteSubtreeMoveForwardBlock(t *testing.T) {
 	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
-	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, nil, utxosStore, newSubtreeChan)
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, blockchainClient, utxosStore, newSubtreeChan)
 
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -613,7 +622,10 @@ func TestSubtreeMoveForwardBlockNewCurrent(t *testing.T) {
 	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
-	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, nil, utxosStore, newSubtreeChan)
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, blockchainClient, utxosStore, newSubtreeChan)
 
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -986,7 +998,10 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		settings := test.CreateBaseTestSettings()
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
-		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, nil, utxosStore, newSubtreeChan)
+		blockchainClient := &blockchain.Mock{}
+		blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, blockchainClient, utxosStore, newSubtreeChan)
 
 		for _, txHash := range txHashes {
 			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
