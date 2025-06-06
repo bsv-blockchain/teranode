@@ -137,7 +137,7 @@ install-tools:
 # make test will run all tests in the project except for the ones in the test directory
 .PHONY: test
 test:
-	SETTINGS_CONTEXT=test go list ./... | grep -v github.com/bitcoin-sv/teranode/test | xargs go test -race -tags "testtxmetacache" -count=1 -coverprofile=coverage.out 2>&1 | grep -v "ld: warning:"
+	set -o pipefail && SETTINGS_CONTEXT=test go list ./... | grep -v github.com/bitcoin-sv/teranode/test | xargs go test -race -tags "testtxmetacache" -count=1 -coverprofile=coverage.out 2>&1 | grep -v "ld: warning:"
 
 # run tests in the test/longtest directory
 .PHONY: longtest

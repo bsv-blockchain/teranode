@@ -72,8 +72,7 @@ jobs:
 
   smoketest:
     name: smoketest
-    runs-on: ubuntu-latest
-    continue-on-error: true
+    runs-on: teranode-runner
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
