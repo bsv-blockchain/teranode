@@ -6,8 +6,10 @@
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
     - [2.1. Starting the Propagation Service](#21-starting-the-propagation-service)
-    - [2.1.1 Validator Integration](#211-validator-integration)
+        - [2.1.1 Validator Integration](#211-validator-integration)
     - [2.2. Propagating Transactions](#22-propagating-transactions)
+    - [2.3. Transaction Processing Workflow](#23-transaction-processing-workflow)
+    - [2.4. Error Handling](#24-error-handling)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -198,7 +200,7 @@ The Propagation service serves as the transaction intake and distribution system
 | `propagation_alwaysUseHTTP` | bool | false | Forces using HTTP instead of Kafka for transaction validation | Affects how transactions are sent to the validator service |
 | `validator_httpAddress` | url | null | URL for validator HTTP API | Used as fallback for large transactions exceeding Kafka limits |
 
-## Configuration Interactions and Dependencies
+### 8.4 Configuration Interactions and Dependencies
 
 ### Transaction Ingestion Paths
 
@@ -232,51 +234,6 @@ The transaction processing pipeline uses batching to optimize throughput, contro
 - `propagation_sendBatchTimeout`: Controls how long to wait for a batch to fill before processing
 
 These settings should be tuned together based on expected transaction volume and size characteristics. Higher batch sizes improve throughput but increase latency, while shorter timeouts decrease latency but may result in smaller, less efficient batches.
-
-## Deployment Recommendations
-
-### Development Environment
-
-For development and testing, prioritize ease of debugging:
-
-```properties
-propagation_httpListenAddress=:9007         # Enable HTTP API on localhost port 9007
-propagation_httpRateLimit=0                # Disable rate limiting for testing
-validator.useLocalValidator=false          # Use separate validator service for easier debugging
-propagation_alwaysUseHTTP=true            # Use direct HTTP instead of Kafka for simplicity
-```
-
-### Production Environment
-
-For production deployments, prioritize performance and reliability:
-
-```properties
-propagation_grpcListenAddress=:9907        # Enable gRPC API on standard port
-propagation_httpListenAddress=:9007        # Enable HTTP API on standard port
-propagation_httpRateLimit=1024             # Apply reasonable rate limiting
-validator.useLocalValidator=true           # Use embedded validator for performance
-propagation_sendBatchSize=250              # Increase batch size for throughput
-ipv6_addresses=ff02::1:1,ff02::1:2         # Enable multicast reception on multiple groups
-ipv6_interface=eth0                        # Use appropriate network interface
-```
-
-### High-Volume Environment
-
-For environments handling high transaction volumes:
-
-```properties
-propagation_grpcListenAddress=:9907        # Enable gRPC API on standard port
-propagation_httpListenAddress=:9007        # Enable HTTP API on standard port
-propagation_httpRateLimit=5000             # Higher rate limit for high volume
-validator.useLocalValidator=true           # Use embedded validator for performance
-propagation_sendBatchSize=500              # Higher batch size for throughput
-propagation_sendBatchTimeout=3             # Lower timeout for more consistent processing
-propagation_grpcMaxConnectionAge=60s       # More frequent connection cycling for load balancing
-```
-
-> **Note**: These recommendations should be adjusted based on your specific hardware capabilities, network conditions, and observed performance metrics. Regular monitoring and tuning are essential for optimal performance.
-
-
 
 ## 9. Other Resources
 

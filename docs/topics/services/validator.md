@@ -8,10 +8,12 @@
     - [2.1. Starting the Validator as a service](#21-starting-the-validator-as-a-service)
     - [2.2. Receiving Transaction Validation Requests](#22-receiving-transaction-validation-requests)
     - [2.3. Validating the Transaction](#23-validating-the-transaction)
+        - [2.3.1. Consensus Rules vs Policy Checks](#231-consensus-rules-vs-policy-checks)
     - [2.4. Script Verification](#24-script-verification)
     - [2.5. Error Handling and Transaction Rejection](#25-error-handling-and-transaction-rejection)
     - [2.6. Concurrent Processing](#26-concurrent-processing)
     - [2.7. Post-validation: Updating stores and propagating the transaction](#27-post-validation-updating-stores-and-propagating-the-transaction)
+        - [2.7.1. Two-Phase Transaction Commit Process](#271-two-phase-transaction-commit-process)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -266,6 +268,55 @@ The above represents an implementation of the core Teranode validation rules:
     - A node must not be able to spend a confiscated (re-assigned) transaction until 1,000 blocks after the transaction was re-assigned (confiscation maturity). The difference between block height and height at which the transaction was re-assigned must not be less than one thousand.
 
 
+#### 2.3.1. Consensus Rules vs Policy Checks
+
+In Bitcoin transaction validation, there are two distinct types of rules:
+
+1. **Consensus Rules**: Mandatory rules that all nodes must enforce to maintain network consensus. Transactions violating consensus rules are always rejected. These include:
+   - Transaction structure and formatting
+   - Double-spend prevention
+   - Input and output value constraints
+   - Script execution validity
+
+2. **Policy Rules**: Node-specific preferences that determine which valid transactions to accept, relay, or mine. Policy rules can differ between nodes without breaking consensus. These include:
+   - Minimum transaction fees
+   - Maximum transaction size
+   - Script complexity limits
+   - Dust output thresholds
+
+The TX Validator implements both types of rules, but provides the ability to skip policy checks when appropriate through the `SkipPolicyChecks` option.
+
+##### Skip Policy Checks Feature
+
+The `SkipPolicyChecks` feature allows Teranode to validate transactions while bypassing certain policy-based validations. When enabled, the validator will:
+
+- Skip transaction size policy checks
+- Skip minimum fee requirements
+- Apply consensus-only script verification rules
+- Continue enforcing all consensus rules
+
+This feature is particularly important when validating transactions that:
+- Are part of blocks mined by other miners (which have already been validated through proof-of-work)
+- Need to be accepted regardless of local policy preferences
+- Have already been confirmed on the blockchain
+
+```go
+// Example of policy checks being conditionally applied:
+if !validationOptions.SkipPolicyChecks {
+    if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
+        return err
+    }
+}
+```
+
+When validating transactions from blocks mined by other nodes, policy checks should be skipped because these blocks are already valid due to proof-of-work, and the transactions must be accepted to maintain consensus, even if they don't meet local policy preferences.
+
+##### Skip Policy Checks - Usage
+
+To use this feature:
+- When directly calling the validator: Use the `WithSkipPolicyChecks(true)` option
+- When using the gRPC API endpoint: Set the `skip_policy_checks` field to `true` in the `ValidateTransactionRequest` message
+- In services like Subtree Validation: The option is applied automatically when validating block transactions
 
 ### 2.4. Script Verification
 
@@ -390,7 +441,7 @@ When the Transaction Validator Service identifies an invalid transaction, it emp
     - Other services in the system, such as the P2P Service or any component interested in invalid transactions, can subscribe to this Kafka topic.
     - By consuming messages from this topic, these services receive notifications about rejected transactions.
 
-#### 2.4.1. Two-Phase Transaction Commit Process
+#### 2.7.1. Two-Phase Transaction Commit Process
 
 The Validator implements a two-phase commit process for transaction creation and addition to block assembly:
 
@@ -649,101 +700,6 @@ These settings help with troubleshooting and observability:
 
 - `validator_verbose_debug` increases log verbosity, useful for diagnosing issues but increases log volume
 - `fsm_state_restore` enables recovering from previous state after restart, important for maintaining continuity
-
-### 8.8 Deployment Recommendations
-
-#### Development Environment
-
-```
-useLocalValidator=false
-validator_grpcAddress=localhost:8081
-validator_grpcListenAddress=:8081
-validator_httpListenAddress=:8082
-validator_httpRateLimit=1024
-validator_sendBatchSize=10
-validator_sendBatchTimeout=1
-validator_sendBatchWorkers=4
-validator_verbose_debug=true
-```
-
-**Rationale**: Development environments benefit from the remote validator deployment model for easier debugging and independent testing. Smaller batch sizes and timeouts improve responsiveness during development, while debug logging provides more visibility.
-
-#### Production Environment
-
-```
-useLocalValidator=true
-validator_sendBatchSize=100
-validator_sendBatchTimeout=2
-validator_sendBatchWorkers=10
-validator_blockvalidation_maxRetries=5
-validator_verbose_debug=false
-validator_kafka_maxMessageBytes=1048576
-```
-
-**Rationale**: Production environments should use the local validator model for optimal performance. Standard batch sizes and worker counts balance throughput and resource usage. Debug logging is disabled to reduce overhead, and retry mechanisms ensure resilience.
-
-#### High-Throughput Environment
-
-```
-useLocalValidator=true
-validator_sendBatchSize=500
-validator_sendBatchTimeout=5
-validator_sendBatchWorkers=32
-validator_blockvalidation_maxRetries=10
-validator_kafka_maxMessageBytes=4194304
-```
-
-**Rationale**: High-throughput environments maximize performance with larger batch sizes, more worker threads, and increased message size limits. The local validator mode minimizes latency in the critical path, while increased retry limits improve resilience under heavy load.
-
-#### High-Availability Environment
-
-```
-useLocalValidator=false
-validator_grpcAddress=validator-service:8081
-grpc_resolver=k8s
-validator_sendBatchSize=200
-validator_sendBatchTimeout=2
-validator_sendBatchWorkers=16
-validator_blockvalidation_maxRetries=10
-validator_blockvalidation_retrySleep=1s
-```
-
-**Rationale**: High-availability deployments use the remote validator model with Kubernetes service discovery to enable independent scaling and failover. Moderate batch settings balance throughput and responsiveness, while aggressive retry settings ensure continuity during disruptions.
-
-### 8.9 Configuration Best Practices
-
-1. **Deployment Model Selection**: Choose `useLocalValidator=true` for maximum performance in production environments. Only use the remote validator model when you need independent scaling or specialized deployment scenarios.
-
-2. **Batch Sizing**: Tune batch parameters based on your transaction volume and latency requirements:
-   - Higher `validator_sendBatchSize` improves throughput but may increase latency
-   - Lower `validator_sendBatchTimeout` reduces latency but may decrease throughput
-   - Adjust `validator_sendBatchWorkers` based on available CPU cores
-
-3. **HTTP API Security**: If enabling the HTTP API with `validator_httpListenAddress`, consider:
-   - Using a private network or VPN for access
-   - Implementing additional authentication mechanisms
-   - Setting appropriate `validator_httpRateLimit` to prevent DOS attacks
-
-4. **Kafka Configuration**: When using Kafka integration:
-   - Ensure broker's `message.max.bytes` is at least as large as `validator_kafka_maxMessageBytes`
-   - Configure adequate disk space for Kafka logs, especially for high transaction volumes
-   - Monitor Kafka consumer lag to detect processing bottlenecks
-
-5. **Monitoring Setup**: Implement comprehensive monitoring:
-   - Track transaction validation rates and latencies
-   - Monitor rejection rates and reasons
-   - Set alerts for unusual patterns indicating potential issues
-
-6. **Resource Allocation**: Provision adequate resources:
-   - The validator is CPU-intensive during script verification
-   - Allocate sufficient memory for transaction batches
-   - Consider using dedicated instances for high-volume deployments
-
-7. **Failure Recovery**: Test and verify recovery mechanisms:
-   - Ensure `fsm_state_restore=true` works correctly in your environment
-   - Validate that `validator_blockvalidation_maxRetries` settings handle transient failures
-   - Implement circuit breakers for persistent failures
-
 
 ## 9. Other Resources
 

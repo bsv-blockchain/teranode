@@ -5,7 +5,7 @@
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
     - [2.1. Receiving UTXOs and warming up the TXMeta Cache](#21-receiving-utxos-and-warming-up-the-txmeta-cache)
-    - [2.2. Receving subtrees for validation](#22-receving-subtrees-for-validation)
+    - [2.2. Receiving subtrees for validation](#22-receiving-subtrees-for-validation)
     - [2.3. Validating the Subtrees](#23-validating-the-subtrees)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
@@ -101,7 +101,7 @@ The subtree validator is a service that validates subtrees. After validating the
 
 ![tx_validation_subtree_validation.svg](img/plantuml/validator/tx_validation_subtree_validation.svg)
 
-### 2.2. Receving subtrees for validation
+### 2.2. Receiving subtrees for validation
 
 * The P2P service is responsible for receiving new subtrees from the network. When a new subtree is found, it will notify the subtree validation service via the Kafka `kafka_subtreesConfig` producer.
 
@@ -339,77 +339,6 @@ These settings determine how the service integrates with the broader system:
 - The gRPC address settings control how the service exposes its API and how other services connect to it
 - The validation timeout prevents operations from hanging indefinitely, ensuring system resilience
 - The validator deployment model (`useLocalValidator`) affects performance and system architecture, with local validation typically offering better performance but requiring more resources
-
-### 8.7 Deployment Recommendations
-
-#### Development Environment
-
-```
-subtree_quorum_path="/tmp/subtree_quorum"
-subtreevalidation_txMetaCacheEnabled=true
-txMetaCacheMaxMB=128
-subtreevalidation_getMissingTransactions=4
-subtreevalidation_processTxMetaUsingCacheConcurrency=8
-subtreevalidation_processTxMetaUsingStoreConcurrency=8
-subtreevalidation_grpcListenAddress=":8089"
-validator.useLocalValidator=true
-```
-
-**Rationale**: Development environments benefit from simplified configuration with local validator and moderate concurrency. Caching is enabled but with lower memory limits to accommodate development machines. The quorum path is set to a temporary location for easy cleanup.
-
-#### Production Environment
-
-```
-subtree_quorum_path="/var/teranode/subtree_quorum"
-subtree_quorum_absolute_timeout="30s"
-subtreevalidation_txMetaCacheEnabled=true
-txMetaCacheMaxMB=512
-subtreevalidation_getMissingTransactions=8
-subtreevalidation_processTxMetaUsingCacheConcurrency=32
-subtreevalidation_processTxMetaUsingStoreConcurrency=32
-subtreevalidation_subtreeDAHConcurrency=16
-subtreevalidation_grpcListenAddress=":8089"
-validator.useLocalValidator=true
-```
-
-**Rationale**: Production environments should use higher concurrency values and larger cache sizes to handle increased load. The quorum path is set to a persistent location, and timeouts are carefully configured to balance responsiveness with reliability. Local validator is recommended for best performance.
-
-#### High-Volume Environment
-
-```
-subtree_quorum_path="/var/teranode/subtree_quorum"
-subtree_quorum_absolute_timeout="45s"
-subtreevalidation_txMetaCacheEnabled=true
-txMetaCacheMaxMB=2048
-subtreevalidation_getMissingTransactions=16
-subtreevalidation_processTxMetaUsingCacheConcurrency=64
-subtreevalidation_processTxMetaUsingStoreConcurrency=64
-subtreevalidation_subtreeDAHConcurrency=32
-subtreevalidation_missingTransactionsBatchSize=32768
-subtreevalidation_spendBatcherSize=2048
-subtreevalidation_processTxMetaUsingStoreBatchSize=2048
-subtreevalidation_processTxMetaUsingCacheBatchSize=2048
-subtreevalidation_grpcListenAddress=":8089"
-validator.useLocalValidator=true
-```
-
-**Rationale**: High-volume environments need maximum performance with significantly increased cache sizes, higher concurrency, and larger batch sizes. Timeout values are increased to accommodate larger processing volumes, and all performance-related settings are tuned for maximum throughput.
-
-### 8.8 Configuration Best Practices
-
-1. **Memory Management**: When enabling the transaction metadata cache, ensure the host system has sufficient memory. Monitor actual memory usage and adjust `txMetaCacheMaxMB` based on observed behavior.
-
-2. **Concurrency Tuning**: Start with concurrency values approximately equal to the number of available CPU cores, then adjust based on observed CPU usage and throughput. Too much concurrency can lead to excessive context switching.
-
-3. **Batch Size Optimization**: Larger batch sizes improve throughput but increase memory usage and latency. Find the optimal balance through testing with representative workloads.
-
-4. **Quorum Path Persistence**: Use a persistent, reliable filesystem location for the quorum path to prevent data loss during restarts.
-
-5. **Timeout Configuration**: Set timeouts based on network latency and expected processing times. Too short timeouts cause unnecessary retries, while too long timeouts can delay error recovery.
-
-6. **Monitoring**: Implement comprehensive monitoring of cache hit rates, validation success rates, and processing times to identify configuration issues.
-
-7. **Validator Deployment**: In production environments, use a local validator (`validator.useLocalValidator=true`) for best performance, unless network architecture specifically requires a remote validator.
 
 
 

@@ -8,6 +8,7 @@
     - [1.2. Data Transformation for Compatibility](#12-data-transformation-for-compatibility)
     - [1.3. Phased Migration Towards Teranode](#13-phased-migration-towards-teranode)
 2. [Architecture](#2-architecture)
+    - [2.1 Validator Integration](#21-validator-integration)
 3. [Data Model](#3-data-model)
 4. [Functionality](#4-functionality)
     - [4.1. BSV to Teranode Communication](#41-bsv-to-teranode-communication)
@@ -437,46 +438,6 @@ The Legacy service uses a batching system for various operations, controlled by 
 - Concurrency settings (`legacy_storeBatcherConcurrency`, `legacy_spendBatcherConcurrency`, `legacy_outpointBatcherConcurrency`) control parallelism
 
 Larger batch sizes improve throughput but use more memory, while higher concurrency improves performance but increases CPU utilization.
-
-## Deployment Recommendations
-
-### Development Environment
-
-For development and testing, prioritize ease of debugging and iteration:
-
-```properties
-legacy_listen_addresses=localhost:8333  # Listen only on localhost for security
-legacy_writeMsgBlocksToDisk=false      # Keep everything in memory for simplicity
-legacy_printInvMessages=true          # Enable verbose logging for debugging
-legacy_savePeers=false                # Don't persist peers between restarts
-```
-
-### Production Environment
-
-For production deployments, prioritize reliability and security:
-
-```properties
-legacy_listen_addresses=0.0.0.0:8333  # Listen on all interfaces
-legacy_writeMsgBlocksToDisk=true      # Reduce memory footprint
-legacy_savePeers=true                 # Persist peer information
-legacy_printInvMessages=false         # Reduce log volume
-validator.useLocalValidator=true      # Use embedded validator for performance
-```
-
-### High-Performance Environment
-
-For high-throughput environments with significant hardware resources:
-
-```properties
-legacy_storeBatcherSize=2048          # Larger batches for efficiency
-legacy_spendBatcherSize=2048          # Larger batches for efficiency
-legacy_storeBatcherConcurrency=64     # Higher concurrency for parallelism
-legacy_spendBatcherConcurrency=64     # Higher concurrency for parallelism
-legacy_writeMsgBlocksToDisk=true      # Manage memory usage
-validator.useLocalValidator=true      # Use embedded validator for performance
-```
-
-> **Note**: These recommendations should be adjusted based on your specific hardware capabilities, network conditions, and observed performance metrics. Regular monitoring and tuning are essential for optimal performance.
 
 ## 8. Other Resources
 

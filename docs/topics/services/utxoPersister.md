@@ -6,7 +6,7 @@
 2. [Functionality](#2-functionality)
     - [2.1 Service Initialization](#21-service-initialization)
     - [2.2 Receiving and Processing a new UTXO Set](#22-receiving-and-processing-a-new-utxo-set)
-    - [2.2 Processing Blocks and Creating UTXO Sets](#22-processing-blocks-and-creating-utxo-sets)
+    - [2.3 Processing Blocks and Creating UTXO Sets](#23-processing-blocks-and-creating-utxo-sets)
 3. [Data Model](#3-data-model)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
@@ -79,7 +79,7 @@ The service interacts with the storage system to read and write necessary files 
 
 ![utxo_persister_processing_blocks.svg](img/plantuml/utxopersister/utxo_persister_processing_blocks.svg)
 
-### 2.2 Processing Blocks and Creating UTXO Sets
+### 2.3 Processing Blocks and Creating UTXO Sets
 
 The UTXO Persister processes blocks and creates UTXO sets as follows:
 
@@ -351,57 +351,7 @@ These settings affect how the service operates and recovers from failures:
 
 These settings typically interact with broader system configuration and are often shared across multiple services.
 
-### 7.6 Deployment Recommendations
-
-#### Development Environment
-
-```
-utxoPersister_buffer_size="4KB"
-blockpersister_skipUTXODelete=false
-direct=true
-fsm_state_restore=false
-blockstore="file://./data/blockstore"
-```
-
-**Rationale**: Development environments benefit from default settings that minimize resource usage and storage requirements. Direct access simplifies development and testing workflow by keeping components together.
-
-#### Production Environment
-
-```
-utxoPersister_buffer_size="64KB"
-blockpersister_skipUTXODelete=false
-direct=true
-fsm_state_restore=true
-blockstore="file:///var/teranode/blockstore"
-```
-
-**Rationale**: Production environments should optimize for performance with larger buffer sizes while still maintaining efficient storage usage. Direct access provides the best performance, and state restoration enables recovery from failures. A persistent filesystem location ensures data durability.
-
-#### High-Throughput Environment
-
-```
-utxoPersister_buffer_size="1MB"
-blockpersister_skipUTXODelete=false
-direct=true
-fsm_state_restore=true
-blockstore="file:///var/teranode/blockstore"
-```
-
-**Rationale**: High-throughput environments maximize performance with very large buffer sizes to reduce I/O overhead. Keeping only the latest UTXO set optimizes storage usage. Direct access minimizes latency in the critical path.
-
-#### Archival Environment
-
-```
-utxoPersister_buffer_size="256KB"
-blockpersister_skipUTXODelete=true
-direct=true
-fsm_state_restore=true
-blockstore="file:///var/teranode/blockstore"
-```
-
-**Rationale**: Archival environments preserve historical UTXO sets for analysis, auditing, or recovery purposes. This configuration accepts the increased storage requirements in exchange for maintaining complete historical data.
-
-### 7.7 Configuration Best Practices
+### 7.6 Configuration Best Practices
 
 1. **Performance Monitoring**: Regularly monitor I/O performance metrics when adjusting buffer sizes. Balance memory usage against throughput based on your specific hardware capabilities.
 

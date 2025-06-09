@@ -5,9 +5,9 @@
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
     - [2.1. Creating, initializing and starting a new P2P Server](#21-creating-initializing-and-starting-a-new-p2p-server)
-    - [2.1.1. Creating a New P2P Server](#211-creating-a-new-p2p-server)
-    - [2.1.2. Initializing the P2P Server](#212-initializing-the-p2p-server)
-    - [2.1.3. Starting the P2P Server](#213-starting-the-p2p-server)
+        - [2.1.1. Creating a New P2P Server](#211-creating-a-new-p2p-server)
+        - [2.1.2. Initializing the P2P Server](#212-initializing-the-p2p-server)
+        - [2.1.3. Starting the P2P Server](#213-starting-the-p2p-server)
     - [2.2. Peer Discovery and Connection](#22-peer-discovery-and-connection)
     - [2.3. Best Block Messages](#23-best-block-messages)
     - [2.4. Blockchain Messages](#24-blockchain-messages)
@@ -529,49 +529,6 @@ The P2P service uses several security mechanisms:
 - The ban system uses a score-based approach where peers accumulate points for bad behavior
 
 These settings enable secure and authenticated communication between nodes in the network.
-
-## Deployment Recommendations
-
-### Development Environment
-
-For development and testing, prioritize ease of debugging and local communication:
-
-```properties
-p2p_listen_addresses=localhost:9906        # Listen only on localhost for security
-p2p_port=9906                              # Standard port for local development
-p2p_dht_use_private=true                   # Use private DHT to avoid external connections
-securityLevelHTTP=0                        # Use plain HTTP for easier debugging
-```
-
-### Production Environment
-
-For production deployments, prioritize security and robust peer discovery:
-
-```properties
-p2p_listen_addresses=0.0.0.0:9906          # Listen on all interfaces
-p2p_advertise_addresses=<public-ip>:9906   # Advertise public IP address
-p2p_bootstrapAddresses=<known-node-1>|<known-node-2>  # Use known nodes for bootstrap
-p2p_shared_key=<secure-random-key>         # Enable private network with shared key
-p2p_optimise_retries=true                  # Optimize connection retries
-securityLevelHTTP=1                        # Use HTTPS for web connections
-server_certFile=/path/to/cert              # Specify SSL certificate
-server_keyFile=/path/to/key                # Specify SSL private key
-```
-
-### High-Availability Network
-
-For high-availability deployments with multiple nodes:
-
-```properties
-p2p_static_peers=<node1>|<node2>|<node3>    # Connect to all known nodes in cluster
-p2p_dht_use_private=true                   # Use private DHT for security
-p2p_ban_threshold=150                      # More lenient banning for known peers
-p2p_listen_addresses=<private-ip>:9906     # Listen on private network interface
-p2p_advertise_addresses=<public-ip>:9906   # Advertise public IP for external nodes
-```
-
-> **Note**: These recommendations should be adjusted based on your specific network topology, security requirements, and operational needs. Regular monitoring and tuning are essential for optimal performance.
-
 
 
 ## 8. Other Resources

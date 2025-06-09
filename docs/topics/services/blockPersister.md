@@ -311,39 +311,6 @@ The Block Persister's processing behavior is controlled by multiple interacting 
    - `BlockPersisterPersistSleep` controls polling frequency when no blocks are available
    - On errors, the service applies a fixed 1-minute backoff regardless of this setting
 
-### Deployment Recommendations
-
-#### Development Environment
-
-```
-blockpersister_persistAge=10
-blockpersister_persistSleep=10s
-blockpersister_concurrency=4
-```
-
-These settings provide more immediate processing with less delay between blocks, which is useful during development and testing.
-
-#### Production Environment
-
-```
-blockpersister_persistAge=100
-blockpersister_persistSleep=1m
-blockpersister_concurrency=16
-blockpersister_batchMissingTransactions=true
-```
-
-These settings prioritize stability and resource efficiency for production deployments with adequate hardware.
-
-#### High-Performance Environment
-
-```
-blockpersister_persistAge=144
-blockpersister_persistSleep=30s
-blockpersister_concurrency=32
-```
-
-For systems with ample CPU resources that need to process large blocks efficiently while maintaining a conservative approach to reorgs.
-
 
 ## 8. Other Resources
 

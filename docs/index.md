@@ -95,6 +95,7 @@
 ### Architecture
 - [Overall System Design](./topics/architecture/teranode-overall-system-design.md)
 - [Microservices Overview](./topics/architecture/teranode-microservices-overview.md)
+- [State Management](./topics/architecture/stateManagement.md)
 
 #### Core Services
 - [Asset Server](./topics/services/assetServer.md)
@@ -111,7 +112,7 @@
 - [UTXO Persister Service](./topics/services/utxoPersister.md)
 - [P2P Service](./topics/services/p2p.md)
 
-- [Legacy Service](./topics/services/legacy)
+- [Legacy Service](./topics/services/legacy.md)
 - [RPC Service](./topics/services/rpc.md)
 
 #### Infrastructure Components
@@ -131,6 +132,7 @@
 - [Testing Framework](./topics/understandingTheTestingFramework.md)
 - [QA Guide & Instructions for Functional Requirement Tests](./topics/functionalRequirementTests.md)
 - [Double Spends](./topics/architecture/understandingDoubleSpends.md)
+- [Two Phase Commit](./topics/features/two_phase_commit.md)
 
 -----
 

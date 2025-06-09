@@ -1360,63 +1360,7 @@ The `rpc_quirks` setting primarily affects response formatting and error handlin
 
 This setting should be left enabled unless all clients are confirmed to support modern Bitcoin RPC conventions.
 
-### 6.6 Deployment Recommendations
-
-#### Development Environment
-
-```
-rpc_user="devuser"
-rpc_pass="devpass"
-rpc_max_clients=10
-rpc_listener_url="http://localhost:8332"
-rpc_quirks=true
-```
-
-**Rationale**: Development environments benefit from higher connection limits to facilitate testing and debugging. Binding only to localhost enhances security while still allowing local tools and applications to connect.
-
-#### Production Environment
-
-```
-rpc_user="<strong_random_username>"
-rpc_pass="<strong_random_password>"
-rpc_limit_user="<app_specific_username>"
-rpc_limit_pass="<app_specific_password>"
-rpc_max_clients=5
-rpc_listener_url="http://localhost:8332"
-rpc_quirks=true
-```
-
-**Rationale**: Production environments should use the two-tier authentication system with strong, unique credentials. The connection limit should be set to balance availability with resource protection. Binding to localhost prevents unauthorized network access.
-
-#### High-Security Environment
-
-```
-rpc_user="<strong_random_username>"
-rpc_pass="<strong_random_password>"
-rpc_limit_user="<app_specific_username>"
-rpc_limit_pass="<app_specific_password>"
-rpc_max_clients=3
-rpc_listener_url="http://localhost:8332"
-rpc_quirks=false
-```
-
-**Rationale**: High-security environments use more restrictive connection limits to reduce attack surface. Disabling quirks mode ensures stricter adherence to standards, eliminating potential edge cases in request handling.
-
-#### Public API Environment
-
-```
-rpc_user="<strong_random_username>"
-rpc_pass="<strong_random_password>"
-rpc_limit_user="<api_specific_username>"
-rpc_limit_pass="<api_specific_password>"
-rpc_max_clients=50
-rpc_listener_url="http://0.0.0.0:8332"
-rpc_quirks=true
-```
-
-**Rationale**: When exposing RPC as a public API, higher connection limits are necessary to handle multiple external clients. However, this configuration should be deployed behind additional security layers (e.g., firewall, reverse proxy, API gateway) to manage access and mitigate potential attacks.
-
-### 6.7 Configuration Best Practices
+### 6.6 Configuration Best Practices
 
 1. **Secure Credential Management**: Never use default or easily guessable credentials. Consider using environment variables or secure credential storage instead of configuration files for passwords.
 

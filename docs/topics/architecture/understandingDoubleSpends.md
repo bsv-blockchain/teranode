@@ -32,8 +32,6 @@
 
 ---
 
-# Understanding Double Spend Handling in Teranode
-
 ## 1. Introduction
 
 A double spend occurs when someone attempts to spend the same Bitcoin UTXO (Unspent Transaction Output) more than once. This is one of the fundamental problems that Bitcoin was designed to solve, as preventing double spending is crucial for maintaining the integrity of a digital currency system.

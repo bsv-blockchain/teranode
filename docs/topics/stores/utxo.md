@@ -5,7 +5,7 @@
 1. [Description](#1-description)
 2. [Architecture](#2-architecture)
 3. [UTXO: Data Model](#3-utxo-data-model)
-    - [2.1. What is an UTXO?](#21-what-is-an-utxo)
+    - [3.1. What is an UTXO?](#31-what-is-an-utxo)
     - [3.2. How are UTXOs stored?](#32-how-are-utxos-stored)
     - [3.3. UTXO Meta Data](#33-utxo-meta-data)
 4. [Use Cases](#4-use-cases)
@@ -24,7 +24,7 @@
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [Running the Store Locally](#7-running-the-store-locally)
     - [How to run](#how-to-run)
-8. [Settings](#8-settings)
+8. [Configuration and Settings](#8-configuration-and-settings)
 9. [Other Resources](#9-other-resources)
 
 ## 1. Description
@@ -113,7 +113,7 @@ More details about the specific stores can be found in the [Technology](#5-techn
 
 ## 3. UTXO: Data Model
 
-## 2.1. What is an UTXO?
+### 3.1. What is an UTXO?
 
 The Teranode UTXO is no different from Bitcoin UTXO. The following is a description of the Bitcoin UTXO model, focusing on the BSV implementation:
 
@@ -481,8 +481,6 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -UtxoStore=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
-
-## 8. Settings
 
 ## 8. Configuration and Settings
 

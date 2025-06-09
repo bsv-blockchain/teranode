@@ -10,6 +10,7 @@
         - [2.2.2. Catching up after a parent block is not found](#222-catching-up-after-a-parent-block-is-not-found)
         - [2.2.3. Validating the Subtrees](#223-validating-the-subtrees)
         - [2.2.4. Block Data Validation](#224-block-data-validation)
+        - [2.2.5. Transaction Re-presentation Detection](#225-transaction-re-presentation-detection)
     - [2.3. Marking Txs as mined](#23-marking-txs-as-mined)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
@@ -217,7 +218,7 @@ The `BlockValidation` proceeds to mark all transactions within the block as "min
 
 ## 3. gRPC Protobuf Definitions
 
-The Block Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/subtreevalidationProto.md).
+The Block Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/blockvalidationProto.md).
 
 
 ## 4. Data Model
@@ -400,53 +401,6 @@ When a node falls behind the blockchain tip, its synchronization strategy is con
 - `blockvalidation_catchupCh_buffer_size` - Affects buffer capacity for catchup operations
 
 Optimal settings depend on hardware capabilities and network conditions.
-
-## Deployment Recommendations
-
-### Development Environment
-
-For development and testing environments, prioritize faster feedback cycles and debugging capabilities:
-
-```properties
-blockvalidation_optimistic_mining=false  # Disable for predictable validation behavior
-blockvalidation_txMetaCacheEnabled=true  # Enable cache for better performance
-blockvalidation_localSetTxMinedConcurrency=4  # Lower concurrency to reduce resource usage
-blockvalidation_validateBlockSubtreesConcurrency=2  # Lower concurrency for reduced CPU usage
-blockvalidation_batch_missing_transactions=true  # Enable for better network efficiency
-```
-
-### Production Environment
-
-For production environments, prioritize reliability, resilience, and consistent performance:
-
-```properties
-blockvalidation_optimistic_mining=true  # Enable for better throughput
-blockvalidation_blockFoundCh_buffer_size=2000  # Increased buffer for handling bursts
-blockvalidation_txMetaCacheEnabled=true  # Enable cache for performance
-blockvalidation_localSetTxMinedConcurrency=16  # Higher concurrency for better throughput
-blockvalidation_validateBlockSubtreesConcurrency=8  # Balanced concurrency for validation
-blockvalidation_processTxMetaUsingCache_Concurrency=64  # Higher concurrency for cache operations
-blockvalidation_validation_max_retries=5  # Increased retries for better resilience
-blockvalidation_useCatchupWhenBehind=true  # Enable efficient catchup when behind
-```
-
-### High-Performance Environment
-
-For high-throughput environments with significant hardware resources:
-
-```properties
-blockvalidation_optimistic_mining=true  # Enable for maximum throughput
-blockvalidation_blockFoundCh_buffer_size=5000  # Large buffer for handling extreme bursts
-blockvalidation_txMetaCacheEnabled=true  # Enable cache for performance
-blockvalidation_processTxMetaUsingCache_BatchSize=2048  # Larger batches for efficiency
-blockvalidation_processTxMetaUsingCache_Concurrency=128  # High concurrency for cache operations
-blockvalidation_localSetTxMinedConcurrency=32  # High concurrency for transaction marking
-blockvalidation_validateBlockSubtreesConcurrency=16  # High concurrency for validation
-blockvalidation_catchupConcurrency=16  # High concurrency for catchup operations
-blockvalidation_useCatchupWhenBehind=true  # Enable efficient catchup when behind
-```
-
-> **Note**: These recommendations should be adjusted based on specific hardware capabilities, network conditions, and observed performance metrics. Regular monitoring and tuning are essential for optimal performance.
 
 
 ## 9. Other Resources

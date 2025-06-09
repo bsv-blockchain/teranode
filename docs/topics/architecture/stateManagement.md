@@ -5,19 +5,22 @@ Last Modified: 3-February-2025
 1. [Introduction](#1-introduction)
 2. [State Machine in Teranode](#2-state-machine-in-teranode)
 3. [Functionality](#3-functionality)
-- [3.1. State Machine Initialization](#31-state-machine-initialization)
-- [3.1. Accessing the State Machine over gRPC](#31-accessing-the-state-machine-over-grpc)
-- [3.2. State Machine States](#32-state-machine-states)
-    - [3.2.1. FSM: Idle State](#321-fsm-idle-state)
-    - [3.2.2. FSM: Legacy Syncing State](#322-fsm-legacy-syncing-state)
-    - [3.2.3. FSM: Running State](#323-fsm-running-state)
-    - [3.2.4. FSM: Catching Blocks State](#324-fsm-catching-blocks-state)
-- [3.3. State Machine Events](#33-state-machine-events)
-    - [3.3.1. FSM Event: Legacy Sync](#331-fsm-event-legacy-sync)
-    - [3.3.2. FSM Event: Run](#332-fsm-event-run)
-    - [3.3.3. FSM Event: Catch up Blocks](#333-fsm-event-catch-up-blocks)
-    - [3.3.4. FSM Event: Idle](#334-fsm-event-idle)
-- [3.4. Waiting on State Machine Transitions](#34-waiting-on-state-machine-transitions)
+   - [3.1. State Machine Initialization](#31-state-machine-initialization)
+   - [3.2. Accessing the State Machine](#32-accessing-the-state-machine)
+      - [3.2.1. Access via Command-Line Interface](#321-access-via-command-line-interface-recommended)
+      - [3.2.2. Access via HTTP](#322-access-via-http-asset-server)
+      - [3.2.3. Access via gRPC](#323-access-via-grpc)
+   - [3.3. State Machine States](#33-state-machine-states)
+      - [3.3.1. FSM: Idle State](#331-fsm-idle-state)
+      - [3.3.2. FSM: Legacy Syncing State](#332-fsm-legacy-syncing-state)
+      - [3.3.3. FSM: Running State](#333-fsm-running-state)
+      - [3.3.4. FSM: Catching Blocks State](#334-fsm-catching-blocks-state)
+   - [3.4. State Machine Events](#34-state-machine-events)
+      - [3.4.1. FSM Event: Legacy Sync](#341-fsm-event-legacy-sync)
+      - [3.4.2. FSM Event: Run](#342-fsm-event-run)
+      - [3.4.3. FSM Event: Catch up Blocks](#343-fsm-event-catch-up-blocks)
+      - [3.4.4. FSM Event: Idle](#344-fsm-event-idle)
+   - [3.5. Waiting on State Machine Transitions](#35-waiting-on-state-machine-transitions)
 
 ## 1. Introduction
 
@@ -73,9 +76,9 @@ fsm_visualizer main.go.
 As part of its own initialization, the Blockchain service initializes the FSM in the **Idle** state, before it transitions to a LegacySyncing or Running state.
 
 
-### 3.1. Accessing the State Machine
+### 3.2. Accessing the State Machine
 
-#### 3.1.1 Access via Command-Line Interface (Recommended)
+#### 3.2.1. Access via Command-Line Interface (Recommended)
 
 The Teranode Command-Line Interface (teranode-cli) provides the most direct and recommended approach for interacting with the State Machine. The CLI abstracts the underlying API calls and offers a straightforward interface for both operators and developers.
 
@@ -86,7 +89,7 @@ The CLI provides two primary commands for FSM interaction:
 
 These commands interface with the same underlying mechanisms as the gRPC methods, but provide a more user-friendly experience with appropriate validation and feedback.
 
-#### 3.1.2 Access via HTTP (Asset Server)
+#### 3.2.2. Access via HTTP (Asset Server)
 
 The Asset Server provides a RESTful HTTP interface to the State Machine, offering a web-friendly approach to FSM interaction. This interface is particularly useful for web applications and administrative dashboards that need to monitor or control node state.
 
@@ -99,7 +102,7 @@ The Asset Server exposes the following endpoints for FSM interaction:
 
 These HTTP endpoints provide the same functionality as the CLI and gRPC methods but with a RESTful interface that can be accessed using standard HTTP clients.
 
-#### 3.1.3 Access via gRPC
+#### 3.2.3. Access via gRPC
 
 The Blockchain service also exposes the following gRPC methods to interact with the FSM programmatically:
 
@@ -112,9 +115,9 @@ The Blockchain service also exposes the following gRPC methods to interact with 
 * **CatchUpBlocks** - Transitions the FSM to the CatchingBlocks state (delegates on the SendFSMEvent method)
 
 
-### 3.2. State Machine States
+### 3.3. State Machine States
 
-#### 3.2.1. FSM: Idle State
+#### 3.3.1. FSM: Idle State
 
 The Blockchain service always starts in an `Idle` state. In this state:
 
@@ -139,7 +142,7 @@ All services will wait for the FSM to transition to the `Running` state (either 
 
 The node can also return back to the `Idle` state from any other state, however this can only be triggered by a manual / external request.
 
-#### 3.2.2. FSM: Legacy Syncing State
+#### 3.3.2. FSM: Legacy Syncing State
 
 When a node is starting up, it may need to perform a legacy sync. This is a full block sync performed against legacy BSV nodes. In this state:
 
@@ -155,7 +158,7 @@ Allowed Operations in Legacy Syncing State:
 - ❌ Create subtrees (or propagate them)
 - ❌ Create blocks (mine candidates)
 
-#### 3.2.3. FSM: Running State
+#### 3.3.3. FSM: Running State
 
 The `Running` state represents the node actively participating in the network. In this state:
 
@@ -177,7 +180,7 @@ If `fsm_state_restore` setting is enabled, and if the node was previously in the
 If the node was previously in any other state, the Block Assembler would now start mining blocks. The Block Assembler will never mine blocks under any other node state.
 
 
-#### 3.2.4. FSM: Catching Blocks State
+#### 3.3.4. FSM: Catching Blocks State
 
 The `CatchingBlocks` state represents the node catching up on blocks. This state is triggered by BlockValidation when the node needs to catch up with the network. In this state:
 
@@ -194,9 +197,9 @@ Allowed Operations in Catching Blocks State:
 - ❌ Create blocks (mine candidates)
 
 
-### 3.3. State Machine Events
+### 3.4. State Machine Events
 
-#### 3.3.1. FSM Event: Legacy Sync
+#### 3.4.1. FSM Event: Legacy Sync
 
 The gRPC `LegacySync` method triggers the FSM to transition to the `LegacySyncing` state. This event is used to indicate that the node is syncing from legacy BSV nodes.
 
@@ -205,14 +208,14 @@ The Legacy service triggers this event when the node is starting up and needs to
 ![fsm_legacy_symc.svg](img/plantuml/fsm_legacy_sync.svg)
 
 
-#### 3.3.2. FSM Event: Run
+#### 3.4.2. FSM Event: Run
 
 The gRPC `Run` method triggers the FSM to transition to the `Running` state. This event is used to indicate that the node is ready to start participating in the network and processing transactions and blocks.
 
 ![fsm_run.svg](img/plantuml/fsm_run.svg)
 
 
-#### 3.3.3. FSM Event: Catch up Blocks
+#### 3.4.3. FSM Event: Catch up Blocks
 
 The gRPC `CatchUpBlocks` method triggers the FSM to transition to the `CatchingBlocks` state. This event is used to indicate that the node is catching up on blocks and needs to process the latest blocks before resuming full operations.
 
@@ -220,14 +223,14 @@ The gRPC `CatchUpBlocks` method triggers the FSM to transition to the `CatchingB
 ![fsm_catchup_blocks.svg](img/plantuml/fsm_catchup_blocks.svg)
 
 
-#### 3.3.4. FSM Event: Idle
+#### 3.4.4. FSM Event: Idle
 
 The gRPC `Idle` method triggers the FSM to transition to the `Idle` state. This event is used to stop the node from participating in the network and halt all operations.
 
 This method is not currently used.
 
 
-### 3.4. Waiting on State Machine Transitions
+### 3.5. Waiting on State Machine Transitions
 
 Through the Blockchain gRPC method `WaitForFSMtoTransitionToGivenState`, services can wait for the FSM to transition to a specific state before proceeding with their operations. This method is used by various services to ensure that the node is in the correct state before starting their activities.
 

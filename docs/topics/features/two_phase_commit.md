@@ -6,7 +6,7 @@
 2. [Purpose and Benefits](#2-purpose-and-benefits)
 3. [Implementation Details](#3-implementation-details)
    - [3.1. Phase 1: Initial Transaction Creation with Unspendable Flag](#31-phase-1-initial-transaction-creation-with-unspendable-flag)
-   - [3.2. Phase 2: Unsetting the Unspendable Flag When Mined in a Block](#32-phase-2-unsetting-the-unspendable-flag-when-mined-in-a-block)
+   - [3.2. Phase 2: Unsetting the Unspendable Flag](#32-phase-2-unsetting-the-unspendable-flag)
    - [3.3. Special Case: Transactions from Blocks](#33-special-case-transactions-from-blocks)
 4. [Service Interaction](#4-service-interaction)
    - [4.1. Validator Service Role](#41-validator-service-role)

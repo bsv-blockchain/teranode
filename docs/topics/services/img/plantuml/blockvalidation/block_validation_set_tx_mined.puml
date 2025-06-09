@@ -24,6 +24,7 @@ skinparam participant {
 participant "Blockchain" as Blockchain
 participant "Block Validation Server" as BVServer
 participant "Block Validation" as BlockValidation
+participant "Model" as Model
 participant "Subtree Store" as SubtreeStore
 participant "UTXO Store" as UTXOStore
 
@@ -40,51 +41,59 @@ end note
 BVServer -> BlockValidation: setTxMined(ctx, blockHash)
 activate BlockValidation
 
-BlockValidation -> Blockchain: GetBlockExists(ctx, blockHash)
-activate Blockchain
-Blockchain --> BlockValidation: exists / not exists
-deactivate Blockchain
+note right of BlockValidation
+  Check block cache first
+end note
 
-alt Block does not exist
+alt Block in cache (lastValidatedBlocks)
+    BlockValidation -> BlockValidation: Use cached block
+else Block not in cache
     BlockValidation -> Blockchain: GetBlock(ctx, blockHash)
     activate Blockchain
     Blockchain --> BlockValidation: Block
     deactivate Blockchain
-
-    BlockValidation -> BlockValidation: Ensure all subtrees are loaded
-
-    loop for each subtree hash in the block
-        BlockValidation -> SubtreeStore: Get(ctx, subtreeHash)
-        activate SubtreeStore
-        SubtreeStore --> BlockValidation: Subtree
-        deactivate SubtreeStore
-    end
-
-    BlockValidation -> Blockchain: GetBlockHeaderIDs(ctx, blockHash, 1)
-    Blockchain --> BlockValidation: blockID
-
-    loop for each batch of tx hashes in the block subtrees
-        BlockValidation -> UTXOStore: SetMinedMulti(ctx, txBatchHashes, blockID)
-        activate UTXOStore
-        note right of UTXOStore
-          SetMinedMulti also unsets the unspendable flag
-          (second phase of two-phase commit)
-        end note
-        UTXOStore --> BlockValidation
-        deactivate UTXOStore
-    end
-
-    BlockValidation -> BlockValidation: updateSubtreesTTL(ctx, block)
-    activate BlockValidation
-    loop for each Subtree in the Block
-        BlockValidation -> SubtreeStore: SetTTL(ctx, subtreeHash, 0)
-        SubtreeStore --> BlockValidation: TTL set to 0
-    end
-    BlockValidation -> Blockchain: SetBlockSubtreesSet(ctx, blockHash)
-    deactivate BlockValidation
-
-    BlockValidation -> Blockchain: SetBlockMinedSet(ctx, blockHash)
 end
+
+BlockValidation -> BlockValidation: Ensure all subtrees are loaded
+note right of BlockValidation
+  Using fallbackGetFunc with subtreeValidationClient
+  if subtrees aren't already loaded
+end note
+
+loop for each subtree hash in the block
+    BlockValidation -> SubtreeStore: Get(ctx, subtreeHash)
+    activate SubtreeStore
+    SubtreeStore --> BlockValidation: Subtree
+    deactivate SubtreeStore
+end
+
+BlockValidation -> Blockchain: GetBlockHeaderIDs(ctx, blockHash, 1)
+Blockchain --> BlockValidation: blockID
+
+BlockValidation -> Model: UpdateTxMinedStatus(ctx, logger, settings, utxoStore, block, blockID)
+activate Model
+note right of Model
+  Handles batch processing of transactions
+  to mark them as mined
+end note
+
+Model -> UTXOStore: SetMinedMulti(ctx, txBatchHashes, blockID)
+activate UTXOStore
+note right of UTXOStore
+  SetMinedMulti also unsets the unspendable flag
+  (second phase of two-phase commit)
+end note
+UTXOStore --> Model
+deactivate UTXOStore
+
+Model --> BlockValidation
+deactivate Model
+
+alt Block was cached
+    BlockValidation -> BlockValidation: Delete from lastValidatedBlocks cache
+end
+
+BlockValidation -> Blockchain: SetBlockMinedSet(ctx, blockHash)
 
 BlockValidation --> BVServer
 deactivate BlockValidation
