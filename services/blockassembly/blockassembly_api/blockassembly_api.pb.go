@@ -182,7 +182,7 @@ type AddTxRequest struct {
 	Size          uint64                 `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`            // the size of the transaction in bytes
 	Locktime      uint32                 `protobuf:"varint,2,opt,name=locktime,proto3" json:"locktime,omitempty"`    // the earliest time a transaction can be mined into a block
 	Utxos         [][]byte               `protobuf:"bytes,5,rep,name=utxos,proto3" json:"utxos,omitempty"`           // the UTXOs consumed by this transaction
-	TxInpoints    []byte                 `protobuf:"bytes,6,opt,name=txInpoints,proto3" json:"txInpoints,omitempty"` // the parent transactions of this transaction
+	TxInpoints    []byte                 `protobuf:"bytes,6,opt,name=txInpoints,proto3" json:"txInpoints,omitempty"` // a serialized list of input outpoints for this transaction
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -991,7 +991,7 @@ var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_depIdx
 	15, // 0: blockassembly_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
 	3,  // 1: blockassembly_api.AddTxBatchRequest.txRequests:type_name -> blockassembly_api.AddTxRequest
 	0,  // 2: blockassembly_api.BlockAssemblyAPI.HealthGRPC:input_type -> blockassembly_api.EmptyMessage
-	3,  // 3: blockassembly_api.BlockAssemblyAPI.addTx:input_type -> blockassembly_api.AddTxRequest
+	3,  // 3: blockassembly_api.BlockAssemblyAPI.AddTx:input_type -> blockassembly_api.AddTxRequest
 	6,  // 4: blockassembly_api.BlockAssemblyAPI.RemoveTx:input_type -> blockassembly_api.RemoveTxRequest
 	4,  // 5: blockassembly_api.BlockAssemblyAPI.AddTxBatch:input_type -> blockassembly_api.AddTxBatchRequest
 	5,  // 6: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:input_type -> blockassembly_api.GetMiningCandidateRequest
@@ -1004,7 +1004,7 @@ var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_depIdx
 	0,  // 13: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:input_type -> blockassembly_api.EmptyMessage
 	0,  // 14: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:input_type -> blockassembly_api.EmptyMessage
 	1,  // 15: blockassembly_api.BlockAssemblyAPI.HealthGRPC:output_type -> blockassembly_api.HealthResponse
-	7,  // 16: blockassembly_api.BlockAssemblyAPI.addTx:output_type -> blockassembly_api.AddTxResponse
+	7,  // 16: blockassembly_api.BlockAssemblyAPI.AddTx:output_type -> blockassembly_api.AddTxResponse
 	0,  // 17: blockassembly_api.BlockAssemblyAPI.RemoveTx:output_type -> blockassembly_api.EmptyMessage
 	8,  // 18: blockassembly_api.BlockAssemblyAPI.AddTxBatch:output_type -> blockassembly_api.AddTxBatchResponse
 	16, // 19: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:output_type -> model.MiningCandidate

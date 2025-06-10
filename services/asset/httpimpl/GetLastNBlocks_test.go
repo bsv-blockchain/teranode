@@ -133,7 +133,7 @@ func TestGetLastNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "STORAGE_ERROR (59): error getting last N blocks", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (69): error getting last N blocks", echoErr.Message)
 	})
 
 	t.Run("No blocks found", func(t *testing.T) {

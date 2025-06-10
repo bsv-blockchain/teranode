@@ -84,6 +84,6 @@ func TestGetBlockStats(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "SERVICE_ERROR (49): error retrieving block statistics", echoErr.Message)
+		assert.Equal(t, "SERVICE_ERROR (59): error retrieving block statistics", echoErr.Message)
 	})
 }

@@ -21,7 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	BlockAssemblyAPI_HealthGRPC_FullMethodName                     = "/blockassembly_api.BlockAssemblyAPI/HealthGRPC"
-	BlockAssemblyAPI_AddTx_FullMethodName                          = "/blockassembly_api.BlockAssemblyAPI/addTx"
+	BlockAssemblyAPI_AddTx_FullMethodName                          = "/blockassembly_api.BlockAssemblyAPI/AddTx"
 	BlockAssemblyAPI_RemoveTx_FullMethodName                       = "/blockassembly_api.BlockAssemblyAPI/RemoveTx"
 	BlockAssemblyAPI_AddTxBatch_FullMethodName                     = "/blockassembly_api.BlockAssemblyAPI/AddTxBatch"
 	BlockAssemblyAPI_GetMiningCandidate_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate"
@@ -285,7 +285,7 @@ func (UnimplementedBlockAssemblyAPIServer) HealthGRPC(context.Context, *EmptyMes
 	return nil, status.Errorf(codes.Unimplemented, "method HealthGRPC not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) AddTx(context.Context, *AddTxRequest) (*AddTxResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method addTx not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method AddTx not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) RemoveTx(context.Context, *RemoveTxRequest) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveTx not implemented")
@@ -587,7 +587,7 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockAssemblyAPI_HealthGRPC_Handler,
 		},
 		{
-			MethodName: "addTx",
+			MethodName: "AddTx",
 			Handler:    _BlockAssemblyAPI_AddTx_Handler,
 		},
 		{

@@ -173,7 +173,7 @@ func TestGetTransactions(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "PROCESSING (4): error getting transaction -> STORAGE_ERROR (59): error getting transaction", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error getting transaction -> STORAGE_ERROR (69): error getting transaction", echoErr.Message)
 	})
 }
 

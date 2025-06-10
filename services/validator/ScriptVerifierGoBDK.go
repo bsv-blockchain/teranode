@@ -23,6 +23,12 @@ import (
 	"github.com/libsv/go-bt/v2"
 )
 
+const (
+	errMsgInvalidTx = "ScriptVerifierGoBDK fail to VerifyScript"
+	errMsgPolicy    = "ScriptVerifierGoBDK fail to VerifyScript by policy settings"
+	errMsgConsensus = "ScriptVerifierGoBDK fail to CheckConsensus"
+)
+
 // init registers the Go-BDK script verifier with the verification factory
 // This is called automatically when the package is imported with the 'bdk' build tag
 func init() {
@@ -173,8 +179,17 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 	}
 
 	// #nosec G115 -- blockHeight won't overflow
-	err := v.se.VerifyScript(eTxBytes, intUtxoHeights, intBlockHeight, consensus)
-	if err != nil {
+	if consensus {
+		errConsensus := v.se.CheckConsensus(eTxBytes, intUtxoHeights, intBlockHeight)
+		if errConsensus != nil {
+			consensusErr := errors.NewTxConsensusError(errMsgConsensus, errConsensus)
+			return errors.NewTxInvalidError(errMsgInvalidTx, consensusErr)
+		}
+	}
+
+	// #nosec G115 -- blockHeight won't overflow
+	errVerify := v.se.VerifyScript(eTxBytes, intUtxoHeights, intBlockHeight, consensus)
+	if errVerify != nil {
 		// Get the information of all utxo heights
 		var utxoHeighstStr []string
 		for _, h := range utxoHeights {
@@ -182,11 +197,31 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 		}
 
 		utxoInfoStr := strings.Join(utxoHeighstStr, "|")
-		errorLogMsg := fmt.Sprintf("Failed to verify script in go-bdk\n\n TxID : %v\n\nBlock Height : %v\n\nUTXO Heights : %v\n\nerror:\n%v\n\n", tx.TxID(), blockHeight, utxoInfoStr, err)
+		errorLogMsg := fmt.Sprintf("%v \n\n TxID : %v\n\nBlock Height : %v\n\nUTXO Heights : %v\n\nerror:\n%v\n\n", errMsgInvalidTx, tx.TxID(), blockHeight, utxoInfoStr, errVerify)
 
 		v.logger.Warnf(errorLogMsg)
 
-		return errors.NewTxInvalidError("Failed to verify script", err)
+		errCode := errVerify.Code()
+		policyRelatedError := (errCode == bdkscript.SCRIPT_ERR_OP_COUNT ||
+			errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW ||
+			errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_MINENCODE ||
+			errCode == bdkscript.SCRIPT_ERR_SCRIPT_SIZE ||
+			errCode == bdkscript.SCRIPT_ERR_PUBKEY_COUNT ||
+			errCode == bdkscript.SCRIPT_ERR_STACK_SIZE)
+
+		if !consensus && policyRelatedError {
+			// See https://github.com/bitcoin-sv/teranode/issues/2016
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
+			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
+		}
+
+		// The special case of policy with consensus == true for MaxStackMemoryUsageConsensus
+		if consensus && errCode == bdkscript.SCRIPT_ERR_STACK_SIZE {
+			policyErr := errors.NewTxPolicyError(errMsgPolicy, errVerify)
+			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
+		}
+
+		return errors.NewTxInvalidError(errMsgInvalidTx, errVerify)
 	}
 
 	return nil

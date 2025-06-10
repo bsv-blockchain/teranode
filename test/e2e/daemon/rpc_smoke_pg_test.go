@@ -327,8 +327,8 @@ func TestShouldNotProcessNonFinalTxWithPostgres(t *testing.T) {
 
 	resp, err := td.CallRPC("sendrawtransaction", []any{txBytes})
 	// "code: -8, message: TX rejected:
-	// PROCESSING (4): error sending transaction 1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631 to 100.00% of the propagation servers: [SERVICE_ERROR (49): address localhost:8084
-	//  -> UNKNOWN (0): SERVICE_ERROR (49): [ProcessTransaction][1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631] failed to validate transaction
+	// PROCESSING (4): error sending transaction 1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631 to 100.00% of the propagation servers: [SERVICE_ERROR (59): address localhost:8084
+	//  -> UNKNOWN (0): SERVICE_ERROR (59): [ProcessTransaction][1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631] failed to validate transaction
 	//  -> UTXO_NON_FINAL (61): [Validate][1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631] transaction is not final
 	//  -> TX_LOCK_TIME (35): lock time (699) as block height is greater than block height (578)]"
 	require.Error(t, err, "Failed to send new tx with rpc")

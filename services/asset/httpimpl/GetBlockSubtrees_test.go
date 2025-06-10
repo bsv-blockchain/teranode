@@ -159,7 +159,7 @@ func TestGetBlockSubtrees(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "STORAGE_ERROR (59): block not found", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (69): block not found", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -182,7 +182,7 @@ func TestGetBlockSubtrees(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "STORAGE_ERROR (59): repository error", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (69): repository error", echoErr.Message)
 	})
 
 	t.Run("Invalid limit parameter", func(t *testing.T) {

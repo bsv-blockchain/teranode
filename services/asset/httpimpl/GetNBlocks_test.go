@@ -262,7 +262,7 @@ func TestGetNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "PROCESSING (4): error getting blocks -> STORAGE_ERROR (59): error getting block", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error getting blocks -> STORAGE_ERROR (69): error getting block", echoErr.Message)
 	})
 
 	t.Run("Repository not found", func(t *testing.T) {

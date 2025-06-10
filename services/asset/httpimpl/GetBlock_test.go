@@ -158,7 +158,7 @@ func TestGetBlockByHeight(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "STORAGE_ERROR (59): error getting block", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (69): error getting block", echoErr.Message)
 	})
 
 	t.Run("Repository not found", func(t *testing.T) {
@@ -377,7 +377,7 @@ func TestGetBlockByHash(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "STORAGE_ERROR (59): error getting block", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (69): error getting block", echoErr.Message)
 	})
 
 	t.Run("Repository not found", func(t *testing.T) {

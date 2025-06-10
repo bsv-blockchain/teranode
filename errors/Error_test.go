@@ -316,7 +316,7 @@ func Test_UtxoSpentError(t *testing.T) {
 		assert.Equal(t, txID, *spendingData2.TxID)
 		assert.Equal(t, 1, spendingData2.Vin)
 
-		contains := "60: UTXO_SPENT (60): 0000000000000000000000000000000000000000000000313233343536373839:1 utxo already spent by tx 0000000000000000000000000000000000000000000000313233343536373839[1] \"utxo 0000000000000000000000000000000000000000000000313233343536373839 already spent by 0000000000000000000000000000000000000000000000313233343536373839[1]\""
+		contains := "70: UTXO_SPENT (70): 0000000000000000000000000000000000000000000000313233343536373839:1 utxo already spent by tx 0000000000000000000000000000000000000000000000313233343536373839[1] \"utxo 0000000000000000000000000000000000000000000000313233343536373839 already spent by 0000000000000000000000000000000000000000000000313233343536373839[1]\""
 
 		assert.Contains(t, unwrappedErr.Error(), contains)
 	})
@@ -359,7 +359,7 @@ func TestErrorString(t *testing.T) {
 
 	thisErr := NewStorageError("failed to set data from reader [%s:%s]", "bucket", "key", err)
 
-	assert.Equal(t, "STORAGE_ERROR (59): failed to set data from reader [bucket:key] -> UNKNOWN (0): some error", thisErr.Error())
+	assert.Equal(t, "STORAGE_ERROR (69): failed to set data from reader [bucket:key] -> UNKNOWN (0): some error", thisErr.Error())
 }
 
 func TestVariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {

@@ -21,7 +21,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// go test -v -tags test_validator -timeout 60m ./test/services/validator/...
+// go test -v -timeout 60m ./test/longtest/services/validator/...
 
 var testStoreURL = "https://ubsv-public.s3.eu-west-1.amazonaws.com/testdata"
 

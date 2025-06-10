@@ -141,6 +141,6 @@ func TestGetUTXOsByTxID(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "STORAGE_ERROR (59): error getting transaction", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (69): error getting transaction", echoErr.Message)
 	})
 }

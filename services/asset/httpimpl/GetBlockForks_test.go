@@ -144,6 +144,6 @@ func TestGetBlockForks(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
-		assert.Equal(t, "STORAGE_ERROR (59): error getting block header", echoErr.Message)
+		assert.Equal(t, "STORAGE_ERROR (69): error getting block header", echoErr.Message)
 	})
 }

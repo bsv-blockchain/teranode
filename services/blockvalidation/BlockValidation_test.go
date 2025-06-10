@@ -720,7 +720,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 
 	t.Logf("Time taken: %s\n", time.Since(start))
 
-	expectedErrorMessage := "SERVICE_ERROR (49)"
+	expectedErrorMessage := "SERVICE_ERROR (59)"
 	require.Contains(t, err.Error(), expectedErrorMessage)
 }
 

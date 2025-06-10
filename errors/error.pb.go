@@ -52,7 +52,7 @@ const (
 	ERR_SUBTREE_INVALID_FORMAT    ERR = 24
 	ERR_SUBTREE_EXISTS            ERR = 25
 	ERR_SUBTREE_ERROR             ERR = 29
-	// Transaction errors 30-39
+	// Transaction errors 30-49
 	ERR_TX_NOT_FOUND            ERR = 30
 	ERR_TX_INVALID              ERR = 31
 	ERR_TX_INVALID_DOUBLE_SPEND ERR = 32
@@ -62,36 +62,38 @@ const (
 	ERR_TX_CONFLICTING          ERR = 36
 	ERR_TX_UN_SPENDABLE         ERR = 37
 	ERR_TX_COINBASE_IMMATURE    ERR = 38
-	ERR_TX_ERROR                ERR = 39
-	// Service errors 40-49
-	ERR_SERVICE_UNAVAILABLE ERR = 40
-	ERR_SERVICE_NOT_STARTED ERR = 41
-	ERR_SERVICE_ERROR       ERR = 49
-	// Storage errors 50-59
-	ERR_STORAGE_UNAVAILABLE ERR = 50
-	ERR_STORAGE_NOT_STARTED ERR = 51
-	ERR_STORAGE_ERROR       ERR = 59
-	// UTXO errors 60-69
-	ERR_UTXO_SPENT     ERR = 60
-	ERR_UTXO_NON_FINAL ERR = 61
-	ERR_UTXO_FROZEN    ERR = 62
-	ERR_UTXO_NOT_FOUND ERR = 63
-	ERR_UTXO_ERROR     ERR = 69
-	// Kafka errors 70-79
-	ERR_KAFKA_DECODE_ERROR ERR = 70
-	ERR_KAFKA_ERROR        ERR = 79
-	// Blob errors 80-89
-	ERR_BLOB_EXISTS               ERR = 80
-	ERR_BLOB_NOT_FOUND            ERR = 81
-	ERR_BLOB_FOOTER_SIZE_MISMATCH ERR = 82
-	ERR_BLOB_ERROR                ERR = 89
-	// State errors 90-99
-	ERR_STATE_INITIALIZATION ERR = 90
-	ERR_STATE_ERROR          ERR = 99
-	// Network errors 100-109
-	ERR_NETWORK_ERROR  ERR = 100
-	ERR_INVALID_SUBNET ERR = 101
-	ERR_INVALID_IP     ERR = 102
+	ERR_TX_POLICY               ERR = 39
+	ERR_TX_CONSENSUS            ERR = 40
+	ERR_TX_ERROR                ERR = 49
+	// Service errors 50-59
+	ERR_SERVICE_UNAVAILABLE ERR = 50
+	ERR_SERVICE_NOT_STARTED ERR = 51
+	ERR_SERVICE_ERROR       ERR = 59
+	// Storage errors 60-69
+	ERR_STORAGE_UNAVAILABLE ERR = 60
+	ERR_STORAGE_NOT_STARTED ERR = 61
+	ERR_STORAGE_ERROR       ERR = 69
+	// UTXO errors 70-79
+	ERR_UTXO_SPENT     ERR = 70
+	ERR_UTXO_NON_FINAL ERR = 71
+	ERR_UTXO_FROZEN    ERR = 72
+	ERR_UTXO_NOT_FOUND ERR = 73
+	ERR_UTXO_ERROR     ERR = 79
+	// Kafka errors 80-89
+	ERR_KAFKA_DECODE_ERROR ERR = 80
+	ERR_KAFKA_ERROR        ERR = 89
+	// Blob errors 90-99
+	ERR_BLOB_EXISTS               ERR = 90
+	ERR_BLOB_NOT_FOUND            ERR = 91
+	ERR_BLOB_FOOTER_SIZE_MISMATCH ERR = 92
+	ERR_BLOB_ERROR                ERR = 99
+	// State errors 100-109
+	ERR_STATE_INITIALIZATION ERR = 100
+	ERR_STATE_ERROR          ERR = 109
+	// Network errors 110-119
+	ERR_NETWORK_ERROR  ERR = 110
+	ERR_INVALID_SUBNET ERR = 111
+	ERR_INVALID_IP     ERR = 112
 )
 
 // Enum value maps for ERR.
@@ -131,29 +133,31 @@ var (
 		36:  "TX_CONFLICTING",
 		37:  "TX_UN_SPENDABLE",
 		38:  "TX_COINBASE_IMMATURE",
-		39:  "TX_ERROR",
-		40:  "SERVICE_UNAVAILABLE",
-		41:  "SERVICE_NOT_STARTED",
-		49:  "SERVICE_ERROR",
-		50:  "STORAGE_UNAVAILABLE",
-		51:  "STORAGE_NOT_STARTED",
-		59:  "STORAGE_ERROR",
-		60:  "UTXO_SPENT",
-		61:  "UTXO_NON_FINAL",
-		62:  "UTXO_FROZEN",
-		63:  "UTXO_NOT_FOUND",
-		69:  "UTXO_ERROR",
-		70:  "KAFKA_DECODE_ERROR",
-		79:  "KAFKA_ERROR",
-		80:  "BLOB_EXISTS",
-		81:  "BLOB_NOT_FOUND",
-		82:  "BLOB_FOOTER_SIZE_MISMATCH",
-		89:  "BLOB_ERROR",
-		90:  "STATE_INITIALIZATION",
-		99:  "STATE_ERROR",
-		100: "NETWORK_ERROR",
-		101: "INVALID_SUBNET",
-		102: "INVALID_IP",
+		39:  "TX_POLICY",
+		40:  "TX_CONSENSUS",
+		49:  "TX_ERROR",
+		50:  "SERVICE_UNAVAILABLE",
+		51:  "SERVICE_NOT_STARTED",
+		59:  "SERVICE_ERROR",
+		60:  "STORAGE_UNAVAILABLE",
+		61:  "STORAGE_NOT_STARTED",
+		69:  "STORAGE_ERROR",
+		70:  "UTXO_SPENT",
+		71:  "UTXO_NON_FINAL",
+		72:  "UTXO_FROZEN",
+		73:  "UTXO_NOT_FOUND",
+		79:  "UTXO_ERROR",
+		80:  "KAFKA_DECODE_ERROR",
+		89:  "KAFKA_ERROR",
+		90:  "BLOB_EXISTS",
+		91:  "BLOB_NOT_FOUND",
+		92:  "BLOB_FOOTER_SIZE_MISMATCH",
+		99:  "BLOB_ERROR",
+		100: "STATE_INITIALIZATION",
+		109: "STATE_ERROR",
+		110: "NETWORK_ERROR",
+		111: "INVALID_SUBNET",
+		112: "INVALID_IP",
 	}
 	ERR_value = map[string]int32{
 		"UNKNOWN":                       0,
@@ -190,29 +194,31 @@ var (
 		"TX_CONFLICTING":                36,
 		"TX_UN_SPENDABLE":               37,
 		"TX_COINBASE_IMMATURE":          38,
-		"TX_ERROR":                      39,
-		"SERVICE_UNAVAILABLE":           40,
-		"SERVICE_NOT_STARTED":           41,
-		"SERVICE_ERROR":                 49,
-		"STORAGE_UNAVAILABLE":           50,
-		"STORAGE_NOT_STARTED":           51,
-		"STORAGE_ERROR":                 59,
-		"UTXO_SPENT":                    60,
-		"UTXO_NON_FINAL":                61,
-		"UTXO_FROZEN":                   62,
-		"UTXO_NOT_FOUND":                63,
-		"UTXO_ERROR":                    69,
-		"KAFKA_DECODE_ERROR":            70,
-		"KAFKA_ERROR":                   79,
-		"BLOB_EXISTS":                   80,
-		"BLOB_NOT_FOUND":                81,
-		"BLOB_FOOTER_SIZE_MISMATCH":     82,
-		"BLOB_ERROR":                    89,
-		"STATE_INITIALIZATION":          90,
-		"STATE_ERROR":                   99,
-		"NETWORK_ERROR":                 100,
-		"INVALID_SUBNET":                101,
-		"INVALID_IP":                    102,
+		"TX_POLICY":                     39,
+		"TX_CONSENSUS":                  40,
+		"TX_ERROR":                      49,
+		"SERVICE_UNAVAILABLE":           50,
+		"SERVICE_NOT_STARTED":           51,
+		"SERVICE_ERROR":                 59,
+		"STORAGE_UNAVAILABLE":           60,
+		"STORAGE_NOT_STARTED":           61,
+		"STORAGE_ERROR":                 69,
+		"UTXO_SPENT":                    70,
+		"UTXO_NON_FINAL":                71,
+		"UTXO_FROZEN":                   72,
+		"UTXO_NOT_FOUND":                73,
+		"UTXO_ERROR":                    79,
+		"KAFKA_DECODE_ERROR":            80,
+		"KAFKA_ERROR":                   89,
+		"BLOB_EXISTS":                   90,
+		"BLOB_NOT_FOUND":                91,
+		"BLOB_FOOTER_SIZE_MISMATCH":     92,
+		"BLOB_ERROR":                    99,
+		"STATE_INITIALIZATION":          100,
+		"STATE_ERROR":                   109,
+		"NETWORK_ERROR":                 110,
+		"INVALID_SUBNET":                111,
+		"INVALID_IP":                    112,
 	}
 )
 
@@ -347,7 +353,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\xa1\t\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\xc2\t\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -385,34 +391,36 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fTX_LOCK_TIME\x10#\x12\x12\n" +
 	"\x0eTX_CONFLICTING\x10$\x12\x13\n" +
 	"\x0fTX_UN_SPENDABLE\x10%\x12\x18\n" +
-	"\x14TX_COINBASE_IMMATURE\x10&\x12\f\n" +
-	"\bTX_ERROR\x10'\x12\x17\n" +
-	"\x13SERVICE_UNAVAILABLE\x10(\x12\x17\n" +
-	"\x13SERVICE_NOT_STARTED\x10)\x12\x11\n" +
-	"\rSERVICE_ERROR\x101\x12\x17\n" +
-	"\x13STORAGE_UNAVAILABLE\x102\x12\x17\n" +
-	"\x13STORAGE_NOT_STARTED\x103\x12\x11\n" +
-	"\rSTORAGE_ERROR\x10;\x12\x0e\n" +
+	"\x14TX_COINBASE_IMMATURE\x10&\x12\r\n" +
+	"\tTX_POLICY\x10'\x12\x10\n" +
+	"\fTX_CONSENSUS\x10(\x12\f\n" +
+	"\bTX_ERROR\x101\x12\x17\n" +
+	"\x13SERVICE_UNAVAILABLE\x102\x12\x17\n" +
+	"\x13SERVICE_NOT_STARTED\x103\x12\x11\n" +
+	"\rSERVICE_ERROR\x10;\x12\x17\n" +
+	"\x13STORAGE_UNAVAILABLE\x10<\x12\x17\n" +
+	"\x13STORAGE_NOT_STARTED\x10=\x12\x11\n" +
+	"\rSTORAGE_ERROR\x10E\x12\x0e\n" +
 	"\n" +
-	"UTXO_SPENT\x10<\x12\x12\n" +
-	"\x0eUTXO_NON_FINAL\x10=\x12\x0f\n" +
-	"\vUTXO_FROZEN\x10>\x12\x12\n" +
-	"\x0eUTXO_NOT_FOUND\x10?\x12\x0e\n" +
+	"UTXO_SPENT\x10F\x12\x12\n" +
+	"\x0eUTXO_NON_FINAL\x10G\x12\x0f\n" +
+	"\vUTXO_FROZEN\x10H\x12\x12\n" +
+	"\x0eUTXO_NOT_FOUND\x10I\x12\x0e\n" +
 	"\n" +
-	"UTXO_ERROR\x10E\x12\x16\n" +
-	"\x12KAFKA_DECODE_ERROR\x10F\x12\x0f\n" +
-	"\vKAFKA_ERROR\x10O\x12\x0f\n" +
-	"\vBLOB_EXISTS\x10P\x12\x12\n" +
-	"\x0eBLOB_NOT_FOUND\x10Q\x12\x1d\n" +
-	"\x19BLOB_FOOTER_SIZE_MISMATCH\x10R\x12\x0e\n" +
+	"UTXO_ERROR\x10O\x12\x16\n" +
+	"\x12KAFKA_DECODE_ERROR\x10P\x12\x0f\n" +
+	"\vKAFKA_ERROR\x10Y\x12\x0f\n" +
+	"\vBLOB_EXISTS\x10Z\x12\x12\n" +
+	"\x0eBLOB_NOT_FOUND\x10[\x12\x1d\n" +
+	"\x19BLOB_FOOTER_SIZE_MISMATCH\x10\\\x12\x0e\n" +
 	"\n" +
-	"BLOB_ERROR\x10Y\x12\x18\n" +
-	"\x14STATE_INITIALIZATION\x10Z\x12\x0f\n" +
-	"\vSTATE_ERROR\x10c\x12\x11\n" +
-	"\rNETWORK_ERROR\x10d\x12\x12\n" +
-	"\x0eINVALID_SUBNET\x10e\x12\x0e\n" +
+	"BLOB_ERROR\x10c\x12\x18\n" +
+	"\x14STATE_INITIALIZATION\x10d\x12\x0f\n" +
+	"\vSTATE_ERROR\x10m\x12\x11\n" +
+	"\rNETWORK_ERROR\x10n\x12\x12\n" +
+	"\x0eINVALID_SUBNET\x10o\x12\x0e\n" +
 	"\n" +
-	"INVALID_IP\x10fB'Z%github.com/bitcoin-sv/teranode/errorsb\x06proto3"
+	"INVALID_IP\x10pB'Z%github.com/bitcoin-sv/teranode/errorsb\x06proto3"
 
 var (
 	file_errors_error_proto_rawDescOnce sync.Once

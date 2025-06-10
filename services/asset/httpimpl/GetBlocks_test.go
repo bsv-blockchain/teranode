@@ -145,6 +145,6 @@ func TestGetBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "PROCESSING (4): error getting best block header -> STORAGE_ERROR (59): error getting best block header", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error getting best block header -> STORAGE_ERROR (69): error getting best block header", echoErr.Message)
 	})
 }

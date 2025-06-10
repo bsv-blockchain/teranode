@@ -37,6 +37,8 @@ var (
 	ErrTxUnspendable              = New(ERR_TX_UN_SPENDABLE, "tx un-spendable")
 	ErrTxCoinbaseImmature         = New(ERR_TX_COINBASE_IMMATURE, "coinbase is not spendable yet")
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
+	ErrTxPolicy                   = New(ERR_TX_POLICY, "tx policy error")
+	ErrTxConsensus                = New(ERR_TX_CONSENSUS, "fail consensus check")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
 	ErrServiceError               = New(ERR_SERVICE_ERROR, "service error")
@@ -65,6 +67,9 @@ func NewInvalidArgumentError(message string, params ...interface{}) *Error {
 }
 func NewThresholdExceededError(message string, params ...interface{}) *Error {
 	return New(ERR_THRESHOLD_EXCEEDED, message, params...)
+}
+func NewTxPolicyError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_POLICY, message, params...)
 }
 func NewNotFoundError(message string, params ...interface{}) *Error {
 	return New(ERR_NOT_FOUND, message, params...)
@@ -137,6 +142,9 @@ func NewTxCoinbaseImmatureError(message string, params ...interface{}) *Error {
 }
 func NewTxError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_ERROR, message, params...)
+}
+func NewTxConsensusError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_CONSENSUS, message, params...)
 }
 func NewServiceUnavailableError(message string, params ...interface{}) *Error {
 	return New(ERR_SERVICE_UNAVAILABLE, message, params...)
