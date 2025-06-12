@@ -121,7 +121,7 @@ Options:
 Convert Bitcoin blockchain data to UTXO set format:
 
 ```bash
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli bitcoin2utxoset --bitcoinDir=<bitcoin-data-path> --outputDir=<output-dir-path> [options]
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli bitcointoutxoset --bitcoinDir=<bitcoin-data-path> --outputDir=<output-dir-path> [options]
 ```
 
 Options:

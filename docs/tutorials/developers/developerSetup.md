@@ -274,19 +274,19 @@ SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli setfsmstate --fsmstate runnin
 
 The Teranode-CLI provides several commands:
 
-| Command | Description |
-|---------|-------------|
-| `getfsmstate` | Get the current FSM State |
-| `setfsmstate` | Set the FSM State (with `--fsmstate` flag) |
-| `settings` | View system configuration |
-| `aerospikereader` | Read transaction data from Aerospike |
-| `filereader` | Read and process files |
-| `seeder` | Seed initial blockchain data |
-| `bitcoin2utxoset` | Convert Bitcoin data to UTXO set |
-| `utxopersister` | Manage UTXO persistence |
-| `export-blocks` | Export blockchain to CSV |
-| `import-blocks` | Import blockchain from CSV |
-| `checkblocktemplate` | Check block template |
+| Command              | Description                                |
+|----------------------|--------------------------------------------|
+| `getfsmstate`        | Get the current FSM State                  |
+| `setfsmstate`        | Set the FSM State (with `--fsmstate` flag) |
+| `settings`           | View system configuration                  |
+| `aerospikereader`    | Read transaction data from Aerospike       |
+| `filereader`         | Read and process files                     |
+| `seeder`             | Seed initial blockchain data               |
+| `bitcointoutxoset`   | Convert Bitcoin data to UTXO set           |
+| `utxopersister`      | Manage UTXO persistence                    |
+| `export-blocks`      | Export blockchain to CSV                   |
+| `import-blocks`      | Import blockchain from CSV                 |
+| `checkblocktemplate` | Check block template                       |
 
 #### Getting Help
 

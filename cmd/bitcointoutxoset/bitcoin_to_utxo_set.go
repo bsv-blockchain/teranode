@@ -1,4 +1,18 @@
-package bitcoin2utxoset
+// Package bitcointoutxoset provides tools for extracting and converting Bitcoin UTXO set data.
+//
+// Usage:
+//
+//	This package is typically used as a command-line tool to process Bitcoin blockchain data and
+//	generate UTXO set files for further analysis or migration.
+//
+// Functions:
+//   - ConvertBitcoinToUtxoSet: Main entry point for processing Bitcoin blockchain data and generating UTXO set files. Handles reading LevelDB, writing headers, and managing UTXO export.
+//
+// Side effects:
+//
+//	Functions in this package may read from and write to disk, execute shell commands, and handle
+//	system signals to ensure safe shutdown and resource cleanup.
+package bitcointoutxoset
 
 import (
 	"bufio"
@@ -14,9 +28,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/bitcoin-sv/teranode/cmd/bitcoin2utxoset/bitcoin"
-	"github.com/bitcoin-sv/teranode/cmd/bitcoin2utxoset/bitcoin/btcleveldb"
-	"github.com/bitcoin-sv/teranode/cmd/bitcoin2utxoset/bitcoin/keys"
+	"github.com/bitcoin-sv/teranode/cmd/bitcointoutxoset/bitcoin"
+	"github.com/bitcoin-sv/teranode/cmd/bitcointoutxoset/bitcoin/btcleveldb"
+	"github.com/bitcoin-sv/teranode/cmd/bitcointoutxoset/bitcoin/keys"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
@@ -28,29 +42,62 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// bitcoin addresses
-// segwit bitcoin addresses
+/*
+- Bitcoin Addresses
+  - SegWit Bitcoin addresses
 
-// go get github.com/syndtr/goleveldb/leveldb
-// set no compression when opening leveldb
-// command line arguments
+- Dependencies
+  - Install: github.com/syndtr/goleveldb/leveldb
+  - Set "no compression" when opening LevelDB
 
-// open file for writing
-// execute shell command (check bitcoin isn't running)
-// catch interrupt signals CTRL-C to close db connection safely
-// catch kill commands too
-// bulk writing to file
-// convert byte slice to hexadecimal
-// parsing flags from command line
-// Check OS type for file-handler limitations
+- Command-Line Interaction:
+  - Parse flags from command line
+  - Handle command line arguments
+  - Open file for writing
+  - Check OS type for file-handler limitations
+  - Catch interrupt signals (e.g., CTRL-C) to safely close DB connection
+  - Catch kill commands for graceful shutdown
+  - Execute shell command (e.g., check that Bitcoin isn't running)
+  - Bulk writing to file
+  - Convert byte slice to hexadecimal
+*/
 
+// BlockHeader represents a Bitcoin block header structure.
 type BlockHeader struct {
 	Hash              string `json:"hash"`
 	Height            int    `json:"height"`
 	PreviousBlockHash string `json:"previousblockhash"`
 }
 
-func Bitcoin2Utxoset(logger ulogger.Logger, _ *settings.Settings, blockchainDir string, outputDir string,
+// ConvertBitcoinToUtxoSet is the main entry point for extracting and converting the UTXO set from a Bitcoin node's data directory.
+//
+// Parameters:
+//   - logger: Logger instance for outputting informational and error messages.
+//   - _ (unused): Settings pointer, reserved for future configuration.
+//   - blockchainDir: Path to the Bitcoin node's data directory (must contain 'chainstate' and 'blocks/index').
+//   - outputDir: Directory where the resulting UTXO set file(s) will be written.
+//   - skipHeaders: If true, skips header extraction and requires blockHashStr, previousBlockHashStr, and blockHeightUint to be set.
+//   - skipUTXOs: If true, skips UTXO extraction and only processes headers.
+//   - blockHashStr: Block hash (as a string) to use when skipping headers.
+//   - previousBlockHashStr: Previous block hash (as a string) to use when skipping headers.
+//   - blockHeightUint: Block height to use when skipping headers.
+//   - dumpRecords: If >0, dumps the specified number of records from the block index for debugging.
+//
+// Behavior:
+//   - Validates the presence of required LevelDB directories.
+//   - Optionally increases file descriptor limits on macOS for large database access.
+//   - If skipHeaders is false, extracts the latest block header and writes it to the output directory.
+//   - If skipUTXOs is false, reads the chainstate LevelDB, decodes UTXO records, and writes them to a file named after the block hash.
+//   - Handles system signals to ensure safe shutdown and resource cleanup.
+//   - Logs progress and errors using the provided logger.
+//
+// Side Effects:
+//   - Reads from and writes to disk.
+//   - May execute shell commands to adjust system limits.
+//   - May terminate the process on critical errors.
+//
+//nolint:gocognit // complexity is acceptable for this function
+func ConvertBitcoinToUtxoSet(logger ulogger.Logger, _ *settings.Settings, blockchainDir string, outputDir string,
 	skipHeaders bool, skipUTXOs bool, blockHashStr string, previousBlockHashStr string, blockHeightUint uint, dumpRecords int) {
 	chainstate := filepath.Join(blockchainDir, "chainstate")
 
@@ -68,17 +115,17 @@ func Bitcoin2Utxoset(logger ulogger.Logger, _ *settings.Settings, blockchainDir 
 		os.Exit(1)
 	}
 
-	// Check if OS type is Mac OS, then increase ulimit -n to 4096 filehandler during runtime and reset to 1024 at the end
-	// Mac OS standard is 1024
+	// Check if OS type is macOS, then increase ulimit -n to 4096 filehandler during runtime and reset to 1024 at the end
+	// macOS standard is 1024
 	// Linux standard is already 4096 which is also "max" for more edit etc/security/limits.conf
 	if runtime.GOOS == "darwin" {
 		cmd2 := exec.Command("ulimit", "-n", "4096")
 
-		fmt.Println("setting ulimit 4096")
+		fmt.Println("Setting ulimit 4096")
 
 		_, err := cmd2.Output()
 		if err != nil {
-			fmt.Printf("setting new ulimit failed with %s\n", err)
+			fmt.Printf("Setting new ulimit failed with %s\n", err)
 		}
 
 		defer exec.Command("ulimit", "-n", "1024")
@@ -109,7 +156,8 @@ func Bitcoin2Utxoset(logger ulogger.Logger, _ *settings.Settings, blockchainDir 
 			return
 		}
 
-		blockHeightUint32, err := util.SafeUintToUint32(blockHeightUint)
+		var blockHeightUint32 uint32
+		blockHeightUint32, err = util.SafeUintToUint32(blockHeightUint)
 		if err != nil {
 			logger.Errorf("Could not convert block height to uint32: %v", err)
 			return
@@ -117,26 +165,31 @@ func Bitcoin2Utxoset(logger ulogger.Logger, _ *settings.Settings, blockchainDir 
 
 		blockHeight = blockHeightUint32
 	} else {
-		indexDB, err := bitcoin.NewIndexDB(index)
+		var indexDB *bitcoin.IndexDB
+		indexDB, err = bitcoin.NewIndexDB(index)
 		if err != nil {
 			logger.Errorf("Could not open index: %v", err)
 			return
 		}
 
-		defer indexDB.Close()
+		defer func() {
+			_ = indexDB.Close()
+		}()
 
 		if dumpRecords > 0 {
 			indexDB.DumpRecords(dumpRecords)
 			return
 		}
 
-		height, err := indexDB.GetLastHeight()
+		var height int
+		height, err = indexDB.GetLastHeight()
 		if err != nil {
 			logger.Errorf("Could not get last height: %v", err)
 			return
 		}
 
-		bestBlock, err := indexDB.WriteHeadersToFile(outputDir, height)
+		var bestBlock *utxopersister.BlockIndex
+		bestBlock, err = indexDB.WriteHeadersToFile(outputDir, height)
 		if err != nil {
 			logger.Errorf("Could not write headers: %v", err)
 			return
@@ -154,18 +207,19 @@ func Bitcoin2Utxoset(logger ulogger.Logger, _ *settings.Settings, blockchainDir 
 	if !skipUTXOs {
 		outFile := filepath.Join(outputDir, blockHash.String()+".utxo-set")
 
-		if _, err := os.Stat(outFile); err == nil {
+		if _, err = os.Stat(outFile); err == nil {
 			logger.Errorf("Output file %s already exists. Please delete and try again", outFile)
 			return
 		}
 
-		if err := runImport(logger, chainstate, outFile, blockHash, blockHeight, previousBlockHash); err != nil {
+		if err = runImport(logger, chainstate, outFile, blockHash, blockHeight, previousBlockHash); err != nil {
 			logger.Errorf("%v", err)
 			return
 		}
 	}
 }
 
+// runImport processes the Bitcoin chainstate LevelDB and writes the UTXO set to a file.
 func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHash *chainhash.Hash, blockHeight uint32, previousBlockHash *chainhash.Hash) error {
 	// Select bitcoin chainstate leveldb folder
 	// open leveldb without compression to avoid corrupting the database for bitcoin
@@ -181,9 +235,12 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	db, err := leveldb.OpenFile(chainstate, opts)
 	if err != nil {
-		return errors.NewProcessingError("Couldn't open LevelDB", err)
+		return errors.NewProcessingError("couldn't open LevelDB", err)
 	}
-	defer db.Close()
+
+	defer func() {
+		_ = db.Close()
+	}()
 
 	// Declare obfuscateKey (a byte slice)
 	var obfuscateKey []byte // obfuscateKey := make([]byte, 0)
@@ -191,42 +248,50 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	// Open a file for writing
 	logger.Infof("Creating output file %s", outFile)
 
-	file, err := os.Create(outFile)
+	var file *os.File
+	file, err = os.Create(outFile)
 	if err != nil {
-		return errors.NewProcessingError("Couldn't create file", err)
+		return errors.NewProcessingError("couldn't create file", err)
 	}
-	defer file.Close()
 
+	defer func() {
+		_ = file.Close()
+	}()
+
+	// Crate a new SHA256 hasher
 	hasher := sha256.New()
 
+	// Create a buffered writer to write to the file and the hasher at the same time
 	bufferedWriter := bufio.NewWriter(io.MultiWriter(file, hasher))
-	defer bufferedWriter.Flush()
+	defer func() {
+		_ = bufferedWriter.Flush()
+	}()
 
+	// Write the header to the file
 	header := fileformat.NewHeader(fileformat.FileTypeUtxoSet)
 
-	if err := header.Write(bufferedWriter); err != nil {
-		return errors.NewProcessingError("Couldn't write header to file", err)
+	if err = header.Write(bufferedWriter); err != nil {
+		return errors.NewProcessingError("couldn't write header to file", err)
 	}
 
-	if _, err := bufferedWriter.Write(blockHash[:]); err != nil {
+	if _, err = bufferedWriter.Write(blockHash[:]); err != nil {
 		return errors.NewProcessingError("error writing header hash", err)
 	}
 
-	if err := binary.Write(bufferedWriter, binary.LittleEndian, blockHeight); err != nil {
+	if err = binary.Write(bufferedWriter, binary.LittleEndian, blockHeight); err != nil {
 		return errors.NewProcessingError("error writing header number", err)
 	}
 
 	// With UTXOSets, we also write the previous block hash before we start writing the UTXOs
 	_, err = bufferedWriter.Write(previousBlockHash[:])
 	if err != nil {
-		return errors.NewProcessingError("Couldn't write previous block hash to file", err)
+		return errors.NewProcessingError("couldn't write previous block hash to file", err)
 	}
 
 	// Iterate over LevelDB keys
 	iter := db.NewIterator(nil, nil)
 	// NOTE: iter.Release() comes after the iteration (not deferred here)
 	// err := iter.Error()
-	// fmt.Println(err)
 
 	// Catch signals that interrupt the script so that we can close the database safely (hopefully not corrupting it)
 	c := make(chan os.Signal, 1)
@@ -258,10 +323,10 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 		key := iter.Key()
 		value := iter.Value()
 
-		// first byte in key indicates the type of key we've got for leveldb
-		prefix := key[0]
+		// the first byte in a key indicates the type of key we've got for leveldb
+		prefixByte := key[0]
 
-		switch prefix {
+		switch prefixByte {
 		// 14 = obfuscateKey (first key)
 		case 14:
 			obfuscateKey = value
@@ -277,7 +342,8 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				deobfuscatedValue[i] = value[i] ^ obfuscateKeyExtended[i]
 			}
 
-			chainstateTip, err := chainhash.NewHash(deobfuscatedValue)
+			var chainstateTip *chainhash.Hash
+			chainstateTip, err = chainhash.NewHash(deobfuscatedValue)
 
 			if err != nil {
 				logger.Errorf("Couldn't create hash from %s: %v", deobfuscatedValue, err)
@@ -296,8 +362,8 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			// vout
 			index := key[33:]
 
-			// convert varint128 index to an integer
-			vout := btcleveldb.Varint128Decode(index)
+			// convert varInt128 index to an integer
+			vout := btcleveldb.VarInt128Decode(index)
 
 			// -----
 			// Value
@@ -321,10 +387,10 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			//          c0842680ed5900a38f35518de4487c108e3810e6794fb68b189d8b <- deobfuscated
 			//          <----><----><><-------------------------------------->
 			//           /      |    \                   |
-			//      varint   varint   varint          script <- P2PKH/P2SH hash160, P2PK public key, or complete script
+			//      varInt   varInt   varInt          script <- P2PKH/P2SH hash160, P2PK public key, or complete script
 			//         |        |     nSize
 			//         |        |
-			//         |     amount (compressesed)
+			//         |     amount (compressed)
 			//         |
 			//         |
 			//  100000100001010100110
@@ -333,32 +399,32 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 			offset := 0
 
-			// First Varint
+			// First VarInt
 			// ------------
 			// b98276a2ec7700cbc2986ff9aed6825920aece14aa6f5382ca5580
 			// <---->
-			varint, bytesRead := btcleveldb.Varint128Read(xor, 0) // start reading at 0
+			varInt, bytesRead := btcleveldb.VarInt128Read(xor, 0) // start reading at 0
 			offset += bytesRead
-			varintDecoded := btcleveldb.Varint128Decode(varint)
+			varIntDecoded := btcleveldb.VarInt128Decode(varInt)
 
 			// Height (first bits)
-			height := varintDecoded >> 1 // right-shift to remove last bit
+			height := varIntDecoded >> 1 // right-shift to remove the last bit
 
 			// Coinbase (last bit)
-			coinbase := varintDecoded & 1 // AND to extract right-most bit
+			coinbase := varIntDecoded & 1 // AND to extract right-most bit
 
-			// Second Varint
+			// Second VarInt
 			// -------------
 			// b98276a2ec7700cbc2986ff9aed6825920aece14aa6f5382ca5580
 			//       <---->
-			varint, bytesRead = btcleveldb.Varint128Read(xor, offset) // start after last varint
+			varInt, bytesRead = btcleveldb.VarInt128Read(xor, offset) // start after last varInt
 			offset += bytesRead
-			varintDecoded = btcleveldb.Varint128Decode(varint)
+			varIntDecoded = btcleveldb.VarInt128Decode(varInt)
 
 			// Amount
-			amount := btcleveldb.DecompressValue(varintDecoded) // int64
+			amount := btcleveldb.DecompressValue(varIntDecoded) // int64
 
-			// Third Varint
+			// Third VarInt
 			// ------------
 			// b98276a2ec7700cbc2986ff9aed6825920aece14aa6f5382ca5580
 			//             <>
@@ -373,16 +439,16 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			//  4  = P2PK 04publickey (uncompressed - but has been compressed in to leveldb) y=even
 			//  5  = P2PK 04publickey (uncompressed - but has been compressed in to leveldb) y=odd
 			//  6+ = [size of the upcoming script] (subtract 6 though to get the actual size in bytes, to account for the previous 5 script types already taken)
-			varint, bytesRead = btcleveldb.Varint128Read(xor, offset) // start after last varint
+			varInt, bytesRead = btcleveldb.VarInt128Read(xor, offset) // start after last varInt
 			offset += bytesRead
-			nsize := btcleveldb.Varint128Decode(varint) //
+			nsize := btcleveldb.VarInt128Decode(varInt) //
 
 			// Script (remaining bytes)
 			// ------
 			// b98276a2ec7700cbc2986ff9aed6825920aece14aa6f5382ca5580
 			//               <-------------------------------------->
 
-			// Move offset back a byte if script type is 2, 3, 4, or 5 (because this forms part of the P2PK public key along with the actual script)
+			// Move offset back a byte if a script type is 2, 3, 4, or 5 (because this forms part of the P2PK public key along with the actual script)
 			if nsize > 1 && nsize < 6 { // either 2, 3, 4, 5
 				offset--
 			}
@@ -401,10 +467,12 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			// Addresses - Get address from script (if possible), and set script type (P2PK, P2PKH, P2SH, P2MS, P2WPKH, P2WSH or P2TR)
 			// ---------
 
-			var scriptType string // initialize script type
+			// Non-Standard (if the script type hasn't been identified and set, then it remains as an unknown "non-standard" script)
+			scriptType := "non-standard" // default to non-standard script
 
 			switch {
-			case nsize == 0: // P2PKH
+			// P2PKH
+			case nsize == 0:
 				scriptType = "p2pkh"
 				prefix := []byte{0x76, 0xa9, 0x14}
 				suffix := []byte{0x88, 0xac}
@@ -417,7 +485,8 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 				script = newScript
 
-			case nsize == 1: // P2SH
+			// P2SH
+			case nsize == 1:
 				scriptType = "p2sh"
 				prefix := []byte{0xa9, 0x14}
 				suffix := []byte{0x87}
@@ -436,9 +505,9 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				//  3 = P2PK 03publickey <- y is odd/even (0x02 = even, 0x03 = odd)
 				//  4 = P2PK 04publickey (uncompressed)  y = odd  <- actual script uses an uncompressed public key, but it is compressed when stored in this db
 				//  5 = P2PK 04publickey (uncompressed) y = even
-				// "The uncompressed pubkeys are compressed when they are added to the db. 0x04 and 0x05 are used to indicate that the key is supposed to be uncompressed and those indicate whether the y value is even or odd so that the full uncompressed key can be retrieved."
+				// "The uncompressed pubkeys are compressed when they are added to the db. 0x04 and 0x05 are used to indicate that the key is supposed to be uncompressed, and those indicate whether the y value is even or odd so that the full uncompressed key can be retrieved."
 				//
-				// if nsize is 4 or 5, you will need to uncompress the public key to get it's full form
+				// if nsize is 4 or 5, you will need to uncompress the public key to get its full form
 				// if nsize == 4 || nsize == 5 {
 				//     // uncompress (4 = y is even, 5 = y is odd)
 				//     script = decompress(script)
@@ -461,28 +530,23 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			case len(script) > 0 && script[len(script)-1] == 174: // if there is a script and if the last opcode is OP_CHECKMULTISIG (174) (0xae)
 				scriptType = "p2ms"
 
-			// Non-Standard (if the script type hasn't been identified and set then it remains as an unknown "non-standard" script)
-			default:
-				scriptType = "non-standard"
 			}
 
+			// Switch on the script type to handle different UTXO types
 			switch scriptType {
-			case "p2pkh":
-				fallthrough
-			case "p2pk":
-				fallthrough
-			case "p2sh":
-				fallthrough
-			case "p2ms":
-				fallthrough
-			case "non-standard":
-				hash, err := chainhash.NewHash(txid)
+			case "p2pkh", "p2pk", "p2sh", "p2ms", "non-standard":
+				var hash *chainhash.Hash
+
+				// Create a hash from the txid
+				hash, err = chainhash.NewHash(txid)
 				if err != nil {
-					return errors.NewProcessingError("Couldn't create hash from %x:", txid, err)
+					return errors.NewProcessingError("couldn't create hash from %x:", txid, err)
 				}
 
 				if currentUTXOWrapper == nil {
-					heightUint32, err := util.SafeInt64ToUint32(height)
+					var heightUint32 uint32
+
+					heightUint32, err = util.SafeInt64ToUint32(height)
 					if err != nil {
 						return err
 					}
@@ -496,13 +560,15 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					// Write the last UTXOWrapper to the file
 					_, err = bufferedWriter.Write(currentUTXOWrapper.Bytes())
 					if err != nil {
-						return errors.NewProcessingError("Couldn't write to file:")
+						return errors.NewProcessingError("couldn't write to file: " + err.Error())
 					}
 
 					txWritten++
 					utxosWritten += uint64(len(currentUTXOWrapper.UTXOs))
 
-					heightUint32, err := util.SafeInt64ToUint32(height)
+					var heightUint32 uint32
+
+					heightUint32, err = util.SafeInt64ToUint32(height)
 					if err != nil {
 						return err
 					}
@@ -514,16 +580,21 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					}
 				}
 
-				voutUint32, err := util.SafeInt64ToUint32(vout)
+				var voutUint32 uint32
+
+				voutUint32, err = util.SafeInt64ToUint32(vout)
 				if err != nil {
 					return err
 				}
 
-				amountUint64, err := util.SafeInt64ToUint64(amount)
+				var amountUint64 uint64
+
+				amountUint64, err = util.SafeInt64ToUint64(amount)
 				if err != nil {
 					return err
 				}
 
+				// Add the UTXO to the current UTXOWrapper
 				currentUTXOWrapper.UTXOs = append(currentUTXOWrapper.UTXOs, &utxopersister.UTXO{
 					Index:  voutUint32,
 					Value:  amountUint64,
@@ -531,7 +602,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				})
 				utxosWritten2++
 			default:
-				fmt.Printf("ERROR: Unknown script type: %v\n", scriptType)
+				fmt.Printf("Error: unknown script type: %v\n", scriptType)
 
 				utxosSkipped++
 			}
@@ -547,11 +618,12 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 		iterCount++
 	}
 
+	// Check for any errors during iteration
 	if currentUTXOWrapper != nil {
 		// Write the last UTXOWrapper to the file
 		_, err = bufferedWriter.Write(currentUTXOWrapper.Bytes())
 		if err != nil {
-			return errors.NewProcessingError("Couldn't write to file:")
+			return errors.NewProcessingError("couldn't write to file: " + err.Error())
 		}
 
 		txWritten++
@@ -563,26 +635,28 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	binary.LittleEndian.PutUint64(b, txWritten)
 
-	if _, err := bufferedWriter.Write(b); err != nil {
-		return errors.NewProcessingError("Couldn't write tx count", err)
+	// Write the number of transactions written to the file
+	if _, err = bufferedWriter.Write(b); err != nil {
+		return errors.NewProcessingError("couldn't write tx count", err)
 	}
 
 	binary.LittleEndian.PutUint64(b, utxosWritten)
 
-	if _, err := bufferedWriter.Write(b); err != nil {
-		return errors.NewProcessingError("Couldn't write utxo count", err)
+	if _, err = bufferedWriter.Write(b); err != nil {
+		return errors.NewProcessingError("couldn't write utxo count", err)
 	}
 
-	iter.Release() // Do not defer this, want to release iterator before closing database
+	iter.Release() // Do not defer this, want to release iterator before closing the database
 
-	if err := bufferedWriter.Flush(); err != nil {
-		return errors.NewProcessingError("Couldn't flush buffer", err)
+	if err = bufferedWriter.Flush(); err != nil {
+		return errors.NewProcessingError("couldn't flush buffer", err)
 	}
 
 	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), blockHash.String()+".utxo-set") // N.B. The 2 spaces is important for the hash to be valid
 
-	if err := os.WriteFile(outFile+".sha256", []byte(hashData), 0644); err != nil {
-		return errors.NewProcessingError("Couldn't write hash file", err)
+	// Write the hash to a file
+	if err = os.WriteFile(outFile+".sha256", []byte(hashData), 0600); err != nil {
+		return errors.NewProcessingError("couldn't write hash file", err)
 	}
 
 	logger.Infof("FINISHED  %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
@@ -592,6 +666,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	return nil
 }
 
+// getObfuscateKeyExtended extends the obfuscateKey to match the length of the value.
 func getObfuscateKeyExtended(obfuscateKey []byte, value []byte) []byte {
 	// Copy the obfuscateKey ready to extend it
 	obfuscateKeyExtended := obfuscateKey[1:] // ignore the first byte, as that just tells you the size of the obfuscateKey
@@ -609,6 +684,7 @@ func getObfuscateKeyExtended(obfuscateKey []byte, value []byte) []byte {
 	return obfuscateKeyExtended
 }
 
+// formatNumber formats an "uint64" number with commas for readability.
 func formatNumber(n uint64) string {
 	in := fmt.Sprintf("%d", n)
 	out := make([]string, 0, len(in)+(len(in)-1)/3)
@@ -624,26 +700,28 @@ func formatNumber(n uint64) string {
 	return strings.Join(out, "")
 }
 
-// func GetBlockHeaderByHeight(height int) (*BlockHeader, error) {
-// 	url := fmt.Sprintf("https://api.whatsonchain.com/v1/bsv/main/block/%d/header", height)
+/*
+func GetBlockHeaderByHeight(height int) (*BlockHeader, error) {
+	url := fmt.Sprintf("https://api.whatsonchain.com/v1/bsv/main/block/%d/header", height)
 
-// 	// Make the GET request
-// 	resp, err := http.Get(url)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("error making GET request: %v", err)
-// 	}
-// 	defer resp.Body.Close()
+	// Make the GET request
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("error making GET request: %v", err)
+	}
+	defer resp.Body.Close()
 
-// 	// Check if the request was successful
-// 	if resp.StatusCode != http.StatusOK {
-// 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-// 	}
+	// Check if the request was successful
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
 
-// 	// Decode the JSON response into the BlockInfo struct
-// 	var bh BlockHeader
-// 	if err := json.NewDecoder(resp.Body).Decode(&bh); err != nil {
-// 		return nil, fmt.Errorf("error decoding response: %v", err)
-// 	}
+	// Decode the JSON response into the BlockInfo struct
+	var bh BlockHeader
+	if err := json.NewDecoder(resp.Body).Decode(&bh); err != nil {
+		return nil, fmt.Errorf("error decoding response: %v", err)
+	}
 
-// 	return &bh, nil
-// }
+	return &bh, nil
+}
+*/

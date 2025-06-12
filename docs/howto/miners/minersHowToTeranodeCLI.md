@@ -17,7 +17,7 @@ Usage: teranode-cli <command> [options]
 
     Available Commands:
     aerospikereader      Aerospike Reader
-    bitcoin2utxoset      Bitcoin 2 Utxoset
+    bitcointoutxoset     Bitcoin to Utxoset
     checkblocktemplate   Check block template
     export-blocks        Export blockchain to CSV
     filereader           File Reader
@@ -42,34 +42,34 @@ Usage: teranode-cli <command> [options]
 
 ### Data Management
 
-| Command           | Description                           | Key Options                                      |
-|-------------------|---------------------------------------|--------------------------------------------------|
-| `aerospikereader` | Read transaction data from Aerospike  | `<txid>` - Transaction ID to lookup              |
-| `bitcoin2utxoset` | Convert Bitcoin data to UTXO set      | `--bitcoinDir` - Location of bitcoin data        |
-|                   |                                       | `--outputDir` - Output directory for UTXO set    |
-|                   |                                       | `--skipHeaders` - Skip processing headers        |
-|                   |                                       | `--skipUTXOs` - Skip processing UTXOs           |
-|                   |                                       | `--blockHash` - Block hash to start from         |
-|                   |                                       | `--blockHeight` - Block height to start from     |
-| `export-blocks`   | Export blockchain data to CSV         | `--file` - CSV file path to export               |
-| `import-blocks`   | Import blockchain data from CSV       | `--file` - CSV file path to import               |
-| `utxopersister`   | Manage UTXO persistence               | None                                             |
+| Command            | Description                          | Key Options                                   |
+|--------------------|--------------------------------------|-----------------------------------------------|
+| `aerospikereader`  | Read transaction data from Aerospike | `<txid>` - Transaction ID to lookup           |
+| `bitcointoutxoset` | Convert Bitcoin data to UTXO set     | `--bitcoinDir` - Location of bitcoin data     |
+|                    |                                      | `--outputDir` - Output directory for UTXO set |
+|                    |                                      | `--skipHeaders` - Skip processing headers     |
+|                    |                                      | `--skipUTXOs` - Skip processing UTXOs         |
+|                    |                                      | `--blockHash` - Block hash to start from      |
+|                    |                                      | `--blockHeight` - Block height to start from  |
+| `export-blocks`    | Export blockchain data to CSV        | `--file` - CSV file path to export            |
+| `import-blocks`    | Import blockchain data from CSV      | `--file` - CSV file path to import            |
+| `utxopersister`    | Manage UTXO persistence              | None                                          |
 
 ### System Tools
 
-| Command              | Description                      | Key Options                                      |
-|----------------------|----------------------------------|--------------------------------------------------|
-| `checkblocktemplate` | Check block template validity     | None                                             |
-| `seeder`             | Seed initial blockchain data     | `--inputDir` - Input directory for data          |
-|                      |                                  | `--hash` - Hash of the data to process          |
-|                      |                                  | `--skipHeaders` - Skip processing headers       |
-|                      |                                  | `--skipUTXOs` - Skip processing UTXOs          |
-| `filereader`         | Read and process files           | `--verbose` - Enable verbose output              |
-|                      |                                  | `--checkHeights` - Check heights in UTXO headers |
-|                      |                                  | `--useStore` - Use store                        |
-| `getfsmstate`        | Get the current FSM state        | None                                             |
-| `setfsmstate`        | Set the FSM state                | `--fsmstate` - Target FSM state                  |
-|                      |                                  | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
+| Command              | Description                   | Key Options                                                      |
+|----------------------|-------------------------------|------------------------------------------------------------------|
+| `checkblocktemplate` | Check block template validity | None                                                             |
+| `seeder`             | Seed initial blockchain data  | `--inputDir` - Input directory for data                          |
+|                      |                               | `--hash` - Hash of the data to process                           |
+|                      |                               | `--skipHeaders` - Skip processing headers                        |
+|                      |                               | `--skipUTXOs` - Skip processing UTXOs                            |
+| `filereader`         | Read and process files        | `--verbose` - Enable verbose output                              |
+|                      |                               | `--checkHeights` - Check heights in UTXO headers                 |
+|                      |                               | `--useStore` - Use store                                         |
+| `getfsmstate`        | Get the current FSM state     | None                                                             |
+| `setfsmstate`        | Set the FSM state             | `--fsmstate` - Target FSM state                                  |
+|                      |                               | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
 
 ## Detailed Command Reference
 
@@ -77,11 +77,11 @@ Usage: teranode-cli <command> [options]
 ```bash
 teranode-cli aerospikereader <txid>
 ```
-Retrieves transaction data from Aerospike database using the provided transaction ID.
+Retrieves transaction data from an Aerospike database using the provided transaction ID.
 
-### Bitcoin 2 UTXO Set
+### Bitcoin to UTXO Set
 ```bash
-teranode-cli bitcoin2utxoset --bitcoinDir=<bitcoin-data-path> --outputDir=<output-dir-path> [options]
+teranode-cli bitcointoutxoset --bitcoinDir=<bitcoin-data-path> --outputDir=<output-dir-path> [options]
 ```
 Options:
 - `--bitcoinDir`: Location of Bitcoin data (required)
@@ -128,7 +128,7 @@ Options:
 ```bash
 teranode-cli import-blocks --file=<path>
 ```
-Imports blockchain data from a CSV file.
+Import blockchain data from a CSV file.
 
 Options:
 - `--file`: CSV file path to import (required)

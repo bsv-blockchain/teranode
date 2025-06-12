@@ -2,27 +2,38 @@ package bitcoin
 
 import (
 	"encoding/binary"
-	"errors"
 	"reflect"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/btcsuite/goleveldb/leveldb"
 	"github.com/btcsuite/goleveldb/leveldb/opt"
 )
 
+// FileIndex represents the structure of a file index in the Bitcoin index database.
 type FileIndex struct {
 	NBlocks      int `json:"nBlocks"`
-	NSize        int `json:"nSize"`
-	NUndoSize    int `json:"nUndoSize"`
 	NHeightFirst int `json:"nHeightFirst"`
 	NHeightLast  int `json:"nHeightLast"`
+	NSize        int `json:"nSize"`
 	NTimeFirst   int `json:"nTimeFirst"`
 	NTimeLast    int `json:"nTimeLast"`
+	NUndoSize    int `json:"nUndoSize"`
 }
 
+// IndexDB represents a read-only index database for Bitcoin blocks.
 type IndexDB struct {
 	db *leveldb.DB
 }
 
+// NewIndexDB creates a new IndexDB instance with the specified path.
+// It opens a LevelDB database in read-only mode with no compression.
+//
+// Parameters:
+//   - path: The file path to the LevelDB database.
+//
+// Returns:
+//   - A pointer to an IndexDB instance if successful.
+//   - An error if the database cannot be opened.
 func NewIndexDB(path string) (*IndexDB, error) {
 	db, err := leveldb.OpenFile(path, &opt.Options{
 		Compression: opt.NoCompression,
@@ -37,10 +48,20 @@ func NewIndexDB(path string) (*IndexDB, error) {
 	}, nil
 }
 
+// Close closes the index database.
+//
+// Returns:
+//   - An error if the database cannot be closed, otherwise nil.
 func (in *IndexDB) Close() error {
 	return in.db.Close()
 }
 
+// GetLastHeight retrieves the last height from the index database.
+// It fetches the last file index and extracts the last block height.
+//
+// Returns:
+//   - The last block height as an integer.
+//   - An error if the last file index cannot be retrieved.
 func (in *IndexDB) GetLastHeight() (int, error) {
 	index, err := in.getLastFileIndex()
 	if err != nil {
@@ -50,6 +71,7 @@ func (in *IndexDB) GetLastHeight() (int, error) {
 	return index.NHeightLast, nil
 }
 
+// getFileIndex retrieves the file index for a given file number from the database.
 func (in *IndexDB) getFileIndex(file uint32) (*FileIndex, error) {
 	bFile := IntToLittleEndianBytes(file)
 	bFile = append([]byte{0x66}, bFile...)
@@ -64,13 +86,16 @@ func (in *IndexDB) getFileIndex(file uint32) (*FileIndex, error) {
 	return index, nil
 }
 
+// getLastFileIndex retrieves the last file index from the database.
 func (in *IndexDB) getLastFileIndex() (*FileIndex, error) {
 	val, err := in.db.Get([]byte{0x6c}, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	index, err := in.getFileIndex(binary.LittleEndian.Uint32(val))
+	var index *FileIndex
+
+	index, err = in.getFileIndex(binary.LittleEndian.Uint32(val))
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +103,17 @@ func (in *IndexDB) getLastFileIndex() (*FileIndex, error) {
 	return index, nil
 }
 
+// IntToLittleEndianBytes converts an integer to a byte slice in little-endian format.
+// It supports various integer types, including unsigned and signed integers.
+//
+// Parameters:
+//   - input: An integer value to be converted. Supported types include uint8, uint16, uint32, uint64, int32, and int64.
+//
+// Returns:
+//   - A byte slice representing the input integer in little-endian format.
+//
+// Panics:
+//   - If the input type is not supported, the function will panic with an error message.
 func IntToLittleEndianBytes(input interface{}) []byte {
 	switch t, v := reflect.TypeOf(input), reflect.ValueOf(input); t.Kind() {
 	case reflect.Uint8:
@@ -108,10 +144,18 @@ func IntToLittleEndianBytes(input interface{}) []byte {
 
 		return buf
 	default:
-		panic(errors.New("input type is not supported"))
+		panic(errors.New(9, "input type is not supported"))
 	}
 }
 
+// DeserializeFileIndex deserializes a byte slice into a FileIndex struct.
+// It extracts multiple variable-length integers from the input data to populate the fields of the FileIndex.
+//
+// Parameters:
+//   - data: A byte slice containing the serialized FileIndex data.
+//
+// Returns:
+//   - A pointer to a FileIndex struct populated with the deserialized values.
 func DeserializeFileIndex(data []byte) *FileIndex {
 	var pos int
 
@@ -146,6 +190,15 @@ func DeserializeFileIndex(data []byte) *FileIndex {
 	}
 }
 
+// DecodeVarIntForIndex decodes a variable-length integer from the input byte slice.
+// It uses a continuation bit to determine whether more bytes are part of the integer.
+//
+// Parameters:
+//   - input: A byte slice containing the encoded variable-length integer.
+//
+// Returns:
+//   - n: The decoded integer value.
+//   - pos: The number of bytes read from the input slice.
 func DecodeVarIntForIndex(input []byte) (n int, pos int) {
 	for {
 		data := input[pos]

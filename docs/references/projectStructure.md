@@ -20,7 +20,7 @@ teranode/
 │
 ├── cmd/                          # Directory containing command-line tools and utilities
 │   ├── aerospikereader/          # Command related to Aerospike reader functionality
-│   ├── bitcoin2utxoset/          # Bitcoin to UTXO set utility
+│   ├── bitcointoutxoset/         # Bitcoin to UTXO set utility
 │   ├── checkblocktemplate/       # Tool to check block templates
 │   ├── filereader/               # Utility for reading files
 │   ├── getfsmstate/              # Tool to get FSM state

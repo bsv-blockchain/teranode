@@ -99,7 +99,7 @@ docker run -it \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
     --entrypoint="" \
   434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv-public:v0.5.50 \
-  /app/bitcoin2utxoset.run -bitcoinDir=/home/ubuntu/bitcoin-data -outputDir=/mnt/teranode/seed/export
+  /app/bitcointoutxoset.run -bitcoinDir=/home/ubuntu/bitcoin-data -outputDir=/mnt/teranode/seed/export
 ```
 
 This script assumes your `bitcoin-data` directory is located in `/home/ubuntu/bitcoin-data` and contains the `blocks`

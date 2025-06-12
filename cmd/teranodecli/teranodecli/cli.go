@@ -8,7 +8,7 @@ import (
 	"sort"
 
 	"github.com/bitcoin-sv/teranode/cmd/aerospikereader"
-	"github.com/bitcoin-sv/teranode/cmd/bitcoin2utxoset"
+	"github.com/bitcoin-sv/teranode/cmd/bitcointoutxoset"
 	"github.com/bitcoin-sv/teranode/cmd/checkblocktemplate"
 	"github.com/bitcoin-sv/teranode/cmd/filereader"
 	"github.com/bitcoin-sv/teranode/cmd/getfsmstate"
@@ -178,7 +178,7 @@ func Start(args []string, version, commit string) {
 
 			return nil
 		}
-	case "bitcoin2utxoset":
+	case "bitcointoutxoset":
 		blockchainDir := cmd.FlagSet.String("bitcoinDir", "", "Location of bitcoin data")
 		outputDir := cmd.FlagSet.String("outputDir", "", "Output directory for UTXO set.")
 		skipHeaders := cmd.FlagSet.Bool("skipHeaders", false, "Skip processing headers")
@@ -189,19 +189,20 @@ func Start(args []string, version, commit string) {
 		dumpRecords := cmd.FlagSet.Int("dumpRecords", 0, "Dump records from index")
 		cmd.Execute = func(args []string) error {
 			if *blockchainDir == "" {
-				return errors.NewProcessingError("The 'bitcoinDir' flag is mandatory.")
+				return errors.NewProcessingError("the 'bitcoinDir' flag is mandatory.")
 			}
 
 			// Check the bitcoinDir exists
 			if _, err := os.Stat(*blockchainDir); os.IsNotExist(err) {
-				return errors.NewProcessingError("Couldn't find %s", *blockchainDir)
+				return errors.NewProcessingError("couldn't find %s", *blockchainDir)
 			}
 
 			if *outputDir == "" {
-				return errors.NewProcessingError("The 'outputDir' flag is mandatory.")
+				return errors.NewProcessingError("the 'outputDir' flag is mandatory.")
 			}
 
-			bitcoin2utxoset.Bitcoin2Utxoset(logger, tSettings, *blockchainDir, *outputDir, *skipHeaders,
+			// Run the conversion
+			bitcointoutxoset.ConvertBitcoinToUtxoSet(logger, tSettings, *blockchainDir, *outputDir, *skipHeaders,
 				*skipUTXOs, *blockHashStr, *previousBlockHashStr, *blockHeightUint, *dumpRecords)
 
 			return nil
