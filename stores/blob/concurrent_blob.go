@@ -2,6 +2,12 @@
 // The blob package is designed to store, retrieve, and manage arbitrary binary data (blobs) with
 // features such as customizable storage backends, Delete-At-Height (DAH) functionality for automatic
 // data expiration, and a standardized HTTP API.
+//
+// This file implements the ConcurrentBlob wrapper, which provides thread-safe access to blob storage
+// with optimized concurrency patterns. It uses a double-checked locking pattern to ensure that only
+// one fetch operation occurs at a time for each unique key, while allowing concurrent operations on
+// different keys. This significantly improves performance in high-concurrency environments where
+// the same blob might be requested multiple times simultaneously.
 package blob
 
 import (

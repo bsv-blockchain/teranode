@@ -1,4 +1,18 @@
 // Package blob provides blob storage functionality with various storage backend implementations.
+// It offers a unified interface for storing, retrieving, and managing binary large objects (blobs)
+// across different storage backends including memory, file system, S3, and HTTP.
+//
+// The package is designed to support blockchain data storage requirements with features like:
+// - Delete-At-Height (DAH) functionality for automatic blockchain-based data expiration
+// - Concurrent access patterns for high-throughput environments
+// - Batching capabilities for efficient bulk operations
+// - Streaming data access through io.Reader interfaces
+// - Range-based content retrieval for partial data access
+// - HTTP API for remote blob store interaction
+//
+// The architecture follows a modular design with a core interface (Store) that can be
+// implemented by various backends and enhanced with wrapper implementations that add
+// functionality like concurrency control, batching, and DAH management.
 package blob
 
 import (
@@ -26,6 +40,18 @@ import (
 // - batcher: Efficient batch processing of multiple operations
 // - localdah: Delete-At-Height functionality for blockchain-based expiration
 // - concurrent: Thread-safe access to the underlying store
+//
+// The Store interface is designed to be composable, allowing implementations to be
+// stacked to provide combined functionality. For example, a file-based store can be
+// wrapped with a batcher for improved write performance, then wrapped with a localdah
+// implementation for automatic expiration, and finally wrapped with a concurrent
+// implementation for thread safety.
+//
+// All methods accept a context.Context parameter to support cancellation and timeouts,
+// which is particularly important for operations that may involve network or disk I/O.
+// Most methods also accept optional FileOption parameters that can modify the behavior
+// of the operation, such as specifying a Delete-At-Height value or controlling whether
+// existing blobs can be overwritten.
 type Store interface {
 	// Health checks the health status of the blob store.
 	// Parameters:

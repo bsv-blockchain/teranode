@@ -1,3 +1,17 @@
+// Package batcher provides a batching wrapper implementation for the blob.Store interface.
+// It improves performance by aggregating multiple small blob operations into larger batches,
+// which reduces overhead for storage backends with high per-operation costs (like network or disk I/O).
+//
+// The batcher works by collecting individual blob operations in memory until either:
+// - The accumulated data reaches a configured size threshold
+// - A background process flushes the batch after a timeout
+//
+// This implementation is particularly useful for high-throughput scenarios where many small
+// blobs are being stored in rapid succession. By batching these operations, it significantly
+// reduces the number of actual storage operations performed on the underlying store.
+//
+// Note that the batcher only supports write operations (Set). Read operations (Get, Exists)
+// and metadata operations (GetDAH, SetDAH) are passed through to the underlying store.
 package batcher
 
 import (
@@ -18,30 +32,66 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// Batcher implements the blob.Store interface with batching capabilities.
+// It aggregates multiple small blob operations into larger batches to improve performance
+// when working with storage backends that have high per-operation costs.
 type Batcher struct {
+	// logger provides structured logging for batcher operations and errors
 	logger           ulogger.Logger
+	// blobStore is the underlying blob storage implementation where batches are ultimately stored
 	blobStore        blobStoreSetter
+	// sizeInBytes defines the maximum size of a batch in bytes before it's flushed
 	sizeInBytes      int
+	// writeKeys determines whether to store a separate index of keys for each batch
 	writeKeys        bool
+	// queue is a lock-free queue for storing batch items to be processed asynchronously
 	queue            *util.LockFreeQ[BatchItem]
+	// queueCtx is the context for controlling the background batch processing goroutine
 	queueCtx         context.Context
+	// queueCancel is the function to cancel the queue context and stop background processing
 	queueCancel      context.CancelFunc
+	// currentBatch holds the accumulated blob data for the current batch
 	currentBatch     []byte
+	// currentBatchKeys holds the accumulated key data for the current batch (if writeKeys is true)
 	currentBatchKeys []byte
 }
 
+// BatchItem represents a single blob operation to be included in a batch.
+// It contains all the necessary information to store a blob in the underlying store.
 type BatchItem struct {
+	// hash is the unique identifier for the blob, typically a transaction ID or similar hash
 	hash     chainhash.Hash
+	// fileType indicates the type of file being stored (e.g., transaction, block, etc.)
 	fileType fileformat.FileType
+	// value contains the actual blob data to be stored
 	value    []byte
 	// next  atomic.Pointer[BatchItem]
 }
 
+// blobStoreSetter defines the minimal interface required for the underlying blob store.
+// The batcher only needs to interact with a subset of the full blob.Store interface,
+// specifically the Health check and Set operations.
 type blobStoreSetter interface {
+	// Health checks the health status of the underlying blob store
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
+	// Set stores a blob in the underlying store
 	Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error
 }
 
+// New creates a new Batcher instance that wraps the provided blob store.
+//
+// The batcher improves performance by aggregating multiple small blob operations into larger batches,
+// which reduces overhead for storage backends with high per-operation costs. It starts a background
+// goroutine that processes queued items and flushes batches when they reach the configured size.
+//
+// Parameters:
+//   - logger: Logger instance for batcher operations and error reporting
+//   - blobStore: The underlying blob store where batches will be stored
+//   - sizeInBytes: Maximum size of a batch in bytes before it's automatically flushed
+//   - writeKeys: Whether to store a separate index of keys for each batch, enabling later retrieval by key
+//
+// Returns:
+//   - *Batcher: A configured batcher instance ready to accept blob operations
 func New(logger ulogger.Logger, blobStore blobStoreSetter, sizeInBytes int, writeKeys bool) *Batcher {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := &Batcher{
@@ -102,6 +152,16 @@ func New(logger ulogger.Logger, blobStore blobStoreSetter, sizeInBytes int, writ
 	return b
 }
 
+// processBatchItem handles a single batch item, adding it to the current batch.
+// If adding the item would exceed the configured batch size limit, the current batch
+// is first flushed to the underlying store. This method is called by the background
+// processing goroutine for each item in the queue.
+//
+// Parameters:
+//   - batchItem: The batch item to process, containing the blob data and metadata
+//
+// Returns:
+//   - error: Any error that occurred during processing, particularly during batch flushing
 func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 	// check whether our batch would overflow the size limit, or is zero, which means we have 1 big transaction
 	currentPos := len(b.currentBatch)
@@ -150,6 +210,18 @@ func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 	return nil
 }
 
+// writeBatch flushes the current batch to the underlying blob store.
+// It generates a unique key for the batch based on the current time and random bytes,
+// then writes both the batch data and (optionally) the batch keys to the underlying store.
+// The batch keys provide an index that maps each original blob key to its position within
+// the batch data, enabling potential future retrieval by key.
+//
+// Parameters:
+//   - currentBatch: The accumulated blob data to write as a single batch
+//   - batchKeys: The accumulated key data to write (if writeKeys is enabled)
+//
+// Returns:
+//   - error: Any error that occurred during the write operation
 func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 	batchKey := make([]byte, 4)
 
@@ -197,11 +269,32 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 	return nil
 }
 
+// Health checks the health status of the batcher and its underlying blob store.
+// This method simply delegates to the underlying blob store's Health method,
+// as the batcher's health is directly dependent on the health of the store it wraps.
+//
+// Parameters:
+//   - ctx: Context for the health check operation
+//   - checkLiveness: Whether to perform a more thorough liveness check
+//
+// Returns:
+//   - int: HTTP status code indicating health status
+//   - string: Description of the health status
+//   - error: Any error that occurred during the health check
 func (b *Batcher) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	// just pass the health of the underlying blob store
 	return b.blobStore.Health(ctx, checkLiveness)
 }
 
+// Close shuts down the batcher, stopping the background processing goroutine
+// and flushing any remaining items in the queue. This ensures that all pending
+// operations are completed before the batcher is terminated.
+//
+// Parameters:
+//   - ctx: Context for the close operation (unused in this implementation)
+//
+// Returns:
+//   - error: Any error that occurred during shutdown
 func (b *Batcher) Close(_ context.Context) error {
 	// Signal the background goroutine to stop
 	b.queueCancel()
@@ -212,6 +305,19 @@ func (b *Batcher) Close(_ context.Context) error {
 	return nil
 }
 
+// SetFromReader reads data from an io.ReadCloser and queues it for batch processing.
+// This method is useful for streaming large blobs directly from a source (like an HTTP request)
+// without having to load the entire blob into memory first.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused in this implementation as processing is asynchronous)
+//   - key: The key identifying the blob
+//   - fileType: The type of the file
+//   - reader: Reader providing the blob data
+//   - opts: Optional file options (ignored in this implementation)
+//
+// Returns:
+//   - error: Any error that occurred during reading or queueing
 func (b *Batcher) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
 	defer reader.Close()
 
@@ -223,6 +329,20 @@ func (b *Batcher) SetFromReader(ctx context.Context, key []byte, fileType filefo
 	return b.Set(ctx, key, fileType, bb, opts...)
 }
 
+// Set queues a blob for batch processing. The blob is not immediately stored in the
+// underlying blob store but is instead added to a queue for asynchronous processing.
+// This allows the caller to continue execution without waiting for the actual storage
+// operation to complete.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused as processing is asynchronous)
+//   - hash: The key identifying the blob
+//   - fileType: The type of the file
+//   - value: The blob data to store
+//   - opts: Optional file options (ignored in this implementation)
+//
+// Returns:
+//   - error: Any error that occurred during queueing
 func (b *Batcher) Set(_ context.Context, hash []byte, fileType fileformat.FileType, value []byte, _ ...options.FileOption) error {
 	b.queue.Enqueue(BatchItem{
 		hash:     chainhash.Hash(hash),
@@ -233,30 +353,113 @@ func (b *Batcher) Set(_ context.Context, hash []byte, fileType fileformat.FileTy
 	return nil
 }
 
+// SetDAH is not supported by the batcher implementation.
+// The batcher is designed primarily for efficient write operations and does not
+// support metadata operations like setting Delete-At-Height values.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused)
+//   - key: The key identifying the blob (unused)
+//   - fileType: The type of the file (unused)
+//   - dah: The delete at height value (unused)
+//   - opts: Optional file options (unused)
+//
+// Returns:
+//   - error: Always returns errors.NewStorageError with an unsupported operation message
 func (b *Batcher) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ uint32, _ ...options.FileOption) error {
-	return errors.NewProcessingError("DAH is not supported in a batcher store")
+	return errors.NewStorageError("SetDAH not supported by batcher")
 }
 
+// GetDAH is not supported by the batcher implementation.
+// The batcher is designed primarily for efficient write operations and does not
+// support metadata operations like retrieving Delete-At-Height values.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused)
+//   - key: The key identifying the blob (unused)
+//   - fileType: The type of the file (unused)
+//   - opts: Optional file options (unused)
+//
+// Returns:
+//   - uint32: Always returns 0
+//   - error: Always returns errors.NewStorageError with an unsupported operation message
 func (b *Batcher) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (uint32, error) {
-	return 0, errors.NewProcessingError("DAH is not supported in a batcher store")
+	return 0, errors.NewStorageError("GetDAH not supported by batcher")
 }
 
+// GetIoReader is not supported by the batcher implementation.
+// The batcher is designed primarily for efficient write operations and does not
+// support read operations like retrieving blob data.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused)
+//   - key: The key identifying the blob (unused)
+//   - fileType: The type of the file (unused)
+//   - opts: Optional file options (unused)
+//
+// Returns:
+//   - io.ReadCloser: Always returns nil
+//   - error: Always returns errors.NewStorageError with an unsupported operation message
 func (b *Batcher) GetIoReader(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (io.ReadCloser, error) {
-	return nil, errors.NewStorageError("getIoReader is not supported in a batcher store")
+	return nil, errors.NewStorageError("GetIoReader not supported by batcher")
 }
 
+// Get is not supported by the batcher implementation.
+// The batcher is designed primarily for efficient write operations and does not
+// support read operations like retrieving blob data.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused)
+//   - key: The key identifying the blob (unused)
+//   - fileType: The type of the file (unused)
+//   - opts: Optional file options (unused)
+//
+// Returns:
+//   - []byte: Always returns nil
+//   - error: Always returns errors.NewStorageError with an unsupported operation message
 func (b *Batcher) Get(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) ([]byte, error) {
-	return nil, errors.NewStorageError("get is not supported in a batcher store")
+	return nil, errors.NewStorageError("Get not supported by batcher")
 }
 
+// Exists is not supported by the batcher implementation.
+// The batcher is designed primarily for efficient write operations and does not
+// support query operations like checking for blob existence.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused)
+//   - key: The key identifying the blob (unused)
+//   - fileType: The type of the file (unused)
+//   - opts: Optional file options (unused)
+//
+// Returns:
+//   - bool: Always returns false
+//   - error: Always returns errors.NewStorageError with an unsupported operation message
 func (b *Batcher) Exists(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (bool, error) {
-	return false, errors.NewStorageError("exists is not supported in a batcher store")
+	return false, errors.NewStorageError("Exists not supported by batcher")
 }
 
+// Del is not supported by the batcher implementation.
+// The batcher is designed primarily for efficient write operations and does not
+// support deletion operations.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused)
+//   - key: The key identifying the blob (unused)
+//   - fileType: The type of the file (unused)
+//   - opts: Optional file options (unused)
+//
+// Returns:
+//   - error: Always returns errors.NewStorageError with an unsupported operation message
 func (b *Batcher) Del(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) error {
-	return errors.NewStorageError("del is not supported in a batcher store")
+	return errors.NewStorageError("Del not supported by batcher")
 }
 
+// SetCurrentBlockHeight is a no-op in the batcher implementation.
+// The batcher does not implement Delete-At-Height functionality, so it ignores
+// block height updates.
+//
+// Parameters:
+//   - height: The current block height (ignored)
 func (b *Batcher) SetCurrentBlockHeight(_ uint32) {
 	// noop
 }

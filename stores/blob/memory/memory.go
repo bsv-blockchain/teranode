@@ -2,6 +2,17 @@
 // This implementation is designed for temporary storage, testing, and development purposes.
 // It stores all blobs in memory, making it fast but volatile (data is lost on process restart).
 // The implementation supports all blob.Store features including DAH-based expiration.
+//
+// The memory implementation offers several advantages for development and testing:
+// - Zero configuration required - works out of the box
+// - Extremely fast access with no I/O overhead
+// - Automatic cleanup of expired blobs via background goroutine
+// - Thread-safe operations with internal synchronization
+// - Support for all blob.Store interface features
+//
+// This implementation is not recommended for production use with large datasets
+// as it will consume system memory proportional to the stored data size and
+// does not persist data across process restarts.
 package memory
 
 import (

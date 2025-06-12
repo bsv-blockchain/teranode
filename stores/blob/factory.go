@@ -1,4 +1,8 @@
 // Package blob provides blob storage functionality with various storage backend implementations.
+// This file contains the factory functions for creating and configuring blob stores with
+// different backends and optional wrapper functionality like batching and Delete-At-Height (DAH).
+// The factory pattern used here allows for flexible configuration of blob stores through URL parameters,
+// enabling runtime selection of storage backends and features.
 package blob
 
 import (

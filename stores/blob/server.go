@@ -12,7 +12,14 @@
 // - Streaming data access through io.Reader interfaces
 //
 // This package integrates with the broader Teranode system to provide reliable data storage
-// with features specifically designed for blockchain data management.
+// with features specifically designed for blockchain data management. The HTTP server component
+// provides a RESTful API that follows standard HTTP conventions:
+//   - GET /blob/{key}.{fileType} - Retrieve a blob
+//   - HEAD /blob/{key}.{fileType} - Check if a blob exists
+//   - POST /blob/{key}.{fileType} - Store a new blob
+//   - PATCH /blob/{key}.{fileType} - Update blob's Delete-At-Height value
+//   - DELETE /blob/{key}.{fileType} - Delete a blob
+//   - GET /health - Health check endpoint
 package blob
 
 import (
@@ -38,6 +45,17 @@ const NotFoundMsg = "Not found"
 // It implements the http.Handler interface and exposes blob operations as RESTful endpoints.
 // The server supports standard CRUD operations plus specialized features like health checks,
 // range requests, and DAH management.
+//
+// The server follows RESTful principles and uses standard HTTP methods for operations:
+// - GET: Retrieve blobs with support for HTTP Range headers for partial content
+// - HEAD: Check blob existence without retrieving content
+// - POST: Store new blobs with streaming support for large data
+// - PATCH: Update blob metadata (specifically DAH values)
+// - DELETE: Remove blobs from storage
+//
+// The server automatically handles content negotiation, status codes, and error responses
+// according to HTTP standards. It's designed to be deployed as part of a microservice
+// architecture where other services can interact with blob storage over HTTP.
 type HTTPBlobServer struct {
 	// store is the underlying blob storage implementation
 	store Store
@@ -178,9 +196,14 @@ func (s *HTTPBlobServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleExists processes blob existence check requests (HTTP HEAD).
-// It checks if a blob exists in the store and returns an appropriate HTTP status code:
+// It checks if a blob exists in the store without retrieving the actual content,
+// making it an efficient way to verify blob availability. The method extracts the
+// blob key and file type from the request path and queries the underlying store.
+//
+// The function returns appropriate HTTP status codes based on the result:
 // - 200 OK if the blob exists
 // - 404 Not Found if the blob doesn't exist
+// - 500 Internal Server Error if an error occurs during the check
 //
 // Parameters:
 //   - w: HTTP response writer for sending the existence check response
@@ -209,6 +232,20 @@ func (s *HTTPBlobServer) handleExists(w http.ResponseWriter, r *http.Request, op
 // handleGet processes blob retrieval requests (HTTP GET).
 // It supports both full blob retrieval and partial retrieval via Range headers.
 // For Range requests, it delegates to handleRangeRequest for specialized handling.
+//
+// The function follows these steps:
+// 1. Extract the blob key and file type from the request path
+// 2. Check for Range headers and delegate to handleRangeRequest if present
+// 3. For full retrievals, stream the blob directly from the store to the HTTP response
+// 4. Set appropriate Content-Type headers based on the file type
+//
+// The function handles errors by returning appropriate HTTP status codes:
+// - 200 OK for successful retrievals
+// - 404 Not Found if the blob doesn't exist
+// - 500 Internal Server Error for other errors
+//
+// For large blobs, the function uses streaming to minimize memory usage by not
+// loading the entire blob into memory at once.
 //
 // The function streams data directly from the store to the HTTP response to minimize
 // memory usage when handling large blobs.
@@ -250,8 +287,20 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 
 // handleRangeRequest processes partial content requests using HTTP Range headers.
 // It implements the HTTP/1.1 Range request specification to return only a portion of a blob.
-// The function parses the Range header, retrieves the requested byte range, and returns
-// the data with appropriate Content-Range headers and 206 Partial Content status.
+// This is particularly useful for large blobs where the client only needs a specific section,
+// such as resumable downloads or media streaming.
+//
+// The function follows these steps:
+// 1. Parse the Range header to determine the requested byte range
+// 2. Retrieve the full blob from the store
+// 3. Validate the requested range against the actual blob size
+// 4. Set appropriate Content-Range and Content-Length headers
+// 5. Return the requested portion with 206 Partial Content status
+//
+// The function handles various edge cases including:
+// - Invalid range formats
+// - Ranges that exceed the blob size
+// - Missing or malformed Range headers
 //
 // Parameters:
 //   - w: HTTP response writer for sending the partial content response
@@ -309,14 +358,23 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 	_, _ = w.Write(data)
 }
 
-// parseRange parses the Range header from HTTP requests.
+// parseRange parses the Range header from HTTP requests according to RFC 7233.
+// It extracts the start and end byte positions from a Range header value in the format
+// "bytes=start-end". This function is used to support partial content requests for large blobs.
+//
+// The function handles various range formats:
+// - "bytes=0-499" - First 500 bytes
+// - "bytes=500-999" - Second 500 bytes
+// - "bytes=-500" - Last 500 bytes (converted to absolute positions internally)
+// - "bytes=500-" - All bytes from position 500 to the end
+//
 // Parameters:
-//   - rangeHeader: The Range header value
+//   - rangeHeader: The Range header value from the HTTP request
 //
 // Returns:
-//   - start: Starting byte position
-//   - end: Ending byte position
-//   - error: Any error that occurred during parsing
+//   - start: Starting byte position (inclusive)
+//   - end: Ending byte position (inclusive)
+//   - error: Any error that occurred during parsing, such as invalid format
 func parseRange(rangeHeader string) (int, int, error) {
 	if !strings.HasPrefix(rangeHeader, "bytes=") {
 		return 0, 0, errors.NewInvalidArgumentError("invalid range header format")
@@ -350,6 +408,16 @@ func parseRange(rangeHeader string) (int, int, error) {
 // using the key extracted from the URL path. The function uses streaming via
 // SetFromReader to efficiently handle large blob uploads without excessive memory usage.
 //
+// The function follows these steps:
+// 1. Extract the blob key and file type from the request path
+// 2. Stream the request body directly to the underlying store
+// 3. Return appropriate HTTP status codes based on the result
+//
+// The function handles errors by returning appropriate HTTP status codes:
+// - 201 Created for successful storage operations
+// - 400 Bad Request if the key cannot be extracted from the path
+// - 500 Internal Server Error for storage failures
+//
 // Parameters:
 //   - w: HTTP response writer for sending the storage operation response
 //   - r: HTTP request containing the blob key in the path and content in the body
@@ -380,6 +448,18 @@ func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts 
 // It updates the DAH value for an existing blob, which determines when the blob
 // will be automatically deleted based on blockchain height. The DAH value is provided
 // as a query parameter in the request URL.
+//
+// The function follows these steps:
+// 1. Extract the blob key and file type from the request path
+// 2. Parse the DAH value from the 'dah' query parameter
+// 3. Update the DAH value in the underlying store
+// 4. Return appropriate HTTP status codes based on the result
+//
+// The function handles errors by returning appropriate HTTP status codes:
+// - 204 No Content for successful DAH updates
+// - 400 Bad Request if the key cannot be extracted or the DAH value is invalid
+// - 404 Not Found if the blob doesn't exist
+// - 500 Internal Server Error for other failures
 //
 // Parameters:
 //   - w: HTTP response writer for sending the DAH update response
@@ -418,6 +498,17 @@ func (s *HTTPBlobServer) handleSetDAH(w http.ResponseWriter, r *http.Request, op
 // It permanently removes a blob from the store based on the key in the URL path.
 // Upon successful deletion, it returns HTTP 204 No Content status.
 //
+// The function follows these steps:
+// 1. Extract the blob key and file type from the request path
+// 2. Delete the blob from the underlying store
+// 3. Return appropriate HTTP status codes based on the result
+//
+// The function handles errors by returning appropriate HTTP status codes:
+// - 204 No Content for successful deletions
+// - 400 Bad Request if the key cannot be extracted from the path
+// - 404 Not Found if the blob doesn't exist
+// - 500 Internal Server Error for other failures
+//
 // Parameters:
 //   - w: HTTP response writer for sending the deletion response
 //   - r: HTTP request containing the blob key in the path
@@ -438,14 +529,24 @@ func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, op
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// getKeyFromPath extracts the blob key from the request path.
+// getKeyFromPath extracts the blob key and file type from the request path.
+// It parses paths in the format "/blob/{key}.{fileType}" where {key} is a base64-encoded
+// blob key and {fileType} is a string representation of the file type.
+//
+// The function performs these steps:
+// 1. Validate the path starts with "/blob/"
+// 2. Extract the key and file type portions from the path
+// 3. Decode the base64-encoded key
+// 4. Convert the file type string to a fileformat.FileType enum
+//
 // Parameters:
-//   - path: The request path
+//   - path: The HTTP request path to parse
 //
 // Returns:
-//   - []byte: Decoded key
-//   - fileType: The file type
-//   - error: Any error that occurred during extraction
+//   - []byte: Decoded binary key that identifies the blob
+//   - fileType: Enumerated file type value from the fileformat package
+//   - error: Any error that occurred during extraction, such as invalid path format,
+//     invalid base64 encoding, or unrecognized file type
 func getKeyFromPath(path string) ([]byte, fileformat.FileType, error) {
 	// Assuming the path is in the format "/blob/{key}.{fileType}"
 	pos := strings.LastIndex(path, ".")

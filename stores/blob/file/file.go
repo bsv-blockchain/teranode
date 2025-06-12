@@ -1,7 +1,22 @@
 // Package file provides a filesystem-based implementation of the blob.Store interface.
-// This implementation stores blobs as files on disk with support for all Store interface
-// features including Delete-At-Height (DAH), checksums, headers, and footers. The file store
-// is designed for production use with durable, persistent storage of blob data.
+// Package file implements a file-based blob storage backend for the blob.Store interface.
+//
+// The file-based blob store provides persistent storage of blobs on the local filesystem,
+// with support for advanced features such as:
+//   - Delete-At-Height (DAH) for automatic cleanup of expired blobs
+//   - Optional checksumming for data integrity verification
+//   - Streaming read/write operations for memory-efficient handling of large blobs
+//   - Fallback to alternative storage locations (persistent subdirectory, longterm store)
+//   - Concurrent access management via semaphores
+//   - Optional header/footer support for blob metadata
+//
+// The implementation organizes blobs in a directory structure based on the first few bytes
+// of the blob key, which helps distribute files across the filesystem and improves lookup
+// performance. It also supports integration with a longterm storage backend for archival
+// purposes.
+//
+// This store is designed for production use in blockchain applications where reliability,
+// performance, and automatic cleanup of expired data are important requirements.
 package file
 
 import (
@@ -35,9 +50,22 @@ import (
 const checksumExtension = ".sha256"
 
 // File implements the blob.Store interface using the local filesystem for storage.
-// It provides persistent storage with features like checksumming, DAH-based cleanup,
-// and optional integration with a separate longterm storage backend for hybrid storage models.
-// The implementation includes background processes for tracking and cleaning expired blobs.
+// It provides a robust, persistent blob storage solution with features like automatic
+// cleanup of expired blobs, data integrity verification, and efficient handling of
+// large blobs through streaming operations.
+//
+// The File store organizes blobs in a directory structure based on the first few bytes
+// of the blob key to distribute files across the filesystem and improve lookup performance.
+// It supports concurrent access through semaphores and can integrate with a longterm
+// storage backend for archival purposes.
+//
+// Configuration options include:
+//   - Root directory path for blob storage
+//   - Optional persistent subdirectory for important blobs
+//   - Checksumming for data integrity verification
+//   - Header/footer support for blob metadata
+//   - Delete-At-Height (DAH) for automatic cleanup of expired blobs
+//   - Integration with longterm storage backend
 type File struct {
 	// path is the base directory path where blob files are stored
 	path string
@@ -90,13 +118,13 @@ var fileSemaphore = make(chan struct{}, 1024)
 // - dahCleanerInterval: Duration between DAH cleanup operations (e.g., "5m" for 5 minutes)
 //
 // Parameters:
-//   - logger: Logger instance for store operations and error reporting
+//   - logger: Logger instance for recording operations and errors
 //   - storeURL: URL containing the store configuration and path
 //   - opts: Additional store configuration options
 //
 // Returns:
 //   - *File: The configured file store instance
-//   - error: Any error that occurred during creation
+//   - error: Any error that occurred during initialization
 func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*File, error) {
 	if storeURL == nil {
 		return nil, errors.NewConfigurationError("storeURL is nil")
@@ -376,6 +404,19 @@ func (s *File) removeDAHFromMap(fileName string) {
 	s.fileDAHsMu.Unlock()
 }
 
+// Health checks the health status of the file-based blob store.
+// It verifies that the storage directory exists and is accessible by attempting to
+// create a temporary file. This ensures that the store can perform basic read/write
+// operations, which is essential for its functionality.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused in this implementation)
+//   - checkLiveness: Whether to perform a more thorough liveness check (unused in this implementation)
+//
+// Returns:
+//   - int: HTTP status code indicating health status (200 for healthy, 500 for unhealthy)
+//   - string: Description of the health status ("OK" or an error message)
+//   - error: Any error that occurred during the health check
 func (s *File) Health(_ context.Context, _ bool) (int, string, error) {
 	fileSemaphore <- struct{}{}
 	defer func() {
@@ -422,6 +463,15 @@ func (s *File) Health(_ context.Context, _ bool) (int, string, error) {
 	return http.StatusOK, "File Store: Healthy", nil
 }
 
+// Close performs any necessary cleanup for the file store.
+// In the current implementation, this is a no-op as the file store doesn't maintain
+// any resources that need explicit cleanup beyond what Go's garbage collector handles.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused in this implementation)
+//
+// Returns:
+//   - error: Always returns nil
 func (s *File) Close(_ context.Context) error {
 	// stop DAH cleaner
 	s.fileDAHsCtxCancel()
@@ -444,6 +494,28 @@ func (s *File) errorOnOverwrite(filename string, opts *options.Options) error {
 	return nil
 }
 
+// SetFromReader stores a blob in the file store from a streaming reader.
+// This method is more memory-efficient than Set for large blobs as it streams data
+// directly to disk without loading the entire blob into memory. It handles file creation,
+// directory creation if needed, and optional checksumming based on store configuration.
+//
+// The method follows these steps:
+// 1. Construct the target filename from the key and file type
+// 2. Create any necessary parent directories
+// 3. Create a temporary file for writing
+// 4. Stream data from the reader to the file, applying any headers/footers
+// 5. Calculate checksums if enabled
+// 6. Rename the temporary file to the final filename
+//
+// Parameters:
+//   - ctx: Context for the operation (unused in this implementation)
+//   - key: The key identifying the blob
+//   - fileType: The type of the file
+//   - reader: Reader providing the blob data
+//   - opts: Optional file options
+//
+// Returns:
+//   - error: Any error that occurred during the operation
 func (s *File) SetFromReader(_ context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
 	fileSemaphore <- struct{}{}
 	defer func() {
@@ -548,6 +620,19 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 	return nil
 }
 
+// Set stores a blob in the file store.
+// This method is a convenience wrapper around SetFromReader that converts the byte slice
+// to a reader before delegating to SetFromReader for the actual storage operation.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - key: The key identifying the blob
+//   - fileType: The type of the file
+//   - value: The blob data to store
+//   - opts: Optional file options
+//
+// Returns:
+//   - error: Any error that occurred during the operation
 func (s *File) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	reader := io.NopCloser(bytes.NewReader(value))
 
@@ -609,6 +694,20 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 	return fileName, nil
 }
 
+// SetDAH sets the Delete-At-Height (DAH) value for a blob in the file store.
+// The DAH value determines at which blockchain height the blob will be automatically deleted.
+// This implementation stores the DAH value in a separate file with the same name as the blob
+// but with a .dah extension, and also maintains an in-memory map of DAH values for quick access.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused in this implementation)
+//   - key: The key identifying the blob
+//   - fileType: The type of the file
+//   - newDAH: The delete at height value
+//   - opts: Optional file options
+//
+// Returns:
+//   - error: Any error that occurred during the operation, including if the blob doesn't exist
 func (s *File) SetDAH(_ context.Context, key []byte, fileType fileformat.FileType, newDAH uint32, opts ...options.FileOption) error {
 	// limit the number of concurrent file operations
 	fileSemaphore <- struct{}{}
@@ -700,6 +799,27 @@ func (s *File) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 	return dah, nil
 }
 
+// GetIoReader retrieves a blob from the file store as a streaming reader.
+// This method provides memory-efficient access to blob data by returning a file handle
+// that can be used to stream the data without loading it entirely into memory. It supports
+// fallback to alternative storage locations if the primary file is not found.
+//
+// The method follows these steps:
+// 1. Construct the filename from the key and file type
+// 2. Attempt to open the file from the primary storage location
+// 3. If not found, try alternative locations (persistent subdirectory, longterm store)
+// 4. Validate the file header if headers are enabled
+// 5. Return a reader for the file
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - key: The key identifying the blob
+//   - fileType: The type of the file
+//   - opts: Optional file options
+//
+// Returns:
+//   - io.ReadCloser: Reader for streaming the blob data
+//   - error: Any error that occurred during the operation
 func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	fileSemaphore <- struct{}{}
 	defer func() {
@@ -785,6 +905,20 @@ func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options
 	return nil, errors.ErrNotFound
 }
 
+// Get retrieves a blob from the file store.
+// This method is a convenience wrapper around GetIoReader that reads the entire blob
+// into memory and returns it as a byte slice. For large blobs, consider using GetIoReader
+// directly to avoid loading the entire blob into memory at once.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - key: The key identifying the blob
+//   - fileType: The type of the file
+//   - opts: Optional file options
+//
+// Returns:
+//   - []byte: The blob data
+//   - error: Any error that occurred during the operation
 func (s *File) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
 	fileReader, err := s.GetIoReader(ctx, key, fileType, opts...)
 	if err != nil {
@@ -803,6 +937,20 @@ func (s *File) Get(ctx context.Context, key []byte, fileType fileformat.FileType
 	return fileData.Bytes(), nil
 }
 
+// Exists checks if a blob exists in the file store.
+// This method attempts to find the blob file in the primary storage location,
+// and if not found, checks alternative locations (persistent subdirectory, longterm store).
+// It's more efficient than Get as it only checks for existence without reading the file contents.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - key: The key identifying the blob
+//   - fileType: The type of the file
+//   - opts: Optional file options
+//
+// Returns:
+//   - bool: True if the blob exists, false otherwise
+//   - error: Any error that occurred during the check (other than not found errors)
 func (s *File) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
 	// The GetIOReader method will handle file locking and error handling,
 	// This method is not updated to require fileType, as Exists is not a getter/setter for content.
@@ -822,6 +970,19 @@ func (s *File) Exists(ctx context.Context, key []byte, fileType fileformat.FileT
 	return true, nil
 }
 
+// Del deletes a blob from the file store.
+// This method removes the blob file and any associated files (such as checksum and DAH files).
+// It also removes the DAH entry from the in-memory map if it exists.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - key: The key identifying the blob to delete
+//   - fileType: The type of the file
+//   - opts: Optional file options
+//
+// Returns:
+//   - error: Any error that occurred during deletion, or nil if the blob was successfully deleted
+//           or didn't exist
 func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
 	fileSemaphore <- struct{}{}
 	defer func() {
