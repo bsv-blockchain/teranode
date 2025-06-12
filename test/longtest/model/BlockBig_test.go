@@ -16,13 +16,19 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/settings"
+	blobmemory "github.com/bitcoin-sv/teranode/stores/blob/memory"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,39 +36,11 @@ import (
 // go test -v -tags test_bigblock ./test/...
 
 func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
-	teranode_model.TestFileDir = "./test-generated_test_data/"
-	teranode_model.TestFileNameTemplate = teranode_model.TestFileDir + "subtree-%d.bin"
-	teranode_model.TestFileNameTemplateMerkleHashes = teranode_model.TestFileDir + "subtree-merkle-hashes.bin"
-	teranode_model.TestFileNameTemplateBlock = teranode_model.TestFileDir + "block.bin"
-	teranode_model.TestTxMetafileNameTemplate = teranode_model.TestFileDir + "txMeta.bin"
-	subtreeStore := teranode_model.NewLocalSubtreeStore()
-	txCount := uint64(4 * 1024)
-	teranode_model.TestSubtreeSize = 1024
+	txCount := uint64(4 * 1024) // configurable
+	subtreeSize := 1024         // configurable
 
-	block, err := teranode_model.GenerateTestBlock(txCount, subtreeStore, true)
+	block, subtreeStore, txMetaStore, err := createTestBlockWithMultipleTxs(t, txCount, subtreeSize)
 	require.NoError(t, err)
-
-	txMetaStore := memory.New(ulogger.TestLogger{})
-	teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, txMetaStore, txmetacache.Unallocated, 1024)
-	require.NoError(t, err)
-	err = teranode_model.LoadTxMetaIntoMemory()
-	require.NoError(t, err)
-
-	// check if the first txid is in the txMetaStore
-	reqTxId, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
-	require.NoError(t, err)
-
-	data, err := teranode_model.TestCachedTxMetaStore.Get(context.Background(), reqTxId)
-	require.NoError(t, err)
-	require.Equal(t, &meta.Data{
-		Fee:         1,
-		SizeInBytes: 1,
-		TxInpoints:  meta.TxInpoints{ParentTxHashes: nil, Idxs: nil},
-	}, data)
-
-	for idx, subtreeHash := range block.Subtrees {
-		subtreeStore.Files[*subtreeHash] = idx
-	}
 
 	currentChain := make([]*teranode_model.BlockHeader, 11)
 	currentChainIDs := make([]uint32, 11)
@@ -80,12 +58,207 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	// check if the block is valid, we expect an error because of the duplicate transaction
 	oldBlockIDs := util.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, teranode_model.NewBloomStats())
+	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, teranode_model.NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
 
 	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncedMapToUint32Slice(oldBlockIDs)
 	require.False(t, hasTransactionsReferencingOldBlocks)
+}
+
+func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
+	var calculatedMerkleRootHash *chainhash.Hash
+	if len(hashes) == 1 {
+		calculatedMerkleRootHash = hashes[0]
+	} else if len(hashes) > 0 {
+		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(hashes)))
+		if err != nil {
+			return nil, err
+		}
+
+		for _, hash := range hashes {
+			err := st.AddNode(*hash, 1, 0)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		calculatedMerkleRoot := st.RootHash()
+		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return calculatedMerkleRootHash, nil
+}
+
+// createTestBlockWithMultipleTxs creates a block with a coinbase and (txCount-1) regular transactions, builds the subtree, stores tx meta, calculates the merkle root, mines the header, and returns the block, subtree store, and tx meta store.
+func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize int) (*teranode_model.Block, *blobmemory.Memory, *memory.Memory, error) {
+	ctx := context.Background()
+
+	var err error
+
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+
+	blockID := uint32(0) // Use a dummy block ID for all txs in this test
+
+	// Coinbase tx
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From(
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		0xffffffff,
+		"",
+		0,
+	)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+
+	txMetaStore := memory.New(ulogger.TestLogger{})
+	subtreeStore := blobmemory.New()
+
+	// Store coinbase meta with block ID
+	_, err = txMetaStore.Create(ctx, coinbaseTx, blockID)
+	require.NoError(t, err)
+
+	txs := make([]*bt.Tx, txCount)
+	txs[0] = coinbaseTx
+	prevTx := coinbaseTx
+
+	for i := uint64(1); i < txCount; i++ {
+		tx := bt.NewTx()
+		_ = tx.FromUTXOs(&bt.UTXO{
+			TxIDHash:      prevTx.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: prevTx.Outputs[0].LockingScript,
+			Satoshis:      prevTx.Outputs[0].Satoshis,
+		})
+		_ = tx.AddP2PKHOutputFromAddress(address.AddressString, prevTx.Outputs[0].Satoshis-1)
+		_ = tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+		txs[i] = tx
+
+		// Store meta for the parent (prevTx) with block ID
+		err := txMetaStore.SetMinedMulti(ctx, []*chainhash.Hash{prevTx.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:     blockID,
+			BlockHeight: 0,
+			SubtreeIdx:  0,
+		})
+		require.NoError(t, err)
+
+		// Store meta for this tx
+		_, err = txMetaStore.Create(ctx, tx, blockID)
+		require.NoError(t, err)
+
+		prevTx = tx
+	}
+
+	// Subtree batching with IsComplete check
+	subtreeHashes := make([]*chainhash.Hash, 0)
+	subtreeCount := 0
+
+	var (
+		subtree           *util.Subtree
+		subtreeMeta       *util.SubtreeMeta
+		subtreeBytes      []byte
+		firstSubtreeBytes []byte
+		subtreeMetaBytes  []byte
+	)
+
+	subtree, _ = util.NewTreeByLeafCount(subtreeSize)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	subtreeMeta = util.NewSubtreeMeta(subtree)
+
+	for i := 1; i < int(txCount); i++ { //nolint:gosec
+		tx := txs[i]
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), uint64(tx.Size()), 0)) //nolint:gosec
+		require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx))
+
+		if subtree.IsComplete() {
+			subtreeBytes, err = subtree.Serialize()
+			if subtreeCount == 0 {
+				firstSubtreeBytes = subtreeBytes
+			}
+
+			require.NoError(t, err)
+			require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes, options.WithDeleteAt(1000), options.WithAllowOverwrite(true)))
+
+			subtreeMetaBytes, err = subtreeMeta.Serialize()
+			require.NoError(t, err)
+			require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+			subtreeHash := subtree.RootHash()
+			subtreeHashes = append(subtreeHashes, subtreeHash)
+
+			subtreeCount++
+			// Start new subtree/meta
+			subtree, _ = util.NewTreeByLeafCount(subtreeSize)
+			subtreeMeta = util.NewSubtreeMeta(subtree)
+		}
+	}
+	// After all txs, if the last subtree is not empty, store it
+	if subtree.Length() > 0 {
+		subtreeBytes, err = subtree.Serialize()
+		require.NoError(t, err)
+		require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+		subtreeMetaBytes, err = subtreeMeta.Serialize()
+		require.NoError(t, err)
+		require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+		subtreeHash := subtree.RootHash()
+		subtreeHashes = append(subtreeHashes, subtreeHash)
+	}
+
+	// Calculate merkle root from all subtree hashes
+	replacedCoinbaseSubtree, _ := util.NewTreeByLeafCount(subtreeSize)
+	require.NoError(t, replacedCoinbaseSubtree.Deserialize(firstSubtreeBytes))
+	replacedCoinbaseSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
+
+	merkleRootSubtreeHashes := make([]*chainhash.Hash, len(subtreeHashes))
+
+	for idx, hash := range subtreeHashes {
+		if idx == 0 {
+			merkleRootSubtreeHashes[idx] = replacedCoinbaseSubtree.RootHash()
+		} else {
+			merkleRootSubtreeHashes[idx] = hash
+		}
+	}
+
+	calculatedMerkleRootHash, err := calculateMerkleRoot(merkleRootSubtreeHashes)
+	require.NoError(t, err)
+
+	nBits, _ := teranode_model.NewNBitFromString("2000ffff")
+	blockHeader := &teranode_model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: calculatedMerkleRootHash,
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+
+	// Mine header
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		blockHeader.Nonce++
+	}
+
+	block, err := teranode_model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		txCount,
+		uint64(coinbaseTx.Size())+uint64(txs[1].Size())*(txCount-1), //nolint:gosec
+		100, 0, nil,
+	)
+	require.NoError(t, err)
+
+	return block, subtreeStore, txMetaStore, nil
 }
 
 func TestBlock_WithDuplicateTransaction(t *testing.T) {
