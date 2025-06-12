@@ -49,6 +49,8 @@ func (tbv *testBlockValidation) ValidateBlock(ctx context.Context, block *model.
 }
 
 func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.T) {
+	initPrometheusMetrics()
+
 	ctx := context.Background()
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup()
@@ -69,7 +71,6 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.
 
 	mockBlockchain := setupMockBlockchain(parentBlock)
 	callCount := 0
-	setMinedChan := make(chan *chainhash.Hash, 1)
 	bv := &testBlockValidation{
 		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient, &MockInvalidBlockHandler{}),
 		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
@@ -85,7 +86,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.
 	require.Error(t, err)
 
 	select {
-	case h := <-setMinedChan:
+	case h := <-bv.setMinedChan:
 		require.Equal(t, parentHash, h, "parent hash should be sent to setMinedChan after first failure")
 	default:
 		t.Log("expected parent hash to be sent to setMinedChan")
@@ -101,6 +102,8 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.
 }
 
 func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *testing.T) {
+	initPrometheusMetrics()
+
 	ctx := context.Background()
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup()
@@ -284,7 +287,7 @@ func setupMockBlockchain(parentBlock *model.Block) *blockchain.Mock {
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
-	mockBlockchain.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errors.NewError("not found"))
+	mockBlockchain.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errors.ErrBlockNotFound)
 
 	return mockBlockchain
 }

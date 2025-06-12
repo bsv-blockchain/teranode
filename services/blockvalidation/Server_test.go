@@ -519,7 +519,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
-			fmt.Sprintf("%s/headers_to_common_ancestor/%s", baseURL, lastBlock.Header.HashPrevBlock.String()),
+			fmt.Sprintf("%s/headers_to_common_ancestor/%s", baseURL, lastBlock.Hash().String()),
 			httpmock.NewBytesResponder(200, headers))
 
 		// Execute
@@ -528,7 +528,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 
 		// Assert
 		assert.NotNil(t, catchupBlockHeaders)
-		assert.Equal(t, 151, len(catchupBlockHeaders))
+		assert.Equal(t, 150, len(catchupBlockHeaders))
 	})
 
 	t.Run("catchup when target block already exists", func(t *testing.T) {
@@ -588,7 +588,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
-			fmt.Sprintf("%s/headers_to_common_ancestor/%s", baseURL, lastBlock.Header.HashPrevBlock.String()),
+			fmt.Sprintf("%s/headers_to_common_ancestor/%s", baseURL, lastBlock.Hash().String()),
 			httpmock.NewErrorResponder(errors.New(errors.ERR_NETWORK_ERROR, "network error")))
 
 		// Execute

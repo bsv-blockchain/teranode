@@ -371,8 +371,11 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 				if err := u.setTxMined(ctx, blockHash); err != nil {
 					u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
-					// put the block back in the setMinedChan
-					u.setMinedChan <- blockHash
+
+					if !errors.Is(err, errors.ErrBlockNotFound) {
+						// put the block back in the setMinedChan
+						u.setMinedChan <- blockHash
+					}
 				} else {
 					_ = u.blockHashesCurrentlyValidated.Delete(*blockHash)
 				}

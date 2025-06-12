@@ -1936,7 +1936,7 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 func getBlockHeadersToCommonAncestor(ctx context.Context, store blockchain_store.Store, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	const (
 		numberOfHeaders = 100
-		searchLimit     = 10
+		searchLimit     = 10000
 	)
 
 	var (

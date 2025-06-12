@@ -288,7 +288,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						u.logger.Errorf("[BlockValidation Init] failed to send CATCHUPBLOCKS event [%v]", err)
 					}
 
-					u.logger.Infof("[BlockValidation Init] processing catchup on channel [%s]", c.block.Hash().String())
+					u.logger.Infof("[BlockValidation Init] processing catchup on channel [%s] [%d]", c.block.Hash().String(), c.block.Height)
 
 					retries := 0
 
@@ -957,26 +957,7 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 	)
 	defer deferFn()
 
-	catchupBlockHeaders, err := u.catchupGetBlocks(ctx, blockUpTo, baseURL)
-	if err != nil {
-		return err
-	}
-
-	if catchupBlockHeaders == nil {
-		return nil
-	}
-
-	lastCommonAncestorBlockHash := catchupBlockHeaders[len(catchupBlockHeaders)-1].HashPrevBlock
-	if secretMining, err := u.checkSecretMining(ctx, lastCommonAncestorBlockHash); err != nil {
-		return err
-	} else if secretMining {
-		u.logger.Infof("[catchup][%s] ignoring catchup, last common ancestor block %s is too far behind current head", blockUpTo.Hash().String(), lastCommonAncestorBlockHash.String())
-		return nil
-	}
-
-	u.logger.Infof("[catchup][%s] catching up (%d blocks) from [%s] to [%s]", blockUpTo.Hash().String(), len(catchupBlockHeaders), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
-
-	validateBlocksChan := make(chan *model.Block, len(catchupBlockHeaders))
+	validateBlocksChan := make(chan *model.Block, 10) // max blocks in-flight
 
 	size := atomic.Uint32{}
 
@@ -985,51 +966,74 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, u.settings.BlockValidation.CatchupConcurrency)
 	g.Go(func() error {
-		slices.Reverse(catchupBlockHeaders)
-		batches := getBlockBatchGets(catchupBlockHeaders, 100)
+		defer func() {
+			// close the channel to signal that all blocks have been processed
+			close(validateBlocksChan)
+		}()
 
-		u.logger.Debugf("[catchup][%s] getting %d batches", blockUpTo.Hash().String(), len(batches))
-
-		blockCount := 0
-		i := 0
-
-		var (
-			blocks []*model.Block
-			err    error
-		)
-
-		for _, batch := range batches {
-			batch := batch
-			i++
-			u.logger.Debugf("[catchup][%s] [batch %d] getting %d blocks from %s", blockUpTo.Hash().String(), i, batch.size, batch.hash.String())
-
-			size.Add(batch.size)
-
-			blocks, err = u.getBlocks(gCtx, &batch.hash, batch.size, baseURL)
+		for { // catchGetBlocks is limited in the number of headers returned hence the loop
+			catchupBlockHeaders, err := u.catchupGetBlocks(ctx, blockUpTo, baseURL)
 			if err != nil {
-				// TODO
-				// we aren't waiting for the func to finish so we never catch this error and log it
-				u.logger.Errorf("[catchup][%s] failed to get %d blocks [%s]:%v", blockUpTo.Hash().String(), batch.size, batch.hash.String(), err)
-				return errors.NewProcessingError("[catchup][%s] failed to get %d blocks [%s]", blockUpTo.Hash().String(), batch.size, batch.hash.String(), err)
+				return err
 			}
 
-			u.logger.Debugf("[catchup][%s] got %d blocks from %s", blockUpTo.Hash().String(), len(blocks), batch.hash.String())
+			if len(catchupBlockHeaders) == 0 {
+				return nil
+			}
 
-			// reverse the blocks, so they are in the correct order, we get them newest to oldest from the other node
-			slices.Reverse(blocks)
+			lastCommonAncestorBlockHash := catchupBlockHeaders[len(catchupBlockHeaders)-1].HashPrevBlock
+			if secretMining, err := u.checkSecretMining(ctx, lastCommonAncestorBlockHash); err != nil {
+				return err
+			} else if secretMining {
+				u.logger.Infof("[catchup][%s] ignoring catchup, last common ancestor block %s is too far behind current head", blockUpTo.Hash().String(), lastCommonAncestorBlockHash.String())
+				return nil
+			}
 
-			for _, block := range blocks {
-				blockCount++
-				validateBlocksChan <- block
+			u.logger.Infof("[catchup][%s] catching up (%d blocks) from [%s] to [%s]", blockUpTo.Hash().String(), len(catchupBlockHeaders), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
+
+			slices.Reverse(catchupBlockHeaders)
+			batches := getBlockBatchGets(catchupBlockHeaders, 100)
+
+			u.logger.Debugf("[catchup][%s] getting %d batches", blockUpTo.Hash().String(), len(batches))
+
+			blockCount := 0
+			i := 0
+
+			var (
+				blocks []*model.Block
+			)
+
+			for _, batch := range batches {
+				batch := batch
+				i++
+				u.logger.Debugf("[catchup][%s] [batch %d] getting %d blocks from %s", blockUpTo.Hash().String(), i, batch.size, batch.hash.String())
+
+				size.Add(batch.size)
+
+				blocks, err = u.getBlocks(gCtx, &batch.hash, batch.size, baseURL)
+				if err != nil {
+					u.logger.Errorf("[catchup][%s] failed to get %d blocks [%s]:%v", blockUpTo.Hash().String(), batch.size, batch.hash.String(), err)
+					return errors.NewProcessingError("[catchup][%s] failed to get %d blocks [%s]", blockUpTo.Hash().String(), batch.size, batch.hash.String(), err)
+				}
+
+				u.logger.Debugf("[catchup][%s] got %d blocks from %s", blockUpTo.Hash().String(), len(blocks), batch.hash.String())
+
+				// reverse the blocks, so they are in the correct order, we get them newest to oldest from the other node
+				slices.Reverse(blocks)
+
+				for _, block := range blocks {
+					blockCount++
+					validateBlocksChan <- block
+				}
+			}
+
+			u.logger.Infof("[catchup][%s] added %d blocks for validating", blockUpTo.Hash().String(), blockCount)
+
+			if catchupBlockHeaders[len(catchupBlockHeaders)-1].Hash().String() == blockUpTo.Hash().String() {
+				// no more catching up to do
+				return nil
 			}
 		}
-
-		u.logger.Infof("[catchup][%s] added %d blocks for validating", blockUpTo.Hash().String(), blockCount)
-
-		// close the channel to signal that all blocks have been processed
-		close(validateBlocksChan)
-
-		return nil
 	})
 
 	i := 0
@@ -1041,8 +1045,8 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 
 		// error is returned from validate block:
 
-		if err = u.blockValidation.ValidateBlock(ctx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
-			return errors.NewServiceError("[catchup][%s]grep  [%s]", blockUpTo.Hash().String(), block.String(), err)
+		if err := u.blockValidation.ValidateBlock(ctx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
+			return errors.NewServiceError("[catchup][%s] failed to validate block [%s]", blockUpTo.Hash().String(), block.String(), err)
 		}
 
 		u.logger.Debugf("[catchup][%s] validated block %d/%d", block.Hash().String(), i, size.Load())
@@ -1093,9 +1097,9 @@ func (u *Server) catchupGetBlocks(ctx context.Context, blockUpTo *model.Block, b
 		return nil, nil
 	}
 
-	catchupBlockHeaders := []*model.BlockHeader{blockUpTo.Header}
+	catchupBlockHeaders := []*model.BlockHeader{}
 
-	blockHeaderHashUpTo := blockUpTo.Header.HashPrevBlock
+	blockHeaderHashUpTo := blockUpTo.Hash()
 	blockHeaderHeightUpTo := blockUpTo.Height
 
 	var blockHeaders []*model.BlockHeader
