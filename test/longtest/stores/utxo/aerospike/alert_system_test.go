@@ -24,7 +24,7 @@ import (
 // go test -v -tags test_aerospike ./test/...
 
 func TestAlertSystem(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)

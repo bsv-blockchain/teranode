@@ -65,6 +65,9 @@ const (
 	Reassignments FieldName = "reassignments"
 	// DeleteAtHeight specifies the block height at which the record should be deleted
 	DeleteAtHeight FieldName = "deleteAtHeight"
+	//  NotMined is an integer field that is set to 1 when a transaction is unminded and removed (nil) when it has.
+	// The idea is to create a secondary index on this field which will only contain records that have this field set."
+	NotMined FieldName = "notMined"
 )
 
 // String returns the string representation of the FieldName.

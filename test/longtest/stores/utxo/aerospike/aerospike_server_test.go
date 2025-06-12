@@ -29,7 +29,7 @@ import (
 // go test -v -tags test_aerospike ./test/...
 
 func TestAerospike(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -838,7 +838,7 @@ func TestAerospike(t *testing.T) {
 }
 
 func TestCoinbase(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -1034,7 +1034,7 @@ func TestCoinbase(t *testing.T) {
 // }
 
 func TestIncrementSpentRecords(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -1066,7 +1066,7 @@ func TestIncrementSpentRecords(t *testing.T) {
 }
 
 func TestStoreDecorate(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -1255,7 +1255,7 @@ func TestStoreDecorate(t *testing.T) {
 // }
 
 func TestSmokeTests(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -1308,7 +1308,7 @@ func TestSmokeTests(t *testing.T) {
 }
 
 func TestCreateZeroSat(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -1385,7 +1385,7 @@ func TestCreateZeroSat(t *testing.T) {
 }
 
 func TestAerospikeWithBatchSize(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.UtxoStore.UtxoBatchSize = 2 // Maximum batch of 2 per record
@@ -1608,7 +1608,7 @@ func TestAerospikeWithBatchSize(t *testing.T) {
 }
 
 func TestSpendSimple(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -1649,7 +1649,7 @@ func TestSpendSimple(t *testing.T) {
 }
 
 func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -1682,7 +1682,7 @@ func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
 }
 
 func TestStore_AerospikeSplitTx(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -1745,7 +1745,7 @@ func TestStore_AerospikeSplitTx(t *testing.T) {
 }
 
 func TestDeleteByBin(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, _, _, deferFn := initAerospike(t, tSettings, logger)
@@ -1840,7 +1840,7 @@ func (m *mockIndexWaiter) WaitForIndexReady(ctx context.Context, indexName strin
 }
 
 func TestAerospikeCleanupService(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)

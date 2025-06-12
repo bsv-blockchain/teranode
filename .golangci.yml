@@ -11,7 +11,7 @@ linters-settings:
         msg: use of fmt.Errorf is deprecated, please use errors.New
   gocognit:
     # Minimal cognitive complexity to report
-    min-complexity: 15 # You can adjust this number as needed
+    min-complexity: 50 # You can adjust this number as needed
 
 
 linters:

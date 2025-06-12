@@ -194,6 +194,11 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		txMeta.Unspendable = true
 	}
 
+	var notMined bool // false
+	if len(options.MinedBlockInfos) == 0 {
+		notMined = true
+	}
+
 	// Insert the transaction row...
 	q := `
 		INSERT INTO transactions (
@@ -206,6 +211,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		,frozen
 		,conflicting
 		,unspendable
+		,not_mined
 	  ) VALUES (
 		 $1
 		,$2
@@ -216,6 +222,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		,$7
 		,$8
 		,$9
+		,$10
 		)
 		RETURNING id
 	`
@@ -244,7 +251,20 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		isCoinbase = *options.IsCoinbase
 	}
 
-	err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes, isCoinbase, options.Frozen, options.Conflicting, options.Unspendable).Scan(&transactionID)
+	err = txn.QueryRowContext(
+		ctx,
+		q,
+		txHash[:],
+		tx.Version,
+		tx.LockTime,
+		txMeta.Fee,
+		txMeta.SizeInBytes,
+		isCoinbase,
+		options.Frozen,
+		options.Conflicting,
+		options.Unspendable,
+		notMined,
+	).Scan(&transactionID)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 			return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", tx.IsCoinbase(), err)
@@ -1111,8 +1131,9 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
     `
 
 	q2 := `		
-		UPDATE transactions
-		SET unspendable = false
+		UPDATE transactions SET
+		 unspendable = false
+		,not_mined = false
 		WHERE hash = $1;
 	`
 
@@ -1430,6 +1451,7 @@ func createPostgresSchema(db *usql.DB) error {
 		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
         ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
         ,unspendable      BOOLEAN DEFAULT FALSE NOT NULL
+		,not_mined        BOOLEAN DEFAULT FALSE NOT NULL
         ,delete_at_height BIGINT
         ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
@@ -1441,6 +1463,11 @@ func createPostgresSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_transactions_hash ON transactions (hash);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create ux_transactions_hash index - [%+v]", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_not_mined_transactions ON transactions (not_mined) WHERE not_mined = TRUE;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create px_not_mined_transactions index - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS ux_transactions_delete_at_height ON transactions (delete_at_height) WHERE delete_at_height IS NOT NULL;`); err != nil {
@@ -1630,6 +1657,7 @@ func createSqliteSchema(db *usql.DB) error {
 		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
         ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
         ,unspendable      BOOLEAN DEFAULT FALSE NOT NULL
+		,not_mined        BOOLEAN DEFAULT FALSE NOT NULL
         ,delete_at_height BIGINT
         ,inserted_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
@@ -1641,6 +1669,11 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_transactions_hash ON transactions (hash);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create ux_transactions_hash idx - [%+v]", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_not_mined_transactions ON transactions (not_mined) WHERE not_mined = TRUE;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create px_not_mined_transactions idx - [%+v]", err)
 	}
 
 	// The previous transaction hash may exist in this table

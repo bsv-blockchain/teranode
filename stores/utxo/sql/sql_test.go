@@ -646,3 +646,43 @@ func TestSetTTL(t *testing.T) {
 
 	assert.NotNil(t, tombstoneMillis)
 }
+
+func TestUnmined(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, tx := setup(ctx, t)
+
+	t.Run("check_empty_store", func(t *testing.T) {
+		count := 0
+
+		err := store.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM transactions WHERE not_mined = TRUE").Scan(&count)
+		require.NoError(t, err)
+
+		assert.Equal(t, 0, count)
+	})
+
+	t.Run("check_not_mined_tx", func(t *testing.T) {
+		_, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+
+		txMined := tx.Clone()
+		txMined.Version++
+
+		_, err = store.Create(ctx, txMined, 0, utxo.WithMinedBlockInfo(
+			utxo.MinedBlockInfo{
+				BlockID:     1,
+				BlockHeight: 1,
+				SubtreeIdx:  1,
+			},
+		))
+		require.NoError(t, err)
+
+		count := 0
+
+		err = store.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM transactions WHERE not_mined = TRUE").Scan(&count)
+		require.NoError(t, err)
+
+		assert.Equal(t, 1, count)
+	})
+}

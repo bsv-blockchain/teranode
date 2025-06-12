@@ -37,7 +37,7 @@ import (
 // go test -v -tags test_aerospike ./test/...
 
 func TestStore_GetTxFromExternalStore(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, _, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -161,7 +161,7 @@ func TestGetExternalFromLargeBlock(t *testing.T) {
 func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight uint32) {
 	ctx := context.Background()
 
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams

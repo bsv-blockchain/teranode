@@ -220,6 +220,22 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 						s.logger.Errorf("Failed to create index: %v", err)
 					}
 				}
+
+				notMinedIndexName := "notMinedIndex"
+
+				exists, err = s.indexExists(notMinedIndexName)
+				if err != nil {
+					s.logger.Errorf("Failed to check notMinedIndex existence: %v", err)
+					return
+				}
+
+				if !exists {
+					// Only one process should try to create the index
+					err := s.CreateIndexIfNotExists(ctx, notMinedIndexName, fields.NotMined.String(), aerospike.NUMERIC)
+					if err != nil {
+						s.logger.Errorf("Failed to create notMinedIndex: %v", err)
+					}
+				}
 			}
 		})
 	}

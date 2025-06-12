@@ -13,10 +13,16 @@ type ErrorTestLogger struct {
 	cancelFn         func()
 }
 
-func NewErrorTestLogger(t *testing.T, cancelFn func()) *ErrorTestLogger {
+func NewErrorTestLogger(t *testing.T, cancelFn ...func()) *ErrorTestLogger {
+	if len(cancelFn) == 0 {
+		return &ErrorTestLogger{
+			t: t,
+		}
+	}
+
 	return &ErrorTestLogger{
 		t:        t,
-		cancelFn: cancelFn,
+		cancelFn: cancelFn[0],
 	}
 }
 

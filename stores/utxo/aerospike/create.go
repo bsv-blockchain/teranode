@@ -703,6 +703,10 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	batches[0] = append(batches[0], aerospike.NewBin(fields.SubtreeIdxs.String(), subtreeIdxs))
 	batches[0] = append(batches[0], aerospike.NewBin(fields.TotalUtxos.String(), len(utxos)))
 
+	if len(blockIDs) == 0 && len(blockHeights) == 0 && len(subtreeIdxs) == 0 {
+		batches[0] = append(batches[0], aerospike.NewBin(fields.NotMined.String(), aerospike.NewIntegerValue(1)))
+	}
+
 	if len(batches) > 1 {
 		// if we have more than one batch, we opt to store the transaction externally
 		external = true

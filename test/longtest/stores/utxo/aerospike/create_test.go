@@ -168,7 +168,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 }
 
 func TestStore_StoreTransactionExternally(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, db, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -255,7 +255,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 }
 
 func TestStore_StorePartialTransactionExternally(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t, nil)
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
