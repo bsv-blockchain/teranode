@@ -1,6 +1,14 @@
 // Package sql implements the blockchain.Store interface using SQL database backends.
 // It provides concrete SQL-based implementations for all blockchain operations
 // defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetBlockHeight method, which retrieves the height of a block
+// in the blockchain by its hash. Block height is a critical property representing the
+// block's position in the chain, with the genesis block at height 0 and each subsequent
+// block incrementing by 1. The implementation uses the blockchainCache for optimized
+// lookups, avoiding database queries for frequently accessed blocks. This optimization
+// is important for Teranode's high-throughput architecture, where block height lookups
+// are common during transaction validation and block processing.
 package sql
 
 import (

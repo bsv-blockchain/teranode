@@ -1,3 +1,16 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetBlockHeaderIDs method, which retrieves a sequence of
+// block header IDs starting from a specified block hash. In Teranode's architecture
+// for BSV, this method plays a critical role in block mining status tracking and
+// chain traversal operations. The implementation uses a multi-tier caching strategy
+// for performance optimization and falls back to a recursive SQL Common Table Expression
+// (CTE) query when cache misses occur. This method supports Teranode's high-throughput
+// transaction processing by providing efficient access to block header identifiers
+// without requiring the full header data to be loaded, which is particularly important
+// for operations that only need to track or reference blocks by their internal database IDs.
 package sql
 
 import (
@@ -9,8 +22,47 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// GetBlockHeaderIDs returns the block header ids from the given block hash and number of headers
-// this is used internally for setting blocks to mined, where we only save the id of the block header and compare that
+// GetBlockHeaderIDs retrieves a sequence of block header database IDs starting from a specified block.
+//
+// This method is primarily used for internal blockchain operations that require efficient
+// access to block identifiers without loading complete header data. It's particularly
+// important for operations like updating mining status flags, where only the internal
+// database IDs of blocks are needed for efficient database operations.
+//
+// The implementation employs a multi-tier approach for optimal performance:
+//
+// 1. First attempts to retrieve header IDs from the in-memory blocks cache
+//   - Provides O(1) lookup time when the requested blocks are in the cache
+//   - Significantly reduces database load for frequently accessed recent blocks
+//   - Returns immediately if the cache contains the requested headers
+//
+// 2. Falls back to a recursive SQL query using Common Table Expressions (CTEs) when cache misses occur
+//   - Efficiently traverses the blockchain graph starting from the specified block
+//   - Retrieves the specified number of header IDs in descending height order
+//   - Uses database indexing for optimal query performance
+//
+// The recursive CTE approach is particularly well-suited for blockchain's linked-list
+// structure, as it allows efficient traversal of the chain without requiring multiple
+// separate queries. This is critical for Teranode's high-throughput BSV implementation,
+// where database efficiency directly impacts node performance.
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - blockHashFrom: Hash of the starting block to retrieve IDs from
+//   - numberOfHeaders: Maximum number of header IDs to retrieve
+//
+// Returns:
+//   - []uint32: Array of block header database IDs in descending height order
+//   - error: Any error encountered during retrieval, specifically:
+//   - StorageError for database query or scan errors
+//
+// The method is optimized for performance with a multi-tier approach:
+//  1. First checks the in-memory blocks cache for the requested headers
+//  2. If found in cache, extracts and returns just the IDs without database access
+//  3. On cache miss, uses a recursive SQL CTE query to efficiently traverse the blockchain
+//  4. Returns an empty slice with nil error if no matching blocks are found
+//
+// This method is particularly important for mining-related operations where blocks need
+// to be efficiently marked as mined without loading their complete data.
 func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeaderIDs")
 	defer deferFn()

@@ -1,5 +1,15 @@
 // Package options provides configuration options for blockchain store operations.
 // It implements the functional options pattern for customizing block storage behavior.
+//
+// This package follows the functional options pattern, which allows for flexible and
+// extensible configuration of blockchain storage operations without breaking API
+// compatibility when new options are added. Options are implemented as functions that
+// modify a configuration struct, allowing for a clean and expressive API.
+//
+// The primary use case is configuring block storage operations with flags that control
+// how blocks are processed, such as whether mining status or subtree data should be
+// explicitly set. This pattern allows for optional parameters without requiring
+// numerous method overloads or complex parameter structs.
 package options
 
 // StoreBlockOptions defines the configuration parameters for storing blocks.

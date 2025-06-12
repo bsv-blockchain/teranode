@@ -1,3 +1,12 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetHeader method, which provides a lightweight alternative
+// to GetBlockHeader by retrieving only the essential header fields without additional
+// metadata. This implementation follows the same caching strategy and database access
+// pattern as GetBlockHeader but is optimized for scenarios where only the core header
+// data is needed, reducing both memory usage and processing overhead.
 package sql
 
 import (
@@ -10,6 +19,43 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// GetHeader retrieves only the essential block header data from the database by its hash.
+// This method provides a lightweight alternative to GetBlockHeader when only the core
+// header fields are needed without additional metadata.
+//
+// The implementation follows the same tiered retrieval strategy as GetBlockHeader:
+//
+// 1. Cache Layer: First checks the in-memory blocksCache for the requested header
+//    - Takes advantage of the same cache used by GetBlockHeader for consistency
+//    - Returns only the header portion, discarding any metadata
+//
+// 2. Database Layer: If not found in cache, executes a streamlined SQL query
+//    - Retrieves only the six essential header fields (version, timestamp, nonce,
+//      previous hash, merkle root, and difficulty bits)
+//    - Omits additional metadata fields like height, transaction count, and chainwork
+//    - Uses the same indexed lookup by block hash for efficient retrieval
+//
+// 3. Reconstruction Phase: Converts raw database values to appropriate types
+//    - Handles the same binary-to-structured data conversions as GetBlockHeader
+//    - Does not extract or process any coinbase transaction data
+//
+// This method is particularly useful for performance-critical operations where:
+//   - Only the cryptographic chain verification is needed
+//   - Header validation must be performed without block positioning context
+//   - Memory usage needs to be minimized for large-scale header processing
+//   - Network bandwidth must be conserved when transmitting headers
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - blockHash: The unique hash identifier of the block header to retrieve
+//
+// Returns:
+//   - *model.BlockHeader: The block header data including only the six essential fields
+//     (version, previous block hash, merkle root, timestamp, difficulty target, and nonce)
+//   - error: Any error encountered during retrieval, specifically:
+//     - BlockNotFoundError if the block does not exist in the database
+//     - StorageError for database connection or query execution errors
+//     - ProcessingError for data conversion or parsing errors
 func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetHeader")
 	defer deferFn()

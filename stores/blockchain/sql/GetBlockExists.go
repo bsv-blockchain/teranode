@@ -1,6 +1,24 @@
 // Package sql implements the blockchain.Store interface using SQL database backends.
 // It provides concrete SQL-based implementations for all blockchain operations
 // defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetBlockExists method, which efficiently checks for the
+// existence of a block in the blockchain by its hash. Block existence verification is
+// a fundamental operation in blockchain systems, used extensively during transaction
+// validation, block processing, and chain synchronization. In Teranode's high-throughput
+// architecture, this operation must be extremely efficient as it may be called thousands
+// of times per second during peak processing.
+//
+// The implementation uses a multi-tier optimization strategy:
+// 1. First checks a dedicated existence cache that stores only block hash to existence mappings
+// 2. If not found in cache, executes a minimal SQL query that only checks existence without
+//    retrieving full block data
+// 3. Updates the cache with the result to optimize future queries for the same block
+//
+// This approach significantly reduces database load and improves response times for this
+// frequently called operation. The existence cache is carefully managed to ensure consistency
+// with the database state, being invalidated whenever blocks are added or removed from the
+// blockchain.
 package sql
 
 import (
@@ -15,18 +33,32 @@ import (
 // GetBlockExists checks if a block exists in the database by its hash.
 // This implements the blockchain.Store.GetBlockExists interface method.
 //
-// The method first checks an in-memory cache to avoid unnecessary database queries.
-// If not found in cache, it executes a lightweight SQL query that only retrieves
-// the block height (rather than the entire block data) to determine existence.
-// The result is then stored in the cache for future queries.
+// Block existence verification is a critical and frequently performed operation in
+// blockchain systems. It's used during transaction validation to verify block references,
+// during block processing to check for duplicate blocks, and during chain synchronization
+// to determine which blocks need to be requested from peers. In Teranode's high-throughput
+// architecture, this method is optimized for maximum performance.
+//
+// The implementation follows a tiered approach to minimize database load:
+// 1. First checks the dedicated existence cache using the block hash as key
+// 2. If not found in cache (cache miss), executes an optimized SQL query
+//    that only checks for existence without retrieving block data
+// 3. Updates the existence cache with the result to benefit future queries
+//
+// The SQL query is carefully designed to be as lightweight as possible, only checking
+// for the presence of a block hash in the blocks table without retrieving any columns.
+// This approach is significantly more efficient than querying for block data or even
+// just the block height, especially for databases with proper indexing on the hash column.
 //
 // Parameters:
-//   - ctx: Context for the database operation, allows for cancellation and timeouts
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
 //   - blockHash: The unique hash identifier of the block to check
 //
 // Returns:
 //   - bool: True if the block exists in the database, false otherwise
-//   - error: Any error encountered during database operations (nil if the block simply doesn't exist)
+//   - error: Any error encountered during the database operation, specifically:
+//     - StorageError for database access errors
+//     - nil if the operation was successful (even if the block doesn't exist)
 func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockExists")
 	defer deferFn()

@@ -1,3 +1,14 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetBlockStats method, which retrieves statistical information
+// about the blockchain. These statistics are essential for monitoring blockchain health,
+// analyzing network performance, and providing insights into the blockchain's growth and
+// characteristics. The implementation uses a recursive Common Table Expression (CTE) in SQL
+// to efficiently traverse the main chain from the current tip backward, calculating various
+// metrics such as block count, transaction count, average block size, and time between blocks.
+// This functionality supports Teranode's monitoring, analytics, and diagnostic capabilities.
 package sql
 
 import (
@@ -10,6 +21,34 @@ import (
 	"github.com/bitcoin-sv/teranode/util/tracing"
 )
 
+// GetBlockStats retrieves statistical information about the blockchain.
+// This implements the blockchain.Store.GetBlockStats interface method.
+//
+// The method calculates various metrics about the blockchain's state and performance,
+// providing insights into the network's health, growth patterns, and processing efficiency.
+// These statistics are valuable for monitoring, analytics, diagnostics, and capacity planning
+// in Teranode's high-throughput architecture.
+//
+// The implementation uses a recursive SQL query to efficiently traverse the main blockchain
+// from the current tip backward, calculating aggregate statistics such as total blocks,
+// total transactions, average block size, and average time between blocks. It handles
+// database engine differences (PostgreSQL vs SQLite) with appropriate SQL syntax adjustments.
+//
+// Statistics calculated include:
+//   - Total number of blocks in the main chain
+//   - Total number of transactions across all blocks
+//   - Maximum block height (chain length)
+//   - Average block size in bytes
+//   - Average number of transactions per block
+//   - Average time between blocks (mining rate)
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//
+// Returns:
+//   - *model.BlockStats: A structure containing the calculated blockchain statistics
+//   - error: Any error encountered during calculation, specifically:
+//     - StorageError for database errors or processing failures
 func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockStats")
 	defer deferFn()

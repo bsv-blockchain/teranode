@@ -6,13 +6,26 @@
 // operations, with implementations for different storage backends including SQL databases.
 // It integrates with other components of the Teranode system while maintaining storage abstraction.
 //
-// Key features:
+// Package Organization:
+// - Interface.go: Defines the core Store interface that all implementations must satisfy
+// - mock.go: Provides an in-memory implementation for testing purposes
+// - sql/: Contains SQL-based implementations supporting PostgreSQL and SQLite
+// - options/: Defines functional options for configuring blockchain operations
+//
+// Implementation Patterns:
+// - Repository pattern: Abstracts storage operations behind a common interface
+// - Functional options: Provides flexible configuration without breaking API compatibility
+// - Caching strategies: Improves performance for frequently accessed data
+// - Context-based operations: Supports cancellation and timeouts for all operations
+//
+// Key Features:
 // - Block and header storage and retrieval by hash, height, or other criteria
 // - Chain state tracking (best chain, orphans, invalid blocks)
 // - Support for chain reorganization
-// - Performance optimizations through caching
-// - Transaction data management
+// - Performance optimizations through multi-level caching
+// - Transaction data management and indexing
 // - Blockchain analysis and statistics
+// - Health monitoring and diagnostics
 package blockchain
 
 import (

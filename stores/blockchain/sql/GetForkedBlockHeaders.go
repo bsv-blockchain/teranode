@@ -1,3 +1,15 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetForkedBlockHeaders method, which retrieves block headers
+// that are not part of a specific chain starting from a given block. This functionality
+// is critical for handling blockchain forks, where multiple competing chains exist
+// simultaneously. The implementation uses a recursive Common Table Expression (CTE) in SQL
+// to efficiently identify blocks that are not part of the specified chain. This method is
+// particularly important for Teranode's fork resolution mechanisms, chain reorganization
+// processes, and maintaining consensus across the network by identifying and tracking
+// competing chains.
 package sql
 
 import (
@@ -10,6 +22,32 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// GetForkedBlockHeaders retrieves block headers that are not part of a specific chain.
+// This implements the blockchain.Store.GetForkedBlockHeaders interface method.
+//
+// The method identifies and retrieves block headers that are not part of the chain that
+// includes the specified starting block. This is essential for detecting and analyzing
+// blockchain forks, where multiple competing chains exist simultaneously. Fork detection
+// and analysis are critical components of Teranode's consensus mechanism and chain
+// reorganization processes.
+//
+// The implementation first checks the blockchainCache for cached headers to optimize performance.
+// If not found in cache, it executes a complex SQL query that uses a recursive Common Table
+// Expression (CTE) to identify the blocks in the specified chain, then retrieves headers
+// for blocks that are not part of this chain. This approach efficiently identifies fork blocks
+// without requiring multiple database queries.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - blockHashFrom: The hash of the starting block that defines the chain of interest
+//   - numberOfHeaders: The maximum number of fork headers to retrieve
+//
+// Returns:
+//   - []*model.BlockHeader: An array of block headers that are not part of the specified chain
+//   - []*model.BlockHeaderMeta: Corresponding metadata for each header including height and chainwork
+//   - error: Any error encountered during retrieval, specifically:
+//     - BlockNotFoundError if the starting block does not exist
+//     - StorageError for database errors or data processing failures
 func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetForkedBlockHeaders")
 	defer deferFn()

@@ -1,3 +1,15 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetLastNInvalidBlocks method, which retrieves information about
+// recently invalidated blocks in the blockchain. This functionality is essential for monitoring
+// blockchain reorganizations, fork resolution processes, and diagnosing consensus issues.
+// The implementation includes efficient caching to optimize performance for repeated queries
+// and retrieves detailed information about invalidated blocks regardless of which fork they
+// belong to. This method is particularly important for Teranode's high-throughput architecture
+// where chain reorganizations must be efficiently tracked and analyzed to maintain consensus
+// integrity across the network.
 package sql
 
 import (
@@ -10,8 +22,34 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// GetLastNInvalidBlocks retrieves the last n blocks that were marked as invalid.
-// These blocks can be on any fork in the blockchain.
+// GetLastNInvalidBlocks retrieves information about recently invalidated blocks in the blockchain.
+// This implements the blockchain.Store.GetLastNInvalidBlocks interface method.
+//
+// The method retrieves detailed information about blocks that have been marked as invalid,
+// regardless of which fork they belong to. This functionality is essential for monitoring
+// blockchain reorganizations, diagnosing consensus issues, and analyzing fork resolution
+// processes. In Teranode's high-throughput architecture, tracking invalidated blocks is
+// critical for maintaining consensus integrity and understanding chain reorganization events.
+//
+// Invalid blocks typically result from chain reorganizations, where a competing chain with
+// greater cumulative proof-of-work becomes the new main chain, causing blocks in the previous
+// main chain to be invalidated. This method helps track these events and provides visibility
+// into the blockchain's fork resolution processes.
+//
+// The implementation uses a response cache to optimize performance for repeated queries,
+// which is particularly important for frequently accessed diagnostic data. It constructs
+// an SQL query to retrieve invalid blocks ordered by height in descending order, providing
+// the most recent invalidations first.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - n: The number of most recently invalidated blocks to retrieve
+//
+// Returns:
+//   - []*model.BlockInfo: An array of block information structures containing details
+//     such as hash, height, timestamp, transaction count, and size for each invalidated block
+//   - error: Any error encountered during retrieval, specifically:
+//     - StorageError for database errors or processing failures
 func (s *SQL) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetLastNInvalidBlocks")
 	defer deferFn()

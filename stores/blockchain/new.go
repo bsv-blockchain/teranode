@@ -1,6 +1,22 @@
 // Package blockchain provides interfaces and implementations for blockchain data storage and retrieval.
 // It offers a comprehensive API for storing, retrieving, and managing blockchain data including blocks,
 // headers, transactions, and chain state information.
+//
+// The package is organized around a central Store interface that defines the contract for all
+// blockchain storage operations. Multiple implementations of this interface are provided:
+// - SQL implementation supporting PostgreSQL and SQLite backends for production and testing
+// - Mock implementation for unit testing and development
+//
+// The blockchain package is designed with the following key features:
+// - Thread-safety for concurrent access from multiple goroutines
+// - Performance optimizations including caching for frequently accessed data
+// - Support for chain reorganizations and fork handling
+// - Extensibility through the functional options pattern
+// - Comprehensive error handling with domain-specific error types
+//
+// This package is a critical component of the Teranode architecture, providing the
+// persistence layer for blockchain data and supporting the consensus rules and validation
+// logic implemented in higher layers of the system.
 package blockchain
 
 import (

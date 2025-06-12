@@ -1,3 +1,15 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetHashOfAncestorBlock method, which retrieves the hash of an
+// ancestor block at a specified depth in the blockchain. This functionality is essential
+// for blockchain traversal, fork detection, and chain reorganization processes. The
+// implementation uses a recursive Common Table Expression (CTE) in SQL to efficiently
+// navigate backward through the blockchain structure by following the parent-child
+// relationships between blocks. This method is particularly important for Teranode's
+// high-throughput architecture where efficient blockchain traversal is critical for
+// maintaining consensus and validating chain integrity.
 package sql
 
 import (
@@ -10,6 +22,30 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specified depth.
+// This implements the blockchain.Store.GetHashOfAncestorBlock interface method.
+//
+// The method traverses the blockchain backward from a specified block to find an ancestor
+// at a given depth. For example, with depth=1, it returns the parent block's hash; with
+// depth=2, it returns the grandparent block's hash, and so on. This traversal is essential
+// for various blockchain operations including fork detection, chain reorganization, and
+// validation of block relationships.
+//
+// The implementation uses a recursive SQL query with a depth counter to efficiently navigate
+// the blockchain structure by following the parent-child relationships between blocks. It
+// includes a timeout mechanism to prevent long-running queries and a safety check to avoid
+// infinite recursion in case of database inconsistencies.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - hash: The hash of the starting block from which to traverse backward
+//   - depth: The number of generations to go back in the blockchain
+//
+// Returns:
+//   - *chainhash.Hash: The hash of the ancestor block at the specified depth, if found
+//   - error: Any error encountered during traversal, specifically:
+//     - BlockNotFoundError if the starting block or an ancestor at the specified depth doesn't exist
+//     - StorageError for database errors or if the operation times out
 func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetHashOfAncestorBlock")
 	defer deferFn()

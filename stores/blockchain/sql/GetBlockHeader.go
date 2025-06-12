@@ -1,6 +1,29 @@
 // Package sql implements the blockchain.Store interface using SQL database backends.
 // It provides concrete SQL-based implementations for all blockchain operations
 // defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetBlockHeader method, which retrieves block headers by their
+// hash. Block headers are lightweight representations of blocks containing only the metadata
+// without the full transaction data. In Bitcoin's design, block headers serve as cryptographic
+// links in the blockchain, containing the previous block's hash to form the chain structure.
+// 
+// The implementation employs a multi-tiered approach to optimize performance:
+//
+// 1. An in-memory cache layer for frequently accessed headers, dramatically reducing
+//    database load for common lookup patterns such as recent blocks and chain tips
+//
+// 2. Efficient SQL queries optimized for header retrieval by hash, which is a fundamental
+//    operation in blockchain synchronization and validation
+//
+// 3. Comprehensive metadata extraction including height, transaction count, and cumulative
+//    proof-of-work (chainwork) to support consensus operations
+//
+// 4. Miner identification through coinbase transaction parsing when available
+//
+// This implementation is critical for Teranode's high-throughput architecture where header
+// lookups occur frequently during block validation, chain reorganization, transaction
+// verification, and peer synchronization processes. The performance of this method directly
+// impacts the node's ability to maintain consensus and process transactions efficiently.
 package sql
 
 import (
@@ -18,22 +41,53 @@ import (
 // GetBlockHeader retrieves a block header from the database by its hash.
 // This implements the blockchain.Store.GetBlockHeader interface method.
 //
-// The method first checks an in-memory cache for the block header to avoid database queries.
-// If not found in cache, it executes a SQL query to retrieve the header data,
-// then reconstructs the header object with all required fields converted to appropriate types.
-// Additionally, if a coinbase transaction is available, it extracts the miner information.
+// Block headers are fundamental components in Bitcoin's blockchain architecture, containing
+// critical metadata that forms the cryptographic chain of blocks. Each header is 80 bytes and
+// contains six fields: version, previous block hash, merkle root, timestamp, difficulty target,
+// and nonce. This method retrieves both the header and extended metadata about the block.
+//
+// The implementation follows a tiered retrieval strategy for optimal performance:
+//
+// 1. Cache Layer: First checks the in-memory blocksCache for the requested header
+//    - This cache is populated during block storage and previous retrievals
+//    - Provides O(1) access time for frequently accessed headers
+//    - Particularly effective for recent blocks and chain tips
+//    - No cache expiration policy is applied as header data is immutable
+//
+// 2. Database Layer: If not found in cache, executes an optimized SQL query
+//    - Retrieves all header fields plus additional metadata in a single query
+//    - Uses parameterized queries to prevent SQL injection
+//    - Employs indexed lookups by block hash for efficient retrieval
+//
+// 3. Reconstruction Phase: Converts raw database values to appropriate types
+//    - Handles binary-to-structured data conversions (hashes, difficulty bits)
+//    - Extracts miner information from coinbase transaction when available
+//    - Populates both header and metadata objects
+//
+// This method is critical for multiple blockchain operations:
+//   - Block validation: Verifying the integrity of new blocks
+//   - Chain reorganization: Determining the valid chain during forks
+//   - Transaction verification: Confirming transaction inclusion
+//   - Peer synchronization: Responding to header requests from peers
+//   - Mining: Providing template data for new block creation
 //
 // Parameters:
 //   - ctx: Context for the database operation, allows for cancellation and timeouts
 //   - blockHash: The unique hash identifier of the block header to retrieve
 //
 // Returns:
-//   - *model.BlockHeader: The complete block header data if found
-//   - *model.BlockHeaderMeta: Metadata about the block including height, transaction count, and chainwork
+//   - *model.BlockHeader: The complete block header data including version, previous block hash,
+//     merkle root, timestamp, difficulty target (nBits), and nonce
+//   - *model.BlockHeaderMeta: Extended metadata about the block including:
+//     - Height: The block's position in the blockchain
+//     - TxCount: Number of transactions in the block
+//     - ChainWork: Cumulative proof-of-work up to this block (critical for consensus)
+//     - SizeInBytes: Total size of the block
+//     - Miner: Identification of the miner who produced the block (when available)
 //   - error: Any error encountered during retrieval, specifically:
-//   - BlockNotFoundError if the block does not exist
-//   - StorageError for database errors
-//   - ProcessingError for data conversion errors
+//     - BlockNotFoundError if the block does not exist in the database
+//     - StorageError for database connection or query execution errors
+//     - ProcessingError for data conversion or parsing errors
 func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeader")
 	defer deferFn()

@@ -1,3 +1,14 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetBlockInChainByHeightHash method, which retrieves a block
+// at a specific height in a particular chain identified by a starting block hash. This
+// functionality is particularly important in blockchain systems like Teranode that support
+// multiple competing chains (forks). The implementation uses a recursive Common Table
+// Expression (CTE) in SQL to efficiently traverse a specific chain backward from the
+// starting block, allowing retrieval of blocks from non-main chains. This is essential
+// for fork resolution, chain comparison, and blockchain reorganization processes.
 package sql
 
 import (
@@ -13,10 +24,30 @@ import (
 	"github.com/ordishs/go-utils"
 )
 
-/*
-GetBlockInChainByHeightHash returns a block by height for a chain determined by the start hash.
-This is useful for getting the block at a given height in a chain that may have a different tip.
-*/
+// GetBlockInChainByHeightHash retrieves a block at a specific height in a particular chain.
+// This implements a specialized blockchain retrieval method not directly defined in the Store interface.
+//
+// This method allows retrieving a block at a specific height from a particular chain identified
+// by a starting block hash, which may not be the main chain with the highest cumulative proof-of-work.
+// This is particularly useful during blockchain reorganizations, fork analysis, or when validating
+// alternative chains that may eventually become the main chain.
+//
+// The implementation uses a recursive SQL query to efficiently traverse the blockchain structure
+// backward from the specified starting block, following parent-child relationships until it finds
+// a block at the requested height. It also includes response caching to optimize performance for
+// frequently requested blocks in specific chains.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - height: The blockchain height at which to retrieve the block
+//   - startHash: The hash of a block in the chain of interest, typically the tip of that chain
+//
+// Returns:
+//   - *model.Block: The complete block at the specified height in the specified chain, if found
+//   - bool: Whether the block is marked as invalid in the database
+//   - error: Any error encountered during retrieval, specifically:
+//     - BlockNotFoundError if no block exists at the specified height in the specified chain
+//     - StorageError for database or processing errors
 func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (block *model.Block, invalid bool, err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockInChainByHeightHash")
 	defer deferFn()

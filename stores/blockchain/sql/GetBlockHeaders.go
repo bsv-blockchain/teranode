@@ -1,3 +1,20 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetBlockHeaders method, which retrieves a sequence of consecutive
+// block headers starting from a specified block hash. This functionality is essential for
+// blockchain synchronization, where nodes need to efficiently retrieve chains of headers
+// to validate and update their local blockchain state. The implementation uses a recursive
+// Common Table Expression (CTE) in SQL to efficiently traverse the blockchain graph structure,
+// following the parent-child relationships between blocks. It also includes caching mechanisms
+// to optimize performance for frequently requested header sequences and handles special cases
+// like chain reorganizations and invalid blocks.
+//
+// In Teranode's high-throughput architecture, efficient header retrieval is critical for
+// maintaining synchronization with the network, especially during initial block download
+// or when recovering from network partitions. The method is designed to work efficiently
+// with both PostgreSQL and SQLite database backends.
 package sql
 
 import (
@@ -11,6 +28,40 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// GetBlockHeaders retrieves a sequence of consecutive block headers starting from a specified block hash.
+// This implements the blockchain.Store.GetBlockHeaders interface method.
+//
+// This method is a cornerstone of blockchain synchronization, enabling nodes to efficiently
+// retrieve chains of headers to validate and update their local blockchain state. In Bitcoin's
+// headers-first synchronization model, nodes first download and validate headers before
+// requesting the corresponding block data, making this method critical for maintaining
+// network consensus.
+//
+// The implementation follows a tiered approach to optimize performance:
+//  1. First checks the blocks cache for the requested headers sequence
+//  2. If not found in cache, executes a SQL query to recursively traverse the blockchain graph structure
+//  3. The query follows parent-child relationships between blocks, starting from the
+//     specified block and retrieving the requested number of headers
+//  4. For each block, constructs both a BlockHeader object containing the core consensus
+//     fields and a BlockHeaderMeta object containing additional metadata
+//
+// The SQL implementation uses database-specific optimizations for both PostgreSQL and
+// SQLite to ensure efficient execution of the recursive query. The method also handles
+// special cases such as chain reorganizations and invalid blocks, ensuring that only
+// valid headers are returned.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - blockHashFrom: The hash of the starting block for header retrieval
+//   - numberOfHeaders: Maximum number of consecutive headers to retrieve
+//
+// Returns:
+//   - []*model.BlockHeader: Slice of consecutive block headers starting from the specified block
+//   - []*model.BlockHeaderMeta: Slice of metadata for the corresponding block headers
+//   - error: Any error encountered during retrieval, specifically:
+//   - StorageError for database access or query execution errors
+//   - ProcessingError for errors during header reconstruction
+//   - nil if the operation was successful (even if fewer headers than requested were found)
 func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeaders",
 		tracing.WithLogMessage(s.logger, "[GetBlockHeaders][%s] called for %d headers", blockHashFrom.String(), numberOfHeaders),

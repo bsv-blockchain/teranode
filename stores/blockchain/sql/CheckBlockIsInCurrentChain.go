@@ -1,3 +1,15 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the CheckBlockIsInCurrentChain method, which determines whether
+// specified blocks are part of the current main blockchain. In blockchain systems like
+// Teranode that support multiple competing chains (forks), it's critical to efficiently
+// determine which blocks belong to the main chain (the chain with the highest cumulative
+// proof-of-work). The implementation uses a recursive Common Table Expression (CTE) in SQL
+// to efficiently traverse the blockchain structure from the current tip backward, checking
+// if the specified blocks are part of this path. This functionality is essential for
+// transaction validation, chain reorganization, and ensuring consensus across the network.
 package sql
 
 import (
@@ -10,6 +22,27 @@ import (
 	"github.com/bitcoin-sv/teranode/util/tracing"
 )
 
+// CheckBlockIsInCurrentChain determines if specified blocks are part of the current main chain.
+// This implements a specialized blockchain validation method not directly defined in the Store interface.
+//
+// In blockchain systems, it's critical to determine whether specific blocks are part of the
+// current main chain (the chain with the highest cumulative proof-of-work) or if they belong
+// to a fork chain. This method efficiently checks multiple block IDs in a single database query,
+// which is important for Teranode's high-throughput architecture where chain membership checks
+// are common during transaction validation and block processing.
+//
+// The implementation uses a recursive SQL query to efficiently traverse the blockchain structure
+// from the current tip backward, checking if the specified blocks are part of this path. It handles
+// database engine differences (PostgreSQL vs SQLite) with appropriate SQL syntax adjustments.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - blockIDs: Array of internal database IDs for the blocks to check
+//
+// Returns:
+//   - bool: True if all specified blocks are part of the current main chain, false otherwise
+//   - error: Any error encountered during the check, specifically:
+//     - StorageError for database errors or processing failures
 func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:CheckIfBlockIsInCurrentChain",
 		tracing.WithDebugLogMessage(s.logger, "[CheckIfBlockIsInCurrentChain] checking if blocks (%v) are in current chain", blockIDs),

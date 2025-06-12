@@ -1,6 +1,17 @@
 // Package sql implements the blockchain.Store interface using SQL database backends.
 // It provides concrete SQL-based implementations for all blockchain operations
 // defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetBlock method, which retrieves complete block data
+// from the database by hash. This functionality is essential for blockchain validation,
+// transaction verification, and block exploration tools. The implementation includes
+// sophisticated caching mechanisms to optimize performance for frequently accessed blocks,
+// particularly important in Teranode's high-throughput architecture where rapid access
+// to recent blocks is critical. It handles the reconstruction of complete block objects
+// from their database representation, including header information, transaction data,
+// and metadata such as height and chainwork. The method also includes special handling
+// for database-specific errors and edge cases, ensuring consistent behavior across
+// different SQL backends.
 package sql
 
 import (
@@ -17,29 +28,48 @@ import (
 
 // getBlockCache is an internal struct used for caching block data.
 // It stores both the block object and its height to avoid additional database queries.
+// This caching mechanism is particularly important for Teranode's high-throughput
+// architecture, where frequently accessed blocks (such as recent blocks in the main chain)
+// can be served from memory rather than requiring repeated database access.
+// The cache is invalidated when new blocks are added or during chain reorganizations.
 type getBlockCache struct {
 	block  *model.Block // Complete block data including header and transaction information
 	height uint32       // Block height in the blockchain
 }
 
 // GetBlock retrieves a complete block from the database by its hash.
-// It implements the blockchain.Store.GetBlock interface method.
+// This implements the blockchain.Store.GetBlock interface method.
 //
-// The method first checks an in-memory cache for the block to avoid database queries.
-// If not found in cache, it executes a SQL query to retrieve the block data,
-// reconstructs the full block object with header information, transaction count,
-// subtrees, and other metadata, then adds it to the cache before returning.
+// The method retrieves the full block data including header, transactions, and metadata.
+// This is a fundamental operation in blockchain systems, used for block validation,
+// transaction verification, chain analysis, and block explorer functionality. In Teranode's
+// high-throughput architecture, efficient block retrieval is critical for maintaining
+// performance during synchronization, validation, and serving API requests.
+//
+// The implementation uses a two-tier caching strategy to optimize performance:
+// 1. First checks a dedicated response cache using a hash-based cache ID
+// 2. If not found, executes optimized SQL queries to retrieve the block data
+//
+// The method handles reconstruction of the complete block object from its database
+// representation, including header information, transaction data, and metadata such as
+// height and chainwork. This reconstruction process involves:
+// - Retrieving the block header and basic metadata
+// - Fetching transaction data if available
+// - Assembling the complete block structure
+// - Caching the result for future requests
 //
 // Parameters:
-//   - ctx: Context for the database operation, allows for cancellation and timeouts
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
 //   - blockHash: The unique hash identifier of the block to retrieve
 //
 // Returns:
-//   - *model.Block: The complete block data if found
+//   - *model.Block: The complete block data if found, including header, transactions,
+//     and metadata such as transaction count and size
 //   - uint32: The height of the block in the blockchain
 //   - error: Any error encountered during retrieval, specifically:
-//   - BlockNotFoundError if the block does not exist
-//   - StorageError for other database or processing errors
+//     - BlockNotFoundError if the block does not exist in the database
+//     - StorageError for database access or query execution errors
+//     - ProcessingError for errors during block reconstruction
 func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlock")
 	defer deferFn()

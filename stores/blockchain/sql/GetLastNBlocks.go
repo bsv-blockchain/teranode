@@ -1,3 +1,15 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetLastNBlocks method, which retrieves information about the
+// most recent blocks in the blockchain. This functionality is essential for blockchain
+// explorers, monitoring tools, and diagnostic interfaces that need to display recent
+// blockchain activity. The implementation includes efficient caching to optimize performance
+// for repeated queries, support for including or excluding orphaned blocks, and filtering
+// by maximum height. It also includes custom time handling to accommodate differences
+// between PostgreSQL and SQLite timestamp representations, ensuring consistent behavior
+// across different database backends.
 package sql
 
 import (
@@ -12,6 +24,34 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// GetLastNBlocks retrieves information about the most recent blocks in the blockchain.
+// This implements the blockchain.Store.GetLastNBlocks interface method.
+//
+// The method retrieves detailed information about the N most recent blocks, with options
+// to include orphaned blocks and filter by maximum height. This functionality is essential
+// for blockchain explorers, monitoring tools, and diagnostic interfaces that need to display
+// recent blockchain activity. In Teranode's high-throughput architecture, efficient access
+// to recent block information is critical for monitoring system health and performance.
+//
+// The implementation uses a response cache to optimize performance for repeated queries,
+// which is particularly important for frequently accessed recent block data. It constructs
+// SQL queries dynamically based on the provided parameters, with different query paths for
+// including or excluding orphaned blocks. The method also handles database engine differences
+// between PostgreSQL and SQLite, particularly for timestamp handling.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - n: The number of most recent blocks to retrieve
+//   - includeOrphans: If true, includes orphaned blocks (blocks not in the main chain);
+//     if false, only includes blocks in the main chain
+//   - fromHeight: Optional maximum height filter; if greater than 0, only blocks with
+//     height less than or equal to this value will be included
+//
+// Returns:
+//   - []*model.BlockInfo: An array of block information structures containing details
+//     such as hash, height, timestamp, transaction count, and size for each block
+//   - error: Any error encountered during retrieval, specifically:
+//     - StorageError for database errors or processing failures
 func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetLastNBlocks")
 	defer deferFn()
@@ -118,18 +158,40 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 	return blockInfos, nil
 }
 
-/* The following code exists to be able to handle the fact that the inserted_at is a TEXT field in
-   sqlite and a TIMESTAMP field in postgres. This is because the sqlite driver does not support
-	 TIMESTAMP fields.
-*/
+// The following code implements custom time handling to accommodate differences between
+// database engines. SQLite stores timestamps as TEXT fields while PostgreSQL uses native
+// TIMESTAMP fields. This abstraction layer ensures consistent behavior across different
+// database backends, which is essential for Teranode's database engine agnostic design.
 
 const SQLiteTimestampFormat = "2006-01-02 15:04:05"
 
+// CustomTime is a wrapper around time.Time that implements custom database serialization.
+// This type provides database engine abstraction by handling the different timestamp
+// formats used by PostgreSQL (native TIMESTAMP) and SQLite (TEXT fields).
 type CustomTime struct {
 	time.Time
 }
 
-// Scan implements the sql.Scanner interface.
+// Scan implements the sql.Scanner interface for CustomTime.
+//
+// This method provides database engine abstraction by handling different timestamp
+// representations from various SQL backends. It supports scanning time values from:
+// - Native time.Time objects (used by PostgreSQL)
+// - String representations (used by SQLite)
+// - Byte array representations
+//
+// The method parses string and byte array values using the SQLiteTimestampFormat constant,
+// ensuring consistent behavior regardless of the underlying database engine. This abstraction
+// is critical for Teranode's database-agnostic design, allowing the same code to work with
+// both PostgreSQL and SQLite backends without modification.
+//
+// Parameters:
+//   - value: The database value to scan, which may be a time.Time, []byte, or string
+//
+// Returns:
+//   - error: Any error encountered during scanning or parsing, specifically:
+//     - ProcessingError for unsupported value types
+//     - Time parsing errors if the string format is invalid
 func (ct *CustomTime) Scan(value interface{}) error {
 	switch v := value.(type) {
 	case time.Time:
@@ -158,7 +220,20 @@ func (ct *CustomTime) Scan(value interface{}) error {
 	return errors.NewProcessingError("unsupported type: %T", value)
 }
 
-// Value implements the driver.Valuer interface.
+// Value implements the driver.Valuer interface for CustomTime.
+//
+// This method provides the database serialization functionality for CustomTime values,
+// converting them to a format that can be stored in the database. It returns the underlying
+// time.Time value, which will be handled appropriately by the database driver:
+// - PostgreSQL driver will store it as a native TIMESTAMP
+// - SQLite driver will convert it to a string using the appropriate format
+//
+// This abstraction is essential for Teranode's database-agnostic design, ensuring that
+// timestamp values are consistently handled regardless of the underlying database engine.
+//
+// Returns:
+//   - driver.Value: The time.Time value to be stored in the database
+//   - error: Any error encountered during conversion (always nil for this implementation)
 func (ct CustomTime) Value() (driver.Value, error) {
 	return ct.Time, nil
 }

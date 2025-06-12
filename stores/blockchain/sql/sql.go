@@ -1,3 +1,19 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines including PostgreSQL
+// and SQLite.
+//
+// The implementation includes:
+// - Efficient block and transaction storage and retrieval
+// - Block header caching for performance optimization
+// - Support for chain reorganization
+// - Block validation status tracking
+// - Chain state management
+// - Database schema creation and migration
+// - Performance optimizations for bulk imports
+//
+// The SQL store can be configured with different caching strategies and
+// performance settings based on the deployment requirements.
 package sql
 
 import (
@@ -27,16 +43,42 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// SQL implements the blockchain.Store interface using SQL database backends.
+// It provides a complete implementation of blockchain data storage and retrieval
+// operations with support for different SQL engines, caching mechanisms, and
+// performance optimizations.
 type SQL struct {
+	// db is the underlying SQL database connection pool
 	db            *usql.DB
+	// engine identifies which SQL engine is being used (PostgreSQL, SQLite, etc.)
 	engine        util.SQLEngine
+	// logger provides structured logging capabilities
 	logger        ulogger.Logger
+	// responseCache provides a time-based cache for frequently accessed query results
 	responseCache *ttlcache.Cache[chainhash.Hash, any]
+	// cacheTTL defines the time-to-live duration for cached items
 	cacheTTL      time.Duration
+	// blocksCache provides specialized caching for block headers and metadata
 	blocksCache   blockchainCache
+	// chainParams contains the blockchain network parameters (mainnet, testnet, etc.)
 	chainParams   *chaincfg.Params
 }
 
+// New creates and initializes a new SQL blockchain store instance.
+//
+// This constructor function establishes a database connection based on the provided URL,
+// initializes the appropriate schema for the selected SQL engine, and configures caching
+// and performance settings. For PostgreSQL, it applies optimizations based on whether
+// the store is being used for bulk imports (seeder mode).
+//
+// Parameters:
+//   - logger: Logger instance for recording operational events and errors
+//   - storeURL: URL containing connection parameters and engine selection
+//   - tSettings: Application settings containing cache configuration and other parameters
+//
+// Returns:
+//   - *SQL: Initialized SQL store instance ready for blockchain operations
+//   - error: Any error encountered during initialization, wrapped as StorageError
 func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*SQL, error) {
 	logger = logger.New("bcsql")
 
@@ -420,16 +462,41 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 	return nil
 }
 
+// blockchainCache provides an in-memory caching mechanism for frequently accessed blockchain data.
+// It maintains maps of block headers, metadata, and existence flags to reduce database queries.
+// The cache is thread-safe with a read-write mutex protecting all operations.
+//
+// This cache significantly improves performance for header-related queries which are common
+// in blockchain operations, especially during chain synchronization and block validation.
 type blockchainCache struct {
+	// enabled determines whether the cache is active
 	enabled     bool
+	// headers maps block hashes to their corresponding headers
 	headers     map[chainhash.Hash]*model.BlockHeader
+	// metas maps block hashes to their metadata (height, status, etc.)
 	metas       map[chainhash.Hash]*model.BlockHeaderMeta
+	// existsCache maps block hashes to boolean existence flags
 	existsCache map[chainhash.Hash]bool
+	// chain maintains an ordered list of block hashes representing the current best chain
 	chain       []chainhash.Hash
+	// mutex provides thread-safe access to all cache data
 	mutex       sync.RWMutex
+	// cacheSize defines the maximum number of entries to keep in the cache
 	cacheSize   int
 }
 
+// NewBlockchainCache creates and initializes a new blockchainCache instance.
+//
+// This function configures the cache based on application settings, determining whether
+// the cache should be enabled and what its size should be. When enabled, the cache
+// significantly improves performance for frequently accessed blockchain data by reducing
+// database queries.
+//
+// Parameters:
+//   - tSettings: Application settings containing cache configuration parameters
+//
+// Returns:
+//   - *blockchainCache: A new, initialized blockchain cache instance
 func NewBlockchainCache(tSettings *settings.Settings) *blockchainCache {
 	cacheSize := tSettings.Block.StoreCacheSize
 
@@ -444,6 +511,19 @@ func NewBlockchainCache(tSettings *settings.Settings) *blockchainCache {
 	}
 }
 
+// AddBlockHeader adds a new block header to the cache and updates the chain state.
+// This method serves as a public wrapper around the internal addBlockHeader method,
+// providing thread-safety through a write lock.
+//
+// The method ensures that the blockchain cache remains consistent by adding both
+// the header and its metadata, and potentially updating the best chain representation.
+//
+// Parameters:
+//   - blockHeader: The block header to add to the cache
+//   - blockHeaderMeta: Metadata associated with the block header, including height and chain work
+//
+// Returns:
+//   - bool: True if the operation was successful, false otherwise (e.g., if the cache is disabled)
 func (c *blockchainCache) AddBlockHeader(blockHeader *model.BlockHeader, blockHeaderMeta *model.BlockHeaderMeta) bool {
 	if !c.enabled {
 		return true
@@ -488,6 +568,23 @@ func (c *blockchainCache) addBlockHeader(blockHeader *model.BlockHeader, blockHe
 	return notAdded
 }
 
+// RebuildBlockchain reconstructs the entire blockchain cache from the provided headers and metadata.
+// This method is typically called after a database reload or when the cache needs to be
+// completely refreshed to ensure consistency with the underlying storage.
+//
+// The method performs a complete reset of the cache and then rebuilds it by:
+// - Clearing all existing cached data (headers, metadata, existence flags, chain)
+// - Adding each header and its metadata to the cache in sequence
+// - Reconstructing the best chain representation
+//
+// This operation is protected by a write lock to ensure thread safety during the rebuild process.
+//
+// Parameters:
+//   - blockHeaders: Slice of block headers to add to the cache
+//   - blockHeaderMetas: Slice of metadata corresponding to the block headers
+//
+// Note: The slices must be of equal length and the elements at the same index must correspond
+// to the same block. The method silently returns if the cache is disabled.
 func (c *blockchainCache) RebuildBlockchain(blockHeaders []*model.BlockHeader, blockHeaderMetas []*model.BlockHeaderMeta) {
 	if !c.enabled {
 		return
@@ -511,10 +608,77 @@ func (c *blockchainCache) RebuildBlockchain(blockHeaders []*model.BlockHeader, b
 	}
 }
 
+// ResetResponseCache clears all entries from the response cache.
+//
+// This method is called when the blockchain state changes significantly, such as during
+// chain reorganizations, block invalidations, or new block additions. Clearing the response
+// cache ensures that subsequent queries will retrieve fresh data from the database rather
+// than potentially stale cached data.
+//
+// In Teranode's high-throughput architecture, maintaining cache consistency is critical
+// for ensuring accurate blockchain state across all components. This method provides a
+// simple but effective mechanism for cache invalidation when the underlying data changes.
+//
+// The implementation uses the ttlcache's DeleteAll method to efficiently remove all
+// cached entries in a single operation. This is more efficient than selectively
+// invalidating entries, especially during major state changes where most cached data
+// would need to be refreshed anyway.
 func (s *SQL) ResetResponseCache() {
 	s.responseCache.DeleteAll()
 }
 
+// ResetBlocksCache refreshes the blocks cache with the most recent blockchain data.
+// 
+// This method performs a complete reset and rebuild of the blocks cache, ensuring that
+// it contains the most up-to-date blockchain state. It is a critical operation in
+// maintaining blockchain consensus integrity, particularly after events that alter
+// the blockchain's structure or state.
+// 
+// In Bitcoin's design, the blockchain can undergo reorganizations when a competing chain
+// with greater cumulative proof-of-work is discovered. During these events, the node must
+// quickly adapt to the new canonical chain state. This method ensures that the in-memory
+// representation of the blockchain (the cache) accurately reflects the current state of
+// the database after such events.
+// 
+// The implementation follows a carefully designed process to maintain consistency:
+// 
+// 1. Clear the existing cache by calling RebuildBlockchain with nil parameters
+//    - This immediately invalidates all cached data, preventing stale data access
+//    - The operation is atomic, ensuring no partial cache state exists during transition
+// 
+// 2. Query the database for the current best block header to determine the chain tip
+//    - Uses the GetBestBlockHeader database method which identifies the tip by highest chainwork
+//    - This ensures the cache rebuilds from the current consensus-valid chain tip
+// 
+// 3. Retrieve the most recent block headers up to the cache size limit
+//    - Fetches headers in reverse order from the tip to populate the most relevant portion
+//      of the blockchain (the most recent blocks)
+//    - Optimizes for the common access pattern where recent blocks are queried most frequently
+//    - Limits the query to the configured cache size to prevent memory exhaustion
+// 
+// 4. Rebuild the cache with these fresh headers
+//    - Repopulates all cache maps (headers, metadata, existence flags)
+//    - Reconstructs the in-memory chain representation for efficient traversal
+// 
+// This cache reset operation is invoked in several critical scenarios:
+// 
+// - After blockchain reorganizations (via InvalidateBlock)
+// - After new block storage (via StoreBlock)
+// - When inconsistencies are detected between cache and database state
+// - During node startup to initialize the cache with current blockchain state
+// 
+// In Teranode's high-throughput architecture for BSV, maintaining an accurate and efficient
+// blocks cache is essential for performance at scale. The cache significantly reduces database
+// load during intensive operations like block validation, transaction verification, and
+// peer synchronization, which are particularly demanding in BSV's unlimited scaling model.
+// 
+// Parameters:
+//   - ctx: Context for the database operations, allowing for cancellation and timeouts
+// 
+// Returns:
+//   - error: Any error encountered during the cache reset process, specifically:
+//     - StorageError when database operations fail during best block header retrieval
+//     - ProcessingError when header reconstruction or cache population fails
 func (s *SQL) ResetBlocksCache(ctx context.Context) error {
 	s.logger.Warnf("Reset")
 	defer s.logger.Warnf("Reset completed")
@@ -544,6 +708,23 @@ func (s *SQL) ResetBlocksCache(ctx context.Context) error {
 	return nil
 }
 
+// GetBestBlockHeader retrieves the header of the block at the tip of the best chain.
+// The best chain is determined by the highest cumulative work, which typically corresponds
+// to the longest valid chain in the blockchain.
+//
+// This method is critical for blockchain consensus as it identifies the current chain tip
+// that new blocks should build upon. It's used for:
+// - Determining the next block's parent hash
+// - Calculating the current blockchain height
+// - Validating incoming blocks against the current best chain
+//
+// The method uses a read lock to ensure thread safety while accessing the cache data.
+// If the cache is disabled or empty, it returns nil values, indicating that the caller
+// should fall back to database queries.
+//
+// Returns:
+//   - *model.BlockHeader: The header of the best block in the chain, or nil if unavailable
+//   - *model.BlockHeaderMeta: Metadata for the best block including height and work, or nil if unavailable
 func (c *blockchainCache) GetBestBlockHeader() (*model.BlockHeader, *model.BlockHeaderMeta) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
@@ -557,6 +738,26 @@ func (c *blockchainCache) GetBestBlockHeader() (*model.BlockHeader, *model.Block
 	return c.headers[hash], c.metas[hash]
 }
 
+// GetBlockHeader retrieves a block header and its metadata from the cache by its hash.
+// This method provides fast access to block headers without requiring database queries,
+// significantly improving performance for frequently accessed headers.
+//
+// The method is commonly used for:
+// - Validating block references (previous block hash)
+// - Checking block existence before processing
+// - Retrieving block metadata like height and chain work
+// - Building block chains and verifying continuity
+//
+// The method uses a read lock to ensure thread safety while accessing the cache data.
+// If the requested header is not found in the cache or if the cache is disabled,
+// it returns nil values, indicating that the caller should fall back to database queries.
+//
+// Parameters:
+//   - hash: The unique hash identifier of the block header to retrieve
+//
+// Returns:
+//   - *model.BlockHeader: The requested block header, or nil if not found in cache
+//   - *model.BlockHeaderMeta: Metadata for the block including height and work, or nil if not found
 func (c *blockchainCache) GetBlockHeader(hash chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
@@ -640,6 +841,22 @@ func (c *blockchainCache) GetBlockHeaders(blockHashFrom *chainhash.Hash, numberO
 	return nil, nil
 }
 
+// GetExists checks if a block with the given hash exists in the blockchain.
+// This method provides a lightweight way to verify block existence using a dedicated
+// existence cache, optimized for frequent existence checks.
+//
+// The existence cache is separate from the header cache and is specifically designed
+// to handle high-volume existence queries efficiently. This approach reduces memory
+// overhead and improves performance for common blockchain operations that only need
+// to know if a block exists without requiring its full header data.
+//
+// Parameters:
+//   - blockHash: The unique hash identifier of the block to check
+//
+// Returns:
+//   - bool: True if the block exists in the blockchain, false if it doesn't
+//   - bool: True if the existence information was found in the cache (cache hit),
+//     false if the information wasn't cached (cache miss)
 func (c *blockchainCache) GetExists(blockHash chainhash.Hash) (bool, bool) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
@@ -649,6 +866,43 @@ func (c *blockchainCache) GetExists(blockHash chainhash.Hash) (bool, bool) {
 	return exists, ok
 }
 
+// SetExists updates the existence cache with information about whether a block exists.
+// This method is called after database operations that determine block existence,
+// allowing subsequent existence checks to be served from the cache without database queries.
+// 
+// In blockchain systems, block existence checks are extremely frequent operations that occur
+// during various critical processes:
+// 
+// - Block validation: Verifying that referenced previous blocks exist
+// - Transaction validation: Checking if blocks containing transactions exist
+// - Chain synchronization: Determining which blocks to request from peers
+// - Reorganization handling: Identifying which blocks remain valid after reorgs
+// - Double-spend prevention: Verifying block inclusion for transactions
+// 
+// The implementation uses a dedicated existence cache separate from the header cache for
+// several blockchain-specific optimizations:
+// 
+// 1. Memory Efficiency: Stores only boolean existence flags rather than full headers
+//    - Critical for BSV's unlimited scaling approach where the blockchain can grow very large
+//    - Allows caching existence information for many more blocks than would be possible
+//      with full header caching
+// 
+// 2. Performance Optimization: Provides O(1) lookup time for existence checks
+//    - Eliminates database queries for frequently checked blocks
+//    - Particularly valuable during block propagation and validation where many
+//      existence checks occur in rapid succession
+// 
+// 3. Consensus Protection: Reduces database load during intensive operations
+//    - Helps maintain node responsiveness during reorganizations or attacks
+//    - Prevents database contention when multiple components need existence information
+// 
+// The method is thread-safe, using the cache's read-write mutex to protect concurrent
+// access to the existence map. It silently returns if the cache is disabled, ensuring
+// graceful degradation when caching is turned off.
+// 
+// Parameters:
+//   - blockHash: The unique hash identifier of the block to update in the cache
+//   - exists: Boolean flag indicating whether the block exists in the blockchain
 func (c *blockchainCache) SetExists(blockHash chainhash.Hash, exists bool) {
 	if !c.enabled {
 		return
@@ -660,6 +914,26 @@ func (c *blockchainCache) SetExists(blockHash chainhash.Hash, exists bool) {
 	c.existsCache[blockHash] = exists
 }
 
+// ExportBlockchainCSV exports the blockchain data to a CSV file for analysis or backup purposes.
+// This method extracts key blockchain metadata including block hashes, heights, timestamps,
+// and chain work values, writing them to the specified file in CSV format.
+//
+// The export includes all blocks in the blockchain and is useful for:
+// - Data analysis and visualization of blockchain metrics
+// - Creating backups of critical blockchain metadata
+// - Migrating data to external systems or databases
+// - Debugging and auditing blockchain state
+//
+// The operation is potentially resource-intensive for large blockchains and may take
+// significant time to complete depending on the blockchain size.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - filePath: The path where the CSV file should be created
+//
+// Returns:
+//   - error: Any error encountered during the export process, including file creation
+//     or database query errors
 func (s *SQL) ExportBlockchainCSV(ctx context.Context, filePath string) error {
 	f, err := os.Create(filePath)
 	if err != nil {

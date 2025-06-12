@@ -1,3 +1,15 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetBlockHeadersFromHeight method, which retrieves a sequence
+// of block headers starting from a specified height in the blockchain. Block headers are
+// lightweight representations of blocks containing only metadata without the full transaction
+// data. This implementation uses the blockchainCache for optimized lookups and includes
+// all headers at the specified heights, including those from fork chains. This method is
+// particularly useful for blockchain synchronization, chain validation, and fork detection
+// processes that require examining sequences of headers without the overhead of retrieving
+// complete blocks.
 package sql
 
 import (
@@ -10,6 +22,50 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// GetBlockHeadersFromHeight retrieves a sequence of block headers starting from a specified height.
+// This implements the blockchain.Store.GetBlockHeadersFromHeight interface method.
+//
+// This method is critical for blockchain synchronization, fork detection, and chain analysis
+// operations that need to examine blocks at specific heights. In Teranode's high-throughput
+// architecture, efficient header retrieval by height is essential for maintaining consensus
+// and handling chain reorganizations.
+//
+// Key features of this implementation include:
+//
+// 1. Multi-fork support: Unlike methods that follow a single chain, this method returns ALL
+//    headers at each height, including those from competing fork chains. This comprehensive
+//    view is essential for fork detection and resolution.
+//
+// 2. Descending order: Headers are returned in descending height order (newest to oldest),
+//    which optimizes for the common case of needing the most recent blocks first.
+//
+// 3. Tiered performance optimization:
+//    - First checks the blockchainCache for cached headers
+//    - If not found, executes an optimized SQL query with height-based filtering
+//    - Uses database-specific optimizations for both PostgreSQL and SQLite
+//
+// 4. Complete header reconstruction: For each block, constructs both a BlockHeader object
+//    containing the core consensus fields and a BlockHeaderMeta object with additional metadata
+//    such as height, transaction count, and chainwork.
+//
+// This method is particularly valuable during initial block download, when validating
+// competing chains during reorganizations, and when serving block explorer requests that
+// need to display all blocks at specific heights, including those on minority chains.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - height: The starting blockchain height from which to retrieve headers
+//   - limit: The maximum number of heights to include in the retrieval
+//
+// Returns:
+//   - []*model.BlockHeader: An array of block headers within the specified height range,
+//     including headers from all fork chains at each height
+//   - []*model.BlockHeaderMeta: Corresponding metadata for each header including height,
+//     transaction count, size, and chainwork
+//   - error: Any error encountered during retrieval, specifically:
+//     - StorageError for database access or query execution errors
+//     - ProcessingError for errors during header reconstruction
+//     - nil if the operation was successful (even if no headers were found)
 func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeadersFromHeight")
 	defer deferFn()

@@ -1,4 +1,15 @@
 // Package blockchain provides interfaces and implementations for blockchain data storage and retrieval.
+//
+// This file implements a mock version of the Store interface for testing purposes.
+// The MockStore provides an in-memory implementation that simulates blockchain
+// storage operations without requiring a database connection. It maintains simple
+// maps for block lookups and chain state, making it suitable for unit testing
+// components that depend on blockchain storage.
+//
+// The mock implementation is thread-safe and provides basic functionality for
+// storing and retrieving blocks, checking existence, and managing chain state.
+// Some methods are fully implemented while others use a placeholder that panics
+// with "implement me" when called, allowing for incremental implementation as needed.
 package blockchain
 
 import (

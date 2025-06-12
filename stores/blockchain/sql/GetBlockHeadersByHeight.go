@@ -1,3 +1,14 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetBlockHeadersByHeight method, which retrieves block headers
+// within a specified height range. This functionality is essential for blockchain
+// synchronization, chain analysis, and block explorer tools. The implementation efficiently
+// retrieves multiple block headers in a single database query, reconstructs the header
+// objects with their metadata, and handles edge cases such as empty results or invalid blocks.
+// It's optimized for Teranode's high-throughput architecture where rapid access to
+// consecutive blocks is often required for validation and synchronization processes.
 package sql
 
 import (
@@ -11,6 +22,36 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+// GetBlockHeadersByHeight retrieves block headers within a specified height range.
+// This implements the blockchain.Store.GetBlockHeadersByHeight interface method.
+//
+// This method is designed to efficiently retrieve multiple block headers based on their
+// height in the blockchain. It's particularly useful for blockchain synchronization,
+// where a node needs to request blocks it's missing within a specific height range.
+// Other common use cases include block explorer functionality, chain analysis tools,
+// and validation of continuous chain segments.
+//
+// The implementation executes a single optimized SQL query to retrieve all headers
+// within the specified range, filtering out invalid blocks to ensure only valid chain
+// data is returned. The results are ordered by ascending height, providing a chronological
+// view of the blockchain within the requested range.
+//
+// For each block, the method constructs both a BlockHeader object containing the core
+// consensus fields and a BlockHeaderMeta object containing additional metadata such as
+// height, transaction count, and chainwork. This separation allows clients to access
+// either the consensus-critical data or the extended metadata as needed.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - startHeight: The lower bound of the height range (inclusive)
+//   - endHeight: The upper bound of the height range (inclusive)
+//
+// Returns:
+//   - []*model.BlockHeader: Slice of block headers within the specified height range
+//   - []*model.BlockHeaderMeta: Slice of metadata for the corresponding block headers
+//   - error: Any error encountered during retrieval, specifically:
+//     - StorageError for database access or query execution errors
+//     - nil if the operation was successful (even if no headers were found)
 func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeadersByHeight")
 	defer deferFn()
@@ -104,6 +145,20 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	return blockHeaders, blockMetas, nil
 }
 
+// max returns the larger of two ordered values.
+// This is a generic helper function that works with any ordered type (integers, floats, etc.)
+// and is used to safely calculate capacity for slices when dealing with height ranges.
+//
+// The function uses Go's generics feature with the constraints.Ordered constraint to ensure
+// that only types that support ordering operations (>, <, ==, etc.) can be used with this function.
+// This approach provides type safety while allowing the function to work with different numeric types.
+//
+// Parameters:
+//   - a: First value to compare
+//   - b: Second value to compare
+//
+// Returns:
+//   - T: The larger of the two input values
 func max[T constraints.Ordered](a, b T) T {
 	if a > b {
 		return a

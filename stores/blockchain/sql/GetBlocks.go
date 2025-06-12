@@ -1,3 +1,13 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file implements the GetBlocks method, which retrieves a sequence of consecutive
+// blocks from the blockchain starting from a specified block hash. The implementation
+// uses a recursive Common Table Expression (CTE) in SQL to efficiently traverse the
+// blockchain structure by following the parent-child relationships between blocks.
+// This method is particularly useful for blockchain synchronization, chain analysis,
+// and block validation processes that require examining sequences of blocks.
 package sql
 
 import (
@@ -11,6 +21,29 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// GetBlocks retrieves a sequence of consecutive blocks from the blockchain.
+// This implements the blockchain.Store.GetBlocks interface method.
+//
+// The method retrieves a specified number of blocks starting from a given block hash
+// and traversing backward through the blockchain (from newer to older blocks). It uses
+// a recursive SQL query to efficiently navigate the blockchain structure by following
+// the parent-child relationships between blocks.
+//
+// For each block, the method retrieves the complete block data including header information,
+// transaction count, size, and other metadata. This comprehensive retrieval is particularly
+// useful for blockchain synchronization processes, chain analysis tools, and validation
+// operations that require examining sequences of blocks.
+//
+// Parameters:
+//   - ctx: Context for the database operation, allowing for cancellation and timeouts
+//   - blockHashFrom: The hash of the starting block from which to retrieve the sequence
+//   - numberOfHeaders: The maximum number of blocks to retrieve in the sequence
+//
+// Returns:
+//   - []*model.Block: An array of complete block objects in the sequence
+//   - error: Any error encountered during retrieval, specifically:
+//     - BlockNotFoundError if the starting block does not exist
+//     - StorageError for database errors or data processing failures
 func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint32) ([]*model.Block, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlocks")
 	defer deferFn()
