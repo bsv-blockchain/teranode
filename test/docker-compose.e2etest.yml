@@ -141,7 +141,7 @@ services:
       - aerospike-1
       - postgres
       - kafka-shared
-    entrypoint: [ "/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.test}
       logLevel: "DEBUG"
@@ -171,7 +171,7 @@ services:
       - aerospike-2
       - postgres
       - kafka-shared
-    entrypoint: [ "/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2.test}
       logLevel: "DEBUG"
@@ -201,7 +201,7 @@ services:
       - aerospike-3
       - postgres
       - kafka-shared
-    entrypoint: [ "/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING" ]
+    entrypoint: [ "/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3.test}
       logLevel: "DEBUG"

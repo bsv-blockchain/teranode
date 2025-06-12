@@ -103,7 +103,8 @@ func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize in
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
-	blockID := uint32(0) // Use a dummy block ID for all txs in this test
+	blockHeight := uint32(1)
+	blockID := uint32(1)
 
 	// Coinbase tx
 	coinbaseTx := bt.NewTx()
@@ -119,8 +120,12 @@ func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize in
 	txMetaStore := memory.New(ulogger.TestLogger{})
 	subtreeStore := blobmemory.New()
 
-	// Store coinbase meta with block ID
-	_, err = txMetaStore.Create(ctx, coinbaseTx, blockID)
+	// Store coinbase meta with block ID, since it has to be mined in the first block
+	_, err = txMetaStore.Create(ctx, coinbaseTx, blockHeight, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+		BlockID:     blockID,
+		BlockHeight: blockHeight,
+		SubtreeIdx:  0,
+	}))
 	require.NoError(t, err)
 
 	txs := make([]*bt.Tx, txCount)
@@ -139,16 +144,8 @@ func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize in
 		_ = tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 		txs[i] = tx
 
-		// Store meta for the parent (prevTx) with block ID
-		err := txMetaStore.SetMinedMulti(ctx, []*chainhash.Hash{prevTx.TxIDChainHash()}, utxo.MinedBlockInfo{
-			BlockID:     blockID,
-			BlockHeight: 0,
-			SubtreeIdx:  0,
-		})
-		require.NoError(t, err)
-
 		// Store meta for this tx
-		_, err = txMetaStore.Create(ctx, tx, blockID)
+		_, err = txMetaStore.Create(ctx, tx, blockHeight)
 		require.NoError(t, err)
 
 		prevTx = tx
