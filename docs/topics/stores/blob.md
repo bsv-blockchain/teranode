@@ -9,6 +9,8 @@
   - [3. Technology](#3-technology)
     - [3.1 Overview](#31-overview)
     - [3.2 Store Options](#32-store-options)
+    - [3.3 Concurrent Access Patterns](#33-concurrent-access-patterns)
+    - [3.4 HTTP REST API Server](#34-http-rest-api-server)
   - [4. Data Model](#4-data-model)
   - [5. Use Cases](#5-use-cases)
     - [5.1. Asset Server (HTTP): Get Transactions](#51-asset-server-http-get-transactions)
@@ -81,7 +83,7 @@ The Blob Server is a store interface, with implementations for Tx Store and Subt
 
 ![Blob_Store_Component_Context_Diagram.png](..%2Fservices%2Fimg%2FBlob_Store_Component_Context_Diagram.png)
 
-The Blob Server implementations for Tx Store and Subtree Store are injected into the various services that require them. They are initialised in the `main_stores.go` file and passed into the services as a dependency. See below:
+The Blob Server implementations for Tx Store and Subtree Store are injected into the various services that require them. They are initialised in the `daemon/daemon_stores.go` file and passed into the services as a dependency. See below:
 
 
 ```go
@@ -98,7 +100,7 @@ func getTxStore(logger ulogger.Logger) blob.Store {
 	if !found {
 		panic("txstore config not found")
 	}
-	txStore, err = blob.NewStore(logger, txStoreUrl)
+	txStore, err = blob.NewStore(logger, txStoreUrl, options.WithHashPrefix(10))
 	if err != nil {
 		panic(err)
 	}
@@ -118,7 +120,7 @@ func getSubtreeStore(logger ulogger.Logger) blob.Store {
 	if !found {
 		panic("subtreestore config not found")
 	}
-	subtreeStore, err = blob.NewStore(logger, subtreeStoreUrl, options.WithPrefixDirectory(10))
+	subtreeStore, err = blob.NewStore(logger, subtreeStoreUrl, options.WithHashPrefix(10))
 	if err != nil {
 		panic(err)
 	}
@@ -163,6 +165,58 @@ The system also includes a main server implementation (`server.go`) that provide
 
 Options for configuring these stores are managed through the `options` package.
 
+### 3.3 Concurrent Access Patterns
+
+The Blob Server includes a `ConcurrentBlob` implementation that provides thread-safe access to blob storage operations with optimized concurrent access patterns. This feature is particularly important in high-concurrency environments where the same blob might be requested multiple times simultaneously.
+
+#### Key Features:
+
+- **Double-Checked Locking Pattern**: Ensures that only one fetch operation occurs at a time for each unique key, while allowing concurrent operations on different keys
+- **Generic Type Support**: Parametrized by a key type K that must satisfy `chainhash.Hash` constraints for type-safe handling
+- **Duplicate Operation Prevention**: Avoids duplicate network or disk operations when multiple goroutines request the same blob simultaneously
+- **Efficient Resource Usage**: Other goroutines wait for completion rather than duplicating work
+
+#### Usage Pattern:
+
+```go
+// Create a concurrent blob instance
+concurrentBlob := blob.NewConcurrentBlob[chainhash.Hash](blobStore, options...)
+
+// Get a blob with automatic fetching if not present
+reader, err := concurrentBlob.Get(ctx, key, fileType, func() (io.ReadCloser, error) {
+    // This function is called only if the blob doesn't exist
+    return fetchBlobFromSource(key)
+})
+```
+
+The `ConcurrentBlob` wrapper is particularly useful for services that need to fetch the same data concurrently, such as block validation or transaction processing services.
+
+### 3.4 HTTP REST API Server
+
+The Blob Server includes a comprehensive HTTP REST API server implementation (`HTTPBlobServer`) that provides full HTTP access to blob storage operations. This server implements the standard `http.Handler` interface and can be easily integrated into existing HTTP server infrastructure.
+
+#### Supported HTTP Endpoints:
+
+- **GET /health**: Health check endpoint returning server status
+- **GET /{key}**: Retrieve blob by key with optional range support
+- **POST /{key}**: Store new blob data
+- **PUT /{key}**: Update existing blob data
+- **DELETE /{key}**: Delete blob by key
+- **GET /{key}/dah**: Get Delete-At-Height information for a blob
+- **POST /{key}/dah**: Set Delete-At-Height for a blob
+
+#### Usage Example:
+
+```go
+// Create HTTP blob server
+httpServer := blob.NewHTTPBlobServer(blobStore, logger)
+
+// Start HTTP server
+http.Handle("/blob/", http.StripPrefix("/blob", httpServer))
+log.Fatal(http.ListenAndServe(":8080", nil))
+```
+
+The HTTP server is particularly useful for external integrations, debugging, and providing web-based access to blob storage functionality.
 
 ## 4. Data Model
 

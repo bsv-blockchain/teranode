@@ -75,13 +75,13 @@ Also, note how the Blockchain client is used in order to wait for the node State
 The Legacy service interacts with the Validator service to validate incoming transactions from the BSV network. This interaction can happen in two different configurations:
 
 1. **Local Validator**:
-   - When `validator.useLocalValidator=true` (recommended for production)
+   - When `useLocalValidator=true` (recommended for production)
    - The Validator is instantiated directly within the Legacy service
    - Direct method calls are used without network overhead
    - This provides the best performance and lowest latency
 
 2. **Remote Validator Service**:
-   - When `validator.useLocalValidator=false`
+   - When `useLocalValidator=false`
    - The Legacy service connects to a separate Validator service via gRPC
    - Useful for development, testing, or specialized deployment scenarios
    - Has higher latency due to additional network calls
@@ -403,7 +403,7 @@ The Legacy service bridges traditional Bitcoin nodes with the Teranode architect
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
 | `legacy_allowBlockPriority` | bool | false | Prioritize transactions based on block priority | Affects transaction selection for block creation |
-| `validator.useLocalValidator` | bool | false | Use a local validator instance embedded in the service | Improves performance by eliminating network overhead for validation |
+| `useLocalValidator` | bool | false | Use a local validator instance embedded in the service | Improves performance by eliminating network overhead for validation |
 | `excessiveblocksize` | uint64 | 4GB | Maximum allowed block size | Limits resource consumption for extremely large blocks |
 
 ## Configuration Interactions and Dependencies

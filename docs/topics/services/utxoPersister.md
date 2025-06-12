@@ -160,13 +160,6 @@ If the current height is less than 100 blocks behind the best block height, the 
 
 
 
-
-
-
-
-
-
-
 3. **Binary Encoding:**
    The UTXO is encoded into a binary format for efficient storage and retrieval:
     - 32 bytes: TxID
@@ -305,6 +298,8 @@ These settings control how UTXO data is stored and retained.
 |---------|------|---------|-------------|--------|
 | `blockpersister_skipUTXODelete` | bool | `false` | When true, previous block's UTXO sets aren't deleted after processing | Controls storage usage and retention policy for historical UTXO sets |
 | `blockstore` | *url.URL | `"file://./data/blockstore"` | Specifies the URL for the block storage backend | Determines where block data, including UTXO sets, are stored |
+| `txstore` | *url.URL | `""` | Specifies the URL for the transaction storage backend | Determines where transaction data is stored for block processing |
+| `txmeta_store` | *url.URL | `""` | Specifies the URL for the UTXO metadata storage backend | Determines where UTXO metadata is stored for efficient lookups |
 
 #### Storage Management Interactions and Dependencies
 
@@ -313,6 +308,7 @@ These settings determine the storage footprint and data persistence behavior of 
 - When `blockpersister_skipUTXODelete` is `false` (default), the service maintains minimal storage by only keeping the UTXO set for the most recent processed block
 - When set to `true`, the service preserves all historical UTXO sets, which increases storage requirements but enables historical analysis and validation
 - The `blockstore` setting defines where all block-related data is stored, affecting both read and write performance based on the underlying storage system
+- The `txstore` and `txmeta_store` settings determine where transaction data and UTXO metadata are stored, respectively, which impacts performance and data availability
 
 Storage requirements grow significantly when keeping historical UTXO sets, as each set contains the complete state of all unspent outputs at a given block height.
 

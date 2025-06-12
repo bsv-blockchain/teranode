@@ -35,7 +35,7 @@ At a glance, the Propagation service:
 
 The gRPC protocol is the primary communication method, although HTTP is also accepted.
 
--  `StartHTTPServer`: This function is designed to start a network listener for the HTTP protocol. Each function configures and starts a server to listen for incoming connections and requests on specific network addresses and ports.
+-  `StartHTTPServer`: This function is designed to start a network listener for the HTTP protocol. Each function configures and starts a server to listen for incoming connections and requests on specific network addresses and ports. For example, the HTTP endpoints are `/tx`, `/txs`, and `/health`.
 
 A node can start multiple parallel instances of the Propagation service. This translates into multiple pods within a Kubernetes cluster. Each instance will have its own gRPC server, and will be able to receive and propagate transactions independently. GRPC load balancing allows to distribute the load across the multiple instances.
 
@@ -58,13 +58,13 @@ Upon startup, the Propagation service starts the relevant communication channels
 The Propagation service can work with the Validator in two different configurations:
 
 1. **Local Validator**:
-   - When `validator.useLocalValidator=true` (recommended for production)
+   - When `useLocalValidator=true` (recommended for production)
    - The Validator is instantiated directly within the Propagation service
    - Direct method calls are used without network overhead
    - This provides the best performance and lowest latency
 
 2. **Remote Validator Service**:
-   - When `validator.useLocalValidator=false`
+   - When `useLocalValidator=false`
    - The Propagation service connects to a separate Validator service via gRPC
    - Useful for development, testing, or specialized deployment scenarios
    - Has higher latency due to additional network calls
@@ -196,7 +196,7 @@ The Propagation service serves as the transaction intake and distribution system
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
-| `validator.useLocalValidator` | bool | false | Use a local validator instance embedded in the service | Eliminates network overhead for validation, improving performance |
+| `useLocalValidator` | bool | false | Use a local validator instance embedded in the service | Eliminates network overhead for validation, improving performance |
 | `propagation_alwaysUseHTTP` | bool | false | Forces using HTTP instead of Kafka for transaction validation | Affects how transactions are sent to the validator service |
 | `validator_httpAddress` | url | null | URL for validator HTTP API | Used as fallback for large transactions exceeding Kafka limits |
 
@@ -216,12 +216,12 @@ At least one ingestion path must be configured for the service to be functional.
 
 The Propagation service interacts with the Validator service using one of two architectural patterns:
 
-- **Local Validator Mode** (`validator.useLocalValidator=true`):
+- **Local Validator Mode** (`useLocalValidator=true`):
   - Validator runs in-process with the Propagation service
   - Eliminates network overhead for validation operations
   - Recommended for production deployments to minimize latency
 
-- **Remote Validator Mode** (`validator.useLocalValidator=false`):
+- **Remote Validator Mode** (`useLocalValidator=false`):
   - Propagation service communicates with a separate Validator service
   - Transactions are sent via Kafka or HTTP, controlled by `propagation_alwaysUseHTTP`
   - Large transactions exceeding Kafka limits are automatically sent via HTTP using `validator_httpAddress`

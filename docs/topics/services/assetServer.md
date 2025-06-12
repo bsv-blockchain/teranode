@@ -303,7 +303,7 @@ The Asset Server can be configured using various settings that control its behav
 | `server_certFile` | string | Path to the SSL certificate file for HTTPS | - | Yes** |
 | `server_keyFile` | string | Path to the SSL key file for HTTPS | - | Yes** |
 | `asset_signHTTPResponses` | bool | Enables cryptographic signing of HTTP responses | false | No |
-| `asset_echoDebug` | bool | Enables Echo framework debug mode for detailed HTTP request logging | false | No |
+| `ECHO_DEBUG` | bool | Enables Echo framework debug mode for detailed HTTP request logging | false | No |
 
 *Required when Centrifuge is enabled<br>
 **Required when securityLevelHTTP is non-zero
@@ -437,9 +437,9 @@ When response signing is enabled (`asset_signHTTPResponses=true`):
 
 | Setting | Type | Description | Default |
 |---------|------|-------------|--------|
-| `asset_echoDebug` | bool | Enables detailed HTTP request logging | false |
+| `ECHO_DEBUG` | bool | Enables detailed HTTP request logging | false |
 
-When `asset_echoDebug` is enabled, the server logs detailed information about each HTTP request and response, useful for development and troubleshooting.
+When `ECHO_DEBUG` is enabled, the server logs detailed information about each HTTP request and response, useful for development and troubleshooting.
 
 7. **FSM Configuration**
     - fsm_state_restore: Enables or disables the restore state for the Finite State Machine.

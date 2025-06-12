@@ -21,6 +21,9 @@
     - [Network and Communication Settings](#network-and-communication-settings)
     - [Kafka and Concurrency Settings](#kafka-and-concurrency-settings)
     - [Performance and Optimization](#performance-and-optimization)
+    - [Transaction Processing](#transaction-processing)
+    - [Bloom Filter Management](#bloom-filter-management)
+    - [Advanced Settings](#advanced-settings)
     - [Storage and State Management](#storage-and-state-management)
 9. [Other Resources](#9-other-resources)
 
@@ -48,17 +51,6 @@ The Legacy Service communicates with the Block Validation over the gRPC protocol
 
 > **Note**: For information about how the Block Validation service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
-To improve performance, the Block Validation Service uses a caching mechanism for UTXO Meta data, called `Tx Meta Cache`. This prevents repeated fetch calls to the store by retaining recently loaded transactions in memory (for a limited time). This can be enabled or disabled via the `blockvalidation_txMetaCacheEnabled` setting. The caching mechanism is implemented in the `txmetacache` package, and is used by the Block Validation Service:
-
-```go
-	// create a caching tx meta store
-	if gocore.Config().GetBool("blockvalidation_txMetaCacheEnabled", true) {
-		logger.Infof("Using cached version of tx meta store")
-		bVal.txMetaStore = newTxMetaCache(txMetaStore)
-	} else {
-		bVal.txMetaStore = txMetaStore
-	}
-```
 
 
 Finally, note that the Block Validation service benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
@@ -295,17 +287,46 @@ The Block Validation service configuration can be adjusted through environment v
 | `blockvalidation_grpcAddress` | string | "localhost:8088" | Address that other services use to connect to this service | Affects how other services discover and communicate with the Block Validation service |
 | `blockvalidation_grpcListenAddress` | string | ":8088" | Network interface and port the service listens on for gRPC connections | Controls network binding and accessibility of the service |
 
-### Block Processing Pipeline
+### Kafka and Concurrency Settings
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
-| `blockvalidation_blockFoundCh_buffer_size` | int | 1000 | Buffer size for the channel handling newly discovered blocks | Affects system's ability to handle bursts of new blocks without blocking |
-| `blockvalidation_maxPreviousBlockHeadersToCheck` | uint64 | 100 | Maximum number of previous block headers to check during validation | Defines the depth of historical validation performed |
-| `blockvalidation_validateBlockSubtreesConcurrency` | int | max(4, runtime.NumCPU()/2) | Number of concurrent goroutines for validating block subtrees | Higher values increase CPU utilization but improve throughput |
-| `blockvalidation_bloom_filter_retention_size` | uint32 | 100 | Number of recent blocks to maintain bloom filters for | Affects memory usage and duplicate transaction detection efficiency |
-| `blockvalidation_optimistic_mining` | bool | true | When enabled, blocks are conditionally accepted before full validation | Dramatically improves throughput at the cost of temporary chain inconsistency if validation fails |
-| `blockvalidation_previous_block_header_count` | uint64 | 100 | Number of previous block headers to maintain in memory | Affects memory usage and validation performance |
-| `blockvalidation_secret_mining_threshold` | uint32 | 10 | Threshold for detecting secret mining attacks | Lower values increase security at the cost of potential false positives |
+| `kafka_blocksConfig` | string | (none) | Kafka configuration for block messages | Required for consuming blocks from Kafka |
+| `blockvalidation_kafkaWorkers` | int | 0 (auto) | Number of Kafka consumer workers | Controls parallelism for Kafka-based block validation |
+
+### Performance and Optimization
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `blockvalidation_batch_missing_transactions` | bool | false | When enabled, missing transactions are fetched in batches | Improves network efficiency at the cost of slightly increased latency |
+| `blockvalidation_processTxMetaUsingCache_BatchSize` | int | 1024 | Batch size for processing transaction metadata using cache | Affects performance and memory usage during cache operations |
+| `blockvalidation_processTxMetaUsingCache_Concurrency` | int | 32 | Concurrency level for processing transaction metadata using cache | Controls parallel cache operations |
+| `blockvalidation_processTxMetaUsingCache_MissingTxThreshold` | int | 1 | Threshold for switching to store-based processing when missing transactions | Controls fallback behavior when cache misses occur |
+| `blockvalidation_processTxMetaUsingStore_BatchSize` | int | CPU/2 (min 4) | Batch size for processing transaction metadata using store | Affects performance during store operations |
+| `blockvalidation_processTxMetaUsingStore_Concurrency` | int | 32 | Concurrency level for processing transaction metadata using store | Controls parallel store operations |
+| `blockvalidation_processTxMetaUsingStore_MissingTxThreshold` | int | 1 | Threshold for store-based processing when missing transactions | Controls fallback behavior for store operations |
+| `blockvalidation_skipCheckParentMined` | bool | false | Skips checking if parent block is mined during validation | Performance optimization that may reduce validation accuracy |
+| `blockvalidation_subtreeFoundChConcurrency` | int | 1 | Concurrency level for subtree found channel processing | Controls parallel subtree processing |
+| `blockvalidation_subtree_validation_abandon_threshold` | int | 1 | Threshold for abandoning subtree validation | Controls when to give up on problematic subtrees |
+| `blockvalidation_validateBlockSubtreesConcurrency` | int | CPU/2 (min 4) | Concurrency level for validating block subtrees | Higher values improve performance but increase resource usage |
+| `blockvalidation_validation_max_retries` | int | 3 | Maximum number of retries for validation operations | Controls resilience to transient failures |
+| `blockvalidation_validation_retry_sleep` | duration | 5s | Sleep duration between validation retries | Controls backoff timing for retry operations |
+| `blockvalidation_isParentMined_retry_max_retry` | int | 20 | Maximum retries for checking if parent block is mined | Controls persistence when checking parent block status |
+| `blockvalidation_isParentMined_retry_backoff_multiplier` | int | 30 | Backoff multiplier for parent mined check retries | Controls exponential backoff timing |
+| `blockvalidation_subtreeGroupConcurrency` | int | 1 | Concurrency level for subtree group processing | Controls parallel processing of subtree groups |
+| `blockvalidation_blockFoundCh_buffer_size` | int | 1000 | Buffer size for block found channel | Controls memory usage and throughput for block notifications |
+| `blockvalidation_catchupCh_buffer_size` | int | 10 | Buffer size for catchup channel | Controls memory usage for catchup operations |
+| `blockvalidation_useCatchupWhenBehind` | bool | false | Enables catchup mechanism when node is behind | Improves sync performance but increases complexity |
+| `blockvalidation_catchupConcurrency` | int | CPU/2 (min 4) | Concurrency level for catchup operations | Controls parallel processing during catchup |
+| `blockvalidation_check_subtree_from_block_timeout` | duration | 5m | Timeout for checking subtree from block | Controls maximum wait time for subtree operations |
+| `blockvalidation_check_subtree_from_block_retries` | int | 5 | Maximum retries for subtree from block checks | Controls resilience for subtree operations |
+| `blockvalidation_check_subtree_from_block_retry_backoff_duration` | duration | 30s | Backoff duration for subtree check retries | Controls timing between retry attempts |
+| `blockvalidation_secret_mining_threshold` | uint32 | 10 | Threshold for detecting secret mining attacks | Security parameter for chain reorganization detection |
+| `blockvalidation_previous_block_header_count` | uint64 | 100 | Number of previous block headers to maintain | Controls memory usage and validation depth |
+| `blockvalidation_maxPreviousBlockHeadersToCheck` | uint64 | 100 | Maximum previous block headers to check during validation | Limits validation scope for performance |
+| `blockvalidation_fail_fast_validation` | bool | true | Enables fail-fast validation mode | Improves performance by stopping validation early on errors |
+| `blockvalidation_finalizeBlockValidationConcurrency` | int | 8 | Concurrency level for finalizing block validation | Controls parallel finalization operations |
+| `blockvalidation_getMissingTransactions` | int | 32 | Concurrency level for retrieving missing transactions | Controls parallel transaction retrieval |
 
 ### Transaction Processing
 
@@ -313,59 +334,28 @@ The Block Validation service configuration can be adjusted through environment v
 |---------|------|---------|-------------|--------|
 | `blockvalidation_localSetTxMinedConcurrency` | int | 8 | Concurrency level for marking transactions as mined | Higher values improve performance but increase memory usage |
 | `blockvalidation_missingTransactionsBatchSize` | int | 5000 | Batch size for retrieving missing transactions | Larger batches improve throughput but increase memory usage |
-| `blockvalidation_batch_missing_transactions` | bool | false | When enabled, missing transactions are fetched in batches | Improves network efficiency at the cost of slightly increased latency |
-| `blockvalidation_txMetaCacheEnabled` | bool | true | Enables or disables transaction metadata caching | Dramatically improves performance at the cost of increased memory usage |
-| `blockvalidation_processTxMetaUsingCache_BatchSize` | int | 1024 | Batch size for processing transaction metadata using cache | Affects performance and memory usage during cache operations |
-| `blockvalidation_processTxMetaUsingCache_Concurrency` | int | 32 | Concurrency level for processing transaction metadata using cache | Controls parallel cache operations |
-| `blockvalidation_processTxMetaUsingCache_MissingTxThreshold` | int | 1 | Threshold for switching to store-based processing when missing transactions | Controls fallback behavior when cache misses occur |
-| `blockvalidation_processTxMetaUsingStore_BatchSize` | int | max(4, runtime.NumCPU()/2) | Batch size for processing transaction metadata using store | Affects storage I/O patterns and transaction processing throughput |
-| `blockvalidation_processTxMetaUsingStore_Concurrency` | int | 32 | Concurrency level for processing transaction metadata using store | Controls parallel storage operations |
-| `blockvalidation_processTxMetaUsingStore_MissingTxThreshold` | int | 1 | Maximum allowed missing transactions before failure | Controls error tolerance during transaction processing |
 
-### Synchronization and Recovery
+### Bloom Filter Management
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
-| `blockvalidation_useCatchupWhenBehind` | bool | false | Enables specialized catchup mode when node falls behind | Affects synchronization strategy and resource utilization |
-| `blockvalidation_catchupConcurrency` | int | max(4, runtime.NumCPU()/2) | Concurrency level for catchup operations | Controls parallel processing during chain synchronization |
-| `blockvalidation_catchupCh_buffer_size` | int | 10 | Buffer size for catchup operations channel | Affects performance during blockchain synchronization |
-| `blockvalidation_subtreeBlockHeightRetention` | uint32 | (global setting) | How long to keep subtrees (in terms of block height) | Affects storage utilization and historical data availability |
-| `blockvalidation_subtreeGroupConcurrency` | int | 1 | Maximum concurrent goroutines for processing subtree groups | Controls parallelism during subtree group processing |
-| `blockvalidation_skipCheckParentMined` | bool | false | When enabled, skips parent block mining verification | Testing only: compromises chain integrity for performance |
+| `blockvalidation_bloom_filter_retention_size` | uint32 | GlobalBlockHeightRetention + 2 | Number of recent blocks to maintain bloom filters for | Affects memory usage and duplicate transaction detection efficiency. Automatically set based on global retention settings |
 
-### Error Handling and Resilience
+### Advanced Settings
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
-| `blockvalidation_validation_max_retries` | int | 3 | Maximum retries for validation operations | Affects resilience to transient failures |
-| `blockvalidation_validation_retry_sleep` | duration | 5s | Sleep duration between validation retries | Controls back-off behavior during retry attempts |
-| `blockvalidation_isParentMined_retry_max_retry` | int | 20 | Maximum retries when checking if parent block is mined | Affects resilience during chain reorganizations |
-| `blockvalidation_isParentMined_retry_backoff_multiplier` | int | 30 | Backoff multiplier for parent mining check retries | Controls exponential back-off during retries |
-| `blockvalidation_check_subtree_from_block_timeout` | duration | 5m | Timeout for checking subtrees from a block | Limits how long the service will wait for subtree validation |
-| `blockvalidation_check_subtree_from_block_retries` | int | 5 | Number of retries for checking subtrees | Affects resilience to transient subtree retrieval failures |
-| `blockvalidation_check_subtree_from_block_retry_backoff_duration` | duration | 30s | Backoff duration between subtree check retries | Controls delay between retry attempts |
-| `blockvalidation_subtree_validation_abandon_threshold` | int | 1 | Number of validation failures before abandoning a subtree | Controls resilience vs. resource conservation trade-off |
-
-### Kafka Integration
-
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `kafka_blocksConfig` | string | (none) | Kafka configuration for block messages | Required for consuming blocks from Kafka |
-| `blockvalidation_kafkaWorkers` | int | 0 (auto) | Number of Kafka consumer workers | Controls parallelism for Kafka-based block validation |
-
-### Performance Monitoring
-
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
+| `blockvalidation_optimistic_mining` | bool | true | When enabled, blocks are conditionally accepted before full validation | Dramatically improves throughput at the cost of temporary chain inconsistency if validation fails |
 | `blockvalidation_validation_warmup_count` | int | 128 | Number of validation operations during warmup | Helps prime caches and establish performance baselines |
+| `excessiveblocksize` | int | 4GB | Maximum allowed block size | Limits resource consumption for extremely large blocks |
 
-### Miscellaneous
+### Storage and State Management
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
-| `excessiveblocksize` | int | 4GB | Maximum allowed block size | Limits resource consumption for extremely large blocks |
 | `utxostore` | URL | (none) | URL for the UTXO store | Required for UTXO validation and updates |
 | `fsm_state_restore` | bool | false | Enables FSM state restoration | Affects recovery behavior after service restart |
+| `blockvalidation_subtreeBlockHeightRetention` | uint32 | (global setting) | How long to keep subtrees (in terms of block height) | Affects storage utilization and historical data availability |
 
 ## Configuration Interactions and Dependencies
 
@@ -384,13 +374,34 @@ Related settings that affect this behavior include:
 - `blockvalidation_validation_max_retries` - Controls resilience during validation
 - `blockvalidation_validation_retry_sleep` - Affects backoff behavior during retries
 
+### Bloom Filter Operations
+
+Bloom filters are used to efficiently detect duplicate transactions and optimize validation performance. The Block Validation Service manages bloom filters with the following operational characteristics:
+
+**Creation and Storage**:
+- Bloom filters are created for each validated block containing transaction hashes
+- Filters are stored in the subtree store with automatic expiration based on `blockvalidation_bloom_filter_retention_size`
+- The retention size is automatically calculated as `GlobalBlockHeightRetention + 2` to ensure adequate coverage
+
+**Performance Impact**:
+- **Memory Usage**: Each bloom filter consumes memory proportional to the number of transactions in the block
+- **CPU Overhead**: Filter creation requires hashing all transaction IDs in the block
+- **Storage I/O**: Filters are persisted to disk and retrieved during validation operations
+
+**Operational Considerations**:
+- Bloom filters reduce false positive rates for duplicate transaction detection
+- Automatic pruning prevents unbounded storage growth
+- Filter retrieval from subtree store may introduce latency during validation
+- Consider increasing retention size for nodes with high transaction volumes
+
 ### Transaction Processing Pipeline
 
-The transaction processing pipeline is controlled by multiple settings that affect concurrency, batch sizing, and caching behavior:
+The transaction processing pipeline uses a hybrid approach combining cache and store operations:
 
-- **Cache-based processing**: When `blockvalidation_txMetaCacheEnabled` is true, the service uses an in-memory cache for transaction metadata, controlled by `blockvalidation_processTxMetaUsingCache_*` settings
-- **Store-based processing**: For transactions not in cache, the service uses store-based processing, controlled by `blockvalidation_processTxMetaUsingStore_*` settings
-- **Batch size vs. Concurrency**: Increasing batch sizes improves efficiency but increases memory usage, while increasing concurrency improves throughput but increases CPU utilization
+- **Subtree Validation Integration**: Transaction metadata operations are delegated to the Subtree Validation Service, which may use caching internally via `subtreevalidation_txMetaCacheEnabled`
+- **Batch Processing**: Transaction operations are batched using `blockvalidation_processTxMetaUsingStore_BatchSize` and `blockvalidation_processTxMetaUsingCache_BatchSize`
+- **Concurrency Control**: Parallel processing is controlled by `blockvalidation_processTxMetaUsingStore_Concurrency` and related settings
+- **Fallback Behavior**: When cache operations fail, the system falls back to store-based processing based on threshold settings
 
 ### Synchronization Strategy
 
@@ -401,7 +412,6 @@ When a node falls behind the blockchain tip, its synchronization strategy is con
 - `blockvalidation_catchupCh_buffer_size` - Affects buffer capacity for catchup operations
 
 Optimal settings depend on hardware capabilities and network conditions.
-
 
 ## 9. Other Resources
 

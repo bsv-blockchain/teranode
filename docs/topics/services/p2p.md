@@ -469,20 +469,20 @@ The P2P service serves as the communication backbone of the Teranode network, en
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
-| `p2p_topic_prefix` | string | "" | Prefix for all P2P topics | Ensures topics are unique across different environments |
+| `p2p_topic_prefix` | string | "" | **REQUIRED** - Prefix for all P2P topics | Ensures topics are unique across different environments. Service will fail to start if not configured. |
 | `p2p_block_topic` | string | "" | Topic name for block announcements | Controls subscription and publication to the block channel |
-| `p2p_bestblock_topic` | string | "" | Topic name for best block announcements | Controls subscription and publication to the best block channel |
 | `p2p_subtree_topic` | string | "" | Topic name for subtree announcements | Controls subscription and publication to the subtree channel |
 | `p2p_mining_on_topic` | string | "" | Topic name for mining status announcements | Controls subscription and publication to the mining status channel |
 | `p2p_rejected_tx_topic` | string | "" | Topic name for rejected transaction announcements | Controls subscription to rejected transaction notifications |
+| `p2p_handshake_topic` | string | "" | **REQUIRED** - Topic name for peer handshake messages | Used for version and verack exchanges between peers. Service will fail to start if not configured. |
 
 ### Authentication and Security
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
 | `p2p_peer_id` | string | "" | Unique identifier for the P2P node | Used to identify this node in the P2P network |
-| `p2p_private_key` | string | "" | Private key for P2P authentication | Provides cryptographic identity for the node; if not provided, will be generated |
-| `p2p_shared_key` | string | "" | Shared key for private network communication | When provided, ensures only nodes with the same shared key can communicate |
+| `p2p_private_key` | string | "" | Private key for P2P authentication | Provides cryptographic identity for the node; if not provided, will be auto-generated and stored |
+| `p2p_shared_key` | string | "" | **REQUIRED for private networks** - Shared key for private network communication | When provided, ensures only nodes with the same shared key can communicate |
 
 ### Ban Management
 
@@ -490,6 +490,32 @@ The P2P service serves as the communication backbone of the Teranode network, en
 |---------|------|---------|-------------|--------|
 | `p2p_ban_threshold` | int | 100 | Score threshold at which peers are banned | Controls how aggressively misbehaving peers are banned |
 | `p2p_ban_duration` | duration | 24h | Duration for which peers remain banned | Controls how long banned peers are excluded from the network |
+
+## Configuration Validation Rules
+
+The P2P service enforces several validation rules during startup:
+
+### Required Configuration
+- `p2p_topic_prefix` - Must be set or service will fail with "p2p_topic_prefix not set in config"
+- `p2p_handshake_topic` - Must be set or service will fail with "p2p_handshake_topic not set in config"
+
+### Network Address Validation
+- Listen addresses must be valid multiaddress format
+- Port numbers must be within valid range (1-65535)
+- Advertise addresses support both IP addresses and domain names
+- When advertise addresses omit ports, `p2p_port` value is automatically used
+
+### Private Network Requirements
+- When `p2p_shared_key` is provided, all peers must use the same shared key
+- Private DHT mode (`p2p_dht_use_private: true`) restricts peer discovery to trusted nodes
+
+### Key Management
+- If `p2p_private_key` is not provided, a new key is auto-generated and persisted to blockchain store
+- Private key format must be compatible with libp2p cryptographic standards
+
+## Configuration Dependencies
+
+The P2P service requires integration with several other services:
 
 ## Configuration Interactions and Dependencies
 
@@ -525,11 +551,10 @@ The P2P service uses several security mechanisms:
 
 - `p2p_private_key` establishes the node's identity, which is reflected in its `p2p_peer_id`
 - `p2p_shared_key` enables private network functionality, restricting communication to nodes with the same shared key
-- If no private key is provided, it will be generated and stored in the blockchain store
+- If no private key is provided, it will be auto-generated and stored in the blockchain store
 - The ban system uses a score-based approach where peers accumulate points for bad behavior
 
 These settings enable secure and authenticated communication between nodes in the network.
-
 
 ## 8. Other Resources
 

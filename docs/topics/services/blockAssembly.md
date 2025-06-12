@@ -21,9 +21,12 @@
 3. [Data Model](#3-data-model)
 4. [gRPC Protobuf Definitions](#4-grpc-protobuf-definitions)
 5. [Technology](#5-technology)
-6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
-7. [How to run](#7-how-to-run)
-8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
+6. [Error Handling](#6-error-handling)
+    - [6.1. Error Handling Patterns](#61-error-handling-patterns)
+    - [6.2. Performance Monitoring](#62-performance-monitoring)
+7. [Directory Structure and Main Files](#7-directory-structure-and-main-files)
+8. [How to run](#8-how-to-run)
+9. [Configuration options (settings flags)](#9-configuration-options-settings-flags)
     - [Network and Communication Settings](#network-and-communication-settings)
     - [gRPC Client Settings](#grpc-client-settings)
     - [Subtree Management](#subtree-management)
@@ -33,7 +36,7 @@
     - [Performance Tuning](#performance-tuning)
     - [Security Settings](#security-settings)
     - [Service Control](#service-control)
-9. [Other Resources](#9-other-resources)
+10. [Other Resources](#10-other-resources)
 
 ## 1. Description
 
@@ -362,7 +365,6 @@ The Block Assembly service can be reset to the best block by calling the `ResetB
 
 The Block Assembly Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/blockassemblyProto.md).
 
-
 ## 5. Technology
 
 - **Go (Golang)**: The service is written in Go.
@@ -375,7 +377,53 @@ The Block Assembly Service uses gRPC for communication between nodes. The protob
 
 - **Networking and Protocol Buffers**: Handles network communications and serializes structured data using Protocol Buffers, a language-neutral, platform-neutral, extensible mechanism for serializing structured data.
 
-## 6. Directory Structure and Main Files
+## 6. Error Handling
+
+### 6.1. Error Handling Patterns
+
+The Block Assembly service implements robust error handling across multiple layers:
+
+#### Block Validation Errors
+- **Mining Solution Validation**: When `SubmitMiningSolution` is called, the service performs comprehensive block validation including difficulty target verification
+- **Invalid Block Handling**: Failed validations are logged with detailed error messages and the mining solution is rejected
+- **Recovery**: The service continues processing other mining candidates without interruption
+
+#### Subtree Storage Failures
+- **Retry Mechanism**: Failed subtree storage operations are automatically retried using `subtreeRetryChan`
+- **Error Propagation**: Storage errors are communicated back through error channels to prevent data loss
+- **Graceful Degradation**: The service can continue operating with reduced functionality if storage issues persist
+
+#### Reorganization Conflicts
+- **Conflicting Transaction Detection**: During reorgs, the service identifies and marks conflicting transactions in affected subtrees
+- **Transaction Recovery**: Non-conflicting transactions are automatically re-added to new subtrees
+- **Deep Reorg Protection**: Reorganizations affecting more than 5 blocks trigger a full service reset for safety
+
+#### UTXO Store Unavailability
+- **Connection Monitoring**: The service monitors UTXO store connectivity and handles temporary unavailability
+- **Operation Queuing**: Transactions are queued when UTXO operations fail temporarily
+- **State Consistency**: The service ensures consistent state even during UTXO store recovery
+
+### 6.2. Performance Monitoring
+
+The service integrates comprehensive Prometheus metrics for operational monitoring:
+
+#### Subtree Processing Metrics
+- `teranode_subtreeprocessor_add_tx`: Counter for transaction additions
+- `teranode_subtreeprocessor_dynamic_subtree_size`: Current dynamic subtree size
+- `teranode_subtreeprocessor_move_forward_block`: Block processing operations
+- `teranode_subtreeprocessor_move_back_block`: Block rollback operations
+
+#### Block Assembly Metrics
+- `teranode_blockassembly_get_mining_candidate`: Mining candidate requests
+- `teranode_blockassembly_submit_mining_solution`: Mining solution submissions
+- Duration histograms for critical operations with microsecond precision
+
+#### State Monitoring
+- Current service state (starting, running, resetting, etc.)
+- Transaction queue lengths and processing rates
+- Subtree counts and completion rates
+
+## 7. Directory Structure and Main Files
 
 ```
 /services/blockassembly
@@ -406,7 +454,7 @@ The Block Assembly Service uses gRPC for communication between nodes. The protob
     └── txIDAndFee.go              - Handling transaction IDs and fees.
 ```
 
-## 7. How to run
+## 8. How to run
 
 To run the Block Assembly Service locally, you can execute the following command:
 
@@ -417,7 +465,7 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -BlockAssembly=1
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Block Assembly Service locally.
 
 
-## 8. Configuration options (settings flags)
+## 9. Configuration options (settings flags)
 
 The Block Assembly service uses the following configuration options:
 
@@ -606,7 +654,7 @@ These settings affect the performance characteristics of the Block Assembly serv
 
 
 
-## 9. Other Resources
+## 10. Other Resources
 
 - [Block Assembly Reference](../../references/services/blockassembly_reference.md)
 - [Handling Double Spends](../architecture/understandingDoubleSpends.md)

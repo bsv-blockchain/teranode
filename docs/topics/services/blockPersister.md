@@ -5,7 +5,8 @@
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
     - [2.1 Service Initialization](#21-service-initialization)
-    - [2.2 Receiving and Processing a new Block Notification](#22-receiving-and-processing-a-new-block-notification)
+    - [2.2 Block Discovery and Processing](#22-block-discovery-and-processing)
+    - [2.3 Subtree Processing Details](#23-subtree-processing-details)
 3. [Data Model](#3-data-model)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
@@ -17,7 +18,7 @@
 
 The Block Persister service functions as an overlay microservice, designed to post-process subtrees after their integration into blocks and persisting them to a separate storage.
 
-Whenever a new block is introduced to the blockchain, the Block Persister service decorates (enriches) all transactions within the block's subtrees, ensuring the inclusion of transaction metadata (UTXO meta data). Then, it will save a number of files into a file storage system (such as S3):
+The Block Persister service operates as a **background processing service** that continuously polls the blockchain service for new blocks. Unlike other Teranode services, it does not expose a gRPC API and functions purely as a data persistence layer. When new blocks are detected through polling, the Block Persister service decorates (enriches) all transactions within the block's subtrees, ensuring the inclusion of transaction metadata (UTXO meta data). Then, it will save a number of files into a file storage system (such as S3):
 
 - A file for the block (`.block` extension).
 - A file for each subtree in a block (`.subtree` extension), containing the decorated transactions.
@@ -32,13 +33,13 @@ The Block Persister files are optionally post-processed by the UTXO Persister, w
 
 ![Block_Persister_Service_Container_Diagram.png](img/Block_Persister_Service_Container_Diagram.png)
 
-* The Block Persister consumes notifications from the Blockchain service, and stores the decorated block in a data store (such as S3).
+* The Block Persister polls the Blockchain service for new blocks and stores the decorated block in a data store (such as S3).
 
 ![Block_Persister_Service_Component_Diagram.png](img/Block_Persister_Service_Component_Diagram.png)
 
-* The Blockchain service relies on Kafka for its new block notifications, to which the Block Persister service subscribes to.
+* The Block Persister service operates independently by polling the Blockchain service directly for new blocks, rather than relying on external notification systems.
 
-* However, note how the Blockchain client is directly accessed in order to wait for the node State Management to change to `RUNNING` state. For more information on this, please refer to the [State Management](../architecture/stateManagement.md)  documentation.
+* The Blockchain client is directly accessed to wait for the node State Management to change to `RUNNING` state before beginning block processing operations. For more information on this, please refer to the [State Management](../architecture/stateManagement.md) documentation.
 
 ## 2. Functionality
 
@@ -54,36 +55,59 @@ The service initializes through the following sequence:
 4. Waits for FSM transition from IDLE state
 5. Starts block processing loop
 
-### 2.2 Receiving and Processing a new Block Notification
+### 2.2 Block Discovery and Processing
 
 ![block_persister_receive_new_blocks.svg](img/plantuml/blockpersister/block_persister_receive_new_blocks.svg)
 
-The service processes blocks through a polling mechanism:
+The service processes blocks through a **continuous polling mechanism**:
 
 1. **Block Discovery**
-    - Retrieves last persisted block height from the Blockchain
-    - Determines if new blocks need processing based on `BlockPersisterPersistAge`. `BlockPersisterPersistAge` defines how many blocks behind the current tip the persister should stay. i.e. the service intentionally stays `BlockPersisterPersistAge` blocks behind the tip. This helps to avoid reorgs and ensures block finality.
+    - Retrieves last persisted block height from the local state
+    - Polls the Blockchain service to get the current best block header
+    - Determines if new blocks need processing based on `BlockPersisterPersistAge`. Blocks are only processed when `(currentTip - lastPersistedHeight) > BlockPersisterPersistAge`. This means the service intentionally stays at least `BlockPersisterPersistAge` blocks behind the tip to avoid reorgs and ensure block finality.
 
 2. **Processing Flow**
-    - Retrieves the next block to process
+    - Retrieves the next block to process from the Blockchain service
     - Converts block to bytes
     - Persists block data to storage
     - Creates and stores the associated files:
     - Block file (.block)
-    - A Subtree file for each subtree in the block (.subtree), including the number of transactions in the subtree, and the decorated transactions (as UTXO meta data).
-    - UTXO additions (.utxo-additions), containing the UTXOs spent in the block. This represent a list of removed Txs (inputs)
-    - UTXO deletions (.utxo-deletions), containing the UTXOs added to the block. This represents a list of added Txs (outputs), including the Coinbase Tx.
+    - A Subtree file for each subtree in the block (.subtree), including the number of transactions in the subtree, and the decorated transactions (with UTXO meta data).
+    - UTXO additions (.utxo-additions), containing the UTXOs created in the block. This represents a list of new transaction outputs, including the Coinbase transaction outputs.
+    - UTXO deletions (.utxo-deletions), containing the UTXOs spent in the block. This represents a list of transaction inputs that reference and spend previous outputs.
     - Updates the local state with the new block height
 
 3. **Sleep Mechanisms**
-    - On error: the services sleeps for a 1-minute period
-    - If no new blocks: The service sleeps for a configurable period if time (`BlockPersisterPersistSleep`)
+    - On error: the service sleeps for a 1-minute period before retrying
+    - If no new blocks: The service sleeps for a configurable period (`BlockPersisterPersistSleep`) before polling again
 
+4. **Service Dependencies**
+    - **FSM State Dependency**: The service waits for the blockchain FSM (Finite State Machine) to transition from the IDLE state to RUNNING before beginning block processing operations
+    - **No gRPC API**: Unlike other Teranode services, the Block Persister does not expose a gRPC API and operates purely as a background processing service
 
-In more detail:
+### 2.3 Subtree Processing Details
 
 ![block_persister_receive_new_blocks_subtrees.svg](img/plantuml/blockpersister/block_persister_receive_new_blocks_subtrees.svg)
 
+The detailed subtree processing workflow includes:
+
+1. **Subtree Retrieval**
+    - Retrieves subtree data from the blockchain service
+    - Deserializes transaction data within the subtree
+
+2. **Transaction Metadata Loading**
+    - Loads transaction metadata in batches for efficiency
+    - Decorates transactions with UTXO metadata
+    - Processes transactions individually if batch processing fails
+
+3. **File Creation**
+    - Stores decorated subtree files (.subtree extension)
+    - Calculates and stores UTXO changes (additions and deletions)
+    - Updates the UTXO difference tracking
+
+4. **Concurrency**
+    - Processes multiple subtrees concurrently using configurable concurrency limits
+    - Uses error groups to handle concurrent processing errors
 
 ## 3. Data Model
 
@@ -172,7 +196,7 @@ If you need all transaction information in a subtree, you should access the `.su
     - **File Storage:** For saving the decorated block files.
 
 4. **Configuration and Logging:**
-    - **Dynamic Configuration:** For managing service settings, including Kafka broker URLs and worker configurations.
+    - **Dynamic Configuration:** For managing service settings, including transaction metadata caching configurations and worker settings.
     - **Logging:** For monitoring service operations, error handling, and debugging.
 
 
