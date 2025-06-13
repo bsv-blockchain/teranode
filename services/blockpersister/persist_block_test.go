@@ -120,6 +120,10 @@ func (m *MockStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash,
 	return nil
 }
 
+func (m *MockStore) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, errors.NewProcessingError("not implemented")
+}
+
 func (m *MockStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
 }

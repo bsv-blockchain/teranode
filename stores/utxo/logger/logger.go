@@ -9,7 +9,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -158,7 +157,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.
 	return data, err
 }
 
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxostore.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	spends, err := s.store.Spend(ctx, tx, ignoreFlags...)
 	spendDetails := make([]string, len(spends))
 
@@ -172,7 +171,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 	return spends, err
 }
 
-func (s *Store) Unspend(ctx context.Context, spends []*utxostore.Spend, flagAsUnspendable ...bool) error {
+func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
 	err := s.store.Unspend(ctx, spends, false)
 	spendDetails := make([]string, len(spends))
 
@@ -200,6 +199,10 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	return err
 }
 
+func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
+	return s.store.GetUnminedTxIterator()
+}
+
 func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	resp, err := s.store.GetSpend(ctx, spend)
 	s.logger.Debugf("[UTXOStore][logger][GetSpend] spend %v resp %v err %v : %s", spend, resp, err, caller())
@@ -207,7 +210,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 	return resp, err
 }
 
-func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxostore.UnresolvedMetaData, fields ...fields.FieldName) error {
+func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
 	err := s.store.BatchDecorate(ctx, unresolvedMetaDataSlice, fields...)
 	s.logger.Debugf("[UTXOStore][logger][BatchDecorate] unresolvedMetaDataSlice %v, fields %v err %v : %s", unresolvedMetaDataSlice, fields, err, caller())
 
@@ -221,21 +224,21 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 	return err
 }
 
-func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSettings *settings.Settings) error {
+func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	err := s.store.FreezeUTXOs(ctx, spends, tSettings)
 	s.logger.Debugf("[UTXOStore][logger][FreezeUTXOs] spends %v err %v : %s", spends, err, caller())
 
 	return err
 }
 
-func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSettings *settings.Settings) error {
+func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	err := s.store.UnFreezeUTXOs(ctx, spends, tSettings)
 	s.logger.Debugf("[UTXOStore][logger][UnFreezeUTXOs] spends %v err %v : %s", spends, err, caller())
 
 	return err
 }
 
-func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo *utxostore.Spend, tSettings *settings.Settings) error {
+func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
 	err := s.store.ReAssignUTXO(ctx, utxo, newUtxo, tSettings)
 	s.logger.Debugf("[UTXOStore][logger][ReAssignUTXO] utxo %v newUtxo %v err %v : %s", utxo, newUtxo, err, caller())
 

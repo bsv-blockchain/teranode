@@ -6,7 +6,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
@@ -20,7 +19,7 @@ type NullStore struct {
 }
 
 // BatchDecorate implements utxo.Store.
-func (m *NullStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxostore.UnresolvedMetaData, fields ...fields.FieldName) error {
+func (m *NullStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
 	return nil
 }
 
@@ -54,7 +53,7 @@ func (m *NullStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fie
 	return &meta.Data{}, nil
 }
 
-func (m *NullStore) GetSpend(ctx context.Context, spend *utxostore.Spend) (*utxostore.SpendResponse, error) {
+func (m *NullStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
 }
 
@@ -62,7 +61,7 @@ func (m *NullStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Da
 	return m.Get(ctx, hash)
 }
 
-func (m *NullStore) MetaBatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxostore.UnresolvedMetaData, fields ...string) error {
+func (m *NullStore) MetaBatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
 	return nil
 }
 
@@ -100,12 +99,16 @@ func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ig
 	return nil, nil
 }
 
-func (m *NullStore) Unspend(ctx context.Context, spends []*utxostore.Spend, flagAsUnspendable ...bool) error {
+func (m *NullStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
 	return nil
 }
 
 func (m *NullStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
 	return nil
+}
+
+func (m *NullStore) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
 }
 
 func (m *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) error {

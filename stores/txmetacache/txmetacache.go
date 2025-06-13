@@ -602,6 +602,10 @@ func (t *TxMetaCache) SetMinedMultiParallel(ctx context.Context, hashes []*chain
 	return nil
 }
 
+func (t *TxMetaCache) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, errors.NewProcessingError("not implemented")
+}
+
 // setMinedInCacheParallel is an internal helper method that updates the mined status
 // of multiple transactions in parallel, using goroutines to improve performance.
 //

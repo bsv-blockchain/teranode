@@ -190,6 +190,7 @@ func TestUnmined(t *testing.T) {
 
 		for rec := range recordset.Records() {
 			assert.Equal(t, 1, rec.Bins[fields.NotMined.String()])
+			assert.Equal(t, txUnMined.TxIDChainHash().CloneBytes(), rec.Bins[fields.TxID.String()])
 
 			count++
 		}

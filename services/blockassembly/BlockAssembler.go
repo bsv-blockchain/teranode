@@ -203,6 +203,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		resetWaitDuration:   atomic.Int32{},
 		currentRunningState: atomic.Value{},
 	}
+
 	b.setCurrentRunningState(StateStarting)
 
 	return b, nil
@@ -559,6 +560,11 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 			b.setBestBlockHeader(header, meta.Height)
 			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader.Load())
 		}
+	}
+
+	// Load unmined transactions
+	if err := b.loadUnminedTransactions(ctx); err != nil {
+		b.logger.Errorf("[BlockAssembler] failed to load un-mined transactions", err)
 	}
 
 	// on mainnet and testnet, wait for 2 blocks before starting to mine, to make sure we are not mining invalid blocks
@@ -1086,4 +1092,37 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 	}
 
 	return nbit, nil
+}
+
+func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) error {
+	if b.utxoStore == nil {
+		b.logger.Warnf("[BlockAssembler] no utxostore, skipping load unmined transactions")
+		return nil
+	}
+
+	it, err := b.utxoStore.GetUnminedTxIterator()
+	if err != nil {
+		return errors.NewProcessingError("error getting unmined tx iterator", err)
+	}
+
+	for {
+		unminedTransaction, err := it.Next(ctx)
+		if err != nil {
+			return errors.NewProcessingError("error getting unmined transaction", err)
+		}
+
+		if unminedTransaction == nil {
+			break
+		}
+
+		subtreeNode := util.SubtreeNode{
+			Hash:        *unminedTransaction.Hash,
+			Fee:         unminedTransaction.Fee,
+			SizeInBytes: unminedTransaction.Size,
+		}
+
+		b.subtreeProcessor.Add(subtreeNode, unminedTransaction.TxInpoints)
+	}
+
+	return nil
 }

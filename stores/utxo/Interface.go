@@ -245,6 +245,9 @@ type Store interface {
 	// SetMinedMulti updates the block ID for multiple transactions that have been mined.
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error
 
+	// GetUnminedTxIterator returns an iterator for all unmined transactions in the store.
+	GetUnminedTxIterator() (UnminedTxIterator, error)
+
 	// these functions are not pure as they will update the data object in place
 
 	// BatchDecorate efficiently fetches metadata for multiple transactions.

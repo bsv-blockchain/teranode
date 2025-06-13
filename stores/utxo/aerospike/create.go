@@ -670,6 +670,7 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	}
 
 	commonBins := []*aerospike.Bin{
+		aerospike.NewBin(fields.TxID.String(), aerospike.NewBytesValue(txHash[:])),
 		aerospike.NewBin(fields.Version.String(), aerospike.NewIntegerValue(int(tx.Version))),
 		aerospike.NewBin(fields.LockTime.String(), aerospike.NewIntegerValue(int(tx.LockTime))),
 		aerospike.NewBin(fields.Fee.String(), aerospike.NewIntegerValue(feeInt)),

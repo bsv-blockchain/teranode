@@ -420,6 +420,10 @@ func (m *Memory) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, mine
 	return nil
 }
 
+func (m *Memory) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, errors.NewProcessingError("iterator not implemented")
+}
+
 // BatchDecorate efficiently fetches metadata for multiple transactions.
 // Unlike other implementations, this always fetches full transaction data.
 func (m *Memory) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {

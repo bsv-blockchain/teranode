@@ -13,6 +13,8 @@ type FieldName string
 const (
 	// Tx represents the full serialized transaction data
 	Tx FieldName = "tx"
+	// TxID represents the transaction ID
+	TxID FieldName = "txID"
 	// Inputs represents the transaction inputs data
 	Inputs FieldName = "inputs"
 	// Outputs represents the transaction outputs data

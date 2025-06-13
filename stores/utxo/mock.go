@@ -3,6 +3,7 @@ package utxo
 import (
 	"context"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -59,6 +60,10 @@ func (m *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsUnsp
 func (m *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error {
 	args := m.Called(ctx, hashes, minedBlockInfo)
 	return args.Error(0)
+}
+
+func (m *MockUtxostore) GetUnminedTxIterator() (UnminedTxIterator, error) {
+	return nil, errors.NewProcessingError("not implemented")
 }
 
 func (m *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...fields.FieldName) error {

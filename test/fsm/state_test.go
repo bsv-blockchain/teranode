@@ -393,6 +393,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpStateMultipleNodes_WithP2PSwitch() {
 
 	// Start nodes with p2p off for teranode2 and teranode3
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test.stopP2P"
+
 	settingsMap["SETTINGS_CONTEXT_3"] = "docker.teranode3.test.stopP2P"
 
 	if err := testEnv.RestartDockerNodes(settingsMap); err != nil {
@@ -481,6 +482,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpStateMultipleNodes_WithP2PSwitch() {
 
 	// Turn on p2p for all nodes by resetting to default settings
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.teranode2.test"
+
 	settingsMap["SETTINGS_CONTEXT_3"] = "docker.teranode3.test"
 
 	if err := testEnv.RestartDockerNodes(settingsMap); err != nil {

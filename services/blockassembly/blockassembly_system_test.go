@@ -98,7 +98,9 @@ func TestHealth(t *testing.T) {
 func Test_CoinbaseSubsidyHeight(t *testing.T) {
 	t.Skip("Skipping coinbase subsidy height test")
 	_, ba, ctx, cancel, cleanup := setupTest(t)
+
 	defer cancel()
+
 	defer cleanup()
 
 	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
@@ -160,7 +162,9 @@ func Test_CoinbaseSubsidyHeight(t *testing.T) {
 func TestDifficultyAdjustment(t *testing.T) {
 	t.Skip("Skipping difficulty adjustment test")
 	_, ba, ctx, cancel, cleanup := setupTest(t)
+
 	defer cancel()
+
 	defer cleanup()
 
 	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
@@ -225,6 +229,7 @@ func TestDifficultyAdjustment(t *testing.T) {
 	// Get initial block height
 	_, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
 	require.NoError(t, err, "Failed to get initial block header")
+
 	initialHeight := initialMetadata.Height
 	t.Logf("Initial block height: %d", initialHeight)
 
@@ -309,7 +314,9 @@ func TestShouldFollowLongerChain(t *testing.T) {
 	// Get initial block height and hash
 	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
 	require.NoError(t, err, "Failed to get initial block header")
+
 	initialHeight := initialMetadata.Height
+
 	t.Logf("Initial block height: %d", initialHeight)
 
 	// Create chain A (higher difficulty)
@@ -423,7 +430,9 @@ func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 	// Get initial block height and hash
 	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
 	require.NoError(t, err, "Failed to get initial block header")
+
 	initialHeight := initialMetadata.Height
+
 	t.Logf("Initial block height: %d", initialHeight)
 
 	// Create chain A (higher difficulty)
@@ -543,6 +552,7 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 
 	// Create test transactions
 	t.Log("Creating test transactions...")
+
 	testTx1 := newTx(1)
 	testTx2 := newTx(2)
 	testTx3 := newTx(3)
@@ -557,7 +567,9 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 
 	// Create and add Chain B block (lower difficulty)
 	t.Log("Creating Chain B block...")
+
 	chainBBits, _ := model.NewNBitFromString("207fffff")
+
 	chainBHeader1 := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  initialHeader.Hash(),
@@ -577,7 +589,9 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 
 	// Create and add Chain A block (higher difficulty)
 	t.Log("Creating Chain A block...")
+
 	chainABits, _ := model.NewNBitFromString("1d00ffff")
+
 	chainAHeader1 := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  initialHeader.Hash(),
@@ -595,25 +609,31 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	}
 
 	t.Log("Adding Chain A block...")
+
 	err = ba.blockchainClient.AddBlock(ctx, blockA, "")
 	require.NoError(t, err)
 
 	t.Log("Adding Chain B block...")
+
 	err = ba.blockchainClient.AddBlock(ctx, blockB, "")
 	require.NoError(t, err)
 
 	// Add transactions
 	t.Log("Adding transactions...")
+
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
+
 	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111}, parents1)
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
+
 	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222}, parents2)
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
+
 	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333}, parents3)
 
 	t.Log("Waiting for transactions to be processed...")
@@ -666,6 +686,7 @@ func TestShouldHandleReorg(t *testing.T) {
 
 	// Create test transactions
 	t.Log("Creating test transactions...")
+
 	testTx1 := newTx(1)
 	testTx2 := newTx(2)
 	testTx3 := newTx(3)
@@ -683,6 +704,7 @@ func TestShouldHandleReorg(t *testing.T) {
 
 	// Create chain A (original chain) with lower difficulty
 	t.Log("Creating Chain A (lower difficulty)...")
+
 	chainABits, _ := model.NewNBitFromString("207fffff") // Lower difficulty
 	chainAHeader1 := &model.BlockHeader{
 		Version:        1,
@@ -695,7 +717,9 @@ func TestShouldHandleReorg(t *testing.T) {
 
 	// Create chain B (competing chain) with higher difficulty
 	t.Log("Creating Chain B (higher difficulty)...")
+
 	chainBBits, _ := model.NewNBitFromString("1d00ffff") // Higher difficulty
+
 	chainBHeader1 := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  initialHeader.Hash(),
@@ -707,6 +731,7 @@ func TestShouldHandleReorg(t *testing.T) {
 
 	// Add transactions
 	t.Log("Adding transactions...")
+
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
 
@@ -722,6 +747,7 @@ func TestShouldHandleReorg(t *testing.T) {
 
 	// Add Chain A block (lower difficulty)
 	t.Log("Adding Chain A block...")
+
 	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
 
 	blockA := &model.Block{
@@ -747,14 +773,17 @@ func TestShouldHandleReorg(t *testing.T) {
 
 	// Now trigger reorg by adding Chain B block with higher difficulty
 	t.Log("Triggering reorg with Chain B block (higher difficulty)...")
+
 	blockB := &model.Block{
 		Header:           chainBHeader1,
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: 1,
 		Subtrees:         []*chainhash.Hash{},
 	}
+
 	err = ba.blockchainClient.AddBlock(ctx, blockB, "")
 	require.NoError(t, err)
+
 	time.Sleep(2 * time.Second)
 
 	// Verify transactions are still present after reorg
@@ -802,6 +831,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 
 	// Create test transactions
 	t.Log("Creating test transactions...")
+
 	testTx1 := newTx(1)
 	testTx2 := newTx(2)
 	testTx3 := newTx(3)
@@ -816,6 +846,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 
 	// Create chain A (original chain) with lower difficulty
 	t.Log("Creating Chain A (lower difficulty)...")
+
 	chainABits, _ := model.NewNBitFromString("207fffff") // Lower difficulty
 
 	// Create multiple blocks for Chain A
@@ -857,7 +888,9 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 
 	// Create chain B (competing chain) with higher difficulty
 	t.Log("Creating Chain B (higher difficulty)...")
+
 	chainBBits, _ := model.NewNBitFromString("1d00ffff") // Higher difficulty
+
 	chainBHeader1 := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  initialHeader.Hash(),
@@ -869,8 +902,10 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 
 	// Add transactions
 	t.Log("Adding transactions...")
+
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
+
 	ba.blockAssembler.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111}, parents1)
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
@@ -883,6 +918,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 
 	// Add Chain A blocks (lower difficulty)
 	t.Log("Adding Chain A blocks...")
+
 	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
 
 	// Add all 4 blocks from Chain A
@@ -940,6 +976,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 
 	// Now trigger reorg by adding single Chain B block with higher difficulty
 	t.Log("Triggering reorg with single Chain B block (higher difficulty)...")
+
 	blockB := &model.Block{
 		Header:           chainBHeader1,
 		CoinbaseTx:       coinbaseTx,
@@ -985,7 +1022,9 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 func TestShouldFailCoinbaseArbitraryTextTooLong(t *testing.T) {
 	t.Skip("Skipping coinbase arbitrary text too long test")
 	_, ba, ctx, cancel, cleanup := setupTest(t)
+
 	defer cancel()
+
 	defer cleanup()
 
 	tSettings := ba.settings
