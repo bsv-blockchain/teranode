@@ -11,7 +11,7 @@ mainnet.
 rm -rf data
 
 # run the node for least 110 blocks
-docker compose -f compose/docker-compose-host.yml up -d
+docker compose --profile chainintegrity -f compose/docker-compose-host.yml up -d
 
 # stop the node after mining 110+ blocks
 
