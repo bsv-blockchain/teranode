@@ -14,5 +14,5 @@ func main() {
 	flag.Parse()
 
 	// chainintegrity.ChainIntegrity(*checkInterval, *alertThreshold, *debug, *logfile)
-	chainintegrity.ChainIntegrityBaseline(*checkInterval, *alertThreshold, *debug, *logfile)
+	chainintegrity.CheckChainIntegrityBaseline(*checkInterval, *alertThreshold, *debug, *logfile)
 }
