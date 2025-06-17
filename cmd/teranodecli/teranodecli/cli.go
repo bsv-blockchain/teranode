@@ -220,7 +220,7 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("target fsm state is required")
 			}
 
-			setfsmstate.SetFSMState(logger, tSettings, *targetFsmState)
+			setfsmstate.UpdateFSMState(logger, tSettings, *targetFsmState)
 
 			return nil
 		}
