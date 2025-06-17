@@ -1,19 +1,22 @@
-Seeder
-------
+# seeder
 
-The seeder is a command line tool that can be used to seed the utxostore with data up to and including
-a specific block.  It reads a UTXOSet and writes all the necessary records to Aerospike.
+The `seeder` package is a command-line tool designed to process blockchain headers and UTXO sets. It initializes the seeder service, handles headers and UTXOs, and manages related operations such as profiling and signal handling.
 
-The UTXOStore needs the following minimum fields (buckets) for a Bitcoin node to be functional.
+## Usage
 
-Key: TXID
+This package is typically used to process blockchain data from specified input files and store the results in appropriate stores.
 
-Value:
-- []Outputs
-- []UTXOs
+### Features
+- Process UTXO headers and sets
+- Store processed data in Aerospike
+- Handle system signals for graceful termination
+- Start a profiler server for debugging
 
-The outputs are used to extend future transactions by proving the value and locking script for an input in
-a transaction.
+## Development
 
-The UTXOs slice is used to keep track of the unspent outputs in the UTXOSet.
+- See `seeder.go` for the main logic and entry points.
+- Run tests with `go test ./...` in this directory.
 
+---
+
+For more information, see the main project documentation.

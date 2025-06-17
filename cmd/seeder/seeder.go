@@ -1,3 +1,19 @@
+// Package seeder provides functionality for processing blockchain headers and UTXO sets.
+// It is designed to initialize the seeder service, handle headers and UTXOs, and manage
+// related operations such as profiling and signal handling.
+//
+// Usage:
+//
+// This package is typically used as a command-line tool to process blockchain data
+// from specified input files and store the results in appropriate stores.
+//
+// Functions:
+//   - Seeder: Initializes the seeder service and orchestrates header and UTXO processing.
+//
+// Side effects:
+//
+// Functions in this package may interact with external stores, print to stdout, and
+// handle system signals for graceful termination.
 package seeder
 
 import (
@@ -23,11 +39,11 @@ import (
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
-	blob_options "github.com/bitcoin-sv/teranode/stores/blob/options"
+	bloboptions "github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/blockchain"
-	blockchain_options "github.com/bitcoin-sv/teranode/stores/blockchain/options"
+	blockchainoptions "github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	utxo_factory "github.com/bitcoin-sv/teranode/stores/utxo/factory"
+	utxofactory "github.com/bitcoin-sv/teranode/stores/utxo/factory"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -36,13 +52,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var (
-	inputDir    string
-	hash        string
-	skipHeaders bool
-	skipUTXOs   bool
+const (
+	errMsgFailedToReadUTXO = "failed to read UTXO set header"
 )
 
+// usage prints the usage message and exits the program with an error code.
 func usage(msg string) {
 	if msg != "" {
 		fmt.Printf("Error: %s\n\n", msg)
@@ -53,15 +67,33 @@ func usage(msg string) {
 	os.Exit(1)
 }
 
-func Seeder(logger ulogger.Logger, tSettings *settings.Settings, inputDir string, hash string, skipHeaders bool, skipUTXOs bool) {
-	profilerAddr := tSettings.ProfilerAddr
+// Seeder initializes the seeder service, processes headers and UTXOs, and starts the profiler server.
+//
+// Parameters:
+//   - logger: Logger instance for logging messages.
+//   - appSettings: Application settings containing configuration values.
+//   - inputDir: Directory containing input files.
+//   - hash: Hash value used to locate specific files.
+//   - skipHeaders: Boolean flag to skip processing headers.
+//   - skipUTXOs: Boolean flag to skip processing UTXOs.
+//
+// Side effects:
+//   - Starts a profiler server.
+//   - Processes headers and UTXOs concurrently.
+//   - Handles system signals for graceful termination.
+//   - Prints messages to stdout.
+//
+//nolint:gocognit // Requires refactoring to reduce cognitive complexity
+func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir string, hash string,
+	skipHeaders bool, skipUTXOs bool) {
+	profilerAddr := appSettings.ProfilerAddr
 	if profilerAddr != "" {
 		go func() {
 			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
 
 			gocore.RegisterStatsHandlers()
 
-			prefix := tSettings.StatsPrefix
+			prefix := appSettings.StatsPrefix
 			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
 
 			server := &http.Server{
@@ -73,7 +105,7 @@ func Seeder(logger ulogger.Logger, tSettings *settings.Settings, inputDir string
 			}
 
 			// http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Errorf("Profiler server failed: %v", err)
 			}
 		}()
@@ -85,7 +117,7 @@ func Seeder(logger ulogger.Logger, tSettings *settings.Settings, inputDir string
 	)
 
 	if !skipHeaders {
-		// Check the headers file exists
+		// Check the header file exists
 		headerFile = filepath.Join(inputDir, hash+".utxo-headers")
 		if _, err := os.Stat(headerFile); os.IsNotExist(err) {
 			usage(fmt.Sprintf("Headers file %s does not exist", headerFile))
@@ -129,7 +161,7 @@ func Seeder(logger ulogger.Logger, tSettings *settings.Settings, inputDir string
 			logger.Infof("Processing headers...")
 
 			// Process the headers
-			if err := processHeaders(ctx, logger, tSettings, headerFile); err != nil {
+			if err := processHeaders(ctx, logger, appSettings, headerFile); err != nil {
 				logger.Errorf("Failed to process headers: %v", err)
 				return
 			}
@@ -147,7 +179,7 @@ func Seeder(logger ulogger.Logger, tSettings *settings.Settings, inputDir string
 			logger.Infof("Processing UTXOs...")
 
 			// Process the UTXOs
-			if err := processUTXOs(ctx, logger, tSettings, utxoFile); err != nil {
+			if err := processUTXOs(ctx, logger, appSettings, utxoFile); err != nil {
 				logger.Errorf("Failed to process UTXOs: %v", err)
 				return
 			}
@@ -159,8 +191,11 @@ func Seeder(logger ulogger.Logger, tSettings *settings.Settings, inputDir string
 	wg.Wait()
 }
 
-func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, headersFile string) error {
-	blockchainStoreURL := tSettings.BlockChain.StoreURL
+// processHeaders reads the UTXO headers from a file and stores them in the blockchain store.
+//
+//nolint:gocognit // Requires refactoring to reduce cognitive complexity
+func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, headersFile string) error {
+	blockchainStoreURL := appSettings.BlockChain.StoreURL
 	if blockchainStoreURL == nil {
 		return errors.NewConfigurationError("blockchain store URL not found in config")
 	}
@@ -171,7 +206,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *setti
 	blockchainStoreURL.RawQuery = q.Encode()
 	logger.Infof("Using blockchain store at %s", blockchainStoreURL)
 
-	blockchainStore, err := blockchain.NewStore(logger, blockchainStoreURL, tSettings)
+	blockchainStore, err := blockchain.NewStore(logger, blockchainStoreURL, appSettings)
 	if err != nil {
 		logger.Fatalf("Failed to create blockchain client: %v", err)
 	}
@@ -183,17 +218,24 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *setti
 
 	// _ = meta
 
-	f, err := os.Open(headersFile)
+	var f *os.File
+
+	f, err = os.Open(headersFile)
 	if err != nil {
-		return errors.NewStorageError("Failed to open file", err)
+		return errors.NewStorageError("failed to open file", err)
 	}
-	defer f.Close()
+
+	defer func() {
+		_ = f.Close()
+	}()
 
 	reader := bufio.NewReader(f)
 
-	header, err := fileformat.ReadHeader(reader)
+	var header fileformat.Header
+
+	header, err = fileformat.ReadHeader(reader)
 	if err != nil {
-		return errors.NewProcessingError("Failed to read UTXO set header", err)
+		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
 	if header.FileType() != fileformat.FileTypeUtxoHeaders {
@@ -205,27 +247,32 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *setti
 		height uint32
 	)
 
-	if err := binary.Read(reader, binary.LittleEndian, hash); err != nil {
-		return errors.NewProcessingError("Failed to read UTXO set header", err)
+	if err = binary.Read(reader, binary.LittleEndian, hash); err != nil {
+		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
-	if err := binary.Read(reader, binary.LittleEndian, &height); err != nil {
-		return errors.NewProcessingError("Failed to read UTXO set header", err)
+	if err = binary.Read(reader, binary.LittleEndian, &height); err != nil {
+		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
 	// Write the last block height and hash to the blockpersister_state.txt file
-	_ = blockpersister.New(ctx, nil, tSettings, nil, nil, nil, nil, blockpersister.WithSetInitialState(height, hash))
+	_ = blockpersister.New(ctx, nil, appSettings,
+		nil, nil, nil,
+		nil, blockpersister.WithSetInitialState(height, hash),
+	)
 
 	var (
 		headersProcessed uint64
 		txCount          uint64
 	)
 
+	var blockIndex *utxopersister.BlockIndex
+
 	for {
-		header, err := utxopersister.NewUTXOHeaderFromReader(reader)
+		blockIndex, err = utxopersister.NewUTXOHeaderFromReader(reader)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				if header == nil {
+				if blockIndex == nil {
 					logger.Errorf("EOF marker not found")
 				} else {
 					logger.Infof("EOF marker found")
@@ -234,36 +281,36 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *setti
 				break
 			}
 
-			return errors.NewProcessingError("Failed to read UTXO", err)
+			return errors.NewProcessingError("failed to read UTXO", err)
 		}
 
-		if header.Height == 0 {
+		if blockIndex.Height == 0 {
 			// The genesis block is already in the store
 			continue
 		}
 
 		block := &model.Block{
-			Header:           header.BlockHeader,
-			TransactionCount: header.TxCount,
-			Height:           header.Height,
+			Header:           blockIndex.BlockHeader,
+			TransactionCount: blockIndex.TxCount,
+			Height:           blockIndex.Height,
 		}
 
 		_, _, err = blockchainStore.StoreBlock(
 			ctx,
 			block,
 			"headers",
-			blockchain_options.WithMinedSet(true),
-			blockchain_options.WithSubtreesSet(true),
+			blockchainoptions.WithMinedSet(true),
+			blockchainoptions.WithSubtreesSet(true),
 		)
 		if err != nil {
-			return errors.NewProcessingError("Failed to add block", err)
+			return errors.NewProcessingError("failed to add block", err)
 		}
 
 		headersProcessed++
-		txCount += header.TxCount
+		txCount += blockIndex.TxCount
 
-		if header.Height%10000 == 0 {
-			fmt.Printf("Processed to block height %d\n", header.Height)
+		if blockIndex.Height%10000 == 0 {
+			fmt.Printf("Processed to block height %d\n", blockIndex.Height)
 		}
 	}
 
@@ -272,8 +319,11 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, tSettings *setti
 	return nil
 }
 
-func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, utxoFile string) error {
-	blockStoreURL := tSettings.Block.BlockStore
+// processUTXOs reads the UTXO set from a file and stores it in the UTXO store.
+//
+//nolint:gocognit // Requires refactoring to reduce cognitive complexity
+func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, utxoFile string) error {
+	blockStoreURL := appSettings.Block.BlockStore
 	if blockStoreURL == nil {
 		return errors.NewConfigurationError("blockstore URL not found in config")
 	}
@@ -282,12 +332,14 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *setting
 
 	blockStore, err := blob.NewStore(logger, blockStoreURL)
 	if err != nil {
-		return errors.NewStorageError("Failed to create blockStore", err)
+		return errors.NewStorageError("failed to create blockStore", err)
 	}
 
-	exists, err := blockStore.Exists(ctx, nil, fileformat.FileTypeDat, blob_options.WithFilename("lastProcessed"))
+	var exists bool
+
+	exists, err = blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"))
 	if err != nil {
-		return errors.NewStorageError("Failed to check if lastProcessed.dat exists", err)
+		return errors.NewStorageError("failed to check if lastProcessed.dat exists", err)
 	}
 
 	if exists {
@@ -295,11 +347,13 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *setting
 		return nil
 	}
 
-	logger.Infof("Using utxostore at %s", tSettings.UtxoStore.UtxoStore)
+	logger.Infof("Using utxostore at %s", appSettings.UtxoStore.UtxoStore)
 
-	utxoStore, err := utxo_factory.NewStore(ctx, logger, tSettings, "seeder", false)
+	var utxoStore utxo.Store
+
+	utxoStore, err = utxofactory.NewStore(ctx, logger, appSettings, "seeder", false)
 	if err != nil {
-		return errors.NewStorageError("Failed to create utxostore", err)
+		return errors.NewStorageError("failed to create utxostore", err)
 	}
 
 	channelSize, _ := gocore.Config().GetInt("channelSize", 1000)
@@ -320,33 +374,40 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *setting
 		})
 	}
 
+	var f *os.File
+
 	// Read the UTXO data from the store
-	f, err := os.Open(utxoFile)
+	f, err = os.Open(utxoFile)
 	if err != nil {
-		return errors.NewStorageError("Failed to open file", err)
+		return errors.NewStorageError("failed to open file", err)
 	}
-	defer f.Close()
+
+	defer func() {
+		_ = f.Close()
+	}()
 
 	reader := bufio.NewReader(f)
 
-	header, err := fileformat.ReadHeader(reader)
+	var header fileformat.Header
+
+	header, err = fileformat.ReadHeader(reader)
 	if err != nil {
-		return errors.NewProcessingError("Failed to read UTXO set header", err)
+		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
 	if header.FileType() != fileformat.FileTypeUtxoSet {
-		return errors.NewProcessingError("Invalid file type: %s", header.FileType)
+		return errors.NewProcessingError("invalid file type: %s", header.FileType)
 	}
 
 	var hash *chainhash.Hash
 
-	if err := binary.Read(reader, binary.LittleEndian, &hash); err != nil {
-		return errors.NewProcessingError("Failed to read UTXO set header", err)
+	if err = binary.Read(reader, binary.LittleEndian, &hash); err != nil {
+		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
 	var height uint32
-	if err := binary.Read(reader, binary.LittleEndian, &height); err != nil {
-		return errors.NewProcessingError("Failed to read UTXO set header", err)
+	if err = binary.Read(reader, binary.LittleEndian, &height); err != nil {
+		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
 	// With UTXOSets, we also read the previous block hash before we start reading the UTXOs
@@ -354,7 +415,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *setting
 
 	_, err = reader.Read(previousBlockHash[:])
 	if err != nil {
-		return errors.NewProcessingError("Couldn't read previous block hash from file", err)
+		return errors.NewProcessingError("couldn't read previous block hash from file", err)
 	}
 
 	var (
@@ -374,7 +435,9 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *setting
 				return gCtx.Err()
 
 			default:
-				utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(gCtx, reader)
+				var utxoWrapper *utxopersister.UTXOWrapper
+
+				utxoWrapper, err = utxopersister.NewUTXOWrapperFromReader(gCtx, reader)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						if utxoWrapper == nil {
@@ -386,7 +449,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *setting
 					}
 
 					logger.Errorf("Failed to read UTXO: %v", err)
-					return errors.NewProcessingError("Failed to read UTXO", err)
+					return errors.NewProcessingError("failed to read UTXO", err)
 				}
 
 				select {
@@ -410,22 +473,24 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, tSettings *setting
 		return nil
 	})
 
-	if err := g.Wait(); err != nil {
-		return errors.NewProcessingError("Error in worker", err)
+	if err = g.Wait(); err != nil {
+		return errors.NewProcessingError("error in worker", err)
 	}
 
 	logger.Infof("All workers finished successfully")
 
 	heightStr := fmt.Sprintf("%d\n", height)
 
-	if err := blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(heightStr), blob_options.WithFilename("lastProcessed")); err != nil {
-		return errors.NewStorageError("Failed to write height of %d to lastProcessed.dat", height, err)
+	if err = blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(heightStr), bloboptions.WithFilename("lastProcessed")); err != nil {
+		return errors.NewStorageError("failed to write height of %d to lastProcessed.dat", height, err)
 	}
 
 	return nil
 }
 
-func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, id int, utxoWrapperCh <-chan *utxopersister.UTXOWrapper) error {
+// worker processes UTXOWrapper messages from the channel and stores them in the UTXO store.
+func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store,
+	id int, utxoWrapperCh <-chan *utxopersister.UTXOWrapper) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -446,6 +511,7 @@ func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, id int
 	}
 }
 
+// processUTXO processes a single UTXOWrapper and stores it in the UTXO store.
 func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersister.UTXOWrapper) error {
 	if utxoWrapper == nil {
 		return nil
@@ -488,6 +554,7 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 	return nil
 }
 
+// formatNumber formats a number with commas as thousands separators.
 func formatNumber(n uint64) string {
 	in := fmt.Sprintf("%d", n)
 	out := make([]string, 0, len(in)+(len(in)-1)/3)
