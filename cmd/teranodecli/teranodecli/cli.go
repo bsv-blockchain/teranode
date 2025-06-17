@@ -226,7 +226,7 @@ func Start(args []string, version, commit string) {
 		}
 	case "settings":
 		cmd.Execute = func(args []string) error {
-			cmdSettings.CmdSettings(logger, tSettings, version, commit)
+			cmdSettings.PrintSettings(logger, tSettings, version, commit)
 			return nil
 		}
 	case "export-blocks":
