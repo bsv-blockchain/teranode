@@ -157,7 +157,7 @@ func Start(args []string, version, commit string) {
 		}
 	case "utxopersister":
 		cmd.Execute = func(args []string) error {
-			utxopersister.UtxoPersister(logger, tSettings)
+			utxopersister.RunUtxoPersister(logger, tSettings)
 			return nil
 		}
 	case "seeder":
