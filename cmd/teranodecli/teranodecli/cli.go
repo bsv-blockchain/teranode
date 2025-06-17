@@ -137,7 +137,7 @@ func Start(args []string, version, commit string) {
 				path = args[0]
 			}
 
-			filereader.FileReader(logger, tSettings, *verbose, *checkHeights, *useStore, path)
+			filereader.ReadAndProcessFile(logger, tSettings, *verbose, *checkHeights, *useStore, path)
 
 			return nil
 		}

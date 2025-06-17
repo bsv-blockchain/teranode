@@ -1,3 +1,20 @@
+// Package filereader provides utilities for reading and processing blockchain-related files.
+// It is designed to handle various file formats, extract relevant data, and perform operations
+// such as validation, transformation, and storage.
+//
+// Usage:
+//
+//    This package is typically used as a command-line tool to read and process blockchain files
+//    for debugging, analysis, or integration with other services.
+//
+// Functions:
+//   - ReadFile: Reads and processes a blockchain file, extracting transactions, and metadata.
+//
+// Side effects:
+//
+//    Functions in this package may print to stdout, log errors, and interact with external
+//    storage systems or services.
+
 package filereader
 
 import (
@@ -11,7 +28,7 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	block_model "github.com/bitcoin-sv/teranode/model"
+	blockmodel "github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
@@ -23,24 +40,24 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-const stdin = "[stdin]"
-
 const (
-	numTransactionsFormat     = "Number of transactions: %d\n"
-	coinbasePlaceholderFormat = "%10d: Coinbase Placeholder\n"
-	nodeFormat                = "%10d: %v\n"
-	fileTypeFormat            = "file type:                 %s\n"
-	blockHashFormat           = "block hash:                %s\n"
-	blockHeightFormat         = "block height:              %d\n"
-	previousBlockHashFormat   = "previous block hash:       %s\n"
+	blockHashFormat           = "block hash:                %s\n" // format for block hash
+	blockHeightFormat         = "block height:              %d\n" // format for block height
+	coinbasePlaceholderFormat = "%10d: Coinbase Placeholder\n"    // format for coinbase placeholder transactions
+	fileTypeFormat            = "file type:                 %s\n" // format for showing a file type
+	nodeFormat                = "%10d: %v\n"                      // format for node information
+	numTransactionsFormat     = "Number of transactions: %d\n"    // format for number of transactions
+	previousBlockHashFormat   = "previous block hash:       %s\n" // format for previous block hash
+	stdin                     = "[stdin]"                         // constant for stdin input
 )
 
 var (
-	verbose      bool
 	checkHeights bool
 	useStore     bool
+	verbose      bool
 )
 
+// usage prints the usage message and exits the program with an error code.
 func usage(msg string) {
 	if msg != "" {
 		fmt.Printf("Error: %s\n\n", msg)
@@ -51,7 +68,26 @@ func usage(msg string) {
 	os.Exit(1)
 }
 
-func FileReader(logger ulogger.Logger, tSettings *settings.Settings, verboseInput bool, checkHeightsInput bool, useStoreInput bool, path string) {
+// ReadAndProcessFile is the main entry point for reading and processing blockchain files.
+//
+// This function initializes the necessary settings and context, then processes the specified
+// file by delegating to the appropriate handler based on the file type. It supports various
+// blockchain-related file formats, such as UTXO sets, block headers, and subtree data.
+//
+// Parameters:
+//   - logger: A logger instance for logging messages and errors.
+//   - settings: Application settings for configuring file processing.
+//   - verboseInput: A boolean flag to enable verbose output.
+//   - checkHeightsInput: A boolean flag to enable height consistency checks.
+//   - useStoreInput: A boolean flag to enable reading files from an external store.
+//   - path: The file path or hash to be processed.
+//
+// Side effects:
+//   - Prints file processing details to stdout.
+//   - Logs errors and informational messages.
+//   - Exits the process with a non-zero status code in case of errors.
+func ReadAndProcessFile(logger ulogger.Logger, settings *settings.Settings, verboseInput bool, checkHeightsInput bool,
+	useStoreInput bool, path string) {
 	verbose = verboseInput
 	checkHeights = checkHeightsInput
 	useStore = useStoreInput
@@ -62,35 +98,54 @@ func FileReader(logger ulogger.Logger, tSettings *settings.Settings, verboseInpu
 
 	// Wrap the reader with a buffered reader
 	// read the transaction count
-	if err := ProcessFile(ctx, path, logger, tSettings); err != nil {
-		fmt.Printf("error processing file: %v\n", err)
+	if err := ProcessFile(ctx, path, logger, settings); err != nil {
+		logger.Fatalf("Error processing file: %v\n", err)
 		os.Exit(1)
 	}
 
 	os.Exit(0)
 }
 
-func ProcessFile(ctx context.Context, path string, logger ulogger.Logger, tSettings *settings.Settings) error {
+// ProcessFile processes the specified file, reading its contents and handling different file types.
+//
+// This function determines the file type based on its extension or header and delegates
+// processing to the appropriate handler. It supports various blockchain-related file formats,
+// such as UTXO sets, block headers, and subtree data.
+//
+// Parameters:
+//   - ctx: The context for managing deadlines and cancellations.
+//   - path: The file path or hash to be processed.
+//   - logger: A logger instance for logging messages and errors.
+//   - settings: Application settings for configuring file processing.
+//
+// Returns:
+//   - An error if the file cannot be processed or if an issue occurs during processing.
+//
+// Side effects:
+//   - Logs file processing details and errors.
+//   - Reads file contents and interacts with external storage systems if necessary.
+func ProcessFile(ctx context.Context, path string, logger ulogger.Logger, settings *settings.Settings) error {
 	if path == "" {
 		return errors.NewProcessingError("no file specified")
 	}
 
-	dir, filename, ext, r, err := getReader(path, logger, tSettings)
+	dir, filename, ext, r, err := getReader(path, logger, settings)
 	if err != nil {
 		return errors.NewProcessingError("error getting reader", err)
 	}
 
 	logger.Infof("Reading file %s\n", path)
 
-	if err := readFile(ctx, filename, ext, logger, tSettings, r, dir); err != nil {
+	if err = readFile(ctx, filename, ext, logger, settings, r, dir); err != nil {
 		return errors.NewProcessingError("error reading file", err)
 	}
 
 	return nil
 }
 
+// readFile reads the contents of a file and processes it based on its type.
 func readFile(ctx context.Context, filename string, ext fileformat.FileType, logger ulogger.Logger,
-	tSettings *settings.Settings, r io.Reader, dir string) error {
+	settings *settings.Settings, r io.Reader, dir string) error {
 	br := bufio.NewReaderSize(r, 1024*1024)
 
 	// Read the header
@@ -124,16 +179,16 @@ func readFile(ctx context.Context, filename string, ext fileformat.FileType, log
 		return handleSubtree(br)
 
 	case fileformat.FileTypeSubtreeData:
-		return handleSubtreeData(br, logger, tSettings, dir, filename)
+		return handleSubtreeData(br, logger, settings, dir, filename)
 
 	case fileformat.FileTypeSubtreeMeta:
-		return handleSubtreeMeta(br, logger, tSettings, dir, filename)
+		return handleSubtreeMeta(br, logger, settings, dir, filename)
 
 	case "":
 		return handleBlockHeader(br)
 
 	case fileformat.FileTypeBlock:
-		return handleBlock(br, logger, tSettings, dir)
+		return handleBlock(br, logger, settings, dir)
 
 	default:
 		return errors.NewProcessingError("unknown file type")
@@ -141,20 +196,22 @@ func readFile(ctx context.Context, filename string, ext fileformat.FileType, log
 }
 
 // handleSubtreeData processes FileTypeSubtreeData files.
-func handleSubtreeData(br *bufio.Reader, logger ulogger.Logger, tSettings *settings.Settings, dir, filename string) error {
+func handleSubtreeData(br *bufio.Reader, logger ulogger.Logger, settings *settings.Settings, dir, filename string) error {
 	stPath := filepath.Join(dir, fmt.Sprintf("%s.subtree", filename))
 
-	_, _, _, stReader, err := getReader(stPath, logger, tSettings)
+	_, _, _, stReader, err := getReader(stPath, logger, settings)
 	if err != nil {
-		return errors.NewProcessingError("Reading subtreeData files depends on subtree file", err)
+		return errors.NewProcessingError("reading subtreeData files depends on subtree file", err)
 	}
 
 	st := &util.Subtree{}
-	if err := st.DeserializeFromReader(stReader); err != nil {
+	if err = st.DeserializeFromReader(stReader); err != nil {
 		return errors.NewProcessingError("error reading subtree", err)
 	}
 
-	sd, err := util.NewSubtreeDataFromReader(st, br)
+	var sd *util.SubtreeData
+
+	sd, err = util.NewSubtreeDataFromReader(st, br)
 	if err != nil {
 		return errors.NewProcessingError("error reading subtree data", err)
 	}
@@ -183,21 +240,24 @@ func handleSubtreeData(br *bufio.Reader, logger ulogger.Logger, tSettings *setti
 }
 
 // handleSubtreeMeta processes FileTypeSubtreeMeta files.
-func handleSubtreeMeta(br *bufio.Reader, logger ulogger.Logger, tSettings *settings.Settings, dir, filename string) error {
+func handleSubtreeMeta(br *bufio.Reader, logger ulogger.Logger, settings *settings.Settings, dir, filename string) error {
 	stPath := filepath.Join(dir, fmt.Sprintf("%s.%s", filename, fileformat.FileTypeSubtree))
 	logger.Infof("Reading subtree from %s\n", stPath)
 
-	_, _, _, stReader, err := getReader(stPath, logger, tSettings)
+	_, _, _, stReader, err := getReader(stPath, logger, settings)
 	if err != nil {
-		return errors.NewProcessingError("Reading subtreeData files depends on subtree file", err)
+		return errors.NewProcessingError("reading subtreeData files depends on subtree file", err)
 	}
 
 	st := &util.Subtree{}
-	if err := st.DeserializeFromReader(stReader); err != nil {
+
+	if err = st.DeserializeFromReader(stReader); err != nil {
 		return errors.NewProcessingError("error reading subtree", err)
 	}
 
-	subtreeMeta, err := util.NewSubtreeMetaFromReader(st, br)
+	var subtreeMeta *util.SubtreeMeta
+
+	subtreeMeta, err = util.NewSubtreeMetaFromReader(st, br)
 	if err != nil {
 		return errors.NewProcessingError("error reading subtree meta", err)
 	}
@@ -239,8 +299,8 @@ func handleBlockHeader(br *bufio.Reader) error {
 }
 
 // handleBlock processes FileTypeBlock files.
-func handleBlock(br *bufio.Reader, logger ulogger.Logger, tSettings *settings.Settings, dir string) error {
-	block, err := block_model.NewBlockFromReader(br, nil)
+func handleBlock(br *bufio.Reader, logger ulogger.Logger, settings *settings.Settings, dir string) error {
+	block, err := blockmodel.NewBlockFromReader(br, nil)
 	if err != nil {
 		return errors.NewBlockError("error reading block", err)
 	}
@@ -255,7 +315,9 @@ func handleBlock(br *bufio.Reader, logger ulogger.Logger, tSettings *settings.Se
 		if verbose {
 			filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
 
-			_, _, _, stReader, err := getReader(filename, logger, tSettings)
+			var stReader io.Reader
+
+			_, _, _, stReader, err = getReader(filename, logger, settings)
 			if err != nil {
 				return err
 			}
@@ -285,17 +347,19 @@ func handleUtxoSet(ctx context.Context, br *bufio.Reader) error {
 
 	var blockHeight uint32
 
-	if err := binary.Read(br, binary.LittleEndian, &blockHeight); err != nil {
+	if err = binary.Read(br, binary.LittleEndian, &blockHeight); err != nil {
 		return errors.NewProcessingError("error reading header number", err)
 	}
 
 	fmt.Printf(blockHeightFormat, blockHeight)
 
-	if _, err := io.ReadFull(br, b); err != nil {
+	if _, err = io.ReadFull(br, b); err != nil {
 		return errors.NewProcessingError("error reading previous block hash", err)
 	}
 
-	previousBlockHash, err := chainhash.NewHash(b)
+	var previousBlockHash *chainhash.Hash
+
+	previousBlockHash, err = chainhash.NewHash(b)
 	if err != nil {
 		return errors.NewProcessingError("error parsing previous block hash", err)
 	}
@@ -306,7 +370,9 @@ func handleUtxoSet(ctx context.Context, br *bufio.Reader) error {
 
 	if verbose {
 		for {
-			ud, err := utxopersister.NewUTXOWrapperFromReader(ctx, br)
+			var ud *utxopersister.UTXOWrapper
+
+			ud, err = utxopersister.NewUTXOWrapperFromReader(ctx, br)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					break
@@ -341,7 +407,7 @@ func handleUtxoAdditions(ctx context.Context, br *bufio.Reader) error {
 	fmt.Printf(blockHashFormat, blockHash)
 
 	var blockHeight uint32
-	if err := binary.Read(br, binary.LittleEndian, &blockHeight); err != nil {
+	if err = binary.Read(br, binary.LittleEndian, &blockHeight); err != nil {
 		return errors.NewProcessingError("error reading header number", err)
 	}
 
@@ -351,7 +417,9 @@ func handleUtxoAdditions(ctx context.Context, br *bufio.Reader) error {
 
 	if verbose {
 		for {
-			ud, err := utxopersister.NewUTXOWrapperFromReader(ctx, br)
+			var ud *utxopersister.UTXOWrapper
+
+			ud, err = utxopersister.NewUTXOWrapperFromReader(ctx, br)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					break
@@ -424,7 +492,7 @@ func handleUtxoDeletions(br *bufio.Reader) error {
 
 	var blockHeight uint32
 
-	if err := binary.Read(br, binary.LittleEndian, &blockHeight); err != nil {
+	if err = binary.Read(br, binary.LittleEndian, &blockHeight); err != nil {
 		return errors.NewProcessingError("error reading header number", err)
 	}
 
@@ -434,7 +502,9 @@ func handleUtxoDeletions(br *bufio.Reader) error {
 
 	if verbose {
 		for {
-			ud, err := utxopersister.NewUTXODeletionFromReader(br)
+			var ud *utxopersister.UTXODeletion
+
+			ud, err = utxopersister.NewUTXODeletionFromReader(br)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					break
@@ -481,7 +551,9 @@ func handleSubtree(br *bufio.Reader) error {
 	return nil
 }
 
-func getReader(path string, logger ulogger.Logger, tSettings *settings.Settings) (string, string, fileformat.FileType, io.Reader, error) {
+// getReader returns an io.Reader for the specified path, handling both file and stdin cases.
+func getReader(path string, logger ulogger.Logger, settings *settings.Settings) (string, string,
+	fileformat.FileType, io.Reader, error) {
 	if path == "" {
 		// Handle stdin
 		return "", stdin, "", os.Stdin, nil
@@ -506,14 +578,15 @@ func getReader(path string, logger ulogger.Logger, tSettings *settings.Settings)
 			return "", "", "", nil, errors.NewProcessingError("error parsing hash", err)
 		}
 
-		store := getBlockStore(logger, tSettings)
+		store := getBlockStore(logger, settings)
 
-		r, err := store.GetIoReader(context.Background(), hash[:], fileformat.FileType(ext))
+		var storeReader io.Reader
+		storeReader, err = store.GetIoReader(context.Background(), hash[:], fileformat.FileType(ext))
 		if err != nil {
 			return "", "", "", nil, errors.NewProcessingError("error getting reader from store", err)
 		}
 
-		return dir, fileWithoutExtension, fileformat.FileType(ext), r, nil
+		return dir, fileWithoutExtension, fileformat.FileType(ext), storeReader, nil
 	}
 
 	f, err := os.Open(path)
@@ -524,6 +597,7 @@ func getReader(path string, logger ulogger.Logger, tSettings *settings.Settings)
 	return dir, fileWithoutExtension, fileformat.FileType(ext), f, nil
 }
 
+// readSubtree reads a subtree from the provided reader and prints its transactions if verbose is enabled.
 func readSubtree(r io.Reader, verbose bool) uint32 {
 	var num uint32
 
@@ -553,8 +627,9 @@ func readSubtree(r io.Reader, verbose bool) uint32 {
 	return num
 }
 
-func getBlockStore(logger ulogger.Logger, tSettings *settings.Settings) blob.Store {
-	blockStoreURL := tSettings.Block.BlockStore
+// getBlockStore initializes and returns a blob store for block data.
+func getBlockStore(logger ulogger.Logger, settings *settings.Settings) blob.Store {
+	blockStoreURL := settings.Block.BlockStore
 	if blockStoreURL == nil {
 		panic("blockstore config not found")
 	}
