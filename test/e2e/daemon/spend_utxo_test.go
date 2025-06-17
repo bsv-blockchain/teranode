@@ -16,7 +16,6 @@ func TestShouldAllowSpendAllUtxos(t *testing.T) {
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
-		EnableP2P:       false,
 		EnableValidator: true,
 		SettingsContext: "dev.system.test",
 	})

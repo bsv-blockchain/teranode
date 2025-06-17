@@ -1115,6 +1115,11 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
+		if subtree == nil {
+			// panic(fmt.Sprintf("[BLOCK][%s] missing subtree %d", b.String(), sIdx))
+			return errors.NewStorageError("[BLOCK][%s] missing subtree %d", b.String(), sIdx)
+		}
+
 		if sIdx == 0 {
 			// We need to inject the coinbase tx id into the first position of the first subtree
 			rootHash, err := subtree.RootHashWithReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size())) // nolint: gosec

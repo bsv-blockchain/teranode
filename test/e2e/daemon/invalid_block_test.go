@@ -30,7 +30,7 @@ func TestOrphanTx(t *testing.T) {
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.Asset.HTTPPort = 18090
+			// settings.Asset.HTTPPort = 18090
 			settings.Validator.UseLocalValidator = true
 		},
 	})
@@ -43,7 +43,7 @@ func TestOrphanTx(t *testing.T) {
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.Asset.HTTPPort = 28090
+			// settings.Asset.HTTPPort = 28090
 			settings.Validator.UseLocalValidator = true
 		},
 	})
@@ -121,7 +121,7 @@ func TestOrphanTx(t *testing.T) {
 		EnableRPC:         true,
 		EnableP2P:         true,
 		UseTracing:        false,
-		SkipRemoveDataDir: true,
+		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
 		SettingsContext:   "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 18090
@@ -246,6 +246,8 @@ func TestInvalidBlockWithContainer(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	defer tc.Cleanup(t)
+
 	node1 := tc.GetNodeClients(t, "docker.host.teranode1")
 	node2 := tc.GetNodeClients(t, "docker.host.teranode2")
 
@@ -346,12 +348,9 @@ func TestInvalidBlockWithContainer(t *testing.T) {
 func TestOrphanTxWithSingleNode(t *testing.T) {
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
-		EnableP2P:       true,
-		UseTracing:      false,
 		SettingsContext: "dev.system.test",
 	})
-
-	defer node1.Stop(t)
+	// is stopped manually
 
 	// Generate 2 blocks on node 1
 	_, err := node1.CallRPC("generate", []any{2})
@@ -393,10 +392,11 @@ func TestOrphanTxWithSingleNode(t *testing.T) {
 	node1.ResetServiceManagerContext(t)
 	node1 = daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:         true,
-		UseTracing:        false,
-		SkipRemoveDataDir: true,
+		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
 		SettingsContext:   "dev.system.test",
 	})
+
+	defer node1.Stop(t)
 
 	err = node1.PropagationClient.ProcessTransaction(node1.Ctx, childTx)
 	require.NoError(t, err)
@@ -439,7 +439,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.Asset.HTTPPort = 18090
+			// settings.Asset.HTTPPort = 18090
 			settings.Validator.UseLocalValidator = true
 			settings.UtxoStore.BlockHeightRetention = 1
 			settings.BlockValidation.OptimisticMining = false
@@ -455,7 +455,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.Asset.HTTPPort = 28090
+			// settings.Asset.HTTPPort = 28090
 			settings.Validator.UseLocalValidator = true
 			settings.UtxoStore.BlockHeightRetention = 1
 			settings.BlockValidation.OptimisticMining = false

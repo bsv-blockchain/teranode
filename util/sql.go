@@ -31,7 +31,7 @@ func InitSQLDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Set
 		return InitSQLiteDB(logger, storeURL, tSettings)
 	}
 
-	return nil, errors.NewConfigurationError("unknown scheme: %s", storeURL.Scheme)
+	return nil, errors.NewConfigurationError("db: unknown scheme: %s", storeURL.Scheme)
 }
 
 func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*usql.DB, error) {

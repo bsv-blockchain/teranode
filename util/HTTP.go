@@ -92,5 +92,10 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 		return nil, cancelFn, errFn("http request [%s] returned status code [%d]", url, resp.StatusCode)
 	}
 
+	isHTML := resp.Header.Get("content-type") == "text/html"
+	if isHTML {
+		return nil, cancelFn, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", url)
+	}
+
 	return resp.Body, cancelFn, nil
 }

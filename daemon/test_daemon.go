@@ -269,8 +269,8 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	var distributorClient *distributor.Distributor
 
 	distributorClient, err = distributor.NewDistributor(ctx, logger, appSettings,
-		distributor.WithBackoffDuration(200*time.Millisecond),
-		distributor.WithRetryAttempts(3),
+		distributor.WithBackoffDuration(500*time.Millisecond),
+		distributor.WithRetryAttempts(10),
 		distributor.WithFailureTolerance(0),
 	)
 	require.NoError(t, err)
@@ -1343,6 +1343,10 @@ func (td *TestDaemon) CreateAndSendTxsConcurrently(_ *testing.T, parentTx *bt.Tx
 	}
 
 	return existingTransactions, txHashes, nil
+}
+
+func (td *TestDaemon) CreateAndSendTxsForAllParentOutputs(t *testing.T, parentTx *bt.Tx) ([]*bt.Tx, []*chainhash.Hash, error) {
+	return td.CreateAndSendTxs(t, parentTx, len(parentTx.Outputs))
 }
 
 // GetPrivateKey retrieves the private key used by the TestDaemon for signing transactions.

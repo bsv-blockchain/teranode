@@ -1,10 +1,12 @@
 package smoke
 
 import (
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/util"
@@ -20,11 +22,10 @@ import (
 func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         false,
-		EnableValidator:   true,
-		SettingsContext:   "dev.system.test",
-		EnableFullLogging: true,
+		EnableRPC:       true,
+		EnableValidator: true,
+		SettingsContext: "dev.system.test",
+		// EnableFullLogging: true,
 	})
 
 	defer td.Stop(t)
@@ -184,11 +185,10 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 func TestDeleteAtHeightHappyPath(t *testing.T) {
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         false,
-		EnableValidator:   true,
-		EnableFullLogging: true,
-		SettingsContext:   "dev.system.test",
+		EnableRPC:       true,
+		EnableValidator: true,
+		// EnableFullLogging: true,
+		SettingsContext: "dev.system.test",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.UtxoStore.BlockHeightRetention = 1
 		},
@@ -269,8 +269,8 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	require.NotNil(t, txMeta)
 
 	// Generate blocks until just before deletion height
-	blocksToGenerate :=td.Settings.UtxoStore.BlockHeightRetention
-	_, err = td.CallRPC("generate", []interface{}{blocksToGenerate+1})
+	blocksToGenerate := td.Settings.UtxoStore.BlockHeightRetention
+	_, err = td.CallRPC("generate", []any{blocksToGenerate + 1})
 	require.NoError(t, err)
 
 	time.Sleep(10 * time.Second)
@@ -282,12 +282,22 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 }
 
 func TestSubtreeBlockHeightRetention(t *testing.T) {
+	const cleanerInterval = 1 * time.Second
+
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         false,
-		EnableValidator:   true,
-		SettingsContext:   "dev.system.test",
+		EnableRPC:       true,
+		EnableValidator: true,
+		SettingsContext: "dev.system.test",
+		SettingsOverrideFunc: func(settings *settings.Settings) {
+			settings.GlobalBlockHeightRetention = 10
+
+			// replace dahCleanerInterval query param with 1 second
+			query := settings.SubtreeValidation.SubtreeStore.RawQuery
+			values, _ := url.ParseQuery(query)
+			values.Set("dahCleanerInterval", cleanerInterval.String())
+			settings.SubtreeValidation.SubtreeStore.RawQuery = values.Encode()
+		},
 	})
 
 	defer td.Stop(t)
@@ -358,34 +368,50 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	_, err = td.DistributorClient.SendTransaction(td.Ctx, spendingTx)
 	require.NoError(t, err)
 
+	// make sure the tx is processed by blockassembly
+	delay := td.Settings.BlockAssembly.DoubleSpendWindow
+	if delay != 0 {
+		time.Sleep(delay)
+	}
+
 	// Generate a block to confirm the spending transaction
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC("generate", []any{1})
 	require.NoError(t, err)
 
 	// Verify subtree exists for the block containing our transaction
 	block, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, currentHeight+1)
 	require.NoError(t, err)
 
-	err = block.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
-	require.NoError(t, err)
+	// can't use block.GetAndValidateSubtrees() as .subtree files have their DAH removed when they are mined
+	// err = block.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
+
+	subtreeHash := block.Subtrees[0]
 
 	// Calculate when subtree should be deleted
-	retentionHeight := currentHeight + 1 + td.Settings.SubtreeValidation.SubtreeBlockHeightRetention
+	retentionHeight := currentHeight + td.Settings.GlobalBlockHeightRetention - 1
 
 	// Generate blocks until just before retention height
-	blocksToGenerate := retentionHeight - currentHeight - 2
-	_, err = td.CallRPC("generate", []interface{}{blocksToGenerate})
+	blocksToGenerate := retentionHeight - currentHeight - 1
+	_, err = td.CallRPC("generate", []any{blocksToGenerate})
 	require.NoError(t, err)
 
+	time.Sleep(cleanerInterval)
+
 	// Verify subtree still exists
-	err = block.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
+
+	// can't use block.GetAndValidateSubtrees() as .subtree files have their DAH removed when they are mined
+	// err = block.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
+
+	_, err = td.SubtreeStore.Get(td.Ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 	require.NoError(t, err)
 
 	// Generate one more block to reach retention height
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC("generate", []any{300})
 	require.NoError(t, err)
 
+	time.Sleep(cleanerInterval)
+
 	// Verify subtree is deleted
-	err = block.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
-	require.Error(t, err, "Subtree should be deleted after retention height")
+	_, err = td.SubtreeStore.Get(td.Ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
+	require.Error(t, err)
 }

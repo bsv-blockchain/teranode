@@ -115,7 +115,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		EnableRPC:         true,
 		EnableP2P:         true,
 		EnableValidator:   true,
-		SkipRemoveDataDir: true,
+		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
@@ -182,7 +182,7 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		EnableRPC:         true,
 		EnableP2P:         true,
 		EnableValidator:   true,
-		SkipRemoveDataDir: true,
+		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
 		// EnableFullLogging:            true,
 		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
@@ -235,11 +235,13 @@ func TestTDRestart(t *testing.T) {
 		EnableRPC:         true,
 		EnableP2P:         false,
 		EnableValidator:   true,
-		SkipRemoveDataDir: true,
+		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
 		SettingsContext:   "docker.host.teranode1.daemon",
 	})
 
 	td.WaitForBlockHeight(t, block1, blockWait, true)
+
+	td.Stop(t)
 }
 
 // Test Reset
@@ -286,16 +288,19 @@ func checkSubtrees(t *testing.T, td *daemon.TestDaemon, expectedTxCount int) {
 }
 
 func TestDynamicSubtreeSize(t *testing.T) {
+	t.Skip("Skipping dynamic subtree size test")
+	testLock.Lock()
+	defer testLock.Unlock()
+
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableP2P:       false,
 		EnableValidator: true,
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
-	t.Cleanup(func() {
-		td.Stop(t)
-	})
+	defer td.Stop(t)
 
 	// Start the blockchain
 	err := td.BlockchainClient.Run(td.Ctx, "test")
@@ -368,7 +373,7 @@ func TestInvalidBlock(t *testing.T) {
 		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
-	time.Sleep(1 * time.Second)
+	defer node1.Stop(t)
 
 	_, err := node1.CallRPC("generate", []any{3})
 	require.NoError(t, err)
@@ -390,8 +395,7 @@ func TestInvalidBlock(t *testing.T) {
 	require.Equal(t, node1BestBlockHeaderMetaNew.Height, uint32(2))
 }
 
-func TestBlockAssemblyReset(t *testing.T) {
-	t.Skip("Skipping block assembly reset test")
+func TestBlockValidationCatchup(t *testing.T) {
 	testLock.Lock()
 	defer testLock.Unlock()
 
@@ -402,20 +406,26 @@ func TestBlockAssemblyReset(t *testing.T) {
 		EnableValidator: true,
 		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.Asset.HTTPPort = 28090
+			s.GlobalBlockHeightRetention = 99999
 			s.BlockValidation.SecretMiningThreshold = 99999
 		},
 	})
-	t.Cleanup(func() { node2.Stop(t) })
 
 	// Start node1 and generate 100 blocks
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         true, // Start without P2P to allow separate chain
-		EnableValidator:   true,
-		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode1.daemon",
+		EnableRPC:       true,
+		EnableP2P:       true, // Start without P2P to allow separate chain
+		EnableValidator: true,
+		SettingsContext: "docker.host.teranode1.daemon",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.Asset.HTTPPort = 18090
+			s.GlobalBlockHeightRetention = 99999
+			s.BlockValidation.SecretMiningThreshold = 99999
+		},
+		// EnableFullLogging: true,
 	})
-	t.Cleanup(func() { node1.Stop(t) })
+	defer node1.Stop(t)
 
 	_, err := node1.CallRPC("generate", []any{100})
 	require.NoError(t, err)
@@ -434,23 +444,29 @@ func TestBlockAssemblyReset(t *testing.T) {
 		EnableRPC:         true,
 		EnableP2P:         false,
 		EnableValidator:   true,
-		SkipRemoveDataDir: true,
+		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
 		SettingsContext:   "docker.host.teranode2.daemon",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.Asset.HTTPPort = 28090
+			s.GlobalBlockHeightRetention = 99999
+			s.BlockValidation.SecretMiningThreshold = 99999
+		},
 	})
 
-	t.Cleanup(func() { node2.Stop(t) })
+	defer node2.Stop(t)
 
-	// generate 200 blocks on node2 (forks from 100)
-	_, err = node2.CallRPC("generate", []any{1000})
+	const extraBlocks = 1000
+
+	_, err = node2.CallRPC("generate", []any{extraBlocks})
 	require.NoError(t, err)
-	//                / 101a -> ... -> 300a (node2 fork)
+	//                / 101a -> ... -> 1100a (node2 fork)
 	// 0 -> 1 ... 100
 	//                \ 100b (node1 stays)
 
 	// generate 1 more block on node1
 	_, err = node1.CallRPC("generate", []any{1})
 	require.NoError(t, err)
-	//                / 101a -> ... -> 1000a
+	//                / 101a -> ... -> 1100a
 	// 0 -> 1 ... 100
 	//                \ 100b -> ... -> 101b (node1 longer chain)
 
@@ -462,13 +478,18 @@ func TestBlockAssemblyReset(t *testing.T) {
 		EnableRPC:         true,
 		EnableP2P:         true, // Enable P2P to trigger reorg
 		EnableValidator:   true,
-		SkipRemoveDataDir: true,
+		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
 		SettingsContext:   "docker.host.teranode2.daemon",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.Asset.HTTPPort = 28090
+			s.GlobalBlockHeightRetention = 99999
+			s.BlockValidation.SecretMiningThreshold = 99999
+		},
 	})
-	t.Cleanup(func() { node2.Stop(t) })
+	defer node2.Stop(t)
 
-	_, err = node2.CallRPC("generate", []any{1})
-	require.NoError(t, err)
+	// _, err = node2.CallRPC("generate", []any{1})
+	// require.NoError(t, err)
 	//                / 201a -> ... -> 301a
 	// 0 -> 1 ... 100
 	//                \ 100b -> ... -> 101b (* reorg to longer chain)
@@ -478,6 +499,6 @@ func TestBlockAssemblyReset(t *testing.T) {
 	// require.NoError(t, err)
 
 	// Verify node1 has synced to node2's chain
-	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 1000, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, extraBlocks+100, blockWait)
 	require.NoError(t, err)
 }

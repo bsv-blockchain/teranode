@@ -28,14 +28,14 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
-	tc "github.com/testcontainers/testcontainers-go/modules/compose"
+	"github.com/testcontainers/testcontainers-go/modules/compose"
 )
 
 type TestContainer struct {
 	Config     TestContainersConfig
-	Compose    tc.ComposeStack
+	Compose    compose.ComposeStack
 	Ctx        context.Context
-	Identifier tc.StackIdentifier
+	Identifier compose.StackIdentifier
 	Logger     *ulogger.ErrorTestLogger
 }
 
@@ -77,10 +77,10 @@ func NewTestContainer(t *testing.T, config TestContainersConfig) (*TestContainer
 		require.NoError(t, err)
 	}
 
-	identifier := tc.StackIdentifier(fmt.Sprintf("test-%d", time.Now().UnixNano()))
+	identifier := compose.StackIdentifier(fmt.Sprintf("test-%d", time.Now().UnixNano()))
 	ctx, cancel := context.WithCancel(context.Background())
 
-	compose, err := tc.NewDockerComposeWith(tc.WithStackFiles(filepath.Join(config.Path, config.ComposeFile)), tc.WithProfiles(config.Profiles...), identifier)
+	compose, err := compose.NewDockerComposeWith(compose.WithStackFiles(filepath.Join(config.Path, config.ComposeFile)), compose.WithProfiles(config.Profiles...), identifier)
 	require.NoError(t, err)
 
 	container := &TestContainer{
@@ -105,7 +105,7 @@ func NewTestContainer(t *testing.T, config TestContainersConfig) (*TestContainer
 	return container, nil
 }
 
-func getPorts(ctx context.Context, t *testing.T, compose tc.ComposeStack, servicePorts []ServicePort) []int {
+func getPorts(ctx context.Context, t *testing.T, compose compose.ComposeStack, servicePorts []ServicePort) []int {
 	ports := []int{}
 
 	for _, servicePort := range servicePorts {
@@ -276,7 +276,7 @@ func (tc *TestContainer) StartNode(t *testing.T, nodeName string) {
 }
 
 func (tc *TestContainer) Cleanup(t *testing.T) {
-	err := tc.Compose.Down(tc.Ctx)
+	err := tc.Compose.Down(tc.Ctx, compose.RemoveOrphans(true))
 	require.NoError(t, err)
 
 	// Wait for configured health check and service ports to be free before continuing

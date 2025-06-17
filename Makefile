@@ -169,11 +169,6 @@ reset-data:
 	unzip data.zip
 	chmod -R u+w data
 
-.PHONY: smoketests
-smoketests:
-	cd test/smoke && \
-		go test -v -count 1 -tags test_smoke_rpc ./...
-
 .PHONY: gen
 gen:
 	protoc \

@@ -431,7 +431,7 @@ func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
 			expectError:   false,
 		},
 		{
-			name:          "common ancestor found in second batch",
+			name:          "common ancestor found in second smaller batch",
 			targetHash:    headers[149].Hash(),
 			locatorHashes: []*chainhash.Hash{headers[20].Hash()},
 			maxHeaders:    100,

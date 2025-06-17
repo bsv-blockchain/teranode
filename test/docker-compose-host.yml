@@ -26,6 +26,10 @@ services:
 
   teranode-builder:
     container_name: teranode-builder
+    profiles:
+      - teranode1
+      - teranode2
+      - teranode3
     image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode:latest
     network_mode: "host"
     build:

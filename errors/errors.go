@@ -318,6 +318,36 @@ func (x *TError) IsNil() bool {
 	return false
 }
 
+func (x *TError) Unwrap() error {
+	if x.WrappedError == nil {
+		return nil
+	}
+
+	return x.WrappedError
+}
+
+func (x *TError) Is(target error) bool {
+	if x == nil {
+		return false
+	}
+
+	if target == nil {
+		return false
+	}
+
+	targetTError, ok := target.(*TError)
+	if ok && x.Code == targetTError.Code {
+		return true
+	}
+
+	targetError, ok := target.(*Error)
+	if ok && x.Code == targetError.Code() {
+		return true
+	}
+
+	return false
+}
+
 // Wrap converts a standard error into a TError, preserving the error code and message.
 func Wrap(err error) *TError {
 	if err == nil {

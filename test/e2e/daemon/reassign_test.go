@@ -2,7 +2,6 @@ package smoke
 
 import (
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -18,7 +17,6 @@ func TestShouldAllowReassign(t *testing.T) {
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
-		EnableP2P:       false,
 		EnableValidator: true,
 		SettingsContext: "dev.system.test",
 	})
@@ -64,7 +62,6 @@ func TestShouldAllowReassign(t *testing.T) {
 	// Mine a block and wait for processing
 	_, err = td.CallRPC("generate", []interface{}{1})
 	require.NoError(t, err)
-	time.Sleep(5 * time.Second)
 
 	throwawayTx := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(parentTx, 0, alicePrivateKey),

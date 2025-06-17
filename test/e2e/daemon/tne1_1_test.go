@@ -6,6 +6,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/settings"
+	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -27,11 +28,10 @@ func TestNode_DoNotVerifyTransactionsIfAlreadyVerified(t *testing.T) {
 	defer node1.Stop(t)
 
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableValidator:   true,
-		EnableP2P:         true,
-		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode2.daemon",
+		EnableRPC:       true,
+		EnableValidator: true,
+		EnableP2P:       true,
+		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 28090
 			settings.Validator.UseLocalValidator = true
@@ -41,11 +41,10 @@ func TestNode_DoNotVerifyTransactionsIfAlreadyVerified(t *testing.T) {
 	defer node2.Stop(t)
 
 	node3 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableValidator:   true,
-		EnableP2P:         true,
-		SkipRemoveDataDir: true,
-		SettingsContext:   "docker.host.teranode3.daemon",
+		EnableRPC:       true,
+		EnableValidator: true,
+		EnableP2P:       true,
+		SettingsContext: "docker.host.teranode3.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 38090
 			settings.Validator.UseLocalValidator = true
@@ -54,27 +53,20 @@ func TestNode_DoNotVerifyTransactionsIfAlreadyVerified(t *testing.T) {
 
 	defer node3.Stop(t)
 
-	// set run state
-	err := node1.BlockchainClient.Run(node1.Ctx, "test")
-	require.NoError(t, err)
-
-	// set run state
-	err = node2.BlockchainClient.Run(node1.Ctx, "test")
-	require.NoError(t, err)
-
-	// set run state
-	err = node3.BlockchainClient.Run(node1.Ctx, "test")
-	require.NoError(t, err)
+	blocks := uint32(101)
 
 	// Generate blocks
-	_, err = node1.CallRPC("generate", []interface{}{101})
-	require.NoError(t, err, "Failed to mine blocks")
+	_, err := node1.CallRPC("generate", []any{blocks})
+	require.NoError(t, err, "Failed to mine blocks on node1")
 
-	_, err = node2.CallRPC("generate", []interface{}{101})
-	require.NoError(t, err, "Failed to mine blocks")
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, blocks, blockWait)
+	require.NoError(t, err)
 
-	_, err = node3.CallRPC("generate", []interface{}{101})
-	require.NoError(t, err, "Failed to mine blocks")
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, blocks, blockWait)
+	require.NoError(t, err)
+
+	err = helper.WaitForNodeBlockHeight(t.Context(), node3.BlockchainClient, blocks, blockWait)
+	require.NoError(t, err)
 
 	block1, errblock := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
 	require.NoError(t, errblock)
@@ -101,12 +93,23 @@ func TestNode_DoNotVerifyTransactionsIfAlreadyVerified(t *testing.T) {
 
 		node.Logger.Infof("Hashes: %v", hashes)
 
-		_, err = node.CallRPC("generate", []interface{}{1})
+		_, err = node.CallRPC("generate", []any{1})
 		require.NoError(t, err, "Failed to mine blocks")
 
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
 		}
+
+		blocks++
+
+		err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, blocks, blockWait)
+		require.NoError(t, err)
+
+		err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, blocks, blockWait)
+		require.NoError(t, err)
+
+		err = helper.WaitForNodeBlockHeight(t.Context(), node3.BlockchainClient, blocks, blockWait)
+		require.NoError(t, err)
 	}
 
 	headerNode1, _, _ := node1.BlockchainClient.GetBestBlockHeader(ctx)

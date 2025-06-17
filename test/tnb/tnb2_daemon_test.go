@@ -30,7 +30,6 @@ func TestUtxoStore(t *testing.T) {
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
-		EnableP2P:       true,
 		EnableValidator: true,
 		SettingsContext: "docker.host.teranode1.daemon",
 	})

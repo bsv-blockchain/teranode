@@ -23,6 +23,8 @@ func TestUniqueCandidateIdentifiers(t *testing.T) {
 		SettingsContext: "dev.system.test",
 	})
 
+	defer td.Stop(t)
+
 	// Mine starting blocks
 	_, err := td.CallRPC("generate", []interface{}{101})
 	require.NoError(t, err, "Failed to mine blocks")

@@ -15,7 +15,6 @@ func TestBlockSubsidy(t *testing.T) {
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
-		EnableP2P:       false,
 		EnableValidator: true,
 		SettingsContext: "dev.system.test",
 	})
@@ -44,9 +43,9 @@ func TestBlockSubsidy(t *testing.T) {
 
 	// Calculate expected block subsidy for current height
 	expectedSubsidy := util.GetBlockSubsidyForHeight(mc0.Height, td.Settings.ChainCfgParams)
-	
+
 	// Verify mining candidate includes at least the block subsidy
-	assert.Greater(t, mc0.CoinbaseValue, expectedSubsidy, 
+	assert.Greater(t, mc0.CoinbaseValue, expectedSubsidy,
 		"Coinbase value should be at least the block subsidy")
 
 	// Generate a block
@@ -63,6 +62,6 @@ func TestBlockSubsidy(t *testing.T) {
 	// Verify coinbase transaction outputs match mining candidate value
 	coinbaseTx := block.CoinbaseTx
 	amount := coinbaseTx.TotalOutputSatoshis()
-	assert.Equal(t, mc0.CoinbaseValue, amount, 
+	assert.Equal(t, mc0.CoinbaseValue, amount,
 		"Coinbase transaction output should match mining candidate value")
-} 
+}

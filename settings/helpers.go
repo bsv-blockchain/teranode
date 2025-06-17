@@ -2,6 +2,7 @@ package settings
 
 import (
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/ordishs/gocore"
@@ -66,4 +67,16 @@ func getDuration(key string, defaultValue time.Duration, alternativeContext ...s
 	}
 
 	return d
+}
+
+func getPort(key string, defaultValue int, alternativeContext ...string) int {
+	portPrefix := getString("PORT_PREFIX", "", alternativeContext...)
+	port := getString(key, strconv.Itoa(defaultValue), alternativeContext...)
+
+	portInt, err := strconv.Atoi(portPrefix + port)
+	if err != nil {
+		panic(err)
+	}
+
+	return portInt
 }

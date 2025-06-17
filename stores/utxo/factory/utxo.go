@@ -184,5 +184,5 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 		return utxoStore, nil
 	}
 
-	return nil, errors.NewProcessingError("unknown scheme: %s", storeURL.Scheme)
+	return nil, errors.NewProcessingError("utxostore: unknown scheme: %s", storeURL.Scheme)
 }

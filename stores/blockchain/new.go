@@ -58,5 +58,5 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Sett
 		return sql.New(logger, storeURL, tSettings)
 	}
 
-	return nil, errors.NewStorageError("unknown scheme: %s", storeURL.Scheme)
+	return nil, errors.NewStorageError("blockchain: unknown scheme: %s", storeURL.Scheme)
 }

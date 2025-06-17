@@ -206,11 +206,14 @@ func (q *Quorum) TryLockIfNotExistsWithTimeout(ctx context.Context, hash *chainh
 		select {
 		case <-time.After(retryDelay):
 			// Sleep finished normally, continue loop.
-		case <-ctx.Done():
-			// Parent context cancelled during retry delay.
-			return locked, exists, release, errors.NewStorageError("[TryLockIfNotExistsWithTimeout][%s] context done during retry delay", hash)
-		case <-cancelCtx.Done():
-			// Internal timeout fired during retry delay.
+		case <-cancelCtx.Done(): // This channel will be closed if ctx is done OR if timeout t is reached
+			// Check if the parent context (ctx) is the reason cancelCtx is done.
+			// ctx.Err() is non-nil if ctx is cancelled.
+			if ctx.Err() != nil {
+				// Parent context was cancelled.
+				return locked, exists, release, errors.NewStorageError("[TryLockIfNotExistsWithTimeout][%s] context done during retry delay", hash)
+			}
+			// If ctx.Err() is nil, it means cancelCtx timed out on its own (due to 't').
 			return locked, exists, release, errors.NewStorageError("[TryLockIfNotExistsWithTimeout][%s] timeout waiting %s for lock to free up during retry delay", hash, t)
 		}
 	}

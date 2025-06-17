@@ -390,7 +390,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					var spendErr *errors.Error
 					if errors.As(spend.Err, &spendErr) {
 						if spendErrs == nil {
-							spendErrs = errors.New(spendErr.Code(), spendErr.Message())
+							spendErrs = errors.New(spendErr.Code(), spendErr.Message(), spendErr)
 						} else {
 							spendErrs = errors.New(spendErrs.Code(), spendErrs.Message(), spendErr)
 						}
