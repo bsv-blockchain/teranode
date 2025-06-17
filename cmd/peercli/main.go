@@ -1,3 +1,23 @@
+// Package peercli provides a command-line interface for interacting with Bitcoin peers.
+// It allows users to connect to peers, send various Bitcoin protocol messages, and
+// interact with the peer in an interactive mode.
+//
+// Usage:
+//
+//	This package is typically used as a CLI tool to establish connections with Bitcoin
+//	peers and send protocol messages such as "inv", "getdata", "ping", etc.
+//
+// Functions:
+//   - connect: Establishes a connection to a Bitcoin peer.
+//   - sendMessage: Sends a specific Bitcoin protocol message to the connected peer.
+//   - interactiveLoop: Starts an interactive CLI loop for user commands.
+//   - handleCommand: Processes user input and executes the corresponding command.
+//   - reconnect: Attempts to reconnect to a Bitcoin peer.
+//
+// Side effects:
+//
+//	Functions in this package may print to stdout and exit the process if an error occurs.
+//	They also interact with the Bitcoin network by sending and receiving protocol messages.
 package main
 
 import (
@@ -20,17 +40,29 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-var p *peer.Peer
-var conn net.Conn
-var bsvPeerConnected chan bool
-var verack chan struct{}
-var logger = ulogger.New("peer-cli")
+const (
+	userAgentName    = "peercli" // userAgentName is the name displayed to the Bitcoin peer when connecting.
+	userAgentVersion = "1.0.0"   // userAgentVersion is the version displayed to the Bitcoin peer when connecting.
+)
 
+var (
+	bsvPeerConnected chan bool                // bsvPeerConnected is a channel used to signal when a Bitcoin SV peer is connected.
+	conn             net.Conn                 // conn is the network connection to the Bitcoin peer.
+	logger           = ulogger.New("peercli") // logger is the logger instance used for logging messages in the peercli application.
+	p                *peer.Peer               // p is the peer instance used to interact with the Bitcoin network.
+	verack           chan struct{}            // verack is a channel used to wait for the "verack" message from the peer after connection.
+)
+
+// main is the entry point for the peercli application.
+// It initializes the CLI application, sets up commands, and starts the interactive loop.
+// Side effects:
+//   - Prints messages to stdout.
+//   - Exits the process on fatal errors.
 func main() {
 	bsvPeerConnected = make(chan bool, 1)
 
 	app := &cli.App{
-		Name:  "bitcoin-cli",
+		Name:  "peer-cli",
 		Usage: "A CLI tool to interact with Bitcoin peers",
 		Commands: []*cli.Command{
 			{
@@ -57,38 +89,54 @@ func main() {
 	interactiveLoop()
 }
 
+// peerCfg returns a peer configuration for connecting to a Bitcoin peer.
+// Parameters:
+//   - None.
+//
+// Returns:
+//   - A pointer to a peer.Config object containing configuration details.
 func peerCfg() *peer.Config {
 	return &peer.Config{
-		UserAgentName:    "peer",  // User agent name to advertise.
-		UserAgentVersion: "1.0.0", // User agent version to advertise.
+		UserAgentName:    userAgentName,    // User agent name to advertise.
+		UserAgentVersion: userAgentVersion, // User agent version to advertise.
 		ChainParams:      &chaincfg.MainNetParams,
 		Services:         0,
 		TrickleInterval:  time.Second * 10,
 		Listeners: peer.MessageListeners{
-			OnVersion:    OnVersion,
-			OnMemPool:    OnMemPool,
-			OnTx:         OnTx,
+			OnAddr:       OnAddr,
 			OnBlock:      OnBlock,
-			OnInv:        OnInv,
-			OnHeaders:    OnHeaders,
-			OnGetData:    OnGetData,
-			OnGetBlocks:  OnGetBlocks,
-			OnGetHeaders: OnGetHeaders,
 			OnFeeFilter:  OnFeeFilter,
 			OnGetAddr:    OnGetAddr,
-			OnAddr:       OnAddr,
-			OnRead:       OnRead,
-			OnWrite:      OnWrite,
-			OnReject:     OnReject,
+			OnGetBlocks:  OnGetBlocks,
+			OnGetData:    OnGetData,
+			OnGetHeaders: OnGetHeaders,
+			OnHeaders:    OnHeaders,
+			OnInv:        OnInv,
+			OnMemPool:    OnMemPool,
 			OnNotFound:   OnNotFound,
-			OnVerAck:     OnVerAck,
 			OnPing:       OnPing,
 			OnPong:       OnPong,
+			OnRead:       OnRead,
+			OnReject:     OnReject,
+			OnTx:         OnTx,
+			OnVerAck:     OnVerAck,
+			OnVersion:    OnVersion,
+			OnWrite:      OnWrite,
 		},
 		TstAllowSelfConnection: true,
 	}
 }
 
+// connect establishes a connection to a Bitcoin peer using the provided address.
+// Parameters:
+//   - c: A CLI context containing the address of the peer to connect to.
+//
+// Returns:
+//   - An error if the connection fails, otherwise nil.
+//
+// Side effects:
+//   - Prints connection status to stdout.
+//   - Sends and receives messages over the network.
 func connect(c *cli.Context) error {
 	verack = make(chan struct{})
 
@@ -96,14 +144,12 @@ func connect(c *cli.Context) error {
 
 	var err error
 
-	tSettings := settings.NewSettings()
-
-	p, err = peer.NewOutboundPeer(logger, tSettings, peerCfg(), addr)
+	p, err = peer.NewOutboundPeer(logger, settings.NewSettings(), peerCfg(), addr)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("trying to dial: %v\n", p.Addr())
+	fmt.Printf("Trying to dial: %v\n", p.Addr())
 
 	conn, err = net.Dial("tcp", p.Addr())
 	if err != nil {
@@ -112,7 +158,7 @@ func connect(c *cli.Context) error {
 	}
 
 	p.AssociateConnection(conn)
-	fmt.Printf("peer connected: %t\n", p.Connected())
+	fmt.Printf("Peer connected: %t\n", p.Connected())
 
 	// Wait for the verack message or timeout in case of failure.
 	select {
@@ -127,6 +173,17 @@ func connect(c *cli.Context) error {
 	return nil
 }
 
+// sendMessage sends a message of the specified type to the connected Bitcoin peer.
+// Parameters:
+//   - msgType: The type of message to send (e.g., "inv", "getdata", "ping").
+//   - args: Additional arguments required for the message.
+//
+// Returns:
+//   - An error if the message fails to send, otherwise nil.
+//
+// Side effects:
+//   - Sends a message to the peer over the network.
+//   - Print the message type to stdout.
 func sendMessage(msgType string, args ...string) error {
 	// 	fmt.Printf("conn.RemoteAddr(): %v\n", conn.RemoteAddr())
 	if p == nil || !p.Connected() {
@@ -221,11 +278,19 @@ func sendMessage(msgType string, args ...string) error {
 	return nil
 }
 
+// interactiveLoop starts an interactive loop for the user to send commands to the Bitcoin peer.
+// Parameters:
+//   - None.
+//
+// Side effects:
+//   - Reads user input from stdin.
+//   - Prints prompts and messages to stdout.
+//   - Executes commands based on user input.
 func interactiveLoop() {
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
-		fmt.Print("bitcoin-cli> ")
+		fmt.Print("peer-cli> ")
 
 		input, err := reader.ReadString('\n')
 		if err != nil {
@@ -247,6 +312,13 @@ func interactiveLoop() {
 	}
 }
 
+// handleCommand processes user input and executes the corresponding command.
+// Parameters:
+//   - input: A string containing the user command and arguments.
+//
+// Side effects:
+//   - Prints error messages to stdout if the command fails.
+//   - Executes the specified command.
 func handleCommand(input string) {
 	parts := strings.Fields(input)
 	if len(parts) == 0 {
@@ -272,6 +344,16 @@ func handleCommand(input string) {
 	}
 }
 
+// reconnect attempts to reconnect to the Bitcoin peer at the specified address.
+// Parameters:
+//   - addr: The address of the peer to reconnect to.
+//
+// Returns:
+//   - An error if the reconnection fails, otherwise nil.
+//
+// Side effects:
+//   - Prints reconnection status to stdout.
+//   - Sends and receives messages over the network.
 func reconnect(addr string) error {
 	fmt.Println("Attempting to reconnect...")
 

@@ -25,7 +25,7 @@ teranode/
 │   ├── filereader/               # Utility for reading files
 │   ├── getfsmstate/              # Tool to get FSM state
 │   ├── keygen/                   # Key generation utility
-│   ├── peer-cli/                 # Peer network command-line interface
+│   ├── peercli/                  # Peer network command-line interface
 │   ├── seeder/                   # Seeder functionality
 │   ├── setfsmstate/              # Tool to set FSM state
 │   ├── settings/                 # Settings management tools
