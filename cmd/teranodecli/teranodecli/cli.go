@@ -209,7 +209,7 @@ func Start(args []string, version, commit string) {
 		}
 	case "getfsmstate":
 		cmd.Execute = func(args []string) error {
-			getfsmstate.GetFSMState(logger, tSettings)
+			getfsmstate.FetchFSMState(logger, tSettings)
 			return nil
 		}
 	case "setfsmstate":
