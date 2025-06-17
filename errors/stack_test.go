@@ -1,16 +1,22 @@
 package errors
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+/*
+// spend simulates a function that might fail, returning an error.
 func spend() error {
 	return New(ERR_INVALID_ARGUMENT, "Spend failed")
 }
+*/
 
+/*
+// validate simulates a validation function that checks the result of spend.
 func validate() error {
 	if err := spend(); err != nil {
 		return New(ERR_INVALID_ARGUMENT, "Validate failed", err)
@@ -18,7 +24,10 @@ func validate() error {
 
 	return nil
 }
+*/
 
+/*
+// processTransaction simulates processing a transaction, which involves validation.
 func processTransaction() error {
 	if err := validate(); err != nil {
 		return New(ERR_INVALID_ARGUMENT, "ProcessTransaction failed", err)
@@ -26,7 +35,10 @@ func processTransaction() error {
 
 	return nil
 }
+*/
 
+/*
+// Propagate simulates propagating a transaction, which involves processing it.
 func Propagate() error {
 	if err := processTransaction(); err != nil {
 		return New(ERR_INVALID_ARGUMENT, "Propagate failed", err)
@@ -34,7 +46,9 @@ func Propagate() error {
 
 	return nil
 }
+*/
 
+// TestStackTraceInformation tests that stack trace information is preserved when wrapping and unwrapping errors with gRPC.
 func TestStackTraceInformation(t *testing.T) {
 	t.Run("stack information is preserved through WrapGRPC and UnwrapGRPC", func(t *testing.T) {
 		// Create a function that returns an error with stack information
@@ -86,7 +100,10 @@ func TestStackTraceInformation(t *testing.T) {
 		assert.Equal(t, nestedErr.function, unwrappedNestedErr.function, "Nested error function information should be preserved")
 
 		// Verify wrapped error's stack information is also preserved
-		wrappedOriginal := unwrappedNestedErr.wrappedErr.(*Error)
+		var wrappedOriginal *Error
+
+		ok := errors.As(unwrappedNestedErr.wrappedErr, &wrappedOriginal)
+		require.True(t, ok, "Unwrapped error should contain the original wrapped error")
 		assert.Equal(t, err.file, wrappedOriginal.file, "Original error file information should be preserved in nested error")
 		assert.Equal(t, err.line, wrappedOriginal.line, "Original error line information should be preserved in nested error")
 		assert.Equal(t, err.function, wrappedOriginal.function, "Original error function information should be preserved in nested error")

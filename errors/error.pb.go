@@ -7,11 +7,12 @@
 package errors
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -222,33 +223,40 @@ var (
 	}
 )
 
+// Enum returns the enum value for ERR.
 func (x ERR) Enum() *ERR {
 	p := new(ERR)
 	*p = x
 	return p
 }
 
+// String returns the string representation of the enum value.
 func (x ERR) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
+// Descriptor returns the descriptor for the enum type.
 func (ERR) Descriptor() protoreflect.EnumDescriptor {
 	return file_errors_error_proto_enumTypes[0].Descriptor()
 }
 
+// Type returns the type of the enum.
 func (ERR) Type() protoreflect.EnumType {
 	return &file_errors_error_proto_enumTypes[0]
 }
 
+// Number returns the enum number for the value.
 func (x ERR) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
+// EnumDescriptor returns the descriptor for the enum type.
 // Deprecated: Use ERR.Descriptor instead.
 func (ERR) EnumDescriptor() ([]byte, []int) {
 	return file_errors_error_proto_rawDescGZIP(), []int{0}
 }
 
+// TError represents a structured error message with additional context.
 type TError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          ERR                    `protobuf:"varint,1,opt,name=code,proto3,enum=errors.ERR" json:"code,omitempty"`
@@ -262,6 +270,7 @@ type TError struct {
 	sizeCache     protoimpl.SizeCache
 }
 
+// Reset resets the TError to its zero value.
 func (x *TError) Reset() {
 	*x = TError{}
 	mi := &file_errors_error_proto_msgTypes[0]
@@ -269,12 +278,15 @@ func (x *TError) Reset() {
 	ms.StoreMessageInfo(mi)
 }
 
+// String returns a string representation of the TError.
 func (x *TError) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
+// ProtoMessage indicates that TError is a proto message.
 func (*TError) ProtoMessage() {}
 
+// ProtoReflect returns the protoreflect.Message for TError.
 func (x *TError) ProtoReflect() protoreflect.Message {
 	mi := &file_errors_error_proto_msgTypes[0]
 	if x != nil {
@@ -287,11 +299,13 @@ func (x *TError) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
+// Descriptor returns the descriptor for the TError message.
 // Deprecated: Use TError.ProtoReflect.Descriptor instead.
 func (*TError) Descriptor() ([]byte, []int) {
 	return file_errors_error_proto_rawDescGZIP(), []int{0}
 }
 
+// GetCode returns the error code of the TError.
 func (x *TError) GetCode() ERR {
 	if x != nil {
 		return x.Code
@@ -299,6 +313,7 @@ func (x *TError) GetCode() ERR {
 	return ERR_UNKNOWN
 }
 
+// GetMessage returns the error message of the TError.
 func (x *TError) GetMessage() string {
 	if x != nil {
 		return x.Message
@@ -306,6 +321,7 @@ func (x *TError) GetMessage() string {
 	return ""
 }
 
+// GetData returns the additional data associated with the TError.
 func (x *TError) GetData() []byte {
 	if x != nil {
 		return x.Data
@@ -313,6 +329,7 @@ func (x *TError) GetData() []byte {
 	return nil
 }
 
+// GetWrappedError returns the wrapped error, if any, associated with the TError.
 func (x *TError) GetWrappedError() *TError {
 	if x != nil {
 		return x.WrappedError
@@ -320,6 +337,7 @@ func (x *TError) GetWrappedError() *TError {
 	return nil
 }
 
+// GetFile returns the file where the error occurred.
 func (x *TError) GetFile() string {
 	if x != nil {
 		return x.File
@@ -327,6 +345,7 @@ func (x *TError) GetFile() string {
 	return ""
 }
 
+// GetLine returns the line number where the error occurred.
 func (x *TError) GetLine() int32 {
 	if x != nil {
 		return x.Line
@@ -334,6 +353,7 @@ func (x *TError) GetLine() int32 {
 	return 0
 }
 
+// GetFunction returns the function name where the error occurred.
 func (x *TError) GetFunction() string {
 	if x != nil {
 		return x.Function

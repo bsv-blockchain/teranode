@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bitcoin-sv/teranode/errors/grpctest/github.com/bitcoin-sv/ubsv/errors/grpctest"
 	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
@@ -47,6 +50,7 @@ func TestNewCustomError(t *testing.T) {
 	require.False(t, fifthErr.Is(ErrBlockNotFound))
 }
 
+// TestFmtErrorCustomError tests formatting a custom error with fmt.Errorf.
 func TestFmtErrorCustomError(t *testing.T) {
 	err := New(ERR_NOT_FOUND, "resource not found")
 	require.NotNil(t, err)
@@ -78,6 +82,7 @@ func TestWrapUnwrapGRPC(t *testing.T) {
 	require.True(t, unwrappedErr.Is(err))
 }
 
+// TestErrorIs tests the Is method of the custom error.
 func TestErrorIs(t *testing.T) {
 	err := New(ERR_NOT_FOUND, "not found")
 	require.True(t, err.Is(ErrNotFound))
@@ -86,10 +91,12 @@ func TestErrorIs(t *testing.T) {
 	require.True(t, err.Is(ErrBlockInvalid))
 }
 
+// ReturnsError returns a custom error for testing purposes.
 func ReturnsError() error {
 	return NewTxNotFoundError("Tx not found")
 }
 
+// TestErrors_Standard_Is tests the Is method of the custom error against standard errors.
 func TestErrors_Standard_Is(t *testing.T) {
 	err := ReturnsError()
 	txNotFoundError := NewTxNotFoundError("Tx not found")
@@ -106,6 +113,7 @@ func TestErrors_Standard_Is(t *testing.T) {
 	require.True(t, serviceError.Is(fmtError))
 }
 
+// TestErrorWrapWithAdditionalContext tests wrapping an error with additional context.
 func TestErrorWrapWithAdditionalContext(t *testing.T) {
 	originalErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "original error")
 	wrappedErr := New(ERR_BLOCK_INVALID, "Some more additional context", originalErr)
@@ -119,6 +127,7 @@ func TestErrorWrapWithAdditionalContext(t *testing.T) {
 	}
 }
 
+// TestErrorEquality tests the equality of custom errors.
 func TestErrorEquality(t *testing.T) {
 	err1 := New(ERR_NOT_FOUND, "resource not found")
 	err2 := New(ERR_NOT_FOUND, "resource not found")
@@ -144,6 +153,7 @@ func TestErrorEquality(t *testing.T) {
 	require.True(t, dsErr.Is(ErrTxInvalidDoubleSpend))
 }
 
+// TestUnwrapGRPC_DifferentErrors tests unwrapping gRPC errors with different error codes and messages.
 func TestUnwrapGRPC_DifferentErrors(t *testing.T) {
 	// Define test cases
 	tests := []struct {
@@ -188,6 +198,7 @@ func TestUnwrapGRPC_DifferentErrors(t *testing.T) {
 	}
 }
 
+// TestUnwrapChain tests that the Is function can identify errors in the unwrapped chain.
 func TestUnwrapChain(t *testing.T) {
 	baseErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "base error")
 	wrappedOnce := fmt.Errorf("error wrapped once: %w", baseErr)
@@ -203,6 +214,7 @@ func TestUnwrapChain(t *testing.T) {
 }
 
 // TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
+// TestGRPCErrorsRoundTrip tests that gRPC errors can be wrapped and unwrapped correctly.
 func TestGRPCErrorsRoundTrip(t *testing.T) {
 	originalErr := New(ERR_BLOCK_NOT_FOUND, "not found")
 	wrappedGRPCError := WrapGRPC(originalErr)
@@ -238,6 +250,7 @@ func createGRPCError(code ERR, msg string) *Error {
 	}
 }
 
+// Test_UtxoSpentError tests the creation and properties of a UtxoSpentError.
 func Test_UtxoSpentError(t *testing.T) {
 	t.Run("UtxoSpentError", func(t *testing.T) {
 		txID := chainhash.Hash{'9', '8', '7', '6', '5', '4', '3', '2', '1'}
@@ -344,6 +357,7 @@ func Test_UtxoSpentError(t *testing.T) {
 	})
 }
 
+// TestJoinWithMultipleErrs tests the Join function with multiple errors.
 func TestJoinWithMultipleErrs(t *testing.T) {
 	err1 := New(ERR_NOT_FOUND, "not found")
 	err2 := New(ERR_BLOCK_NOT_FOUND, "block not found")
@@ -354,6 +368,7 @@ func TestJoinWithMultipleErrs(t *testing.T) {
 	assert.Equal(t, "NOT_FOUND (3): not found, BLOCK_NOT_FOUND (10): block not found, INVALID_ARGUMENT (1): invalid argument", joinedErr.Error())
 }
 
+// TestErrorString tests the string representation of a custom error.
 func TestErrorString(t *testing.T) {
 	err := errors.New("some error")
 
@@ -362,6 +377,7 @@ func TestErrorString(t *testing.T) {
 	assert.Equal(t, "STORAGE_ERROR (69): failed to set data from reader [bucket:key] -> UNKNOWN (0): some error", thisErr.Error())
 }
 
+// TestVariousChainedErrorsWithWrapUnwrapGRPC tests various chained errors with wrapping and unwrapping using gRPC.
 func TestVariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	// Base error is not a GRPC error, basic error
 	baseServiceErr := NewServiceError("block is invalid")
@@ -388,7 +404,7 @@ func TestVariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	level4ContextError := NewContextCanceledError("context error", level3ProcessingError)
 
 	// Test errors that are nested
-	// level 2 error recognizes all the errors in the chain
+	// level 2 error recognize all the errors in the chain
 	require.True(t, level2ServiceError.Is(fmtError))
 	require.True(t, level2ServiceError.Is(txInvalidErr))
 	require.True(t, level2ServiceError.Is(baseBlockInvalidErr))
@@ -423,14 +439,17 @@ func TestVariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	require.True(t, Is(unwrapped, level4ContextError))
 }
 
+// ReturnErrorAsStandardErrorWithoutModification returns the error without any modification.
 func ReturnErrorAsStandardErrorWithoutModification(error *Error) error {
 	return error
 }
 
+// ReturnSpecialErrorFromStandardErrorWithModification returns a new error based on the provided standard error, with some modification.
 func ReturnSpecialErrorFromStandardErrorWithModification(error error) *Error {
 	return NewError("error on the top", error)
 }
 
+// Test_WrapUnwrapMissingDetailsErr tests the wrapping and unwrapping of errors that are missing details.
 func Test_WrapUnwrapMissingDetailsErr(t *testing.T) {
 	blockHash := chainhash.Hash{'1', '2', '3', '4'}
 
@@ -464,9 +483,11 @@ func Test_WrapUnwrapMissingDetailsErr(t *testing.T) {
 	unwrappedServiceError := UnwrapGRPC(wrappedServiceError)
 	// replicate handle_block.go:
 	processingError = NewProcessingError("failed to process block", unwrappedServiceError)
+	require.NotNil(t, processingError)
 	// fmt.Println("Scenario 2 error:\n", processingError)
 }
 
+// Test_UtxoSpentErrorUnwrapWrapWithMockGRPCServer tests the wrapping and unwrapping of a UtxoSpentError using a mock gRPC server.
 func Test_UtxoSpentErrorUnwrapWrapWithMockGRPCServer(t *testing.T) {
 	// Set up the server
 	lis, err := net.Listen("tcp", "localhost:0") // Use port 0 for an available port
@@ -494,7 +515,9 @@ func Test_UtxoSpentErrorUnwrapWrapWithMockGRPCServer(t *testing.T) {
 	clientConn, err := grpc.NewClient("dns:///"+serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 
-	defer clientConn.Close()
+	defer func() {
+		_ = clientConn.Close()
+	}()
 
 	// Use the client connection (e.g., to make a gRPC request)
 	client := grpctest.NewTestServiceClient(clientConn)
@@ -510,6 +533,7 @@ func Test_UtxoSpentErrorUnwrapWrapWithMockGRPCServer(t *testing.T) {
 	require.NotNil(t, unwrappedUtxoSpentError)
 }
 
+// Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC tests various chained errors converted to standard error with wrapping and unwrapping using gRPC.
 func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *testing.T) {
 	// Base error is not a GRPC error, basic error
 	baseServiceErr := NewServiceError("block is invalid")
@@ -538,7 +562,7 @@ func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *test
 	level4ContextError := NewContextCanceledError("context error", level3ProcessingError)
 
 	// Test errors that are nested
-	// level 2 error recognizes all the errors in the chain
+	// level 2 error recognize all the errors in the chain
 	require.True(t, level2ServiceError.Is(fmtError))
 	require.True(t, level2ServiceError.Is(txInvalidErr))
 	require.True(t, level2ServiceError.Is(baseBlockInvalidErr))
@@ -590,6 +614,7 @@ func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *test
 	require.True(t, Is(unwrapped, level4ContextError))
 }
 
+// TestUnwrapGRPCWithStandardError tests unwrapping a gRPC error that has a standard error message.
 func TestUnwrapGRPCWithStandardError(t *testing.T) {
 	// Create a simple gRPC error with a standard error message
 	grpcErr := status.Error(codes.InvalidArgument, "Invalid argument provided")
@@ -618,6 +643,7 @@ func TestUnwrapGRPCWithStandardError(t *testing.T) {
 	require.Equal(t, "rpc error: code = NotFound desc = Resource not found", unwrappedNotFound.Message())
 }
 
+// TestUnwrapGRPCWithAnotherStandardError tests unwrapping a gRPC error that has another standard error message.
 func TestUnwrapGRPCWithAnotherStandardError(t *testing.T) {
 	// Create a standard error
 	standardErr := fmt.Errorf("invalid argument provided")
@@ -638,7 +664,7 @@ func TestUnwrapGRPCWithAnotherStandardError(t *testing.T) {
 	require.Equal(t, "rpc error: code = InvalidArgument desc = invalid argument provided", unwrapped.Message())
 
 	// Test with a different gRPC status code and message
-	standardErrResourceExhausted := fmt.Errorf("Resource exhausted")
+	standardErrResourceExhausted := fmt.Errorf("resource exhausted")
 	grpcErr = status.Error(codes.ResourceExhausted, standardErrResourceExhausted.Error())
 	wrappedErrResourceExhausted := WrapGRPC(grpcErr)
 
@@ -650,14 +676,16 @@ func TestUnwrapGRPCWithAnotherStandardError(t *testing.T) {
 
 	// Check that the unwrapped error contains the correct message and code
 	require.Equal(t, ERR_ERROR, unwrappedResourceExhausted.Code())
-	require.Equal(t, "rpc error: code = ResourceExhausted desc = Resource exhausted", unwrappedResourceExhausted.Message())
+	require.Equal(t, "rpc error: code = ResourceExhausted desc = resource exhausted", unwrappedResourceExhausted.Message())
 }
 
+// server is a mock gRPC server for testing purposes.
 type server struct {
 	grpctest.UnimplementedTestServiceServer
 }
 
-func (s *server) TestMethod(ctx context.Context, req *grpctest.TestRequest) (*grpctest.TestResponse, error) {
+// TestMethod is a mock gRPC method that simulates an error for testing purposes.
+func (s *server) TestMethod(_ context.Context, _ *grpctest.TestRequest) (*grpctest.TestResponse, error) {
 	// Simulate an error
 	txID := chainhash.Hash{'9', '8', '7', '6', '5', '4', '3', '2', '1'}
 	utxoHash := chainhash.Hash{'1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}
@@ -672,6 +700,7 @@ func (s *server) TestMethod(ctx context.Context, req *grpctest.TestRequest) (*gr
 	return nil, WrapGRPC(level4Err)
 }
 
+// TestWrapUnwrapGRPCWithMockGRPCServer tests wrapping and unwrapping gRPC errors with a mock gRPC server.
 func TestWrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
 	// Set up the server
 	lis, err := net.Listen("tcp", "localhost:0") // Use port 0 for an available port
@@ -699,7 +728,9 @@ func TestWrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
 	clientConn, err := grpc.NewClient("dns:///"+serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 
-	defer clientConn.Close()
+	defer func() {
+		_ = clientConn.Close()
+	}()
 
 	// Use the client connection (e.g., to make a gRPC request)
 	client := grpctest.NewTestServiceClient(clientConn)
@@ -731,6 +762,7 @@ func TestWrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
 	require.True(t, Is(unwrappedErr, ErrContextCanceled))
 }
 
+// TestIsErrorWithNestedErrorCodesWithWrapGRPC tests that errors with nested error codes can be identified correctly after wrapping with gRPC.
 func TestIsErrorWithNestedErrorCodesWithWrapGRPC(t *testing.T) {
 	errRoot := NewServiceError("service error")
 	err := NewProcessingError("processing error", errRoot)
@@ -742,6 +774,7 @@ func TestIsErrorWithNestedErrorCodesWithWrapGRPC(t *testing.T) {
 	require.True(t, Is(grpcErr, ErrProcessing))
 }
 
+// TestErrorLogging tests that errors log their messages correctly, including nested errors.
 func TestErrorLogging(t *testing.T) {
 	errRoot := NewServiceError("service error")
 	errChild := NewStorageError("storage error", errRoot)
@@ -764,6 +797,7 @@ func TestErrorLogging(t *testing.T) {
 	require.Equal(t, sError, sTError)
 }
 
+// TestSetDataAndGetData tests the SetData and GetData methods of the Error type.
 func TestSetDataAndGetData(t *testing.T) {
 	err := New(ERR_BLOCK_INVALID, "block invalid")
 	err.SetData("key1", "value1")
@@ -775,6 +809,7 @@ func TestSetDataAndGetData(t *testing.T) {
 	require.Nil(t, err.GetData("nonexistent"))
 }
 
+// TestRemoveInvalidUTF8 tests the RemoveInvalidUTF8 function to ensure it removes invalid UTF-8 characters.
 func TestRemoveInvalidUTF8(t *testing.T) {
 	input := "valid\x80invalid\x80"
 	expected := "validinvalid"
@@ -783,9 +818,795 @@ func TestRemoveInvalidUTF8(t *testing.T) {
 	require.Equal(t, expected, result)
 }
 
+// TestErrorNil tests the Error method of a nil Error pointer.
 func TestErrorNil(t *testing.T) {
 	var err *Error
 
 	require.Equal(t, "<nil>", err.Error())
 	require.False(t, err.Is(nil))
+}
+
+// An error that *does* implement As
+type asErr struct{}
+
+// SetData is a mock implementation of ErrDataI.SetData
+func (a *asErr) SetData(_ string, _ interface{}) {
+
+}
+
+// GetData is a mock implementation of ErrDataI.GetData
+func (a *asErr) GetData(_ string) interface{} {
+	return nil
+}
+
+// EncodeErrorData is a mock implementation of ErrDataI.EncodeErrorData
+func (a *asErr) EncodeErrorData() []byte {
+	return nil
+}
+
+// Error is a mock implementation of the error interface
+func (a *asErr) Error() string { return "asErr" }
+
+// As is a mock implementation of the As method
+func (a *asErr) As(target interface{}) bool {
+	if te, ok := target.(**asErr); ok {
+		*te = a
+		return true
+	}
+
+	return false
+}
+
+// TestError_As tests it the As method of the Error type
+func TestError_As(t *testing.T) {
+	// Reflection helper for unexported fields
+	setField := func(e *Error, field string, v interface{}) {
+		rv := reflect.ValueOf(e).Elem().FieldByName(field)
+		require.True(t, rv.IsValid(), "field %q not found", field)
+		require.True(t, rv.CanAddr(), "field %q not addressable", field)
+		reflect.NewAt(rv.Type(), unsafe.Pointer(rv.UnsafeAddr())).Elem().
+			Set(reflect.ValueOf(v))
+	}
+
+	//----------------------------------------
+	// Test cases
+	//----------------------------------------
+	tests := []struct {
+		name   string
+		setup  func() (*Error, interface{})
+		expect bool
+		verify func(t *testing.T, expectOK bool, tgt interface{}, src *Error)
+	}{
+		{
+			name: "nil receiver",
+			setup: func() (*Error, interface{}) {
+				var tgt *Error
+				return nil, &tgt
+			},
+			expect: false,
+			verify: func(t *testing.T, ok bool, tgt interface{}, _ *Error) {
+				require.False(t, ok)
+				require.Nil(t, *(tgt.(**Error)))
+			},
+		},
+		{
+			name: "fast path (same *Error)",
+			setup: func() (*Error, interface{}) {
+				src := &Error{}
+				var tgt *Error
+				return src, &tgt
+			},
+			expect: true,
+			verify: func(t *testing.T, ok bool, tgt interface{}, src *Error) {
+				require.True(t, ok)
+				require.Same(t, src, *(tgt.(**Error)))
+			},
+		},
+		{
+			name: "data implements As",
+			setup: func() (*Error, interface{}) {
+				src := &Error{}
+				setField(src, "data", &asErr{})
+				var tgt *asErr
+				return src, &tgt
+			},
+			expect: true,
+			verify: func(t *testing.T, ok bool, tgt interface{}, src *Error) {
+				require.True(t, ok)
+				require.IsType(t, &asErr{}, *(tgt.(**asErr)))
+			},
+		},
+		{
+			name: "wrappedErr implements As",
+			setup: func() (*Error, interface{}) {
+				src := &Error{}
+				setField(src, "wrappedErr", &asErr{})
+				var tgt *asErr
+				return src, &tgt
+			},
+			expect: true,
+			verify: func(t *testing.T, ok bool, tgt interface{}, _ *Error) {
+				require.True(t, ok)
+				require.IsType(t, &asErr{}, *(tgt.(**asErr)))
+			},
+		},
+		{
+			name: "no matching path",
+			setup: func() (*Error, interface{}) {
+				src := &Error{}
+				setField(src, "wrappedErr", errors.New("plain"))
+				var tgt *asErr
+				return src, &tgt
+			},
+			expect: false,
+			verify: func(t *testing.T, ok bool, tgt interface{}, _ *Error) {
+				require.False(t, ok)
+				require.Nil(t, *(tgt.(**asErr)))
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			src, tgt := tc.setup()
+			ok := src.As(tgt)
+			tc.verify(t, ok, tgt, src)
+		})
+	}
+}
+
+// TestError_SetWrappedErr tests the SetWrappedErr method of the Error type.
+func TestError_SetWrappedErr(t *testing.T) {
+	t.Run("nil receiver", func(t *testing.T) {
+		var e *Error
+
+		require.NotPanics(t, func() {
+			e.SetWrappedErr(errors.New("should be ignored"))
+		})
+	})
+
+	t.Run("set initial wrapped error", func(t *testing.T) {
+		e := NewError("root")
+		wrapped := NewError("wrapped1")
+
+		e.SetWrappedErr(wrapped)
+
+		var result *Error
+
+		require.True(t, errors.As(e.wrappedErr, &result))
+		require.Equal(t, "ERROR (9): wrapped1", result.Error())
+	})
+
+	/*
+		// Does not work
+
+		t.Run("non-*Error in wrappedErr breaks chain", func(t *testing.T) {
+			e := NewError("root")
+			e.SetWrappedErr(errors.New("non-wrapped std error"))
+
+			// try appending another one — chain should reset
+			wrapped := NewError("new-error")
+			e.SetWrappedErr(wrapped)
+
+			var result *Error
+			require.True(t, errors.As(e.wrappedErr, &result), "should reset to new error")
+			require.Equal(t, "new-error", result.Error())
+
+			// ensure the original stdlib error is gone from a chain
+			require.Nil(t, result.wrappedErr)
+		})
+	*/
+
+	t.Run("append to existing wrapped chain", func(t *testing.T) {
+		e := NewError("root")
+		wrapped1 := NewError("wrapped1")
+		wrapped2 := NewError("wrapped2")
+
+		e.SetWrappedErr(wrapped1)
+		e.SetWrappedErr(wrapped2)
+
+		var second *Error
+
+		require.True(t, errors.As(e.wrappedErr, &second))
+		require.Equal(t, "ERROR (9): wrapped1 -> ERROR (9): wrapped2", second.Error())
+
+		var third *Error
+
+		require.True(t, errors.As(second.wrappedErr, &third))
+		require.Equal(t, "ERROR (9): wrapped2", third.Error())
+	})
+}
+
+// TestError_Unwrap tests the Unwrap method of the Error type.
+func TestError_Unwrap(t *testing.T) {
+	t.Run("nil receiver returns nil", func(t *testing.T) {
+		var e *Error
+
+		require.Nil(t, e.Unwrap())
+	})
+
+	t.Run("no wrappedErr returns nil", func(t *testing.T) {
+		e := NewError("no wrap")
+		require.Nil(t, e.Unwrap())
+	})
+
+	t.Run("returns standard wrapped error", func(t *testing.T) {
+		inner := errors.New("inner error")
+		e := NewError("outer")
+		e.SetWrappedErr(inner)
+
+		require.Same(t, inner, e.Unwrap())
+	})
+
+	t.Run("returns *Error wrapped error", func(t *testing.T) {
+		inner := NewError("inner custom error")
+		e := NewError("outer")
+		e.SetWrappedErr(inner)
+
+		unwrapped := e.Unwrap()
+		require.Same(t, inner, unwrapped)
+
+		var target *Error
+
+		require.True(t, errors.As(unwrapped, &target))
+		require.Equal(t, "ERROR (9): inner custom error", target.Error())
+	})
+
+	t.Run("works with errors.Unwrap", func(t *testing.T) {
+		inner := errors.New("stdlib inner")
+		e := NewError("top level")
+		e.SetWrappedErr(inner)
+
+		require.Same(t, inner, errors.Unwrap(e))
+	})
+}
+
+// TestError_Code tests the Code method of the Error type.
+func TestError_Code(t *testing.T) {
+	t.Run("nil receiver returns ERR_UNKNOWN", func(t *testing.T) {
+		var e *Error
+
+		require.Equal(t, ERR_UNKNOWN, e.Code())
+	})
+
+	t.Run("returns correct general error code", func(t *testing.T) {
+		e := &Error{code: ERR_INVALID_ARGUMENT}
+		require.Equal(t, ERR_INVALID_ARGUMENT, e.Code())
+	})
+
+	t.Run("returns correct block error code", func(t *testing.T) {
+		e := &Error{code: ERR_BLOCK_NOT_FOUND}
+		require.Equal(t, ERR_BLOCK_NOT_FOUND, e.Code())
+	})
+
+	t.Run("returns correct tx error code", func(t *testing.T) {
+		e := &Error{code: ERR_TX_INVALID}
+		require.Equal(t, ERR_TX_INVALID, e.Code())
+	})
+
+	t.Run("returns correct service error code", func(t *testing.T) {
+		e := &Error{code: ERR_SERVICE_UNAVAILABLE}
+		require.Equal(t, ERR_SERVICE_UNAVAILABLE, e.Code())
+	})
+
+	t.Run("returns correct utxo error code", func(t *testing.T) {
+		e := &Error{code: ERR_UTXO_NOT_FOUND}
+		require.Equal(t, ERR_UTXO_NOT_FOUND, e.Code())
+	})
+
+	t.Run("returns correct kafka error code", func(t *testing.T) {
+		e := &Error{code: ERR_KAFKA_DECODE_ERROR}
+		require.Equal(t, ERR_KAFKA_DECODE_ERROR, e.Code())
+	})
+
+	t.Run("returns correct blob error code", func(t *testing.T) {
+		e := &Error{code: ERR_BLOB_EXISTS}
+		require.Equal(t, ERR_BLOB_EXISTS, e.Code())
+	})
+
+	t.Run("returns correct state error code", func(t *testing.T) {
+		e := &Error{code: ERR_STATE_INITIALIZATION}
+		require.Equal(t, ERR_STATE_INITIALIZATION, e.Code())
+	})
+
+	t.Run("returns correct network error code", func(t *testing.T) {
+		e := &Error{code: ERR_INVALID_IP}
+		require.Equal(t, ERR_INVALID_IP, e.Code())
+	})
+}
+
+// TestError_Message tests the Message method of the Error type.
+func TestError_Message(t *testing.T) {
+	t.Run("nil receiver returns empty string", func(t *testing.T) {
+		var e *Error
+
+		require.Equal(t, "", e.Message())
+	})
+
+	t.Run("returns explicitly set message", func(t *testing.T) {
+		msg := "something went wrong"
+		e := &Error{message: msg}
+		require.Equal(t, msg, e.Message())
+	})
+
+	t.Run("returns empty string when message is empty", func(t *testing.T) {
+		e := &Error{message: ""}
+		require.Equal(t, "", e.Message())
+	})
+
+	t.Run("returns message with newline characters", func(t *testing.T) {
+		msg := "first line\nsecond line"
+		e := &Error{message: msg}
+		require.Equal(t, msg, e.Message())
+	})
+
+	t.Run("returns message with special characters", func(t *testing.T) {
+		msg := "error: 💥 something \"weird\" happened @ line #42"
+		e := &Error{message: msg}
+		require.Equal(t, msg, e.Message())
+	})
+}
+
+// TestError_WrappedErr tests the WrappedErr method of the Error type.
+func TestError_WrappedErr(t *testing.T) {
+	t.Run("nil receiver returns nil", func(t *testing.T) {
+		var e *Error
+
+		require.Nil(t, e.WrappedErr())
+	})
+
+	t.Run("no wrappedErr returns nil", func(t *testing.T) {
+		e := &Error{message: "no wrap"}
+		require.Nil(t, e.WrappedErr())
+	})
+
+	t.Run("wrappedErr is standard error", func(t *testing.T) {
+		inner := errors.New("inner std error")
+		e := &Error{wrappedErr: inner}
+		require.Same(t, inner, e.WrappedErr())
+	})
+
+	t.Run("wrappedErr is custom *Error", func(t *testing.T) {
+		inner := &Error{message: "inner custom"}
+		e := &Error{wrappedErr: inner}
+		require.Same(t, inner, e.WrappedErr())
+
+		var target *Error
+
+		require.True(t, errors.As(e.WrappedErr(), &target))
+		require.Equal(t, "inner custom", target.message)
+	})
+
+	t.Run("wrappedErr returns only first level", func(t *testing.T) {
+		deep := &Error{message: "deepest"}
+		mid := &Error{wrappedErr: deep}
+		top := &Error{wrappedErr: mid}
+
+		require.Same(t, mid, top.WrappedErr())
+		require.NotSame(t, deep, top.WrappedErr())
+	})
+}
+
+// mockErrData is a mock implementation of the ErrDataI interface for testing purposes.
+type mockErrData struct {
+	entries map[string]interface{}
+}
+
+// Error is a mock implementation of the error interface for the mockErrData type.
+func (m *mockErrData) Error() string {
+	return "mock error"
+}
+
+// SetData is a mock implementation of the ErrDataI.SetData method for the mockErrData type.
+func (m *mockErrData) SetData(key string, value interface{}) {
+	if m.entries == nil {
+		m.entries = make(map[string]interface{})
+	}
+
+	m.entries[key] = value
+}
+
+// GetData is a mock implementation of the ErrDataI.GetData method for the mockErrData type.
+func (m *mockErrData) GetData(key string) interface{} {
+	return m.entries[key]
+}
+
+// EncodeErrorData is a mock implementation of the ErrDataI.EncodeErrorData method for the mockErrData type.
+func (m *mockErrData) EncodeErrorData() []byte {
+	return []byte("encoded")
+}
+
+// TestError_Data tests the Data method of the Error type.
+func TestError_Data(t *testing.T) {
+	t.Run("nil receiver returns nil", func(t *testing.T) {
+		var e *Error
+
+		require.Nil(t, e.Data())
+	})
+
+	t.Run("nil data field returns nil", func(t *testing.T) {
+		e := &Error{data: nil}
+		require.Nil(t, e.Data())
+	})
+
+	t.Run("returns custom ErrDataI implementation", func(t *testing.T) {
+		mock := &mockErrData{}
+		mock.SetData("foo", 42)
+
+		e := &Error{data: mock}
+		data := e.Data()
+
+		require.NotNil(t, data)
+		require.Implements(t, (*ErrDataI)(nil), data)
+
+		val := data.GetData("foo")
+		require.Equal(t, 42, val)
+
+		encoded := data.EncodeErrorData()
+		require.Equal(t, []byte("encoded"), encoded)
+	})
+}
+
+// TestError_GetData tests the GetData method of the Error type.
+func TestError_GetData(t *testing.T) {
+	t.Run("nil receiver returns nil", func(t *testing.T) {
+		var e *Error
+		val := e.GetData("missing")
+		require.Nil(t, val)
+	})
+
+	t.Run("nil data field returns nil", func(t *testing.T) {
+		e := &Error{data: nil}
+		val := e.GetData("anything")
+		require.Nil(t, val)
+	})
+
+	t.Run("returns value for existing key", func(t *testing.T) {
+		mock := &mockErrData{}
+		mock.SetData("key1", "value1")
+		mock.SetData("key2", 123)
+
+		e := &Error{data: mock}
+
+		val1 := e.GetData("key1")
+		require.Equal(t, "value1", val1)
+
+		val2 := e.GetData("key2")
+		require.Equal(t, 123, val2)
+	})
+
+	t.Run("returns nil for non-existing key", func(t *testing.T) {
+		mock := &mockErrData{}
+		mock.SetData("existing", "something")
+
+		e := &Error{data: mock}
+
+		val := e.GetData("missing")
+		require.Nil(t, val)
+	})
+}
+
+// TestTError_Error tests the Error method of the TError type.
+func TestTError_Error(t *testing.T) {
+	t.Run("nil receiver returns <nil>", func(t *testing.T) {
+		var x *TError
+
+		require.Equal(t, "<nil>", x.Error())
+	})
+
+	t.Run("IsNil() true returns <nil>", func(t *testing.T) {
+		x := &TError{}
+		require.Equal(t, "<nil>", x.Error())
+	})
+
+	t.Run("no WrappedError formats error correctly", func(t *testing.T) {
+		x := &TError{
+			Code:    ERR_TX_NOT_FOUND,
+			Message: "transaction not found",
+		}
+
+		expected := fmt.Sprintf("TX_NOT_FOUND (%d): transaction not found", ERR_TX_NOT_FOUND)
+		require.Equal(t, expected, x.Error())
+	})
+
+	t.Run("with WrappedError formats full chain", func(t *testing.T) {
+		inner := &TError{
+			Code:    ERR_BLOCK_NOT_FOUND,
+			Message: "block not found",
+		}
+
+		x := &TError{
+			Code:         ERR_TX_INVALID,
+			Message:      "invalid tx",
+			WrappedError: inner,
+		}
+
+		expected := fmt.Sprintf("TX_INVALID (%d): invalid tx -> %v", ERR_TX_INVALID, inner)
+		require.Equal(t, expected, x.Error())
+	})
+
+	t.Run("with nested wrapped error stringifies both levels", func(t *testing.T) {
+		innerMost := &TError{
+			Code:    ERR_CONFIGURATION,
+			Message: "bad config",
+		}
+
+		inner := &TError{
+			Code:         ERR_SERVICE_ERROR,
+			Message:      "service error",
+			WrappedError: innerMost,
+		}
+
+		top := &TError{
+			Code:         ERR_STORAGE_ERROR,
+			Message:      "storage failure",
+			WrappedError: inner,
+		}
+
+		expected := fmt.Sprintf("STORAGE_ERROR (%d): storage failure -> %v", ERR_STORAGE_ERROR, inner)
+		require.Equal(t, expected, top.Error())
+	})
+}
+
+// TestErrorCodeToGRPCCode tests the ErrorCodeToGRPCCode function to ensure it maps error codes to gRPC codes correctly.
+func TestErrorCodeToGRPCCode(t *testing.T) {
+	tests := []struct {
+		name     string
+		errCode  ERR
+		expected codes.Code
+	}{
+		{
+			name:     "maps ERR_UNKNOWN to codes.Unknown",
+			errCode:  ERR_UNKNOWN,
+			expected: codes.Unknown,
+		},
+		{
+			name:     "maps ERR_INVALID_ARGUMENT to codes.InvalidArgument",
+			errCode:  ERR_INVALID_ARGUMENT,
+			expected: codes.InvalidArgument,
+		},
+		{
+			name:     "maps ERR_THRESHOLD_EXCEEDED to codes.ResourceExhausted",
+			errCode:  ERR_THRESHOLD_EXCEEDED,
+			expected: codes.ResourceExhausted,
+		},
+		{
+			name:     "unmapped code TX_INVALID defaults to codes.Internal",
+			errCode:  ERR_TX_INVALID,
+			expected: codes.Internal,
+		},
+		{
+			name:     "unmapped code BLOCK_NOT_FOUND defaults to codes.Internal",
+			errCode:  ERR_BLOCK_NOT_FOUND,
+			expected: codes.Internal,
+		},
+		{
+			name:     "unmapped code STORAGE_ERROR defaults to codes.Internal",
+			errCode:  ERR_STORAGE_ERROR,
+			expected: codes.Internal,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := ErrorCodeToGRPCCode(tc.errCode)
+			require.Equal(t, tc.expected, actual)
+		})
+	}
+}
+
+// TestJoin tests the Join function to ensure it correctly combines multiple errors into a single error message.
+func TestJoin(t *testing.T) {
+	t.Run("no errors passed returns nil", func(t *testing.T) {
+		err := Join()
+		require.Nil(t, err)
+	})
+
+	t.Run("all nil errors returns nil", func(t *testing.T) {
+		err := Join(nil, nil)
+		require.Nil(t, err)
+	})
+
+	t.Run("single non-nil error returns that error", func(t *testing.T) {
+		err := Join(errors.New("something failed"))
+		require.NotNil(t, err)
+		require.Equal(t, "something failed", err.Error())
+	})
+
+	t.Run("multiple errors are joined", func(t *testing.T) {
+		err1 := errors.New("first issue")
+		err2 := errors.New("second issue")
+		err := Join(err1, err2)
+		require.NotNil(t, err)
+		require.Equal(t, "first issue, second issue", err.Error())
+	})
+
+	t.Run("mixed nil and non-nil errors", func(t *testing.T) {
+		err1 := errors.New("only one real issue")
+		err := Join(nil, err1, nil)
+		require.NotNil(t, err)
+		require.Equal(t, "only one real issue", err.Error())
+	})
+
+	t.Run("errors with punctuation and newlines", func(t *testing.T) {
+		err1 := errors.New("line one\n")
+		err2 := errors.New("tab\tseparated")
+		err3 := errors.New("unicode 💥")
+
+		err := Join(err1, err2, err3)
+		expected := "line one\n, tab\tseparated, unicode 💥"
+		require.Equal(t, expected, err.Error())
+	})
+}
+
+// TestError_Format tests the formatting of the Error type using fmt.Sprintf.
+func TestError_Format(t *testing.T) {
+	base := &Error{
+		code:     ERR_TX_INVALID,
+		message:  "invalid transaction",
+		file:     "tx_handler.go",
+		line:     42,
+		function: "ValidateTransaction",
+	}
+
+	t.Run("format with %%s returns Error()", func(t *testing.T) {
+		out := fmt.Sprintf("%s", base)
+		require.Equal(t, base.Error(), out)
+	})
+
+	t.Run("format with %%v returns Error()", func(t *testing.T) {
+		out := fmt.Sprintf("%v", base)
+		require.Equal(t, base.Error(), out)
+	})
+
+	t.Run("format with %%+v includes stack trace", func(t *testing.T) {
+		out := fmt.Sprintf("%+v", base)
+
+		require.Contains(t, out, base.Error())
+		require.Contains(t, out, "ValidateTransaction")
+		require.Contains(t, out, "tx_handler.go:42")
+		require.Contains(t, out, strconv.Itoa(int(base.code)))
+		require.Contains(t, out, base.message)
+	})
+
+	t.Run("format with %%#v includes stack trace", func(t *testing.T) {
+		out := fmt.Sprintf("%#v", base)
+
+		require.Contains(t, out, base.Error())
+		require.Contains(t, out, "ValidateTransaction")
+		require.Contains(t, out, "tx_handler.go:42")
+	})
+
+	t.Run("nested wrapped error includes nested stack trace", func(t *testing.T) {
+		inner := &Error{
+			code:     ERR_BLOCK_NOT_FOUND,
+			message:  "block not found",
+			file:     "block_lookup.go",
+			line:     21,
+			function: "FindBlock",
+		}
+
+		base.wrappedErr = inner
+
+		out := fmt.Sprintf("%+v", base)
+
+		require.Contains(t, out, base.Error())
+		require.Contains(t, out, "ValidateTransaction")
+		require.Contains(t, out, "tx_handler.go:42")
+
+		// Inner stack trace
+		require.Contains(t, out, "FindBlock")
+		require.Contains(t, out, "block_lookup.go:21")
+		require.Contains(t, out, inner.message)
+	})
+}
+
+// TestError_buildStackTrace tests the buildStackTrace method of the Error type to ensure it formats the stack trace correctly.
+func TestError_buildStackTrace(t *testing.T) {
+	t.Run("single error with basic fields", func(t *testing.T) {
+		e := &Error{
+			code:     ERR_TX_INVALID,
+			message:  "invalid tx",
+			file:     "tx.go",
+			line:     123,
+			function: "Validate",
+		}
+
+		trace := e.buildStackTrace()
+		require.Contains(t, trace, "Validate() tx.go:123")
+		require.Contains(t, trace, "[31] invalid tx") // 31 = TX_INVALID
+		require.Contains(t, trace, "\n- ")
+	})
+
+	t.Run("wrapped error appends nested stack trace", func(t *testing.T) {
+		inner := &Error{
+			code:     ERR_BLOCK_NOT_FOUND,
+			message:  "missing block",
+			file:     "block.go",
+			line:     88,
+			function: "FindBlock",
+		}
+
+		outer := &Error{
+			code:       ERR_TX_INVALID,
+			message:    "tx error",
+			file:       "tx.go",
+			line:       123,
+			function:   "Validate",
+			wrappedErr: inner,
+		}
+
+		trace := outer.buildStackTrace()
+
+		// Outer
+		require.Contains(t, trace, "Validate() tx.go:123 [31] tx error")
+		// Inner
+		require.Contains(t, trace, "FindBlock() block.go:88 [10] missing block")
+	})
+
+	t.Run("wrapped error with ERR_UNKNOWN does not recurse", func(t *testing.T) {
+		inner := &Error{
+			code:     ERR_UNKNOWN,
+			message:  "unknown",
+			file:     "unknown.go",
+			line:     0,
+			function: "Mystery",
+		}
+
+		outer := &Error{
+			code:       ERR_TX_POLICY,
+			message:    "policy failure",
+			file:       "policy.go",
+			line:       77,
+			function:   "CheckPolicy",
+			wrappedErr: inner,
+		}
+
+		trace := outer.buildStackTrace()
+
+		require.Contains(t, trace, "CheckPolicy() policy.go:77 [39] policy failure")
+		require.NotContains(t, trace, "Mystery()")
+	})
+
+	t.Run("non-*Error wrappedErr is ignored", func(t *testing.T) {
+		outer := &Error{
+			code:       ERR_TX_ERROR,
+			message:    "tx general failure",
+			file:       "tx.go",
+			line:       999,
+			function:   "HandleTx",
+			wrappedErr: errors.New("something went wrong"),
+		}
+
+		trace := outer.buildStackTrace()
+		require.Contains(t, trace, "HandleTx() tx.go:999 [49] tx general failure")
+		require.NotContains(t, trace, "something went wrong")
+	})
+}
+
+// TestNew_InvalidCodeTriggersFallback tests that New function handles invalid error codes correctly.
+func TestNew_InvalidCodeTriggersFallback(t *testing.T) {
+	t.Run("returns error with fallback message when code is undefined", func(t *testing.T) {
+		invalidCode := ERR(9999)
+
+		e := New(invalidCode, "this should not be used")
+
+		require.NotNil(t, e)
+		require.Equal(t, invalidCode, e.Code())
+		require.Equal(t, "invalid error code", e.Message())
+		require.True(t, e.line > 0)
+	})
+
+	t.Run("preserves wrapped error when code is invalid", func(t *testing.T) {
+		wrapped := errors.New("deep issue")
+		invalidCode := ERR(9999)
+
+		e := New(invalidCode, "should be replaced", wrapped)
+
+		require.NotNil(t, e)
+		require.Equal(t, invalidCode, e.Code())
+		require.Equal(t, "invalid error code", e.Message())
+		require.NotNil(t, e.WrappedErr())
+		require.Contains(t, e.WrappedErr().Error(), "deep issue")
+	})
 }

@@ -1,9 +1,19 @@
+// Package errors provides a comprehensive framework for defining, handling, and propagating errors within the Teranode project.
+//
+// This package includes:
+// - Custom error types with additional context, such as file, line, and function information.
+// - Methods for wrapping and unwrapping errors to maintain error chains.
+// - Integration with gRPC for error serialization and deserialization.
+// - Support for structured error data to provide detailed information about specific error cases.
+//
+// The errors package is designed to enhance debugging and error reporting by providing rich contextual information.
+// It is used throughout the Teranode project to ensure consistent error handling and propagation.
 package errors
 
 import (
 	"errors"
 	"fmt"
-	reflect "reflect"
+	"reflect"
 	"runtime"
 	"strings"
 	"unicode/utf8"
@@ -15,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+// Error represents a custom error type with additional context.
 type Error struct {
 	code       ERR
 	message    string
@@ -25,29 +36,32 @@ type Error struct {
 	data       ErrDataI
 }
 
+// Interface defines the methods that the Error type must implement to be compatible with the standard error interface.
 type Interface interface {
+	As(target interface{}) bool
+	Code() ERR
+	Data() ErrDataI
 	Error() string
 	Is(target error) bool
-	As(target interface{}) bool
-	Unwrap() error
-
-	Code() ERR
 	Message() string
+	Unwrap() error
 	WrappedErr() error
-	Data() ErrDataI
 }
 
+// Error returns the string representation of the error.
 func (e *Error) Error() string {
-	// Error() can be called on wrapped errors, which can be nil, for example predefined errors
+	// Error() can be called on wrapped errors, which can be nil, for example, predefined errors
 	if e == nil {
 		return "<nil>"
 	}
 
+	// Set the data message if it exists
 	dataMsg := ""
 	if e.Data() != nil {
 		dataMsg = e.data.Error()
 	}
 
+	// If the wrapped error is nil, return the error message without the wrapped error
 	if e.WrappedErr() == nil {
 		if dataMsg == "" {
 			return fmt.Sprintf("%s (%d): %v", e.code.Enum(), e.code, e.message)
@@ -56,10 +70,12 @@ func (e *Error) Error() string {
 		return fmt.Sprintf("%d: %v %q", e.code, e.message, dataMsg)
 	}
 
+	// No data message, return the error message with the wrapped error
 	if dataMsg == "" {
 		return fmt.Sprintf("%s (%d): %v -> %v", e.code.Enum(), e.code, e.message, e.wrappedErr)
 	}
 
+	// Return the error message with the wrapped error and data message
 	return fmt.Sprintf("%s (%d): %v -> %v %q", e.code.Enum(), e.code, e.message, e.wrappedErr, dataMsg)
 }
 
@@ -69,7 +85,8 @@ func (e *Error) Is(target error) bool {
 		return false
 	}
 
-	targetError, ok := target.(*Error)
+	var targetError *Error
+	ok := errors.As(target, &targetError)
 	if !ok {
 		// fmt.Println("Target is not of type *Error, checking \ne.Error()", e.Error(), "contains() target.Error():\n", target.Error())
 		return strings.Contains(e.Error(), target.Error())
@@ -85,7 +102,8 @@ func (e *Error) Is(target error) bool {
 
 	// Unwrap the current error and recursively call Is on the unwrapped error
 	if unwrapped := errors.Unwrap(e); unwrapped != nil {
-		if ue, ok := unwrapped.(*Error); ok {
+		var ue *Error
+		if errors.As(unwrapped, &ue) {
 			return ue.Is(target)
 		}
 	}
@@ -93,43 +111,44 @@ func (e *Error) Is(target error) bool {
 	return false
 }
 
+// As attempts to assign the error to the target if types are compatible.
 func (e *Error) As(target interface{}) bool {
-	// fmt.Println("In as, e:", e, "\ntarget: ", target)
 	if e == nil {
 		return false
 	}
 
-	// Try to assign this error to the target if the types are compatible
-	if targetErr, ok := target.(**Error); ok {
-		*targetErr = e
+	// Fast path for our own error type.
+	if te, ok := target.(**Error); ok {
+		*te = e
 		return true
 	}
 
-	// check if Data matches the target type
-	if e.data != nil {
-		if data, ok := e.data.(error); ok {
-			return errors.As(data, target)
+	// 1. Try the data payload.
+	if err, ok := e.data.(error); ok {
+		var as interface{ As(interface{}) bool }
+		if as, ok = err.(interface{ As(interface{}) bool }); ok && as.As(target) {
+			return true
 		}
 	}
 
-	// Recursively check the wrapped error if there is one
-	if e.wrappedErr != nil {
-		// use reflect to see if the value is nil. If it is, return false
-		if reflect.ValueOf(e.wrappedErr).IsNil() {
-			return false
+	// 2. Try an explicitly wrapped error.
+	if err := e.wrappedErr; err != nil && !reflect.ValueOf(err).IsNil() {
+		if as, ok := err.(interface{ As(interface{}) bool }); ok && as.As(target) {
+			return true
 		}
-
-		return errors.As(e.wrappedErr, target)
 	}
 
-	// Also check any further unwrapped errors
-	if unwrapped := errors.Unwrap(e); unwrapped != nil {
-		return errors.As(unwrapped, target)
+	// 3. Finally, get whatever "errors.Unwrap" gives us.
+	if err := errors.Unwrap(e); err != nil {
+		if as, ok := err.(interface{ As(interface{}) bool }); ok && as.As(target) {
+			return true
+		}
 	}
 
 	return false
 }
 
+// SetWrappedErr sets the wrapped error in the error chain.
 func (e *Error) SetWrappedErr(err error) {
 	if e == nil {
 		return
@@ -152,6 +171,7 @@ func (e *Error) SetWrappedErr(err error) {
 	lastErr.wrappedErr = err
 }
 
+// Unwrap returns the wrapped error if present.
 func (e *Error) Unwrap() error {
 	if e == nil {
 		return nil
@@ -160,6 +180,7 @@ func (e *Error) Unwrap() error {
 	return e.wrappedErr
 }
 
+// Code returns the error code.
 func (e *Error) Code() ERR {
 	if e == nil {
 		return ERR_UNKNOWN
@@ -168,6 +189,7 @@ func (e *Error) Code() ERR {
 	return e.code
 }
 
+// Message returns the error message.
 func (e *Error) Message() string {
 	if e == nil {
 		return ""
@@ -176,6 +198,7 @@ func (e *Error) Message() string {
 	return e.message
 }
 
+// WrappedErr returns the wrapped error if present.
 func (e *Error) WrappedErr() error {
 	if e == nil {
 		return nil
@@ -184,6 +207,7 @@ func (e *Error) WrappedErr() error {
 	return e.wrappedErr
 }
 
+// Data retrieves the error data associated with the error.
 func (e *Error) Data() ErrDataI {
 	if e == nil {
 		return nil
@@ -192,6 +216,7 @@ func (e *Error) Data() ErrDataI {
 	return e.data
 }
 
+// SetData sets a key-value pair in the error data.
 func (e *Error) SetData(key string, value interface{}) {
 	if e.data == nil {
 		e.data = &ErrData{}
@@ -203,14 +228,15 @@ func (e *Error) SetData(key string, value interface{}) {
 	}
 }
 
+// GetData retrieves the value associated with a key in the error data.
 func (e *Error) GetData(key string) interface{} {
-	if e.data == nil {
+	if e == nil || e.data == nil {
 		return nil
 	}
-
 	return e.data.GetData(key)
 }
 
+// New creates a new Error instance with the specified code, message, and optional parameters.
 func New(code ERR, message string, params ...interface{}) *Error {
 	var wErr *Error
 
@@ -230,7 +256,7 @@ func New(code ERR, message string, params ...interface{}) *Error {
 
 	// Format the message with the remaining parameters
 	if len(params) > 0 {
-		//nolint:forbidigo
+		//nolint:forbidigo // Ignore this linter warning, this is an exception where we want to use fmt.Errorf
 		err := fmt.Errorf(message, params...)
 		message = err.Error()
 	}
@@ -270,6 +296,7 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	return returnErr
 }
 
+// Error represents a custom error type that implements the error interface.
 func (x *TError) Error() string {
 	if x.IsNil() {
 		return "<nil>"
@@ -282,6 +309,7 @@ func (x *TError) Error() string {
 	return fmt.Sprintf("%s (%d): %s -> %v", x.Code.String(), x.Code, x.Message, x.WrappedError)
 }
 
+// IsNil checks if the TError is nil or has no meaningful content.
 func (x *TError) IsNil() bool {
 	if x == nil || (x.Code == ERR_UNKNOWN && x.Message == "") {
 		return true
@@ -290,12 +318,14 @@ func (x *TError) IsNil() bool {
 	return false
 }
 
+// Wrap converts a standard error into a TError, preserving the error code and message.
 func Wrap(err error) *TError {
 	if err == nil {
 		return nil
 	}
 
-	if castError, ok := err.(*Error); ok {
+	var castError *Error
+	if errors.As(err, &castError) {
 		return &TError{
 			Code:         castError.code,
 			Message:      RemoveInvalidUTF8(castError.message),
@@ -322,7 +352,8 @@ func WrapGRPC(err error) error {
 	}
 
 	// If the error is an "*Error", get all wrapped errors, and wrap with gRPC details
-	if castedErr, ok := err.(*Error); ok {
+	var castedErr *Error
+	if errors.As(err, &castedErr) {
 		// check if the error is already wrapped, don't wrap it with gRPC details
 		if castedErr.wrappedErr != nil {
 			if _, ok := status.FromError(castedErr.wrappedErr); ok {
@@ -360,7 +391,7 @@ func WrapGRPC(err error) error {
 			fn := runtime.FuncForPC(pc)
 			parts := strings.Split(fn.Name(), "/")
 
-			err2 := &Error{
+			return &Error{
 				// TODO: add grpc construction error type
 				code:       ERR_ERROR,
 				message:    "error serializing TError to protobuf Any",
@@ -369,8 +400,6 @@ func WrapGRPC(err error) error {
 				function:   parts[len(parts)-1],
 				wrappedErr: err,
 			}
-
-			return err2
 		}
 
 		wrappedErrDetails = append(wrappedErrDetails, details)
@@ -378,7 +407,8 @@ func WrapGRPC(err error) error {
 		if castedErr.wrappedErr != nil {
 			currWrappedErr := castedErr.wrappedErr
 			for currWrappedErr != nil {
-				if err, ok := currWrappedErr.(*Error); ok {
+				var err *Error
+				if errors.As(currWrappedErr, &err) {
 					var details protoadapt.MessageV1
 
 					var pbError error
@@ -422,20 +452,6 @@ func WrapGRPC(err error) error {
 
 					wrappedErrDetails = append(wrappedErrDetails, details)
 					currWrappedErr = err.wrappedErr
-				} else {
-					pc, file, line, _ := runtime.Caller(1)
-					fn := runtime.FuncForPC(pc)
-					parts := strings.Split(fn.Name(), "/")
-
-					details, _ := anypb.New(&TError{
-						Code:     ERR_ERROR,
-						Message:  err.Error(),
-						File:     file,
-						Line:     int32(line), // nolint:gosec
-						Function: parts[len(parts)-1],
-					})
-					wrappedErrDetails = append(wrappedErrDetails, details)
-					currWrappedErr = nil
 				}
 			}
 		}
@@ -448,7 +464,7 @@ func WrapGRPC(err error) error {
 			fn := runtime.FuncForPC(pc)
 			parts := strings.Split(fn.Name(), "/")
 
-			err2 := &Error{
+			return &Error{
 				// TODO: add grpc construction error type
 				code:       ERR_ERROR,
 				message:    "error adding details to the error's gRPC status",
@@ -457,8 +473,6 @@ func WrapGRPC(err error) error {
 				function:   parts[len(parts)-1],
 				wrappedErr: err,
 			}
-
-			return err2
 		}
 
 		return st.Err()
@@ -488,6 +502,7 @@ func WrapGRPC(err error) error {
 	}
 }
 
+// UnwrapGRPC unwraps a gRPC error and returns the underlying Error type.
 func UnwrapGRPC(err error) *Error {
 	if err == nil {
 		return nil
@@ -524,7 +539,7 @@ func UnwrapGRPC(err error) *Error {
 		}
 
 		var customDetails TError
-		if err := anypb.UnmarshalTo(detailAny, &customDetails, proto.UnmarshalOptions{}); err == nil {
+		if err = anypb.UnmarshalTo(detailAny, &customDetails, proto.UnmarshalOptions{}); err == nil {
 			currErr = New(customDetails.Code, customDetails.Message)
 
 			if customDetails.Data != nil {
@@ -569,6 +584,7 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 	}
 }
 
+// Join combines multiple errors into a single error.
 func Join(errs ...error) error {
 	var messages []string
 
@@ -585,6 +601,7 @@ func Join(errs ...error) error {
 	return errors.New(strings.Join(messages, ", "))
 }
 
+// Is checks if the error matches the target error.
 func Is(err, target error) bool {
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
@@ -593,13 +610,15 @@ func Is(err, target error) bool {
 	return errors.Is(err, target)
 }
 
+// AsData attempts to assign the error data to the target if types are compatible.
 func AsData(err error, target interface{}) bool {
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
 	}
 
 	// cycle through the wrapped errors and check if any of them match the target
-	if castedErr, ok := err.(*Error); ok {
+	var castedErr *Error
+	if errors.As(err, &castedErr) {
 		if errors.As(castedErr.data, target) {
 			return true
 		}
@@ -612,13 +631,15 @@ func AsData(err error, target interface{}) bool {
 	return false
 }
 
+// As attempts to assign the error to the target if types are compatible.
 func As(err error, target any) bool {
 	if isGRPCWrappedError(err) {
 		err = UnwrapGRPC(err)
 	}
 
 	// cycle through the wrapped errors and check if any of them match the target
-	if castedErr, ok := err.(*Error); ok {
+	var castedErr *Error
+	if errors.As(err, &castedErr) {
 		if castedErr.As(target) {
 			return true
 		}
@@ -631,34 +652,34 @@ func As(err error, target any) bool {
 	return errors.As(err, target)
 }
 
+// isGRPCWrappedError checks if the error is a gRPC wrapped error.
 func isGRPCWrappedError(err error) bool {
 	_, ok := status.FromError(err)
 	return ok
 }
 
-// buildStackTrace returns just the stack trace portion of the error message
+// buildStackTrace returns just the stack trace portion of the error message.
 func (e *Error) buildStackTrace() string {
 	trace := fmt.Sprintf("\n- %s%s() %s:%d [%d] %s", "", e.function, e.file, e.line, e.code, e.message)
 
 	if e.wrappedErr != nil {
-		if werr, ok := e.wrappedErr.(*Error); ok && werr.Code() != ERR_UNKNOWN {
-			trace += werr.buildStackTrace()
-		} else {
-			trace += fmt.Sprintf("\n- %v", e.wrappedErr)
+		var wrappedErr *Error
+		if errors.As(e.wrappedErr, &wrappedErr) && wrappedErr.Code() != ERR_UNKNOWN {
+			trace += wrappedErr.buildStackTrace()
 		}
 	}
 
 	return trace
 }
 
-// Format implements fmt.Formatter for custom formatting
+// Format implements fmt.Formatter for custom formatting.
 func (e *Error) Format(f fmt.State, c rune) {
 	msg := e.Error()
 	if c == 'v' && (f.Flag('+') || f.Flag('#')) {
 		msg += e.buildStackTrace()
 	}
 
-	fmt.Fprint(f, msg)
+	_, _ = fmt.Fprint(f, msg)
 }
 
 // RemoveInvalidUTF8 sanitizes a string by removing invalid UTF-8 characters.
