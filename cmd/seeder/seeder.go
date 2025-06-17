@@ -243,11 +243,11 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 	}
 
 	var (
-		hash   *chainhash.Hash
+		hash   chainhash.Hash
 		height uint32
 	)
 
-	if err = binary.Read(reader, binary.LittleEndian, hash); err != nil {
+	if err = binary.Read(reader, binary.LittleEndian, &hash); err != nil {
 		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
@@ -258,7 +258,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 	// Write the last block height and hash to the blockpersister_state.txt file
 	_ = blockpersister.New(ctx, nil, appSettings,
 		nil, nil, nil,
-		nil, blockpersister.WithSetInitialState(height, hash),
+		nil, blockpersister.WithSetInitialState(height, &hash),
 	)
 
 	var (
@@ -399,7 +399,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		return errors.NewProcessingError("invalid file type: %s", header.FileType)
 	}
 
-	var hash *chainhash.Hash
+	var hash chainhash.Hash
 
 	if err = binary.Read(reader, binary.LittleEndian, &hash); err != nil {
 		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
