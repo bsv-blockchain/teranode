@@ -281,7 +281,7 @@ func Start(args []string, version, commit string) {
 		}
 	case "checkblocktemplate":
 		cmd.Execute = func(args []string) error {
-			blockTemplate, err := checkblocktemplate.CheckBlockTemplate(logger, tSettings)
+			blockTemplate, err := checkblocktemplate.ValidateBlockTemplate(logger, tSettings)
 			if err != nil {
 				return errors.NewProcessingError("Failed to check block template: %v", err)
 			}
