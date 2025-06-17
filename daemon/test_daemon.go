@@ -50,64 +50,76 @@ import (
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 )
 
+const (
+	blockHashMismatch         = "Block hash mismatch at height %d"
+	failedGettingSubtree      = "Failed to get subtree"
+	failedParsingSubtreeBytes = "Failed to parse subtree bytes"
+	failedParsingStorePort    = "Failed to parse store port: %v"
+)
+
+// TestDaemon is a struct that holds the test daemon instance and its dependencies.
 type TestDaemon struct {
-	Ctx                   context.Context
-	ctxCancel             context.CancelFunc
-	Logger                ulogger.Logger
-	composeDependencies   tc.ComposeStack
-	d                     *Daemon
-	BlockchainClient      blockchain.ClientI
+	AssetURL              string
 	BlockAssemblyClient   *blockassembly.Client
-	PropagationClient     *propagation.Client
 	BlockValidationClient *blockvalidation.Client
-	privKey               *bec.PrivateKey
+	BlockchainClient      blockchain.ClientI
+	Ctx                   context.Context
+	DistributorClient     *distributor.Distributor
+	Logger                ulogger.Logger
+	PropagationClient     *propagation.Client
+	Settings              *settings.Settings
 	SubtreeStore          blob.Store
 	UtxoStore             utxo.Store
-	DistributorClient     *distributor.Distributor
+	composeDependencies   tc.ComposeStack
+	ctxCancel             context.CancelFunc
+	d                     *Daemon
+	privKey               *bec.PrivateKey
 	rpcURL                *url.URL
-	AssetURL              string
-	Settings              *settings.Settings
 }
 
+// TestOptions defines the options for creating a test daemon instance.
 type TestOptions struct {
-	SkipRemoveDataDir       bool
-	UseTracing              bool
-	EnableRPC               bool
-	EnableP2P               bool
-	EnableValidator         bool
+	EnableFullLogging       bool
 	EnableLegacy            bool
-	StartDaemonDependencies bool
+	EnableP2P               bool
+	EnableRPC               bool
+	EnableValidator         bool
 	SettingsContext         string
 	SettingsOverrideFunc    func(*settings.Settings)
-	EnableFullLogging       bool
+	SkipRemoveDataDir       bool
+	StartDaemonDependencies bool
+	UseTracing              bool
 }
 
+// JSONError represents a JSON error response from the RPC server.
 type JSONError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
 
+// Error implements the error interface for JSONError.
 func (je *JSONError) Error() string {
 	return fmt.Sprintf("code: %d, message: %s", je.Code, je.Message)
 }
 
+// NewTestDaemon creates a new TestDaemon instance with the provided options.
 func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var (
 		composeDependencies tc.ComposeStack
-		tSettings           *settings.Settings
+		appSettings         *settings.Settings
 	)
 
 	if opts.SettingsContext != "" {
-		tSettings = settings.NewSettings(opts.SettingsContext)
+		appSettings = settings.NewSettings(opts.SettingsContext)
 	} else {
-		tSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
+		appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
 	}
 
-	path := filepath.Join("data", tSettings.ClientName)
+	path := filepath.Join("data", appSettings.ClientName)
 	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
-		// a bit hacky. Ideally all stores sit under data/${ClientName}
+		// a bit hacky. Ideally, all stores sit under data/${ClientName}
 		path = "data"
 	}
 
@@ -124,8 +136,8 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	// composeDependencies = StartDaemonDependencies(ctx, t, !opts.SkipRemoveDataDir, calculateDependencies(t, opts.Settings))
 	// }
 
-	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
-	tSettings.ChainCfgParams.CoinbaseMaturity = 1
+	appSettings.ChainCfgParams = &chaincfg.RegressionNetParams
+	appSettings.ChainCfgParams.CoinbaseMaturity = 1
 
 	absPath, err := filepath.Abs(path)
 	require.NoError(t, err)
@@ -134,32 +146,32 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	err = os.MkdirAll(absPath, 0755)
 	require.NoError(t, err)
 
-	quorumPath := tSettings.SubtreeValidation.QuorumPath
+	quorumPath := appSettings.SubtreeValidation.QuorumPath
 	require.NotNil(t, quorumPath, "No subtree_quorum_path specified")
 
 	err = os.MkdirAll(quorumPath, 0755)
 	require.NoError(t, err)
 
 	// Override with test settings...
-	tSettings.Asset.CentrifugeDisable = true
-	tSettings.UtxoStore.DBTimeout = 500 * time.Second
-	tSettings.LocalTestStartFromState = "RUNNING"
-	tSettings.SubtreeValidation.TxMetaCacheEnabled = false
-	tSettings.ProfilerAddr = ""
-	tSettings.RPC.CacheEnabled = false
-	tSettings.P2P.DHTUsePrivate = true
+	appSettings.Asset.CentrifugeDisable = true
+	appSettings.UtxoStore.DBTimeout = 500 * time.Second
+	appSettings.LocalTestStartFromState = "RUNNING"
+	appSettings.SubtreeValidation.TxMetaCacheEnabled = false
+	appSettings.ProfilerAddr = ""
+	appSettings.RPC.CacheEnabled = false
+	appSettings.P2P.DHTUsePrivate = true
 
 	if opts.UseTracing {
 		// tracing
-		tSettings.UseOpenTracing = true
-		tSettings.TracingSampleRate = "1" // 100% sampling during the test
+		appSettings.UseOpenTracing = true
+		appSettings.TracingSampleRate = "1" // 100% sampling during the test
 	} else {
-		tSettings.UseOpenTracing = false
+		appSettings.UseOpenTracing = false
 	}
 
 	// Override with test settings...
 	if opts.SettingsOverrideFunc != nil {
-		opts.SettingsOverrideFunc(tSettings)
+		opts.SettingsOverrideFunc(appSettings)
 	}
 
 	readyCh := make(chan struct{})
@@ -170,9 +182,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	)
 
 	if opts.EnableFullLogging {
-		logger = ulogger.New(tSettings.ClientName)
+		logger = ulogger.New(appSettings.ClientName)
 		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
-			return ulogger.New(tSettings.ClientName+"-"+serviceName, ulogger.WithLevel("DEBUG"))
+			return ulogger.New(appSettings.ClientName+"-"+serviceName, ulogger.WithLevel("DEBUG"))
 		})
 	} else {
 		logger = ulogger.NewErrorTestLogger(t, cancel)
@@ -209,15 +221,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		services = append(services, "-legacy=1")
 	}
 
-	WaitForPortsFree(t, ctx, tSettings)
+	WaitForPortsFree(t, ctx, appSettings)
 
-	go d.Start(logger, services, tSettings, readyCh)
+	go d.Start(logger, services, appSettings, readyCh)
 
 	select {
 	case <-readyCh:
-		t.Logf("Daemon %s started successfully", tSettings.ClientName)
+		t.Logf("Daemon %s started successfully", appSettings.ClientName)
 	case <-time.After(30 * time.Second):
-		t.Fatalf("Daemon %s failed to start within 30s", tSettings.ClientName)
+		t.Fatalf("Daemon %s failed to start within 30s", appSettings.ClientName)
 	}
 
 	if opts.UseTracing {
@@ -231,41 +243,56 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		})
 	}
 
-	ports := []int{tSettings.HealthCheckPort}
+	ports := []int{appSettings.HealthCheckPort}
 	require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
 
-	blockchainClient, err := blockchain.NewClient(ctx, logger, tSettings, "test")
+	var blockchainClient blockchain.ClientI
+
+	blockchainClient, err = blockchain.NewClient(ctx, logger, appSettings, "test")
 	require.NoError(t, err)
 
-	blockAssemlyClient, err := blockassembly.NewClient(ctx, logger, tSettings)
+	var blockAssemblyClient *blockassembly.Client
+
+	blockAssemblyClient, err = blockassembly.NewClient(ctx, logger, appSettings)
 	require.NoError(t, err)
 
-	propagationClient, err := propagation.NewClient(ctx, logger, tSettings)
+	var propagationClient *propagation.Client
+
+	propagationClient, err = propagation.NewClient(ctx, logger, appSettings)
 	require.NoError(t, err)
 
-	blockValidationClient, err := blockvalidation.NewClient(ctx, logger, tSettings, "test")
+	var blockValidationClient *blockvalidation.Client
+
+	blockValidationClient, err = blockvalidation.NewClient(ctx, logger, appSettings, "test")
 	require.NoError(t, err)
 
-	distributorClient, err := distributor.NewDistributor(ctx, logger, tSettings,
+	var distributorClient *distributor.Distributor
+
+	distributorClient, err = distributor.NewDistributor(ctx, logger, appSettings,
 		distributor.WithBackoffDuration(200*time.Millisecond),
 		distributor.WithRetryAttempts(3),
 		distributor.WithFailureTolerance(0),
 	)
 	require.NoError(t, err)
 
-	w, err := wif.DecodeWIF(tSettings.BlockAssembly.MinerWalletPrivateKeys[0])
+	var w *wif.WIF
+	w, err = wif.DecodeWIF(appSettings.BlockAssembly.MinerWalletPrivateKeys[0])
 	require.NoError(t, err)
 
 	privKey := w.PrivKey
 
-	subtreeStore, err := d.daemonStores.GetSubtreeStore(logger, tSettings)
+	var subtreeStore blob.Store
+
+	subtreeStore, err = d.daemonStores.GetSubtreeStore(logger, appSettings)
 	require.NoError(t, err)
 
-	utxoStore, err := d.daemonStores.GetUtxoStore(ctx, logger, tSettings)
+	var utxoStore utxo.Store
+
+	utxoStore, err = d.daemonStores.GetUtxoStore(ctx, logger, appSettings)
 	require.NoError(t, err)
 
 	assert.NotNil(t, blockchainClient)
-	assert.NotNil(t, blockAssemlyClient)
+	assert.NotNil(t, blockAssemblyClient)
 	assert.NotNil(t, propagationClient)
 	assert.NotNil(t, blockValidationClient)
 	assert.NotNil(t, subtreeStore)
@@ -273,25 +300,26 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	assert.NotNil(t, distributorClient)
 
 	return &TestDaemon{
-		Ctx:                   ctx,
-		ctxCancel:             cancel,
-		Logger:                logger,
-		composeDependencies:   composeDependencies,
-		d:                     d,
-		BlockchainClient:      blockchainClient,
-		BlockAssemblyClient:   blockAssemlyClient,
-		PropagationClient:     propagationClient,
+		AssetURL:              fmt.Sprintf("http://localhost:%d", appSettings.Asset.HTTPPort),
+		BlockAssemblyClient:   blockAssemblyClient,
 		BlockValidationClient: blockValidationClient,
-		privKey:               privKey,
+		BlockchainClient:      blockchainClient,
+		Ctx:                   ctx,
+		DistributorClient:     distributorClient,
+		Logger:                logger,
+		PropagationClient:     propagationClient,
+		Settings:              appSettings,
 		SubtreeStore:          subtreeStore,
 		UtxoStore:             utxoStore,
-		DistributorClient:     distributorClient,
-		rpcURL:                tSettings.RPC.RPCListenerURL,
-		AssetURL:              fmt.Sprintf("http://localhost:%d", tSettings.Asset.HTTPPort),
-		Settings:              tSettings,
+		composeDependencies:   composeDependencies,
+		ctxCancel:             cancel,
+		d:                     d,
+		privKey:               privKey,
+		rpcURL:                appSettings.RPC.RPCListenerURL,
 	}
 }
 
+// Stop stops the TestDaemon instance and cleans up resources.
 func (td *TestDaemon) Stop(t *testing.T) {
 	if err := td.d.Stop(); err != nil {
 		t.Errorf("Failed to stop daemon %s: %v", td.Settings.ClientName, err)
@@ -304,34 +332,37 @@ func (td *TestDaemon) Stop(t *testing.T) {
 	t.Logf("Daemon %s stopped successfully", td.Settings.ClientName)
 }
 
+// StopDaemonDependencies stops the daemon dependencies if they were started.
 func (td *TestDaemon) StopDaemonDependencies() {
 	StopDaemonDependencies(td.Ctx, td.composeDependencies)
 }
 
+// WaitForPortsFree waits for the specified ports to be free on localhost.
 func WaitForPortsFree(t *testing.T, ctx context.Context, settings *settings.Settings) {
 	require.NoError(t, wait.ForPortsFree(ctx, "localhost", GetPorts(settings), 30*time.Second, 100*time.Millisecond))
 }
 
-func GetPorts(tSettings *settings.Settings) []int {
+// GetPorts returns a slice of ports from the provided settings.
+func GetPorts(appSettings *settings.Settings) []int {
 	ports := []int{
-		getPortFromString(tSettings.Asset.CentrifugeListenAddress),
-		getPortFromString(tSettings.Asset.HTTPListenAddress),
-		getPortFromString(tSettings.Block.PersisterHTTPListenAddress),
-		getPortFromString(tSettings.BlockAssembly.GRPCListenAddress),
-		getPortFromString(tSettings.BlockChain.GRPCListenAddress),
-		getPortFromString(tSettings.BlockChain.HTTPListenAddress),
-		getPortFromString(tSettings.BlockValidation.GRPCListenAddress),
-		getPortFromString(tSettings.Validator.GRPCListenAddress),
-		getPortFromString(tSettings.Validator.HTTPListenAddress),
-		getPortFromString(tSettings.P2P.GRPCListenAddress),
-		getPortFromString(tSettings.P2P.HTTPListenAddress),
-		getPortFromString(tSettings.Coinbase.GRPCListenAddress),
-		getPortFromString(tSettings.SubtreeValidation.GRPCListenAddress),
-		getPortFromString(tSettings.Legacy.GRPCListenAddress),
-		getPortFromString(tSettings.Propagation.HTTPListenAddress),
-		getPortFromString(tSettings.Propagation.GRPCListenAddress),
-		getPortFromString(tSettings.Faucet.HTTPListenAddress),
-		getPortFromURL(tSettings.RPC.RPCListenerURL),
+		getPortFromString(appSettings.Asset.CentrifugeListenAddress),
+		getPortFromString(appSettings.Asset.HTTPListenAddress),
+		getPortFromString(appSettings.Block.PersisterHTTPListenAddress),
+		getPortFromString(appSettings.BlockAssembly.GRPCListenAddress),
+		getPortFromString(appSettings.BlockChain.GRPCListenAddress),
+		getPortFromString(appSettings.BlockChain.HTTPListenAddress),
+		getPortFromString(appSettings.BlockValidation.GRPCListenAddress),
+		getPortFromString(appSettings.Validator.GRPCListenAddress),
+		getPortFromString(appSettings.Validator.HTTPListenAddress),
+		getPortFromString(appSettings.P2P.GRPCListenAddress),
+		getPortFromString(appSettings.P2P.HTTPListenAddress),
+		getPortFromString(appSettings.Coinbase.GRPCListenAddress),
+		getPortFromString(appSettings.SubtreeValidation.GRPCListenAddress),
+		getPortFromString(appSettings.Legacy.GRPCListenAddress),
+		getPortFromString(appSettings.Propagation.HTTPListenAddress),
+		getPortFromString(appSettings.Propagation.GRPCListenAddress),
+		getPortFromString(appSettings.Faucet.HTTPListenAddress),
+		getPortFromURL(appSettings.RPC.RPCListenerURL),
 	}
 
 	// remove all where port == 0
@@ -340,6 +371,7 @@ func GetPorts(tSettings *settings.Settings) []int {
 	return ports
 }
 
+// removeZeros removes all zero values from the slice of ports.
 func removeZeros(ports []int) []int {
 	var result []int
 
@@ -352,17 +384,19 @@ func removeZeros(ports []int) []int {
 	return result
 }
 
+// getPortFromString extracts the port number from a string address.
+// This works for IPV4 and IPV6 addresses, as well as simple hostnames.
 func getPortFromString(address string) int {
 	if address == "" {
 		return 0
 	}
 
-	if !strings.Contains(address, ":") {
+	lastColon := strings.LastIndex(address, ":")
+	if lastColon == -1 || lastColon == len(address)-1 {
 		return 0
 	}
 
-	portString := strings.Split(address, ":")[1]
-
+	portString := address[lastColon+1:]
 	port, err := strconv.Atoi(portString)
 	if err != nil {
 		return 0
@@ -371,6 +405,7 @@ func getPortFromString(address string) int {
 	return port
 }
 
+// getPortFromURL extracts the port number from a URL.
 func getPortFromURL(url *url.URL) int {
 	port, err := strconv.Atoi(url.Port())
 	if err != nil {
@@ -380,7 +415,7 @@ func getPortFromURL(url *url.URL) int {
 	return port
 }
 
-// Function to call the RPC endpoint with any method and parameters, returning the response and error
+// CallRPC calls the RPC method with the given parameters and returns the response as a string.
 func (td *TestDaemon) CallRPC(method string, params []interface{}) (string, error) {
 	// Create the request payload
 	requestBody, err := json.Marshal(map[string]interface{}{
@@ -394,7 +429,9 @@ func (td *TestDaemon) CallRPC(method string, params []interface{}) (string, erro
 	}
 
 	// Create the HTTP request
-	req, err := http.NewRequest("POST", td.rpcURL.String(), bytes.NewBuffer(requestBody))
+	var req *http.Request
+
+	req, err = http.NewRequest("POST", td.rpcURL.String(), bytes.NewBuffer(requestBody))
 	if err != nil {
 		return "", errors.NewProcessingError("failed to create request", err)
 	}
@@ -406,12 +443,16 @@ func (td *TestDaemon) CallRPC(method string, params []interface{}) (string, erro
 	// Perform the request
 	client := &http.Client{}
 
-	resp, err := client.Do(req)
+	var resp *http.Response
+
+	resp, err = client.Do(req)
 	if err != nil {
 		return "", errors.NewProcessingError("failed to perform request", err)
 	}
 
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	// Check the status code
 	if resp.StatusCode != http.StatusOK {
@@ -419,7 +460,9 @@ func (td *TestDaemon) CallRPC(method string, params []interface{}) (string, erro
 	}
 
 	// Read the response body
-	body, err := io.ReadAll(resp.Body)
+	var body []byte
+
+	body, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return "", errors.NewProcessingError("failed to read response body", err)
 	}
@@ -439,25 +482,26 @@ func (td *TestDaemon) CallRPC(method string, params []interface{}) (string, erro
 		Error *JSONError `json:"error"`
 	}
 
-	if err := json.Unmarshal(body, &jsonResponse); err != nil {
+	if err = json.Unmarshal(body, &jsonResponse); err != nil {
 		return string(body), errors.NewProcessingError("failed to parse response JSON", err)
 	}
 
 	if jsonResponse.Error != nil {
-		return string(body), errors.NewProcessingError("RPC returned error", jsonResponse.Error)
+		return string(body), errors.NewProcessingError("rpc returned error", jsonResponse.Error)
 	}
 
 	// Return the response as a string
 	return string(body), nil
 }
 
+// VerifyBlockByHeight verifies that the block at the given height matches the expected block.
 func (td *TestDaemon) VerifyBlockByHeight(t *testing.T, expectedBlock *model.Block, height uint32) {
 	tmpBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, height)
 	require.NoError(t, err, "Failed to get block at height %d", height)
-	assert.Equal(t, expectedBlock.Header.Hash().String(), tmpBlock.Header.Hash().String(),
-		"Block hash mismatch at height %d", height)
+	assert.Equal(t, expectedBlock.Header.Hash().String(), tmpBlock.Header.Hash().String(), blockHashMismatch, height)
 }
 
+// VerifyBlockByHash verifies that the block at the given hash matches the expected block.
 func (td *TestDaemon) VerifyBlockByHash(t *testing.T, expectedBlock *model.Block, hash *chainhash.Hash) {
 	tmpBlock, err := td.BlockchainClient.GetBlock(td.Ctx, hash)
 	require.NoError(t, err, "Failed to get block at hash %s", hash)
@@ -465,43 +509,58 @@ func (td *TestDaemon) VerifyBlockByHash(t *testing.T, expectedBlock *model.Block
 		"Block hash mismatch at hash %s", hash)
 }
 
+// VerifyConflictingInSubtrees verifies that the expected conflicting transactions are present in the subtree with the given hash.
 func (td *TestDaemon) VerifyConflictingInSubtrees(t *testing.T, subtreeHash *chainhash.Hash, expectedConflicts ...*bt.Tx) {
 	latestSubtreeReader, err := td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash[:], fileformat.FileTypeSubtree)
-	require.NoError(t, err, "Failed to get subtree")
+	require.NoError(t, err, failedGettingSubtree)
 
-	latestSubtree, err := util.NewSubtreeFromReader(latestSubtreeReader)
+	var latestSubtree *util.Subtree
+
+	latestSubtree, err = util.NewSubtreeFromReader(latestSubtreeReader)
 	_ = latestSubtreeReader.Close() // Ensure the reader is closed after use
-	require.NoError(t, err, "Failed to parse subtree bytes")
+
+	require.NoError(t, err, failedParsingSubtreeBytes)
 
 	require.Len(t, latestSubtree.ConflictingNodes, len(expectedConflicts),
 		"Unexpected number of conflicting nodes in subtree")
 
 	for _, conflict := range expectedConflicts {
 		// conflicting txs are not in order
-		assert.True(t, slices.Contains(latestSubtree.ConflictingNodes, *conflict.TxIDChainHash()), "Expected conflicting node %s not found in subtree", conflict.String())
+		assert.True(t, slices.Contains(latestSubtree.ConflictingNodes, *conflict.TxIDChainHash()),
+			"Expected conflicting node %s not found in subtree", conflict.String())
 	}
 }
 
+// VerifyConflictingInUtxoStore verifies that the expected conflicting transactions are marked as conflicting in the UTXO store.
 func (td *TestDaemon) VerifyConflictingInUtxoStore(t *testing.T, conflictValue bool, expectedConflicts ...*bt.Tx) {
 	for _, conflict := range expectedConflicts {
 		readTx, err := td.UtxoStore.Get(td.Ctx, conflict.TxIDChainHash())
 		require.NoError(t, err, "Failed to get transaction %s", conflict.String())
-		assert.Equal(t, conflictValue, readTx.Conflicting, "Expected transaction %s to be marked as conflicting", conflict.String())
+		assert.Equal(t, conflictValue, readTx.Conflicting,
+			"Expected transaction %s to be marked as conflicting", conflict.String())
 	}
 }
 
+// VerifyNotInBlockAssembly checks that the given transactions are not present in the block assembly candidate's subtrees.
 func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	// get a mining candidate and check the subtree does not contain the given transactions
 	candidate, err := td.BlockAssemblyClient.GetMiningCandidate(td.Ctx, true)
 	require.NoError(t, err)
 
 	for _, subtreeHash := range candidate.SubtreeHashes {
-		subtreeReader, err := td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash, fileformat.FileTypeSubtree)
-		require.NoError(t, err, "Failed to get subtree")
+		var subtreeReader io.ReadCloser
 
-		subtree, err := util.NewSubtreeFromReader(subtreeReader)
-		_ = subtreeReader.Close() // Ensure the reader is closed after use
-		require.NoError(t, err, "Failed to parse subtree bytes")
+		subtreeReader, err = td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash, fileformat.FileTypeSubtree)
+		require.NoError(t, err, failedGettingSubtree)
+
+		var subtree *util.Subtree
+
+		subtree, err = util.NewSubtreeFromReader(subtreeReader)
+
+		_ = subtreeReader.Close()
+
+		// Ensure the reader is closed after use
+		require.NoError(t, err, failedParsingSubtreeBytes)
 
 		for _, tx := range txs {
 			hash := *tx.TxIDChainHash()
@@ -511,6 +570,7 @@ func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	}
 }
 
+// VerifyInBlockAssembly checks that the given transactions are present in the block assembly candidate's subtrees exactly once.
 func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	// get a mining candidate and check the subtree does not contain the given transactions
 	candidate, err := td.BlockAssemblyClient.GetMiningCandidate(td.Ctx, true)
@@ -527,12 +587,17 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	}
 
 	for _, subtreeHash := range candidate.SubtreeHashes {
-		subtreeReader, err := td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash, fileformat.FileTypeSubtree)
-		require.NoError(t, err, "Failed to get subtree")
+		var subtreeReader io.ReadCloser
 
-		subtree, err := util.NewSubtreeFromReader(subtreeReader)
+		subtreeReader, err = td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash, fileformat.FileTypeSubtree)
+		require.NoError(t, err, failedGettingSubtree)
+
+		var subtree *util.Subtree
+
+		subtree, err = util.NewSubtreeFromReader(subtreeReader)
 		_ = subtreeReader.Close() // Ensure the reader is closed after use
-		require.NoError(t, err, "Failed to parse subtree bytes")
+
+		require.NoError(t, err, failedParsingSubtreeBytes)
 
 		for _, tx := range txs {
 			hash := *tx.TxIDChainHash()
@@ -550,6 +615,7 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	}
 }
 
+// CreateTransaction creates a new transaction with a single input from the parent transaction.
 func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, useInput ...uint64) *bt.Tx {
 	tx := bt.NewTx()
 
@@ -583,7 +649,11 @@ func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, useInput 
 	amount := parentTx.Outputs[useParentOutputUint32].Satoshis
 
 	// create a random number of outputs
-	numOutputs, _ := rand.Int(rand.Reader, big.NewInt(10))
+	var numOutputs *big.Int
+
+	numOutputs, err = rand.Int(rand.Reader, big.NewInt(10))
+	require.NoError(t, err)
+
 	if numOutputs.Uint64() == 0 {
 		numOutputs = big.NewInt(1)
 	}
@@ -611,6 +681,7 @@ func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, useInput 
 	return tx
 }
 
+// CreateTransactionFromMultipleInputs creates a new transaction with multiple inputs from the provided parent transactions.
 func (td *TestDaemon) CreateTransactionFromMultipleInputs(t *testing.T, parentTxs []*bt.Tx, amount uint64) *bt.Tx {
 	tx := bt.NewTx()
 
@@ -647,16 +718,21 @@ func (td *TestDaemon) CreateTransactionWithOptions(t *testing.T, options ...tran
 	return transactions.Create(t, opts...)
 }
 
+// MineToMaturityAndGetSpendableCoinbaseTx mines blocks to maturity and returns the spendable coinbase transaction.
 func (td *TestDaemon) MineToMaturityAndGetSpendableCoinbaseTx(t *testing.T) *bt.Tx {
 	_, err := td.CallRPC("generate", []any{uint32(td.Settings.ChainCfgParams.CoinbaseMaturity + 1)})
 	require.NoError(t, err)
 
-	lastBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, uint32(td.Settings.ChainCfgParams.CoinbaseMaturity+1))
+	var lastBlock *model.Block
+
+	lastBlock, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, uint32(td.Settings.ChainCfgParams.CoinbaseMaturity+1))
 	require.NoError(t, err)
 
 	td.WaitForBlockHeight(t, lastBlock, 10*time.Second)
 
-	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	var block1 *model.Block
+
+	block1, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
 
 	coinbaseTx := block1.CoinbaseTx
@@ -664,6 +740,7 @@ func (td *TestDaemon) MineToMaturityAndGetSpendableCoinbaseTx(t *testing.T) *bt.
 	return coinbaseTx
 }
 
+// MineAndWait mines the specified number of blocks and waits for them to be added to the blockchain.
 func (td *TestDaemon) MineAndWait(t *testing.T, blockCount uint32) *model.Block {
 	// Get the current block height
 	_, meta, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
@@ -674,24 +751,33 @@ func (td *TestDaemon) MineAndWait(t *testing.T, blockCount uint32) *model.Block 
 
 	endHeight := meta.Height + blockCount
 
-	lastBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, endHeight)
+	var lastBlock *model.Block
+
+	lastBlock, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, endHeight)
 	require.NoError(t, err)
 
 	return lastBlock
 }
 
+// CreateTestBlock creates a test block with the given previous block, nonce, and transactions.
 func (td *TestDaemon) CreateTestBlock(t *testing.T, previousBlock *model.Block, nonce uint32, txs ...*bt.Tx) (*util.Subtree, *model.Block) {
 	// Create and save the subtree with the double spend tx
 	subtree, err := createAndSaveSubtrees(td.Ctx, td.SubtreeStore, txs)
 	require.NoError(t, err)
 
-	address, err := bscript.NewAddressFromPublicKey(td.privKey.PubKey(), true)
+	var address *bscript.Address
+
+	address, err = bscript.NewAddressFromPublicKey(td.privKey.PubKey(), true)
 	require.NoError(t, err)
 
-	coinbaseTx, err := model.CreateCoinbase(previousBlock.Height+1, 50e8, "test", []string{address.AddressString})
+	var coinbaseTx *bt.Tx
+
+	coinbaseTx, err = model.CreateCoinbase(previousBlock.Height+1, 50e8, "test", []string{address.AddressString})
 	require.NoError(t, err)
 
-	merkleRoot, err := subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) // nolint:gosec
+	var merkleRoot *chainhash.Hash
+
+	merkleRoot, err = subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) // nolint:gosec
 	require.NoError(t, err)
 
 	block := &model.Block{
@@ -723,6 +809,7 @@ func (td *TestDaemon) CreateTestBlock(t *testing.T, previousBlock *model.Block, 
 	return subtree, block
 }
 
+// WaitForBlockHeight waits for the blockchain to reach the specified block height and verifies the block.
 func (td *TestDaemon) WaitForBlockHeight(t *testing.T, expectedBlock *model.Block, timeout time.Duration, skipVerifyChain ...bool) {
 	deadline := time.Now().Add(timeout)
 
@@ -751,7 +838,7 @@ finished:
 	}
 
 	assert.Equal(t, expectedBlock.Header.Hash().String(), tmpBlock.Header.Hash().String(),
-		"Block hash mismatch at height %d", expectedBlock.Height)
+		blockHashMismatch, expectedBlock.Height)
 
 	for state == nil || state.CurrentHeight < expectedBlock.Height {
 		state, err = td.BlockAssemblyClient.GetBlockAssemblyState(td.Ctx)
@@ -774,15 +861,18 @@ finished:
 	previousBlockHash := expectedBlock.Header.HashPrevBlock
 
 	for height := expectedBlock.Height - 1; height > 0; height-- {
-		getBlockByHeight, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, height)
+		var getBlockByHeight *model.Block
+
+		getBlockByHeight, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, height)
 		require.NoError(t, err)
 
-		require.Equal(t, previousBlockHash.String(), getBlockByHeight.Header.Hash().String(), "Block hash mismatch at height %d", height)
+		require.Equal(t, previousBlockHash.String(), getBlockByHeight.Header.Hash().String(), blockHashMismatch, height)
 
 		previousBlockHash = getBlockByHeight.Header.HashPrevBlock
 	}
 }
 
+// createAndSaveSubtrees creates a new subtree with the given transactions and saves it to the subtree store.
 func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*bt.Tx) (*util.Subtree, error) {
 	subtree, err := util.NewIncompleteTreeByLeafCount(len(txs) + 1)
 	if err != nil {
@@ -828,6 +918,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 	return subtree, nil
 }
 
+// storeSubtreeFiles serializes and stores the subtree, subtree data, and subtree meta in the provided subtree store.
 func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *util.Subtree, subtreeData *util.SubtreeData, subtreeMeta *util.SubtreeMeta) error {
 	subtreeBytes, err := subtree.Serialize()
 	if err != nil {
@@ -883,11 +974,13 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *ut
 	return nil
 }
 
+// ResetServiceManagerContext resets the ServiceManager context to allow for a fresh start.
 func (td *TestDaemon) ResetServiceManagerContext(t *testing.T) {
 	err := td.d.ServiceManager.ResetContext()
 	require.NoError(t, err)
 }
 
+// WaitForHealthLiveness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
 func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 	timeoutElapsed := time.After(timeout)
 
@@ -917,13 +1010,14 @@ func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 	return nil
 }
 
+// CreateAndSendTxs creates and sends a specified number of transactions based on the provided parent transaction.
 func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error) {
-	transactions := make([]*bt.Tx, count)
+	rawTransactions := make([]*bt.Tx, count)
 	currentParent := parentTx
 	txHashes := make([]*chainhash.Hash, 0)
 
 	for i := 0; i < count; i++ {
-		utxo := &bt.UTXO{
+		existingUtxo := &bt.UTXO{
 			TxIDHash:      currentParent.TxIDChainHash(),
 			Vout:          uint32(0),
 			LockingScript: currentParent.Outputs[0].LockingScript,
@@ -932,17 +1026,17 @@ func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int)
 
 		newTx := bt.NewTx()
 
-		err := newTx.FromUTXOs(utxo)
+		err := newTx.FromUTXOs(existingUtxo)
 		require.NoError(t, err)
 
 		outputAmount := currentParent.Outputs[0].Satoshis - 1000 // minus 1000 satoshis for fee
 		if outputAmount <= 0 {
-			return transactions, nil, errors.NewProcessingError("insufficient funds for next transaction", nil)
+			return rawTransactions, nil, errors.NewProcessingError("insufficient funds for next transaction", nil)
 		}
 
 		err = newTx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), outputAmount)
 		if err != nil {
-			return transactions, nil, errors.NewProcessingError("Error adding output to transaction", err)
+			return rawTransactions, nil, errors.NewProcessingError("error adding output to transaction", err)
 		}
 
 		err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: td.privKey})
@@ -953,50 +1047,52 @@ func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int)
 
 		td.Logger.Infof("Transaction %d sent: %s", i+1, newTx.TxID())
 
-		transactions[i] = newTx
+		rawTransactions[i] = newTx
 		txHashes = append(txHashes, newTx.TxIDChainHash())
 		currentParent = newTx
 	}
 
-	return transactions, txHashes, nil
+	return rawTransactions, txHashes, nil
 }
 
+// daemonDependency represents a dependency for the daemon, including its name and port.
 type daemonDependency struct {
 	name string
 	port int
 }
 
-// nolint:unused
-func calculateDependencies(t *testing.T, tSettings []*settings.Settings) []daemonDependency {
+// calculateDependencies calculates the dependencies required for the daemon based on the provided app settings.
+// nolint:unused // This function is used to calculate the dependencies for the daemon.
+func calculateDependencies(t *testing.T, appSettings []*settings.Settings) []daemonDependency {
 	dependencies := make([]daemonDependency, 5)
 
 	// Blockchain store
-	url := tSettings[0].BlockChain.StoreURL
+	blockchainURL := appSettings[0].BlockChain.StoreURL
 
-	port, err := strconv.Atoi(url.Port())
+	port, err := strconv.Atoi(blockchainURL.Port())
 	if err != nil {
-		t.Fatalf("Failed to parse store port: %v", err)
+		t.Fatalf(failedParsingStorePort, err)
 	}
 
 	dependencies = append(dependencies, daemonDependency{"postgres", port})
 
 	// Kafka
-	url = tSettings[0].Kafka.BlocksConfig
+	kafkaURL := appSettings[0].Kafka.BlocksConfig
 
-	port, err = strconv.Atoi(url.Port())
+	port, err = strconv.Atoi(kafkaURL.Port())
 	if err != nil {
-		t.Fatalf("Failed to parse store port: %v", err)
+		t.Fatalf(failedParsingStorePort, err)
 	}
 
 	dependencies = append(dependencies, daemonDependency{"kafka-shared", port})
 
 	// Aerospike
-	for i, s := range tSettings {
-		url = s.UtxoStore.UtxoStore
+	for i, s := range appSettings {
+		aeroURL := s.UtxoStore.UtxoStore
 
-		port, err = strconv.Atoi(url.Port())
+		port, err = strconv.Atoi(aeroURL.Port())
 		if err != nil {
-			t.Fatalf("Failed to parse store port: %v", err)
+			t.Fatalf(failedParsingStorePort, err)
 		}
 
 		dependencies = append(dependencies, daemonDependency{"aerospike-" + strconv.Itoa(i+1), port})
@@ -1005,6 +1101,7 @@ func calculateDependencies(t *testing.T, tSettings []*settings.Settings) []daemo
 	return dependencies
 }
 
+// StartDaemonDependencies starts the required dependencies for the daemon using Docker Compose.
 func StartDaemonDependencies(t *testing.T, removeDataDir bool, dependencies []daemonDependency) tc.ComposeStack {
 	var (
 		err     error
@@ -1014,7 +1111,7 @@ func StartDaemonDependencies(t *testing.T, removeDataDir bool, dependencies []da
 	identifier := tc.StackIdentifier(fmt.Sprintf("test-%d", time.Now().UnixNano()))
 
 	if removeDataDir {
-		err := os.RemoveAll("./data")
+		err = os.RemoveAll("./data")
 		require.NoError(t, err)
 	}
 
@@ -1028,7 +1125,7 @@ func StartDaemonDependencies(t *testing.T, removeDataDir bool, dependencies []da
 		services[i] = dependency.name
 	}
 
-	if err := compose.Up(t.Context(), tc.RunServices(services...)); err != nil {
+	if err = compose.Up(t.Context(), tc.RunServices(services...)); err != nil {
 		t.Fatalf("Failed to start docker network: %v", err)
 	}
 
@@ -1038,7 +1135,7 @@ func StartDaemonDependencies(t *testing.T, removeDataDir bool, dependencies []da
 	}
 
 	// Wait for dependent services to become ready
-	if err := wait.ForPortsReady(t.Context(), "localhost", ports, 5*time.Second, 100*time.Millisecond); err != nil {
+	if err = wait.ForPortsReady(t.Context(), "localhost", ports, 5*time.Second, 100*time.Millisecond); err != nil {
 		// If the wait fails (timeout), stop the docker stack before failing the test
 		log.Printf("Services failed to start, attempting to stop docker stack...")
 
@@ -1060,7 +1157,8 @@ func StartDaemonDependencies(t *testing.T, removeDataDir bool, dependencies []da
 	return compose
 }
 
-func StopDaemonDependencies(ctx context.Context, compose tc.ComposeStack) {
+// StopDaemonDependencies stops the Docker Compose stack and checks if the containers are gone and ports are free.
+func StopDaemonDependencies(_ context.Context, compose tc.ComposeStack) {
 	if compose == nil {
 		log.Printf("No docker stack to stop.")
 		return
@@ -1117,7 +1215,7 @@ func StopDaemonDependencies(ctx context.Context, compose tc.ComposeStack) {
 	log.Printf("StopDaemonDependencies finished.")
 }
 
-// CreateParentTransactions creates a single transaction with multiple outputs from a parent transaction.
+// CreateParentTransactionWithNOutputs creates a single transaction with multiple outputs from a parent transaction.
 // Each output can then be spent concurrently by child transactions.
 // count specifies how many outputs to create in the transaction.
 func (td *TestDaemon) CreateParentTransactionWithNOutputs(t *testing.T, parentTx *bt.Tx, count int) (*bt.Tx, error) {
@@ -1125,19 +1223,19 @@ func (td *TestDaemon) CreateParentTransactionWithNOutputs(t *testing.T, parentTx
 	newTx := bt.NewTx()
 
 	// Add input from parent transaction using UTXO
-	utxo := &bt.UTXO{
+	existingUtxo := &bt.UTXO{
 		TxIDHash:      parentTx.TxIDChainHash(),
 		Vout:          0,
 		LockingScript: parentTx.Outputs[0].LockingScript,
 		Satoshis:      parentTx.Outputs[0].Satoshis,
 	}
-	err := newTx.FromUTXOs(utxo)
+	err := newTx.FromUTXOs(existingUtxo)
 
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to add input", err)
 	}
 
-	// Calculate satoshis per output, leaving some for fees
+	// Calculate satoshis per output, leaving some for fee
 	// Reserve 1000 satoshis for fees
 	//nolint:gosec
 	totalSatoshis := parentTx.Outputs[0].Satoshis - 1000
@@ -1159,7 +1257,9 @@ func (td *TestDaemon) CreateParentTransactionWithNOutputs(t *testing.T, parentTx
 	}
 
 	// Send the transaction
-	response, err := td.DistributorClient.SendTransaction(td.Ctx, newTx)
+	var response []*distributor.ResponseWrapper
+
+	response, err = td.DistributorClient.SendTransaction(td.Ctx, newTx)
 	require.NoError(t, err)
 
 	require.Equal(t, len(response), 1)
@@ -1173,8 +1273,8 @@ func (td *TestDaemon) CreateParentTransactionWithNOutputs(t *testing.T, parentTx
 }
 
 // CreateAndSendTxsConcurrently creates and sends transactions concurrently using multiple goroutines
-func (td *TestDaemon) CreateAndSendTxsConcurrently(t *testing.T, parentTx *bt.Tx) ([]*bt.Tx, []*chainhash.Hash, error) {
-	transactions := make([]*bt.Tx, len(parentTx.Outputs))
+func (td *TestDaemon) CreateAndSendTxsConcurrently(_ *testing.T, parentTx *bt.Tx) ([]*bt.Tx, []*chainhash.Hash, error) {
+	existingTransactions := make([]*bt.Tx, len(parentTx.Outputs))
 	txHashes := make([]*chainhash.Hash, len(parentTx.Outputs))
 
 	resultChan := make(chan struct {
@@ -1193,7 +1293,7 @@ func (td *TestDaemon) CreateAndSendTxsConcurrently(t *testing.T, parentTx *bt.Tx
 			defer wg.Done()
 
 			//nolint:gosec
-			utxo := &bt.UTXO{
+			existingUtxo := &bt.UTXO{
 				TxIDHash:      parentTx.TxIDChainHash(),
 				Vout:          uint32(index),
 				LockingScript: parentTx.Outputs[index].LockingScript,
@@ -1201,7 +1301,7 @@ func (td *TestDaemon) CreateAndSendTxsConcurrently(t *testing.T, parentTx *bt.Tx
 			}
 
 			newTx := bt.NewTx()
-			if err := newTx.FromUTXOs(utxo); err != nil {
+			if err := newTx.FromUTXOs(existingUtxo); err != nil {
 				errorChan <- errors.NewProcessingError("Error creating transaction from UTXO", err)
 			}
 
@@ -1237,19 +1337,21 @@ func (td *TestDaemon) CreateAndSendTxsConcurrently(t *testing.T, parentTx *bt.Tx
 	// Collect results
 	for index := 0; index < len(parentTx.Outputs); index++ {
 		result := <-resultChan
-		transactions[result.index] = result.tx
+		existingTransactions[result.index] = result.tx
 		txHashes[result.index] = result.tx.TxIDChainHash()
 		td.Logger.Infof("Transaction %d sent: %s", result.index+1, result.tx.TxID())
 	}
 
-	return transactions, txHashes, nil
+	return existingTransactions, txHashes, nil
 }
 
-func (td *TestDaemon) GetPrivateKey(t *testing.T) *bec.PrivateKey {
+// GetPrivateKey retrieves the private key used by the TestDaemon for signing transactions.
+func (td *TestDaemon) GetPrivateKey(_ *testing.T) *bec.PrivateKey {
 	privKey := td.privKey
 	return privKey
 }
 
+// LogJSON logs the given data as formatted JSON with a label.
 func (td *TestDaemon) LogJSON(t *testing.T, label string, data interface{}) {
 	jsonData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {

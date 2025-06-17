@@ -5,6 +5,7 @@ import (
 	"gopkg.in/DataDog/dd-trace-go.v1/profiler"
 )
 
+// datadogProfiler initializes the Datadog profiler with the service name "teranode"
 func datadogProfiler() func() {
 	if err := profiler.Start(
 		profiler.WithService("teranode"),

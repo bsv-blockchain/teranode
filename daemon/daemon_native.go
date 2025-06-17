@@ -12,7 +12,7 @@ import (
 func init() {
 	// Create a secp256k1 context
 	if gocore.Config().GetBool("use_cgo_verifier", true) {
-		log.Println("Using BDK secp256k1 verifyer - VerifySignature")
+		log.Println("Using BDK secp256k1 verifier - VerifySignature")
 		interpreter.InjectExternalVerifySignatureFn(bdksecp256k1.VerifySignature)
 		sdkinterpreter.InjectExternalVerifySignatureFn(bdksecp256k1.VerifySignature)
 	}

@@ -936,6 +936,7 @@ func TestHandleSubtreeTopic(t *testing.T) {
 	})
 }
 
+// TestReceiveBestBlockStreamHandler tests the receiveBestBlockStreamHandler function
 func TestReceiveBestBlockStreamHandler(t *testing.T) {
 	// Create subtests for different scenarios
 	t.Run("successful stream handling", func(t *testing.T) {
@@ -972,6 +973,7 @@ func TestReceiveBestBlockStreamHandler(t *testing.T) {
 
 		// Connect the mock stream to the mock connection
 		mockStream.On("Conn").Return(mockConn).Maybe() // Allow any number of calls
+		mockStream.On("Conn").Return(network.Conn(mockConn)).Maybe()
 
 		// Directly verify our mock is set up correctly
 		testConn := mockStream.Conn()
@@ -980,7 +982,9 @@ func TestReceiveBestBlockStreamHandler(t *testing.T) {
 		require.Equal(t, peerIDStr, testPeer.String(), "Peer ID should match expected value")
 
 		// Read data from the stream
-		buf, err := io.ReadAll(mockStream)
+		var buf []byte
+
+		buf, err = io.ReadAll(mockStream)
 		require.NoError(t, err)
 
 		// Parse and verify the message
@@ -990,7 +994,7 @@ func TestReceiveBestBlockStreamHandler(t *testing.T) {
 		require.Equal(t, blockHash.String(), msg.Hash)
 		require.Equal(t, peerIDStr, msg.PeerID)
 
-		// Get peer ID from conn and verify
+		// Get peer ID from connection and verify
 		conn := mockStream.Conn()
 		remotePeerID := conn.RemotePeer()
 		require.Equal(t, peerIDStr, remotePeerID.String())
@@ -1682,6 +1686,12 @@ func (m *MockNetworkStream) Write(p []byte) (n int, err error) {
 	return args.Int(0), args.Error(1)
 }
 
+// CloseWithError implements the network.Stream interface
+func (m *MockNetworkStream) CloseWithError(err error) error {
+	args := m.Called(err)
+	return args.Error(0)
+}
+
 // Close implements the io.Closer interface
 func (m *MockNetworkStream) Close() error {
 	args := m.Called()
@@ -1760,75 +1770,85 @@ func (m *MockNetworkStream) CloseWrite() error {
 	return args.Error(0)
 }
 
-// MockNetworkConn implements the network.Conn interface for testing
+// MockNetworkConn is a testify-mock that implements network.Conn.
 type MockNetworkConn struct {
 	mock.Mock
 }
 
-// RemotePeer implements the network.Conn interface
-func (m *MockNetworkConn) RemotePeer() peer.ID {
+// ID implements the network.Conn interface
+func (m *MockNetworkConn) ID() string { args := m.Called(); return args.String(0) }
+
+// LocalPeer is a mock implementation of the network.Conn interface
+func (m *MockNetworkConn) LocalPeer() peer.ID { args := m.Called(); return args.Get(0).(peer.ID) }
+
+// RemotePeer is a mock implementation of the network.Conn interface
+func (m *MockNetworkConn) RemotePeer() peer.ID { args := m.Called(); return args.Get(0).(peer.ID) }
+
+// LocalPrivateKey is a mock implementation of the network.Conn interface
+func (m *MockNetworkConn) LocalPrivateKey() crypto.PrivKey {
 	args := m.Called()
-	return args.Get(0).(peer.ID)
+	return args.Get(0).(crypto.PrivKey)
 }
 
-// RemoteMultiaddr implements the network.Conn interface
-func (m *MockNetworkConn) RemoteMultiaddr() ma.Multiaddr {
+// RemotePublicKey is a mock implementation of the network.Conn interface
+func (m *MockNetworkConn) RemotePublicKey() crypto.PubKey {
 	args := m.Called()
-	return args.Get(0).(ma.Multiaddr)
+	return args.Get(0).(crypto.PubKey)
 }
 
-// LocalMultiaddr implements the network.Conn interface
+// LocalMultiaddr is a mock implementation of the network.Conn interface
 func (m *MockNetworkConn) LocalMultiaddr() ma.Multiaddr {
 	args := m.Called()
 	return args.Get(0).(ma.Multiaddr)
 }
 
-// LocalPeer implements the network.Conn interface
-func (m *MockNetworkConn) LocalPeer() peer.ID {
+// RemoteMultiaddr is a mock implementation of the network.Conn interface
+func (m *MockNetworkConn) RemoteMultiaddr() ma.Multiaddr {
 	args := m.Called()
-	return args.Get(0).(peer.ID)
+	return args.Get(0).(ma.Multiaddr)
 }
 
-// Scope implements the network.Conn interface
+// Stat is a mock implementation of the network.Conn interface
+func (m *MockNetworkConn) Stat() network.ConnStats {
+	args := m.Called()
+	return args.Get(0).(network.ConnStats)
+}
+
+// Scope is a mock implementation of the network.Conn interface
 func (m *MockNetworkConn) Scope() network.ConnScope {
 	args := m.Called()
 	return args.Get(0).(network.ConnScope)
 }
 
-// Close implements the network.Conn interface
-func (m *MockNetworkConn) Close() error {
-	args := m.Called()
+// Close is a mock implementation of the network.Conn interface
+func (m *MockNetworkConn) Close() error { args := m.Called(); return args.Error(0) }
+
+// CloseWithError is a mock implementation of the network.Conn interface
+// Satisfies network.Conn (v0.38+)
+func (m *MockNetworkConn) CloseWithError(code network.ConnErrorCode) error {
+	args := m.Called(code)
 	return args.Error(0)
 }
 
-// ID implements the network.Conn interface
-func (m *MockNetworkConn) ID() string {
-	args := m.Called()
-	return args.String(0)
-}
+// String is a mock implementation of the network.Conn interface
+func (m *MockNetworkConn) String() string { args := m.Called(); return args.String(0) }
 
-// NewStream implements the network.Conn interface
+// NewStream is a mock implementation of the network.Conn interface
 func (m *MockNetworkConn) NewStream(ctx context.Context) (network.Stream, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(network.Stream), args.Error(1)
 }
 
-// GetStreams implements the network.Conn interface
+// GetStreams is a mock implementation of the network.Conn interface
 func (m *MockNetworkConn) GetStreams() []network.Stream {
 	args := m.Called()
 	return args.Get(0).([]network.Stream)
 }
 
-// IsClosed implements the network.Conn interface
+// IsClosed is a mock implementation of the network.Conn interface
 func (m *MockNetworkConn) IsClosed() bool {
 	args := m.Called()
 	return args.Bool(0)
-}
-
-// Stat implements the network.Conn interface
-func (m *MockNetworkConn) Stat() network.ConnStats {
-	args := m.Called()
-	return args.Get(0).(network.ConnStats)
 }
 
 // ConnState implements the network.Conn interface
@@ -1837,16 +1857,6 @@ func (m *MockNetworkConn) ConnState() network.ConnectionState {
 	// this is a workaround for the ConnectionState type
 	var state network.ConnectionState
 	return state // Return the zero value of the type
-}
-
-// RemotePublicKey implements the network.Conn interface
-func (m *MockNetworkConn) RemotePublicKey() crypto.PubKey {
-	args := m.Called()
-	if len(args) == 0 {
-		return nil // Return nil as a default if not mocked specifically
-	}
-
-	return args.Get(0).(crypto.PubKey)
 }
 
 // MockConnScope implements the network.ConnScope interface for testing

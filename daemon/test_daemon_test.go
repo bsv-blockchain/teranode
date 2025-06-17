@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestCreateTransaction tests the CreateTransaction method of the TestDaemon struct.
 func TestCreateTransaction(t *testing.T) {
 	privKey, pubKey := bec.PrivKeyFromBytes(bec.S256(), []byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
 
@@ -122,4 +124,126 @@ func TestCreateTransaction(t *testing.T) {
 		// script should be 0x06(script size) + OP_FALSE + OP_RETURN + <test>
 		assert.Equal(t, []byte{0x06, 0x00, 0x6a, 0x74, 0x65, 0x73, 0x74}, tx.Outputs[1].LockingScript.Bytes())
 	})
+}
+
+// TestGetPortFromString tests the getPortFromString function.
+func TestGetPortFromString(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: 0,
+		},
+		{
+			name:     "missing colon",
+			input:    "localhost",
+			expected: 0,
+		},
+		{
+			name:     "non-numeric port",
+			input:    "localhost:abc",
+			expected: 0,
+		},
+		{
+			name:     "valid port",
+			input:    "localhost:8080",
+			expected: 8080,
+		},
+		{
+			name:     "colon with empty port",
+			input:    "localhost:",
+			expected: 0,
+		},
+		{
+			name:     "multiple colons - IPv6",
+			input:    "[::1]:443",
+			expected: 443,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := getPortFromString(tc.input)
+			require.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// TestGetPortFromURL tests the getPortFromURL function.
+func TestGetPortFromURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		inputURL string
+		expected int
+	}{
+		{
+			name:     "no port in URL",
+			inputURL: "http://localhost",
+			expected: 0,
+		},
+		{
+			name:     "valid numeric port",
+			inputURL: "http://localhost:8080",
+			expected: 8080,
+		},
+		{
+			name:     "empty port",
+			inputURL: "http://localhost:",
+			expected: 0,
+		},
+		{
+			name:     "IPv6 with valid port",
+			inputURL: "http://[::1]:443",
+			expected: 443,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := url.Parse(tc.inputURL)
+			require.NoError(t, err)
+
+			result := getPortFromURL(u)
+			require.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// TestLogJSON tests the LogJSON method of the TestDaemon struct.
+func TestLogJSON(t *testing.T) {
+	td := &TestDaemon{} // create a new TestDaemon instance
+
+	t.Run("valid_data", func(t *testing.T) {
+		data := map[string]interface{}{
+			"foo": "bar",
+			"baz": 123,
+		}
+		td.LogJSON(t, "SampleData", data)
+	})
+}
+
+// TestGetPrivateKey tests the GetPrivateKey method of the TestDaemon struct.
+func TestGetPrivateKey(t *testing.T) {
+	expected := &bec.PrivateKey{} // this would typically be initialized with a real key in practice
+	td := &TestDaemon{privKey: expected}
+
+	actual := td.GetPrivateKey(t)
+	require.Equal(t, expected, actual)
+}
+
+// TestJSONError_Error tests the Error method of the JSONError struct.
+func TestJSONError_Error(t *testing.T) {
+	je := &JSONError{
+		Code:    -32601,
+		Message: "Method not found",
+	}
+
+	expected := "code: -32601, message: Method not found"
+	actual := je.Error()
+
+	require.Equal(t, expected, actual)
 }

@@ -1,3 +1,20 @@
+// Package daemon provides the main entry point for the Teranode daemon.
+// It is responsible for initializing and managing various services and components
+// required for the operation of the Teranode system.
+//
+// Usage:
+//
+// This package is typically used to start the Teranode daemon, which orchestrates
+// the interaction between blockchain, networking, and other subsystems.
+//
+// Functions:
+//   - InitializeDaemon: Sets up the daemon and its dependencies.
+//   - StartDaemon: Starts the daemon and its services.
+//
+// Side effects:
+//
+// Functions in this package may start background processes, open network connections,
+// and interact with external systems such as databases and blockchain nodes.
 package daemon
 
 import (
@@ -7,83 +24,110 @@ import (
 	"net"
 	"net/http"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/services/alert"
-	"github.com/bitcoin-sv/teranode/services/asset"
-	"github.com/bitcoin-sv/teranode/services/blockassembly"
-	"github.com/bitcoin-sv/teranode/services/blockchain"
-	"github.com/bitcoin-sv/teranode/services/blockpersister"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
-	"github.com/bitcoin-sv/teranode/services/legacy"
-	"github.com/bitcoin-sv/teranode/services/legacy/peer"
-	"github.com/bitcoin-sv/teranode/services/p2p"
-	"github.com/bitcoin-sv/teranode/services/propagation"
-	"github.com/bitcoin-sv/teranode/services/rpc"
-	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
-	"github.com/bitcoin-sv/teranode/services/utxopersister"
-	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
-	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/servicemanager"
-	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/ordishs/gocore"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
-	pprofRegistered   atomic.Bool
-	metricsRegistered atomic.Bool
+	globalStoreMutex  sync.RWMutex
 	healthRegistered  atomic.Bool
+	metricsRegistered atomic.Bool
+	pprofRegistered   atomic.Bool
 	traceCloser       io.Closer
-	globalStoreMu     sync.RWMutex
 )
 
-// Option is a functional option type for configuring the Daemon.
-type Option func(*Daemon)
+const (
+	// Logger names for various services
+	loggerBlockAssembly            = "ba"
+	loggerBlockPersisterStore      = "bps"
+	loggerBlockValidation          = "bval"
+	loggerBlockchain               = "bchn"
+	loggerBlockchainClient         = "bchc"
+	loggerBlockchainSQL            = "bcsql"
+	loggerKafkaConsumerBlocks      = "kcb"
+	loggerKafkaConsumerRejectedTx  = "kcrtx"
+	loggerKafkaConsumerSubtree     = "kcs"
+	loggerKafkaConsumerTransaction = "kctx"
+	loggerKafkaConsumerTxMeta      = "kctm"
+	loggerKafkaProducerBlockFinal  = "kpbf"
+	loggerKafkaProducerBlocks      = "kpb"
+	loggerKafkaProducerRejectedTx  = "kprtx"
+	loggerKafkaProducerSubtree     = "kps"
+	loggerP2P                      = "p2p"
+	loggerPeerClient               = "peer"
+	loggerPropagation              = "prop"
+	loggerRPC                      = "rpc"
+	loggerSubtreeValidation        = "stval"
+	loggerSubtrees                 = "subtrees"
+	loggerTransactions             = "txs"
+	loggerTxValidator              = "txval"
+	loggerUtxos                    = "utxos"
 
-// WithLoggerFactory provides a custom logger factory for the Daemon and its services.
-func WithLoggerFactory(factory func(serviceName string) ulogger.Logger) Option {
-	return func(d *Daemon) {
-		d.loggerFactory = factory
-	}
-}
+	// Service names
+	serviceAlert                   = "alert"
+	serviceAlertFormal             = "Alert"
+	serviceAsset                   = "asset"
+	serviceAssetFormal             = "Asset"
+	serviceBlockAssembly           = "blockassembly"
+	serviceBlockAssemblyFormal     = "BlockAssembly"
+	serviceBlockPersister          = "blockpersister"
+	serviceBlockPersisterFormal    = "BlockPersister"
+	serviceBlockValidation         = "blockvalidation"
+	serviceBlockValidationFormal   = "BlockValidation"
+	serviceBlockchainFormal        = "Blockchain"
+	serviceHelp                    = "help"
+	serviceLegacy                  = "legacy"
+	serviceLegacyFormal            = "Legacy"
+	serviceNameDaemon              = "Daemon"
+	serviceNameP2P                 = "p2p"
+	serviceNameP2PFormal           = "P2P"
+	servicePropagation             = "propagation"
+	servicePropagationFormal       = "Propagation"
+	serviceRPC                     = "rpc"
+	serviceRPCFormal               = "RPC"
+	serviceServiceManager          = "ServiceManager"
+	serviceSubtreeValidation       = "subtreevalidation"
+	serviceSubtreeValidationFormal = "SubtreeValidation"
+	serviceUtxoPersister           = "utxopersister"
+	serviceUtxoPersisterFormal     = "UTXOPersister"
+	serviceValidator               = "validator"
+	serviceValidatorFormal         = "Validator"
+)
 
-func WithContext(ctx context.Context) Option {
-	return func(d *Daemon) {
-		d.Ctx = ctx
-	}
-}
-
+// externalService represents an external service that can be added to the Daemon.
 type externalService struct {
 	Name     string
 	InitFunc func() (servicemanager.Service, error)
 }
 
+// Daemon is the main structure for managing the Teranode daemon.
 type Daemon struct {
-	Ctx           context.Context
-	doneCh        chan struct{}
-	closeDoneOnce sync.Once
-
-	stopCh             chan struct{}
-	closeStopOnce      sync.Once
-	serverMu           sync.Mutex
-	server             *http.Server
+	Ctx                context.Context
 	ServiceManager     *servicemanager.ServiceManager
-	externalServices   []*externalService
-	loggerFactory      func(serviceName string) ulogger.Logger
-	daemonStores       *DaemonStores
 	appCount           int
 	blockValidationSrv *blockvalidation.Server
+	closeDoneOnce      sync.Once
+	closeStopOnce      sync.Once
+	daemonStores       *Stores
+	doneCh             chan struct{}
+	externalServices   []*externalService
+	loggerFactory      func(serviceName string) ulogger.Logger
+	server             *http.Server
+	serverMu           sync.Mutex
+	stopCh             chan struct{}
 }
 
+// New creates a new Daemon instance with the provided options.
 func New(opts ...Option) *Daemon {
 	ctx := context.Background()
 
@@ -99,7 +143,7 @@ func New(opts ...Option) *Daemon {
 		loggerFactory: func(serviceName string) ulogger.Logger {
 			return ulogger.New(serviceName)
 		},
-		daemonStores: &DaemonStores{},
+		daemonStores: &Stores{},
 	}
 
 	// Apply functional options
@@ -108,11 +152,12 @@ func New(opts ...Option) *Daemon {
 	}
 
 	// Initialize ServiceManager with the configured logger factory
-	d.ServiceManager = servicemanager.NewServiceManager(d.Ctx, d.loggerFactory("ServiceManager"))
+	d.ServiceManager = servicemanager.NewServiceManager(d.Ctx, d.loggerFactory(serviceServiceManager))
 
 	return d
 }
 
+// AddExternalService adds an external service to the Daemon.
 func (d *Daemon) AddExternalService(name string, initFunc func() (servicemanager.Service, error)) {
 	d.externalServices = append(d.externalServices, &externalService{
 		Name:     name,
@@ -120,8 +165,9 @@ func (d *Daemon) AddExternalService(name string, initFunc func() (servicemanager
 	})
 }
 
+// Stop gracefully stops the Daemon and all its services.
 func (d *Daemon) Stop() error {
-	logger := d.loggerFactory("Daemon")
+	logger := d.loggerFactory(serviceNameDaemon)
 
 	if traceCloser != nil {
 		_ = traceCloser.Close()
@@ -129,7 +175,8 @@ func (d *Daemon) Stop() error {
 	}
 
 	d.serverMu.Lock()
-	// Gracefully shutdown the HTTP server if it exists
+
+	// Graceful shutdown the HTTP server if it exists
 	if d.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -150,7 +197,7 @@ func (d *Daemon) Stop() error {
 		return nil
 	}
 
-	// Default timeout of 30 seconds if not provided
+	// // Default timeout of 30 seconds if it wasn't provided
 	shutdownTimeout := 30 * time.Second
 
 	// Set up a timeout channel
@@ -169,6 +216,7 @@ func (d *Daemon) Stop() error {
 	}
 }
 
+// updateServiceStatuses logs the statuses of all services managed by the ServiceManager.
 func (d *Daemon) updateServiceStatuses(logger ulogger.Logger) {
 	// Get detailed information about all services
 	type serviceStatus struct {
@@ -209,10 +257,11 @@ func (d *Daemon) updateServiceStatuses(logger ulogger.Logger) {
 	}
 }
 
-func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings.Settings, readyCh ...chan struct{}) {
+// Start initializes and starts the Daemon and its services.
+func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settings.Settings, readyChannel ...chan struct{}) {
 	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
 	if d.shouldStart("wait_for_postgres", args) {
-		if err := waitForPostgresToStart(logger, tSettings.PostgresCheckAddress); err != nil {
+		if err := waitForPostgresToStart(logger, appSettings.PostgresCheckAddress); err != nil {
 			logger.Errorf("error waiting for postgres: %v", err)
 			return
 		}
@@ -221,11 +270,11 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 	sm := d.ServiceManager
 
 	var readyChInternal chan struct{}
-	if len(readyCh) > 0 {
-		readyChInternal = readyCh[0]
+	if len(readyChannel) > 0 {
+		readyChInternal = readyChannel[0]
 	}
 
-	err := d.startServices(sm.Ctx, logger, tSettings, sm, args, readyChInternal)
+	err := d.startServices(sm.Ctx, logger, appSettings, sm, args, readyChInternal)
 	if err != nil {
 		logger.Errorf("error starting services: %v", err)
 		sm.ForceShutdown()
@@ -238,7 +287,11 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 	mux := http.NewServeMux()
 	healthFunc := func(liveness bool) func(http.ResponseWriter, *http.Request) {
 		return func(w http.ResponseWriter, r *http.Request) {
-			status, details, err := sm.HealthHandler(sm.Ctx, liveness)
+			var status int
+
+			var details string
+
+			status, details, err = sm.HealthHandler(sm.Ctx, liveness)
 			if err != nil {
 				w.WriteHeader(status)
 				_, _ = w.Write([]byte(details))
@@ -262,13 +315,13 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 		healthRegistered.Store(true)
 	}
 
-	port := tSettings.HealthCheckPort
+	port := appSettings.HealthCheckPort
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
 		Handler:           mux,
 		ReadHeaderTimeout: 20 * time.Second,  // Prevent Slowloris attacks
-		ReadTimeout:       60 * time.Second,  // Maximum duration for reading entire request
+		ReadTimeout:       60 * time.Second,  // Maximum duration for reading the entire request
 		WriteTimeout:      60 * time.Second,  // Maximum duration before timing out writes of response
 		IdleTimeout:       120 * time.Second, // Maximum amount of time to wait for the next request
 	}
@@ -278,8 +331,8 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 	d.serverMu.Unlock()
 
 	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("Error starting server: %v", err)
+		if localErr := server.ListenAndServe(); localErr != nil && !errors.Is(localErr, http.ErrServerClosed) {
+			logger.Fatalf("Error starting server: %v", localErr)
 		}
 	}()
 
@@ -293,7 +346,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 
 	// Wait for either services to complete or doneCh to be closed
 	select {
-	case err := <-waitErr:
+	case err = <-waitErr:
 		if err != nil {
 			logger.Errorf("services failed: %v", err)
 		}
@@ -313,7 +366,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 		logger.Infof("daemon shutdown waiting for services to finish")
 
 		// Wait for services to complete shutdown using the existing waitCh
-		if err := <-waitErr; err != nil {
+		if err = <-waitErr; err != nil {
 			logger.Errorf("error during service shutdown: %v", err)
 		}
 
@@ -323,12 +376,13 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, tSettings *settings
 	d.closeStopOnce.Do(func() { close(d.stopCh) })
 }
 
+// closeStores safely closes the main stores used by the Daemon.
 func (d *Daemon) closeStores(logger ulogger.Logger, sm *servicemanager.ServiceManager) {
-	globalStoreMu.RLock()
-	txStoreToClose := d.daemonStores.mainTxstore
-	subtreeStoreToClose := d.daemonStores.mainSubtreestore
+	globalStoreMutex.RLock()
+	txStoreToClose := d.daemonStores.mainTxStore
+	subtreeStoreToClose := d.daemonStores.mainSubtreeStore
 	tempStoreToClose := d.daemonStores.mainTempStore
-	globalStoreMu.RUnlock()
+	globalStoreMutex.RUnlock()
 
 	if txStoreToClose != nil {
 		logger.Debugf("closing tx store")
@@ -349,647 +403,7 @@ func (d *Daemon) closeStores(logger ulogger.Logger, sm *servicemanager.ServiceMa
 	}
 }
 
-// startServices starts the services based on the command line arguments and the config file
-// nolint:gocognit
-func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, sm *servicemanager.ServiceManager, args []string, readyCh chan<- struct{}) error {
-	var (
-		closeOnce sync.Once
-	)
-
-	// Create logger using the factory
-	createLogger := d.loggerFactory
-
-	help := d.shouldStart("help", args)
-	startBlockchain := d.shouldStart("Blockchain", args)
-	startBlockAssembly := d.shouldStart("BlockAssembly", args)
-	startSubtreeValidation := d.shouldStart("SubtreeValidation", args)
-	startBlockValidation := d.shouldStart("BlockValidation", args)
-	startValidator := d.shouldStart("Validator", args)
-	startPropagation := d.shouldStart("Propagation", args)
-	startP2P := d.shouldStart("P2P", args)
-	startAsset := d.shouldStart("Asset", args)
-	startBlockPersister := d.shouldStart("BlockPersister", args)
-	startUTXOPersister := d.shouldStart("UTXOPersister", args)
-	startLegacy := d.shouldStart("Legacy", args)
-	startRPC := d.shouldStart("RPC", args)
-	startAlert := d.shouldStart("Alert", args)
-
-	d.appCount += len(d.externalServices)
-
-	if help || d.appCount == 0 {
-		printUsage()
-		return nil
-	}
-
-	profilerAddr := tSettings.ProfilerAddr
-	if profilerAddr != "" && !pprofRegistered.Load() {
-		pprofRegistered.Store(true)
-
-		go func() {
-			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
-
-			gocore.RegisterStatsHandlers()
-
-			prefix := tSettings.StatsPrefix
-			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
-
-			server := &http.Server{
-				Addr:         profilerAddr,
-				Handler:      nil,
-				ReadTimeout:  60 * time.Second,
-				WriteTimeout: 60 * time.Second,
-				IdleTimeout:  120 * time.Second,
-			}
-
-			// http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
-			logger.Fatalf("%v", server.ListenAndServe())
-		}()
-	}
-
-	if tSettings.UseDatadogProfiler {
-		deferFn := datadogProfiler()
-		defer deferFn()
-	}
-
-	prometheusEndpoint := tSettings.PrometheusEndpoint
-	if prometheusEndpoint != "" && !metricsRegistered.Load() {
-		metricsRegistered.Store(true)
-		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
-		http.Handle(prometheusEndpoint, promhttp.Handler())
-	}
-
-	if tSettings.UseOpenTracing {
-		logger.Infof("Starting tracer")
-		// closeTracer := tracing.InitOtelTracer()
-		// defer closeTracer()
-		samplingRateStr := tSettings.TracingSampleRate
-
-		samplingRate, err := strconv.ParseFloat(samplingRateStr, 64)
-		if err != nil {
-			logger.Errorf("error parsing sampling rate: %v", err)
-
-			samplingRate = 0.01
-		}
-
-		serviceName := tSettings.ServiceName
-
-		closer, err := tracing.InitTracer(serviceName, samplingRate, true, nil)
-		if err != nil {
-			logger.Warnf("failed to initialize tracer: %v", err)
-		}
-
-		if closer != nil {
-			traceCloser = closer
-		}
-	}
-
-	var blockchainService *blockchain.Blockchain
-
-	// blockchain service
-	if startBlockchain {
-		blockchainStoreURL := tSettings.BlockChain.StoreURL
-		if blockchainStoreURL == nil {
-			return errors.NewStorageError("blockchain store url not found")
-		}
-
-		blockchainStore, err := blockchain_store.NewStore(createLogger("bcsql"), blockchainStoreURL, tSettings)
-		if err != nil {
-			return err
-		}
-
-		blocksFinalKafkaAsyncProducer, err := getKafkaBlocksFinalAsyncProducer(ctx, createLogger("kpbf"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		var localTestStartFromState string
-
-		// Check if the command line has the -localTestStartFromState flag, if so use that value as initial FSM state
-		for _, cmd := range args {
-			if strings.HasPrefix(cmd, "-localTestStartFromState=") {
-				localTestStartFromState = strings.SplitN(cmd, "=", 2)[1]
-				break
-			}
-		}
-
-		// if flag is not found, check the config if the flag is set
-		if localTestStartFromState == "" {
-			// read the config param
-			localTestStartFromState = tSettings.LocalTestStartFromState
-		}
-
-		blockchainService, err = blockchain.New(ctx, createLogger("bchn"), tSettings, blockchainStore, blocksFinalKafkaAsyncProducer, localTestStartFromState)
-		if err != nil {
-			return err
-		}
-
-		if err = sm.AddService("BlockChainService", blockchainService); err != nil {
-			return err
-		}
-	}
-
-	// p2p server
-	if startP2P {
-		blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "p2p")
-		if err != nil {
-			return err
-		}
-
-		rejectedTxKafkaConsumerClient, err := getKafkaRejectedTxConsumerGroup(createLogger("kprtx"), tSettings, "p2p"+"."+tSettings.ClientName)
-		if err != nil {
-			return err
-		}
-
-		subtreeKafkaProducerClient, err := getKafkaSubtreesAsyncProducer(ctx, createLogger("kps"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		blocksKafkaProducerClient, err := getKafkaBlocksAsyncProducer(ctx, createLogger("kpb"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		p2pLogger := createLogger("p2p")
-		p2pLogger.SetLogLevel(tSettings.LogLevel)
-		p2pService, err := p2p.NewServer(ctx,
-			p2pLogger,
-			tSettings,
-			blockchainClient,
-			rejectedTxKafkaConsumerClient,
-			subtreeKafkaProducerClient,
-			blocksKafkaProducerClient,
-			d.blockValidationSrv,
-		)
-		if err != nil {
-			return err
-		}
-
-		if err = sm.AddService("P2P", p2pService); err != nil {
-			return err
-		}
-	}
-
-	// asset service
-	if startAsset {
-		utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger("utxos"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		txStore, err := d.daemonStores.GetTxStore(createLogger("txs"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		subtreeStore, err := d.daemonStores.GetSubtreeStore(createLogger("subtrees"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		blockPersisterStore, err := d.daemonStores.GetBlockPersisterStore(createLogger("bp"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "asset")
-		if err != nil {
-			return err
-		}
-
-		if err := sm.AddService("Asset", asset.NewServer(
-			createLogger("asset"),
-			tSettings,
-			utxoStore,
-			txStore,
-			subtreeStore,
-			blockPersisterStore,
-			blockchainClient,
-		)); err != nil {
-			return err
-		}
-	}
-
-	if startRPC {
-		blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "rpc")
-		if err != nil {
-			return err
-		}
-
-		utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger("utxos"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		rpcServer, err := rpc.NewServer(createLogger("rpc"), tSettings, blockchainClient, utxoStore)
-		if err != nil {
-			return err
-		}
-
-		if err := sm.AddService("Rpc", rpcServer); err != nil {
-			return err
-		}
-	}
-
-	if startAlert {
-		blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "alert")
-		if err != nil {
-			return err
-		}
-
-		utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger("utxos"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		blockassemblyClient, err := blockassembly.NewClient(ctx, createLogger("ba"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		peerClient, err := peer.NewClient(ctx, createLogger("peer"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		p2pClient, err := p2p.NewClient(ctx, createLogger("p2p"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		if err = sm.AddService("Alert", alert.New(
-			createLogger("alert"),
-			tSettings,
-			blockchainClient,
-			utxoStore,
-			blockassemblyClient,
-			peerClient,
-			p2pClient,
-		)); err != nil {
-			return err
-		}
-	}
-
-	if startBlockPersister {
-		blockStore, err := d.daemonStores.GetBlockStore(createLogger("bps"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		subtreeStore, err := d.daemonStores.GetSubtreeStore(createLogger("subtrees"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger("utxos"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "blockpersister")
-		if err != nil {
-			return err
-		}
-
-		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
-			createLogger("bp"),
-			tSettings,
-			blockStore,
-			subtreeStore,
-			utxoStore,
-			blockchainClient,
-		)); err != nil {
-			return err
-		}
-	}
-
-	if startUTXOPersister {
-		blockStore, err := d.daemonStores.GetBlockStore(createLogger("bps"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "utxopersister")
-		if err != nil {
-			return err
-		}
-
-		if err := sm.AddService("UTXOPersister", utxopersister.New(ctx,
-			createLogger("utxop"),
-			tSettings,
-			blockStore,
-			blockchainClient,
-		)); err != nil {
-			return err
-		}
-	}
-
-	// blockAssembly
-	if startBlockAssembly {
-		if tSettings.BlockAssembly.GRPCListenAddress != "" {
-			txStore, err := d.daemonStores.GetTxStore(createLogger("txs"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger("utxos"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			subtreeStore, err := d.daemonStores.GetSubtreeStore(createLogger("subtrees"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "blockassembly")
-			if err != nil {
-				return err
-			}
-
-			if err = sm.AddService("BlockAssembly", blockassembly.New(
-				createLogger("bass"),
-				tSettings,
-				txStore,
-				utxoStore,
-				subtreeStore,
-				blockchainClient,
-			)); err != nil {
-				return err
-			}
-		}
-	}
-
-	// subtreeValidation
-	if startSubtreeValidation {
-		subtreeStore, err := d.daemonStores.GetSubtreeStore(createLogger("subtrees"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		txStore, err := d.daemonStores.GetTxStore(createLogger("txs"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger("utxos"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		validatorClient, err := d.daemonStores.GetValidatorClient(ctx, createLogger("txval"), tSettings)
-		if err != nil {
-			return err
-		}
-
-		blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "subtreevalidation")
-		if err != nil {
-			return err
-		}
-
-		subtreeConsumerClient, err := getKafkaSubtreesConsumerGroup(createLogger("kcs"), tSettings, "subtreevalidation"+"."+tSettings.ClientName)
-		if err != nil {
-			return err
-		}
-
-		txmetaConsumerClient, err := getKafkaTxmetaConsumerGroup(createLogger("kctm"), tSettings, "subtreevalidation"+"."+tSettings.ClientName)
-		if err != nil {
-			return err
-		}
-
-		subtreeValidationService, err := subtreevalidation.New(ctx,
-			createLogger("stval"),
-			tSettings,
-			subtreeStore,
-			txStore,
-			utxoStore,
-			validatorClient,
-			blockchainClient,
-			subtreeConsumerClient,
-			txmetaConsumerClient,
-		)
-		if err != nil {
-			return err
-		}
-
-		if err = sm.AddService("Subtree Validation", subtreeValidationService); err != nil {
-			return err
-		}
-	}
-
-	// blockValidation
-	if startBlockValidation {
-		if tSettings.BlockValidation.GRPCListenAddress != "" {
-			subtreeStore, err := d.daemonStores.GetSubtreeStore(createLogger("subtrees"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			txStore, err := d.daemonStores.GetTxStore(createLogger("txs"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger("utxos"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			validatorClient, err := d.daemonStores.GetValidatorClient(ctx, createLogger("txval"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "blockvalidation")
-			if err != nil {
-				return err
-			}
-
-			kafkaConsumerClient, err := getKafkaBlocksConsumerGroup(createLogger("kcb"), tSettings, "blockvalidation"+"."+tSettings.ClientName)
-			if err != nil {
-				return err
-			}
-
-			d.blockValidationSrv = blockvalidation.New(
-				createLogger("bval"),
-				tSettings,
-				subtreeStore,
-				txStore,
-				utxoStore,
-				validatorClient,
-				blockchainClient,
-				kafkaConsumerClient,
-			)
-			if err = sm.AddService("Block Validation", d.blockValidationSrv); err != nil {
-				return err
-			}
-		}
-	}
-
-	// validator
-	if startValidator {
-		if tSettings.Validator.GRPCListenAddress != "" {
-			utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger("utxos"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "validator")
-			if err != nil {
-				return err
-			}
-
-			consumerClient, err := getKafkaTxConsumerGroup(createLogger("kctx"), tSettings, "validator"+"."+tSettings.ClientName)
-			if err != nil {
-				return err
-			}
-
-			txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, createLogger("kctm"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, createLogger("kctr"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			blockAssemblyClient, err := blockassembly.NewClient(ctx, createLogger("bass"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			if err = sm.AddService("Validator", validator.NewServer(
-				createLogger("validator"),
-				tSettings,
-				utxoStore,
-				blockchainClient,
-				consumerClient,
-				txMetaKafkaProducerClient,
-				rejectedTxKafkaProducerClient,
-				blockAssemblyClient,
-			)); err != nil {
-				return err
-			}
-		}
-	}
-
-	// propagation
-	if startPropagation {
-		if tSettings.Propagation.GRPCListenAddress != "" {
-			txStore, err := d.daemonStores.GetTxStore(createLogger("txs"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			validatorClient, err := d.daemonStores.GetValidatorClient(ctx, createLogger("txval"), tSettings)
-			if err != nil {
-				return err
-			}
-
-			blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger("bchc"), tSettings, "propagation")
-			if err != nil {
-				return err
-			}
-
-			validatorKafkaProducerClient, err := getKafkaTxAsyncProducer(ctx, createLogger("kctx"))
-			if err != nil {
-				return err
-			}
-
-			if err = sm.AddService("PropagationServer", propagation.New(
-				createLogger("prop"),
-				tSettings,
-				txStore,
-				validatorClient,
-				blockchainClient,
-				validatorKafkaProducerClient,
-			)); err != nil {
-				return err
-			}
-		}
-	}
-
-	if startLegacy {
-		// if tSettings.ChainCfgParams.Net == chaincfg.RegressionNetParams.Net {
-		// 	logger.Warnf("legacy service not supported in regtest mode. Skipping legacy service...")
-		// 	return nil
-		// }
-		subtreeStore, err := d.daemonStores.GetSubtreeStore(logger, tSettings)
-		if err != nil {
-			return err
-		}
-
-		tempStore, err := d.daemonStores.GetTempStore(logger, tSettings)
-		if err != nil {
-			return err
-		}
-
-		utxoStore, err := d.daemonStores.GetUtxoStore(ctx, logger, tSettings)
-		if err != nil {
-			return err
-		}
-
-		validatorClient, err := d.daemonStores.GetValidatorClient(ctx, logger, tSettings)
-		if err != nil {
-			return err
-		}
-
-		blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, logger, tSettings, "legacy")
-		if err != nil {
-			return err
-		}
-
-		subtreeValidationClient, err := d.daemonStores.GetSubtreeValidationClient(ctx, logger, tSettings)
-		if err != nil {
-			return err
-		}
-
-		blockValidationClient, err := d.daemonStores.GetBlockValidationClient(ctx, logger, tSettings)
-		if err != nil {
-			return err
-		}
-
-		blockassemblyClient, err := blockassembly.NewClient(ctx, logger, tSettings)
-		if err != nil {
-			return err
-		}
-
-		if err = sm.AddService("Legacy", legacy.New(
-			createLogger("legacy"),
-			tSettings,
-			blockchainClient,
-			validatorClient,
-			subtreeStore,
-			tempStore,
-			utxoStore,
-			subtreeValidationClient,
-			blockValidationClient,
-			blockassemblyClient,
-		)); err != nil {
-			return err
-		}
-	}
-
-	for _, externalService := range d.externalServices {
-		service, err := externalService.InitFunc()
-		if err != nil {
-			return err
-		}
-
-		if err := sm.AddService(externalService.Name, service); err != nil {
-			return err
-		}
-	}
-
-	if readyCh != nil {
-		sm.WaitForServiceToBeReady()
-		closeOnce.Do(func() { close(readyCh) })
-	}
-
-	return nil
-}
-
+// shouldStart checks if the specified app should be started based on command line arguments or config settings.
 func (d *Daemon) shouldStart(app string, args []string) bool {
 	// See if the app is enabled in the command line
 	cmdArg := fmt.Sprintf("-%s=1", strings.ToLower(app))
@@ -1008,7 +422,7 @@ func (d *Daemon) shouldStart(app string, args []string) bool {
 		}
 	}
 
-	// Add option to stop all services from running if -all=0 is passed
+	// Add an option to stop all services from running if -all=0 is passed
 	// except for the services that are explicitly enabled above
 	for _, cmd := range args {
 		if cmd == "-all=0" {
@@ -1027,6 +441,7 @@ func (d *Daemon) shouldStart(app string, args []string) bool {
 	return b
 }
 
+// printUsage prints the usage information for the Daemon command line options.
 func printUsage() {
 	fmt.Println("usage: main [options]")
 	fmt.Println("where options are:")
@@ -1078,8 +493,9 @@ func printUsage() {
 	fmt.Println("")
 }
 
+// waitForPostgresToStart waits for PostgreSQL to be ready at the specified address.
 func waitForPostgresToStart(logger ulogger.Logger, address string) error {
-	timeout := time.Minute // 1 minutes timeout
+	timeout := time.Minute // 1-minute timeout
 
 	logger.Infof("Waiting for PostgreSQL to be ready at %s\n", address)
 

@@ -16,31 +16,33 @@ import (
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/teranode/stores/utxo/factory"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/kafka"
 )
 
-type DaemonStores struct {
-	mainTxstore                 blob.Store
-	mainSubtreestore            blob.Store
-	mainTempStore               blob.Store
-	mainBlockStore              blob.Store
+type Stores struct {
 	mainBlockPersisterStore     blob.Store
+	mainBlockStore              blob.Store
+	mainBlockValidationClient   blockvalidation.Interface
+	mainSubtreeStore            blob.Store
+	mainSubtreeValidationClient subtreevalidation.Interface
+	mainTempStore               blob.Store
+	mainTxStore                 blob.Store
 	mainUtxoStore               utxostore.Store
 	mainValidatorClient         validator.Interface
-	mainSubtreeValidationClient subtreevalidation.Interface
-	mainBlockValidationClient   blockvalidation.Interface
 }
 
 // GetUtxoStore returns the main UTXO store instance. If the store hasn't been initialized yet,
 // it creates a new one using the provided settings. This function ensures only one instance
 // of the UTXO store exists by maintaining a singleton pattern.
-func (d *DaemonStores) GetUtxoStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (utxostore.Store, error) {
+func (d *Stores) GetUtxoStore(ctx context.Context, logger ulogger.Logger,
+	appSettings *settings.Settings) (utxostore.Store, error) {
 	if d.mainUtxoStore != nil {
 		return d.mainUtxoStore, nil
 	}
 
 	var err error
 
-	d.mainUtxoStore, err = utxofactory.NewStore(ctx, logger, tSettings, "main")
+	d.mainUtxoStore, err = utxofactory.NewStore(ctx, logger, appSettings, "main")
 	if err != nil {
 		return nil, err
 	}
@@ -51,14 +53,15 @@ func (d *DaemonStores) GetUtxoStore(ctx context.Context, logger ulogger.Logger, 
 // GetSubtreeValidationClient returns the main subtree validation client instance. If the client
 // hasn't been initialized yet, it creates a new one using the provided settings. This function
 // ensures only one instance of the subtree validation client exists.
-func (d *DaemonStores) GetSubtreeValidationClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (subtreevalidation.Interface, error) {
+func (d *Stores) GetSubtreeValidationClient(ctx context.Context, logger ulogger.Logger,
+	appSettings *settings.Settings) (subtreevalidation.Interface, error) {
 	if d.mainSubtreeValidationClient != nil {
 		return d.mainSubtreeValidationClient, nil
 	}
 
 	var err error
 
-	d.mainSubtreeValidationClient, err = subtreevalidation.NewClient(ctx, logger, tSettings, "main_stores")
+	d.mainSubtreeValidationClient, err = subtreevalidation.NewClient(ctx, logger, appSettings, "main_stores")
 
 	return d.mainSubtreeValidationClient, err
 }
@@ -66,14 +69,15 @@ func (d *DaemonStores) GetSubtreeValidationClient(ctx context.Context, logger ul
 // GetBlockValidationClient returns the main block validation client instance. If the client
 // hasn't been initialized yet, it creates a new one using the provided settings. This function
 // ensures only one instance of the block validation client exists.
-func (d *DaemonStores) GetBlockValidationClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (blockvalidation.Interface, error) {
+func (d *Stores) GetBlockValidationClient(ctx context.Context, logger ulogger.Logger,
+	appSettings *settings.Settings) (blockvalidation.Interface, error) {
 	if d.mainBlockValidationClient != nil {
 		return d.mainBlockValidationClient, nil
 	}
 
 	var err error
 
-	d.mainBlockValidationClient, err = blockvalidation.NewClient(ctx, logger, tSettings, "main_stores")
+	d.mainBlockValidationClient, err = blockvalidation.NewClient(ctx, logger, appSettings, "main_stores")
 
 	return d.mainBlockValidationClient, err
 }
@@ -81,55 +85,68 @@ func (d *DaemonStores) GetBlockValidationClient(ctx context.Context, logger ulog
 // GetBlockchainClient creates and returns a new blockchain client instance. Unlike other store
 // getters, this function always creates a new client instance to maintain source information.
 // The source parameter identifies the origin or purpose of the client.
-func (d *DaemonStores) GetBlockchainClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source string) (blockchain.ClientI, error) {
+func (d *Stores) GetBlockchainClient(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
+	source string) (blockchain.ClientI, error) {
 	// don't use a global client, otherwise we don't know the source
-	return blockchain.NewClient(ctx, logger, tSettings, source)
+	return blockchain.NewClient(ctx, logger, appSettings, source)
 }
 
 // GetBlockAssemblyClient creates and returns a new block assembly client instance.
-func GetBlockAssemblyClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (blockassembly.ClientI, error) {
+func GetBlockAssemblyClient(ctx context.Context, logger ulogger.Logger,
+	appSettings *settings.Settings) (blockassembly.ClientI, error) {
 	// don't use a global client, otherwise we don't know the source
-	return blockassembly.NewClient(ctx, logger, tSettings)
+	return blockassembly.NewClient(ctx, logger, appSettings)
 }
 
 // GetValidatorClient returns the main validator client instance. If the client hasn't been
 // initialized yet, it creates either a local validator or a remote client based on configuration.
 // For local validators, it sets up necessary dependencies including UTXO store and Kafka producers.
-func (d *DaemonStores) GetValidatorClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (validator.Interface, error) {
+func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
+	appSettings *settings.Settings) (validator.Interface, error) {
 	if d.mainValidatorClient != nil {
 		return d.mainValidatorClient, nil
 	}
 
 	var err error
 
-	localValidator := tSettings.Validator.UseLocalValidator
+	localValidator := appSettings.Validator.UseLocalValidator
 
 	if localValidator {
 		logger.Infof("[Validator] Using local validator")
 
-		utxoStore, err := d.GetUtxoStore(ctx, logger, tSettings)
+		var utxoStore utxostore.Store
+
+		utxoStore, err = d.GetUtxoStore(ctx, logger, appSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create local validator client", err)
 		}
 
-		txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, logger, tSettings)
+		var txMetaKafkaProducerClient *kafka.KafkaAsyncProducer
+
+		txMetaKafkaProducerClient, err = getKafkaTxmetaAsyncProducer(ctx, logger, appSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create txmeta kafka producer for local validator", err)
 		}
 
-		rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, logger, tSettings)
+		var rejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
+
+		rejectedTxKafkaProducerClient, err = getKafkaRejectedTxAsyncProducer(ctx, logger, appSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
 		}
 
-		blockAssemblyClient, err := GetBlockAssemblyClient(ctx, logger, tSettings)
+		var blockAssemblyClient blockassembly.ClientI
+
+		blockAssemblyClient, err = GetBlockAssemblyClient(ctx, logger, appSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create block assembly client for local validator", err)
 		}
 
-		validatorClient, err := validator.New(ctx,
+		var validatorClient validator.Interface
+
+		validatorClient, err = validator.New(ctx,
 			logger,
-			tSettings,
+			appSettings,
 			utxoStore,
 			txMetaKafkaProducerClient,
 			rejectedTxKafkaProducerClient,
@@ -142,7 +159,7 @@ func (d *DaemonStores) GetValidatorClient(ctx context.Context, logger ulogger.Lo
 		return validatorClient, nil
 
 	} else {
-		d.mainValidatorClient, err = validator.NewClient(ctx, logger, tSettings)
+		d.mainValidatorClient, err = validator.NewClient(ctx, logger, appSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create validator client", err)
 		}
@@ -154,12 +171,12 @@ func (d *DaemonStores) GetValidatorClient(ctx context.Context, logger ulogger.Lo
 // GetTxStore returns the main transaction store instance. If the store hasn't been initialized yet,
 // it creates a new one using the configured URL from settings. This function ensures only one
 // instance of the transaction store exists.
-func (d *DaemonStores) GetTxStore(logger ulogger.Logger, tSettings *settings.Settings) (blob.Store, error) {
-	if d.mainTxstore != nil {
-		return d.mainTxstore, nil
+func (d *Stores) GetTxStore(logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
+	if d.mainTxStore != nil {
+		return d.mainTxStore, nil
 	}
 
-	txStoreURL := tSettings.Block.TxStore
+	txStoreURL := appSettings.Block.TxStore
 	if txStoreURL == nil {
 		return nil, errors.NewConfigurationError("txstore config not found")
 	}
@@ -174,25 +191,25 @@ func (d *DaemonStores) GetTxStore(logger ulogger.Logger, tSettings *settings.Set
 		}
 	}
 
-	d.mainTxstore, err = blob.NewStore(logger, txStoreURL, options.WithHashPrefix(hashPrefix))
+	d.mainTxStore, err = blob.NewStore(logger, txStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create tx store", err)
 	}
 
-	return d.mainTxstore, nil
+	return d.mainTxStore, nil
 }
 
 // GetSubtreeStore returns the main subtree store instance. If the store hasn't been initialized yet,
 // it creates a new one using the URL from settings. The store is configured with a hash prefix
 // of 2 for optimized storage organization.
-func (d *DaemonStores) GetSubtreeStore(logger ulogger.Logger, tSettings *settings.Settings) (blob.Store, error) {
-	if d.mainSubtreestore != nil {
-		return d.mainSubtreestore, nil
+func (d *Stores) GetSubtreeStore(logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
+	if d.mainSubtreeStore != nil {
+		return d.mainSubtreeStore, nil
 	}
 
 	var err error
 
-	subtreeStoreURL := tSettings.SubtreeValidation.SubtreeStore
+	subtreeStoreURL := appSettings.SubtreeValidation.SubtreeStore
 
 	if subtreeStoreURL == nil {
 		return nil, errors.NewConfigurationError("subtreestore config not found")
@@ -206,23 +223,23 @@ func (d *DaemonStores) GetSubtreeStore(logger ulogger.Logger, tSettings *setting
 		}
 	}
 
-	d.mainSubtreestore, err = blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(hashPrefix))
+	d.mainSubtreeStore, err = blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}
 
-	return d.mainSubtreestore, nil
+	return d.mainSubtreeStore, nil
 }
 
 // GetTempStore returns the main temporary store instance. If the store hasn't been initialized yet,
 // it creates a new one using the configured URL from settings, defaulting to "./tmp" if not specified.
 // This store is used for temporary data storage during processing.
-func (d *DaemonStores) GetTempStore(logger ulogger.Logger, tSettings *settings.Settings) (blob.Store, error) {
+func (d *Stores) GetTempStore(logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
 	if d.mainTempStore != nil {
 		return d.mainTempStore, nil
 	}
 
-	tempStoreURL := tSettings.Legacy.TempStore
+	tempStoreURL := appSettings.Legacy.TempStore
 	if tempStoreURL == nil {
 		return nil, errors.NewConfigurationError("temp_store config not found")
 	}
@@ -240,12 +257,12 @@ func (d *DaemonStores) GetTempStore(logger ulogger.Logger, tSettings *settings.S
 // GetBlockStore returns the main block store instance. If the store hasn't been initialized yet,
 // it creates a new one using the configured URL from settings. This store is responsible for
 // persisting blockchain blocks.
-func (d *DaemonStores) GetBlockStore(logger ulogger.Logger, tSettings *settings.Settings) (blob.Store, error) {
+func (d *Stores) GetBlockStore(logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
 	if d.mainBlockStore != nil {
 		return d.mainBlockStore, nil
 	}
 
-	blockStoreURL := tSettings.Block.BlockStore
+	blockStoreURL := appSettings.Block.BlockStore
 
 	if blockStoreURL == nil {
 		return nil, errors.NewConfigurationError("blockstore config not found")
@@ -272,12 +289,13 @@ func (d *DaemonStores) GetBlockStore(logger ulogger.Logger, tSettings *settings.
 // GetBlockPersisterStore returns the main block persister store instance. If the store hasn't been
 // initialized yet, it creates a new one using the configured URL from settings. This store is
 // specifically used for block persistence operations.
-func (d *DaemonStores) GetBlockPersisterStore(logger ulogger.Logger, tSettings *settings.Settings) (blob.Store, error) {
+func (d *Stores) GetBlockPersisterStore(logger ulogger.Logger,
+	appSettings *settings.Settings) (blob.Store, error) {
 	if d.mainBlockPersisterStore != nil {
 		return d.mainBlockPersisterStore, nil
 	}
 
-	blockStoreURL := tSettings.Block.PersisterStore
+	blockStoreURL := appSettings.Block.PersisterStore
 
 	if blockStoreURL == nil {
 		return nil, errors.NewConfigurationError("blockPersisterStore config not found")
