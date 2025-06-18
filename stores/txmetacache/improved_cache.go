@@ -232,19 +232,21 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 	return &c, nil
 }
 
-// Set stores a key-value pair in the cache.
-//
+// Set adds or updates a single key-value pair in the cache.
+// This is the fundamental method for storing data in the cache and is used by higher-level
+// operations like SetMulti and SetMultiKeysSingleValue.
+
 // Parameters:
 // - k: Key as byte slice, typically a transaction hash
 // - v: Value as byte slice, typically transaction metadata
 //
 // Returns:
-// - Error if the storage operation fails
+// - Error if the storage operation fails, such as when the value exceeds maximum size	
 //
 // Implementation details:
 // - Uses xxhash for fast hashing and bucket selection
 // - Delegates actual storage to the appropriate bucket implementation
-// - Thread-safe for concurrent access
+// - Thread-safe for concurrent access from multiple goroutines
 //
 // Important notes:
 // - The key and value contents may be modified after returning from Set

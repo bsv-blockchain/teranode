@@ -10,6 +10,7 @@ These const values are suitable for a production machine that needs to manage 1m
 const BucketsCount = 8
 const chunkSize = maxValueSizeKB * 2 * 1024
 
+// LogCacheSize logs which cache configuration is being used
 func LogCacheSize() {
 	logger := ulogger.NewZeroLogger("improved_cache")
 	logger.Debugf("Using improved_cache_const_test.go")

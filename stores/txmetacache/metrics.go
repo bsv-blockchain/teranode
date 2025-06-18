@@ -1,5 +1,7 @@
 // Package txmetacache provides a caching layer for transaction metadata to improve performance.
 // This file specifically contains Prometheus metrics definitions for monitoring cache operations.
+// The metrics track key performance indicators such as cache size, hit/miss rates, and memory usage
+// to enable effective monitoring and tuning of the cache in production environments.
 package txmetacache
 
 import (
@@ -13,37 +15,39 @@ var (
 	// tx meta cache stats - the following Prometheus metrics track key performance indicators
 	// for the transaction metadata cache to help with monitoring and tuning
 	
-	// Current number of entries in the cache
+	// Current number of entries in the cache; monitors utilization and capacity
 	prometheusBlockValidationTxMetaCacheSize               prometheus.Gauge
-	// Total count of cache insertions since startup
+	// Total count of cache insertions since startup; tracks write throughput
 	prometheusBlockValidationTxMetaCacheInsertions         prometheus.Gauge
-	// Count of successful cache retrievals (cache hits)
+	// Count of successful cache retrievals (cache hits); indicates cache effectiveness
 	prometheusBlockValidationTxMetaCacheHits               prometheus.Gauge
-	// Count of unsuccessful cache retrievals (cache misses)
+	// Count of unsuccessful cache retrievals (cache misses); helps identify sizing issues
 	prometheusBlockValidationTxMetaCacheMisses             prometheus.Gauge
-	// Count of origin retrievals from the cache
+	// Count of origin retrievals from the cache; tracks origin information usage
 	prometheusBlockValidationTxMetaCacheGetOrigin          prometheus.Gauge
-	// Count of items evicted from the cache due to memory constraints
+	// Count of items evicted from the cache due to memory constraints; indicates pressure
 	prometheusBlockValidationTxMetaCacheEvictions          prometheus.Gauge
-	// Count of trim operations performed on the cache
+	// Count of trim operations performed on the cache; tracks memory management activity
 	prometheusBlockValidationTxMetaCacheTrims              prometheus.Gauge
-	// Total size of all map buckets in the cache
+	// Total size of all map buckets in the cache; monitors memory consumption
 	prometheusBlockValidationTxMetaCacheMapSize            prometheus.Gauge
-	// Cumulative count of all elements ever added to the cache
+	// Cumulative count of all elements ever added to the cache; tracks total throughput
 	prometheusBlockValidationTxMetaCacheTotalElementsAdded prometheus.Gauge
-	// Count of hits for transactions that were deemed too old to use
+	// Count of hits for transactions that were deemed too old to use; monitors expiration policy
 	prometheusBlockValidationTxMetaCacheHitOldTx           prometheus.Gauge
 )
 
 var (
 	// prometheusMetricsInitOnce ensures that Prometheus metrics are initialized exactly once,
-	// preventing duplicate metric registration which would cause a panic
+	// preventing duplicate metric registration which would cause a panic. This is essential
+	// for thread-safety when multiple instances or components might initialize metrics.
 	prometheusMetricsInitOnce sync.Once
 )
 
 // initPrometheusMetrics initializes all Prometheus metrics for the txmetacache package.
 // It uses sync.Once to ensure metrics are registered only once with Prometheus,
-// as attempting to register the same metric twice would cause a panic.
+// as attempting to register the same metric twice would cause a panic. This function
+// is called during TxMetaCache initialization to set up monitoring capabilities.
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
@@ -52,20 +56,28 @@ func initPrometheusMetrics() {
 // This function creates and registers each individual metric with the Prometheus registry.
 // All metrics use the same namespace ("teranode") and subsystem ("tx_meta_cache") for consistency.
 //
-// Metrics overview:
-// - size: Current number of entries in the cache
-// - insertions: Total number of entries added to the cache since startup
-// - hits: Number of successful retrievals from the cache
-// - misses: Number of failed retrievals that had to fall back to the underlying store
-// - get_origin: Number of transactions where origin information was retrieved from cache
-// - evictions: Number of entries removed from the cache due to memory constraints
-// - trims: Number of cache cleanup operations performed
-// - map_size: Total size of all bucket maps in the cache
-// - total_elements_added: Cumulative count of all elements ever added to the cache
-// - hit_old_tx: Count of cache hits for transactions deemed too old to use
+// Metrics are organized into functional categories:
+// 1. Capacity metrics:
+//    - size: Current number of entries in the cache
+//    - map_size: Total size of all bucket maps in the cache
+//
+// 2. Performance metrics:
+//    - hits: Number of successful retrievals from the cache
+//    - misses: Number of failed retrievals that had to fall back to the underlying store
+//    - hit_old_tx: Count of cache hits for transactions deemed too old to use
+//
+// 3. Throughput metrics:
+//    - insertions: Total number of entries added to the cache since startup
+//    - get_origin: Number of transactions where origin information was retrieved from cache
+//    - total_elements_added: Cumulative count of all elements ever added to the cache
+//
+// 4. Memory management metrics:
+//    - evictions: Number of entries removed from the cache due to memory constraints
+//    - trims: Number of cache cleanup operations performed
 func _initPrometheusMetrics() {
-	// Size metric tracks the current number of entries in the transaction metadata cache
-	// This is a point-in-time measurement that indicates cache utilization level
+	// Size metric tracks the current number of entries in the transaction metadata cache.
+	// This is a point-in-time measurement that indicates cache utilization level and
+	// helps identify potential capacity issues or unexpected cache clearing events.
 	prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "teranode",
@@ -75,8 +87,9 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	// Insertions metric tracks the total number of items added to the transaction metadata cache
-	// This counter increases monotonically and helps track write load on the cache
+	// Insertions metric tracks the total number of items added to the transaction metadata cache.
+	// This counter increases monotonically and helps track write load on the cache,
+	// providing insights into transaction processing throughput and cache churn rate.
 	prometheusBlockValidationTxMetaCacheInsertions = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "teranode",
@@ -86,8 +99,9 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	// Hits metric tracks successful cache retrievals where the item was found and returned
-	// This counter is crucial for evaluating cache effectiveness and hit ratio when compared with misses
+	// Hits metric tracks successful cache retrievals where the item was found and returned.
+	// This counter is crucial for evaluating cache effectiveness and hit ratio when compared with misses,
+	// serving as a primary indicator of how well the cache is reducing database load.
 	prometheusBlockValidationTxMetaCacheHits = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "teranode",
@@ -97,8 +111,9 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	// Misses metric tracks failed cache retrievals where the item was not found
-	// High miss rates may indicate insufficient cache size or premature eviction of useful entries
+	// Misses metric tracks failed cache retrievals where the item was not found.
+	// High miss rates may indicate insufficient cache size or premature eviction of useful entries,
+	// and can help identify opportunities for cache tuning and optimization.
 	prometheusBlockValidationTxMetaCacheMisses = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "teranode",

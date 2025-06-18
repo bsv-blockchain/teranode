@@ -36,50 +36,73 @@ import (
 )
 
 // metrics holds atomic counters for collecting operational statistics about the cache.
-// These metrics are exposed via Prometheus for monitoring cache effectiveness.
+// These metrics are exposed via Prometheus for monitoring cache effectiveness and performance.
+// All counters use atomic operations to ensure thread-safety in concurrent environments.
+//
+// These metrics are critical for operational monitoring and can help identify:
+// - Cache hit ratio (hits vs. misses) to evaluate cache effectiveness
+// - Insertion and eviction rates to detect memory pressure
+// - Age-related expiration patterns through hitOldTx tracking
 type metrics struct {
-	insertions atomic.Uint64 // Tracks number of items inserted into the cache
-	hits       atomic.Uint64 // Tracks number of successful cache retrievals
-	misses     atomic.Uint64 // Tracks number of failed cache retrievals
-	evictions  atomic.Uint64 // Tracks number of items evicted from the cache
-	hitOldTx   atomic.Uint64 // Tracks number of cache hits for outdated transactions
+	insertions atomic.Uint64 // Tracks number of items inserted into the cache; indicates write throughput
+	hits       atomic.Uint64 // Tracks number of successful cache retrievals; indicates cache effectiveness
+	misses     atomic.Uint64 // Tracks number of failed cache retrievals; helps identify sizing issues
+	evictions  atomic.Uint64 // Tracks number of items evicted from the cache; indicates memory pressure
+	hitOldTx   atomic.Uint64 // Tracks number of cache hits for outdated transactions; monitors expiration policy
 }
 
-// TxMetaCache is the main struct that implements a caching layer around a UTXO store.
-// It intercepts and caches transaction metadata operations to improve performance.
-// The cache acts as a decorator around the underlying UTXO store, implementing the
+// TxMetaCache wraps a utxo.Store implementation and adds caching capabilities for transaction metadata.
+// This significantly improves performance for frequently accessed transaction information while providing the
 // same interface but adding caching capabilities.
+//
+// The cache is designed for high-throughput blockchain environments where transaction metadata
+// is frequently accessed during validation, mining, and mempool management operations.
+// It implements an LRU-like eviction policy based on block height to ensure that older, less
+// relevant transactions are removed first when memory pressure occurs.
+//
+// Thread-safety: All operations are thread-safe and can be called concurrently from multiple goroutines.
 type TxMetaCache struct {
-	utxoStore                     utxo.Store     // The underlying UTXO store that this cache wraps
-	cache                         *ImprovedCache // The in-memory cache implementation
-	metrics                       metrics        // Performance metrics for monitoring
-	logger                        ulogger.Logger // Logger for operational logging
-	noOfBlocksToKeepInTxMetaCache uint32         // Configuration for cache expiration based on block height
+	utxoStore                     utxo.Store     // The underlying UTXO store that this cache wraps; provides persistence
+	cache                         *ImprovedCache // The in-memory cache implementation; provides high-performance access
+	metrics                       metrics        // Performance metrics for monitoring cache efficiency and throughput
+	logger                        ulogger.Logger // Logger for operational logging and diagnostic information
+	noOfBlocksToKeepInTxMetaCache uint32         // Configuration for cache expiration based on block height; controls data retention
 }
 
 // CacheStats provides statistical information about the current state of the cache.
 // These statistics are useful for monitoring cache utilization and performance.
+// The metrics exposed through this struct are critical for operational monitoring,
+// capacity planning, and performance tuning of the transaction metadata cache.
 type CacheStats struct {
-	EntriesCount       uint64 // Number of entries currently in the cache
-	TrimCount          uint64 // Number of trim operations performed
-	TotalMapSize       uint64 // Total size of all map buckets in the cache
-	TotalElementsAdded uint64 // Cumulative count of all elements added to the cache
+	EntriesCount       uint64 // Number of entries currently in the cache; indicates current utilization
+	TrimCount          uint64 // Number of trim operations performed; indicates memory management activity
+	TotalMapSize       uint64 // Total size of all map buckets in the cache; reflects memory consumption
+	TotalElementsAdded uint64 // Cumulative count of all elements added to the cache; measures total throughput
 }
 
 // BucketType defines the allocation strategy for the cache's internal buckets.
 // This affects memory usage patterns and performance characteristics of the cache.
+// The choice of bucket type has significant implications for memory allocation,
+// startup time, and runtime performance in high-throughput environments.
 type BucketType int
 
 const (
 	// Unallocated indicates that memory for buckets will be allocated on demand.
+	// This strategy minimizes initial memory usage and is suitable for environments
+	// with constrained resources or where cache usage patterns are unpredictable.
+	// However, it may lead to more frequent memory allocations during operation.
 	Unallocated BucketType = iota
 
 	// Preallocated indicates that memory for buckets will be allocated upfront.
-	// This can improve performance but uses more initial memory.
+	// This strategy improves runtime performance by avoiding allocations during
+	// high-throughput operations, but increases initial memory consumption and
+	// startup time. Recommended for production environments with predictable load.
 	Preallocated
 
 	// Trimmed indicates that the cache should maintain a trimmed state,
-	// which can help control memory usage.
+	// which can help control memory usage. This strategy periodically removes
+	// less frequently used entries to maintain a smaller memory footprint.
+	// Suitable for long-running services with memory constraints.
 	Trimmed
 )
 
@@ -655,16 +678,21 @@ func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*cha
 	return nil
 }
 
-// Delete removes a transaction's metadata from the underlying store.
-// This method only forwards the deletion to the underlying store without
-// affecting the cache, as the entry will naturally expire from the cache.
+// Delete removes a transaction's metadata from the cache.
+// This is typically used when a transaction becomes invalid or is no longer needed.
+// Unlike other methods that delegate to the underlying store, this method only affects
+// the in-memory cache and does not modify the persistent storage.
 //
 // Parameters:
 // - ctx: Context for the operation (unused but required by interface)
 // - hash: Hash of the transaction to delete
 //
 // Returns:
-// - Error if deletion from the underlying store fails
+// - Error if deletion from the cache fails (currently always returns nil)
+//
+// This method is used internally by operations that modify transaction state, such as
+// FreezeUTXOs and ReAssignUTXO, to ensure cache consistency with the underlying store.
+// It also increments the evictions metric to track manual cache removals.
 func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	t.cache.Del(hash[:])
 	t.metrics.evictions.Add(1)
@@ -775,22 +803,75 @@ func (t *TxMetaCache) Health(ctx context.Context, checkLiveness bool) (int, stri
 	return t.utxoStore.Health(ctx, checkLiveness)
 }
 
+// GetSpend retrieves information about a specific UTXO spend attempt.
+// This method delegates directly to the underlying UTXO store without caching.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - spend: The spend object containing information about the UTXO being spent
+//
+// Returns:
+// - SpendResponse containing the result of the spend attempt
+// - Error if the retrieval fails
 func (t *TxMetaCache) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return t.utxoStore.GetSpend(ctx, spend)
 }
 
+// Spend marks UTXOs as spent by a transaction.
+// This method delegates directly to the underlying UTXO store without caching.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - tx: The transaction that spends the UTXOs
+// - ignoreFlags: Optional flags to modify spending behavior
+//
+// Returns:
+// - Array of Spend objects representing the spent UTXOs
+// - Error if the spend operation fails
 func (t *TxMetaCache) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return t.utxoStore.Spend(ctx, tx)
 }
 
+// Unspend marks previously spent UTXOs as unspent.
+// This method delegates directly to the underlying UTXO store without caching.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - spends: Array of Spend objects to mark as unspent
+// - flagAsUnspendable: Optional flag to mark the UTXOs as unspendable
+//
+// Returns:
+// - Error if the unspend operation fails
 func (t *TxMetaCache) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
 	return t.utxoStore.Unspend(ctx, spends, flagAsUnspendable...)
 }
 
+// PreviousOutputsDecorate populates previous output information for a list of outpoints.
+// This method delegates directly to the underlying UTXO store without caching.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - outpoints: List of previous outputs to decorate with additional information
+//
+// Returns:
+// - Error if the decoration operation fails
 func (t *TxMetaCache) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
 	return t.utxoStore.PreviousOutputsDecorate(ctx, outpoints)
 }
 
+// FreezeUTXOs marks UTXOs as frozen (temporarily unspendable) in the underlying store
+// and removes any related entries from the cache to ensure consistency.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - spends: Array of Spend objects representing UTXOs to freeze
+// - tSettings: Transaction settings that control the freeze behavior
+//
+// Returns:
+// - Error if the freeze operation fails
+//
+// This method ensures cache consistency by removing any cached entries for
+// transactions affected by the freeze operation.
 func (t *TxMetaCache) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	if err := t.utxoStore.FreezeUTXOs(ctx, spends, tSettings); err != nil {
 		return err
@@ -803,6 +884,16 @@ func (t *TxMetaCache) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSe
 	return nil
 }
 
+// UnFreezeUTXOs removes the frozen status from UTXOs in the underlying store.
+// This method ensures that the cache remains consistent with the underlying store.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - spends: Array of Spend objects representing UTXOs to unfreeze
+// - tSettings: Transaction settings that control the unfreeze behavior
+//
+// Returns:
+// - Error if the unfreeze operation fails
 func (t *TxMetaCache) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	if err := t.utxoStore.UnFreezeUTXOs(ctx, spends, tSettings); err != nil {
 		return err
@@ -815,6 +906,20 @@ func (t *TxMetaCache) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, t
 	return nil
 }
 
+// ReAssignUTXO reassigns a UTXO from one transaction to another in the underlying store
+// and ensures cache consistency by removing any related entries.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - utxo: The original UTXO to reassign
+// - newUtxo: The new UTXO to assign to
+// - tSettings: Transaction settings that control the reassignment behavior
+//
+// Returns:
+// - Error if the reassignment operation fails
+//
+// This method maintains cache consistency by removing both the original and new
+// transaction entries from the cache after the reassignment is complete.
 func (t *TxMetaCache) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
 	if err := t.utxoStore.ReAssignUTXO(ctx, utxo, newUtxo, tSettings); err != nil {
 		return err
@@ -827,26 +932,63 @@ func (t *TxMetaCache) GetCounterConflicting(ctx context.Context, txHash chainhas
 	return t.utxoStore.GetCounterConflicting(ctx, txHash)
 }
 
+// GetConflictingChildren retrieves a list of child transactions that conflict with the specified transaction.
+// This method delegates directly to the underlying UTXO store without caching.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - txHash: Hash of the transaction to check for conflicting children
+//
+// Returns:
+// - Array of transaction hashes that are conflicting children of the specified transaction
+// - Error if the retrieval fails
 func (t *TxMetaCache) GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
 	return t.utxoStore.GetConflictingChildren(ctx, txHash)
 }
 
+// SetConflicting marks transactions as conflicting or non-conflicting in the underlying store.
+// This method delegates directly to the underlying UTXO store without caching.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - txHashes: Array of transaction hashes to mark as conflicting or non-conflicting
+// - setValue: Whether to mark the transactions as conflicting (true) or non-conflicting (false)
+//
+// Returns:
+// - Array of Spend objects representing the affected UTXOs
+// - Array of transaction hashes that were successfully marked
+// - Error if the operation fails
 func (t *TxMetaCache) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
 	return t.utxoStore.SetConflicting(ctx, txHashes, setValue)
 }
 
+// SetUnspendable marks transactions as unspendable or spendable.
+// This is a stub implementation that currently does nothing.
+//
+// Parameters:
+// - ctx: Context for the operation
+// - txHashes: Array of transaction hashes to mark as unspendable or spendable
+// - setValue: Whether to mark the transactions as unspendable (true) or spendable (false)
+//
+// Returns:
+// - Error if the operation fails (currently always returns nil)
 func (t *TxMetaCache) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
 }
 
 // SetBlockHeight updates the current block height in the underlying store.
 // This is critical for cache expiration as it determines which cached entries are considered stale.
+// The block height is a fundamental parameter for the cache's LRU-like eviction policy, which
+// removes entries based on their age relative to the current blockchain tip.
 //
 // Parameters:
 // - height: The new blockchain height to set
 //
 // Returns:
 // - Error if updating the block height fails
+//
+// This method should be called whenever a new block is added to the blockchain to ensure
+// that the cache properly manages its entries based on the latest blockchain state.
 func (t *TxMetaCache) SetBlockHeight(height uint32) error {
 	return t.utxoStore.SetBlockHeight(height)
 }
@@ -862,21 +1004,32 @@ func (t *TxMetaCache) GetBlockHeight() uint32 {
 
 // SetMedianBlockTime updates the median block time in the underlying store.
 // This is used for transaction validation and other time-based operations.
+// The median block time is a critical parameter for validating time-locked transactions
+// and ensuring that transactions with time-based conditions are properly processed.
 //
 // Parameters:
 // - height: Block height used to calculate the median time
 //
 // Returns:
 // - Error if updating the median block time fails
+//
+// This method should be called whenever the blockchain tip changes to ensure
+// that time-based transaction validations use the most current median time value.
 func (t *TxMetaCache) SetMedianBlockTime(height uint32) error {
 	return t.utxoStore.SetMedianBlockTime(height)
 }
 
 // GetMedianBlockTime retrieves the current median block time from the underlying store.
 // This time value is used for validating time-based transaction conditions.
+// The median time is calculated from a window of recent blocks and provides a more
+// stable time reference than using the latest block's timestamp directly.
 //
 // Returns:
-// - The current median block time as a Unix timestamp
+// - The current median block time as a Unix timestamp (seconds since epoch)
+//
+// This method is typically used during transaction validation to check time-locked
+// transactions (using nLockTime or CHECKLOCKTIMEVERIFY) against the blockchain's
+// consensus-determined time.
 func (t *TxMetaCache) GetMedianBlockTime() uint32 {
 	return t.utxoStore.GetMedianBlockTime()
 }
