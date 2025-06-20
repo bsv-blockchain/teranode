@@ -114,7 +114,7 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 		hashStr := c.Param("hash")
 		nStr := c.QueryParam("n")
 
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetBlockHeaders_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockHeaders_http",
 			tracing.WithParentStat(AssetStat),
 			tracing.WithLogMessage(h.logger, "[GetBlockHeaders_http] Get %s Block Headers in %s for %s", mode, c.Request().RemoteAddr, hashStr),
 		)

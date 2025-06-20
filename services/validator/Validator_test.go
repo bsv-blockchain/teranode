@@ -90,7 +90,7 @@ func BenchmarkValidator(b *testing.B) {
 }
 
 func TestValidate_CoinbaseTransaction(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	coinbase, err := bt.NewTxFromString(model.CoinbaseHex)
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 
 func TestValidate_ValidTransaction(t *testing.T) {
 	t.Run("Mined transactions return blockIDs", func(t *testing.T) {
-		tracing.SetGlobalMockTracer()
+		tracing.SetupMockTracer()
 
 		// delete spends set to false
 		utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
@@ -166,7 +166,7 @@ func TestValidate_ValidTransaction(t *testing.T) {
 }
 
 func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
 	tx, err := bt.NewTxFromString(txHex)
@@ -226,7 +226,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 }
 
 func TestValidate_RejectedTransactionChannel(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
 	tx, err := bt.NewTxFromString(txHex)
@@ -268,7 +268,7 @@ func TestValidate_TxMetaStoreError(t *testing.T) {
 }
 
 func TestValidate_BlockAssemblyError(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
 	tx, err := bt.NewTxFromString(txHex)
@@ -363,13 +363,13 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 
 	ctx := context.Background()
 
-	span := tracing.Start(ctx, "Test")
-	defer span.Finish()
+	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
+	defer endSpan()
 
-	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
+	err = v.validateTransaction(ctx, tx, height, &Options{})
 	require.NoError(t, err)
 
-	err = v.validateTransactionScripts(span.Ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
+	err = v.validateTransactionScripts(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -394,13 +394,13 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 
 	ctx := context.Background()
 
-	span := tracing.Start(ctx, "Test")
-	defer span.Finish()
+	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
+	defer endSpan()
 
-	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
+	err = v.validateTransaction(ctx, tx, height, &Options{})
 	require.NoError(t, err)
 
-	err = v.validateTransactionScripts(span.Ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
+	err = v.validateTransactionScripts(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -425,13 +425,13 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 	ctx := context.Background()
 
-	span := tracing.Start(ctx, "Test")
-	defer span.Finish()
+	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
+	defer endSpan()
 
-	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
+	err = v.validateTransaction(ctx, tx, height, &Options{})
 	require.NoError(t, err)
 
-	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -456,10 +456,10 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 	ctx := context.Background()
 
-	span := tracing.Start(ctx, "Test")
-	defer span.Finish()
+	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
+	defer endSpan()
 
-	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
+	err = v.validateTransaction(ctx, tx, height, &Options{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "transaction fee is too low")
 }
@@ -479,8 +479,8 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 // 	ctx := context.Background()
 
-// 	span := tracing.Start(ctx, "Test")
-// 	defer span.Finish()
+// 	ctx, span := tracing.Start(ctx, "Test")
+// 	defer span.End()
 
 // 	err = v.validateTransaction(span, tx, height)
 // 	require.NoError(t, err)
@@ -517,15 +517,13 @@ func TestValidateTransactions(t *testing.T) {
 			txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
 		}
 
-		ctx := context.Background()
+		ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+		defer endSpan()
 
-		span := tracing.Start(ctx, "Test")
-		defer span.Finish()
-
-		err = v.validateTransaction(span.Ctx, tx, testData.BlockHeight, &Options{})
+		err = v.validateTransaction(ctx, tx, testData.BlockHeight, &Options{})
 		require.NoError(t, err)
 
-		err = v.validateTransactionScripts(span.Ctx, tx, testData.BlockHeight, testData.UTXOHeights, &Options{SkipPolicyChecks: true})
+		err = v.validateTransactionScripts(ctx, tx, testData.BlockHeight, testData.UTXOHeights, &Options{SkipPolicyChecks: true})
 		require.NoError(t, err, fmt.Sprintf("Failed with TxID %v", testData.TxID))
 	}
 }
@@ -548,15 +546,13 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
 	}
 
-	ctx := context.Background()
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
 
-	span := tracing.Start(ctx, "Test")
-	defer span.Finish()
-
-	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
+	err = v.validateTransaction(ctx, tx, height, &Options{})
 	require.NoError(t, err)
 
-	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -578,15 +574,13 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
 	}
 
-	ctx := context.Background()
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
 
-	span := tracing.Start(ctx, "Test")
-	defer span.Finish()
-
-	err = v.validateTransaction(span.Ctx, tx, height, &Options{})
+	err = v.validateTransaction(ctx, tx, height, &Options{})
 	require.NoError(t, err)
 
-	err = v.validateTransactionScripts(span.Ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -829,15 +823,15 @@ func TestFalseOrEmptyTopStackElementScriptError(t *testing.T) {
 
 	ctx := context.Background()
 
-	span := tracing.Start(ctx, "Test")
-	defer span.Finish()
+	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
+	defer endSpan()
 
-	err := v.validateTransactionScripts(span.Ctx, tx, height, []uint32{}, &Options{SkipPolicyChecks: true})
+	err := v.validateTransactionScripts(ctx, tx, height, []uint32{}, &Options{SkipPolicyChecks: true})
 	require.Error(t, err)
 }
 
 func TestValidator_TwoPhaseCommitTransaction(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	ctx := context.Background()
 
@@ -861,9 +855,10 @@ func TestValidator_TwoPhaseCommitTransaction(t *testing.T) {
 		stats:       gocore.NewStat("validator"),
 	}
 
-	span := tracing.Start(ctx, "Test")
-	defer span.Finish()
-	err = v.twoPhaseCommitTransaction(span, tx, tx.TxID())
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	err = v.twoPhaseCommitTransaction(ctx, tx, tx.TxID())
 	require.NoError(t, err)
 
 	meta, err = utxoStore.GetMeta(ctx, tx.TxIDChainHash())
@@ -872,7 +867,7 @@ func TestValidator_TwoPhaseCommitTransaction(t *testing.T) {
 }
 
 func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	ctx := context.Background()
 
@@ -897,9 +892,10 @@ func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
 		stats:       gocore.NewStat("validator"),
 	}
 
-	span := tracing.Start(ctx, "Test")
-	defer span.Finish()
-	err = v.twoPhaseCommitTransaction(span, tx, tx.TxID())
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	err = v.twoPhaseCommitTransaction(ctx, tx, tx.TxID())
 	assert.NoError(t, err)
 
 	meta, err = utxoStore.GetMeta(ctx, tx.TxIDChainHash())
@@ -922,7 +918,7 @@ func NewFailingUtxoStore() *FailingUtxoStore {
 }
 
 func TestValidator_TwoPhaseCommitTransaction_SetUnspendableFails(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	ctx := context.Background()
 
@@ -940,9 +936,10 @@ func TestValidator_TwoPhaseCommitTransaction_SetUnspendableFails(t *testing.T) {
 		stats:       gocore.NewStat("validator"),
 	}
 
-	span := tracing.Start(ctx, "Test")
-	defer span.Finish()
-	err = v.twoPhaseCommitTransaction(span, tx, tx.TxID())
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	err = v.twoPhaseCommitTransaction(ctx, tx, tx.TxID())
 	assert.Error(t, err)
 
 	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
@@ -951,7 +948,7 @@ func TestValidator_TwoPhaseCommitTransaction_SetUnspendableFails(t *testing.T) {
 }
 
 func TestValidator_UnspendableFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	ctx := context.Background()
 
@@ -988,7 +985,7 @@ func TestValidator_UnspendableFlagChangedIfBlockAssemblyStoreSucceeds(t *testing
 }
 
 func TestValidator_UnspendableFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	ctx := context.Background()
 

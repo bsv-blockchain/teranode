@@ -362,7 +362,7 @@ type readCloserWrapper struct {
 // This reader can be used to iterate through all UTXOs added in the block.
 // Returns a ReadCloser interface and any error encountered.
 func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetUTXOAdditionsReader",
+	ctx, _, deferFn := tracing.Tracer("utxopersister").Start(ctx, "GetUTXOAdditionsReader",
 		tracing.WithDebugLogMessage(us.logger, "[GetUTXOAdditionsReader] called"),
 	)
 	defer deferFn()
@@ -466,11 +466,13 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 // with coordinated error handling to ensure data integrity. Tracing is used for
 // performance monitoring and diagnostics throughout the operation.
 func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err error) {
-	ctx, createStat, deferFn := tracing.StartTracing(ctx, "CreateUTXOSet",
+	createStat := gocore.NewStat("utxopersister.CreateUTXOSet")
+
+	ctx, _, endSpan := tracing.Tracer("utxopersister").Start(ctx, "CreateUTXOSet",
 		tracing.WithParentStat(us.stats),
 		tracing.WithLogMessage(us.logger, "[CreateUTXOSet] called"),
 	)
-	defer deferFn()
+	defer endSpan()
 
 	us.logger.Infof("[CreateUTXOSet] Creating UTXOSet for block %s height %d", c.lastBlockHash, c.lastBlockHeight)
 

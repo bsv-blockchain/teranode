@@ -43,7 +43,7 @@ import (
  - 5: mark tx_parent1 & tx_parent2 & tx_parent4 as spendable again
 */
 func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chainhash.Hash) (losingTxHashesMap util.TxMap, err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessConflicting")
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "ProcessConflicting")
 
 	defer deferFn()
 
@@ -166,7 +166,7 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 }
 
 func markConflictingRecursively(ctx context.Context, s Store, hashes []chainhash.Hash) ([]*Spend, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "markConflictingRecursively")
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "markConflictingRecursively")
 
 	defer deferFn()
 
@@ -189,7 +189,7 @@ func markConflictingRecursively(ctx context.Context, s Store, hashes []chainhash
 }
 
 func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]chainhash.Hash, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetConflictingChildren")
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetConflictingChildren")
 
 	defer deferFn()
 
@@ -250,7 +250,7 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 }
 
 func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetCounterConflictingTxHashes")
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetCounterConflictingTxHashes")
 
 	defer deferFn()
 

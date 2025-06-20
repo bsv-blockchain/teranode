@@ -20,7 +20,7 @@ func TestSingleTransactionPropagationWithUtxoPostgres(t *testing.T) {
 	td := utils.SetupPostgresTestDaemon(t, ctx, "test-single-txs")
 
 	// Generate initial blocks
-	_, err := td.CallRPC("generate", []any{101})
+	_, err := td.CallRPC(td.Ctx, "generate", []any{101})
 	require.NoError(t, err)
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
@@ -59,7 +59,7 @@ func TestMultipleTransactionsPropagationWithUtxoPostgres(t *testing.T) {
 	td := utils.SetupPostgresTestDaemon(t, ctx, "test-multiple-txs")
 
 	// Generate initial blocks
-	_, err := td.CallRPC("generate", []interface{}{101})
+	_, err := td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err)
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
@@ -96,7 +96,7 @@ func TestConcurrentTransactionsPropagationWithUtxoPostgres(t *testing.T) {
 	td := utils.SetupPostgresTestDaemon(t, ctx, "test-concurrent-txs")
 
 	// Generate initial blocks
-	_, err := td.CallRPC("generate", []interface{}{101})
+	_, err := td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err)
 
 	// Send transactions concurrently

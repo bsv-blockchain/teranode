@@ -172,10 +172,13 @@ func TestImportWithExistingGenesis(t *testing.T) {
 
 	// insert dummy blocks into first store
 	var genesisID int64
+
 	genesisHash := cfg.ChainCfgParams.GenesisHash.CloneBytes()
 	require.NoError(t, s1.GetDB().QueryRowContext(ctx, `SELECT id FROM blocks WHERE hash=$1`, genesisHash).Scan(&genesisID))
+
 	for i, h := range []string{"0a", "0b"} {
 		hexHash, _ := hex.DecodeString(h)
+
 		_, err := s1.GetDB().ExecContext(ctx,
 			`INSERT INTO blocks
               (parent_id,version,hash,previous_hash,merkle_root,block_time,

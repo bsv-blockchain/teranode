@@ -18,7 +18,7 @@ func TestMiningCandidate(t *testing.T) {
 
 	defer td.Stop(t)
 
-	res, err := td.CallRPC("getminingcandidate", nil)
+	res, err := td.CallRPC(td.Ctx, "getminingcandidate", nil)
 	require.NoError(t, err)
 
 	var rpcResponse map[string]any

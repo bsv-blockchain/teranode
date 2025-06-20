@@ -41,10 +41,10 @@ import (
 // Returns:
 //   - bool: True if the block was mined by the local node, false otherwise
 //   - error: Any error encountered during the check, specifically:
-//     - BlockNotFoundError if the specified block doesn't exist in the database
-//     - StorageError for database errors or processing failures
+//   - BlockNotFoundError if the specified block doesn't exist in the database
+//   - StorageError for database errors or processing failures
 func (s *SQL) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockIsMined")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockIsMined")
 	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)

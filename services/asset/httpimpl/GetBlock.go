@@ -135,7 +135,7 @@ type BlockExtended struct {
 //	GET /block/height/0/hex
 func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetBlockByHeight_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockByHeight_http",
 			tracing.WithParentStat(AssetStat),
 			tracing.WithLogMessage(h.logger, "[Asset_http] GetBlockByHeight in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("height")),
 		)
@@ -284,7 +284,7 @@ func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashStr := c.Param("hash")
 
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetBlockByHash_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockByHash_http",
 			tracing.WithParentStat(AssetStat),
 			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockByHash in %s for %s: %s", mode, c.Request().RemoteAddr, hashStr),
 		)

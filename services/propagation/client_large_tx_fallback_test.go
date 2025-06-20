@@ -46,12 +46,12 @@ func (m *MockPropagationAPIClient) ProcessTransaction(ctx context.Context, req *
 
 // ProcessTransactionBatch implements the gRPC method for batch transactions
 func (m *MockPropagationAPIClient) ProcessTransactionBatch(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest, opts ...grpc.CallOption) (*propagation_api.ProcessTransactionBatchResponse, error) {
-	m.ProcessedTransactionBatchSize = len(req.Tx)
+	m.ProcessedTransactionBatchSize = len(req.Items)
 
 	// Calculate total size
 	totalSize := 0
-	for _, tx := range req.Tx {
-		totalSize += len(tx)
+	for _, item := range req.Items {
+		totalSize += len(item.Tx)
 	}
 
 	// If batch is too large, return ResourceExhausted error
@@ -61,7 +61,7 @@ func (m *MockPropagationAPIClient) ProcessTransactionBatch(ctx context.Context, 
 
 	// Normal batch - return success with no errors
 	response := &propagation_api.ProcessTransactionBatchResponse{
-		Errors: make([]*errors.TError, len(req.Tx)),
+		Errors: make([]*errors.TError, len(req.Items)),
 	}
 
 	for i := range response.Errors {

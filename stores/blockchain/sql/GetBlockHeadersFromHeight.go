@@ -32,21 +32,24 @@ import (
 //
 // Key features of this implementation include:
 //
-// 1. Multi-fork support: Unlike methods that follow a single chain, this method returns ALL
-//    headers at each height, including those from competing fork chains. This comprehensive
-//    view is essential for fork detection and resolution.
+//  1. Multi-fork support: Unlike methods that follow a single chain, this method returns ALL
+//     headers at each height, including those from competing fork chains. This comprehensive
+//     view is essential for fork detection and resolution.
 //
-// 2. Descending order: Headers are returned in descending height order (newest to oldest),
-//    which optimizes for the common case of needing the most recent blocks first.
+//  2. Descending order: Headers are returned in descending height order (newest to oldest),
+//     which optimizes for the common case of needing the most recent blocks first.
 //
 // 3. Tiered performance optimization:
-//    - First checks the blockchainCache for cached headers
-//    - If not found, executes an optimized SQL query with height-based filtering
-//    - Uses database-specific optimizations for both PostgreSQL and SQLite
 //
-// 4. Complete header reconstruction: For each block, constructs both a BlockHeader object
-//    containing the core consensus fields and a BlockHeaderMeta object with additional metadata
-//    such as height, transaction count, and chainwork.
+//   - First checks the blockchainCache for cached headers
+//
+//   - If not found, executes an optimized SQL query with height-based filtering
+//
+//   - Uses database-specific optimizations for both PostgreSQL and SQLite
+//
+//     4. Complete header reconstruction: For each block, constructs both a BlockHeader object
+//     containing the core consensus fields and a BlockHeaderMeta object with additional metadata
+//     such as height, transaction count, and chainwork.
 //
 // This method is particularly valuable during initial block download, when validating
 // competing chains during reorganizations, and when serving block explorer requests that
@@ -63,11 +66,11 @@ import (
 //   - []*model.BlockHeaderMeta: Corresponding metadata for each header including height,
 //     transaction count, size, and chainwork
 //   - error: Any error encountered during retrieval, specifically:
-//     - StorageError for database access or query execution errors
-//     - ProcessingError for errors during header reconstruction
-//     - nil if the operation was successful (even if no headers were found)
+//   - StorageError for database access or query execution errors
+//   - ProcessingError for errors during header reconstruction
+//   - nil if the operation was successful (even if no headers were found)
 func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeadersFromHeight")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeadersFromHeight")
 	defer deferFn()
 
 	headers, metas := s.blocksCache.GetBlockHeadersFromHeight(height, int(limit))

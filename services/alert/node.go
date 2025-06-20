@@ -265,7 +265,7 @@ func (n *Node) UnbanPeer(ctx context.Context, peer string) error {
 //   - *models.BlacklistResponse: Response containing processed and unprocessed funds with status
 //   - error: Any error encountered during the overall blacklisting process
 func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund) (*models.BlacklistResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "AddToConsensusBlacklist",
+	ctx, _, deferFn := tracing.Tracer("alert").Start(ctx, "AddToConsensusBlacklist",
 		tracing.WithDebugLogMessage(n.logger, "[AddToConsensusBlacklist] called for %d funds", len(funds)),
 	)
 	defer deferFn()
@@ -370,7 +370,7 @@ func (n *Node) getAddToConsensusBlacklistResponse(fund models.Fund, err error) m
 //   - *models.AddToConfiscationTransactionWhitelistResponse: Response containing processing status for each transaction
 //   - error: Any error encountered during the overall whitelisting process
 func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []models.ConfiscationTransactionDetails) (*models.AddToConfiscationTransactionWhitelistResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "AddToConfiscationTransactionWhitelist",
+	ctx, _, deferFn := tracing.Tracer("alert").Start(ctx, "AddToConfiscationTransactionWhitelist",
 		tracing.WithDebugLogMessage(n.logger, "[AddToConfiscationTransactionWhitelist] called for %d txs", len(txs)),
 	)
 	defer deferFn()

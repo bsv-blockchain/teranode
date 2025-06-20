@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
+	"github.com/ordishs/gocore"
 )
 
 type Distributor struct {
@@ -171,9 +172,11 @@ func (d *Distributor) GetPropagationGRPCAddresses() []string {
 
 func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*ResponseWrapper, error) {
 	start := time.Now()
-	ctx, stat, deferFn := tracing.StartTracing(ctx, "Distributor:SendTransaction")
 
-	defer deferFn()
+	stat := gocore.NewStat("Distributor:SendTransaction")
+
+	ctx, span, endSpan := tracing.Tracer("rpc").Start(ctx, "Distributor:SendTransaction")
+	defer endSpan()
 
 	var wg sync.WaitGroup
 
@@ -277,7 +280,10 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 	failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
 	if failurePercentage > float32(d.failureTolerance) || errorCount == len(d.propagationServers) {
-		return responses, errors.NewProcessingError("error sending transaction %s to %.2f%% of the propagation servers: %v", tx.TxIDChainHash().String(), failurePercentage, errs)
+		err := errors.NewProcessingError("error sending transaction %s to %.2f%% of the propagation servers: %v", tx.TxIDChainHash().String(), failurePercentage, errs)
+		span.RecordError(err)
+
+		return responses, err
 	} else if errorCount > 0 {
 		d.logger.Errorf("error(s) distributing transaction %s: %v", tx.TxIDChainHash().String(), errs)
 	}

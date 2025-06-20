@@ -499,7 +499,7 @@ func (u *BlockValidation) SetSubtreeExists(hash *chainhash.Hash) error {
 //   - bool: Whether the subtree exists
 //   - error: Any error encountered during the check
 func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetSubtreeExists")
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "GetSubtreeExists")
 	defer deferFn()
 
 	_, ok := u.subtreeExists.Get(*hash)
@@ -528,7 +528,7 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 //
 // Returns an error if the mining status update fails.
 func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.Hash) (err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "setTxMined",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "setTxMined",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[setTxMined][%s] setting tx mined", blockHash.String()),
 	)
@@ -638,7 +638,7 @@ func (u *BlockValidation) isParentMined(ctx context.Context, blockHeader *model.
 //
 // Returns an error if validation fails or nil on success.
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "ValidateBlock",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "ValidateBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationValidateBlock),
 		tracing.WithLogMessage(u.logger, "[ValidateBlock][%s] validating block from %s", block.Hash().String(), baseURL),
@@ -748,15 +748,15 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 
 		// decouple the tracing context to not cancel the context when finalize the block processing in the background
-		callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleValidateBlock")
-		defer callerSpan.Finish()
+		decoupledCtx, _, endSpanFn := tracing.DecoupleTracingSpan(ctx, "ValidateBlock", "decoupled")
+		defer endSpanFn()
 
 		optimisticMiningWg.Add(1)
 
 		go func() {
 			defer optimisticMiningWg.Done()
 
-			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(callerSpan.Ctx, block.Header.HashPrevBlock, u.settings.BlockValidation.MaxPreviousBlockHeadersToCheck)
+			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(decoupledCtx, block.Header.HashPrevBlock, u.settings.BlockValidation.MaxPreviousBlockHeadersToCheck)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
 
@@ -779,7 +779,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				return
 			}
 
-			if ok, err := block.Valid(callerSpan.Ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+			if ok, err := block.Valid(decoupledCtx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 				u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
 				if errors.Is(err, errors.ErrBlockInvalid) {
@@ -790,7 +790,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 							reason = err.Error()
 						}
 
-						reportErr := u.invalidBlockHandler.ReportInvalidBlock(callerSpan.Ctx, block.Hash().String(), reason)
+						reportErr := u.invalidBlockHandler.ReportInvalidBlock(decoupledCtx, block.Hash().String(), reason)
 						if reportErr != nil {
 							u.logger.Warnf("[ValidateBlock][%s] failed to report invalid block in background: %v", block.Hash().String(), reportErr)
 						} else {
@@ -798,7 +798,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 						}
 					}
 
-					if invalidateBlockErr := u.blockchainClient.InvalidateBlock(callerSpan.Ctx, block.Header.Hash()); invalidateBlockErr != nil {
+					if invalidateBlockErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invalidateBlockErr != nil {
 						u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
 					}
 				} else {
@@ -813,7 +813,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			if err = u.checkOldBlockIDs(ctx, oldBlockIDsMap, block); err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to check old block IDs: %s", block.String(), err)
 
-				if invalidateBlockErr := u.blockchainClient.InvalidateBlock(callerSpan.Ctx, block.Header.Hash()); invalidateBlockErr != nil {
+				if invalidateBlockErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invalidateBlockErr != nil {
 					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
 				}
 			}
@@ -900,17 +900,17 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase in tx store: %s DONE", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 
 	// decouple the tracing context to not cancel the context when finalize the block processing in the background
-	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleValidateBlock")
+	decoupledCtx, _, _ := tracing.DecoupleTracingSpan(ctx, "ValidateBlock", "decoupled")
 
 	go func() {
-		if err := u.updateSubtreesDAH(callerSpan.Ctx, block); err != nil {
+		if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
 			// TODO: what to do here? We have already added the block to the blockchain
 			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
 		}
 	}()
 
 	// create bloom filter for the block and wait for it
-	if err = u.createAppendBloomFilter(callerSpan.Ctx, block); err != nil {
+	if err = u.createAppendBloomFilter(decoupledCtx, block); err != nil {
 		u.logger.Errorf("[ValidateBlock][%s] failed to create bloom filter: %s", block.Hash().String(), err)
 	}
 
@@ -918,7 +918,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 }
 
 func (u *BlockValidation) collectNecessaryBloomFilters(ctx context.Context, block *model.Block, currentChainBlockHeaders []*model.BlockHeader) ([]*model.BlockBloomFilter, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "collectNecessaryBloomFilters",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "collectNecessaryBloomFilters",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[collectNecessaryBloomFilters][%s] collecting bloom filters for %d headers", block.String(), len(currentChainBlockHeaders)),
 	)
@@ -1064,7 +1064,7 @@ func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
 //
 // Returns an error if revalidation fails.
 func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
-	ctx, _, deferFn := tracing.StartTracing(context.Background(), "reValidateBlock",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(context.Background(), "reValidateBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[reValidateBlock][%s] validating block from %s", blockData.block.Hash().String(), blockData.baseURL),
 	)
@@ -1121,7 +1121,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 //   - ctx: Context for the operation
 //   - block: Block to create filter for
 func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *model.Block) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "createAppendBloomFilter",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "createAppendBloomFilter",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[createAppendBloomFilter][%s] creating bloom filter", block.Hash().String()),
 	)
@@ -1232,7 +1232,7 @@ func (u *BlockValidation) pruneBloomFilters(ctx context.Context, block *model.Bl
 //
 // Returns an error if DAH updates fail.
 func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Block) (err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:updateSubtreesDAH",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockValidation:updateSubtreesDAH",
 		tracing.WithLogMessage(u.logger, "[updateSubtreesDAH][%s] updating subtrees DAH", block.Hash().String()),
 	)
 
@@ -1282,12 +1282,15 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 //
 // Returns an error if subtree validation fails.
 func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
-	ctx, stat, deferFn := tracing.StartTracing(ctx, "ValidateBlockSubtrees")
-	defer deferFn()
+	start := gocore.CurrentTime()
+
+	stat := gocore.NewStat("validateBlockSubtrees")
+
+	ctx, span, endSpan := tracing.Tracer("blockvalidation").Start(ctx, "ValidateBlockSubtrees")
+	defer endSpan()
 
 	u.lastUsedBaseURL = baseURL
 
-	start1 := gocore.CurrentTime()
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, u.settings.BlockValidation.ValidateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
 
@@ -1297,7 +1300,10 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 
 		blockHeight, err = block.ExtractCoinbaseHeight()
 		if err != nil {
-			return errors.NewProcessingError("[validateBlockSubtrees][%s] failed to extract coinbase height", block.Hash().String(), err)
+			err = errors.NewProcessingError("[validateBlockSubtrees][%s] failed to extract coinbase height", block.Hash().String(), err)
+			span.RecordError(err)
+
+			return err
 		}
 	}
 
@@ -1338,6 +1344,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 
 	// an error is only thrown if the existence of a subtree cannot be checked, which implies a service error
 	if err := g.Wait(); err != nil {
+		span.RecordError(err)
 		return err
 	}
 
@@ -1367,7 +1374,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 		}
 	}
 
-	stat.NewStat("1. validateBlockSubtrees").AddTime(start1)
+	stat.NewStat("1. validateBlockSubtrees").AddTime(start)
 
 	return nil
 }
@@ -1383,7 +1390,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 // Returns an error if block verification fails.
 func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32],
 	block *model.Block) (iterationError error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockValidation:checkOldBlockIDs",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockValidation:checkOldBlockIDs",
 		tracing.WithDebugLogMessage(u.logger, "[checkOldBlockIDs][%s] checking %d old block IDs", oldBlockIDsMap.Length(), block.Hash().String()),
 	)
 

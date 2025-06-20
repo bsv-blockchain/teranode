@@ -113,7 +113,7 @@ func (h *HTTP) GetNBlocks(mode ReadMode) func(c echo.Context) error {
 		hashStr := c.Param("hash")
 		nStr := c.QueryParam("n")
 
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetNBlocks_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetNBlocks_http",
 			tracing.WithParentStat(AssetStat),
 			tracing.WithDebugLogMessage(h.logger, "[Asset_http] Get %s Blocks in %s for %s", mode, c.Request().RemoteAddr, hashStr),
 		)

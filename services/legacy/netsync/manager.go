@@ -794,7 +794,7 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 
 // handleTxMsg handles transaction messages from all peers.
 func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
-	ctx, _, _ := tracing.StartTracing(sm.ctx, "handleTxMsg",
+	ctx, _, _ := tracing.Tracer("SyncManager").Start(sm.ctx, "handleTxMsg",
 		tracing.WithHistogram(prometheusLegacyNetsyncHandleTxMsg),
 		tracing.WithDebugLogMessage(sm.logger, "handling transaction message for %s from %s", tmsg.tx.Hash(), tmsg.peer),
 	)
@@ -908,7 +908,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 // processOrphanTransactions recursively processes orphan transactions that were waiting for a transaction to be accepted
 func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *chainhash.Hash, acceptedTxs *[]*TxHashAndFee) {
 	// check whether any transaction in the orphan pool has this transaction as a parent
-	ctx, _, deferFn := tracing.StartTracing(ctx, "processOrphanTransactions",
+	ctx, _, deferFn := tracing.Tracer("SyncManager").Start(ctx, "processOrphanTransactions",
 		tracing.WithHistogram(prometheusLegacyNetsyncProcessOrphanTransactions),
 	)
 	defer deferFn()
@@ -1798,7 +1798,7 @@ out:
 					// we must make sure the block is written to disk before continuing
 					blockDiskWriter <- struct{}{}
 
-					ctx, _, _ := tracing.StartTracing(sm.ctx, "blockHandler",
+					ctx, _, _ := tracing.Tracer("SyncManager").Start(sm.ctx, "blockHandler",
 						tracing.WithLogMessage(sm.logger, "[blockHandler][%s] processing block message", msg.block.Hash()),
 					)
 

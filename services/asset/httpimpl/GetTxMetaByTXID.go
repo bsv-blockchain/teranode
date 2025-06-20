@@ -100,7 +100,7 @@ type aerospikeRecord struct {
 //   - Direct access to underlying storage system
 func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		_, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetUTXOsByTXID_http",
+		_, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetTxMetaByTxID_http",
 			tracing.WithParentStat(AssetStat),
 		)
 

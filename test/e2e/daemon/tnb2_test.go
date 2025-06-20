@@ -29,7 +29,7 @@ func TestUTXOValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to mine blocks")
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(ctx, 1)
@@ -106,7 +106,7 @@ func TestScriptValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to mine blocks")
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(ctx, 1)

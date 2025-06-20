@@ -12,10 +12,10 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/k8sresolver"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	prometheus_golang "github.com/prometheus/client_golang/prometheus"
 	"github.com/sercand/kuberesolver/v5"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -128,11 +128,9 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 	}
 
 	// add tracing, which is configured and enabled in the config
-	opts, unaryClientInterceptors, streamClientInterceptors = tracing.GetGRPCClientTracerOptions(
-		opts,
-		unaryClientInterceptors,
-		streamClientInterceptors,
-	)
+	if tSettings.TracingEnabled {
+		opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	}
 
 	prometheusGRPCMetrics := tSettings.UsePrometheusGRPCMetrics
 	if prometheusGRPCMetrics {
@@ -206,12 +204,9 @@ func getGRPCServer(connectionOptions *ConnectionOptions, opts []grpc.ServerOptio
 	unaryInterceptors := make([]grpc.UnaryServerInterceptor, 0)
 	streamInterceptors := make([]grpc.StreamServerInterceptor, 0)
 
-	// add tracing, which is configured and enabled in the config
-	opts, unaryInterceptors, streamInterceptors = tracing.GetGRPCServerTracerOptions(
-		opts,
-		unaryInterceptors,
-		streamInterceptors,
-	)
+	if tSettings.TracingEnabled {
+		opts = append(opts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	}
 
 	prometheusGRPCMetrics := tSettings.UsePrometheusGRPCMetrics
 	if prometheusGRPCMetrics {

@@ -60,7 +60,7 @@ func (u *Server) GetSubtreeExists(_ context.Context, _ *chainhash.Hash) (bool, e
 // SetTxMetaCache stores transaction metadata in the cache if caching is enabled.
 func (u *Server) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *meta.Data) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
-		_, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:SetTxMetaCache")
+		_, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "SubtreeValidation:SetTxMetaCache")
 		defer deferFn()
 
 		return cache.SetCache(hash, txMeta)
@@ -87,7 +87,7 @@ func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []b
 // DelTxMetaCache removes transaction metadata from the cache if caching is enabled.
 func (u *Server) DelTxMetaCache(ctx context.Context, hash *chainhash.Hash) error {
 	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
-		ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:DelTxMetaCache")
+		ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "SubtreeValidation:DelTxMetaCache")
 		defer deferFn()
 
 		return cache.Delete(ctx, hash)
@@ -99,7 +99,7 @@ func (u *Server) DelTxMetaCache(ctx context.Context, hash *chainhash.Hash) error
 // DelTxMetaCacheMulti removes multiple transaction metadata entries from the cache.
 func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
-		ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:DelTxMetaCacheMulti")
+		ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "SubtreeValidation:DelTxMetaCacheMulti")
 		defer deferFn()
 
 		return cache.Delete(ctx, hash)
@@ -248,7 +248,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 //   - error: Detailed error information if validation fails for any reason
 func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions *validator.Options) (txMeta *meta.Data, err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "getMissingTransaction",
+	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "getMissingTransaction",
 		tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
 	)
 
@@ -436,13 +436,17 @@ type ValidateSubtree struct {
 // necessary authorization and parameter validation.
 func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
+
+	stat := gocore.NewStat("ValidateSubtreeInternal")
+
 	startTotal := time.Now()
-	ctx, stat, deferFn := tracing.StartTracing(ctx, "ValidateSubtreeInternal",
+
+	ctx, _, endSpan := tracing.Tracer("subtreevalidation").Start(ctx, "ValidateSubtreeInternal",
 		tracing.WithHistogram(prometheusSubtreeValidationValidateSubtree),
 	)
 
 	defer func() {
-		deferFn(err)
+		endSpan(err)
 	}()
 
 	u.logger.Infof("[ValidateSubtreeInternal][%s] called", v.SubtreeHash.String())
@@ -836,7 +840,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash chainhash.Hash, subtree *util.Subtree,
 	missingTxHashes []utxo.UnresolvedMetaData, allTxs []chainhash.Hash, baseURL string, txMetaSlice []*meta.Data, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:processMissingTransactions",
+	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "SubtreeValidation:processMissingTransactions",
 		tracing.WithDebugLogMessage(u.logger, "[processMissingTransactions][%s] processing %d missing txs", subtreeHash.String(), len(missingTxHashes)),
 	)
 
@@ -1045,7 +1049,7 @@ type txMapWrapper struct {
 //   - map[uint32][]missingTx: Map of dependency levels to transactions at that level
 
 func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, map[uint32][]missingTx) {
-	_, _, deferFn := tracing.StartTracing(ctx, "prepareTxsPerLevel",
+	_, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "prepareTxsPerLevel",
 		tracing.WithDebugLogMessage(u.logger, "[prepareTxsPerLevel] preparing %d transactions per level", len(transactions)),
 	)
 

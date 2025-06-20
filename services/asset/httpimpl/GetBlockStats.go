@@ -45,7 +45,7 @@ import (
 //	# Get blockchain statistics
 //	GET /blocks/stats
 func (h *HTTP) GetBlockStats(c echo.Context) error {
-	ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetBlockStats_http",
+	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockStats_http",
 		tracing.WithParentStat(AssetStat),
 		tracing.WithDebugLogMessage(h.logger, "GetBlockStats_http"),
 	)

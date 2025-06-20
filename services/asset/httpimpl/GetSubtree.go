@@ -97,7 +97,7 @@ func calculateSpeed(duration time.Duration, sizeInKB float64) float64 {
 //   - Includes performance metrics in logs
 func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetSubtree_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetSubtree_http",
 			tracing.WithParentStat(AssetStat),
 			tracing.WithLogMessage(h.logger, "[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash")),
 		)

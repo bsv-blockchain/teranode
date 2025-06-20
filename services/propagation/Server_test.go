@@ -89,7 +89,7 @@ func (m *CustomMockBlockchainClient) GetFSMCurrentStateForE2ETestMode() blockcha
 // TestPropagationServer_HealthLiveness tests the Health function with liveness checks.
 func TestPropagationServer_HealthLiveness(t *testing.T) {
 	// Initialize tracing for tests
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	// Create a server with minimal dependencies
 	ps := &PropagationServer{
@@ -110,7 +110,7 @@ func TestPropagationServer_HealthLiveness(t *testing.T) {
 // TestPropagationServer_HealthReadiness tests the Health function with readiness checks.
 func TestPropagationServer_HealthReadiness(t *testing.T) {
 	// Initialize tracing for tests
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	t.Run("all dependencies healthy", func(t *testing.T) {
 		// Create mock dependencies - all healthy
@@ -317,7 +317,7 @@ func TestPropagationServer_HealthReadiness(t *testing.T) {
 // TestPropagationServer_HealthGRPC tests the HealthGRPC function.
 func TestPropagationServer_HealthGRPC(t *testing.T) {
 	// Initialize tracing for tests
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	t.Run("healthy service", func(t *testing.T) {
 		// Create mock dependencies - all healthy

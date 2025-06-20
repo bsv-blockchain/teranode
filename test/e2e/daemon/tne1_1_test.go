@@ -56,7 +56,7 @@ func TestNode_DoNotVerifyTransactionsIfAlreadyVerified(t *testing.T) {
 	blocks := uint32(101)
 
 	// Generate blocks
-	_, err := node1.CallRPC("generate", []any{blocks})
+	_, err := node1.CallRPC(node1.Ctx, "generate", []any{blocks})
 	require.NoError(t, err, "Failed to mine blocks on node1")
 
 	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, blocks, blockWait)
@@ -93,7 +93,7 @@ func TestNode_DoNotVerifyTransactionsIfAlreadyVerified(t *testing.T) {
 
 		node.Logger.Infof("Hashes: %v", hashes)
 
-		_, err = node.CallRPC("generate", []any{1})
+		_, err = node.CallRPC(node.Ctx, "generate", []any{1})
 		require.NoError(t, err, "Failed to mine blocks")
 
 		if err != nil {

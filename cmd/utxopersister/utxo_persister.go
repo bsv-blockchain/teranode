@@ -49,11 +49,8 @@ import (
 //   - Logs and exits on critical errors such as missing configuration or failed service initialization.
 func RunUtxoPersister(logger ulogger.Logger, settings *settings.Settings) {
 	// Start tracing
-	ctx, _, deferFn := tracing.StartTracing(
-		context.Background(),
-		"utxopersister",
-	)
-	defer deferFn()
+	ctx, _, endFn := tracing.Tracer("utxopersister").Start(context.Background(), "RunUtxoPersister")
+	defer endFn()
 
 	// If a profiler address is set, register the statistics handlers and start the profiler server
 	profilerAddr := settings.ProfilerAddr

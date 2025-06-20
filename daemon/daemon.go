@@ -35,6 +35,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/servicemanager"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 )
 
@@ -166,12 +167,19 @@ func (d *Daemon) AddExternalService(name string, initFunc func() (servicemanager
 }
 
 // Stop gracefully stops the Daemon and all its services.
-func (d *Daemon) Stop() error {
+func (d *Daemon) Stop(skipTracerShutdown ...bool) error {
 	logger := d.loggerFactory(serviceNameDaemon)
 
-	if traceCloser != nil {
-		_ = traceCloser.Close()
-		traceCloser = nil
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if len(skipTracerShutdown) == 0 || !skipTracerShutdown[0] {
+		// Shutdown the tracer
+		if err := tracing.ShutdownTracer(shutdownCtx); err != nil {
+			logger.Errorf("Error shutting down tracer: %v", err)
+		} else {
+			logger.Infof("Tracer shutdown completed")
+		}
 	}
 
 	d.serverMu.Lock()

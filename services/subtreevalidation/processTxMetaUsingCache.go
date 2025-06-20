@@ -37,7 +37,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 		return 0, errors.NewProcessingError("txHashes and txMetaSlice must be the same length")
 	}
 
-	ctx, _, deferFn := tracing.StartTracing(ctx, "processTxMetaUsingCache")
+	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processTxMetaUsingCache")
 	defer deferFn()
 
 	batchSize := u.settings.SubtreeValidation.ProcessTxMetaUsingCacheBatchSize

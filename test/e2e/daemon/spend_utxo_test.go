@@ -27,7 +27,7 @@ func TestShouldAllowSpendAllUtxos(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err)
 
 	// Generate private key and address for recipient
@@ -98,7 +98,7 @@ func TestShouldAllowSpendAllUtxos(t *testing.T) {
 	td.Logger.Infof("Second Transaction sent: %s", tx2.TxID())
 
 	// Mine a block
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to mine block")
 
 	// Verify both transactions are in block

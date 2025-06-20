@@ -36,7 +36,7 @@ func TestMoveUp(t *testing.T) {
 
 	defer node2.Stop(t)
 
-	_, err := node2.CallRPC("generate", []any{1})
+	_, err := node2.CallRPC(node2.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -53,7 +53,7 @@ func TestMoveUp(t *testing.T) {
 	require.NoError(t, err)
 
 	// generate 1 block on node1
-	_, err = node1.CallRPC("generate", []any{1})
+	_, err = node1.CallRPC(node1.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
 	// verify block height on node1
@@ -81,7 +81,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 	})
 
 	// mine 3 blocks on node2
-	_, err := node2.CallRPC("generate", []any{3})
+	_, err := node2.CallRPC(node2.Ctx, "generate", []any{3})
 	require.NoError(t, err)
 
 	// verify blockheight on node2
@@ -103,7 +103,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		},
 	})
 
-	_, err = node1.CallRPC("generate", []any{2})
+	_, err = node1.CallRPC(node1.Ctx, "generate", []any{2})
 	require.NoError(t, err)
 
 	// verify blockheight on node1
@@ -123,7 +123,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		},
 	})
 
-	_, err = node2.CallRPC("generate", []any{1})
+	_, err = node2.CallRPC(node2.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
 	defer func() {
@@ -156,7 +156,7 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 	})
 
 	// mine 3 blocks on node2
-	_, err := node2.CallRPC("generate", []any{3})
+	_, err := node2.CallRPC(node2.Ctx, "generate", []any{3})
 	require.NoError(t, err)
 
 	// stop node 2 so that it doesn't sync with node 1
@@ -174,7 +174,7 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		},
 	})
 
-	_, err = node1.CallRPC("generate", []any{2})
+	_, err = node1.CallRPC(node1.Ctx, "generate", []any{2})
 	require.NoError(t, err)
 
 	// restart node 2 (which is at height 3)
@@ -221,7 +221,7 @@ func TestTDRestart(t *testing.T) {
 	// err := td.BlockchainClient.Run(td.Ctx, "test")
 	// require.NoError(t, err)
 
-	_, err := td.CallRPC("generate", []any{1})
+	_, err := td.CallRPC(td.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
@@ -259,7 +259,7 @@ func checkSubtrees(t *testing.T, td *daemon.TestDaemon, expectedTxCount int) {
 	t.Logf("Number of subtrees in candidate: %d", len(candidate.SubtreeHashes))
 
 	// Mine a block
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err)
 
 	for i, subtreeBytes := range candidate.SubtreeHashes {
@@ -308,7 +308,7 @@ func TestDynamicSubtreeSize(t *testing.T) {
 
 	// Generate initial blocks
 	initialBlocks := 150
-	_, err = td.CallRPC("generate", []interface{}{initialBlocks})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{initialBlocks})
 	require.NoError(t, err)
 
 	// Configuration for the test
@@ -353,7 +353,7 @@ func TestDynamicSubtreeSize(t *testing.T) {
 		checkSubtrees(t, td, outputCount)
 
 		// // Mine a block to ensure all transactions are processed
-		_, err = td.CallRPC("generate", []interface{}{1})
+		_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 		require.NoError(t, err)
 
 		// // Wait between iterations to allow for subtree size adjustments
@@ -375,7 +375,7 @@ func TestInvalidBlock(t *testing.T) {
 
 	defer node1.Stop(t)
 
-	_, err := node1.CallRPC("generate", []any{3})
+	_, err := node1.CallRPC(node1.Ctx, "generate", []any{3})
 	require.NoError(t, err)
 
 	node1BestBlockHeader, node1BestBlockHeaderMeta, err := node1.BlockchainClient.GetBestBlockHeader(t.Context())
@@ -427,7 +427,7 @@ func TestBlockValidationCatchup(t *testing.T) {
 	})
 	defer node1.Stop(t)
 
-	_, err := node1.CallRPC("generate", []any{100})
+	_, err := node1.CallRPC(node1.Ctx, "generate", []any{100})
 	require.NoError(t, err)
 	// 0 -> 1 ... 100 (node1 main chain)
 
@@ -457,14 +457,14 @@ func TestBlockValidationCatchup(t *testing.T) {
 
 	const extraBlocks = 1000
 
-	_, err = node2.CallRPC("generate", []any{extraBlocks})
+	_, err = node2.CallRPC(node2.Ctx, "generate", []any{extraBlocks})
 	require.NoError(t, err)
 	//                / 101a -> ... -> 1100a (node2 fork)
 	// 0 -> 1 ... 100
 	//                \ 100b (node1 stays)
 
 	// generate 1 more block on node1
-	_, err = node1.CallRPC("generate", []any{1})
+	_, err = node1.CallRPC(node1.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 	//                / 101a -> ... -> 1100a
 	// 0 -> 1 ... 100
@@ -488,7 +488,7 @@ func TestBlockValidationCatchup(t *testing.T) {
 	})
 	defer node2.Stop(t)
 
-	// _, err = node2.CallRPC("generate", []any{1})
+	// _, err = node2.CallRPC(node2.Ctx, "generate", []any{1})
 	// require.NoError(t, err)
 	//                / 201a -> ... -> 301a
 	// 0 -> 1 ... 100

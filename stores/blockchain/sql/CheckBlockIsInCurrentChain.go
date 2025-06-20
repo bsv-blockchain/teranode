@@ -42,9 +42,9 @@ import (
 // Returns:
 //   - bool: True if all specified blocks are part of the current main chain, false otherwise
 //   - error: Any error encountered during the check, specifically:
-//     - StorageError for database errors or processing failures
+//   - StorageError for database errors or processing failures
 func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:CheckIfBlockIsInCurrentChain",
+	ctx, _, deferFn := tracing.Tracer("SyncManager").Start(ctx, "sql:CheckIfBlockIsInCurrentChain",
 		tracing.WithDebugLogMessage(s.logger, "[CheckIfBlockIsInCurrentChain] checking if blocks (%v) are in current chain", blockIDs),
 	)
 	defer deferFn()

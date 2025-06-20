@@ -26,7 +26,7 @@ func TestUniqueCandidateIdentifiers(t *testing.T) {
 	defer td.Stop(t)
 
 	// Mine starting blocks
-	_, err := td.CallRPC("generate", []interface{}{101})
+	_, err := td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to mine blocks")
 
 	// Get initial mining candidate
@@ -44,7 +44,7 @@ func TestUniqueCandidateIdentifiers(t *testing.T) {
 		"Mining candidates should have unique identifiers")
 
 	// Mine a block and get another candidate to verify uniqueness across blocks
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to mine blocks")
 
 	mc3, err := helper.GetMiningCandidate(ctx, *td.BlockAssemblyClient, td.Logger)

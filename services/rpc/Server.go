@@ -69,6 +69,8 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/ordishs/gocore"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // API version constants
@@ -593,37 +595,37 @@ func handleVersion(_ context.Context, s *RPCServer, cmd interface{}, closeChan <
 type RPCServer struct {
 	// settings contains the configuration parameters for the RPC server including
 	// authentication credentials, network binding options, and service parameters
-	settings               *settings.Settings
+	settings *settings.Settings
 
 	// started indicates whether the server has been started (1) or not (0)
 	// This uses atomic operations for thread-safe access
-	started                int32
+	started int32
 
 	// shutdown indicates whether the server is in the process of shutting down (1) or not (0)
 	// This uses atomic operations for thread-safe access
-	shutdown               int32
+	shutdown int32
 
 	// authsha contains the SHA256 hash of the HTTP basic auth string for admin-level access
 	// This is used for authenticating clients with full administrative privileges
-	authsha                [sha256.Size]byte
+	authsha [sha256.Size]byte
 
 	// limitauthsha contains the SHA256 hash of the HTTP basic auth string for limited-level access
 	// This is used for authenticating clients with restricted access (read-only operations)
-	limitauthsha           [sha256.Size]byte
+	limitauthsha [sha256.Size]byte
 
 	// numClients tracks the number of connected RPC clients for connection limiting
 	// This uses atomic operations for thread-safe access
-	numClients             int32
+	numClients int32
 
 	// statusLines maps HTTP status codes to their corresponding status text lines
 	// Used for proper HTTP response generation
-	statusLines            map[int]string
+	statusLines map[int]string
 
 	// statusLock protects concurrent access to the status lines map
-	statusLock             sync.RWMutex
+	statusLock sync.RWMutex
 
 	// wg is used to wait for all goroutines to exit during shutdown
-	wg                     sync.WaitGroup
+	wg sync.WaitGroup
 
 	// requestProcessShutdown is closed when an authorized RPC client requests a shutdown
 	// This channel is used to notify the main process that a shutdown has been requested
@@ -631,49 +633,49 @@ type RPCServer struct {
 
 	// quit is used to signal the server to shut down
 	// All long-running goroutines should monitor this channel for termination signals
-	quit                   chan int
+	quit chan int
 
 	// logger provides structured logging capabilities for operational and debugging messages
-	logger                 ulogger.Logger
+	logger ulogger.Logger
 
 	// rpcMaxClients is the maximum number of concurrent RPC clients allowed
 	// This setting helps prevent resource exhaustion from too many simultaneous connections
-	rpcMaxClients          int
+	rpcMaxClients int
 
 	// rpcQuirks enables backwards-compatible quirks in the RPC server when true
 	// This improves compatibility with clients expecting legacy Bitcoin Core behavior
-	rpcQuirks              bool
+	rpcQuirks bool
 
 	// listeners contains the network listeners for the RPC server
 	// Multiple listeners may be active for different IP addresses and ports
-	listeners              []net.Listener
+	listeners []net.Listener
 
 	// blockchainClient provides access to blockchain data and operations
 	// Used for retrieving block information, chain state, and blockchain operations
-	blockchainClient       blockchain.ClientI
+	blockchainClient blockchain.ClientI
 
 	// blockAssemblyClient provides access to block assembly and mining services
 	// Used for mining-related RPC commands like getminingcandidate and generate
-	blockAssemblyClient    *blockassembly.Client
+	blockAssemblyClient *blockassembly.Client
 
 	// peerClient provides access to legacy peer network services
 	// Used for peer management and information retrieval
-	peerClient             peer.ClientI
+	peerClient peer.ClientI
 
 	// p2pClient provides access to the P2P network services
 	// Used for modern peer management and network operations
-	p2pClient              p2p.ClientI
+	p2pClient p2p.ClientI
 
 	// assetHTTPURL is the URL where assets (e.g., for HTTP UI) are served from
-	assetHTTPURL           *url.URL
+	assetHTTPURL *url.URL
 
 	// helpCacher caches help text for RPC commands to improve performance
 	// Prevents regenerating help text for each request
-	helpCacher             *helpCacher
+	helpCacher *helpCacher
 
 	// utxoStore provides access to the UTXO (Unspent Transaction Output) database
 	// Used for transaction validation and UTXO queries
-	utxoStore              utxo.Store
+	utxoStore utxo.Store
 }
 
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
@@ -801,7 +803,7 @@ func (s *RPCServer) RequestedProcessShutdown() <-chan struct{} {
 //
 // Returns:
 //   - bool: true if connection limits are exceeded and the client was rejected,
-//           false if the connection can proceed
+//     false if the connection can proceed
 //
 // This function is safe for concurrent access through the use of atomic operations.
 func (s *RPCServer) limitConnections(w http.ResponseWriter, remoteAddr string) bool {
@@ -819,7 +821,7 @@ func (s *RPCServer) limitConnections(w http.ResponseWriter, remoteAddr string) b
 }
 
 // incrementClients atomically increments the count of connected RPC clients.
-// 
+//
 // This method is part of the connection tracking system that enables the server
 // to enforce limits on the number of simultaneous connections. It maintains an
 // accurate count of standard HTTP JSON-RPC clients currently connected to the server.
@@ -836,7 +838,7 @@ func (s *RPCServer) incrementClients() {
 }
 
 // decrementClients atomically decrements the count of connected RPC clients.
-// 
+//
 // This method is called when an RPC client disconnects, properly reducing the
 // tracked count of active connections. It works in conjunction with incrementClients
 // to maintain an accurate count of standard HTTP JSON-RPC clients currently
@@ -853,16 +855,16 @@ func (s *RPCServer) decrementClients() {
 	atomic.AddInt32(&s.numClients, -1)
 }
 
-// checkAuth implements the two-tier HTTP Basic authentication system for RPC clients.  
-// It validates credentials supplied in the HTTP request against configured admin and 
+// checkAuth implements the two-tier HTTP Basic authentication system for RPC clients.
+// It validates credentials supplied in the HTTP request against configured admin and
 // limited-access username/password combinations.
 //
 // The method implements a secure authentication flow that:
-// 1. Extracts the Authorization header from the HTTP request
-// 2. Validates the credentials against both admin and limited-user authentication strings
-// 3. Uses time-constant comparison operations to prevent timing attacks
-// 4. Distinguishes between admin users (who can perform state-changing operations)
-//    and limited users (who can only perform read-only operations)
+//  1. Extracts the Authorization header from the HTTP request
+//  2. Validates the credentials against both admin and limited-user authentication strings
+//  3. Uses time-constant comparison operations to prevent timing attacks
+//  4. Distinguishes between admin users (who can perform state-changing operations)
+//     and limited users (who can only perform read-only operations)
 //
 // Security considerations:
 // - Uses SHA256 for credential hashing
@@ -879,7 +881,7 @@ func (s *RPCServer) decrementClients() {
 //   - bool: Authorization level (true for admin access, false for limited access). The value specifies whether the user can change the state of the node.
 //   - error: Authentication error if any occurred, nil on success
 //
-// The second bool is always false if the first bool is false (authorization 
+// The second bool is always false if the first bool is false (authorization
 // level is only meaningful for authenticated requests).
 func (s *RPCServer) checkAuth(r *http.Request, require bool) (bool, bool, error) {
 	authhdr := r.Header["Authorization"]
@@ -1231,6 +1233,13 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	rpcServeMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Extract trace context from incoming request headers
+		ctx := r.Context()
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
+
+		// Update request with the new context
+		r = r.WithContext(ctx)
+
 		w.Header().Set("Connection", "close")
 		w.Header().Set("Content-Type", "application/json")
 
@@ -1437,10 +1446,10 @@ func (s *RPCServer) Init(ctx context.Context) (err error) {
 // for consistent monitoring, alerting, and orchestration. It provides both readiness and liveness
 // checking capabilities to support different operational scenarios:
 //
-// - Readiness: Indicates whether the service is ready to accept requests (listeners are bound
-//   and core dependencies are available)
-// - Liveness: Indicates whether the service is functioning correctly (listeners are still working
-//   and not in a hung state)
+//   - Readiness: Indicates whether the service is ready to accept requests (listeners are bound
+//     and core dependencies are available)
+//   - Liveness: Indicates whether the service is functioning correctly (listeners are still working
+//     and not in a hung state)
 //
 // The method performs checks appropriate to the service's role, including:
 // - Verifying network listeners are active

@@ -74,6 +74,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -284,7 +285,10 @@ type keyIgnoreUnspendable struct {
 //  6. Updates external storage
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	start := time.Now()
-	ctx, stat, deferFn := tracing.StartTracing(s.ctx, "sendSpendBatchLua",
+
+	stat := gocore.NewStat("sendSpendBatchLua")
+
+	ctx, _, deferFn := tracing.Tracer("aerospike").Start(s.ctx, "sendSpendBatchLua",
 		tracing.WithParentStat(gocoreStat),
 		tracing.WithHistogram(prometheusUtxoSpendBatch),
 	)

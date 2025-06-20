@@ -398,7 +398,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockFound",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationBlockFound),
 		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", hash.String(), baseURL.String()),
@@ -548,7 +548,7 @@ func (u *Server) Stop(_ context.Context) error {
 // Returns an EmptyMessage on success or an error if validation cannot be initiated.
 // If WaitToComplete is set in the request, waits for validation to finish before returning.
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockFound",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationBlockFound),
 		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl()),
@@ -621,7 +621,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to create block from bytes", err))
 	}
 
-	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessBlock",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "ProcessBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[ProcessBlock][%s] process block called for height %d (%d txns)", block.Hash(), request.Height, block.TransactionCount),
 	)
@@ -676,7 +676,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 
 	block.Height = request.Height
 
-	ctx, _, deferFn := tracing.StartTracing(ctx, "ValidateBlock",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "ValidateBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[Server:ValidateBlock][%s] validate block called for height %d", block.Hash().String(), request.Height),
 	)
@@ -715,7 +715,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 }
 
 func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseURL string, useBlock ...*model.Block) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "processBlockFound",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationProcessBlockFound),
 		tracing.WithDebugLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseURL),
@@ -797,7 +797,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 //   - block: The block whose parent requires verification
 //   - baseURL: Source URL for additional data retrieval if needed
 func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model.Block, baseURL string) {
-	_, _, deferFn := tracing.StartTracing(ctx, "checkParentProcessingComplete",
+	_, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "checkParentProcessingComplete",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[checkParentProcessingComplete][%s] called from %s", block.Hash().String(), baseURL),
 	)
@@ -854,7 +854,7 @@ func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model
 }
 
 func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseURL string) (*model.Block, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlock",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "getBlock",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
@@ -877,7 +877,7 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseURL str
 }
 
 func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, baseURL string) ([]*model.Block, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlocks",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "getBlocks",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
@@ -909,7 +909,7 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 }
 
 func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, _ uint32, baseURL string) ([]*model.BlockHeader, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlockHeaders",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "getBlockHeaders",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
@@ -950,7 +950,7 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, _ ui
 }
 
 func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL string) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "catchup",
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "catchup",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationCatchup),
 		tracing.WithLogMessage(u.logger, "[catchup][%s] catching up on server %s", blockUpTo.Hash().String(), baseURL),

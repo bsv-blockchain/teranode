@@ -39,23 +39,23 @@ import (
 // The implementation employs a multi-tiered approach for optimal performance:
 //
 // 1. Response Cache Layer: First checks a dedicated response cache for recently accessed blocks
-//    - Uses a hash of the query parameters as the cache key for consistent lookups
-//    - Provides immediate response for frequently accessed blocks without database queries
-//    - Cache entries are automatically invalidated when new blocks are added or after the TTL expires
+//   - Uses a hash of the query parameters as the cache key for consistent lookups
+//   - Provides immediate response for frequently accessed blocks without database queries
+//   - Cache entries are automatically invalidated when new blocks are added or after the TTL expires
 //
 // 2. Database Layer: If not found in cache, executes an optimized SQL query
-//    - Retrieves all block fields in a single query using the database ID as the primary key
-//    - Leverages database indexing for efficient retrieval by primary key
-//    - Includes all necessary fields to reconstruct a complete block object
+//   - Retrieves all block fields in a single query using the database ID as the primary key
+//   - Leverages database indexing for efficient retrieval by primary key
+//   - Includes all necessary fields to reconstruct a complete block object
 //
 // 3. Block Reconstruction: Converts raw database values to structured blockchain types
-//    - Handles binary-to-structured data conversions (hashes, difficulty bits, transactions)
-//    - Processes subtree data specific to Teranode's transaction management architecture
-//    - Constructs a complete block object with header, metadata, and transaction information
+//   - Handles binary-to-structured data conversions (hashes, difficulty bits, transactions)
+//   - Processes subtree data specific to Teranode's transaction management architecture
+//   - Constructs a complete block object with header, metadata, and transaction information
 //
 // 4. Cache Update: Stores the reconstructed block in the response cache for future queries
-//    - Applies the configured cache TTL to balance freshness with performance
-//    - Ensures consistent responses for repeated queries within the cache window
+//   - Applies the configured cache TTL to balance freshness with performance
+//   - Ensures consistent responses for repeated queries within the cache window
 //
 // Parameters:
 //   - ctx: Context for the database operation, allowing for cancellation and timeouts
@@ -64,11 +64,11 @@ import (
 // Returns:
 //   - *model.Block: A complete block object with header, metadata, and transaction information
 //   - error: Any error encountered during retrieval, specifically:
-//     - BlockNotFoundError if no block with the specified ID exists
-//     - StorageError for database connection or query execution errors
-//     - InvalidArgumentError for data conversion failures
+//   - BlockNotFoundError if no block with the specified ID exists
+//   - StorageError for database connection or query execution errors
+//   - InvalidArgumentError for data conversion failures
 func (s *SQL) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockByID")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockByID")
 	defer deferFn()
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds

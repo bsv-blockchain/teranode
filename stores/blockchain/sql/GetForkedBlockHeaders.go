@@ -46,10 +46,10 @@ import (
 //   - []*model.BlockHeader: An array of block headers that are not part of the specified chain
 //   - []*model.BlockHeaderMeta: Corresponding metadata for each header including height and chainwork
 //   - error: Any error encountered during retrieval, specifically:
-//     - BlockNotFoundError if the starting block does not exist
-//     - StorageError for database errors or data processing failures
+//   - BlockNotFoundError if the starting block does not exist
+//   - StorageError for database errors or data processing failures
 func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetForkedBlockHeaders")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetForkedBlockHeaders")
 	defer deferFn()
 
 	headers, metas := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)

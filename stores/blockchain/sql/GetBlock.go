@@ -67,11 +67,11 @@ type getBlockCache struct {
 //     and metadata such as transaction count and size
 //   - uint32: The height of the block in the blockchain
 //   - error: Any error encountered during retrieval, specifically:
-//     - BlockNotFoundError if the block does not exist in the database
-//     - StorageError for database access or query execution errors
-//     - ProcessingError for errors during block reconstruction
+//   - BlockNotFoundError if the block does not exist in the database
+//   - StorageError for database access or query execution errors
+//   - ProcessingError for errors during block reconstruction
 func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlock")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlock")
 	defer deferFn()
 
 	// header, meta, er := cache.GetBlock(*blockHash)

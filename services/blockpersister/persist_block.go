@@ -44,7 +44,7 @@ import (
 // Note: Block persistence is atomic - if any part fails, the entire operation is considered
 // failed and should be retried after resolving the underlying issue.
 func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBytes []byte) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "persistBlock",
+	ctx, _, deferFn := tracing.Tracer("blockpersister").Start(ctx, "persistBlock",
 		tracing.WithHistogram(prometheusBlockPersisterPersistBlock),
 		tracing.WithLogMessage(u.logger, "[persistBlock] called for block %s", hash.String()),
 	)

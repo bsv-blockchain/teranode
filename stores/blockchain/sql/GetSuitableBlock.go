@@ -45,10 +45,10 @@ import (
 //   - *model.SuitableBlock: A structure containing the necessary information for mining,
 //     including block height, previous block hash, difficulty target, and median time
 //   - error: Any error encountered during retrieval or calculation, specifically:
-//     - BlockNotFoundError if the specified block doesn't exist
-//     - StorageError for database errors or processing failures
+//   - BlockNotFoundError if the specified block doesn't exist
+//   - StorageError for database errors or processing failures
 func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*model.SuitableBlock, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetSuitableBlock")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetSuitableBlock")
 	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)

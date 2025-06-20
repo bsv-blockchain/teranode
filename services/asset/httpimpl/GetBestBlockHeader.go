@@ -81,7 +81,7 @@ import (
 //   - All little-endian fields are converted to standard integers in JSON format
 func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetBestBlockHeader_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBestBlockHeader_http",
 			tracing.WithParentStat(AssetStat),
 			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBestBlockHeader in %s for %s", mode, c.Request().RemoteAddr),
 		)

@@ -64,7 +64,7 @@ import (
 // This method is particularly important for mining-related operations where blocks need
 // to be efficiently marked as mined without loading their complete data.
 func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeaderIDs")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeaderIDs")
 	defer deferFn()
 
 	_, metas := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)

@@ -31,7 +31,7 @@ func TestVerifyMerkleRootCalculation(t *testing.T) {
 	require.NoError(t, errMc, "Failed to get mining candidate")
 
 	// Generate 1 block
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to mine block")
 
 	// Get Merkle branches from the mining candidate (should be empty for coinbase-only block)

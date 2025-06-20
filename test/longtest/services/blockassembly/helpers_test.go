@@ -48,7 +48,7 @@ func initStores() (*memory.Memory, *utxostore.Memory, *settings.Settings, blockc
 	blobStore := memory.New()
 	utxoStore := utxostore.New(ulogger.TestLogger{})
 
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.Policy.BlockMaxSize = 1000000

@@ -6,85 +6,42 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/opentracing/opentracing-go"
-	"github.com/opentracing/opentracing-go/mocktracer"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
+// Options func represents a functional option for configuring tracing
 type Options func(s *TraceOptions)
 
+// logMessage represents a log message with its level and arguments
 type logMessage struct {
 	message string
 	args    []interface{}
 	level   string
 }
 
-type TraceOptions struct {
-	ParentStat  *gocore.Stat
-	Tags        []tracingTag
-	Histogram   prometheus.Histogram
-	Counter     prometheus.Counter
-	Logger      ulogger.Logger
-	LogMessages []logMessage
-}
-
-func WithParentStat(stat *gocore.Stat) Options {
-	return func(s *TraceOptions) {
-		s.ParentStat = stat
-	}
-}
-
+// tracingTag represents a key-value tag for tracing
 type tracingTag struct {
 	key   string
 	value string
 }
 
-func WithTag(key, value string) Options {
-	return func(s *TraceOptions) {
-		if s.Tags == nil {
-			s.Tags = make([]tracingTag, 0)
-		}
-
-		s.Tags = append(s.Tags, tracingTag{key: key, value: value})
-	}
+// TraceOptions contains all options for configuring a trace span
+type TraceOptions struct {
+	SpanStartOptions []trace.SpanStartOption // options passed to the OpenTelemetry span
+	ParentStat       *gocore.Stat            // parent gocore.Stat
+	Tags             []tracingTag            // tags to be added to the span
+	Histogram        prometheus.Histogram    // histogram to be observed when the span is finished
+	Counter          prometheus.Counter      // counter to be incremented when the span is finished
+	Logger           ulogger.Logger          // logger to be used when starting the span and when the span is finished
+	LogMessages      []logMessage            // log messages to be added to the span
 }
 
-// WithHistogram sets the prometheus histogram to be observed when the span is finished.
-func WithHistogram(histogram prometheus.Histogram) Options {
-	return func(s *TraceOptions) {
-		s.Histogram = histogram
-	}
-}
-
-// WithCounter sets the prometheus counter to be incremented when the span is finished.
-func WithCounter(counter prometheus.Counter) Options {
-	return func(s *TraceOptions) {
-		s.Counter = counter
-	}
-}
-
-// WithLogMessage sets the logger and log message to be used when starting the span and when the span is finished.
-// The log message is formatted with fmt.Sprintf and all arguments are passed to the logger.
-// The log message is logged at the INFO level. This should only be used in grpc / http calls and not internal functions.
-func WithLogMessage(logger ulogger.Logger, message string, args ...interface{}) Options {
-	return func(s *TraceOptions) {
-		s.addLogMessage(logger, message, "INFO", args)
-	}
-}
-
-func WithWarnLogMessage(logger ulogger.Logger, message string, args ...interface{}) Options {
-	return func(s *TraceOptions) {
-		s.addLogMessage(logger, message, "WARN", args)
-	}
-}
-
-func WithDebugLogMessage(logger ulogger.Logger, message string, args ...interface{}) Options {
-	return func(s *TraceOptions) {
-		s.addLogMessage(logger, message, "DEBUG", args)
-	}
-}
-
+// addLogMessage adds a log message to the trace options
 func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level string, args []interface{}) {
 	if s.Logger == nil && logger != nil {
 		// duplicate the logger so that the skip frame is correct
@@ -98,33 +55,160 @@ func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level strin
 	}
 }
 
-// StartTracing starts a new span with the given name and returns a context with the span and a function to finish the span.
-func StartTracing(ctx context.Context, name string, setOptions ...Options) (context.Context, *gocore.Stat, func(...error)) {
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, name)
+func WithSpanStartOptions(options ...trace.SpanStartOption) Options {
+	return func(s *TraceOptions) {
+		s.SpanStartOptions = options
+	}
+}
 
-	// process the options
+// WithParentStat sets the parent gocore.Stat for the trace
+func WithParentStat(stat *gocore.Stat) Options {
+	return func(s *TraceOptions) {
+		s.ParentStat = stat
+	}
+}
+
+// WithTag adds a key-value tag to the trace
+func WithTag(key, value string) Options {
+	return func(s *TraceOptions) {
+		if s.Tags == nil {
+			s.Tags = make([]tracingTag, 0)
+		}
+
+		s.Tags = append(s.Tags, tracingTag{key: key, value: value})
+	}
+}
+
+// WithHistogram sets the prometheus histogram to be observed when the span is finished
+func WithHistogram(histogram prometheus.Histogram) Options {
+	return func(s *TraceOptions) {
+		s.Histogram = histogram
+	}
+}
+
+// WithCounter sets the prometheus counter to be incremented when the span is finished
+func WithCounter(counter prometheus.Counter) Options {
+	return func(s *TraceOptions) {
+		s.Counter = counter
+	}
+}
+
+// WithLogMessage sets the logger and log message to be used when starting the span and when the span is finished
+func WithLogMessage(logger ulogger.Logger, message string, args ...interface{}) Options {
+	return func(s *TraceOptions) {
+		s.addLogMessage(logger, message, "INFO", args)
+	}
+}
+
+// WithWarnLogMessage sets a warning log message
+func WithWarnLogMessage(logger ulogger.Logger, message string, args ...interface{}) Options {
+	return func(s *TraceOptions) {
+		s.addLogMessage(logger, message, "WARN", args)
+	}
+}
+
+// WithDebugLogMessage sets a debug log message
+func WithDebugLogMessage(logger ulogger.Logger, message string, args ...interface{}) Options {
+	return func(s *TraceOptions) {
+		s.addLogMessage(logger, message, "DEBUG", args)
+	}
+}
+
+// UTracer provides a unified tracing interface that combines OpenTelemetry spans
+// with gocore.Stat for consistent tracing and performance monitoring.
+type UTracer struct {
+	name   string
+	tracer trace.Tracer
+}
+
+// USpan represents an active tracing span with associated statistics
+type USpan struct {
+	stat *gocore.Stat
+	ctx  context.Context
+}
+
+// Tracer creates a new unified tracer with the given name.
+// The name typically represents the service or component being traced.
+//
+// Parameters:
+//   - name: The name of the service or component
+//   - otelOpts: OpenTelemetry tracer options passed directly to otel.Tracer
+func Tracer(name string, otelOpts ...trace.TracerOption) *UTracer {
+	// Filter out nil options to prevent panic in OpenTelemetry
+	var validOpts []trace.TracerOption
+
+	for _, opt := range otelOpts {
+		if opt != nil {
+			validOpts = append(validOpts, opt)
+		}
+	}
+
+	// Create OpenTelemetry tracer with valid options
+	tracer := otel.Tracer(name, validOpts...)
+
+	return &UTracer{
+		name:   name,
+		tracer: tracer,
+	}
+}
+
+// Start begins a new trace span with the given operation name and options.
+// It returns:
+//   - context.Context: Updated context containing the span
+//   - *USpan: The unified span object that must be ended with End()
+//
+// Example usage:
+//
+//	ctx, span := tracer.Start(ctx, "ProcessTransaction",
+//	    WithParentStat(parentStat),
+//	    WithTag("tx.id", txID),
+//	    WithLogMessage(logger, "Processing transaction %s", txID),
+//	)
+//	defer span.End()
+func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (context.Context, trace.Span, func(...error)) {
+	// Process options
 	options := &TraceOptions{}
-	for _, opt := range setOptions {
+	for _, opt := range opts {
 		opt(options)
 	}
 
+	// Add any options.Tags to the span options...
+	for _, tag := range options.Tags {
+		options.SpanStartOptions = append(options.SpanStartOptions, trace.WithAttributes(attribute.String(tag.key, tag.value)))
+	}
+
+	// Start OpenTelemetry span
+	ctx, span := u.tracer.Start(ctx, spanName, options.SpanStartOptions...)
+
+	// Create gocore.Stat (only if enabled)
 	var (
 		start time.Time
 		stat  *gocore.Stat
 	)
 
 	if options.ParentStat != nil {
-		start, stat, ctx = NewStatFromContext(spanCtx, name, options.ParentStat)
+		start, stat, ctx = NewStatFromContext(ctx, spanName, options.ParentStat)
 	} else {
-		start, stat, ctx = NewStatFromContext(spanCtx, name, defaultStat)
+		start, stat, ctx = NewStatFromContext(ctx, spanName, defaultStat)
 	}
 
+	// Set span attributes from tags
+	if len(options.Tags) > 0 {
+		attrs := make([]attribute.KeyValue, 0, len(options.Tags))
+		for _, tag := range options.Tags {
+			attrs = append(attrs, attribute.String(tag.key, tag.value))
+		}
+
+		span.SetAttributes(attrs...)
+	}
+
+	// Log start messages (only if logging is enabled)
 	if options.Logger != nil && len(options.LogMessages) > 0 {
 		for _, l := range options.LogMessages {
-			switch {
-			case l.level == "WARN":
+			switch l.level {
+			case "WARN":
 				options.Logger.Warnf(l.message, l.args...)
-			case l.level == "DEBUG":
+			case "DEBUG":
 				options.Logger.Debugf(l.message, l.args...)
 			default:
 				options.Logger.Infof(l.message, l.args...)
@@ -132,75 +216,120 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 		}
 	}
 
-	if len(options.Tags) > 0 {
-		for _, tag := range options.Tags {
-			span.SetTag(tag.key, tag.value)
+	endFn := func(optionalError ...error) {
+		if span == nil {
+			return
 		}
+
+		var err error
+
+		if len(optionalError) > 0 && optionalError[0] != nil {
+			err = optionalError[0]
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+
+		span.End()
+
+		if stat != nil {
+			stat.AddTime(start)
+		}
+
+		u.recordMetrics(options, start)
+		u.logEndMessage(options, start, err)
 	}
 
-	return ctx, stat, func(optionalError ...error) {
-		span.Finish()
-		stat.AddTime(start)
+	return ctx, span, endFn
+}
 
-		if options.Histogram != nil {
-			options.Histogram.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-		}
+// Context returns the context associated with this span.
+// This context should be passed to child operations to maintain the trace.
+func (span *USpan) Context() context.Context {
+	if span == nil {
+		return context.Background()
+	}
 
-		if options.Counter != nil {
-			options.Counter.Inc()
-		}
+	return span.ctx
+}
 
-		if options.Logger != nil && len(options.LogMessages) > 0 {
-			var (
-				done string
-				err  error
-			)
+// Stat returns the gocore.Stat associated with this span.
+// This can be used as a parent stat for child operations.
+func (span *USpan) Stat() *gocore.Stat {
+	if span == nil {
+		return nil
+	}
 
-			if len(optionalError) > 0 {
-				err = optionalError[0]
-			}
+	return span.stat
+}
 
-			if err != nil {
-				done = fmt.Sprintf(" DONE in %s with error: %v", time.Since(start), err)
+// // DecoupleTracingSpan creates a new context with the current span for decoupled tracing
+func DecoupleTracingSpan(ctx context.Context, name string, spanName string) (context.Context, trace.Span, func(...error)) {
+	// Extract the current span from context
+	currentSpan := trace.SpanFromContext(ctx)
+
+	// Create a new context with the current span
+	newCtx := trace.ContextWithSpan(context.Background(), currentSpan)
+
+	// Copy stats from the original context
+	newCtx = CopyStatFromContext(ctx, newCtx)
+
+	// Start a new span
+	return Tracer(name).Start(newCtx, spanName)
+}
+
+// logEndMessage logs the completion message for a span
+func (u *UTracer) logEndMessage(options *TraceOptions, start time.Time, err error) {
+	if options.Logger == nil || len(options.LogMessages) == 0 {
+		return
+	}
+
+	var done string
+	if err != nil {
+		done = fmt.Sprintf(" DONE in %s with error: %v", time.Since(start), err)
+	} else {
+		done = fmt.Sprintf(" DONE in %s", time.Since(start))
+	}
+
+	for _, l := range options.LogMessages {
+		switch l.level {
+		case "WARN":
+			if err != nil && options.Logger.LogLevel() == ulogger.LogLevelWarning {
+				options.Logger.Errorf(l.message+done, l.args...)
 			} else {
-				done = fmt.Sprintf(" DONE in %s", time.Since(start))
+				options.Logger.Warnf(l.message+done, l.args...)
 			}
-
-			for _, l := range options.LogMessages {
-				switch {
-				case l.level == "WARN":
-					if err != nil && options.Logger.LogLevel() == ulogger.LogLevelWarning {
-						options.Logger.Errorf(l.message+done, l.args...)
-					} else {
-						options.Logger.Warnf(l.message+done, l.args...)
-					}
-				case l.level == "DEBUG":
-					if err != nil && options.Logger.LogLevel() == ulogger.LogLevelDebug {
-						options.Logger.Errorf(l.message+done, l.args...)
-					} else {
-						options.Logger.Debugf(l.message+done, l.args...)
-					}
-				default:
-					if err != nil {
-						options.Logger.Errorf(l.message+done, l.args...)
-					} else {
-						options.Logger.Infof(l.message+done, l.args...)
-					}
-				}
+		case "DEBUG":
+			if err != nil && options.Logger.LogLevel() == ulogger.LogLevelDebug {
+				options.Logger.Errorf(l.message+done, l.args...)
+			} else {
+				options.Logger.Debugf(l.message+done, l.args...)
+			}
+		default:
+			if err != nil {
+				options.Logger.Errorf(l.message+done, l.args...)
+			} else {
+				options.Logger.Infof(l.message+done, l.args...)
 			}
 		}
 	}
 }
 
-func DecoupleTracingSpan(ctx context.Context, name string) Span {
-	callerSpan := opentracing.SpanFromContext(ctx)
-	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
-	setCtx = CopyStatFromContext(ctx, setCtx)
-	setSpan := Start(setCtx, name)
+// recordMetrics records histogram and counter metrics
+func (u *UTracer) recordMetrics(options *TraceOptions, start time.Time) {
+	if options.Histogram != nil {
+		duration := time.Since(start)
+		options.Histogram.Observe(duration.Seconds())
+	}
 
-	return setSpan
+	if options.Counter != nil {
+		options.Counter.Inc()
+	}
 }
 
-func SetGlobalMockTracer() {
-	opentracing.SetGlobalTracer(mocktracer.New())
+// SetupMockTracer sets up a mock tracer for testing
+func SetupMockTracer() {
+	// OpenTelemetry doesn't have a direct equivalent to OpenTracing's mocktracer
+	// For testing, you would typically use the SDK's trace.NewTracerProvider with
+	// an in-memory exporter or a testing exporter
+	// This is a placeholder - in a real implementation you'd set up a test provider
 }

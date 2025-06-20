@@ -175,7 +175,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		opt(options)
 	}
 
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:Create")
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "sql:Create")
 	defer deferFn()
 
 	// ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
@@ -1297,7 +1297,7 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 }
 
 func (s *Store) GetCounterConflicting(ctx context.Context, hash chainhash.Hash) ([]chainhash.Hash, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetCounterConflicting",
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetCounterConflicting",
 		tracing.WithHistogram(prometheusSQLUtxoGetCounterConflicting),
 	)
 
@@ -1308,7 +1308,7 @@ func (s *Store) GetCounterConflicting(ctx context.Context, hash chainhash.Hash) 
 
 // GetConflictingChildren returns a list of conflicting transactions for a given transaction hash.
 func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash) ([]chainhash.Hash, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetConflicting",
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetConflicting",
 		tracing.WithHistogram(prometheusSQLUtxoGetConflicting),
 	)
 

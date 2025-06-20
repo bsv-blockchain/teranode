@@ -82,7 +82,7 @@ var rpcCallCache = cache.New(10*time.Second, time.Minute)
 //   - interface{}: Block data in the requested format (string or bsvjson.GetBlockVerboseResult)
 //   - error: Any error encountered during processing
 func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBlock",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlock",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlock),
 		tracing.WithLogMessage(s.logger, "[handleGetBlock] called"),
@@ -107,12 +107,11 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 // handleGetBlockByHeight implements the getblockbyheight command.
 func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBlockByHeight",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockByHeight",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlockByHeight),
 		tracing.WithLogMessage(s.logger, "[handleGetBlockByHeight] called"),
 	)
-
 	defer deferFn()
 
 	c := cmd.(*bsvjson.GetBlockByHeightCmd)
@@ -128,12 +127,11 @@ func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, 
 
 // handleGetBlockHash implements the getblockhash command.
 func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBlockHash",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockHash",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlockHash),
 		tracing.WithLogMessage(s.logger, "[handleGetBlockHash] called"),
 	)
-
 	defer deferFn()
 
 	c := cmd.(*bsvjson.GetBlockHashCmd)
@@ -154,12 +152,11 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 
 // handleGetBlockHash implements the getblockheader command.
 func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBlockHeader",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockHeader",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlockHeader),
 		tracing.WithLogMessage(s.logger, "[handleGetBlockHeader] called"),
 	)
-
 	defer deferFn()
 
 	c := cmd.(*bsvjson.GetBlockHeaderCmd)
@@ -346,7 +343,7 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 //   - interface{}: String containing the hash of the best block in the main chain
 //   - error: Any error encountered during processing
 func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBestBlockHash",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBestBlockHash",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBestBlockHash),
 		tracing.WithLogMessage(s.logger, "[handleGetBestBlockHash] called"),
@@ -399,7 +396,7 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 //   - interface{}: Either a string (raw transaction hex) or a GetRawTransactionResult object
 //   - error: Any error encountered during processing, including if transaction is not found
 func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleGetRawTransaction",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetRawTransaction",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetRawTransaction),
 		tracing.WithLogMessage(s.logger, "[handleGetRawTransaction] called"),
@@ -441,7 +438,7 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 
 // handleCreateRawTransaction handles createrawtransaction commands.
 func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleCreateRawTransaction",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleCreateRawTransaction",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleCreateRawTransaction),
 		tracing.WithLogMessage(s.logger, "[handleCreateRawTransaction] called"),
@@ -592,7 +589,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 //   - interface{}: String containing the transaction hash if successful
 //   - error: Detailed error information if transaction submission fails
 func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleSendRawTransaction",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleSendRawTransaction",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleSendRawTransaction),
 		tracing.WithLogMessage(s.logger, "[handleSendRawTransaction] called"),
@@ -669,7 +666,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 //   - error: Any error encountered during block generation
 func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	c := cmd.(*bsvjson.GenerateCmd)
-	_, _, deferFn := tracing.StartTracing(ctx, "handleGenerate",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGenerate",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGenerate),
 		tracing.WithLogMessage(s.logger, "[handleGenerate] called for %d blocks", c.NumBlocks),
@@ -742,7 +739,7 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 //   - error: Any error encountered during block generation or address parsing
 func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	c := cmd.(*bsvjson.GenerateToAddressCmd)
-	_, _, deferFn := tracing.StartTracing(ctx, "handleGenerateToAddress",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGenerateToAddress",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGenerateToAddress),
 		tracing.WithLogMessage(s.logger, "[handleGenerateToAddress] called for %d blocks to %s", c.NumBlocks, c.Address),
@@ -821,7 +818,7 @@ func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{},
 //   - interface{}: A mining candidate object with all required fields for miners
 //   - error: Any error encountered during template generation
 func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetMiningCandidate",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetMiningCandidate",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetMiningCandidate),
 		tracing.WithLogMessage(s.logger, "[handleGetMiningCandidate] called"),
@@ -886,7 +883,7 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 }
 
 func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetpeerinfo",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetpeerinfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetpeerinfo),
 		tracing.WithLogMessage(s.logger, "[handleGetpeerinfo] called"),
@@ -996,7 +993,7 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 }
 
 func handleGetDifficulty(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetDifficulty",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetDifficulty",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetDifficulty),
 		tracing.WithLogMessage(s.logger, "[handleGetDifficulty] called"),
@@ -1012,7 +1009,7 @@ func handleGetDifficulty(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 }
 
 func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetblockchaininfo",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetblockchaininfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetblockchaininfo),
 		tracing.WithLogMessage(s.logger, "[handleGetblockchaininfo] called"),
@@ -1055,7 +1052,7 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 
 // handleGetInfo returns a JSON object containing various state info.
 func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetInfo",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetInfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetinfo),
 		tracing.WithLogMessage(s.logger, "[handleGetInfo] called"),
@@ -1149,7 +1146,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 //   - interface{}: Boolean true if the solution was accepted, error otherwise
 //   - error: Detailed error if the solution was rejected
 func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleSubmitMiningSolution",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleSubmitMiningSolution",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleSubmitMiningSolution),
 		tracing.WithLogMessage(s.logger, "[handleSubmitMiningSolution] called"),
@@ -1218,7 +1215,7 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 //   - interface{}: Null on success
 //   - error: Any error encountered during block invalidation
 func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleInvalidateBlock",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleInvalidateBlock",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleInvalidateBlock),
 		tracing.WithLogMessage(s.logger, "[handleInvalidateBlock] called"),
@@ -1272,7 +1269,7 @@ func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 //   - interface{}: Null on success
 //   - error: Any error encountered during block reconsideration
 func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "handleReconsiderBlock",
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleReconsiderBlock",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleReconsiderBlock),
 		tracing.WithLogMessage(s.logger, "[handleReconsiderBlock] called"),
@@ -1296,7 +1293,7 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 }
 
 func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleHelp",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleHelp",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleHelp),
 		tracing.WithLogMessage(s.logger, "[handleHelp] called"),
@@ -1368,7 +1365,7 @@ func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan str
 //   - interface{}: Boolean indicating whether the address is banned (true) or not (false)
 //   - error: Any error encountered during ban check, such as invalid address format
 func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleIsBanned",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleIsBanned",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleIsBanned),
 		tracing.WithLogMessage(s.logger, "[handleIsBanned] called"),
@@ -1442,7 +1439,7 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 //   - interface{}: Array of ban information objects
 //   - error: Any error encountered while retrieving ban information
 func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleListBanned",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleListBanned",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleListBanned),
 		tracing.WithLogMessage(s.logger, "[handleListBanned] called"),
@@ -1500,7 +1497,7 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 //   - interface{}: Null on success
 //   - error: Any error encountered while clearing the ban list
 func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleClearBanned",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleClearBanned",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleClearBanned),
 		tracing.WithLogMessage(s.logger, "[handleClearBanned] called"),
@@ -1552,7 +1549,7 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 //   - interface{}: Null on success
 //   - error: Any error encountered during ban list modification
 func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleSetBan",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleSetBan",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleSetBan),
 		tracing.WithLogMessage(s.logger, "[handleSetBan] called"),
@@ -1696,7 +1693,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 }
 
 func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleGetMiningInfo",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetMiningInfo",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetMiningInfo),
 		tracing.WithLogMessage(s.logger, "[handleGetMiningInfo] called"),
@@ -1733,7 +1730,7 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 }
 
 func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleFreeze",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleFreeze",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleFreeze),
 		tracing.WithLogMessage(s.logger, "[handleFreeze] called"),
@@ -1757,7 +1754,7 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 }
 
 func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleUnfreeze",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleUnfreeze",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleUnfreeze),
 		tracing.WithLogMessage(s.logger, "[handleUnfreeze] called"),
@@ -1781,7 +1778,7 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 }
 
 func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "handleReassign",
+	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleReassign",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleReassign),
 		tracing.WithLogMessage(s.logger, "[handleReassign] called"),

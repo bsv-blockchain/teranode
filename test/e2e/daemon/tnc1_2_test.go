@@ -32,7 +32,7 @@ func TestCheckPrevBlockHash(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to mine blocks")
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(ctx, 1)
@@ -59,7 +59,7 @@ func TestCheckPrevBlockHash(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mine the block with the new transaction
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to mine block")
 
 	// Get the current best block header
@@ -98,10 +98,10 @@ func TestPrevBlockHashAfterReorg(t *testing.T) {
 
 	// set run state
 	// Generate blocks on node1 and node2
-	_, err := node1.CallRPC("generate", []any{101})
+	_, err := node1.CallRPC(node1.Ctx, "generate", []any{101})
 	require.NoError(t, err)
 
-	_, err = node2.CallRPC("generate", []any{101})
+	_, err = node2.CallRPC(node2.Ctx, "generate", []any{101})
 	require.NoError(t, err)
 
 	// get block height
@@ -130,10 +130,10 @@ func TestPrevBlockHashAfterReorg(t *testing.T) {
 	require.NoError(t, err, "Failed to send transactions")
 
 	// Generate blocks on node1 and node2
-	_, err = node1.CallRPC("generate", []any{1})
+	_, err = node1.CallRPC(node1.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
-	_, err = node2.CallRPC("generate", []any{5})
+	_, err = node2.CallRPC(node2.Ctx, "generate", []any{5})
 	require.NoError(t, err)
 
 	// Get the current best block header from node1 after reorg

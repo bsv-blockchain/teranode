@@ -50,7 +50,7 @@ func (h *HTTP) GetLegacyBlock() func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashStr := c.Param("hash")
 
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetLegacyBlock_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetLegacyBlock_http",
 			tracing.WithParentStat(AssetStat),
 			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetLegacyBlock for %s: %s", c.Request().RemoteAddr, hashStr),
 		)
@@ -106,7 +106,7 @@ func (h *HTTP) GetRestLegacyBlock() func(c echo.Context) error {
 
 		hashString := strings.Replace(resource, ".bin", "", 1)
 
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetRestLegacyBlock_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetRestLegacyBlock_http",
 			tracing.WithParentStat(AssetStat),
 			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetBlockGetRestLegacyBlockByHash for %s: %s", c.Request().RemoteAddr, resource),
 		)

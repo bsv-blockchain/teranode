@@ -35,7 +35,7 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err)
 
 	privateKey1, err := bec.NewPrivateKey(bec.S256())
@@ -144,7 +144,7 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 	require.NoError(t, err, "Failed to create and send transaction after unfreezing")
 
 	// Mine a block
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to generate block")
 
 	// Verify transaction is in block
@@ -201,7 +201,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{2})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{2})
 	require.NoError(t, err)
 
 	// Get coinbase transaction from block 1
@@ -219,7 +219,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	require.NoError(t, err, "Failed to send parent transaction")
 
 	// Generate a block to confirm the parent transaction
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err)
 
 	// Create a transaction that spends all outputs from parent transaction
@@ -260,7 +260,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate a block to confirm the spending transaction
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err)
 
 	// Verify the parent transaction is marked for deletion
@@ -270,7 +270,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 
 	// Generate blocks until just before deletion height
 	blocksToGenerate := td.Settings.UtxoStore.BlockHeightRetention
-	_, err = td.CallRPC("generate", []any{blocksToGenerate + 1})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{blocksToGenerate + 1})
 	require.NoError(t, err)
 
 	time.Sleep(10 * time.Second)
@@ -307,7 +307,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err)
 
 	// Get coinbase transaction from block 1
@@ -325,7 +325,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	require.NoError(t, err, "Failed to send parent transaction")
 
 	// Generate a block to confirm the parent transaction
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err)
 
 	// Get current block height
@@ -375,7 +375,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	}
 
 	// Generate a block to confirm the spending transaction
-	_, err = td.CallRPC("generate", []any{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
 	// Verify subtree exists for the block containing our transaction
@@ -392,7 +392,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 
 	// Generate blocks until just before retention height
 	blocksToGenerate := retentionHeight - currentHeight - 1
-	_, err = td.CallRPC("generate", []any{blocksToGenerate})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{blocksToGenerate})
 	require.NoError(t, err)
 
 	time.Sleep(cleanerInterval)
@@ -406,7 +406,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate one more block to reach retention height
-	_, err = td.CallRPC("generate", []any{300})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{300})
 	require.NoError(t, err)
 
 	time.Sleep(cleanerInterval)

@@ -2,14 +2,18 @@ package smoke
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
+	"github.com/bitcoin-sv/teranode/settings"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
+	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -18,17 +22,76 @@ import (
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 )
+
+func requireNoError(t *testing.T, span trace.Span, err error, msgAndArgs ...any) {
+	if span != nil {
+		span.RecordError(err)
+	}
+
+	require.NoError(t, err, msgAndArgs...)
+}
+
+func TestTracing(t *testing.T) {
+	tSettings := settings.NewSettings()
+	tSettings.TracingEnabled = true
+	tSettings.TracingSampleRate = 1.0
+
+	// Set a valid localhost URL for testing (assuming Jaeger is not running)
+	// This test will fail with our deterministic validation, so skip for now
+	t.Skip("Skipping TestTracing - requires proper Jaeger configuration")
+
+	defer func() {
+		require.NoError(t, tracing.ShutdownTracer(context.Background()))
+	}()
+
+	tracer := tracing.Tracer("test_tracing")
+
+	logger := ulogger.NewVerboseTestLogger(t)
+
+	_, _, endSpan := tracer.Start(
+		context.Background(),
+		"TestTracing",
+		tracing.WithLogMessage(logger, "Running TestTracing"),
+	)
+
+	defer func() {
+		endSpan()
+		time.Sleep(2 * time.Second)
+	}()
+
+	time.Sleep(1 * time.Second)
+}
 
 func TestSendTxAndCheckState(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
+		UseTracing:      true,
 		SettingsContext: "dev.system.test",
+		SettingsOverrideFunc: func(settings *settings.Settings) {
+			settings.TracingEnabled = true
+			settings.TracingSampleRate = 1.0
+		},
 	})
 
-	defer td.Stop(t)
+	// Reset tracing state for clean test environment
+	// tracing.ResetTracerForTesting()
 
-	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t)
+	// Use tracerName (component identifier) not serviceName (global identifier)
+	tracer := tracing.Tracer("rpc_smoke_test")
+
+	ctx, span, endSpan := tracer.Start(
+		context.Background(),
+		"TestSendTxAndCheckState",
+	)
+
+	defer func() {
+		endSpan()
+		td.Stop(t)
+	}()
+
+	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, ctx)
 
 	newTx := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(coinbaseTx, 0),
@@ -38,8 +101,8 @@ func TestSendTxAndCheckState(t *testing.T) {
 	// t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
-	_, err := td.CallRPC("sendrawtransaction", []any{txBytes})
-	require.NoError(t, err, "Failed to send new tx with rpc")
+	_, err := td.CallRPC(ctx, "sendrawtransaction", []any{txBytes})
+	requireNoError(t, span, err, "Failed to send new tx with rpc")
 	// t.Logf("Transaction sent with RPC: %s\n", resp)
 
 	// Wait for transaction to be processed
@@ -53,18 +116,18 @@ func TestSendTxAndCheckState(t *testing.T) {
 
 	block := td.MineAndWait(t, 1)
 
-	err = block.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
-	require.NoError(t, err)
+	err = block.GetAndValidateSubtrees(ctx, td.Logger, td.SubtreeStore, nil)
+	requireNoError(t, span, err)
 
-	err = block.CheckMerkleRoot(td.Ctx)
-	require.NoError(t, err)
+	err = block.CheckMerkleRoot(ctx)
+	requireNoError(t, span, err)
 
 	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
 		return block.SubTreesFromBytes(subtreeHash[:])
 	}
 
-	subtree, err := block.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore, fallbackGetFunc)
-	require.NoError(t, err)
+	subtree, err := block.GetSubtrees(ctx, td.Logger, td.SubtreeStore, fallbackGetFunc)
+	requireNoError(t, span, err)
 
 	blFound := false
 	for i := 0; i < len(subtree); i++ {
@@ -82,12 +145,12 @@ func TestSendTxAndCheckState(t *testing.T) {
 
 	assert.True(t, blFound, "TX not found in the blockstore")
 
-	resp, err := td.CallRPC("getblockchaininfo", []any{})
-	require.NoError(t, err)
+	resp, err := td.CallRPC(ctx, "getblockchaininfo", []any{})
+	requireNoError(t, span, err)
 
 	var blockchainInfo helper.BlockchainInfo
 	errJSON := json.Unmarshal([]byte(resp), &blockchainInfo)
-	require.NoError(t, errJSON)
+	requireNoError(t, span, errJSON)
 
 	td.LogJSON(t, "blockchainInfo", blockchainInfo)
 	assert.Equal(t, int(td.Settings.ChainCfgParams.CoinbaseMaturity+2), blockchainInfo.Result.Blocks)
@@ -103,12 +166,12 @@ func TestSendTxAndCheckState(t *testing.T) {
 	assert.Nil(t, blockchainInfo.Error)
 	assert.Nil(t, blockchainInfo.ID)
 
-	resp, err = td.CallRPC("getinfo", []any{})
-	require.NoError(t, err)
+	resp, err = td.CallRPC(ctx, "getinfo", []any{})
+	requireNoError(t, span, err)
 
 	var getInfo helper.GetInfo
 	errJSON = json.Unmarshal([]byte(resp), &getInfo)
-	require.NoError(t, errJSON)
+	requireNoError(t, span, errJSON)
 	require.NotNil(t, getInfo.Result)
 
 	td.LogJSON(t, "getInfo", getInfo)
@@ -128,39 +191,39 @@ func TestSendTxAndCheckState(t *testing.T) {
 
 	var getDifficulty helper.GetDifficultyResponse
 
-	resp, err = td.CallRPC("getdifficulty", []any{})
+	resp, err = td.CallRPC(ctx, "getdifficulty", []any{})
 
-	require.NoError(t, err)
+	requireNoError(t, span, err)
 
 	errJSON = json.Unmarshal([]byte(resp), &getDifficulty)
-	require.NoError(t, errJSON)
+	requireNoError(t, span, errJSON)
 
 	// t.Logf("getDifficulty: %+v", getDifficulty)
 	assert.Equal(t, float64(4.6565423739069247e-10), getDifficulty.Result)
 
-	resp, err = td.CallRPC("getblockhash", []any{td.Settings.ChainCfgParams.CoinbaseMaturity + 2})
-	require.NoError(t, err, "Failed to get block hash")
+	resp, err = td.CallRPC(ctx, "getblockhash", []any{td.Settings.ChainCfgParams.CoinbaseMaturity + 2})
+	requireNoError(t, span, err, "Failed to get block hash")
 
 	var getBlockHash helper.GetBlockHashResponse
 	errJSON = json.Unmarshal([]byte(resp), &getBlockHash)
-	require.NoError(t, errJSON)
+	requireNoError(t, span, errJSON)
 
 	// t.Logf("getBlockHash: %+v", getBlockHash)
 	assert.Equal(t, block.Hash().String(), getBlockHash.Result)
 
 	td.LogJSON(t, "getBlockHash", getBlockHash)
 
-	resp, err = td.CallRPC("getblockbyheight", []any{td.Settings.ChainCfgParams.CoinbaseMaturity + 2})
-	require.NoError(t, err, "Failed to get block by height")
+	resp, err = td.CallRPC(ctx, "getblockbyheight", []any{td.Settings.ChainCfgParams.CoinbaseMaturity + 2})
+	requireNoError(t, span, err, "Failed to get block by height")
 
 	var getBlockByHeightResp helper.GetBlockByHeightResponse
 	errJSON = json.Unmarshal([]byte(resp), &getBlockByHeightResp)
-	require.NoError(t, errJSON)
+	requireNoError(t, span, errJSON)
 
 	td.LogJSON(t, "getBlockByHeightResp", getBlockByHeightResp)
 
-	penultimateBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, getBlockByHeightResp.Result.Height-1)
-	require.NoError(t, err)
+	penultimateBlock, err := td.BlockchainClient.GetBlockByHeight(ctx, getBlockByHeightResp.Result.Height-1)
+	requireNoError(t, span, err)
 
 	// Assert block properties
 	assert.Equal(t, block.Hash().String(), getBlockByHeightResp.Result.Hash)
@@ -196,7 +259,7 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 
 	// Generate initial blocks
 	// CSVHeight is the block height at which the CSV rules are activated including lock time
-	_, err = td.CallRPC("generate", []any{tSettings.ChainCfgParams.CSVHeight + 1})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{tSettings.ChainCfgParams.CSVHeight + 1})
 	require.NoError(t, err)
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
@@ -244,7 +307,7 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
-	resp, err := td.CallRPC("sendrawtransaction", []any{txBytes})
+	resp, err := td.CallRPC(td.Ctx, "sendrawtransaction", []any{txBytes})
 	// "code: -8, message: TX rejected:
 	// PROCESSING (4): error sending transaction 1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631 to 100.00% of the propagation servers: [SERVICE_ERROR (59): address localhost:8084
 	//  -> UNKNOWN (0): SERVICE_ERROR (59): [ProcessTransaction][1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631] failed to validate transaction
@@ -272,7 +335,7 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks to get coinbase funds
-	_, err = td.CallRPC("generate", []any{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{101})
 	require.NoError(t, err)
 
 	// Get the policy settings to know the max tx size
@@ -334,7 +397,7 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 
 	// Try to send the oversized transaction
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
-	_, err = td.CallRPC("sendrawtransaction", []interface{}{txBytes})
+	_, err = td.CallRPC(td.Ctx, "sendrawtransaction", []interface{}{txBytes})
 
 	// The transaction should be rejected for being too large
 	require.Error(t, err, "Expected transaction to be rejected for exceeding MaxTxSizePolicy")
@@ -360,7 +423,7 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks to get coinbase funds
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err)
 
 	// Get the policy settings to know the max script size
@@ -417,7 +480,7 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 
 	// Try to send the transaction with oversized script
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
-	_, err = td.CallRPC("sendrawtransaction", []interface{}{txBytes})
+	_, err = td.CallRPC(td.Ctx, "sendrawtransaction", []interface{}{txBytes})
 
 	// The transaction should be rejected for having a script that's too large
 	require.Error(t, err, "Expected transaction to be rejected for exceeding MaxScriptSizePolicy")
@@ -442,7 +505,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []any{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{101})
 	require.NoError(t, err)
 
 	tSettings := td.Settings
@@ -488,7 +551,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	tx1Bytes := hex.EncodeToString(tx1.ExtendedBytes())
 
 	// Send TX1
-	resp, err := td.CallRPC("sendrawtransaction", []any{tx1Bytes})
+	resp, err := td.CallRPC(td.Ctx, "sendrawtransaction", []any{tx1Bytes})
 	require.NoError(t, err, "Failed to send TX1 with rpc")
 	t.Logf("TX1 sent with RPC: %s\n", resp)
 
@@ -502,7 +565,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	time.Sleep(250 * time.Millisecond) // Make absolutely sure block assembly has processed the tx
 
 	// Generate one block to include TX1
-	_, err = td.CallRPC("generate", []any{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
 	// Create second recipient's key pair
@@ -536,7 +599,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	tx2Bytes := hex.EncodeToString(tx2.ExtendedBytes())
 
 	// Send TX2
-	resp, err = td.CallRPC("sendrawtransaction", []any{tx2Bytes})
+	resp, err = td.CallRPC(td.Ctx, "sendrawtransaction", []any{tx2Bytes})
 	require.NoError(t, err, "Failed to send TX2 with rpc")
 	t.Logf("TX2 sent with RPC: %s\n", resp)
 
@@ -547,7 +610,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	}
 
 	// Generate one block to include TX2
-	_, err = td.CallRPC("generate", []any{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
 	// Get the block containing TX2 (should be at height 103)
@@ -595,7 +658,7 @@ func TestDoubleInput(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks to get coinbase funds
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err)
 
 	// Create a transaction with an oversized script

@@ -26,7 +26,7 @@ func TestBlockSubsidy(t *testing.T) {
 	require.NoError(t, err)
 
 	td.Logger.Infof("Generating blocks...")
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to generate block")
 
 	// Get initial coinbase transaction to create new transactions
@@ -49,7 +49,7 @@ func TestBlockSubsidy(t *testing.T) {
 		"Coinbase value should be at least the block subsidy")
 
 	// Generate a block
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to generate block")
 
 	// Get the generated block

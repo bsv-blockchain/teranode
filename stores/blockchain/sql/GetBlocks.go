@@ -42,10 +42,10 @@ import (
 // Returns:
 //   - []*model.Block: An array of complete block objects in the sequence
 //   - error: Any error encountered during retrieval, specifically:
-//     - BlockNotFoundError if the starting block does not exist
-//     - StorageError for database errors or data processing failures
+//   - BlockNotFoundError if the starting block does not exist
+//   - StorageError for database errors or data processing failures
 func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint32) ([]*model.Block, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlocks")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlocks")
 	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)

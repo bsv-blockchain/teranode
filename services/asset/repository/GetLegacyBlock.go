@@ -266,7 +266,7 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 		return 0, errors.NewProcessingError("[processTxMetaUsingStore] txHashes and txMetaSlice must be the same length")
 	}
 
-	ctx, _, deferFn := tracing.StartTracing(ctx, "Repository:getTxs")
+	ctx, _, deferFn := tracing.Tracer("repository").Start(ctx, "getTxs")
 	defer deferFn()
 
 	batchSize := repo.settings.BlockValidation.ProcessTxMetaUsingStoreBatchSize

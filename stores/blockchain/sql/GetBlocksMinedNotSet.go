@@ -45,9 +45,9 @@ import (
 // Returns:
 //   - []*model.Block: An array of complete block objects whose mining status needs to be set
 //   - error: Any error encountered during retrieval, specifically:
-//     - StorageError for database errors or processing failures
+//   - StorageError for database errors or processing failures
 func (s *SQL) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlocksMinedNotSet")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlocksMinedNotSet")
 	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)

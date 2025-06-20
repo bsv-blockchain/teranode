@@ -44,10 +44,10 @@ import (
 // Returns:
 //   - *chainhash.Hash: The hash of the ancestor block at the specified depth, if found
 //   - error: Any error encountered during traversal, specifically:
-//     - BlockNotFoundError if the starting block or an ancestor at the specified depth doesn't exist
-//     - StorageError for database errors or if the operation times out
+//   - BlockNotFoundError if the starting block or an ancestor at the specified depth doesn't exist
+//   - StorageError for database errors or if the operation times out
 func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetHashOfAncestorBlock")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetHashOfAncestorBlock")
 	defer deferFn()
 
 	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)

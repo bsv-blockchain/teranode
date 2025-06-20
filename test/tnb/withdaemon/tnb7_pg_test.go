@@ -24,7 +24,7 @@ func TestValidatedTxShouldSpendInputsWithPostgres(t *testing.T) {
 	td := u.SetupPostgresTestDaemon(t, ctx, "spend-inputs")
 
 	// Generate initial blocks
-	_, err := td.CallRPC("generate", []interface{}{101})
+	_, err := td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err)
 
 	// Create key pairs for testing

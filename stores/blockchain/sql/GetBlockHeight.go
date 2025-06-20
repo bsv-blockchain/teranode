@@ -37,7 +37,7 @@ import (
 //   - BlockNotFoundError if the block does not exist
 //   - StorageError for other database errors
 func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeight")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeight")
 	defer deferFn()
 
 	_, meta := s.blocksCache.GetBlockHeader(*blockHash)

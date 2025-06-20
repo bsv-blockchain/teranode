@@ -43,9 +43,9 @@ import (
 //   - *model.BlockDataPoints: A structure containing arrays of timestamps and transaction
 //     counts for blocks within the specified period, suitable for graphing and analytics
 //   - error: Any error encountered during data collection, specifically:
-//     - StorageError for database errors or processing failures
+//   - StorageError for database errors or processing failures
 func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockGraphData")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockGraphData")
 	defer deferFn()
 
 	q := `

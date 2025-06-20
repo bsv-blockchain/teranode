@@ -21,6 +21,7 @@ package propagation
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -48,6 +49,9 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
@@ -379,7 +383,7 @@ func (ps *PropagationServer) Stop(_ context.Context) error {
 //   - echo.HandlerFunc: HTTP handler function for the Echo web framework
 func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "handleSingleTx",
+		ctx, _, deferFn := tracing.Tracer("propagation").Start(c.Request().Context(), "handleSingleTx",
 			tracing.WithParentStat(ps.stats),
 			tracing.WithHistogram(prometheusProcessedHandleSingleTx),
 		)
@@ -423,7 +427,7 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 //   - echo.HandlerFunc: HTTP handler function for the Echo web framework
 func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "handleMultipleTx",
+		ctx, _, deferFn := tracing.Tracer("propagation").Start(c.Request().Context(), "handleMultipleTx",
 			tracing.WithParentStat(ps.stats),
 			tracing.WithHistogram(prometheusProcessedHandleMultipleTx),
 		)
@@ -618,6 +622,15 @@ func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, http
 //   - *propagation_api.EmptyMessage: Empty response on successful processing
 //   - error: Error with specific details if transaction processing fails
 func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
+	// Debug: Check if span context was received from client
+	spanCtx := trace.SpanContextFromContext(ctx)
+	if spanCtx.IsValid() {
+		ps.logger.Infof("[ProcessTransaction] Server received span context: TraceID=%s, SpanID=%s",
+			spanCtx.TraceID().String(), spanCtx.SpanID().String())
+	} else {
+		ps.logger.Warnf("[ProcessTransaction] Server received INVALID span context")
+	}
+
 	if err := ps.processTransaction(ctx, req); err != nil {
 		ps.logger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
 
@@ -647,26 +660,40 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 //   - *propagation_api.ProcessTransactionBatchResponse: Response containing per-transaction error status
 //   - error: Error if overall batch processing fails (size limits, context canceled)
 func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessTransactionBatch",
+	ctx, _, endSpan := tracing.Tracer("propagation").Start(
+		ctx,
+		"ProcessTransactionBatch",
+		tracing.WithTag("batch_size", fmt.Sprintf("%d", len(req.Items))),
 		tracing.WithParentStat(ps.stats),
 		tracing.WithHistogram(prometheusProcessedTransactionBatch),
-		tracing.WithDebugLogMessage(ps.logger, "[ProcessTransactionBatch] called for %d transactions", len(req.Tx)),
+		tracing.WithDebugLogMessage(ps.logger, "[ProcessTransactionBatch] called for %d transactions", len(req.Items)),
 	)
-	defer deferFn()
+	defer endSpan()
 
 	response := &propagation_api.ProcessTransactionBatchResponse{
-		Errors: make([]*errors.TError, len(req.Tx)),
+		Errors: make([]*errors.TError, len(req.Items)),
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	for idx, tx := range req.Tx {
+	for idx, item := range req.Items {
 		idx := idx
-		tx := tx
+		tx := item.Tx
 
 		g.Go(func() error {
+			var txCtx context.Context
+
+			if len(item.TraceContext) > 0 {
+				// Deserialize the trace context
+				prop := otel.GetTextMapPropagator()
+				txCtx = prop.Extract(gCtx, propagation.MapCarrier(item.TraceContext))
+			} else {
+				// No trace context available, use the batch context
+				txCtx = gCtx
+			}
+
 			// just call the internal process transaction function for every transaction
-			if err := ps.processTransaction(gCtx, &propagation_api.ProcessTransactionRequest{
+			if err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
 				Tx: tx,
 			}); err != nil {
 				e := errors.Wrap(err)
@@ -701,20 +728,25 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 // Returns:
 //   - error: error if any processing step fails
 func (ps *PropagationServer) processTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) error {
-	_, _, deferFn := tracing.StartTracing(ctx, "processTransaction",
+	ctx, span, endSpan := tracing.Tracer("propagation").Start(ctx, "processTransaction",
 		tracing.WithParentStat(ps.stats),
 	)
-	defer deferFn()
+	defer endSpan()
 
 	timeStart := time.Now()
 
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		return errors.NewProcessingError("[ProcessTransaction] failed to parse transaction from bytes", err)
+
+		err = errors.NewProcessingError("[ProcessTransaction] failed to parse transaction from bytes", err)
+		span.RecordError(err)
+
+		return err
 	}
 
 	if err = ps.processTransactionInternal(ctx, btTx); err != nil {
+		span.RecordError(err)
 		return err
 	}
 
@@ -744,6 +776,11 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 // Returns:
 //   - error: Error if any step in the processing pipeline fails
 func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btTx *bt.Tx) error {
+	ctx, span, endSpan := tracing.Tracer("propagation").Start(ctx, "processTransactionInternal",
+		tracing.WithParentStat(ps.stats),
+	)
+	defer endSpan()
+
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
@@ -754,13 +791,16 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		return errors.NewTxInvalidError("[ProcessTransaction][%s] transaction is not extended", btTx.TxID())
 	}
 
-	// decouple the tracing context to not cancel the context when the tx is being saved in the background
-	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleStoreTransaction")
-	defer callerSpan.Finish()
+	// // decouple the tracing context to not cancel the context when the tx is being saved in the background
+	// decoupledCtx, decoupledSpan, decoupledEndSpan := tracing.DecoupleTracingSpan(ctx, "processTransactionInternal", "decoupled")
+	// defer decoupledEndSpan()
 
 	// we should store all transactions, if this fails we should not validate the transaction
-	if err := ps.storeTransaction(callerSpan.Ctx, btTx); err != nil {
-		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
+	if err := ps.storeTransaction(ctx, btTx); err != nil {
+		err = errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
+		span.RecordError(err)
+
+		return err
 	}
 
 	if ps.validatorKafkaProducerClient != nil {
@@ -909,13 +949,13 @@ func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
 // as key ensures consistent and efficient transaction retrieval.
 //
 // Parameters:
-//   - ctx: Context for the storage operation with tracing and timeout
+//   - ctx: context for the storage operation with tracing and timeout
 //   - btTx: Bitcoin transaction to store (must be properly parsed)
 //
 // Returns:
-//   - error: Error with detailed context if the storage operation fails
+//   - error: error with detailed context if the storage operation fails
 func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "PropagationServer:Set:Store")
+	ctx, _, deferFn := tracing.Tracer("propagation").Start(ctx, "PropagationServer:Set:Store")
 	defer deferFn()
 
 	if ps.txStore != nil {

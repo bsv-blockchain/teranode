@@ -210,7 +210,7 @@ func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, s
 //   - *blockassembly_api.HealthResponse: Health check response
 //   - error: Any error encountered during health check
 func (ba *BlockAssembly) HealthGRPC(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.HealthResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "HealthGRPC",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithCounter(prometheusBlockAssemblyHealth),
 		tracing.WithDebugLogMessage(ba.logger, "[HealthGRPC] called"),
@@ -571,9 +571,10 @@ var txsProcessed = atomic.Uint64{}
 //   - *blockassembly_api.AddTxResponse: Response indicating success
 //   - error: Any error encountered during addition
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "AddTx",
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "AddTx",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyAddTx),
+		tracing.WithTag("txid", utils.ReverseAndHexEncodeSlice(req.Txid)),
 		tracing.WithLogMessage(ba.logger, "[AddTx][%s] add tx called", utils.ReverseAndHexEncodeSlice(req.Txid)),
 	)
 
@@ -614,7 +615,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 }
 
 func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.RemoveTxRequest) (*blockassembly_api.EmptyMessage, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "RemoveTx",
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "RemoveTx",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyRemoveTx),
 		tracing.WithLogMessage(ba.logger, "[RemoveTx][%s] called", utils.ReverseAndHexEncodeSlice(req.Txid)),
@@ -647,7 +648,7 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 //   - *blockassembly_api.AddTxBatchResponse: Response indicating success
 //   - error: Any error encountered during batch processing
 func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "AddTxBatch",
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "AddTxBatch",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithDebugLogMessage(ba.logger, "[AddTxBatch] called with %d transactions", len(batch.GetTxRequests())),
 	)
@@ -709,12 +710,12 @@ func (ba *BlockAssembly) TxCount() uint64 {
 //   - *model.MiningCandidate: Mining candidate block
 //   - error: Any error encountered during retrieval
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassembly_api.GetMiningCandidateRequest) (*model.MiningCandidate, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetMiningCandidate",
+	ctx, _, endSpan := tracing.Tracer("blockassembly").Start(ctx, "GetMiningCandidate",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyGetMiningCandidateDuration),
 		tracing.WithLogMessage(ba.logger, "[GetMiningCandidate] called"),
 	)
-	defer deferFn()
+	defer endSpan()
 
 	isRunning, err := ba.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
 	if err != nil {
@@ -743,8 +744,8 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 	}, jobTTL) // create a new job with a TTL, will be cleaned up automatically
 
 	// decouple the tracing context to not cancel the context when the subtree DAH is being saved in the background
-	callerSpan := tracing.DecoupleTracingSpan(ctx, "decouple")
-	defer callerSpan.Finish()
+	decoupledCtx, _, endSpan := tracing.DecoupleTracingSpan(ctx, "blockassembly", "decoupleMiningOn")
+	defer endSpan()
 
 	go func() {
 		previousHash, err := chainhash.NewHash(miningCandidate.PreviousHash)
@@ -752,7 +753,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 			ba.logger.Errorf("failed to convert previous hash: %s", err)
 		}
 
-		if err = ba.blockchainClient.SendNotification(callerSpan.Ctx, &blockchain.Notification{
+		if err = ba.blockchainClient.SendNotification(decoupledCtx, &blockchain.Notification{
 			Type:     model.NotificationType_MiningOn,
 			Hash:     previousHash[:],
 			Base_URL: "",
@@ -785,11 +786,11 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 //   - *blockassembly_api.SubmitMiningSolutionResponse: Submission response
 //   - error: Any error encountered during submission processing
 func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.OKResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "SubmitMiningSolution",
+	_, _, endSpan := tracing.Tracer("blockassembly").Start(ctx, "SubmitMiningSolution",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithLogMessage(ba.logger, "[SubmitMiningSolution] called"),
 	)
-	defer deferFn()
+	defer endSpan()
 
 	var responseChan chan error
 
@@ -823,17 +824,17 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 }
 
 func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSubmissionRequest) (*blockassembly_api.OKResponse, error) {
-	jobID := utils.ReverseAndHexEncodeSlice(req.Id)
+	jobID := utils.ReverseAndHexEncodeSlice(req.SubmitMiningSolutionRequest.Id)
 
-	ctx, _, deferFn := tracing.StartTracing(ctx, "submitMiningSolution",
+	ctx, _, endSpan := tracing.Tracer("blockassembly").Start(ctx, "submitMiningSolution",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblySubmitMiningSolution),
 		tracing.WithLogMessage(ba.logger, "[submitMiningSolution] called for job id %s", jobID),
 	)
 
-	defer deferFn()
+	defer endSpan()
 
-	storeID, err := chainhash.NewHash(req.Id)
+	storeID, err := chainhash.NewHash(req.SubmitMiningSolutionRequest.Id)
 	if err != nil {
 		return nil, err
 	}
@@ -999,12 +1000,12 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	ba.blockAssembler.UpdateBestBlock(ctx)
 
 	// decouple the tracing context to not cancel the context when the subtree DAH is being saved in the background
-	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleSubtreeDAH")
-	defer callerSpan.Finish()
+	callerCtx, _, endSpan := tracing.DecoupleTracingSpan(ctx, "blockassembly", "decoupleSubtreeDAH")
+	defer endSpan()
 
 	go func() {
 		// TODO what do we do if this fails, the subtrees DAH and tx meta status still needs to be updated
-		g, gCtx := errgroup.WithContext(callerSpan.Ctx)
+		g, gCtx := errgroup.WithContext(callerCtx)
 
 		g.Go(func() error {
 			timeStart := time.Now()
@@ -1024,7 +1025,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		if err = g.Wait(); err != nil {
 			ba.logger.Errorf("[BlockAssembly][%s][InvalidateBlock] block is not valid: %v", block.String(), err)
 
-			if err = ba.blockchainClient.InvalidateBlock(callerSpan.Ctx, block.Header.Hash()); err != nil {
+			if err = ba.blockchainClient.InvalidateBlock(callerCtx, block.Header.Hash()); err != nil {
 				ba.logger.Errorf("[BlockAssembly][%s][InvalidateBlock] failed to invalidate block: %s", block.Header.Hash(), err)
 			}
 		}
@@ -1092,16 +1093,17 @@ func (ba *BlockAssembly) SubtreeCount() int {
 }
 
 func (ba *BlockAssembly) removeSubtreesDAH(ctx context.Context, block *model.Block) (err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockAssembly:removeSubtrees",
+	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "removeSubtreesDAH",
+		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyUpdateSubtreesDAH),
 	)
 	defer deferFn()
 
 	// decouple the tracing context to not cancel the context when the subtree DAH is being saved in the background
-	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleSubtreeDAH")
-	defer callerSpan.Finish()
+	callerCtx, _, endSpan := tracing.DecoupleTracingSpan(ctx, "blockassembly", "decoupleSubtreeDAH")
+	defer endSpan()
 
-	g, gCtx := errgroup.WithContext(callerSpan.Ctx)
+	g, gCtx := errgroup.WithContext(callerCtx)
 	util.SafeSetLimit(g, ba.settings.BlockAssembly.SubtreeProcessorConcurrentReads)
 
 	startTime := time.Now()
@@ -1140,7 +1142,7 @@ func (ba *BlockAssembly) removeSubtreesDAH(ctx context.Context, block *model.Blo
 }
 
 func (ba *BlockAssembly) DeDuplicateBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "DeDuplicateBlockAssembly",
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "DeDuplicateBlockAssembly",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithLogMessage(ba.logger, "[DeDuplicateBlockAssembly] called"),
 	)
@@ -1152,7 +1154,7 @@ func (ba *BlockAssembly) DeDuplicateBlockAssembly(ctx context.Context, _ *blocka
 }
 
 func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "ResetBlockAssembly",
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "ResetBlockAssembly",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithLogMessage(ba.logger, "[ResetBlockAssembly] called"),
 	)
@@ -1185,7 +1187,7 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 //   - *blockassembly_api.StateMessage: Detailed state information
 //   - error: Any error encountered while gathering state information
 func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.StateMessage, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "GetBlockAssemblyState",
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "GetBlockAssemblyState",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithLogMessage(ba.logger, "[GetBlockAssemblyState] called"),
 	)
@@ -1262,7 +1264,7 @@ func (ba *BlockAssembly) GetCurrentDifficulty(_ context.Context, _ *blockassembl
 //   - *blockassembly_api.EmptyMessage: Empty response on success
 //   - error: Any error encountered during block generation
 func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) (*blockassembly_api.EmptyMessage, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "generateBlocks",
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "GenerateBlocks",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblerGenerateBlocks),
 		tracing.WithLogMessage(ba.logger, "[generateBlocks] called"),

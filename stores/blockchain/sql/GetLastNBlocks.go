@@ -51,9 +51,9 @@ import (
 //   - []*model.BlockInfo: An array of block information structures containing details
 //     such as hash, height, timestamp, transaction count, and size for each block
 //   - error: Any error encountered during retrieval, specifically:
-//     - StorageError for database errors or processing failures
+//   - StorageError for database errors or processing failures
 func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetLastNBlocks")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetLastNBlocks")
 	defer deferFn()
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
@@ -190,8 +190,8 @@ type CustomTime struct {
 //
 // Returns:
 //   - error: Any error encountered during scanning or parsing, specifically:
-//     - ProcessingError for unsupported value types
-//     - Time parsing errors if the string format is invalid
+//   - ProcessingError for unsupported value types
+//   - Time parsing errors if the string format is invalid
 func (ct *CustomTime) Scan(value interface{}) error {
 	switch v := value.(type) {
 	case time.Time:

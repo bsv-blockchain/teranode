@@ -46,7 +46,7 @@ import (
 // Note: Processing is not atomic across multiple subtrees - each subtree is processed individually,
 // allowing partial block processing to succeed even if some subtrees fail.
 func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error {
-	ctx, _, deferFn := tracing.StartTracing(pCtx, "ProcessSubtree",
+	ctx, _, deferFn := tracing.Tracer("blockpersister").Start(pCtx, "ProcessSubtree",
 		tracing.WithHistogram(prometheusBlockPersisterValidateSubtree),
 		tracing.WithDebugLogMessage(u.logger, "[ProcessSubtree] called for subtree %s", subtreeHash.String()),
 	)

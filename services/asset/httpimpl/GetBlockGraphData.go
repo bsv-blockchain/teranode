@@ -68,7 +68,7 @@ import (
 //	# Get transaction data for last week
 //	GET /blocks/graph/1w
 func (h *HTTP) GetBlockGraphData(c echo.Context) error {
-	ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetBlockGraphData_http",
+	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockGraphData_http",
 		tracing.WithParentStat(AssetStat),
 	)
 

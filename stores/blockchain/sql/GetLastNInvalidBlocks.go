@@ -49,9 +49,9 @@ import (
 //   - []*model.BlockInfo: An array of block information structures containing details
 //     such as hash, height, timestamp, transaction count, and size for each invalidated block
 //   - error: Any error encountered during retrieval, specifically:
-//     - StorageError for database errors or processing failures
+//   - StorageError for database errors or processing failures
 func (s *SQL) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetLastNInvalidBlocks")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetLastNInvalidBlocks")
 	defer deferFn()
 
 	// Create a unique cache ID for this query

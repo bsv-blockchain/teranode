@@ -134,7 +134,7 @@ func (h *HTTP) GetTransaction(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashStr := c.Param("hash")
 
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetTransaction_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetTransaction_http",
 			tracing.WithParentStat(AssetStat),
 			tracing.WithLogMessage(h.logger, "[Asset_http] GetTransaction in %s for %s: %s", mode, c.Request().RemoteAddr, hashStr),
 		)

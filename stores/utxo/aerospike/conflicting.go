@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Store) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	ctx, _, _ = tracing.StartTracing(ctx, "GetCounterConflicting",
+	ctx, _, _ = tracing.Tracer("aerospike").Start(ctx, "GetCounterConflicting",
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetCounterConflicting),
 	)
 
@@ -25,7 +25,7 @@ func (s *Store) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash
 
 // GetConflictingChildren returns the conflicting transactions for the given transaction hash
 func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash) ([]chainhash.Hash, error) {
-	ctx, _, _ = tracing.StartTracing(ctx, "GetConflicting",
+	ctx, _, _ = tracing.Tracer("aerospike").Start(ctx, "GetConflicting",
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetConflicting),
 	)
 

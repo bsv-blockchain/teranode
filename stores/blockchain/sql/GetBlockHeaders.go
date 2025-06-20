@@ -63,7 +63,7 @@ import (
 //   - ProcessingError for errors during header reconstruction
 //   - nil if the operation was successful (even if fewer headers than requested were found)
 func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeaders",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeaders",
 		tracing.WithLogMessage(s.logger, "[GetBlockHeaders][%s] called for %d headers", blockHashFrom.String(), numberOfHeaders),
 	)
 	defer deferFn()

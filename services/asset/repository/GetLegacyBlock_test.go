@@ -44,7 +44,7 @@ var (
 )
 
 func TestGetLegacyBlockWithBlockStore(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	ctx := setup(t)
 	ctx.logger.Debugf("test")
@@ -93,7 +93,7 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 }
 
 func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	ctx := setup(t)
 	ctx.logger.Debugf("test")
@@ -142,7 +142,7 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 }
 
 func TestGetLegacyWireBlockWithSubtreeStore(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	ctx := setup(t)
 	ctx.logger.Debugf("test")

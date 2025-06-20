@@ -112,7 +112,7 @@ func (h *HTTP) GetBlockHeadersToCommonAncestor(mode ReadMode) func(c echo.Contex
 	return func(c echo.Context) error {
 		hashStr := c.Param("hash")
 
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetBlockHeadersToCommonAncestor_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockHeadersToCommonAncestor_http",
 			tracing.WithParentStat(AssetStat),
 			tracing.WithLogMessage(h.logger, "[GetBlockHeadersToCommonAncestor_http] Get %s Block Headers in %s for %s", mode, c.Request().RemoteAddr, hashStr),
 		)

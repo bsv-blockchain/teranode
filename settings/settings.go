@@ -32,6 +32,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 	doubleSpendWindow := time.Duration(doubleSpendWindowMillis) * time.Millisecond
 
 	return &Settings{
+		Commit:                     gocore.GetCommit(),
+		Version:                    gocore.GetVersion(),
 		Context:                    settingsContext,
 		ServiceName:                getString("SERVICE_NAME", "teranode", alternativeContext...),
 		ClientName:                 getString("clientName", "defaultClientName", alternativeContext...),
@@ -47,18 +49,17 @@ func NewSettings(alternativeContext ...string) *Settings {
 		PrometheusEndpoint:         getString("prometheusEndpoint", "", alternativeContext...),
 		HealthCheckPort:            getInt("health_check_port", 8000, alternativeContext...),
 		UseDatadogProfiler:         getBool("use_datadog_profiler", false, alternativeContext...),
-		UseOpenTracing:             getBool("use_open_tracing", true, alternativeContext...),
-		TracingSampleRate:          getString("tracing_SampleRate", "0.01", alternativeContext...),
+		TracingSampleRate:          getFloat64("tracing_SampleRate", 0.01, alternativeContext...),
 		LocalTestStartFromState:    getString("local_test_start_from_state", "", alternativeContext...),
 		PostgresCheckAddress:       getString("postgres_check_address", "localhost:5432", alternativeContext...),
 		UseCgoVerifier:             getBool("use_cgo_verifier", true, alternativeContext...),
-		UseOtelTracing:             getBool("use_otel_tracing", false, alternativeContext...),
+		TracingEnabled:             getBool("tracing_enabled", false, alternativeContext...),
 		GRPCResolver:               getString("grpc_resolver", "", alternativeContext...),
 		GRPCMaxRetries:             getInt("grpc_max_retries", 40, alternativeContext...),
 		GRPCRetryBackoff:           getDuration("grpc_retry_backoff", 250*time.Millisecond, alternativeContext...),
 		SecurityLevelGRPC:          getInt("security_level_grpc", 0, alternativeContext...),
 		UsePrometheusGRPCMetrics:   getBool("use_prometheus_grpc_metrics", true, alternativeContext...),
-		TracingCollectorURL:        getURL("tracing_collector_url", "", alternativeContext...),
+		TracingCollectorURL:        getURL("tracing_collector_url", "http://localhost:4318", alternativeContext...),
 		GRPCAdminAPIKey:            getString("grpc_admin_api_key", "", alternativeContext...),
 		GlobalBlockHeightRetention: globalBlockHeightRetention,
 

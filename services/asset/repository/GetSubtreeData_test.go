@@ -15,7 +15,7 @@ import (
 )
 
 func TestGetSubtreeDataWithReader(t *testing.T) {
-	tracing.SetGlobalMockTracer()
+	tracing.SetupMockTracer()
 
 	t.Run("get subtree from block store", func(t *testing.T) {
 		ctx, subtree, metaDatas := setupSubtreeReaderTest(t)

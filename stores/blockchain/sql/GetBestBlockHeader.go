@@ -15,11 +15,11 @@
 //   - Providing accurate chain tip information to API clients and block explorers
 //
 // The implementation uses a sophisticated multi-tier approach to optimize performance:
-//   1. First checks a dedicated blocks cache to avoid database queries
-//   2. If not in cache, executes an optimized SQL query with careful indexing
-//   3. Uses deterministic tie-breaking logic for the rare case of equal chainwork
-//      values between competing chain tips
-//   4. Reconstructs the header and metadata with all required fields
+//  1. First checks a dedicated blocks cache to avoid database queries
+//  2. If not in cache, executes an optimized SQL query with careful indexing
+//  3. Uses deterministic tie-breaking logic for the rare case of equal chainwork
+//     values between competing chain tips
+//  4. Reconstructs the header and metadata with all required fields
 //
 // In Teranode's high-throughput architecture, this method's efficiency is particularly
 // critical as it may be called thousands of times per second during peak operation,
@@ -50,22 +50,22 @@ import (
 //
 // The implementation follows a sophisticated multi-tier approach to optimize performance:
 //
-// 1. Cache Layer: First checks the blocksCache for the best block header to avoid
-//    expensive database queries. This cache is carefully maintained and invalidated
-//    when the blockchain state changes (e.g., when new blocks are added or during
-//    chain reorganizations).
+//  1. Cache Layer: First checks the blocksCache for the best block header to avoid
+//     expensive database queries. This cache is carefully maintained and invalidated
+//     when the blockchain state changes (e.g., when new blocks are added or during
+//     chain reorganizations).
 //
 // 2. Database Layer: If not found in cache, executes an optimized SQL query that:
-//    - Filters for valid blocks only (is_valid = true)
-//    - Orders by chainwork in descending order to find the highest
-//    - Implements a deterministic tie-breaker for the rare case of equal chainwork
-//      values between competing chain tips, using peer_id and block id
-//    - Limits to a single result (the best block)
+//   - Filters for valid blocks only (is_valid = true)
+//   - Orders by chainwork in descending order to find the highest
+//   - Implements a deterministic tie-breaker for the rare case of equal chainwork
+//     values between competing chain tips, using peer_id and block id
+//   - Limits to a single result (the best block)
 //
 // 3. Reconstruction Layer: After retrieving the block data:
-//    - Reconstructs the BlockHeader object with all consensus fields
-//    - Builds the BlockHeaderMeta object with additional metadata
-//    - Converts binary data to appropriate types (e.g., chainhash.Hash)
+//   - Reconstructs the BlockHeader object with all consensus fields
+//   - Builds the BlockHeaderMeta object with additional metadata
+//   - Converts binary data to appropriate types (e.g., chainhash.Hash)
 //
 // 4. Cache Update: Updates the blocksCache with the best block header for future requests
 //
@@ -83,11 +83,11 @@ import (
 //   - *model.BlockHeaderMeta: Metadata about the best block including height, transaction
 //     count, size, chainwork, and other non-consensus fields
 //   - error: Any error encountered during retrieval, specifically:
-//     - BlockNotFoundError if no valid blocks exist in the database
-//     - StorageError for database access or query execution errors
-//     - ProcessingError for errors during header reconstruction
+//   - BlockNotFoundError if no valid blocks exist in the database
+//   - StorageError for database access or query execution errors
+//   - ProcessingError for errors during header reconstruction
 func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBestBlockHeader")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBestBlockHeader")
 	defer deferFn()
 
 	header, meta := s.blocksCache.GetBestBlockHeader()

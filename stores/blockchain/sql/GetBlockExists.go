@@ -10,10 +10,10 @@
 // of times per second during peak processing.
 //
 // The implementation uses a multi-tier optimization strategy:
-// 1. First checks a dedicated existence cache that stores only block hash to existence mappings
-// 2. If not found in cache, executes a minimal SQL query that only checks existence without
-//    retrieving full block data
-// 3. Updates the cache with the result to optimize future queries for the same block
+//  1. First checks a dedicated existence cache that stores only block hash to existence mappings
+//  2. If not found in cache, executes a minimal SQL query that only checks existence without
+//     retrieving full block data
+//  3. Updates the cache with the result to optimize future queries for the same block
 //
 // This approach significantly reduces database load and improves response times for this
 // frequently called operation. The existence cache is carefully managed to ensure consistency
@@ -40,10 +40,10 @@ import (
 // architecture, this method is optimized for maximum performance.
 //
 // The implementation follows a tiered approach to minimize database load:
-// 1. First checks the dedicated existence cache using the block hash as key
-// 2. If not found in cache (cache miss), executes an optimized SQL query
-//    that only checks for existence without retrieving block data
-// 3. Updates the existence cache with the result to benefit future queries
+//  1. First checks the dedicated existence cache using the block hash as key
+//  2. If not found in cache (cache miss), executes an optimized SQL query
+//     that only checks for existence without retrieving block data
+//  3. Updates the existence cache with the result to benefit future queries
 //
 // The SQL query is carefully designed to be as lightweight as possible, only checking
 // for the presence of a block hash in the blocks table without retrieving any columns.
@@ -57,10 +57,10 @@ import (
 // Returns:
 //   - bool: True if the block exists in the database, false otherwise
 //   - error: Any error encountered during the database operation, specifically:
-//     - StorageError for database access errors
-//     - nil if the operation was successful (even if the block doesn't exist)
+//   - StorageError for database access errors
+//   - nil if the operation was successful (even if the block doesn't exist)
 func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockExists")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockExists")
 	defer deferFn()
 
 	// Check if the existence information is already in cache

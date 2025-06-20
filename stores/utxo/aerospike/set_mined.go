@@ -123,7 +123,7 @@ import (
 //   - prometheusTxMetaAerospikeMapSetMinedBatchN: Successful updates
 //   - prometheusTxMetaAerospikeMapSetMinedBatchErrN: Failed updates
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
-	_, _, deferFn := tracing.StartTracing(ctx, "aerospike:SetMinedMulti2")
+	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "aerospike:SetMinedMulti2")
 	defer deferFn()
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)

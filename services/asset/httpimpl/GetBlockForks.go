@@ -141,7 +141,7 @@ type forksLink struct {
 func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 	hashStr := c.Param("hash")
 
-	ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetBlockForks_http",
+	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockForks_http",
 		tracing.WithParentStat(AssetStat),
 		tracing.WithDebugLogMessage(h.logger, "[Asset] GetBlockForks_http for %s", hashStr),
 	)

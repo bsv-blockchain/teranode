@@ -60,7 +60,7 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err)
 
 	tSettings := td.Settings
@@ -104,7 +104,7 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
-	resp, err := td.CallRPC("sendrawtransaction", []interface{}{txBytes})
+	resp, err := td.CallRPC(td.Ctx, "sendrawtransaction", []interface{}{txBytes})
 	require.NoError(t, err, "Failed to send new tx with rpc")
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 
@@ -115,12 +115,12 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to generate blocks")
 
 	t.Logf("Resp: %s", resp)
 
-	_, err = td.CallRPC("generate", []interface{}{100})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{100})
 	require.NoError(t, err, "Failed to generate blocks")
 
 	t.Logf("Resp: %s", resp)
@@ -157,7 +157,7 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 
 	assert.True(t, blFound, "TX not found in the blockstore")
 
-	resp, err = td.CallRPC("getblockchaininfo", []interface{}{})
+	resp, err = td.CallRPC(td.Ctx, "getblockchaininfo", []interface{}{})
 	require.NoError(t, err)
 
 	var blockchainInfo helper.BlockchainInfo
@@ -184,7 +184,7 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 	assert.Nil(t, blockchainInfo.Error)
 	assert.Nil(t, blockchainInfo.ID)
 
-	resp, err = td.CallRPC("getinfo", []interface{}{})
+	resp, err = td.CallRPC(td.Ctx, "getinfo", []interface{}{})
 
 	require.NoError(t, err)
 
@@ -210,7 +210,7 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 
 	var getDifficulty helper.GetDifficultyResponse
 
-	resp, err = td.CallRPC("getdifficulty", []interface{}{})
+	resp, err = td.CallRPC(td.Ctx, "getdifficulty", []interface{}{})
 
 	require.NoError(t, err)
 
@@ -220,7 +220,7 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 	t.Logf("getDifficulty: %+v", getDifficulty)
 	assert.Equal(t, float64(4.6565423739069247e-10), getDifficulty.Result)
 
-	resp, err = td.CallRPC("getblockhash", []interface{}{202})
+	resp, err = td.CallRPC(td.Ctx, "getblockhash", []interface{}{202})
 	require.NoError(t, err, "Failed to generate blocks")
 
 	var getBlockHash helper.GetBlockHashResponse
@@ -232,7 +232,7 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 
 	t.Logf("%s", resp)
 
-	resp, err = td.CallRPC("getblockbyheight", []interface{}{102})
+	resp, err = td.CallRPC(td.Ctx, "getblockbyheight", []interface{}{102})
 	require.NoError(t, err, "Failed to get block by height")
 
 	var getBlockByHeightResp helper.GetBlockByHeightResponse
@@ -277,7 +277,7 @@ func TestShouldNotProcessNonFinalTxWithPostgres(t *testing.T) {
 
 	// Generate initial blocks
 	// CSVHeight is the block height at which the CSV rules are activated including lock time
-	_, err = td.CallRPC("generate", []any{tSettings.ChainCfgParams.CSVHeight + 1})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{tSettings.ChainCfgParams.CSVHeight + 1})
 	require.NoError(t, err)
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
@@ -325,7 +325,7 @@ func TestShouldNotProcessNonFinalTxWithPostgres(t *testing.T) {
 	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
-	resp, err := td.CallRPC("sendrawtransaction", []any{txBytes})
+	resp, err := td.CallRPC(td.Ctx, "sendrawtransaction", []any{txBytes})
 	// "code: -8, message: TX rejected:
 	// PROCESSING (4): error sending transaction 1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631 to 100.00% of the propagation servers: [SERVICE_ERROR (59): address localhost:8084
 	//  -> UNKNOWN (0): SERVICE_ERROR (59): [ProcessTransaction][1b36fab6c9342373f0c45770f5e46f963e6d70a3f42a5e8fce003b03ed27f631] failed to validate transaction

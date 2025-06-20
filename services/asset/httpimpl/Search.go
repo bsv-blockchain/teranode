@@ -96,7 +96,7 @@ type res struct {
 func (h *HTTP) Search(c echo.Context) error {
 	q := c.QueryParam("q")
 
-	ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "Search",
+	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "Search",
 		tracing.WithParentStat(AssetStat),
 		tracing.WithDebugLogMessage(h.logger, "[Asset_http] Search for %s: %s", c.Request().RemoteAddr, q),
 	)

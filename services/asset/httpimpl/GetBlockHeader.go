@@ -91,7 +91,7 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashParam := c.Param("hash")
 
-		ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetBlockHeader_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockHeader_http",
 			tracing.WithParentStat(AssetStat),
 			tracing.WithLogMessage(h.logger, "[Asset_http] GetBlockHeader in %s for %s: %s", mode, c.Request().RemoteAddr, hashParam),
 		)

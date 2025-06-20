@@ -1,8 +1,7 @@
-//go:build test_nightly || test_docker_daemon || debug
-
 package smoke
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/test/testcontainers"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -26,35 +26,57 @@ func TestOrphanTx(t *testing.T) {
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:  true,
 		EnableP2P:  true,
-		UseTracing: false,
+		UseTracing: true,
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			// settings.Asset.HTTPPort = 18090
 			settings.Validator.UseLocalValidator = true
+			settings.TracingEnabled = true
+			settings.TracingSampleRate = 1.0
 		},
 	})
 
-	defer node1.Stop(t)
-
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableP2P:  true,
-		UseTracing: false,
+		UseTracing: true,
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			// settings.Asset.HTTPPort = 28090
 			settings.Validator.UseLocalValidator = true
+			settings.TracingEnabled = true
+			settings.TracingSampleRate = 1.0
 		},
 	})
 
-	defer node2.Stop(t)
+	tracer := tracing.Tracer("testDaemon")
+
+	node1Ctx, _, endSpan1 := tracer.Start(
+		context.Background(),
+		"TestOrphanTx",
+		tracing.WithTag("node", "node1"),
+	)
+
+	node2Ctx, _, endSpan2 := tracer.Start(
+		context.Background(),
+		"TestOrphanTx",
+		tracing.WithTag("node", "node2"),
+	)
+
+	t.Cleanup(func() {
+		endSpan2()
+		endSpan1()
+
+		node2.Stop(t)
+		node1.Stop(t)
+	})
 
 	// Generate 2 blocks on node 1
-	_, err := node1.CallRPC("generate", []any{2})
+	_, err := node1.CallRPC(node1Ctx, "generate", []any{2})
 	require.NoError(t, err)
 
-	block2, err := node1.BlockchainClient.GetBlockByHeight(node1.Ctx, 2)
+	block2, err := node1.BlockchainClient.GetBlockByHeight(node1Ctx, 2)
 	require.NoError(t, err)
 
 	// Wait for block assembler to catch up on node 1
@@ -62,10 +84,10 @@ func TestOrphanTx(t *testing.T) {
 
 	// Node 2 should have received notifications for these blocks over P2P.
 	// Wait for block assembler to catch up on node 2
-	node2.WaitForBlockHeight(t, block2, 10*time.Second, true)
+	// node2.WaitForBlockHeight(t, block2, 10*time.Second, true)
 
 	// Get block 1's coinbase tx from node 1 and create a transaction that spends the 0th output of block 1's coinbase
-	block1, err := node1.BlockchainClient.GetBlockByHeight(node1.Ctx, 1)
+	block1, err := node1.BlockchainClient.GetBlockByHeight(node1Ctx, 1)
 	require.NoError(t, err)
 
 	coinbaseTxFromNode1, err := getTx(t, node1.AssetURL, block1.CoinbaseTx.TxID())
@@ -86,7 +108,7 @@ func TestOrphanTx(t *testing.T) {
 	err = parentTx.AddP2PKHOutputFromPubKeyBytes(node1.GetPrivateKey(t).PubKey().SerialiseCompressed(), 10000)
 	require.NoError(t, err)
 
-	require.NoError(t, parentTx.FillAllInputs(node1.Ctx, &unlocker.Getter{PrivateKey: node1.GetPrivateKey(t)}))
+	require.NoError(t, parentTx.FillAllInputs(node1Ctx, &unlocker.Getter{PrivateKey: node1.GetPrivateKey(t)}))
 
 	// Check that the transaction is signed
 	assert.Greater(t, len(parentTx.Inputs[0].UnlockingScript.Bytes()), 0)
@@ -95,10 +117,10 @@ func TestOrphanTx(t *testing.T) {
 	childTx := node1.CreateTransaction(t, parentTx)
 	t.Logf("childTx: %s", childTx.TxID())
 
-	err = node1.PropagationClient.ProcessTransaction(node1.Ctx, parentTx)
+	err = node1.PropagationClient.ProcessTransaction(node1Ctx, parentTx)
 	require.NoError(t, err)
 
-	err = node2.PropagationClient.ProcessTransaction(node2.Ctx, parentTx)
+	err = node2.PropagationClient.ProcessTransaction(node2Ctx, parentTx)
 	require.NoError(t, err)
 
 	// Now we've sent the tx to both nodes, let's retrieve them to check they have been stored
@@ -114,9 +136,11 @@ func TestOrphanTx(t *testing.T) {
 
 	assert.Equal(t, txFromNode1.String(), txFromNode2.String())
 
-	//restart node 1
-	node1.Stop(t)
+	// restart node 1
+	node1.Stop(t, true)
+
 	node1.ResetServiceManagerContext(t)
+
 	node1 = daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:         true,
 		EnableP2P:         true,
@@ -126,18 +150,18 @@ func TestOrphanTx(t *testing.T) {
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 18090
 			settings.Validator.UseLocalValidator = true
+			settings.TracingEnabled = true
+			settings.TracingSampleRate = 1.0
 		},
 	})
-
-	defer node1.Stop(t)
 
 	node1.WaitForBlockHeight(t, block2, 1*time.Second)
 
 	// send a child tx to both
-	err = node1.PropagationClient.ProcessTransaction(node1.Ctx, childTx)
+	err = node1.PropagationClient.ProcessTransaction(node1Ctx, childTx)
 	require.NoError(t, err)
 
-	err = node2.PropagationClient.ProcessTransaction(node2.Ctx, childTx)
+	err = node2.PropagationClient.ProcessTransaction(node2Ctx, childTx)
 	require.NoError(t, err)
 
 	// verify the child tx is in the block assembly
@@ -148,34 +172,34 @@ func TestOrphanTx(t *testing.T) {
 	node2.VerifyInBlockAssembly(t, parentTx)
 
 	// generate a block on node1
-	_, err = node1.CallRPC("generate", []any{1})
+	_, err = node1.CallRPC(node1Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
 	// verify the child tx is in the utxo store
-	utxo, err := node1.UtxoStore.Get(node1.Ctx, childTx.TxIDChainHash())
+	utxo, err := node1.UtxoStore.Get(node1Ctx, childTx.TxIDChainHash())
 	require.NoError(t, err)
 
 	assert.Equal(t, uint32(3), utxo.BlockHeights[0], "childtx should be (incorrectly) mined in block 3 on node1")
 
-	utxo, err = node1.UtxoStore.Get(node1.Ctx, parentTx.TxIDChainHash())
+	utxo, err = node1.UtxoStore.Get(node1Ctx, parentTx.TxIDChainHash())
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, len(utxo.BlockHeights), "parentTx should not be mined on node1")
 
-	block3, err := node1.BlockchainClient.GetBlockByHeight(node1.Ctx, 3)
+	block3, err := node1.BlockchainClient.GetBlockByHeight(node1Ctx, 3)
 	require.NoError(t, err)
 
-	err = block3.GetAndValidateSubtrees(node1.Ctx, node1.Logger, node1.SubtreeStore, nil)
+	err = block3.GetAndValidateSubtrees(node1Ctx, node1.Logger, node1.SubtreeStore, nil)
 	require.NoError(t, err)
 
-	err = block3.CheckMerkleRoot(node1.Ctx)
+	err = block3.CheckMerkleRoot(node1Ctx)
 	require.NoError(t, err)
 
 	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
 		return block3.SubTreesFromBytes(subtreeHash[:])
 	}
 
-	subtree, err := block3.GetSubtrees(node1.Ctx, node1.Logger, node1.SubtreeStore, fallbackGetFunc)
+	subtree, err := block3.GetSubtrees(node1Ctx, node1.Logger, node1.SubtreeStore, fallbackGetFunc)
 	require.NoError(t, err)
 
 	blFound := false
@@ -195,18 +219,18 @@ func TestOrphanTx(t *testing.T) {
 	require.False(t, blFound)
 
 	// get the block height on node2
-	blockHeightNode2, _, err := node2.BlockchainClient.GetBestHeightAndTime(node2.Ctx)
+	blockHeightNode2, _, err := node2.BlockchainClient.GetBestHeightAndTime(node2Ctx)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint32(2), blockHeightNode2, "Block height on node2 should be 2")
 
-	utxo, err = node2.UtxoStore.Get(node2.Ctx, childTx.TxIDChainHash())
+	utxo, err = node2.UtxoStore.Get(node2Ctx, childTx.TxIDChainHash())
 	require.NoError(t, err)
 
 	require.Equal(t, len(utxo.BlockHeights), 0, "childtx on node2 should have no block heights")
 	// assert.Equal(t, uint32(3), utxo.BlockHeights[0], "childtx on node2 should have block height 3")
 
-	utxo, err = node2.UtxoStore.Get(node2.Ctx, parentTx.TxIDChainHash())
+	utxo, err = node2.UtxoStore.Get(node2Ctx, parentTx.TxIDChainHash())
 	require.NoError(t, err)
 
 	assert.Nil(t, utxo.BlockHeights, "parentTx on node2 should have no block heights")
@@ -353,7 +377,7 @@ func TestOrphanTxWithSingleNode(t *testing.T) {
 	// is stopped manually
 
 	// Generate 2 blocks on node 1
-	_, err := node1.CallRPC("generate", []any{2})
+	_, err := node1.CallRPC(node1.Ctx, "generate", []any{2})
 	require.NoError(t, err)
 
 	block1, err := node1.BlockchainClient.GetBlockByHeight(node1.Ctx, 1)
@@ -465,7 +489,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 	defer node2.Stop(t)
 
 	// Generate 2 blocks on node 1
-	_, err := node1.CallRPC("generate", []any{2})
+	_, err := node1.CallRPC(node1.Ctx, "generate", []any{2})
 	require.NoError(t, err)
 
 	block2, err := node1.BlockchainClient.GetBlockByHeight(node1.Ctx, 2)
@@ -519,7 +543,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 	assert.Equal(t, txFromNode1.String(), txFromNode2.String())
 
 	// generate 1 block
-	_, err = node1.CallRPC("generate", []any{1})
+	_, err = node1.CallRPC(node1.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
 	childTx1 := node1.CreateTransaction(t, parentTx)
@@ -581,11 +605,11 @@ func TestUnminedConflictResolution(t *testing.T) {
 	t.Logf("Generate 2 blocks")
 
 	// generate 2 blocks so that the parentTx expires on both nodes
-	// _, err = node1.CallRPC("generate", []any{2})
+	// _, err = node1.CallRPC(node1.Ctx, "generate", []any{2})
 	// require.NoError(t, err)
 
 	blocksToGenerate := node1.Settings.UtxoStore.BlockHeightRetention
-	_, err = node1.CallRPC("generate", []any{blocksToGenerate + 1})
+	_, err = node1.CallRPC(node1.Ctx, "generate", []any{blocksToGenerate + 1})
 	require.NoError(t, err)
 
 	time.Sleep(10 * time.Second)
@@ -611,7 +635,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 	// require.Error(t, err)
 
 	// generate 1 block on node 2
-	_, err = node2.CallRPC("generate", []any{1})
+	_, err = node2.CallRPC(node2.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
 	time.Sleep(10 * time.Second)

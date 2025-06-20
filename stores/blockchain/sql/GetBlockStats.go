@@ -48,9 +48,9 @@ import (
 // Returns:
 //   - *model.BlockStats: A structure containing the calculated blockchain statistics
 //   - error: Any error encountered during calculation, specifically:
-//     - StorageError for database errors or processing failures
+//   - StorageError for database errors or processing failures
 func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockStats")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockStats")
 	defer deferFn()
 
 	tweak := "X'00'"

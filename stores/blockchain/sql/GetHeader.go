@@ -26,18 +26,18 @@ import (
 // The implementation follows the same tiered retrieval strategy as GetBlockHeader:
 //
 // 1. Cache Layer: First checks the in-memory blocksCache for the requested header
-//    - Takes advantage of the same cache used by GetBlockHeader for consistency
-//    - Returns only the header portion, discarding any metadata
+//   - Takes advantage of the same cache used by GetBlockHeader for consistency
+//   - Returns only the header portion, discarding any metadata
 //
 // 2. Database Layer: If not found in cache, executes a streamlined SQL query
-//    - Retrieves only the six essential header fields (version, timestamp, nonce,
-//      previous hash, merkle root, and difficulty bits)
-//    - Omits additional metadata fields like height, transaction count, and chainwork
-//    - Uses the same indexed lookup by block hash for efficient retrieval
+//   - Retrieves only the six essential header fields (version, timestamp, nonce,
+//     previous hash, merkle root, and difficulty bits)
+//   - Omits additional metadata fields like height, transaction count, and chainwork
+//   - Uses the same indexed lookup by block hash for efficient retrieval
 //
 // 3. Reconstruction Phase: Converts raw database values to appropriate types
-//    - Handles the same binary-to-structured data conversions as GetBlockHeader
-//    - Does not extract or process any coinbase transaction data
+//   - Handles the same binary-to-structured data conversions as GetBlockHeader
+//   - Does not extract or process any coinbase transaction data
 //
 // This method is particularly useful for performance-critical operations where:
 //   - Only the cryptographic chain verification is needed
@@ -53,11 +53,11 @@ import (
 //   - *model.BlockHeader: The block header data including only the six essential fields
 //     (version, previous block hash, merkle root, timestamp, difficulty target, and nonce)
 //   - error: Any error encountered during retrieval, specifically:
-//     - BlockNotFoundError if the block does not exist in the database
-//     - StorageError for database connection or query execution errors
-//     - ProcessingError for data conversion or parsing errors
+//   - BlockNotFoundError if the block does not exist in the database
+//   - StorageError for database connection or query execution errors
+//   - ProcessingError for data conversion or parsing errors
 func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetHeader")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetHeader")
 	defer deferFn()
 
 	header, _ := s.blocksCache.GetBlockHeader(*blockHash)

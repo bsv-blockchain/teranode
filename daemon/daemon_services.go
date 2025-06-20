@@ -2,9 +2,7 @@ package daemon
 
 import (
 	"context"
-	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -95,30 +93,12 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	}
 
 	// start tracing if enabled
-	if appSettings.UseOpenTracing {
+	if appSettings.TracingEnabled {
 		logger.Infof("Starting tracer")
-		// closeTracer := tracing.InitOtelTracer()
-		// defer closeTracer()
-		samplingRateStr := appSettings.TracingSampleRate
 
-		samplingRate, err := strconv.ParseFloat(samplingRateStr, 64)
-		if err != nil {
-			logger.Errorf("error parsing sampling rate: %v", err)
-
-			samplingRate = 0.01
-		}
-
-		serviceName := appSettings.ServiceName
-
-		var closer io.Closer
-
-		closer, err = tracing.InitTracer(serviceName, samplingRate, true, nil)
+		err := tracing.InitTracer(appSettings)
 		if err != nil {
 			logger.Warnf("failed to initialize tracer: %v", err)
-		}
-
-		if closer != nil {
-			traceCloser = closer
 		}
 	}
 

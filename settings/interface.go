@@ -8,33 +8,34 @@ import (
 )
 
 type Settings struct {
-	Context                  string
-	ServiceName              string
-	ClientName               string
-	DataFolder               string
-	SecurityLevelHTTP        int
-	ServerCertFile           string
-	ServerKeyFile            string
-	Logger                   string
-	LogLevel                 string
-	PrettyLogs               bool
-	ProfilerAddr             string
-	StatsPrefix              string
-	PrometheusEndpoint       string
-	HealthCheckPort          int
-	UseDatadogProfiler       bool
-	TracingSampleRate        string
-	LocalTestStartFromState  string
-	PostgresCheckAddress     string
-	UseCgoVerifier           bool
-	GRPCResolver             string
-	GRPCMaxRetries           int
-	GRPCRetryBackoff         time.Duration
-	SecurityLevelGRPC        int
-	UsePrometheusGRPCMetrics bool
-	TracingCollectorURL      *url.URL
-	GRPCAdminAPIKey          string
-
+	Commit                     string
+	Version                    string
+	Context                    string
+	ServiceName                string
+	ClientName                 string
+	DataFolder                 string
+	SecurityLevelHTTP          int
+	ServerCertFile             string
+	ServerKeyFile              string
+	Logger                     string
+	LogLevel                   string
+	PrettyLogs                 bool
+	ProfilerAddr               string
+	StatsPrefix                string
+	PrometheusEndpoint         string
+	HealthCheckPort            int
+	UseDatadogProfiler         bool
+	TracingSampleRate          float64
+	LocalTestStartFromState    string
+	PostgresCheckAddress       string
+	UseCgoVerifier             bool
+	GRPCResolver               string
+	GRPCMaxRetries             int
+	GRPCRetryBackoff           time.Duration
+	SecurityLevelGRPC          int
+	UsePrometheusGRPCMetrics   bool
+	TracingCollectorURL        *url.URL
+	GRPCAdminAPIKey            string
 	ChainCfgParams             *chaincfg.Params
 	Policy                     *PolicySettings
 	Kafka                      KafkaSettings
@@ -57,8 +58,7 @@ type Settings struct {
 	RPC                        RPCSettings
 	Faucet                     FaucetSettings
 	Dashboard                  DashboardSettings
-	UseOpenTracing             bool
-	UseOtelTracing             bool
+	TracingEnabled             bool
 	GlobalBlockHeightRetention uint32
 }
 

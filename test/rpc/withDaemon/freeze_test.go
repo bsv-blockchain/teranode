@@ -29,7 +29,7 @@ func TestShouldHandleFreeze(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err)
 
 	tSettings := td.Settings
@@ -73,7 +73,7 @@ func TestShouldHandleFreeze(t *testing.T) {
 	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
-	resp, err := td.CallRPC("sendrawtransaction", []interface{}{txBytes})
+	resp, err := td.CallRPC(td.Ctx, "sendrawtransaction", []interface{}{txBytes})
 	require.NoError(t, err, "Failed to send new tx with rpc")
 	t.Logf("Transaction sent with RPC: %s\n", resp)
 
@@ -84,12 +84,12 @@ func TestShouldHandleFreeze(t *testing.T) {
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to generate blocks")
 
 	t.Logf("Resp: %s", resp)
 
-	_, err = td.CallRPC("generate", []interface{}{100})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{100})
 	require.NoError(t, err, "Failed to generate blocks")
 
 	t.Logf("Resp: %s", resp)

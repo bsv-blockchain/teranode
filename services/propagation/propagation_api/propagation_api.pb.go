@@ -268,19 +268,74 @@ func (x *ProcessTransactionRequest) GetTx() []byte {
 	return nil
 }
 
+type BatchTransactionItem struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// tx contains the raw transaction bytes to process
+	Tx []byte `protobuf:"bytes,1,opt,name=tx,proto3" json:"tx,omitempty"`
+	// trace_context contains the serialized OpenTelemetry trace context as key-value pairs
+	// This allows proper span propagation for each transaction in the batch
+	TraceContext  map[string]string `protobuf:"bytes,2,rep,name=trace_context,json=traceContext,proto3" json:"trace_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchTransactionItem) Reset() {
+	*x = BatchTransactionItem{}
+	mi := &file_services_propagation_propagation_api_propagation_api_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchTransactionItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchTransactionItem) ProtoMessage() {}
+
+func (x *BatchTransactionItem) ProtoReflect() protoreflect.Message {
+	mi := &file_services_propagation_propagation_api_propagation_api_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchTransactionItem.ProtoReflect.Descriptor instead.
+func (*BatchTransactionItem) Descriptor() ([]byte, []int) {
+	return file_services_propagation_propagation_api_propagation_api_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *BatchTransactionItem) GetTx() []byte {
+	if x != nil {
+		return x.Tx
+	}
+	return nil
+}
+
+func (x *BatchTransactionItem) GetTraceContext() map[string]string {
+	if x != nil {
+		return x.TraceContext
+	}
+	return nil
+}
+
 // ProcessTransactionBatchRequest represents a request to process multiple transactions.
 // swagger:model ProcessTransactionRequest
 type ProcessTransactionBatchRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// tx contains an array of raw transaction bytes to process
-	Tx            [][]byte `protobuf:"bytes,1,rep,name=tx,proto3" json:"tx,omitempty"`
+	Items         []*BatchTransactionItem `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProcessTransactionBatchRequest) Reset() {
 	*x = ProcessTransactionBatchRequest{}
-	mi := &file_services_propagation_propagation_api_propagation_api_proto_msgTypes[5]
+	mi := &file_services_propagation_propagation_api_propagation_api_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -292,7 +347,7 @@ func (x *ProcessTransactionBatchRequest) String() string {
 func (*ProcessTransactionBatchRequest) ProtoMessage() {}
 
 func (x *ProcessTransactionBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_propagation_propagation_api_propagation_api_proto_msgTypes[5]
+	mi := &file_services_propagation_propagation_api_propagation_api_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -305,12 +360,12 @@ func (x *ProcessTransactionBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessTransactionBatchRequest.ProtoReflect.Descriptor instead.
 func (*ProcessTransactionBatchRequest) Descriptor() ([]byte, []int) {
-	return file_services_propagation_propagation_api_propagation_api_proto_rawDescGZIP(), []int{5}
+	return file_services_propagation_propagation_api_propagation_api_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *ProcessTransactionBatchRequest) GetTx() [][]byte {
+func (x *ProcessTransactionBatchRequest) GetItems() []*BatchTransactionItem {
 	if x != nil {
-		return x.Tx
+		return x.Items
 	}
 	return nil
 }
@@ -328,7 +383,7 @@ type ProcessTransactionBatchResponse struct {
 
 func (x *ProcessTransactionBatchResponse) Reset() {
 	*x = ProcessTransactionBatchResponse{}
-	mi := &file_services_propagation_propagation_api_propagation_api_proto_msgTypes[6]
+	mi := &file_services_propagation_propagation_api_propagation_api_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -340,7 +395,7 @@ func (x *ProcessTransactionBatchResponse) String() string {
 func (*ProcessTransactionBatchResponse) ProtoMessage() {}
 
 func (x *ProcessTransactionBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_propagation_propagation_api_propagation_api_proto_msgTypes[6]
+	mi := &file_services_propagation_propagation_api_propagation_api_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -353,7 +408,7 @@ func (x *ProcessTransactionBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessTransactionBatchResponse.ProtoReflect.Descriptor instead.
 func (*ProcessTransactionBatchResponse) Descriptor() ([]byte, []int) {
-	return file_services_propagation_propagation_api_propagation_api_proto_rawDescGZIP(), []int{6}
+	return file_services_propagation_propagation_api_propagation_api_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ProcessTransactionBatchResponse) GetErrors() []*errors.TError {
@@ -379,9 +434,15 @@ const file_services_propagation_propagation_api_propagation_api_proto_rawDesc = 
 	"\vGetResponse\x12\x0e\n" +
 	"\x02tx\x18\x01 \x01(\fR\x02tx\"+\n" +
 	"\x19ProcessTransactionRequest\x12\x0e\n" +
-	"\x02tx\x18\x01 \x01(\fR\x02tx\"0\n" +
-	"\x1eProcessTransactionBatchRequest\x12\x0e\n" +
-	"\x02tx\x18\x01 \x03(\fR\x02tx\"I\n" +
+	"\x02tx\x18\x01 \x01(\fR\x02tx\"\xc5\x01\n" +
+	"\x14BatchTransactionItem\x12\x0e\n" +
+	"\x02tx\x18\x01 \x01(\fR\x02tx\x12\\\n" +
+	"\rtrace_context\x18\x02 \x03(\v27.propagation_api.BatchTransactionItem.TraceContextEntryR\ftraceContext\x1a?\n" +
+	"\x11TraceContextEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"]\n" +
+	"\x1eProcessTransactionBatchRequest\x12;\n" +
+	"\x05items\x18\x01 \x03(\v2%.propagation_api.BatchTransactionItemR\x05items\"I\n" +
 	"\x1fProcessTransactionBatchResponse\x12&\n" +
 	"\x06errors\x18\x01 \x03(\v2\x0e.errors.TErrorR\x06errors2\xc3\x02\n" +
 	"\x0ePropagationAPI\x12N\n" +
@@ -402,32 +463,36 @@ func file_services_propagation_propagation_api_propagation_api_proto_rawDescGZIP
 	return file_services_propagation_propagation_api_propagation_api_proto_rawDescData
 }
 
-var file_services_propagation_propagation_api_propagation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_services_propagation_propagation_api_propagation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_services_propagation_propagation_api_propagation_api_proto_goTypes = []any{
 	(*EmptyMessage)(nil),                    // 0: propagation_api.EmptyMessage
 	(*HealthResponse)(nil),                  // 1: propagation_api.HealthResponse
 	(*GetRequest)(nil),                      // 2: propagation_api.GetRequest
 	(*GetResponse)(nil),                     // 3: propagation_api.GetResponse
 	(*ProcessTransactionRequest)(nil),       // 4: propagation_api.ProcessTransactionRequest
-	(*ProcessTransactionBatchRequest)(nil),  // 5: propagation_api.ProcessTransactionBatchRequest
-	(*ProcessTransactionBatchResponse)(nil), // 6: propagation_api.ProcessTransactionBatchResponse
-	(*timestamppb.Timestamp)(nil),           // 7: google.protobuf.Timestamp
-	(*errors.TError)(nil),                   // 8: errors.TError
+	(*BatchTransactionItem)(nil),            // 5: propagation_api.BatchTransactionItem
+	(*ProcessTransactionBatchRequest)(nil),  // 6: propagation_api.ProcessTransactionBatchRequest
+	(*ProcessTransactionBatchResponse)(nil), // 7: propagation_api.ProcessTransactionBatchResponse
+	nil,                                     // 8: propagation_api.BatchTransactionItem.TraceContextEntry
+	(*timestamppb.Timestamp)(nil),           // 9: google.protobuf.Timestamp
+	(*errors.TError)(nil),                   // 10: errors.TError
 }
 var file_services_propagation_propagation_api_propagation_api_proto_depIdxs = []int32{
-	7, // 0: propagation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
-	8, // 1: propagation_api.ProcessTransactionBatchResponse.errors:type_name -> errors.TError
-	0, // 2: propagation_api.PropagationAPI.HealthGRPC:input_type -> propagation_api.EmptyMessage
-	4, // 3: propagation_api.PropagationAPI.ProcessTransaction:input_type -> propagation_api.ProcessTransactionRequest
-	5, // 4: propagation_api.PropagationAPI.ProcessTransactionBatch:input_type -> propagation_api.ProcessTransactionBatchRequest
-	1, // 5: propagation_api.PropagationAPI.HealthGRPC:output_type -> propagation_api.HealthResponse
-	0, // 6: propagation_api.PropagationAPI.ProcessTransaction:output_type -> propagation_api.EmptyMessage
-	6, // 7: propagation_api.PropagationAPI.ProcessTransactionBatch:output_type -> propagation_api.ProcessTransactionBatchResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	9,  // 0: propagation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	8,  // 1: propagation_api.BatchTransactionItem.trace_context:type_name -> propagation_api.BatchTransactionItem.TraceContextEntry
+	5,  // 2: propagation_api.ProcessTransactionBatchRequest.items:type_name -> propagation_api.BatchTransactionItem
+	10, // 3: propagation_api.ProcessTransactionBatchResponse.errors:type_name -> errors.TError
+	0,  // 4: propagation_api.PropagationAPI.HealthGRPC:input_type -> propagation_api.EmptyMessage
+	4,  // 5: propagation_api.PropagationAPI.ProcessTransaction:input_type -> propagation_api.ProcessTransactionRequest
+	6,  // 6: propagation_api.PropagationAPI.ProcessTransactionBatch:input_type -> propagation_api.ProcessTransactionBatchRequest
+	1,  // 7: propagation_api.PropagationAPI.HealthGRPC:output_type -> propagation_api.HealthResponse
+	0,  // 8: propagation_api.PropagationAPI.ProcessTransaction:output_type -> propagation_api.EmptyMessage
+	7,  // 9: propagation_api.PropagationAPI.ProcessTransactionBatch:output_type -> propagation_api.ProcessTransactionBatchResponse
+	7,  // [7:10] is the sub-list for method output_type
+	4,  // [4:7] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_services_propagation_propagation_api_propagation_api_proto_init() }
@@ -441,7 +506,7 @@ func file_services_propagation_propagation_api_propagation_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_propagation_propagation_api_propagation_api_proto_rawDesc), len(file_services_propagation_propagation_api_propagation_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

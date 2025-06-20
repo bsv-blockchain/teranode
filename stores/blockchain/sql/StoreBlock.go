@@ -37,35 +37,35 @@ import (
 // The implementation follows a sophisticated multi-stage approach:
 //
 // 1. Concurrency Management:
-//    - Uses a mutex to ensure thread-safety during block insertion
-//    - Prevents race conditions that could compromise blockchain integrity
-//    - Particularly important during chain reorganizations or parallel block processing
+//   - Uses a mutex to ensure thread-safety during block insertion
+//   - Prevents race conditions that could compromise blockchain integrity
+//   - Particularly important during chain reorganizations or parallel block processing
 //
 // 2. Block Validation and Positioning:
-//    - Validates the block's structure and relationship to existing blocks
-//    - Handles special cases like genesis blocks with zero previous values
-//    - Enforces BIP34 compliance by validating coinbase height encoding
-//    - Calculates the block's position in the blockchain (height)
+//   - Validates the block's structure and relationship to existing blocks
+//   - Handles special cases like genesis blocks with zero previous values
+//   - Enforces BIP34 compliance by validating coinbase height encoding
+//   - Calculates the block's position in the blockchain (height)
 //
 // 3. Consensus Determination:
-//    - Computes cumulative proof-of-work by adding block's work to previous total
-//    - Uses the work calculator to derive work from difficulty bits (nBits)
-//    - Maintains the chain with highest cumulative work as the valid blockchain
+//   - Computes cumulative proof-of-work by adding block's work to previous total
+//   - Uses the work calculator to derive work from difficulty bits (nBits)
+//   - Maintains the chain with highest cumulative work as the valid blockchain
 //
 // 4. Database Persistence:
-//    - Persists block data, transactions, and metadata atomically
-//    - Uses database-specific optimizations for PostgreSQL and SQLite
-//    - Handles constraint violations and other database errors gracefully
-//    - Extracts miner information from coinbase transactions for analytics
+//   - Persists block data, transactions, and metadata atomically
+//   - Uses database-specific optimizations for PostgreSQL and SQLite
+//   - Handles constraint violations and other database errors gracefully
+//   - Extracts miner information from coinbase transactions for analytics
 //
 // 5. Cache Management:
-//    - Updates the in-memory caches for optimized future access
-//    - Invalidates affected caches during chain reorganizations
-//    - Maintains cache consistency with database state
+//   - Updates the in-memory caches for optimized future access
+//   - Invalidates affected caches during chain reorganizations
+//   - Maintains cache consistency with database state
 //
 // 6. Optional Processing:
-//    - Supports functional options pattern for flexible behavior modification
-//    - Handles flags for mined status and subtree processing
+//   - Supports functional options pattern for flexible behavior modification
+//   - Handles flags for mined status and subtree processing
 //
 // In Teranode's high-throughput architecture, this method is designed to efficiently
 // process blocks at scale while maintaining strict blockchain validation rules and
@@ -87,12 +87,12 @@ import (
 //     the block in subsequent operations
 //   - uint32: The height of the block in the blockchain
 //   - error: Any error encountered during the operation, specifically:
-//     - ValidationError for blocks that violate consensus rules (e.g., invalid coinbase height)
-//     - BlockAlreadyExistsError for duplicate block submissions
-//     - StorageError for database failures
-//     - ProcessingError for internal processing failures
+//   - ValidationError for blocks that violate consensus rules (e.g., invalid coinbase height)
+//   - BlockAlreadyExistsError for duplicate block submissions
+//   - StorageError for database failures
+//   - ProcessingError for internal processing failures
 func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:StoreBlock")
+	ctx, _, deferFn := tracing.Tracer("sql").Start(ctx, "sql:StoreBlock")
 	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -214,28 +214,28 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 // The implementation follows a systematic approach to block processing:
 //
 // 1. Block Positioning and Validation:
-//    - Determines if this is a genesis block or a regular block
-//    - For regular blocks, retrieves and validates previous block data
-//    - Establishes the block's height by incrementing the previous block's height
-//    - Validates the block height encoded in the coinbase transaction (BIP34 compliance)
-//    - Inherits validity status from the previous block (invalid parents create invalid children)
+//   - Determines if this is a genesis block or a regular block
+//   - For regular blocks, retrieves and validates previous block data
+//   - Establishes the block's height by incrementing the previous block's height
+//   - Validates the block height encoded in the coinbase transaction (BIP34 compliance)
+//   - Inherits validity status from the previous block (invalid parents create invalid children)
 //
 // 2. Consensus Calculation:
-//    - Calculates cumulative chain work by adding the block's work to the previous total
-//    - Uses the work calculator to derive work from difficulty bits (nBits)
-//    - Maintains the chain with highest cumulative work as the valid blockchain
+//   - Calculates cumulative chain work by adding the block's work to the previous total
+//   - Uses the work calculator to derive work from difficulty bits (nBits)
+//   - Maintains the chain with highest cumulative work as the valid blockchain
 //
 // 3. Block Data Preparation:
-//    - Extracts and formats all required fields for database storage
-//    - Prepares block hash, version, timestamp, and transaction information
-//    - Extracts miner information from coinbase transaction when available
-//    - Handles special fields like chainwork representation and parent references
+//   - Extracts and formats all required fields for database storage
+//   - Prepares block hash, version, timestamp, and transaction information
+//   - Extracts miner information from coinbase transaction when available
+//   - Handles special fields like chainwork representation and parent references
 //
 // 4. Database Persistence:
-//    - Executes optimized SQL insert statements with database-specific adaptations
-//    - Uses prepared statements and batching for efficient transaction processing
-//    - Handles constraint violations and other database errors with appropriate domain translation
-//    - Applies optional flags for mined status and subtree processing
+//   - Executes optimized SQL insert statements with database-specific adaptations
+//   - Uses prepared statements and batching for efficient transaction processing
+//   - Handles constraint violations and other database errors with appropriate domain translation
+//   - Applies optional flags for mined status and subtree processing
 //
 // This function is critical to blockchain integrity as it maintains the chain's
 // continuity and ensures that all blocks are properly linked with correct heights
@@ -439,16 +439,16 @@ func (*SQL) parseSQLError(err error, block *model.Block) error {
 // The implementation handles two distinct scenarios:
 //
 // 1. Genesis Block Processing:
-//    - Identifies genesis blocks based on network parameters or previous hash value
-//    - Initializes previous values with defaults (zero height, empty chain work, etc.)
-//    - Sets up the foundation for the entire blockchain
+//   - Identifies genesis blocks based on network parameters or previous hash value
+//   - Initializes previous values with defaults (zero height, empty chain work, etc.)
+//   - Sets up the foundation for the entire blockchain
 //
 // 2. Regular Block Processing:
-//    - Retrieves the previous block's data from the database using its hash
-//    - Validates that the previous block exists in the database
-//    - Establishes the correct block height by incrementing the previous block's height
-//    - Retrieves the cumulative chain work to be extended by the new block
-//    - Determines validity inheritance (invalid parents create invalid children)
+//   - Retrieves the previous block's data from the database using its hash
+//   - Validates that the previous block exists in the database
+//   - Establishes the correct block height by incrementing the previous block's height
+//   - Retrieves the cumulative chain work to be extended by the new block
+//   - Determines validity inheritance (invalid parents create invalid children)
 //
 // This function is essential for maintaining blockchain continuity and implementing
 // the core consensus rules of Bitcoin, particularly the requirement that blocks form
@@ -574,27 +574,27 @@ func calculateAndPrepareChainWork(previousChainWorkBytes []byte, block *model.Bl
 // the main Bitcoin network. The rule requires miners to include the block height in
 // the coinbase transaction's input script, providing several important benefits:
 //
-// 1. Prevents coinbase transaction hash collisions that could occur when miners
-//    used identical coinbase transactions in different blocks
-// 2. Enhances blockchain analysis by making it easier to identify which block
-//    a coinbase transaction belongs to
-// 3. Provides an additional integrity check for block validation
-// 4. Enables certain scripting capabilities that rely on knowing the current height
+//  1. Prevents coinbase transaction hash collisions that could occur when miners
+//     used identical coinbase transactions in different blocks
+//  2. Enhances blockchain analysis by making it easier to identify which block
+//     a coinbase transaction belongs to
+//  3. Provides an additional integrity check for block validation
+//  4. Enables certain scripting capabilities that rely on knowing the current height
 //
 // The implementation performs a systematic validation process:
 //
 // 1. Applicability Check:
-//    - Determines if BIP34 validation applies based on block version and height
-//    - For blocks before the activation height or with version < 2, validation is skipped
+//   - Determines if BIP34 validation applies based on block version and height
+//   - For blocks before the activation height or with version < 2, validation is skipped
 //
 // 2. Height Extraction:
-//    - Accesses the coinbase transaction (first transaction in the block)
-//    - Examines the first input's script for the encoded height value
-//    - Uses Bitcoin's script parsing rules to extract the height as a number
+//   - Accesses the coinbase transaction (first transaction in the block)
+//   - Examines the first input's script for the encoded height value
+//   - Uses Bitcoin's script parsing rules to extract the height as a number
 //
 // 3. Validation:
-//    - Compares the extracted height with the expected block height
-//    - Returns a ValidationError if heights don't match or extraction fails
+//   - Compares the extracted height with the expected block height
+//   - Returns a ValidationError if heights don't match or extraction fails
 //
 // In Teranode's implementation of the BSV protocol, this validation is particularly
 // important for maintaining consensus compatibility with other Bitcoin implementations
@@ -648,30 +648,30 @@ func (s *SQL) validateCoinbaseHeight(block *model.Block, currentHeight uint32) e
 //
 // The implementation follows Bitcoin's established proof-of-work calculation methodology:
 //
-// 1. Each block's individual work is derived from its difficulty target (nBits field)
-//    using the formula: work = 2^256 / (target+1), representing the expected number
-//    of hash operations required to find a block at that difficulty
+//  1. Each block's individual work is derived from its difficulty target (nBits field)
+//     using the formula: work = 2^256 / (target+1), representing the expected number
+//     of hash operations required to find a block at that difficulty
 //
-// 2. The cumulative chain work is the sum of all individual block work values in the chain,
-//    stored as a large integer (represented as a hash) to handle the potentially enormous
-//    values that accumulate over time
+//  2. The cumulative chain work is the sum of all individual block work values in the chain,
+//     stored as a large integer (represented as a hash) to handle the potentially enormous
+//     values that accumulate over time
 //
-// 3. The work calculator component handles the mathematical operations efficiently,
-//    including the conversion between different representations of the work values
+//  3. The work calculator component handles the mathematical operations efficiently,
+//     including the conversion between different representations of the work values
 //
 // This calculation is critical for several aspects of blockchain operation:
 //
-// - Consensus Formation: Enables nodes to objectively identify the canonical blockchain
-//   without central coordination
+//   - Consensus Formation: Enables nodes to objectively identify the canonical blockchain
+//     without central coordination
 //
-// - Chain Selection: During reorganizations, the chain with the most cumulative work
-//   is automatically selected as the valid chain
+//   - Chain Selection: During reorganizations, the chain with the most cumulative work
+//     is automatically selected as the valid chain
 //
-// - Security Quantification: Provides a measure of the blockchain's security by
-//   quantifying the computational resources required to rewrite history
+//   - Security Quantification: Provides a measure of the blockchain's security by
+//     quantifying the computational resources required to rewrite history
 //
-// - Network Analysis: Allows for estimation of the network's total computational power
-//   and mining difficulty adjustments
+//   - Network Analysis: Allows for estimation of the network's total computational power
+//     and mining difficulty adjustments
 //
 // In Teranode's high-throughput architecture for BSV, maintaining accurate chain work
 // calculations is essential for ensuring consensus compatibility with other Bitcoin

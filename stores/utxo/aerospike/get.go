@@ -1022,7 +1022,7 @@ func sendErrorAndClose(errCh chan error, err error) {
 }
 
 func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
-	ctx, _, _ = tracing.StartTracing(ctx, "GetOutpointsFromExternalStore",
+	ctx, _, _ = tracing.Tracer("aerospike").Start(ctx, "GetOutpointsFromExternalStore",
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
 	)
 
@@ -1083,7 +1083,7 @@ func (s *Store) getExternalOutpoints(ctx context.Context, previousTxHash chainha
 }
 
 func (s *Store) GetTxFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
-	ctx, _, _ = tracing.StartTracing(ctx, "GetTxFromExternalStore",
+	ctx, _, _ = tracing.Tracer("aerospike").Start(ctx, "GetTxFromExternalStore",
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
 	)
 

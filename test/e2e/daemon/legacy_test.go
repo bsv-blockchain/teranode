@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/teranode/test/testcontainers"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,13 +72,24 @@ func TestInitialSync(t *testing.T) {
 		},
 	})
 
-	defer node1.Stop(t)
+	tracer := tracing.Tracer("testDaemon")
+
+	ctx, _, endSpan := tracer.Start(
+		context.Background(),
+		"TestInitialSync",
+		tracing.WithTag("node", "node1"),
+	)
+
+	defer func() {
+		endSpan()
+		node1.Stop(t)
+	}()
 
 	// verify blockheight on node1
-	err = helper.WaitForNodeBlockHeight(node1.Ctx, node1.BlockchainClient, 101, 30*time.Second)
+	err = helper.WaitForNodeBlockHeight(ctx, node1.BlockchainClient, 101, 30*time.Second)
 	require.NoError(t, err)
 
-	resp, err := node1.CallRPC("getpeerinfo", []any{})
+	resp, err := node1.CallRPC(ctx, "getpeerinfo", []any{})
 
 	require.NoError(t, err)
 
@@ -288,7 +300,7 @@ func GenerateBlocksAndSyncWithSVNode(t *testing.T, ctx context.Context, td *daem
 		// sv node complains if blocks are generated too fast
 		time.Sleep(500 * time.Millisecond)
 
-		_, err := td.CallRPC("generate", []interface{}{1})
+		_, err := td.CallRPC(td.Ctx, "generate", []interface{}{1})
 		require.NoError(t, err)
 		err = waitForSvNode(t, svNodeRPCURL, "blocks", float64(i))
 		require.NoError(t, err)

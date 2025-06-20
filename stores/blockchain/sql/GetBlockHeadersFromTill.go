@@ -33,16 +33,16 @@ import (
 // handling chain reorganizations.
 //
 // The implementation follows these key steps:
-// 1. First retrieves metadata for both the starting and ending blocks to determine
-//    the expected number of headers in the sequence
-// 2. Uses a recursive SQL Common Table Expression (CTE) to efficiently traverse the
-//    blockchain structure between the specified blocks
-// 3. The query follows parent-child relationships between blocks, starting from the
-//    ending block and traversing backward until reaching the starting block
-// 4. For each block in the sequence, constructs both a BlockHeader object containing
-//    the core consensus fields and a BlockHeaderMeta object with additional metadata
-// 5. Validates that the sequence forms a continuous chain by checking that the last
-//    header in the result matches the expected starting block
+//  1. First retrieves metadata for both the starting and ending blocks to determine
+//     the expected number of headers in the sequence
+//  2. Uses a recursive SQL Common Table Expression (CTE) to efficiently traverse the
+//     blockchain structure between the specified blocks
+//  3. The query follows parent-child relationships between blocks, starting from the
+//     ending block and traversing backward until reaching the starting block
+//  4. For each block in the sequence, constructs both a BlockHeader object containing
+//     the core consensus fields and a BlockHeaderMeta object with additional metadata
+//  5. Validates that the sequence forms a continuous chain by checking that the last
+//     header in the result matches the expected starting block
 //
 // The headers are returned in descending height order (newest to oldest), which is
 // consistent with Bitcoin's blockchain traversal convention where chains are typically
@@ -58,11 +58,11 @@ import (
 //     the specified blocks, ordered from newest to oldest
 //   - []*model.BlockHeaderMeta: Slice of metadata for the corresponding block headers
 //   - error: Any error encountered during retrieval, specifically:
-//     - BlockNotFoundError if either the starting or ending block doesn't exist
-//     - StorageError for database access or query execution errors
-//     - ProcessingError if the headers don't form a continuous chain or during header reconstruction
+//   - BlockNotFoundError if either the starting or ending block doesn't exist
+//   - StorageError for database access or query execution errors
+//   - ProcessingError if the headers don't form a continuous chain or during header reconstruction
 func (s *SQL) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeaders",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeaders",
 		tracing.WithLogMessage(s.logger, "[GetBlockHeadersFromTill] called for %s -> %s", blockHashFrom.String(), blockHashTill.String()),
 	)
 	defer deferFn()

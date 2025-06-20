@@ -428,7 +428,7 @@ func (repo *Repository) GetSubtreeDataReaderFromBlockPersister(ctx context.Conte
 //   - *util.Subtree: Deserialized subtree structure
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error) {
-	ctx, _, _ = tracing.StartTracing(ctx, "Repository:GetSubtree",
+	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtree",
 		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
 	)
 

@@ -50,10 +50,10 @@ import (
 //   - []*model.BlockHeader: Slice of block headers within the specified height range
 //   - []*model.BlockHeaderMeta: Slice of metadata for the corresponding block headers
 //   - error: Any error encountered during retrieval, specifically:
-//     - StorageError for database access or query execution errors
-//     - nil if the operation was successful (even if no headers were found)
+//   - StorageError for database access or query execution errors
+//   - nil if the operation was successful (even if no headers were found)
 func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeadersByHeight")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeadersByHeight")
 	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)

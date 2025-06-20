@@ -4,11 +4,135 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
+
+func TestUTracer_WithError(t *testing.T) {
+	gocore.SetInfo("name", "v0.1.2b", "76b9cdd7e5ff85b62f6fec6cc20cfe02b4a12c17")
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.TracingSampleRate = 1.0
+
+	err := InitTracer(tSettings)
+	require.NoError(t, err)
+
+	defer func() {
+		err := ShutdownTracer(context.Background())
+		require.NoError(t, err)
+	}()
+
+	logger := newLineLogger()
+
+	tracer := Tracer("test-service")
+
+	// Start span
+	_, _, endFn := tracer.Start(context.Background(), "TestOperationWithError",
+		WithLogMessage(logger, "Processing operation"),
+	)
+
+	// Simulate error
+	testErr := errors.NewProcessingError("test error occurred")
+
+	// End with error
+	endFn(testErr)
+
+	// Verify error logging
+	assert.Contains(t, logger.lastLog, "Processing operation DONE in")
+	assert.Contains(t, logger.lastLog, "with error: PROCESSING (4): test error occurred")
+}
+
+func TestUTracer_ChildSpans(t *testing.T) {
+	gocore.SetInfo("name", "v0.1.2b", "76b9cdd7e5ff85b62f6fec6cc20cfe02b4a12c17")
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.TracingSampleRate = 1.0
+
+	err := InitTracer(tSettings)
+	require.NoError(t, err)
+
+	defer func() {
+		err := ShutdownTracer(context.Background())
+		require.NoError(t, err)
+	}()
+
+	tracer := Tracer("test-service", nil)
+
+	// Start parent span
+	ctx, parentSpan, endParent := tracer.Start(
+		context.Background(),
+		"ParentOperation",
+		WithTag("TXID", "d286fcdf58754b59691528cf857850d47ed529608b0a6fd8da5317303beffe8b"),
+	)
+
+	// Start child span
+	_, childSpan, endChild1 := tracer.Start(ctx, "ChildOperation",
+		WithTag("child.id", "child-1"),
+	)
+
+	// Verify child has parent's stat as parent
+	assert.NotNil(t, childSpan)
+	assert.NotNil(t, parentSpan)
+
+	// End child
+	endChild1()
+
+	// Start another child
+	_, _, endChild2 := tracer.Start(ctx, "ChildOperation2")
+	endChild2()
+
+	// End parent
+	endParent()
+}
+
+func TestSimpleTracing(t *testing.T) {
+	// Initialize tracer
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.TracingSampleRate = 1.0
+
+	err := InitTracer(tSettings)
+	require.NoError(t, err)
+
+	defer func() {
+		err := ShutdownTracer(context.Background())
+		require.NoError(t, err)
+	}()
+
+	logger := ulogger.NewVerboseTestLogger(t)
+
+	tracer := Tracer("test-service")
+
+	ctx, span, endFn := tracer.Start(
+		context.Background(),
+		"operation 1",
+		WithTag("foo", "bar"),
+		WithLogMessage(logger, "Starting operation 1"),
+	)
+
+	time.Sleep(1 * time.Second)
+
+	_, _, childEndFn := tracer.Start(ctx, "operation 2")
+
+	time.Sleep(1 * time.Second)
+
+	childEndFn()
+
+	span.AddEvent("bang", trace.WithAttributes(attribute.String("foo", "bar")))
+
+	time.Sleep(1 * time.Second)
+
+	endFn()
+
+	time.Sleep(5 * time.Second)
+}
 
 type lineLogger struct {
 	lastLog string
@@ -22,6 +146,7 @@ func (l *lineLogger) New(service string, options ...ulogger.Option) ulogger.Logg
 	return nil
 }
 func (l *lineLogger) Duplicate(options ...ulogger.Option) ulogger.Logger { return l }
+
 func (l *lineLogger) LogLevel() int {
 	return 0
 }
@@ -49,58 +174,4 @@ func (l *lineLogger) Fatalf(format string, args ...interface{}) {
 
 func (l *lineLogger) log(_ string, format string, args ...interface{}) {
 	l.lastLog = fmt.Sprintf(format, args...)
-}
-
-func TestTraceing(t *testing.T) {
-	logger := newLineLogger()
-
-	_, _, deferFn := StartTracing(
-		context.Background(),
-		"TestTracing",
-		WithLogMessage(
-			logger,
-			"%s %s",
-			"hello",
-			"world",
-		),
-	)
-
-	assert.Equal(t, "hello world", logger.lastLog)
-
-	deferFn()
-
-	assert.Contains(t, logger.lastLog, "hello world DONE in")
-}
-
-func TestStartTracingWithError(t *testing.T) {
-	logger := newLineLogger()
-
-	err := func() (err error) {
-		_, _, deferFn := StartTracing(context.Background(), "TestTracing", WithLogMessage(logger, "test"))
-		defer deferFn(err)
-
-		return errors.NewProcessingError("test error")
-	}()
-
-	assert.NotNil(t, err)
-	t.Log(logger.lastLog)
-	assert.Contains(t, logger.lastLog, "test DONE in")
-}
-
-func TestStartTracingWithErrorDeferred(t *testing.T) {
-	logger := newLineLogger()
-
-	err := func() (err error) {
-		_, _, deferFn := StartTracing(context.Background(), "TestTracing", WithLogMessage(logger, "test"))
-		defer func() {
-			deferFn(err)
-		}()
-
-		return errors.NewProcessingError("test error")
-	}()
-
-	assert.NotNil(t, err)
-	assert.Contains(t, logger.lastLog, "test error")
-	assert.Contains(t, logger.lastLog, "test DONE in")
-	assert.Contains(t, logger.lastLog, "with error")
 }

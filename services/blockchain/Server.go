@@ -257,7 +257,7 @@ func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, strin
 // - HealthResponse with current service status, human-readable details, and timestamp
 // - Error if the health check fails unexpectedly (wrapped for gRPC transmission)
 func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "HealthGRPC",
 		tracing.WithParentStat(b.stats),
 		tracing.WithCounter(prometheusBlockchainHealth),
 		tracing.WithDebugLogMessage(b.logger, "[HealthGRPC] called"),
@@ -627,7 +627,7 @@ func (b *Blockchain) Stop(_ context.Context) error {
 // - Empty response on success
 // - Error if the block addition fails (wrapped for GRPC transmission)
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "AddBlock",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "AddBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainAddBlock),
 		tracing.WithDebugLogMessage(b.logger, "[AddBlock] called from %s", request.PeerId),
@@ -735,7 +735,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 // - Complete block data in API response format on success
 // - Error if block retrieval fails (wrapped for GRPC transmission)
 func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlock",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlock),
 		tracing.WithDebugLogMessage(b.logger, "[GetBlock] called for %s", utils.ReverseAndHexEncodeSlice(request.Hash)),
@@ -775,7 +775,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 
 // GetBlocks retrieves multiple blocks starting from a specific hash.
 func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlocksRequest) (*blockchain_api.GetBlocksResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlocks",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocks",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
 		tracing.WithLogMessage(b.logger, "[GetBlocks] called for %s", utils.ReverseAndHexEncodeSlice(req.Hash)),
@@ -810,7 +810,7 @@ func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlock
 
 // GetBlockByHeight retrieves a block at a specific height in the blockchain.
 func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_api.GetBlockByHeightRequest) (*blockchain_api.GetBlockResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockByHeight",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockByHeight",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlock),
 		tracing.WithLogMessage(b.logger, "[GetBlockByHeight] called for %d", request.Height),
@@ -845,7 +845,7 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 
 // GetBlockByID retrieves a block by its ID.
 func (b *Blockchain) GetBlockByID(ctx context.Context, request *blockchain_api.GetBlockByIDRequest) (*blockchain_api.GetBlockResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockByHeight",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockByHeight",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlock),
 		tracing.WithLogMessage(b.logger, "[GetBlockByHeight] called for %d", request.Id),
@@ -880,7 +880,7 @@ func (b *Blockchain) GetBlockByID(ctx context.Context, request *blockchain_api.G
 
 // GetBlockStats retrieves statistical information about the blockchain.
 func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockStats",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockStats",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockStats),
 	)
@@ -893,7 +893,7 @@ func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*mode
 
 // GetBlockGraphData retrieves data points for blockchain visualization.
 func (b *Blockchain) GetBlockGraphData(ctx context.Context, req *blockchain_api.GetBlockGraphDataRequest) (*model.BlockDataPoints, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockGraphData",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockGraphData",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockGraphData),
 	)
@@ -906,7 +906,7 @@ func (b *Blockchain) GetBlockGraphData(ctx context.Context, req *blockchain_api.
 
 // GetLastNBlocks retrieves the most recent N blocks from the blockchain.
 func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api.GetLastNBlocksRequest) (*blockchain_api.GetLastNBlocksResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetLastNBlocks",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLastNBlocks",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetLastNBlocks),
 	)
@@ -924,7 +924,7 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 
 // GetLastNInvalidBlocks retrieves the most recent N blocks that have been marked as invalid.
 func (b *Blockchain) GetLastNInvalidBlocks(ctx context.Context, request *blockchain_api.GetLastNInvalidBlocksRequest) (*blockchain_api.GetLastNInvalidBlocksResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetLastNInvalidBlocks",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLastNInvalidBlocks",
 		tracing.WithParentStat(b.stats),
 	)
 	defer deferFn()
@@ -941,7 +941,7 @@ func (b *Blockchain) GetLastNInvalidBlocks(ctx context.Context, request *blockch
 
 // GetSuitableBlock finds a suitable block for mining purposes.
 func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_api.GetSuitableBlockRequest) (*blockchain_api.GetSuitableBlockResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetSuitableBlock",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetSuitableBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetSuitableBlock),
 	)
@@ -959,7 +959,7 @@ func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_a
 
 // GetNextWorkRequired calculates the required proof of work for the next block.
 func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchain_api.GetNextWorkRequiredRequest) (*blockchain_api.GetNextWorkRequiredResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetNextWorkRequired",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetNextWorkRequired",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetNextWorkRequired),
 	)
@@ -1015,7 +1015,7 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 
 // GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specific depth.
 func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockchain_api.GetHashOfAncestorBlockRequest) (*blockchain_api.GetHashOfAncestorBlockResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetHashOfAncestorBlock",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetHashOfAncestorBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetHashOfAncestorBlock),
 	)
@@ -1033,7 +1033,7 @@ func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockc
 
 // GetBlockExists checks if a block with the given hash exists in the blockchain.
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockExists",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockExists",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockExists),
 	)
@@ -1056,7 +1056,7 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 
 // GetBestBlockHeader retrieves the header of the current best block.
 func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.GetBlockHeaderResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBestBlockHeader",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBestBlockHeader",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBestBlockHeader),
 	)
@@ -1081,7 +1081,7 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 
 // CheckBlockIsInCurrentChain verifies if a block is part of the current main chain.
 func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockchain_api.CheckBlockIsCurrentChainRequest) (*blockchain_api.CheckBlockIsCurrentChainResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "CheckBlockIsInCurrentChain",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "CheckBlockIsInCurrentChain",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainCheckBlockIsInCurrentChain),
 	)
@@ -1099,7 +1099,7 @@ func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockc
 
 // GetBlockHeader retrieves the header of a specific block.
 func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.GetBlockHeaderRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBestBlockHeader",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBestBlockHeader",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeader),
 	)
@@ -1128,7 +1128,7 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 
 // GetBlockHeaders retrieves multiple block headers starting from a specific hash.
 func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeaders",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeaders",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
 	)
@@ -1161,7 +1161,7 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 }
 
 func (b *Blockchain) GetBlockHeadersToCommonAncestor(ctx context.Context, req *blockchain_api.GetBlockHeadersToCommonAncestorRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeaders",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeaders",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
 	)
@@ -1206,7 +1206,7 @@ func (b *Blockchain) GetBlockHeadersToCommonAncestor(ctx context.Context, req *b
 
 // GetBlockHeadersFromTill retrieves block headers between two specified blocks.
 func (b *Blockchain) GetBlockHeadersFromTill(ctx context.Context, req *blockchain_api.GetBlockHeadersFromTillRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeadersFromTill",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromTill",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
 	)
@@ -1245,7 +1245,7 @@ func (b *Blockchain) GetBlockHeadersFromTill(ctx context.Context, req *blockchai
 
 // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
 func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersFromHeightRequest) (*blockchain_api.GetBlockHeadersFromHeightResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeadersFromHeight",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromHeight",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeadersFromHeight),
 	)
@@ -1274,7 +1274,7 @@ func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockch
 
 // GetBlockHeadersByHeight retrieves block headers between two specified heights.
 func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersByHeightRequest) (*blockchain_api.GetBlockHeadersByHeightResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeadersByHeight",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersByHeight",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeadersByHeight),
 	)
@@ -1305,9 +1305,10 @@ func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchai
 // It maintains the subscription until the context is cancelled or the client disconnects.
 // The source parameter identifies the subscriber for logging purposes.
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
-	ctx, _, deferFn := tracing.StartTracing(sub.Context(), "Subscribe",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(sub.Context(), "Subscribe",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSubscribe),
+		tracing.WithDebugLogMessage(b.logger, "[Subscribe] called"),
 	)
 	defer deferFn()
 
@@ -1341,9 +1342,10 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 // GetState retrieves a value from the blockchain state storage by its key.
 // It provides access to arbitrary state data stored in the blockchain.
 func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetState",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetState",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetState),
+		tracing.WithDebugLogMessage(b.logger, "[GetState] called"),
 	)
 	defer deferFn()
 
@@ -1360,9 +1362,10 @@ func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateR
 // SetState stores a value in the blockchain state storage with the specified key.
 // It allows storing arbitrary state data in the blockchain.
 func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateRequest) (*emptypb.Empty, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "SetState",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "SetState",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSetState),
+		tracing.WithDebugLogMessage(b.logger, "[SetState] called with state %s", req.Key),
 	)
 	defer deferFn()
 
@@ -1377,9 +1380,10 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 // GetBlockHeaderIDs retrieves block header IDs starting from a specific hash.
 // It returns a list of block IDs for the requested number of headers.
 func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeaderIDsResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeaderIDs",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeaderIDs",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeaderIDs),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlockHeaderIDs] called with start hash %x", request.StartHash),
 	)
 	defer deferFn()
 
@@ -1400,9 +1404,10 @@ func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_
 
 // InvalidateBlock marks a block as invalid in the blockchain.
 func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_api.InvalidateBlockRequest) (*emptypb.Empty, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "InvalidateBlock",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "InvalidateBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainInvalidateBlock),
+		tracing.WithDebugLogMessage(b.logger, "[InvalidateBlock] called with hash %x", request.BlockHash),
 	)
 	defer deferFn()
 
@@ -1432,9 +1437,10 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 
 // RevalidateBlock restores a previously invalidated block.
 func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_api.RevalidateBlockRequest) (*emptypb.Empty, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "RevalidateBlock",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RevalidateBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainRevalidateBlock),
+		tracing.WithDebugLogMessage(b.logger, "[RevalidateBlock] called with hash %x", request.BlockHash),
 	)
 	defer deferFn()
 
@@ -1454,9 +1460,10 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 
 // SendNotification broadcasts a notification to all subscribers.
 func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "RevalidateBlock",
+	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RevalidateBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSendNotification),
+		tracing.WithDebugLogMessage(b.logger, "[SendNotification] called"),
 	)
 	defer deferFn()
 
@@ -1467,9 +1474,10 @@ func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.N
 
 // GetBlockIsMined checks if a block has been mined in the blockchain.
 func (b *Blockchain) GetBlockIsMined(ctx context.Context, req *blockchain_api.GetBlockIsMinedRequest) (*blockchain_api.GetBlockIsMinedResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockIsMined",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockIsMined",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockIsMined),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlockIsMined] called with hash %x", req.BlockHash),
 	)
 	defer deferFn()
 
@@ -1487,9 +1495,10 @@ func (b *Blockchain) GetBlockIsMined(ctx context.Context, req *blockchain_api.Ge
 
 // SetBlockMinedSet marks a block as mined in the blockchain.
 func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.SetBlockMinedSetRequest) (*emptypb.Empty, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "SetBlockMinedSet",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "SetBlockMinedSet",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSetBlockMinedSet),
+		tracing.WithDebugLogMessage(b.logger, "[SetBlockMinedSet] called with hash %x", req.BlockHash),
 	)
 	defer deferFn()
 
@@ -1505,9 +1514,10 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 
 // GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
 func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlocksMinedNotSetResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlocksMinedNotSet",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocksMinedNotSet",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlocksMinedNotSet),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlocksMinedNotSet] called"),
 	)
 	defer deferFn()
 
@@ -1531,9 +1541,10 @@ func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty)
 
 // SetBlockSubtreesSet marks a block's subtrees as set in the blockchain.
 func (b *Blockchain) SetBlockSubtreesSet(ctx context.Context, req *blockchain_api.SetBlockSubtreesSetRequest) (*emptypb.Empty, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "SetBlockSubtreesSet",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "SetBlockSubtreesSet",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSetBlockSubtreesSet),
+		tracing.WithDebugLogMessage(b.logger, "[SetBlockSubtreesSet] called with hash %x", req.BlockHash),
 	)
 	defer deferFn()
 
@@ -1554,9 +1565,10 @@ func (b *Blockchain) SetBlockSubtreesSet(ctx context.Context, req *blockchain_ap
 
 // GetBlocksSubtreesNotSet retrieves blocks whose subtrees haven't been set.
 func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlocksSubtreesNotSetResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlocksSubtreesNotSet",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocksSubtreesNotSet",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlocksSubtreesNotSet),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlocksSubtreesNotSet] called"),
 	)
 	defer deferFn()
 
@@ -1768,9 +1780,10 @@ func (b *Blockchain) Idle(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty
 
 // GetBlockLocator retrieves a block locator for synchronization purposes.
 func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockLocator",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockLocator",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockLocator),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlockLocator] called with hash %x", req.Hash),
 	)
 	defer deferFn()
 
@@ -1779,9 +1792,9 @@ func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.Ge
 		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetBlockLocator] request's hash is not valid", err))
 	}
 
-	blockHeight := req.Height
+	blockHeaderHeight := req.Height
 
-	locatorHashes, err := getBlockLocator(ctx, b.store, blockHeader, blockHeight)
+	locatorHashes, err := getBlockLocator(ctx, b.store, blockHeader, blockHeaderHeight)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewStorageError("[Blockchain][GetBlockLocator] error using blockchain store", err))
 	}
@@ -1796,9 +1809,10 @@ func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.Ge
 
 // LocateBlockHeaders finds block headers using a locator.
 func (b *Blockchain) LocateBlockHeaders(ctx context.Context, request *blockchain_api.LocateBlockHeadersRequest) (*blockchain_api.LocateBlockHeadersResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "LocateBlockHeaders",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "LocateBlockHeaders",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainLocateBlockHeaders),
+		tracing.WithDebugLogMessage(b.logger, "[LocateBlockHeaders] called with %d hashes", len(request.Locator)),
 	)
 	defer deferFn()
 
@@ -2010,7 +2024,7 @@ func (b *Blockchain) SetBlockProcessedAt(ctx context.Context, req *blockchain_ap
 		return nil, errors.NewInvalidArgumentError("invalid block hash", err)
 	}
 
-	b.logger.Debugf("[Blockchain] Setting block processed at timestamp for %s, clear=%v", blockHash, req.Clear)
+	b.logger.Debugf("[Blockchain] Setting block processed at timestamp for %x, clear=%v", blockHash, req.Clear)
 
 	// Check if the block exists
 	exists, err := b.store.GetBlockExists(ctx, blockHash)
@@ -2019,7 +2033,7 @@ func (b *Blockchain) SetBlockProcessedAt(ctx context.Context, req *blockchain_ap
 	}
 
 	if !exists {
-		return nil, errors.NewNotFoundError("block not found: %s", blockHash)
+		return nil, errors.NewNotFoundError("block not found: %x", blockHash)
 	}
 
 	// Update the processed_at timestamp in the database

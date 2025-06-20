@@ -28,7 +28,7 @@ func TestShouldAllowReassign(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{2})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{2})
 	require.NoError(t, err)
 
 	// Generate private keys and addresses for Alice, Bob, and Charles
@@ -60,7 +60,7 @@ func TestShouldAllowReassign(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mine a block and wait for processing
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err)
 
 	throwawayTx := td.CreateTransactionWithOptions(t,
@@ -121,7 +121,7 @@ func TestShouldAllowReassign(t *testing.T) {
 	require.Error(t, err, "Transaction should be rejected since UTXO is not spendable until block 1000")
 
 	// Generate 1000 blocks to reach reassignment height
-	_, err = td.CallRPC("generate", []interface{}{1000})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1000})
 	require.NoError(t, err)
 
 	// Now try spending the reassigned UTXO - should succeed

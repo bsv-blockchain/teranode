@@ -372,7 +372,7 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC("generate", []interface{}{11})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{11})
 	require.NoError(t, err)
 
 	block11, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 11)

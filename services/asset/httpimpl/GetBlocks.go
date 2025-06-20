@@ -99,7 +99,7 @@ import (
 //   - Response is pretty-printed JSON for readability
 //   - When includeOrphans=true, orphaned blocks at the same height are included
 func (h *HTTP) GetBlocks(c echo.Context) error {
-	ctx, _, deferFn := tracing.StartTracing(c.Request().Context(), "GetBlocks_http",
+	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlocks_http",
 		tracing.WithParentStat(AssetStat),
 	)
 

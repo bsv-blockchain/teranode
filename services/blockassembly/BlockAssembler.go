@@ -413,7 +413,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 // Parameters:
 //   - ctx: Context for cancellation
 func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
-	_, _, deferFn := tracing.StartTracing(ctx, "UpdateBestBlock",
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "UpdateBestBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockAssemblerUpdateBestBlock),
 		tracing.WithLogMessage(b.logger, "[UpdateBestBlock] called"),
@@ -940,7 +940,7 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 //   - []*model.Block: Blocks to move up
 //   - error: Any error encountered
 func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.BlockHeader, height uint32) ([]*model.Block, []*model.Block, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "getReorgBlocks",
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "getReorgBlocks",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockAssemblerGetReorgBlocksDuration),
 		tracing.WithLogMessage(b.logger, "[getReorgBlocks] called"),

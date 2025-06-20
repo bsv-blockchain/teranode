@@ -16,7 +16,10 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	batcher "github.com/bitcoin-sv/teranode/util/batcher"
+	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -33,6 +36,7 @@ import (
 // or with an error), the result is sent through the done channel, allowing the original
 // caller to continue execution with proper error handling.
 type batchItem struct {
+	ctx  context.Context
 	tx   *bt.Tx     // Bitcoin transaction to process
 	done chan error // Channel to signal completion and return any error
 }
@@ -153,13 +157,22 @@ func (c *Client) Stop() {
 // Returns:
 //   - error: Error if transaction processing fails
 func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
+	ctx, _, endSpan := tracing.Tracer("PropagationClient").Start(ctx, "ProcessTransaction", tracing.WithTag("tx", tx.TxID()))
+	defer endSpan()
+
 	if c.settings.Propagation.AlwaysUseHTTP {
 		return c.sendTransactionViaHTTP(ctx, tx)
 	}
 
 	if c.batchSize > 0 {
 		done := make(chan error)
-		c.batcher.Put(&batchItem{tx: tx, done: done})
+
+		c.batcher.Put(&batchItem{
+			ctx:  ctx,
+			tx:   tx,
+			done: done,
+		})
+
 		err := <-done
 
 		return err
@@ -328,7 +341,7 @@ func (c *Client) handleBatchResponse(batch []*batchItem, response *propagation_a
 //
 // Returns:
 //   - error: Error if the HTTP batch processing fails
-func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, txs [][]byte) error {
+func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, items []*propagation_api.BatchTransactionItem) error {
 	// Create HTTP client for large batch
 	client := &http.Client{
 		Timeout: 60 * time.Second, // Longer timeout for batch
@@ -336,8 +349,8 @@ func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, tx
 
 	// Combine all transactions into a single payload for the /txs endpoint
 	var combinedTxs bytes.Buffer
-	for _, txBytes := range txs {
-		combinedTxs.Write(txBytes)
+	for _, item := range items {
+		combinedTxs.Write(item.Tx)
 	}
 
 	// Send batch to validator /txs endpoint
@@ -403,18 +416,28 @@ func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, tx
 //   - error: Error if batch processing fails at the transport level
 func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem) error {
 	// Create a slice of raw transaction bytes for the gRPC request
-	txs := make([][]byte, len(batch))
+	items := make([]*propagation_api.BatchTransactionItem, len(batch))
+
 	for i, item := range batch {
-		txs[i] = item.tx.ExtendedBytes()
+		// Serialize the trace context for this transaction
+		traceContext := make(map[string]string)
+
+		prop := otel.GetTextMapPropagator()
+		prop.Inject(item.ctx, propagation.MapCarrier(traceContext))
+
+		items[i] = &propagation_api.BatchTransactionItem{
+			Tx:           item.tx.ExtendedBytes(),
+			TraceContext: traceContext,
+		}
 	}
 
 	if c.settings.Propagation.AlwaysUseHTTP {
-		return c.processBatchViaHTTP(ctx, batch, txs)
+		return c.processBatchViaHTTP(ctx, batch, items)
 	}
 
 	// First, try to process the batch using gRPC
 	response, err := c.client.ProcessTransactionBatch(ctx, &propagation_api.ProcessTransactionBatchRequest{
-		Tx: txs,
+		Items: items,
 	})
 
 	// If successful, handle the response and return
@@ -430,8 +453,7 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 		c.logger.Warnf("[ProcessTransactionBatch] Batch exceeds gRPC message limit, falling back to validator /txs endpoint: %s",
 			st.Message())
 
-		// Process the batch via HTTP
-		return c.processBatchViaHTTP(ctx, batch, txs)
+		return c.processBatchViaHTTP(ctx, batch, items)
 	}
 
 	// Any other gRPC error - unwrap it according to our error handling rule

@@ -581,7 +581,7 @@ func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlock
 }
 
 func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, isLegacySync bool) error {
-	_, _, deferFn := tracing.StartTracing(context.Background(), "reset",
+	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(context.Background(), "reset",
 		tracing.WithParentStat(stp.stats),
 		tracing.WithHistogram(prometheusSubtreeProcessorReset),
 		tracing.WithLogMessage(stp.logger, "[SubtreeProcessor][reset][%s] Resetting subtree processor with %d moveBackBlocks and %d moveForwardBlocks", len(moveBackBlocks), len(moveForwardBlocks)),
@@ -986,7 +986,7 @@ func (stp *SubtreeProcessor) Remove(hash chainhash.Hash) error {
 }
 
 func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chainhash.Hash) error {
-	_, _, deferFn := tracing.StartTracing(ctx, "removeTxFromSubtrees",
+	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "removeTxFromSubtrees",
 		tracing.WithParentStat(stp.stats),
 		tracing.WithHistogram(prometheusSubtreeProcessorRemoveTx),
 		tracing.WithLogMessage(stp.logger, "[SubtreeProcessor][removeTxFromSubtrees][%s] removing transaction from subtrees", hash),
@@ -1639,7 +1639,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 		return errors.NewProcessingError("[moveForwardBlock] you must pass in a block to moveForwardBlock")
 	}
 
-	_, _, deferFn := tracing.StartTracing(ctx, "moveForwardBlock",
+	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "moveForwardBlock",
 		tracing.WithParentStat(stp.stats),
 		tracing.WithCounter(prometheusSubtreeProcessorMoveForwardBlock),
 		tracing.WithHistogram(prometheusSubtreeProcessorMoveForwardBlockDuration),

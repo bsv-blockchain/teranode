@@ -51,9 +51,9 @@ import (
 // Returns:
 //   - []*model.Block: An array of complete block objects whose subtrees need to be processed
 //   - error: Any error encountered during retrieval, specifically:
-//     - StorageError for database errors or processing failures
+//   - StorageError for database errors or processing failures
 func (s *SQL) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlocksSubtreesNotSet")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlocksSubtreesNotSet")
 	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -109,8 +109,8 @@ func (s *SQL) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, erro
 // Returns:
 //   - []*model.Block: An array of complete block objects reconstructed from the query results
 //   - error: Any error encountered during query execution or block reconstruction, specifically:
-//     - Database errors from query execution
-//     - ProcessingError for data conversion failures
+//   - Database errors from query execution
+//   - ProcessingError for data conversion failures
 func (s *SQL) getBlocksWithQuery(ctx context.Context, q string) ([]*model.Block, error) {
 	rows, err := s.db.QueryContext(ctx, q)
 	if err != nil {

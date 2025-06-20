@@ -6,17 +6,17 @@
 // hash. Block headers are lightweight representations of blocks containing only the metadata
 // without the full transaction data. In Bitcoin's design, block headers serve as cryptographic
 // links in the blockchain, containing the previous block's hash to form the chain structure.
-// 
+//
 // The implementation employs a multi-tiered approach to optimize performance:
 //
-// 1. An in-memory cache layer for frequently accessed headers, dramatically reducing
-//    database load for common lookup patterns such as recent blocks and chain tips
+//  1. An in-memory cache layer for frequently accessed headers, dramatically reducing
+//     database load for common lookup patterns such as recent blocks and chain tips
 //
-// 2. Efficient SQL queries optimized for header retrieval by hash, which is a fundamental
-//    operation in blockchain synchronization and validation
+//  2. Efficient SQL queries optimized for header retrieval by hash, which is a fundamental
+//     operation in blockchain synchronization and validation
 //
-// 3. Comprehensive metadata extraction including height, transaction count, and cumulative
-//    proof-of-work (chainwork) to support consensus operations
+//  3. Comprehensive metadata extraction including height, transaction count, and cumulative
+//     proof-of-work (chainwork) to support consensus operations
 //
 // 4. Miner identification through coinbase transaction parsing when available
 //
@@ -49,20 +49,20 @@ import (
 // The implementation follows a tiered retrieval strategy for optimal performance:
 //
 // 1. Cache Layer: First checks the in-memory blocksCache for the requested header
-//    - This cache is populated during block storage and previous retrievals
-//    - Provides O(1) access time for frequently accessed headers
-//    - Particularly effective for recent blocks and chain tips
-//    - No cache expiration policy is applied as header data is immutable
+//   - This cache is populated during block storage and previous retrievals
+//   - Provides O(1) access time for frequently accessed headers
+//   - Particularly effective for recent blocks and chain tips
+//   - No cache expiration policy is applied as header data is immutable
 //
 // 2. Database Layer: If not found in cache, executes an optimized SQL query
-//    - Retrieves all header fields plus additional metadata in a single query
-//    - Uses parameterized queries to prevent SQL injection
-//    - Employs indexed lookups by block hash for efficient retrieval
+//   - Retrieves all header fields plus additional metadata in a single query
+//   - Uses parameterized queries to prevent SQL injection
+//   - Employs indexed lookups by block hash for efficient retrieval
 //
 // 3. Reconstruction Phase: Converts raw database values to appropriate types
-//    - Handles binary-to-structured data conversions (hashes, difficulty bits)
-//    - Extracts miner information from coinbase transaction when available
-//    - Populates both header and metadata objects
+//   - Handles binary-to-structured data conversions (hashes, difficulty bits)
+//   - Extracts miner information from coinbase transaction when available
+//   - Populates both header and metadata objects
 //
 // This method is critical for multiple blockchain operations:
 //   - Block validation: Verifying the integrity of new blocks
@@ -79,17 +79,17 @@ import (
 //   - *model.BlockHeader: The complete block header data including version, previous block hash,
 //     merkle root, timestamp, difficulty target (nBits), and nonce
 //   - *model.BlockHeaderMeta: Extended metadata about the block including:
-//     - Height: The block's position in the blockchain
-//     - TxCount: Number of transactions in the block
-//     - ChainWork: Cumulative proof-of-work up to this block (critical for consensus)
-//     - SizeInBytes: Total size of the block
-//     - Miner: Identification of the miner who produced the block (when available)
+//   - Height: The block's position in the blockchain
+//   - TxCount: Number of transactions in the block
+//   - ChainWork: Cumulative proof-of-work up to this block (critical for consensus)
+//   - SizeInBytes: Total size of the block
+//   - Miner: Identification of the miner who produced the block (when available)
 //   - error: Any error encountered during retrieval, specifically:
-//     - BlockNotFoundError if the block does not exist in the database
-//     - StorageError for database connection or query execution errors
-//     - ProcessingError for data conversion or parsing errors
+//   - BlockNotFoundError if the block does not exist in the database
+//   - StorageError for database connection or query execution errors
+//   - ProcessingError for data conversion or parsing errors
 func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeader")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeader")
 	defer deferFn()
 
 	header, meta := s.blocksCache.GetBlockHeader(*blockHash)

@@ -83,7 +83,7 @@ import (
 //   - StorageError for database access or query execution errors
 //   - ProcessingError for errors during block reconstruction
 func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockByHeight")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockByHeight")
 	defer deferFn()
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds

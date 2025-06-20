@@ -46,10 +46,10 @@ import (
 //   - *model.Block: The complete block at the specified height in the specified chain, if found
 //   - bool: Whether the block is marked as invalid in the database
 //   - error: Any error encountered during retrieval, specifically:
-//     - BlockNotFoundError if no block exists at the specified height in the specified chain
-//     - StorageError for database or processing errors
+//   - BlockNotFoundError if no block exists at the specified height in the specified chain
+//   - StorageError for database or processing errors
 func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (block *model.Block, invalid bool, err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockInChainByHeightHash")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockInChainByHeightHash")
 	defer deferFn()
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds

@@ -41,7 +41,8 @@ func TestUtxoStore(t *testing.T) {
 		td.Stop(t)
 	})
 
-	td.CallRPC("generate", []interface{}{101})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{101})
+	require.NoError(t, err)
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)

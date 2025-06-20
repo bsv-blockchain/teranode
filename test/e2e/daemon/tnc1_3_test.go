@@ -32,7 +32,7 @@ func TestCheckHashPrevBlockCandidate(t *testing.T) {
 	defer td.Stop(t)
 
 	// Mine starting blocks
-	_, err := td.CallRPC("generate", []interface{}{101})
+	_, err := td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to mine blocks")
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(ctx, 1)
@@ -42,7 +42,7 @@ func TestCheckHashPrevBlockCandidate(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mine 1 block
-	_, err = td.CallRPC("generate", []interface{}{1})
+	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to mine blocks")
 
 	// Get mining candidate with no additional transactions
@@ -75,7 +75,7 @@ func TestCoinbaseTXAmount(t *testing.T) {
 	defer td.Stop(t)
 
 	// Mine starting blocks
-	_, err := td.CallRPC("generate", []interface{}{101})
+	_, err := td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to mine blocks")
 
 	// Get mining candidate with no additional transactions
@@ -113,7 +113,7 @@ func TestCoinbaseTXAmount2(t *testing.T) {
 	defer td.Stop(t)
 
 	// Mine starting blocks
-	_, err := td.CallRPC("generate", []interface{}{101})
+	_, err := td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err, "Failed to mine blocks")
 
 	block, errblock := td.BlockchainClient.GetBlockByHeight(ctx, 1)

@@ -349,7 +349,7 @@ func (b *Block) String() string {
 
 func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32],
 	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "Block:Valid",
+	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
 		tracing.WithHistogram(prometheusBlockValid),
 		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
 	)
@@ -539,7 +539,7 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 // Returns:
 // - error: if a duplicate transaction is found or if there is an error adding the transaction to the txMap
 func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
-	_, _, deferFn := tracing.StartTracing(ctx, "Block:checkDuplicateTransactions")
+	_, _, deferFn := tracing.Tracer("block").Start(ctx, "checkDuplicateTransactions")
 	defer deferFn()
 
 	concurrency := b.settings.Block.CheckDuplicateTransactionsConcurrency
@@ -962,7 +962,7 @@ func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeS
 }
 
 func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, fallbackGetFunc func(subtreeHash chainhash.Hash) error) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "Block:GetAndValidateSubtrees",
+	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "GetAndValidateSubtrees",
 		tracing.WithHistogram(prometheusBlockGetAndValidateSubtrees),
 	)
 	defer deferFn()
@@ -1106,7 +1106,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		return errors.NewStorageError("[BLOCK][%s] number of subtrees does not match number of subtree slices, have you called block.GetAndValidateSubtrees()?", b.String())
 	}
 
-	_, _, deferFn := tracing.StartTracing(ctx, "Block:CheckMerkleRoot",
+	_, _, deferFn := tracing.Tracer("block").Start(ctx, "CheckMerkleRoot",
 		tracing.WithHistogram(prometheusBlockCheckMerkleRoot),
 	)
 	defer deferFn()

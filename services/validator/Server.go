@@ -374,7 +374,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 //   - *validator_api.ValidateTransactionResponse: Validation results with status and details
 //   - error: Detailed validation error if validation fails, nil on success
 func (v *Server) validateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "ValidateTransaction",
+	ctx, _, deferFn := tracing.Tracer("validator").Start(ctx, "ValidateTransaction",
 		tracing.WithParentStat(v.stats),
 		tracing.WithHistogram(prometheusValidateTransaction),
 		tracing.WithDebugLogMessage(v.logger, "[ValidateTransaction] called"),
@@ -459,7 +459,7 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 //   - Error details for each transaction
 //   - error: Batch-level errors (rare, typically nil as transaction-specific errors are in the response)
 func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "ValidateTransactionBatch",
+	ctx, _, deferFn := tracing.Tracer("validator").Start(ctx, "ValidateTransactionBatch",
 		tracing.WithParentStat(v.stats),
 		tracing.WithHistogram(prometheusTransactionValidateBatch),
 		tracing.WithDebugLogMessage(v.logger, "[ValidateTransactionBatch] called for %d transactions", len(req.GetTransactions())),
@@ -512,7 +512,7 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 //   - *validator_api.GetBlockHeightResponse: Response containing the current block height
 //   - error: Returns Internal error if block height is 0 or cannot be retrieved
 func (v *Server) GetBlockHeight(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.GetBlockHeightResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeight",
+	_, _, deferFn := tracing.Tracer("validator").Start(ctx, "GetBlockHeight",
 		tracing.WithParentStat(v.stats),
 		tracing.WithDebugLogMessage(v.logger, "[GetBlockHeight] called"),
 	)
@@ -546,7 +546,7 @@ func (v *Server) GetBlockHeight(ctx context.Context, _ *validator_api.EmptyMessa
 //   - *validator_api.GetMedianBlockTimeResponse: Response containing the median block time as Unix timestamp
 //   - error: Returns Internal error if median time is 0 or cannot be retrieved
 func (v *Server) GetMedianBlockTime(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.GetMedianBlockTimeResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "GetMedianBlockTime",
+	_, _, deferFn := tracing.Tracer("validator").Start(ctx, "GetMedianBlockTime",
 		tracing.WithParentStat(v.stats),
 		tracing.WithDebugLogMessage(v.logger, "[GetMedianBlockTime] called"),
 	)

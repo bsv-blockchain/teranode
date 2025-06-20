@@ -42,7 +42,6 @@ import (
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/go-utils/expiringmap"
-	"github.com/ordishs/gocore"
 )
 
 // S3 implements the blob.Store interface using Amazon S3 or compatible object storage services.
@@ -59,11 +58,11 @@ import (
 // streaming operations for large blobs.
 type S3 struct {
 	// client is the S3 client interface for interacting with the S3 service
-	client  S3Client
+	client S3Client
 	// bucket is the name of the S3 bucket where blobs are stored
-	bucket  string
+	bucket string
 	// logger provides structured logging for store operations
-	logger  ulogger.Logger
+	logger ulogger.Logger
 	// options contains configuration options for the store
 	options *options.Options
 }
@@ -206,13 +205,8 @@ func (g *S3) Health(ctx context.Context, checkLiveness bool) (int, string, error
 // Returns:
 //   - error: Always returns nil
 func (g *S3) Close(_ context.Context) error {
-	start := gocore.CurrentTime()
-	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("Close").AddTime(start)
-	}()
-
-	traceSpan := tracing.Start(context.Background(), "s3:Close")
-	defer traceSpan.Finish()
+	_, _, endTrace := tracing.Tracer("s3").Start(context.Background(), "Close")
+	defer endTrace()
 
 	return nil
 }
@@ -232,15 +226,13 @@ func (g *S3) Close(_ context.Context) error {
 // Returns:
 //   - error: Any error that occurred during the storage operation
 func (g *S3) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
-	start := gocore.CurrentTime()
+	_, _, endTrace := tracing.Tracer("s3").Start(ctx, "SetFromReader")
+
 	defer func() {
 		_ = reader.Close()
 
-		gocore.NewStat("prop_store_s3", true).NewStat("SetFromReader").AddTime(start)
+		endTrace()
 	}()
-
-	traceSpan := tracing.Start(ctx, "s3:SetFromReader")
-	defer traceSpan.Finish()
 
 	merged := options.MergeOptions(g.options, opts)
 
@@ -281,8 +273,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, fileType fileformat.
 	// uploadInput.Expires = &expires
 	// }
 
-	if _, err := g.client.Upload(traceSpan.Ctx, uploadInput); err != nil {
-		traceSpan.RecordError(err)
+	if _, err := g.client.Upload(ctx, uploadInput); err != nil {
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data from reader", g.bucket, objectKey, err)
 	}
 
@@ -290,17 +281,22 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, fileType fileformat.
 }
 
 func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
-	start := gocore.CurrentTime()
-	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("Set").AddTime(start)
-	}()
-
-	traceSpan := tracing.Start(ctx, "s3:Set")
-	defer traceSpan.Finish()
+	ctx, _, endSpan := tracing.Tracer("s3").Start(ctx, "s3:Set")
+	defer endSpan()
 
 	merged := options.MergeOptions(g.options, opts)
 
 	objectKey := g.getObjectKey(key, fileType, merged)
+
+	if !merged.AllowOverwrite {
+		// Check if the object already exists
+		if _, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: aws.String(g.bucket),
+			Key:    objectKey,
+		}); err == nil {
+			return errors.NewBlobAlreadyExistsError("[S3][Set] [%s] already exists in store", objectKey)
+		}
+	}
 
 	if !merged.AllowOverwrite {
 		// Check if the object already exists
@@ -335,8 +331,7 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	// uploadInput.Expires = &expires
 	// }
 
-	if _, err := g.client.Upload(traceSpan.Ctx, uploadInput); err != nil {
-		traceSpan.RecordError(err)
+	if _, err := g.client.Upload(ctx, uploadInput); err != nil {
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data", g.bucket, objectKey, err)
 	}
 
@@ -346,45 +341,30 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 }
 
 func (g *S3) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error {
-	start := gocore.CurrentTime()
-	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("SetDAH").AddTime(start)
-	}()
-
-	traceSpan := tracing.Start(ctx, "s3:SetDAH")
-	defer traceSpan.Finish()
+	_, _, endSpan := tracing.Tracer("s3").Start(ctx, "s3:SetDAH")
+	defer endSpan()
 
 	// TODO implement
 	return nil
 }
 
 func (g *S3) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("GetDAH").AddTime(start)
-	}()
-
-	traceSpan := tracing.Start(ctx, "s3:GetDAH")
-	defer traceSpan.Finish()
+	_, _, endSpan := tracing.Tracer("s3").Start(ctx, "s3:GetDAH")
+	defer endSpan()
 
 	// TODO implement
 	return 0, nil
 }
 
 func (g *S3) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("GetIoReader").AddTime(start)
-	}()
-
-	traceSpan := tracing.Start(ctx, "s3:Get")
-	defer traceSpan.Finish()
+	ctx, _, endSpan := tracing.Tracer("s3").Start(ctx, "s3:GetIoReader")
+	defer endSpan()
 
 	merged := options.MergeOptions(g.options, opts)
 
 	objectKey := g.getObjectKey(key, fileType, merged)
 
-	result, err := g.client.GetObject(traceSpan.Ctx, &s3.GetObjectInput{
+	result, err := g.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})
@@ -410,13 +390,8 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, fileType fileformat.Fi
 }
 
 func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("Get").AddTime(start)
-	}()
-
-	traceSpan := tracing.Start(ctx, "s3:Get")
-	defer traceSpan.Finish()
+	ctx, span, endSpan := tracing.Tracer("s3").Start(ctx, "s3:Get")
+	defer endSpan()
 
 	merged := options.MergeOptions(g.options, opts)
 
@@ -433,7 +408,7 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	}
 
 	buf := manager.NewWriteAtBuffer([]byte{})
-	_, err := g.client.Download(traceSpan.Ctx, buf,
+	_, err := g.client.Download(ctx, buf,
 		&s3.GetObjectInput{
 			Bucket: aws.String(g.bucket),
 			Key:    objectKey,
@@ -441,12 +416,14 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") {
+			span.RecordError(errors.ErrNotFound)
 			return nil, errors.ErrNotFound
 		}
 
-		traceSpan.RecordError(err)
+		err = errors.NewStorageError("[S3] [%s/%s] failed to get data", g.bucket, objectKey, err)
+		span.RecordError(err)
 
-		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get data", g.bucket, objectKey, err)
+		return nil, err
 	}
 
 	// Remove header and footer from the downloaded content
@@ -455,7 +432,10 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	// Skip the header bytes
 	header, err := fileformat.ReadHeaderFromBytes(content)
 	if err != nil {
-		return nil, errors.NewStorageError("[S3] [%s/%s] failed to read header", g.bucket, objectKey, err)
+		err = errors.NewStorageError("[S3] [%s/%s] failed to read header", g.bucket, objectKey, err)
+		span.RecordError(err)
+
+		return nil, err
 	}
 
 	content = content[len(header.Bytes()):]
@@ -466,13 +446,8 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 }
 
 func (g *S3) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("Exists").AddTime(start)
-	}()
-
-	traceSpan := tracing.Start(ctx, "s3:Exists")
-	defer traceSpan.Finish()
+	ctx, span, endSpan := tracing.Tracer("s3").Start(ctx, "s3:Exists")
+	defer endSpan()
 
 	merged := options.MergeOptions(g.options, opts)
 
@@ -484,7 +459,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, fileType fileformat.FileTyp
 		return true, nil
 	}
 
-	_, err := g.client.HeadObject(traceSpan.Ctx, &s3.HeadObjectInput{
+	_, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})
@@ -500,22 +475,18 @@ func (g *S3) Exists(ctx context.Context, key []byte, fileType fileformat.FileTyp
 			return false, nil
 		}
 
-		traceSpan.RecordError(err)
+		err = errors.NewStorageError("[S3] [%s/%s] failed to check whether object exists", g.bucket, objectKey, err)
+		span.RecordError(err)
 
-		return false, errors.NewStorageError("[S3] [%s/%s] failed to check whether object exists", g.bucket, objectKey, err)
+		return false, err
 	}
 
 	return true, nil
 }
 
 func (g *S3) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
-	start := gocore.CurrentTime()
-	defer func() {
-		gocore.NewStat("prop_store_s3", true).NewStat("Del").AddTime(start)
-	}()
-
-	traceSpan := tracing.Start(ctx, "s3:Del")
-	defer traceSpan.Finish()
+	ctx, span, endSpan := tracing.Tracer("s3").Start(ctx, "s3:Del")
+	defer endSpan()
 
 	merged := options.MergeOptions(g.options, opts)
 
@@ -523,13 +494,15 @@ func (g *S3) Del(ctx context.Context, key []byte, fileType fileformat.FileType, 
 
 	cache.Delete(*objectKey)
 
-	_, err := g.client.DeleteObject(traceSpan.Ctx, &s3.DeleteObjectInput{
+	_, err := g.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})
 	if err != nil {
-		traceSpan.RecordError(err)
-		return errors.NewStorageError("[S3] [%s/%s] unable to del data", g.bucket, objectKey, err)
+		err = errors.NewStorageError("[S3] [%s/%s] unable to del data", g.bucket, objectKey, err)
+		span.RecordError(err)
+
+		return err
 	}
 
 	// do we need to wait until we can be sure that the object is deleted?

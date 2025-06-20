@@ -38,7 +38,6 @@ import (
 	"github.com/bitcoin-sv/teranode/test/utils/wait"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -48,6 +47,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
+	"go.opentelemetry.io/otel"
+	otelprop "go.opentelemetry.io/otel/propagation"
 )
 
 const (
@@ -161,14 +162,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.RPC.CacheEnabled = false
 	appSettings.P2P.DHTUsePrivate = true
 
-	if opts.UseTracing {
-		// tracing
-		appSettings.UseOpenTracing = true
-		appSettings.TracingSampleRate = "1" // 100% sampling during the test
-	} else {
-		appSettings.UseOpenTracing = false
-	}
-
 	// Override with test settings...
 	if opts.SettingsOverrideFunc != nil {
 		opts.SettingsOverrideFunc(appSettings)
@@ -230,17 +223,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		t.Logf("Daemon %s started successfully", appSettings.ClientName)
 	case <-time.After(30 * time.Second):
 		t.Fatalf("Daemon %s failed to start within 30s", appSettings.ClientName)
-	}
-
-	if opts.UseTracing {
-		// start tracing after the global tracer has been set
-		_, _, deferFn := tracing.StartTracing(ctx, "NewDoubleSpendTester",
-			tracing.WithLogMessage(logger, "NewDoubleSpendTester"),
-		)
-
-		t.Cleanup(func() {
-			deferFn()
-		})
 	}
 
 	ports := []int{appSettings.HealthCheckPort}
@@ -320,8 +302,8 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 }
 
 // Stop stops the TestDaemon instance and cleans up resources.
-func (td *TestDaemon) Stop(t *testing.T) {
-	if err := td.d.Stop(); err != nil {
+func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
+	if err := td.d.Stop(skipTracerShutdown...); err != nil {
 		t.Errorf("Failed to stop daemon %s: %v", td.Settings.ClientName, err)
 	}
 
@@ -397,6 +379,7 @@ func getPortFromString(address string) int {
 	}
 
 	portString := address[lastColon+1:]
+
 	port, err := strconv.Atoi(portString)
 	if err != nil {
 		return 0
@@ -416,7 +399,7 @@ func getPortFromURL(url *url.URL) int {
 }
 
 // CallRPC calls the RPC method with the given parameters and returns the response as a string.
-func (td *TestDaemon) CallRPC(method string, params []interface{}) (string, error) {
+func (td *TestDaemon) CallRPC(ctx context.Context, method string, params []interface{}) (string, error) {
 	// Create the request payload
 	requestBody, err := json.Marshal(map[string]interface{}{
 		"method": method,
@@ -428,10 +411,10 @@ func (td *TestDaemon) CallRPC(method string, params []interface{}) (string, erro
 		return "", errors.NewProcessingError("failed to marshal request body", err)
 	}
 
-	// Create the HTTP request
+	// Create the HTTP request with context
 	var req *http.Request
 
-	req, err = http.NewRequest("POST", td.rpcURL.String(), bytes.NewBuffer(requestBody))
+	req, err = http.NewRequestWithContext(ctx, "POST", td.rpcURL.String(), bytes.NewBuffer(requestBody))
 	if err != nil {
 		return "", errors.NewProcessingError("failed to create request", err)
 	}
@@ -439,6 +422,9 @@ func (td *TestDaemon) CallRPC(method string, params []interface{}) (string, erro
 	// Set the appropriate headers
 	req.SetBasicAuth("bitcoin", "bitcoin")
 	req.Header.Set("Content-Type", "application/json")
+
+	// Inject OpenTelemetry trace context into HTTP headers
+	otel.GetTextMapPropagator().Inject(ctx, otelprop.HeaderCarrier(req.Header))
 
 	// Perform the request
 	client := &http.Client{}
@@ -719,20 +705,20 @@ func (td *TestDaemon) CreateTransactionWithOptions(t *testing.T, options ...tran
 }
 
 // MineToMaturityAndGetSpendableCoinbaseTx mines blocks to maturity and returns the spendable coinbase transaction.
-func (td *TestDaemon) MineToMaturityAndGetSpendableCoinbaseTx(t *testing.T) *bt.Tx {
-	_, err := td.CallRPC("generate", []any{uint32(td.Settings.ChainCfgParams.CoinbaseMaturity + 1)})
+func (td *TestDaemon) MineToMaturityAndGetSpendableCoinbaseTx(t *testing.T, ctx context.Context) *bt.Tx {
+	_, err := td.CallRPC(ctx, "generate", []any{uint32(td.Settings.ChainCfgParams.CoinbaseMaturity + 1)})
 	require.NoError(t, err)
 
 	var lastBlock *model.Block
 
-	lastBlock, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, uint32(td.Settings.ChainCfgParams.CoinbaseMaturity+1))
+	lastBlock, err = td.BlockchainClient.GetBlockByHeight(ctx, uint32(td.Settings.ChainCfgParams.CoinbaseMaturity+1))
 	require.NoError(t, err)
 
 	td.WaitForBlockHeight(t, lastBlock, 10*time.Second)
 
 	var block1 *model.Block
 
-	block1, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	block1, err = td.BlockchainClient.GetBlockByHeight(ctx, 1)
 	require.NoError(t, err)
 
 	coinbaseTx := block1.CoinbaseTx
@@ -746,7 +732,7 @@ func (td *TestDaemon) MineAndWait(t *testing.T, blockCount uint32) *model.Block 
 	_, meta, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
 	require.NoError(t, err)
 
-	_, err = td.CallRPC("generate", []any{blockCount})
+	_, err = td.CallRPC(td.Ctx, "generate", []any{blockCount})
 	require.NoError(t, err)
 
 	endHeight := meta.Height + blockCount

@@ -70,11 +70,19 @@ message ProcessTransactionRequest {
   bytes tx = 1;
 }
 
+message BatchTransactionItem {
+  // tx contains the raw transaction bytes to process
+  bytes tx = 1;
+  // trace_context contains the serialized OpenTelemetry trace context as key-value pairs
+  // This allows proper span propagation for each transaction in the batch
+  map<string, string> trace_context = 2;
+}
+
 // ProcessTransactionBatchRequest represents a request to process multiple transactions.
 // swagger:model ProcessTransactionRequest
 message ProcessTransactionBatchRequest {
   // tx contains an array of raw transaction bytes to process
-  repeated bytes tx = 1;
+  repeated BatchTransactionItem items = 1;
 }
 
 // ProcessTransactionBatchResponse contains the results of batch transaction processing.

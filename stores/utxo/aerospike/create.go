@@ -75,6 +75,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 )
 
 // Used for NOOP batch operations
@@ -140,7 +141,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		opt(createOptions)
 	}
 
-	_, _, deferFn := tracing.StartTracing(ctx, "aerospike:Create")
+	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "aerospike:Create")
 	defer deferFn()
 
 	txMeta, err := util.TxMetaDataFromTx(tx)
@@ -248,7 +249,10 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 //   - batch: Array of BatchStoreItems to process
 func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 	start := time.Now()
-	ctx, stat, deferFn := tracing.StartTracing(s.ctx, "sendStoreBatch",
+
+	stat := gocore.NewStat("sendStoreBatch")
+
+	ctx, _, deferFn := tracing.Tracer("aerospike").Start(s.ctx, "sendStoreBatch",
 		tracing.WithParentStat(gocoreStat),
 		tracing.WithHistogram(prometheusUtxoCreateBatch),
 	)

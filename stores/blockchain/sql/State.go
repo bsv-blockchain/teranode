@@ -20,7 +20,7 @@ import (
 //   - []byte: The data associated with the key, if found
 //   - error: Any error encountered during retrieval (including when key doesn't exist)
 func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetState")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetState")
 	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -58,7 +58,7 @@ func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
 // Returns:
 //   - error: Any error encountered during the storage operation
 func (s *SQL) SetState(ctx context.Context, key string, data []byte) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:SetState")
+	ctx, _, deferFn := tracing.Tracer("	blockchain").Start(ctx, "sql:SetState")
 	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)

@@ -493,7 +493,7 @@ func hasServices(advertised, desired wire.ServiceFlag) bool {
 // and is used to negotiate the protocol version details as well as kick start
 // the communications.
 func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgReject {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnVersion",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnVersion",
 		tracing.WithHistogram(peerServerMetrics["OnVersion"]),
 		tracing.WithLogMessage(sp.server.logger, "OnVersion from %s", p),
 	)
@@ -580,7 +580,7 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 
 // OnProtoconf is invoked when a peer receives a protoconf bitcoin message.
 func (sp *serverPeer) OnProtoconf(p *peer.Peer, msg *wire.MsgProtoconf) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnProtoconf",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnProtoconf",
 		tracing.WithHistogram(peerServerMetrics["OnProtoconf"]),
 	)
 
@@ -598,7 +598,7 @@ func (sp *serverPeer) OnProtoconf(p *peer.Peer, msg *wire.MsgProtoconf) {
 // pool up to the maximum inventory allowed per message.  When the peer has a
 // bloom filter loaded, the contents are filtered accordingly.
 func (sp *serverPeer) OnMemPool(_ *peer.Peer, _ *wire.MsgMemPool) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnMemPool",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnMemPool",
 		tracing.WithHistogram(peerServerMetrics["OnMemPool"]),
 	)
 
@@ -612,7 +612,7 @@ func (sp *serverPeer) OnMemPool(_ *peer.Peer, _ *wire.MsgMemPool) {
 // handler this does not serialize all transactions through a single thread
 // transactions don't rely on the previous one in a linear fashion like blocks.
 func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnTx",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnTx",
 		tracing.WithHistogram(peerServerMetrics["OnTx"]),
 		tracing.WithDebugLogMessage(sp.server.logger, "[serverPeer.OnTx][%s] OnTx from %s", msg.TxHash(), sp),
 	)
@@ -640,7 +640,7 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 // OnBlock is invoked when a peer receives a block bitcoin message. It
 // blocks until the bitcoin block has been fully processed.
 func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnBlock",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnBlock",
 		tracing.WithHistogram(peerServerMetrics["OnBlock"]),
 	)
 
@@ -707,7 +707,7 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 // accordingly.  We pass the message down to blockmanager which will call
 // QueueMessage with any appropriate responses.
 func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnInv",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnInv",
 		tracing.WithHistogram(peerServerMetrics["OnInv"]),
 	)
 
@@ -753,7 +753,7 @@ func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
 // OnHeaders is invoked when a peer receives a headers bitcoin
 // message.  The message is passed down to the sync manager.
 func (sp *serverPeer) OnHeaders(_ *peer.Peer, msg *wire.MsgHeaders) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnHeaders",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnHeaders",
 		tracing.WithHistogram(peerServerMetrics["OnHeaders"]),
 	)
 
@@ -763,7 +763,7 @@ func (sp *serverPeer) OnHeaders(_ *peer.Peer, msg *wire.MsgHeaders) {
 // OnGetData is invoked when a peer receives a getdata bitcoin message and
 // is used to deliver block and transaction information.
 func (sp *serverPeer) OnGetData(_ *peer.Peer, msg *wire.MsgGetData) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetData",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnGetData",
 		tracing.WithHistogram(peerServerMetrics["OnGetData"]),
 	)
 
@@ -847,7 +847,7 @@ func (sp *serverPeer) OnGetData(_ *peer.Peer, msg *wire.MsgGetData) {
 // OnGetBlocks is invoked when a peer receives a getblocks bitcoin
 // message.
 func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetBlocks",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnGetBlocks",
 		tracing.WithHistogram(peerServerMetrics["OnGetBlocks"]),
 	)
 
@@ -911,7 +911,7 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 // OnGetHeaders is invoked when a peer receives a getheaders bitcoin
 // message.
 func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetHeaders",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnGetHeaders",
 		tracing.WithHistogram(peerServerMetrics["OnGetHeaders"]),
 	)
 
@@ -1017,7 +1017,7 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 // lower than provided value are inventoried to them.  The peer will be
 // disconnected if an invalid fee filter value is provided.
 func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, msg *wire.MsgFeeFilter) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnFeeFilter",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnFeeFilter",
 		tracing.WithHistogram(peerServerMetrics["OnFeeFilter"]),
 	)
 
@@ -1061,7 +1061,7 @@ func (sp *serverPeer) OnFilterLoad(_ *peer.Peer, msg *wire.MsgFilterLoad) {
 // and is used to provide the peer with known addresses from the address
 // manager.
 func (sp *serverPeer) OnGetAddr(_ *peer.Peer, msg *wire.MsgGetAddr) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetAddr",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnGetAddr",
 		tracing.WithHistogram(peerServerMetrics["OnGetAddr"]),
 	)
 
@@ -1105,7 +1105,7 @@ func (sp *serverPeer) OnGetAddr(_ *peer.Peer, msg *wire.MsgGetAddr) {
 // OnAddr is invoked when a peer receives an addr bitcoin message and is
 // used to notify the server about advertised addresses.
 func (sp *serverPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnAddr",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnAddr",
 		tracing.WithHistogram(peerServerMetrics["OnAddr"]),
 	)
 
@@ -1150,7 +1150,7 @@ func (sp *serverPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
 
 // OnReject logs all reject messages received from the remote peer.
 func (sp *serverPeer) OnReject(p *peer.Peer, msg *wire.MsgReject) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnReject",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnReject",
 		tracing.WithHistogram(peerServerMetrics["OnReject"]),
 	)
 
@@ -1159,7 +1159,7 @@ func (sp *serverPeer) OnReject(p *peer.Peer, msg *wire.MsgReject) {
 
 // OnNotFound logs all not found messages received from the remote peer.
 func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnNotFound",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnNotFound",
 		tracing.WithHistogram(peerServerMetrics["OnNotFound"]),
 	)
 
@@ -1169,7 +1169,7 @@ func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
 // OnRead is invoked when a peer receives a message and it is used to update
 // the bytes received by the server.
 func (sp *serverPeer) OnRead(_ *peer.Peer, bytesRead int, msg wire.Message, err error) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnRead",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnRead",
 		tracing.WithHistogram(peerServerMetrics["OnRead"]),
 	)
 
@@ -1179,7 +1179,7 @@ func (sp *serverPeer) OnRead(_ *peer.Peer, bytesRead int, msg wire.Message, err 
 // OnWrite is invoked when a peer sends a message and it is used to update
 // the bytes sent by the server.
 func (sp *serverPeer) OnWrite(_ *peer.Peer, bytesWritten int, msg wire.Message, err error) {
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnWrite",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnWrite",
 		tracing.WithHistogram(peerServerMetrics["OnWrite"]),
 	)
 
@@ -1506,7 +1506,7 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 		return false
 	}
 
-	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.handleAddPeerMsg",
+	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.handleAddPeerMsg",
 		tracing.WithHistogram(peerServerMetrics["handleAddPeerMsg"]),
 		tracing.WithLogMessage(sp.server.logger, "handleAddPeerMsg from %s", sp),
 	)

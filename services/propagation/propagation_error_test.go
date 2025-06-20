@@ -65,7 +65,10 @@ func TestPropagationServiceErrors(t *testing.T) {
 
 		// Try to process them in a batch
 		resp, err := client.ProcessTransactionBatch(context.Background(), &propagation_api.ProcessTransactionBatchRequest{
-			Tx: [][]byte{tx1.ExtendedBytes(), tx2.ExtendedBytes()},
+			Items: []*propagation_api.BatchTransactionItem{
+				{Tx: tx1.ExtendedBytes()},
+				{Tx: tx2.ExtendedBytes()},
+			},
 		})
 
 		// Verify we get a successful response but with TErrors for each tx

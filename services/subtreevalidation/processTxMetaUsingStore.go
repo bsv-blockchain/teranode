@@ -40,7 +40,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 		return 0, errors.NewInvalidArgumentError("txHashes and txMetaSlice must be the same length")
 	}
 
-	ctx, _, deferFn := tracing.StartTracing(ctx, "processTxMetaUsingStore")
+	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processTxMetaUsingStore")
 	defer deferFn()
 
 	batchSize := u.settings.BlockValidation.ProcessTxMetaUsingStoreBatchSize

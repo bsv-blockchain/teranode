@@ -106,8 +106,9 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 }
 
 func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, txMetaStore txMinedStatus, block *Block, blockID uint32) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "UpdateTxMinedStatus",
-		tracing.WithHistogram(prometheusBlockValid),
+	ctx, _, deferFn := tracing.Tracer("model").Start(ctx, "updateTxMinedStatus",
+		tracing.WithHistogram(prometheusUpdateTxMinedDuration),
+		tracing.WithTag("TXID", block.Hash().String()),
 		tracing.WithDebugLogMessage(logger, "[UpdateTxMinedStatus] [%s] blockID %d for %d subtrees", block.Hash().String(), blockID, len(block.Subtrees)),
 	)
 	defer deferFn()
