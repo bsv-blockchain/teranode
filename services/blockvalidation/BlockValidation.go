@@ -25,25 +25,26 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/interfaces/blockvalidation"
 	p2pconstants "github.com/bitcoin-sv/teranode/interfaces/p2p"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
-	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/proto"
 )
 
 // revalidateBlockData contains information needed to revalidate a block
@@ -71,9 +72,6 @@ type BlockValidation struct {
 	// logger provides structured logging capabilities
 	logger ulogger.Logger
 
-	// invalidBlockHandler is used to report invalid blocks to the P2P service
-	invalidBlockHandler blockvalidation.InvalidBlockHandler
-
 	// settings contains operational parameters and feature flags
 	settings *settings.Settings
 
@@ -99,7 +97,7 @@ type BlockValidation struct {
 	bloomFilterRetentionSize uint32
 
 	// validatorClient handles transaction validation operations
-	validatorClient validator.Interface
+	// validatorClient validator.Interface
 
 	// subtreeValidationClient manages subtree validation processes
 	subtreeValidationClient subtreevalidation.Interface
@@ -139,6 +137,9 @@ type BlockValidation struct {
 
 	// lastUsedBaseURL stores the most recent source URL used for retrievals
 	lastUsedBaseURL string
+
+	// invalidBlockKafkaProducer publishes invalid block events to Kafka
+	invalidBlockKafkaProducer kafka.KafkaAsyncProducerI
 }
 
 // NewBlockValidation creates a new block validation instance with the provided dependencies.
@@ -156,31 +157,33 @@ type BlockValidation struct {
 //   - validatorClient: Transaction validation interface
 //   - subtreeValidationClient: Subtree validation interface
 //   - opts: Optional parameters:
-//   - invalidBlockHandler: Handler for reporting invalid blocks to the P2P service (optional)
 //   - bloomRetentionSize: Length of last X blocks to retain bloom filters
 //
 // Returns a configured BlockValidation instance ready for use.
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
 	txStore blob.Store, utxoStore utxo.Store, subtreeValidationClient subtreevalidation.Interface, opts ...interface{}) *BlockValidation {
-	// Process optional parameters
-	var invalidBlockHandler interface {
-		ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error
-	}
-
-	// Check if invalidBlockHandler is provided
-	for _, opt := range opts {
-		if handler, ok := opt.(interface {
-			ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error
-		}); ok {
-			invalidBlockHandler = handler
-			break
-		}
-	}
-
 	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
+	// Initialize Kafka producer for invalid blocks if configured
+	var invalidBlockKafkaProducer kafka.KafkaAsyncProducerI
+
+	if tSettings.Kafka.InvalidBlocks != "" {
+		logger.Infof("Initializing Kafka producer for invalid blocks topic: %s", tSettings.Kafka.InvalidBlocks)
+
+		var err error
+
+		invalidBlockKafkaProducer, err = initialiseInvalidBlockKafkaProducer(ctx, logger, tSettings)
+		if err != nil {
+			logger.Errorf("Failed to create Kafka producer for invalid blocks: %v", err)
+		} else {
+			// Start the producer with a message channel
+			go invalidBlockKafkaProducer.Start(ctx, make(chan *kafka.Message, 100))
+		}
+	} else {
+		logger.Infof("No Kafka topic configured for invalid blocks, using interface handler only")
+	}
+
 	bv := &BlockValidation{
 		logger:                        logger,
-		invalidBlockHandler:           invalidBlockHandler,
 		settings:                      tSettings,
 		blockchainClient:              blockchainClient,
 		subtreeStore:                  subtreeStore,
@@ -193,7 +196,8 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		subtreeDeDuplicator:           NewDeDuplicator(tSettings.GlobalBlockHeightRetention),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
-		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes
+		invalidBlockKafkaProducer:     invalidBlockKafkaProducer,
+		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute), // we keep this for 10 minutes
 		subtreeCount:                  atomic.Int32{},
 		blockHashesCurrentlyValidated: util.NewSwissMap(0),
 		blockBloomFiltersBeingCreated: util.NewSwissMap(0),
@@ -275,6 +279,17 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 	}()
 
 	return bv
+}
+
+func initialiseInvalidBlockKafkaProducer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (*kafka.KafkaAsyncProducer, error) {
+	logger.Infof("Initializing Kafka producer for invalid blocks topic: %s", tSettings.Kafka.InvalidBlocks)
+
+	invalidBlockKafkaProducer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, tSettings.Kafka.InvalidBlocksConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return invalidBlockKafkaProducer, nil
 }
 
 // start initializes the block validation system and begins processing.
@@ -783,18 +798,25 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
 				if errors.Is(err, errors.ErrBlockInvalid) {
-					// Report invalid block to P2P service if handler is available
-					if u.invalidBlockHandler != nil {
-						reason := p2pconstants.ReasonInvalidBlock.String()
-						if err != nil {
-							reason = err.Error()
+					reason := p2pconstants.ReasonInvalidBlock.String()
+
+					// Only use Kafka for reporting invalid blocks
+					if u.invalidBlockKafkaProducer != nil {
+						u.logger.Infof("[ValidateBlock][%s] publishing invalid block to Kafka in background", block.Hash().String())
+						msg := &kafkamessage.KafkaInvalidBlockTopicMessage{
+							BlockHash: block.Hash().String(),
+							Reason:    reason,
 						}
 
-						reportErr := u.invalidBlockHandler.ReportInvalidBlock(decoupledCtx, block.Hash().String(), reason)
-						if reportErr != nil {
-							u.logger.Warnf("[ValidateBlock][%s] failed to report invalid block in background: %v", block.Hash().String(), reportErr)
+						msgBytes, err := proto.Marshal(msg)
+						if err != nil {
+							u.logger.Errorf("[ValidateBlock][%s] failed to marshal invalid block message: %v", block.Hash().String(), err)
 						} else {
-							u.logger.Infof("[ValidateBlock][%s] reported invalid block to P2P service in background", block.Hash().String())
+							kafkaMsg := &kafka.Message{
+								Key:   []byte(block.Hash().String()),
+								Value: msgBytes,
+							}
+							u.invalidBlockKafkaProducer.Publish(kafkaMsg)
 						}
 					}
 
@@ -847,18 +869,28 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 
 		if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
-			// Report invalid block to P2P service if handler is available
-			if u.invalidBlockHandler != nil {
-				reason := "unknown"
-				if err != nil {
-					reason = err.Error()
+			reason := "unknown"
+			if err != nil {
+				reason = err.Error()
+			}
+
+			// Publish invalid block to Kafka if producer is available
+			if u.invalidBlockKafkaProducer != nil {
+				u.logger.Infof("[ValidateBlock][%s] publishing invalid block to Kafka", block.Hash().String())
+				msg := &kafkamessage.KafkaInvalidBlockTopicMessage{
+					BlockHash: block.Hash().String(),
+					Reason:    reason,
 				}
 
-				reportErr := u.invalidBlockHandler.ReportInvalidBlock(ctx, block.Hash().String(), reason)
-				if reportErr != nil {
-					u.logger.Warnf("[ValidateBlock][%s] failed to report invalid block: %v", block.Hash().String(), reportErr)
+				msgBytes, err := proto.Marshal(msg)
+				if err != nil {
+					u.logger.Errorf("[ValidateBlock][%s] failed to marshal invalid block message: %v", block.Hash().String(), err)
 				} else {
-					u.logger.Infof("[ValidateBlock][%s] reported invalid block to P2P service", block.Hash().String())
+					kafkaMsg := &kafka.Message{
+						Key:   []byte(block.Hash().String()),
+						Value: msgBytes,
+					}
+					u.invalidBlockKafkaProducer.Publish(kafkaMsg)
 				}
 			}
 

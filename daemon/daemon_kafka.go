@@ -170,3 +170,12 @@ func getKafkaTxmetaConsumerGroup(logger ulogger.Logger, settings *settings.Setti
 
 	return getKafkaConsumerGroup(logger, kafkaTxmetaConfig, consumerGroupID, true)
 }
+
+func getKafkaInvalidBlocksConsumerGroup(logger ulogger.Logger, settings *settings.Settings, consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {
+	kafkaInvalidBlocksConfig := settings.Kafka.InvalidBlocksConfig
+	if kafkaInvalidBlocksConfig == nil {
+		return nil, nil // Optional, return nil if not configured
+	}
+
+	return getKafkaConsumerGroup(logger, kafkaInvalidBlocksConfig, consumerGroupID, true)
+}

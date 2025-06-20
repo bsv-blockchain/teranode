@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { afterUpdate } from 'svelte'
+  import { afterUpdate, onMount } from 'svelte'
 
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import MessageBox from '$internal/components/msgbox/index.svelte'
@@ -8,7 +8,7 @@
   import { contentLeft } from '$internal/stores/nav'
   import { MessageType } from '$internal/components/msgbox/types'
 
-  import { messages, sock } from '$internal/stores/p2pStore'
+  import { messages, sock, connectionAttempts } from '$internal/stores/p2pStore'
   import i18n from '$internal/i18n'
 
   $: t = $i18n.t
@@ -18,6 +18,15 @@
   const pageKey = 'page.p2p'
 
   let innerWidth = 0
+  let currentNodeUrl = ''
+
+  // Get the current node's URL to filter out self-messages
+  onMount(() => {
+    if (!import.meta.env.SSR && window && window.location) {
+      const url = new URL(window.location.href)
+      currentNodeUrl = url.origin
+    }
+  })
 
   function scrollToTop() {
     if (!import.meta.env.SSR && window && window.scrollTo) {
@@ -38,6 +47,7 @@
 
   let byPeer = false
   let filter = ''
+  let showLocalMessages = false // Toggle for showing local messages (off by default)
   let groupedMessages: any = {}
   let filteredMessages: any[] = []
   let peers: string[] = []
@@ -57,8 +67,19 @@
   $: data = dataSnapshot ? dataSnapshot : $messages
 
   $: {
-    // Transoform types to be lower case, as they have been changing case in the BE
-    filteredMessages = data.map((item) => ({ ...item, type: item.type.toLowerCase() }))
+    // Transform types to be lower case, as they have been changing case in the BE
+    // Filter messages based on the showLocalMessages toggle
+    filteredMessages = data
+      .filter((item) => {
+        // Only filter out local messages if showLocalMessages is false
+        if (!showLocalMessages && currentNodeUrl && item.base_url) {
+          const itemUrl = item.base_url.replace(/\/$/, '') // Remove trailing slash if present
+          const normalizedCurrentUrl = currentNodeUrl.replace(/\/$/, '') // Remove trailing slash if present
+          return !itemUrl.includes(normalizedCurrentUrl)
+        }
+        return true
+      })
+      .map((item) => ({ ...item, type: item.type.toLowerCase() }))
 
     if (filter.length > 0) {
       const f = filter.toLowerCase()
@@ -81,8 +102,12 @@
         }
       })
 
+      // Sort messages in descending order by receivedAt timestamp
       Object.keys(newGroupedMessages).forEach((peer_id) => {
-        newGroupedMessages[peer_id].sort((a: any, b: any) => a.peer_id.localeCompare(b.peerid))
+        newGroupedMessages[peer_id].sort((a: any, b: any) => {
+          // Sort by receivedAt in descending order (newest first)
+          return new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()
+        })
       })
 
       groupedMessages = newGroupedMessages
@@ -112,6 +137,15 @@
           labelAlignment="center"
         />
 
+        <Switch
+          size="small"
+          name="localMessages"
+          label="Show Local Messages"
+          bind:checked={showLocalMessages}
+          labelPlacement="left"
+          labelAlignment="center"
+        />
+
         <TextInput
           size="small"
           name="filter"
@@ -130,6 +164,11 @@
         </Button>
       </div>
     </div>
+    {#if $connectionAttempts > 0 && !connected}
+      <div class="connection-status">
+        <span class="error">P2P connection failed. Attempt {$connectionAttempts}/5</span>
+      </div>
+    {/if}
   </div>
 
   {#if byPeer}
@@ -205,6 +244,17 @@
     gap: 15px;
 
     margin-top: 8px;
+  }
+
+  .connection-status {
+    margin-top: 10px;
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 14px;
+  }
+
+  .connection-status .error {
+    color: #ff6b6b;
   }
 
   .peer {

@@ -16,6 +16,9 @@
 
 `{"method": "sendrawtransaction", "params": ["010000000100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff01807c814a000000001976a9142246f8f846d04b71fbec79815c7ab487b47737a388ac00000000"]}`
 
+
+`{"method": "getrawtransaction", "params": ["txid":"0000000000000000000000000000000000000000000000000000000000000000",1]}`
+
 `{"method": "submitminingsolution", "params": ["{\"id\": \"aGVsbG9JZA==\",\"nonce\": 1804358173, \"coinbase\": \"aGVsbG9JZA==\",\"time\": 1528925410,\"version\": 536870912}"]}`
 
 `{"method": "generate", "params": [101]}`
@@ -45,13 +48,13 @@ curl --user bitcoin  -X POST http://localhost:19292 \
 
 ##test ban
 
-docker compose build   
+docker compose build
 
-cd test  
+cd test
 
-docker compose -f docker-compose.e2etest.legacy.yml up -d  
+docker compose -f docker-compose.e2etest.legacy.yml up -d
 
-grpcurl -plaintext localhost:10087 blockchain_api.BlockchainAPI.LegacySync 
+grpcurl -plaintext localhost:10087 blockchain_api.BlockchainAPI.LegacySync
 
 curl --user bitcoin:bitcoin -X POST http://localhost:\11292  -H "Content-Type: application/json"   -d '{"method": "getpeerinfo", "params": []}'
 

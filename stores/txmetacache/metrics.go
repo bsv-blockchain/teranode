@@ -14,27 +14,27 @@ import (
 var (
 	// tx meta cache stats - the following Prometheus metrics track key performance indicators
 	// for the transaction metadata cache to help with monitoring and tuning
-	
+
 	// Current number of entries in the cache; monitors utilization and capacity
-	prometheusBlockValidationTxMetaCacheSize               prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheSize prometheus.Gauge
 	// Total count of cache insertions since startup; tracks write throughput
-	prometheusBlockValidationTxMetaCacheInsertions         prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheInsertions prometheus.Gauge
 	// Count of successful cache retrievals (cache hits); indicates cache effectiveness
-	prometheusBlockValidationTxMetaCacheHits               prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheHits prometheus.Gauge
 	// Count of unsuccessful cache retrievals (cache misses); helps identify sizing issues
-	prometheusBlockValidationTxMetaCacheMisses             prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheMisses prometheus.Gauge
 	// Count of origin retrievals from the cache; tracks origin information usage
-	prometheusBlockValidationTxMetaCacheGetOrigin          prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheGetOrigin prometheus.Gauge
 	// Count of items evicted from the cache due to memory constraints; indicates pressure
-	prometheusBlockValidationTxMetaCacheEvictions          prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheEvictions prometheus.Gauge
 	// Count of trim operations performed on the cache; tracks memory management activity
-	prometheusBlockValidationTxMetaCacheTrims              prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheTrims prometheus.Gauge
 	// Total size of all map buckets in the cache; monitors memory consumption
-	prometheusBlockValidationTxMetaCacheMapSize            prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheMapSize prometheus.Gauge
 	// Cumulative count of all elements ever added to the cache; tracks total throughput
 	prometheusBlockValidationTxMetaCacheTotalElementsAdded prometheus.Gauge
 	// Count of hits for transactions that were deemed too old to use; monitors expiration policy
-	prometheusBlockValidationTxMetaCacheHitOldTx           prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheHitOldTx prometheus.Gauge
 )
 
 var (
@@ -58,22 +58,22 @@ func initPrometheusMetrics() {
 //
 // Metrics are organized into functional categories:
 // 1. Capacity metrics:
-//    - size: Current number of entries in the cache
-//    - map_size: Total size of all bucket maps in the cache
+//   - size: Current number of entries in the cache
+//   - map_size: Total size of all bucket maps in the cache
 //
 // 2. Performance metrics:
-//    - hits: Number of successful retrievals from the cache
-//    - misses: Number of failed retrievals that had to fall back to the underlying store
-//    - hit_old_tx: Count of cache hits for transactions deemed too old to use
+//   - hits: Number of successful retrievals from the cache
+//   - misses: Number of failed retrievals that had to fall back to the underlying store
+//   - hit_old_tx: Count of cache hits for transactions deemed too old to use
 //
 // 3. Throughput metrics:
-//    - insertions: Total number of entries added to the cache since startup
-//    - get_origin: Number of transactions where origin information was retrieved from cache
-//    - total_elements_added: Cumulative count of all elements ever added to the cache
+//   - insertions: Total number of entries added to the cache since startup
+//   - get_origin: Number of transactions where origin information was retrieved from cache
+//   - total_elements_added: Cumulative count of all elements ever added to the cache
 //
 // 4. Memory management metrics:
-//    - evictions: Number of entries removed from the cache due to memory constraints
-//    - trims: Number of cache cleanup operations performed
+//   - evictions: Number of entries removed from the cache due to memory constraints
+//   - trims: Number of cache cleanup operations performed
 func _initPrometheusMetrics() {
 	// Size metric tracks the current number of entries in the transaction metadata cache.
 	// This is a point-in-time measurement that indicates cache utilization level and

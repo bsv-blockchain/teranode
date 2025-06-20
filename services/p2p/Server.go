@@ -24,6 +24,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,29 +72,30 @@ const (
 // - Ban management is thread-safe across connections
 type Server struct {
 	p2p_api.UnimplementedPeerServiceServer
-	P2PNode                       P2PNodeI           // The P2P network node instance - using interface instead of concrete type
-	logger                        ulogger.Logger     // Logger instance for the server
-	settings                      *settings.Settings // Configuration settings
-	bitcoinProtocolID             string             // Bitcoin protocol identifier
-	blockchainClient              blockchain.ClientI // Client for blockchain interactions
-	blockValidationClient         blockvalidation.Interface
-	blockValidationServer         *blockvalidation.Server   // Client for block validation
-	AssetHTTPAddressURL           string                    // HTTP address URL for assets
-	e                             *echo.Echo                // Echo server instance
-	notificationCh                chan *notificationMsg     // Channel for notifications
-	rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
-	subtreeKafkaProducerClient    kafka.KafkaAsyncProducerI // Kafka producer for subtrees
-	blocksKafkaProducerClient     kafka.KafkaAsyncProducerI // Kafka producer for blocks
-	banList                       BanListI                  // List of banned peers
-	banChan                       chan BanEvent             // Channel for ban events
-	banManager                    *PeerBanManager           // Manager for peer banning
-	gCtx                          context.Context
-	blockTopicName                string
-	subtreeTopicName              string
-	miningOnTopicName             string
-	rejectedTxTopicName           string
-	handshakeTopicName            string   // pubsub topic for version/verack
-	blockPeerMap                  sync.Map // Map to track which peer sent each block (hash -> peerID)
+	P2PNode                          P2PNodeI           // The P2P network node instance - using interface instead of concrete type
+	logger                           ulogger.Logger     // Logger instance for the server
+	settings                         *settings.Settings // Configuration settings
+	bitcoinProtocolID                string             // Bitcoin protocol identifier
+	blockchainClient                 blockchain.ClientI // Client for blockchain interactions
+	blockValidationClient            blockvalidation.Interface
+	AssetHTTPAddressURL              string                    // HTTP address URL for assets
+	e                                *echo.Echo                // Echo server instance
+	notificationCh                   chan *notificationMsg     // Channel for notifications
+	rejectedTxKafkaConsumerClient    kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
+	invalidBlocksKafkaConsumerClient kafka.KafkaConsumerGroupI // Kafka consumer for invalid blocks
+	subtreeKafkaProducerClient       kafka.KafkaAsyncProducerI // Kafka producer for subtrees
+	blocksKafkaProducerClient        kafka.KafkaAsyncProducerI // Kafka producer for blocks
+	banList                          BanListI                  // List of banned peers
+	banChan                          chan BanEvent             // Channel for ban events
+	banManager                       *PeerBanManager           // Manager for peer banning
+	gCtx                             context.Context
+	blockTopicName                   string
+	subtreeTopicName                 string
+	miningOnTopicName                string
+	rejectedTxTopicName              string
+	invalidBlocksTopicName           string   // Kafka topic for invalid blocks
+	handshakeTopicName               string   // pubsub topic for version/verack
+	blockPeerMap                     sync.Map // Map to track which peer sent each block (hash -> peerID)
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -104,6 +108,7 @@ type Server struct {
 // - tSettings: Configuration settings containing network topology and behavior parameters
 // - blockchainClient: Client for retrieving and querying blockchain data
 // - rejectedTxKafkaConsumerClient: Kafka consumer client for receiving rejected transaction notifications
+// - invalidBlocksKafkaConsumerClient: Kafka consumer client for receiving invalid block notifications
 // - subtreeKafkaProducerClient: Kafka producer client for publishing subtree data
 // - blocksKafkaProducerClient: Kafka producer client for publishing block data
 //
@@ -115,9 +120,9 @@ func NewServer(
 	tSettings *settings.Settings,
 	blockchainClient blockchain.ClientI,
 	rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI,
+	invalidBlocksKafkaConsumerClient kafka.KafkaConsumerGroupI,
 	subtreeKafkaProducerClient kafka.KafkaAsyncProducerI,
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
-	blockValidationServer *blockvalidation.Server,
 ) (*Server, error) {
 	logger.Debugf("Creating P2P service")
 
@@ -196,25 +201,26 @@ func NewServer(
 	}
 
 	p2pServer := &Server{
-		P2PNode:               p2pNode,
-		logger:                logger,
-		settings:              tSettings,
-		bitcoinProtocolID:     "teranode/bitcoin/1.0.0",
-		notificationCh:        make(chan *notificationMsg),
-		blockchainClient:      blockchainClient,
-		blockValidationServer: blockValidationServer,
-		banList:               banlist,
-		banChan:               banChan,
+		P2PNode:           p2pNode,
+		logger:            logger,
+		settings:          tSettings,
+		bitcoinProtocolID: "teranode/bitcoin/1.0.0",
+		notificationCh:    make(chan *notificationMsg),
+		blockchainClient:  blockchainClient,
+		banList:           banlist,
+		banChan:           banChan,
 
-		rejectedTxKafkaConsumerClient: rejectedTxKafkaConsumerClient,
-		subtreeKafkaProducerClient:    subtreeKafkaProducerClient,
-		blocksKafkaProducerClient:     blocksKafkaProducerClient,
-		gCtx:                          ctx,
-		blockTopicName:                fmt.Sprintf("%s-%s", topicPrefix, btn),
-		subtreeTopicName:              fmt.Sprintf("%s-%s", topicPrefix, stn),
-		miningOnTopicName:             fmt.Sprintf("%s-%s", topicPrefix, miningOntn),
-		rejectedTxTopicName:           fmt.Sprintf("%s-%s", topicPrefix, rtn),
-		handshakeTopicName:            fmt.Sprintf("%s-%s", topicPrefix, htn),
+		rejectedTxKafkaConsumerClient:    rejectedTxKafkaConsumerClient,
+		invalidBlocksKafkaConsumerClient: invalidBlocksKafkaConsumerClient,
+		subtreeKafkaProducerClient:       subtreeKafkaProducerClient,
+		blocksKafkaProducerClient:        blocksKafkaProducerClient,
+		gCtx:                             ctx,
+		blockTopicName:                   fmt.Sprintf("%s-%s", topicPrefix, btn),
+		subtreeTopicName:                 fmt.Sprintf("%s-%s", topicPrefix, stn),
+		miningOnTopicName:                fmt.Sprintf("%s-%s", topicPrefix, miningOntn),
+		rejectedTxTopicName:              fmt.Sprintf("%s-%s", topicPrefix, rtn),
+		invalidBlocksTopicName:           "invalid-blocks", // Fixed topic name for invalid blocks
+		handshakeTopicName:               fmt.Sprintf("%s-%s", topicPrefix, htn),
 	}
 
 	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
@@ -380,25 +386,38 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	s.rejectedTxKafkaConsumerClient.Start(ctx, rejectedTxHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
+
+	// Handler for invalid blocks Kafka messages
+	if s.invalidBlocksKafkaConsumerClient != nil {
+		invalidBlocksHandler := func(msg *kafka.KafkaMessage) error {
+			var m kafkamessage.KafkaInvalidBlockTopicMessage
+			if err := proto.Unmarshal(msg.Value, &m); err != nil {
+				s.logger.Errorf("[Start] error unmarshalling invalidBlocksMessage: %v", err)
+				return err
+			}
+
+			s.logger.Infof("[Start] Received invalid block notification via Kafka: %s, reason: %s", m.BlockHash, m.Reason)
+
+			// Use the existing ReportInvalidBlock method to handle the invalid block
+			err = s.ReportInvalidBlock(ctx, m.BlockHash, m.Reason)
+			if err != nil {
+				// Don't return error here, as we want to continue processing messages
+				s.logger.Errorf("[Start] Failed to report invalid block from Kafka: %v", err)
+			}
+
+			return nil
+		}
+
+		s.logger.Infof("[Start] Starting invalid blocks Kafka consumer on topic: %s", s.invalidBlocksTopicName)
+		s.invalidBlocksKafkaConsumerClient.Start(ctx, invalidBlocksHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
+	}
+
 	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
 	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
 
 	s.blockValidationClient, err = blockvalidation.NewClient(ctx, s.logger, s.settings, "p2p")
 	if err != nil {
 		return errors.NewServiceError("could not create block validation client [%w]", err)
-	}
-
-	// Register the P2P server as an InvalidBlockHandler with the block validation service
-	// This allows the block validation service to notify the P2P server when a block is invalid
-	// so we can add ban score to the peer that sent the invalid block
-	if s.blockValidationServer != nil {
-		err = RegisterWithBlockValidation(ctx, s.logger, s.blockValidationServer, s)
-		if err != nil {
-			// Continue even if registration fails, as this is a new feature
-			s.logger.Warnf("Failed to register with block validation service: %v", err)
-		}
-	} else {
-		s.logger.Warnf("Block validation server is not initialized, skipping registration")
 	}
 
 	s.e = s.setupHTTPServer()
@@ -428,17 +447,31 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return errors.NewServiceError("error starting p2p node", err)
 	}
 
-	_ = s.P2PNode.SetTopicHandler(ctx, s.blockTopicName, s.handleBlockTopic)
-	_ = s.P2PNode.SetTopicHandler(ctx, s.subtreeTopicName, s.handleSubtreeTopic)
-	_ = s.P2PNode.SetTopicHandler(ctx, s.miningOnTopicName, s.handleMiningOnTopic)
-	_ = s.P2PNode.SetTopicHandler(ctx, s.handshakeTopicName, s.handleHandshakeTopic)
+	// give the P2P node a moment to initialise before checking readiness
+	time.Sleep(500 * time.Millisecond)
+
+	// wait for P2P node to be ready for handler registration using a polling mechanism
+	if err := s.waitForP2PNodeReadiness(ctx); err != nil {
+		return err
+	}
+
+	// register remaining handlers
+	if err := s.registerRemainingHandlers(ctx); err != nil {
+		// continue despite errors, but log the issue
+		s.logger.Warnf("[Server] Some P2P topic handlers failed to register: %v", err)
+	}
 
 	go s.blockchainSubscriptionListener(ctx)
 
 	go s.listenForBanEvents(ctx)
 
-	// Disconnect any pre-existing banned peers at startup
+	// disconnect any pre-existing banned peers at startup
 	go s.disconnectPreExistingBannedPeers(ctx)
+
+	// start the invalid blocks consumer
+	if err := s.startInvalidBlockConsumer(ctx); err != nil {
+		return errors.NewServiceError("failed to start invalid blocks consumer", err)
+	}
 
 	// Set up the peer connected callback to announce our best block when a new peer connects
 	s.P2PNode.SetPeerConnectedCallback(s.P2PNodeConnected)
@@ -906,10 +939,17 @@ func (s *Server) Stop(ctx context.Context) error {
 		}
 	}
 
-	// close the kafka consumer gracefully
+	// close the kafka consumers gracefully
 	if s.rejectedTxKafkaConsumerClient != nil {
 		if err := s.rejectedTxKafkaConsumerClient.Close(); err != nil {
-			s.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+			s.logger.Errorf("[Stop] failed to close rejected tx kafka consumer gracefully: %v", err)
+			errs = append(errs, err)
+		}
+	}
+
+	if s.invalidBlocksKafkaConsumerClient != nil {
+		if err := s.invalidBlocksKafkaConsumerClient.Close(); err != nil {
+			s.logger.Errorf("[Stop] failed to close invalid blocks kafka consumer gracefully: %v", err)
 			errs = append(errs, err)
 		}
 	}
@@ -1154,7 +1194,7 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 			continue
 		}
 
-		banScore, _, _ := s.banManager.GetBanScore(sp.Addrs[0].String())
+		banScore, _, _ := s.banManager.GetBanScore(sp.ID.String())
 
 		resp.Peers = append(resp.Peers, &p2p_api.Peer{
 			Id:            sp.ID.String(),
@@ -1220,6 +1260,88 @@ func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreReques
 		req.PeerId, req.Reason, score, banned)
 
 	return &p2p_api.AddBanScoreResponse{Ok: true}, nil
+}
+
+// registerRemainingHandlers registers all topic handlers except the block handler (which is registered during readiness check)
+func (s *Server) registerRemainingHandlers(ctx context.Context) error {
+	var registerErrors []string
+
+	// register subtree topic handler
+	if err := s.P2PNode.SetTopicHandler(ctx, s.subtreeTopicName, s.handleSubtreeTopic); err != nil {
+		s.logger.Errorf("[Server] Error setting subtree topic handler: %v", err)
+		registerErrors = append(registerErrors, fmt.Sprintf("subtree:%v", err))
+	} else {
+		s.logger.Debugf("[Server] Successfully registered subtree topic handler")
+	}
+
+	// register mining-on topic handler
+	if err := s.P2PNode.SetTopicHandler(ctx, s.miningOnTopicName, s.handleMiningOnTopic); err != nil {
+		s.logger.Errorf("[Server] Error setting mining-on topic handler: %v", err)
+		registerErrors = append(registerErrors, fmt.Sprintf("mining-on:%v", err))
+	} else {
+		s.logger.Debugf("[Server] Successfully registered mining-on topic handler")
+	}
+
+	// register handshake topic handler
+	if err := s.P2PNode.SetTopicHandler(ctx, s.handshakeTopicName, s.handleHandshakeTopic); err != nil {
+		s.logger.Errorf("[Server] Error setting handshake topic handler: %v", err)
+		registerErrors = append(registerErrors, fmt.Sprintf("handshake:%v", err))
+	} else {
+		s.logger.Debugf("[Server] Successfully registered handshake topic handler")
+	}
+
+	// if any errors occurred, return them as a combined error
+	if len(registerErrors) > 0 {
+		return errors.NewServiceError("failed to register handlers: %s", strings.Join(registerErrors, "; "))
+	}
+
+	return nil
+}
+
+// waitForP2PNodeReadiness polls until the P2P node is ready to register handlers or times out
+func (s *Server) waitForP2PNodeReadiness(ctx context.Context) error {
+	const (
+		maxWaitTime     = 10 * time.Second
+		initialInterval = 100 * time.Millisecond
+		maxInterval     = 500 * time.Millisecond
+		factor          = 1.5 // backoff multiplier
+	)
+
+	startTime := time.Now()
+	timeout := time.After(maxWaitTime)
+	interval := initialInterval
+	attempts := 0
+
+	for {
+		attempts++
+		s.logger.Debugf("[Server] Attempt %d: Checking if P2P node is ready for handler registration", attempts)
+
+		// check if topics are ready by attempting to register the block topic handler
+		err := s.P2PNode.SetTopicHandler(ctx, s.blockTopicName, s.handleBlockTopic)
+		if err == nil {
+			s.logger.Infof("[Server] P2P node ready for handler registration after %d attempts (%.2f seconds)",
+				attempts, time.Since(startTime).Seconds())
+			return nil
+		}
+
+		s.logger.Debugf("[Server] P2P node not ready yet (attempt %d): %v", attempts, err)
+
+		// use select to handle timeout and context cancellation
+		select {
+		case <-time.After(interval):
+			// increase the interval for next attempt (with exponential backoff)
+			interval = time.Duration(float64(interval) * factor)
+			if interval > maxInterval {
+				interval = maxInterval
+			}
+		case <-timeout:
+			// fallback to ensure we don't hang forever
+			s.logger.Warnf("[Server] Timeout after %d attempts waiting for P2P node to be ready, proceeding anyway", attempts)
+			return nil // continue despite timeout
+		case <-ctx.Done():
+			return errors.NewServiceError("context canceled while waiting for P2P node to be ready", ctx.Err())
+		}
+	}
 }
 
 func (s *Server) listenForBanEvents(ctx context.Context) {
@@ -1430,4 +1552,147 @@ func contains(slice []string, item string) bool {
 	}
 
 	return false
+}
+
+// startInvalidBlockConsumer initializes and starts the Kafka consumer for invalid blocks
+func (s *Server) startInvalidBlockConsumer(ctx context.Context) error {
+	var kafkaURL *url.URL
+
+	var brokerURLs []string
+
+	// Use InvalidBlocksConfig URL if available, otherwise construct one
+	if s.settings.Kafka.InvalidBlocksConfig != nil {
+		s.logger.Infof("Using InvalidBlocksConfig URL: %s", s.settings.Kafka.InvalidBlocksConfig.String())
+		kafkaURL = s.settings.Kafka.InvalidBlocksConfig
+
+		// For non-memory schemes, we need to extract broker URLs from the host
+		if kafkaURL.Scheme != "memory" {
+			brokerURLs = []string{kafkaURL.Host}
+		}
+	} else {
+		// Fall back to the old way of constructing the URL
+		host := s.settings.Kafka.Hosts
+
+		s.logger.Infof("Starting invalid block consumer on topic: %s", s.settings.Kafka.InvalidBlocks)
+		s.logger.Infof("Raw Kafka host from settings: %s", host)
+
+		// Split the host string in case it contains multiple hosts
+		hosts := strings.Split(host, ",")
+		brokerURLs = make([]string, 0, len(hosts))
+
+		// Process each host to ensure it has a port
+		for _, h := range hosts {
+			// Trim any whitespace
+			h = strings.TrimSpace(h)
+
+			// Skip empty hosts
+			if h == "" {
+				continue
+			}
+
+			// Check if the host string contains a port
+			if !strings.Contains(h, ":") {
+				// If no port is specified, use the default Kafka port from settings
+				h = h + ":" + strconv.Itoa(s.settings.Kafka.Port)
+				s.logger.Infof("Added default port to Kafka host: %s", h)
+			}
+
+			brokerURLs = append(brokerURLs, h)
+		}
+
+		if len(brokerURLs) == 0 {
+			return errors.NewConfigurationError("no valid Kafka hosts found")
+		}
+
+		s.logger.Infof("Using Kafka brokers: %v", brokerURLs)
+
+		// Create a valid URL for the Kafka consumer
+		kafkaURLString := fmt.Sprintf("kafka://%s/%s?partitions=%d",
+			brokerURLs[0], // Use the first broker for the URL
+			s.settings.Kafka.InvalidBlocks,
+			s.settings.Kafka.Partitions)
+
+		s.logger.Infof("Kafka URL: %s", kafkaURLString)
+
+		var err error
+
+		kafkaURL, err = url.Parse(kafkaURLString)
+		if err != nil {
+			return errors.NewConfigurationError("invalid Kafka URL: %w", err)
+		}
+	}
+
+	// Create the Kafka consumer config
+	cfg := kafka.KafkaConsumerConfig{
+		Logger:            s.logger,
+		URL:               kafkaURL,
+		BrokersURL:        brokerURLs,
+		Topic:             s.settings.Kafka.InvalidBlocks,
+		Partitions:        s.settings.Kafka.Partitions,
+		ConsumerGroupID:   s.settings.Kafka.InvalidBlocks + "-consumer",
+		AutoCommitEnabled: true,
+		Replay:            false,
+		ConsumerCount:     1, // We only need one consumer for invalid blocks
+	}
+
+	// Create the Kafka consumer group - this will handle the memory scheme correctly
+	consumer, err := kafka.NewKafkaConsumerGroup(cfg)
+	if err != nil {
+		return errors.NewServiceError("failed to create Kafka consumer", err)
+	}
+
+	// Store the consumer for cleanup
+	s.invalidBlocksKafkaConsumerClient = consumer
+
+	// Start the consumer
+	consumer.Start(ctx, s.processInvalidBlockMessage)
+
+	return nil
+}
+
+func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
+	ctx := context.Background()
+
+	var invalidBlockMsg kafkamessage.KafkaInvalidBlockTopicMessage
+	if err := proto.Unmarshal(message.Value, &invalidBlockMsg); err != nil {
+		s.logger.Errorf("failed to unmarshal invalid block message: %v", err)
+		return err
+	}
+
+	blockHash := invalidBlockMsg.GetBlockHash()
+	reason := invalidBlockMsg.GetReason()
+
+	s.logger.Infof("[handleInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
+
+	// Look up the peer ID that sent this block
+	peerIDVal, ok := s.blockPeerMap.Load(blockHash)
+	if !ok {
+		s.logger.Warnf("[handleInvalidBlockMessage] no peer found for invalid block %s", blockHash)
+		return nil // Not an error, just no peer to ban
+	}
+
+	peerID, ok := peerIDVal.(string)
+	if !ok {
+		s.logger.Errorf("[handleInvalidBlockMessage] peer ID for block %s is not a string: %v", blockHash, peerIDVal)
+		return nil
+	}
+
+	// Add ban score to the peer
+	s.logger.Infof("[handleInvalidBlockMessage] adding ban score to peer %s for invalid block %s: %s",
+		peerID, blockHash, reason)
+
+	req := &p2p_api.AddBanScoreRequest{
+		PeerId: peerID,
+		Reason: "invalid_block",
+	}
+
+	if _, err := s.AddBanScore(ctx, req); err != nil {
+		s.logger.Errorf("[handleInvalidBlockMessage] error adding ban score to peer %s: %v", peerID, err)
+		return err
+	}
+
+	// Remove the block from the map to avoid memory leaks
+	s.blockPeerMap.Delete(blockHash)
+
+	return nil
 }

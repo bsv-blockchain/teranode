@@ -105,7 +105,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	// Create a slice of service starters
 	starters := []serviceStarter{
 		{startBlockchain, func() error { return startBlockchainService(ctx, appSettings, sm, args, createLogger) }},
-		{startP2P, func() error { return startP2PService(ctx, d, appSettings, sm, createLogger, d.blockValidationSrv) }},
+		{startP2P, func() error { return startP2PService(ctx, d, appSettings, sm, createLogger) }},
 		{startAsset, func() error { return startAssetService(ctx, d, appSettings, sm, createLogger) }},
 		{startRPC, func() error { return startRPCService(ctx, d, appSettings, sm, createLogger) }},
 		{startAlert, func() error { return startAlertService(ctx, d, appSettings, sm, createLogger) }},
@@ -235,8 +235,7 @@ func startBlockchainService(ctx context.Context, appSettings *settings.Settings,
 
 // startP2PService initializes and starts the P2P service.
 func startP2PService(ctx context.Context, daemon *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger,
-	blockValidationSrv *blockvalidation.Server) error {
+	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
 	// Create a blockchain client for the P2P service
 	blockchainClient, err := daemon.daemonStores.GetBlockchainClient(
 		ctx, createLogger(loggerBlockchainClient), appSettings, serviceNameP2P,
@@ -251,6 +250,11 @@ func startP2PService(ctx context.Context, daemon *Daemon, appSettings *settings.
 	rejectedTxKafkaConsumerClient, err = getKafkaRejectedTxConsumerGroup(
 		createLogger(loggerKafkaProducerRejectedTx), appSettings, serviceNameP2P+"."+appSettings.ClientName,
 	)
+	if err != nil {
+		return err
+	}
+
+	invalidBlocksKafkaConsumerClient, err := getKafkaInvalidBlocksConsumerGroup(createLogger("kpib"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
 	if err != nil {
 		return err
 	}
@@ -283,8 +287,10 @@ func startP2PService(ctx context.Context, daemon *Daemon, appSettings *settings.
 
 	p2pService, err = p2p.NewServer(
 		ctx, p2pLogger, appSettings, blockchainClient,
-		rejectedTxKafkaConsumerClient, subtreeKafkaProducerClient,
-		blocksKafkaProducerClient, blockValidationSrv,
+		rejectedTxKafkaConsumerClient,
+		invalidBlocksKafkaConsumerClient,
+		subtreeKafkaProducerClient,
+		blocksKafkaProducerClient,
 	)
 	if err != nil {
 		return err

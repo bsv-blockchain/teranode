@@ -241,7 +241,7 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 // - v: Value as byte slice, typically transaction metadata
 //
 // Returns:
-// - Error if the storage operation fails, such as when the value exceeds maximum size	
+// - Error if the storage operation fails, such as when the value exceeds maximum size
 //
 // Implementation details:
 // - Uses xxhash for fast hashing and bucket selection

@@ -411,7 +411,6 @@ func (d *Daemon) closeStores(logger ulogger.Logger, sm *servicemanager.ServiceMa
 	}
 }
 
-// shouldStart checks if the specified app should be started based on command line arguments or config settings.
 func (d *Daemon) shouldStart(app string, args []string) bool {
 	// See if the app is enabled in the command line
 	cmdArg := fmt.Sprintf("-%s=1", strings.ToLower(app))

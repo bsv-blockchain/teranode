@@ -71,6 +71,7 @@ type KafkaSettings struct {
 	BlocksFinal        string
 	BlocksValidate     string
 	Hosts              string
+	InvalidBlocks      string
 	LegacyInv          string
 	Partitions         int
 	Port               int
@@ -84,6 +85,7 @@ type KafkaSettings struct {
 	LegacyInvConfig    *url.URL
 	BlocksFinalConfig  *url.URL
 	RejectedTxConfig   *url.URL
+	InvalidBlocksConfig *url.URL
 	SubtreesConfig     *url.URL
 	BlocksConfig       *url.URL
 }

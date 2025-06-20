@@ -74,6 +74,44 @@ var (
 	hash3 = tx3.TxIDChainHash()
 )
 
+// SafeMockKafkaProducer is a thread-safe mock Kafka producer for testing
+type SafeMockKafkaProducer struct {
+	sync.Mutex
+	mock.Mock
+	publishCalled bool
+}
+
+func (m *SafeMockKafkaProducer) Publish(msg *kafka.Message) {
+	m.Lock()
+	defer m.Unlock()
+	m.publishCalled = true
+}
+
+func (m *SafeMockKafkaProducer) Start(ctx context.Context, ch chan *kafka.Message) {
+	m.Lock()
+	defer m.Unlock()
+	m.Called(ctx, ch)
+}
+
+func (m *SafeMockKafkaProducer) Stop() error {
+	m.Lock()
+	defer m.Unlock()
+	m.Called()
+
+	return nil
+}
+
+func (m *SafeMockKafkaProducer) IsPublishCalled() bool {
+	m.Lock()
+	defer m.Unlock()
+
+	return m.publishCalled
+}
+
+func (m *SafeMockKafkaProducer) BrokersURL() []string {
+	return []string{}
+}
+
 func newTx(random uint32, parentTxHash ...*chainhash.Hash) *bt.Tx {
 	tx := bt.NewTx()
 	tx.Version = random
@@ -229,7 +267,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	// now create a subtree with the coinbase to calculate the merkle root
 	replicatedSubtree := subtree.Duplicate()
-	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
 
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
@@ -336,7 +374,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	coinbase.Outputs = nil
-	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+uint64(fees))
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+uint64(fees)) //nolint: gosec
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
@@ -358,7 +396,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	// now create a subtree with the coinbase to calculate the merkle root
 	replicatedSubtree := subtree.Duplicate()
-	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
 
 	// if len(subtreeHashes) == 1 {
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
@@ -461,7 +499,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	// now create a subtree with the coinbase to calculate the merkle root
 	replicatedSubtree := subtree.Duplicate()
-	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
 
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
@@ -491,7 +529,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	block := &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
-		TransactionCount: uint64(subtree.Length()),
+		TransactionCount: uint64(subtree.Length()), //nolint: gosec
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
@@ -549,7 +587,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	// now create a subtree with the coinbase to calculate the merkle root
 	replicatedSubtree := subtree.Duplicate()
-	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
 
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
@@ -579,7 +617,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	block := &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
-		TransactionCount: uint64(subtree.Length()),
+		TransactionCount: uint64(subtree.Length()), //nolint: gosec
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
@@ -666,7 +704,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	// now create a subtree with the coinbase to calculate the merkle root
 	replicatedSubtree := subtree.Duplicate()
-	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
 
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
@@ -696,7 +734,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	block := &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
-		TransactionCount: uint64(subtree.Length()),
+		TransactionCount: uint64(subtree.Length()), //nolint: gosec
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
@@ -784,7 +822,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 		subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 		// now create a subtree with the coinbase to calculate the merkle root
 		replicatedSubtree := subtree.Duplicate()
-		replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+		replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
 
 		calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
@@ -3313,4 +3351,134 @@ func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 
 	_, exists := blockValidation.blockHashesCurrentlyValidated.Get(*blockHash)
 	require.False(t, exists, "block hash should be deleted from blockHashesCurrentlyValidated after success")
+}
+
+func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
+	initPrometheusMetrics()
+
+	tSettings := test.CreateBaseTestSettings()
+
+	// Duplicate Transaction Setup
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+
+	coinbaseTx := bt.NewTx()
+	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
+	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+
+	normalTx := bt.NewTx()
+	_ = normalTx.FromUTXOs(&bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: coinbaseTx.Outputs[0].LockingScript,
+		Satoshis:      coinbaseTx.Outputs[0].Satoshis,
+	})
+	_ = normalTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000)
+	_ = normalTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
+
+	subtree, err := util.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) //nolint: gosec
+	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) //nolint: gosec
+	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) //nolint: gosec
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\\z`, httpmock.NewBytesResponder(200, nodeBytes))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+
+	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
+	require.NoError(t, err)
+	t.Logf("Stored subtree with hash: %s", subtree.RootHash().String())
+
+	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+
+	replicatedSubtree := subtree.Duplicate()
+	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint: gosec
+	calculatedMerkleRootHash := replicatedSubtree.RootHash()
+
+	nBits, _ := model.NewNBitFromString("2000ffff")
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: calculatedMerkleRootHash,
+		Timestamp:      uint32(time.Now().Unix()), //nolint: gosec
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		blockHeader.Nonce++
+	}
+
+	totalSize := int64(coinbaseTx.Size()) + 2*int64(normalTx.Size())
+	block, err := model.NewBlock(
+		blockHeader,
+		coinbaseTx,
+		subtreeHashes,
+		uint64(subtree.Length()), //nolint: gosec
+		uint64(totalSize),        //nolint: gosec
+		100, 0, tSettings,
+	)
+	require.NoError(t, err)
+
+	// Mock Blockchain and Kafka
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return(nil)
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything).Return(nil)
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
+
+	// Use our thread-safe mock
+	mockKafka := &SafeMockKafkaProducer{}
+	mockKafka.On("Publish", mock.MatchedBy(func(msg *kafka.Message) bool {
+		return true
+	})).Return(nil).Once()
+	mockKafka.On("Start", mock.Anything, mock.Anything).Return()
+
+	bv := &BlockValidation{
+		logger:                        ulogger.TestLogger{},
+		settings:                      tSettings,
+		blockchainClient:              mockBlockchain,
+		subtreeStore:                  subtreeStore,
+		txStore:                       txStore,
+		utxoStore:                     txMetaStore,
+		recentBlocksBloomFilters:      util.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+		bloomFilterRetentionSize:      0,
+		subtreeValidationClient:       subtreeValidationClient,
+		subtreeDeDuplicator:           NewDeDuplicator(0),
+		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		invalidBlockKafkaProducer:     mockKafka,
+		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
+		blockHashesCurrentlyValidated: util.NewSwissMap(0),
+		blockBloomFiltersBeingCreated: util.NewSwissMap(0),
+		bloomFilterStats:              model.NewBloomStats(),
+		setMinedChan:                  make(chan *chainhash.Hash, 1),
+		stats:                         gocore.NewStat("blockvalidation"),
+	}
+
+	err = bv.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
+	t.Logf("ValidateBlock error type: %T, value: %v", err, err)
+	require.Error(t, err)
+
+	// Use the thread-safe method to check if Publish was called
+	require.True(t, mockKafka.IsPublishCalled(), "Kafka Publish should be called for invalid block (duplicate transaction)")
 }

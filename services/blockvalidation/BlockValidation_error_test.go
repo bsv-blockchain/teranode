@@ -27,17 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MockInvalidBlockHandler implements InvalidBlockHandler for testing
-// using testify's mock package.
-type MockInvalidBlockHandler struct {
-	mock.Mock
-}
-
-func (m *MockInvalidBlockHandler) ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error {
-	args := m.Called(ctx, blockHash, reason)
-	return args.Error(0)
-}
-
 // testBlockValidation is a test double for BlockValidation that allows shadowing waitForPreviousBlocksToBeProcessed.
 type testBlockValidation struct {
 	*BlockValidation
@@ -368,12 +357,18 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	mockHandler := new(MockInvalidBlockHandler)
 	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
 
+	// Use our thread-safe mock Kafka producer
+	mockKafka := &SafeMockKafkaProducer{}
+	mockKafka.On("Start", mock.Anything, mock.Anything).Return()
+
 	callCount := 0
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.Kafka.InvalidBlocks = "test-invalid-blocks" // Enable Kafka publishing
+
 	bv := &testBlockValidation{
 		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient, mockHandler),
 		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
@@ -385,6 +380,9 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 			return nil
 		},
 	}
+
+	// Inject our mock Kafka producer directly into the BlockValidation struct
+	bv.BlockValidation.invalidBlockKafkaProducer = mockKafka
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
@@ -398,6 +396,9 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return mockBlockchain.AssertCalled(t, "InvalidateBlock", mock.Anything, block.Header.Hash())
 	}, 2*time.Second, 100*time.Millisecond, "InvalidateBlock should be called in background goroutine")
+
+	// Verify that Publish was called on the Kafka producer
+	require.True(t, mockKafka.IsPublishCalled(), "Kafka Publish should be called for invalid block")
 }
 
 func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
@@ -478,10 +479,17 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	mockHandler := new(MockInvalidBlockHandler)
 	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
 
+	// Use our thread-safe mock Kafka producer
+	mockKafka := &SafeMockKafkaProducer{}
+	mockKafka.On("Start", mock.Anything, mock.Anything).Return()
+
 	callCount := 0
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Enable Kafka publishing
+	tSettings.Kafka.InvalidBlocks = "test-invalid-blocks"
 
 	bv := &testBlockValidation{
 		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient, mockHandler),
@@ -493,6 +501,9 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 			return nil
 		},
 	}
+
+	// Inject our mock Kafka producer directly into the BlockValidation struct
+	bv.BlockValidation.invalidBlockKafkaProducer = mockKafka
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)

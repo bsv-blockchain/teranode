@@ -9,6 +9,11 @@ message KafkaBlockTopicMessage {
   string URL = 2;
 }
 
+message KafkaInvalidBlockTopicMessage {
+  string blockHash = 1;
+  string reason = 2;
+}
+
 message KafkaSubtreeTopicMessage {
   string hash = 1;
   string URL = 2;

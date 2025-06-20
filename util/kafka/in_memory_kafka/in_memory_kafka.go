@@ -118,6 +118,7 @@ func (p *InMemorySyncProducer) SendMessage(msg *sarama.ProducerMessage) (int32, 
 			return 0, 0, fmt.Errorf("failed to encode key: %w", errKey) // nolint:forbidigo
 		}
 	}
+
 	value, err := msg.Value.Encode()
 	if err != nil {
 		return 0, 0, err

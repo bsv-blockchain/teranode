@@ -245,6 +245,7 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 	if err != nil && !errors.Is(err, errors.ErrBlockNotFound) {
 		return nil, err
 	}
+
 	var (
 		blockReply    interface{}
 		nextBlockHash string
@@ -433,7 +434,73 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 		return nil, errors.NewServiceError("Error reading response body", err)
 	}
 
-	return body, nil
+	if *c.Verbose == 0 {
+		return body, nil
+	}
+
+	// parse the transaction
+	tx, err := bsvutil.NewTxFromBytes(body)
+	if err != nil {
+		return nil, errors.NewServiceError("Error parsing transaction", err)
+	}
+
+	// inputs
+	inputs := make([]bsvjson.Vin, len(tx.MsgTx().TxIn))
+	for i, txIn := range tx.MsgTx().TxIn {
+		inputs[i] = bsvjson.Vin{
+			Txid: txIn.PreviousOutPoint.Hash.String(),
+			Vout: txIn.PreviousOutPoint.Index,
+			ScriptSig: &bsvjson.ScriptSig{
+				Asm: "",
+				Hex: "",
+			},
+			Sequence: txIn.Sequence,
+		}
+	}
+
+	// outputs
+	outputs := make([]bsvjson.Vout, len(tx.MsgTx().TxOut))
+
+	for i, txOut := range tx.MsgTx().TxOut {
+		pkScriptClass, addresses, _, err := txscript.ExtractPkScriptAddrs(txOut.PkScript, s.settings.ChainCfgParams)
+		if err != nil {
+			return nil, errors.NewServiceError("Error extracting script addresses", err)
+		}
+
+		// Convert []bsvutil.Address to []string
+		addressStrings := make([]string, len(addresses))
+		for j, addr := range addresses {
+			addressStrings[j] = addr.EncodeAddress()
+		}
+
+		asm, err := txscript.DisasmString(txOut.PkScript)
+		if err != nil {
+			return nil, errors.NewServiceError("Error disassembling script", err)
+		}
+
+		outputs[i] = bsvjson.Vout{
+			Value: float64(txOut.Value),
+			ScriptPubKey: bsvjson.ScriptPubKeyResult{
+				Addresses: addressStrings,
+				Asm:       asm,
+				Hex:       hex.EncodeToString(txOut.PkScript),
+				Type:      pkScriptClass.String(),
+			},
+		}
+	}
+
+	// return verbose transaction
+	// do we want to send all the vin and vout data?
+	return bsvjson.TxRawResult{
+		Hex:      string(body),
+		Txid:     tx.Hash().String(),
+		Hash:     tx.Hash().String(),
+		Size:     int32(tx.MsgTx().SerializeSize()), //nolint:gosec
+		Version:  tx.MsgTx().Version,
+		LockTime: tx.MsgTx().LockTime,
+		Vin:      inputs,
+		Vout:     outputs,
+	}, nil
 }
 
 // handleCreateRawTransaction handles createrawtransaction commands.
@@ -979,6 +1046,7 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 				Version:        p.Version,
 				SubVer:         p.SubVer,
 				CurrentHeight:  p.CurrentHeight,
+				BanScore:       p.Banscore,
 			}
 			infos = append(infos, info)
 		}

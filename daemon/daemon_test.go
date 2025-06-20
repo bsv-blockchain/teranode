@@ -213,6 +213,7 @@ func getFreePort() (int, error) {
 	}
 
 	var l *net.TCPListener
+
 	l, err = net.ListenTCP("tcp", addr)
 	if err != nil {
 		return 0, err
@@ -297,6 +298,10 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 
 	if appSettings.Kafka.SubtreesConfig != nil {
 		appSettings.Kafka.SubtreesConfig.Scheme = newConst
+	}
+
+	if appSettings.Kafka.InvalidBlocksConfig != nil {
+		appSettings.Kafka.InvalidBlocksConfig.Scheme = newConst
 	}
 
 	WaitForPortsFree(t, ctx, appSettings)

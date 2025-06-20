@@ -375,7 +375,10 @@ func (repo *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, l
 func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
 	if err != nil {
-		return nil, err
+		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	defer func() {
@@ -402,7 +405,15 @@ func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Has
 //   - io.ReadCloser: Reader for subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
-	return repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+	reader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+	if err != nil {
+		reader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return reader, nil
 }
 
 // GetSubtreeDataReaderFromBlockPersister provides a reader interface for accessing subtree data from block persister.
@@ -434,7 +445,10 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
 	if err != nil {
-		return nil, errors.NewServiceError("error in GetSubtree Get method", err)
+		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	defer func() {

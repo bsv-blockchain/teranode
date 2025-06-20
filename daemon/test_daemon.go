@@ -605,7 +605,7 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, useInput ...uint64) *bt.Tx {
 	tx := bt.NewTx()
 
-	parentOutput := uint64(0)
+	var parentOutput uint64
 
 	if len(useInput) > 0 {
 		parentOutput = useInput[0]

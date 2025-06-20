@@ -175,9 +175,6 @@ func New(
 		kafkaConsumerClient:  kafkaConsumerClient,
 	}
 
-	// Set the global server instance for the blockvalidation package
-	SetServer(bVal)
-
 	return bVal
 }
 
@@ -276,7 +273,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		for {
 			_, _, ctx1 := tracing.NewStatFromContext(ctx, "catchupCh", u.stats, false)
 			select {
-
 			case <-ctx.Done():
 				u.logger.Infof("[Init] closing block found channel")
 				return

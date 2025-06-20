@@ -70,6 +70,7 @@ type KafkaAsyncProducer struct {
 	Producer       sarama.AsyncProducer // Underlying Sarama async producer
 	publishChannel chan *Message        // Channel for publishing messages
 	closed         atomic.Bool          // Flag indicating if producer is closed
+	channelMu      sync.RWMutex         // Mutex to protect publishChannel access
 }
 
 // NewKafkaAsyncProducerFromURL creates a new async producer from a URL configuration.
@@ -216,7 +217,9 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 
 		defer cancel()
 
+		c.channelMu.Lock()
 		c.publishChannel = ch
+		c.channelMu.Unlock()
 
 		go func() {
 			for s := range c.Producer.Successes() {
@@ -241,7 +244,11 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 		go func() {
 			wg.Done()
 
-			for msgBytes := range c.publishChannel {
+			c.channelMu.RLock()
+			ch := c.publishChannel
+			c.channelMu.RUnlock()
+
+			for msgBytes := range ch {
 				if c.closed.Load() {
 					break
 				}
@@ -318,7 +325,13 @@ func (c *KafkaAsyncProducer) BrokersURL() []string {
 
 // Publish sends a message to the producer's publish channel.
 func (c *KafkaAsyncProducer) Publish(msg *Message) {
-	c.publishChannel <- msg
+	c.channelMu.RLock()
+	ch := c.publishChannel
+	c.channelMu.RUnlock()
+
+	if ch != nil {
+		ch <- msg
+	}
 }
 
 // createTopic creates a new Kafka topic with the specified configuration.

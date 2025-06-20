@@ -16,8 +16,8 @@ import (
 
 var (
 	testLock sync.Mutex
-	// DEBUG DEBUG DEBUG
-	blockWait = 180 * time.Second
+	// Reasonable timeout for block synchronization
+	blockWait = 10 * time.Second
 )
 
 func TestMoveUp(t *testing.T) {
@@ -37,6 +37,10 @@ func TestMoveUp(t *testing.T) {
 	defer node2.Stop(t)
 
 	_, err := node2.CallRPC(node2.Ctx, "generate", []any{1})
+	require.NoError(t, err)
+
+	// wait for node2 to catchup to block 1
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 1, blockWait)
 	require.NoError(t, err)
 
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{

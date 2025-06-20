@@ -157,7 +157,6 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 		}
 
 		return validatorClient, nil
-
 	} else {
 		d.mainValidatorClient, err = validator.NewClient(ctx, logger, appSettings)
 		if err != nil {

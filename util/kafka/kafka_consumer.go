@@ -462,6 +462,7 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 						kc.cfg.Logger.Debugf("[kafka_consumer] Context canceled in commit ticker (topic: %s): %v",
 							kc.cfg.Topic, err)
 					}
+
 					return
 				case <-commitTicker.C:
 					mu.Lock()
@@ -491,6 +492,7 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 					kc.cfg.Logger.Debugf("[kafka_consumer] Context canceled in message forwarder (topic: %s, partition: %d): %v",
 						claim.Topic(), claim.Partition(), err)
 				}
+
 				return
 			}
 		}
