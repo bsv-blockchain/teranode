@@ -327,9 +327,12 @@ func (s *File) getExpiredFiles() []string {
 
 	currentBlockHeight := s.currentBlockHeight.Load()
 
+	s.logger.Debugf("[File] current block height is %d", currentBlockHeight)
+
 	for fileName, dah := range s.fileDAHs {
 		if dah <= currentBlockHeight {
 			filesToRemove = append(filesToRemove, fileName)
+			s.logger.Debugf("[File] removing expired file: %s", fileName)
 		}
 	}
 	s.fileDAHsMu.Unlock()
@@ -341,12 +344,14 @@ func (s *File) cleanupExpiredFile(fileName string) {
 	// check if the DAH file still exists, even if the map says it has expired, another process might have updated it
 	dah, err := s.readDAHFromFile(fileName + ".dah")
 	if err != nil {
-		s.logger.Warnf("[File] failed to read DAH from file: %s", fileName+".dah")
+		s.logger.Debugf("[File] failed to read DAH from file: %s", fileName+".dah")
 		return
 	}
 
 	if dah == 0 {
 		s.removeDAHFromMap(fileName)
+		s.logger.Debugf("[File] removing expired file with DAH of 0: %s", fileName)
+
 		return
 	}
 
@@ -354,6 +359,7 @@ func (s *File) cleanupExpiredFile(fileName string) {
 		return
 	}
 
+	s.logger.Debugf("[File] removing expired file: %s", fileName)
 	s.removeFiles(fileName)
 	s.removeDAHFromMap(fileName)
 }
@@ -368,7 +374,7 @@ func (s *File) shouldRemoveFile(fileName string, fileDAH uint32) bool {
 		s.fileDAHs[fileName] = fileDAH
 		s.fileDAHsMu.Unlock()
 
-		s.logger.Warnf("[File] DAH file %s has DAH of %d, but map has %d",
+		s.logger.Debugf("[File] DAH file %s has DAH of %d, but map has %d",
 			fileName+".dah",
 			fileDAH,
 			mapDAH)
@@ -384,6 +390,10 @@ func (s *File) removeFiles(fileName string) {
 	defer func() {
 		<-fileSemaphore
 	}()
+
+	// Use the Del method to allow logger.go to log the removal to help with troubleshooting
+	// FileTypeUnknown is "", which will remove the file, checksum and dah files
+	// err := s.Del(context.Background(), []byte(fileName), fileformat.FileTypeUnknown)
 
 	if err := os.Remove(fileName); err != nil && !os.IsNotExist(err) {
 		s.logger.Warnf("[File] failed to remove file: %s", fileName)
@@ -563,7 +573,12 @@ func (s *File) SetFromReader(_ context.Context, key []byte, fileType fileformat.
 
 	// rename the file to remove the .tmp extension
 	if err = os.Rename(tmpFilename, filename); err != nil {
-		return errors.NewStorageError("[File][SetFromReader] [%s] failed to rename file from tmp", filename, err)
+		// check is some other process has created this file before us
+		if _, statErr := os.Stat(filename); statErr != nil {
+			return errors.NewStorageError("[File][SetFromReader] [%s] failed to rename file from tmp", filename, err)
+		} else {
+			s.logger.Warnf("[File][SetFromReader] [%s] already exists so another process created it first", filename)
+		}
 	}
 
 	// Write SHA256 hash file
@@ -608,13 +623,20 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 	hashFilename := filename + checksumExtension
 	tmpHashFilename := hashFilename + ".tmp"
 
+	var err error
+
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err := os.WriteFile(tmpHashFilename, []byte(hashStr), 0644); err != nil {
+	if err = os.WriteFile(tmpHashFilename, []byte(hashStr), 0644); err != nil {
 		return errors.NewStorageError("[File] failed to write hash file", err)
 	}
 
-	if err := os.Rename(tmpHashFilename, hashFilename); err != nil {
-		return errors.NewStorageError("[File] failed to rename hash file from tmp", err)
+	if err = os.Rename(tmpHashFilename, hashFilename); err != nil {
+		// check is some other process has created this file before us
+		if _, statErr := os.Stat(hashFilename); statErr != nil {
+			return errors.NewStorageError("[File] failed to rename hash file", err)
+		} else {
+			s.logger.Warnf("[File] hash file %s already exists so another process created it first", hashFilename)
+		}
 	}
 
 	return nil
@@ -670,13 +692,20 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 		dahFilename := fileName + ".dah"
 		dahTempFilename := dahFilename + ".tmp"
 
+		var err error
+
 		//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 		if err = os.WriteFile(dahTempFilename, []byte(strconv.FormatUint(uint64(dah), 10)), 0644); err != nil {
 			return "", errors.NewStorageError("[File][%s] failed to write DAH to file", dahTempFilename, err)
 		}
 
-		if err := os.Rename(dahTempFilename, dahFilename); err != nil {
-			return "", errors.NewStorageError("[File][%s] failed to rename file from tmp", dahFilename, err)
+		if err = os.Rename(dahTempFilename, dahFilename); err != nil {
+			// check is some other process has created this file before us
+			if _, statErr := os.Stat(dahFilename); statErr != nil {
+				return "", errors.NewStorageError("[File][%s] failed to rename file from tmp", dahFilename, err)
+			} else {
+				s.logger.Warnf("[File][%s] DAH file already exists so another process created it first", dahFilename)
+			}
 		}
 
 		s.fileDAHsMu.Lock()
@@ -758,7 +787,11 @@ func (s *File) SetDAH(_ context.Context, key []byte, fileType fileformat.FileTyp
 	}
 
 	if err = os.Rename(dahTempFilename, dahFilename); err != nil {
-		return errors.NewStorageError("[File][%s] failed to rename file from tmp", dahFilename, err)
+		if _, statErr := os.Stat(dahFilename); statErr != nil {
+			return errors.NewStorageError("[File][%s] failed to rename file from tmp", dahFilename, err)
+		} else {
+			s.logger.Warnf("[File][%s] file already exists meaning another process created it first", dahFilename)
+		}
 	}
 
 	s.fileDAHsMu.Lock()
@@ -982,7 +1015,7 @@ func (s *File) Exists(ctx context.Context, key []byte, fileType fileformat.FileT
 //
 // Returns:
 //   - error: Any error that occurred during deletion, or nil if the blob was successfully deleted
-//           or didn't exist
+//     or didn't exist
 func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
 	fileSemaphore <- struct{}{}
 	defer func() {
