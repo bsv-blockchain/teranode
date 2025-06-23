@@ -161,7 +161,7 @@ func Tracer(name string, otelOpts ...trace.TracerOption) *UTracer {
 //
 //	ctx, span := tracer.Start(ctx, "ProcessTransaction",
 //	    WithParentStat(parentStat),
-//	    WithTag("tx.id", txID),
+//	    WithTag("txid", txID),
 //	    WithLogMessage(logger, "Processing transaction %s", txID),
 //	)
 //	defer span.End()

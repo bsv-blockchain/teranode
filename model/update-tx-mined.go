@@ -105,13 +105,13 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	return <-done
 }
 
-func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, txMetaStore txMinedStatus, block *Block, blockID uint32) error {
-	ctx, _, deferFn := tracing.Tracer("model").Start(ctx, "updateTxMinedStatus",
+func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, txMetaStore txMinedStatus, block *Block, blockID uint32) (err error) {
+	ctx, _, endSpan := tracing.Tracer("model").Start(ctx, "updateTxMinedStatus",
 		tracing.WithHistogram(prometheusUpdateTxMinedDuration),
-		tracing.WithTag("TXID", block.Hash().String()),
+		tracing.WithTag("txid", block.Hash().String()),
 		tracing.WithDebugLogMessage(logger, "[UpdateTxMinedStatus] [%s] blockID %d for %d subtrees", block.Hash().String(), blockID, len(block.Subtrees)),
 	)
-	defer deferFn()
+	defer endSpan(err)
 
 	if !tSettings.UtxoStore.UpdateTxMinedStatus {
 		return nil

@@ -23,7 +23,6 @@ func TestInvalidBlockKafkaP2P_E2E(t *testing.T) {
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:         true,
 		EnableP2P:         true,
-		UseTracing:        false,
 		SettingsContext:   "docker.host.teranode1.daemon",
 		EnableFullLogging: false,
 	})
@@ -32,7 +31,6 @@ func TestInvalidBlockKafkaP2P_E2E(t *testing.T) {
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:         true,
 		EnableP2P:         true,
-		UseTracing:        false,
 		SettingsContext:   "docker.host.teranode2.daemon",
 		SkipRemoveDataDir: true,
 		EnableFullLogging: false,

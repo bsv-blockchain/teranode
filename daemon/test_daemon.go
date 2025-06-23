@@ -89,7 +89,6 @@ type TestOptions struct {
 	SettingsOverrideFunc    func(*settings.Settings)
 	SkipRemoveDataDir       bool
 	StartDaemonDependencies bool
-	UseTracing              bool
 }
 
 // JSONError represents a JSON error response from the RPC server.

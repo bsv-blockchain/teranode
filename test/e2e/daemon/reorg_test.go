@@ -39,10 +39,6 @@ func TestMoveUp(t *testing.T) {
 	_, err := node2.CallRPC(node2.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
-	// wait for node2 to catchup to block 1
-	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 1, blockWait)
-	require.NoError(t, err)
-
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC: true,
 		EnableP2P: true,

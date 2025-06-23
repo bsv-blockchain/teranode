@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Tracing Module</title>
+            <style>
+/* From extension vscode.github */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.vscode-dark img[src$=\#gh-light-mode-only],
+.vscode-light img[src$=\#gh-dark-mode-only],
+.vscode-high-contrast:not(.vscode-high-contrast-light) img[src$=\#gh-light-mode-only],
+.vscode-high-contrast-light img[src$=\#gh-dark-mode-only] {
+	display: none;
+}
+
+</style>
+            
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/markdown.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/highlight.css">
+<style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+            }
+        </style>
+        <style>
+.task-list-item {
+    list-style-type: none;
+}
+
+.task-list-item-checkbox {
+    margin-left: -20px;
+    vertical-align: middle;
+    pointer-events: none;
+}
+</style>
+<style>
+:root {
+  --color-note: #0969da;
+  --color-tip: #1a7f37;
+  --color-warning: #9a6700;
+  --color-severe: #bc4c00;
+  --color-caution: #d1242f;
+  --color-important: #8250df;
+}
+
+</style>
+<style>
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-note: #2f81f7;
+    --color-tip: #3fb950;
+    --color-warning: #d29922;
+    --color-severe: #db6d28;
+    --color-caution: #f85149;
+    --color-important: #a371f7;
+  }
+}
+
+</style>
+<style>
+.markdown-alert {
+  padding: 0.5rem 1rem;
+  margin-bottom: 16px;
+  color: inherit;
+  border-left: .25em solid #888;
+}
+
+.markdown-alert>:first-child {
+  margin-top: 0
+}
+
+.markdown-alert>:last-child {
+  margin-bottom: 0
+}
+
+.markdown-alert .markdown-alert-title {
+  display: flex;
+  font-weight: 500;
+  align-items: center;
+  line-height: 1
+}
+
+.markdown-alert .markdown-alert-title .octicon {
+  margin-right: 0.5rem;
+  display: inline-block;
+  overflow: visible !important;
+  vertical-align: text-bottom;
+  fill: currentColor;
+}
+
+.markdown-alert.markdown-alert-note {
+  border-left-color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-note .markdown-alert-title {
+  color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-important {
+  border-left-color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-important .markdown-alert-title {
+  color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-warning {
+  border-left-color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-warning .markdown-alert-title {
+  color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-tip {
+  border-left-color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-tip .markdown-alert-title {
+  color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-caution {
+  border-left-color: var(--color-caution);
+}
+
+.markdown-alert.markdown-alert-caution .markdown-alert-title {
+  color: var(--color-caution);
+}
+
+</style>
+        
+        </head>
+        <body class="vscode-body vscode-light">
+            <h1 id="tracing-module">Tracing Module</h1>
+<p>This module provides distributed tracing capabilities for Teranode using OpenTelemetry. It offers a unified interface that combines tracing spans, performance metrics, structured logging, and Prometheus metrics integration.</p>
+<h2 id="adding-tracing-to-functions">Adding Tracing to Functions</h2>
+<h3 id="basic-usage">Basic Usage</h3>
+<p>To add tracing to a function, follow this pattern:</p>
+<pre><code class="language-go"><span class="hljs-keyword">import</span> <span class="hljs-string">&quot;github.com/bitcoin-sv/teranode/util/tracing&quot;</span>
+
+<span class="hljs-function"><span class="hljs-keyword">func</span> <span class="hljs-title">MyFunction</span><span class="hljs-params">(ctx context.Context)</span></span> <span class="hljs-type">error</span> {
+    <span class="hljs-comment">// Create a tracer for your component</span>
+    tracer := tracing.Tracer(<span class="hljs-string">&quot;my-component&quot;</span>)
+    
+    <span class="hljs-comment">// Start a span</span>
+    ctx, span, endSpan := tracer.Start(ctx, <span class="hljs-string">&quot;MyFunction&quot;</span>)
+    <span class="hljs-keyword">defer</span> endSpan() <span class="hljs-comment">// IMPORTANT: Always defer endSpan()</span>
+    
+    <span class="hljs-comment">// Your function logic here</span>
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">nil</span>
+}
+</code></pre>
+<h3 id="with-error-handling">With Error Handling</h3>
+<p>When your function returns an error, pass it to the endSpan function:</p>
+<pre><code class="language-go"><span class="hljs-function"><span class="hljs-keyword">func</span> <span class="hljs-title">ProcessTransaction</span><span class="hljs-params">(ctx context.Context, txID <span class="hljs-type">string</span>)</span></span> (err <span class="hljs-type">error</span>) {
+    tracer := tracing.Tracer(<span class="hljs-string">&quot;transaction-processor&quot;</span>)
+    
+    ctx, span, endSpan := tracer.Start(ctx, <span class="hljs-string">&quot;ProcessTransaction&quot;</span>,
+        tracing.WithTag(<span class="hljs-string">&quot;tx.id&quot;</span>, txID),
+    )
+    <span class="hljs-keyword">defer</span> endSpan(err) <span class="hljs-comment">// Pass the named return error</span>
+    
+    <span class="hljs-comment">// Your processing logic</span>
+    <span class="hljs-keyword">if</span> err := validate(txID); err != <span class="hljs-literal">nil</span> {
+        <span class="hljs-keyword">return</span> err <span class="hljs-comment">// The error will be recorded in the span</span>
+    }
+    
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">nil</span>
+}
+</code></pre>
+<h3 id="with-additional-options">With Additional Options</h3>
+<p>You can enhance your spans with various options:</p>
+<pre><code class="language-go">ctx, span, endSpan := tracer.Start(ctx, <span class="hljs-string">&quot;OperationName&quot;</span>,
+    <span class="hljs-comment">// Add searchable tags</span>
+    tracing.WithTag(<span class="hljs-string">&quot;user.id&quot;</span>, userID),
+    tracing.WithTag(<span class="hljs-string">&quot;request.type&quot;</span>, <span class="hljs-string">&quot;batch&quot;</span>),
+    
+    <span class="hljs-comment">// Add logging</span>
+    tracing.WithLogMessage(logger, <span class="hljs-string">&quot;Processing batch for user %s&quot;</span>, userID),
+    
+    <span class="hljs-comment">// Add metrics</span>
+    tracing.WithHistogram(myHistogram),
+    tracing.WithCounter(myCounter),
+    
+    <span class="hljs-comment">// Link to parent statistics</span>
+    tracing.WithParentStat(parentStat),
+)
+<span class="hljs-keyword">defer</span> endSpan()
+</code></pre>
+<h2 id="recording-errors-in-spans">Recording Errors in Spans</h2>
+<h3 id="method-1-pass-error-to-endspan">Method 1: Pass Error to endSpan</h3>
+<p>The recommended approach is to pass errors to the endSpan function:</p>
+<pre><code class="language-go"><span class="hljs-function"><span class="hljs-keyword">func</span> <span class="hljs-title">MyOperation</span><span class="hljs-params">(ctx context.Context)</span></span> (err <span class="hljs-type">error</span>) {
+    ctx, span, endSpan := tracer.Start(ctx, <span class="hljs-string">&quot;MyOperation&quot;</span>)
+    <span class="hljs-keyword">defer</span> endSpan(err) <span class="hljs-comment">// Automatically records the error</span>
+    
+    <span class="hljs-keyword">if</span> err := doSomething(); err != <span class="hljs-literal">nil</span> {
+        <span class="hljs-keyword">return</span> fmt.Errorf(<span class="hljs-string">&quot;failed to do something: %w&quot;</span>, err)
+    }
+    
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">nil</span>
+}
+</code></pre>
+<h3 id="method-2-direct-error-recording">Method 2: Direct Error Recording</h3>
+<p>For cases where you want to record an error but continue processing:</p>
+<pre><code class="language-go">ctx, span, endSpan := tracer.Start(ctx, <span class="hljs-string">&quot;BatchOperation&quot;</span>)
+<span class="hljs-keyword">defer</span> endSpan()
+
+<span class="hljs-keyword">for</span> _, item := <span class="hljs-keyword">range</span> items {
+    <span class="hljs-keyword">if</span> err := processItem(item); err != <span class="hljs-literal">nil</span> {
+        <span class="hljs-comment">// Record error but continue</span>
+        span.RecordError(err)
+        span.AddEvent(<span class="hljs-string">&quot;item_failed&quot;</span>, 
+            attribute.String(<span class="hljs-string">&quot;item.id&quot;</span>, item.ID),
+            attribute.String(<span class="hljs-string">&quot;error&quot;</span>, err.Error()),
+        )
+        <span class="hljs-keyword">continue</span>
+    }
+}
+</code></pre>
+<h3 id="method-3-multiple-errors">Method 3: Multiple Errors</h3>
+<p>When handling multiple potential errors:</p>
+<pre><code class="language-go"><span class="hljs-function"><span class="hljs-keyword">func</span> <span class="hljs-title">ComplexOperation</span><span class="hljs-params">(ctx context.Context)</span></span> <span class="hljs-type">error</span> {
+    ctx, span, endSpan := tracer.Start(ctx, <span class="hljs-string">&quot;ComplexOperation&quot;</span>)
+    
+    <span class="hljs-keyword">var</span> finalErr <span class="hljs-type">error</span>
+    <span class="hljs-keyword">defer</span> <span class="hljs-function"><span class="hljs-keyword">func</span><span class="hljs-params">()</span></span> {
+        endSpan(finalErr) <span class="hljs-comment">// Pass the final error state</span>
+    }()
+    
+    <span class="hljs-keyword">if</span> err := step1(); err != <span class="hljs-literal">nil</span> {
+        finalErr = fmt.Errorf(<span class="hljs-string">&quot;step1 failed: %w&quot;</span>, err)
+        <span class="hljs-keyword">return</span> finalErr
+    }
+    
+    <span class="hljs-keyword">if</span> err := step2(); err != <span class="hljs-literal">nil</span> {
+        finalErr = fmt.Errorf(<span class="hljs-string">&quot;step2 failed: %w&quot;</span>, err)
+        <span class="hljs-keyword">return</span> finalErr
+    }
+    
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">nil</span>
+}
+</code></pre>
+<h2 id="the-importance-of-ending-spans">The Importance of Ending Spans</h2>
+<h3 id="why-you-must-call-endspan">Why You Must Call endSpan</h3>
+<p>The <code>endSpan</code> function performs several critical operations:</p>
+<ol>
+<li><strong>Span Completion</strong>: Marks the span as complete in the distributed trace</li>
+<li><strong>Duration Recording</strong>: Calculates and records the operation duration</li>
+<li><strong>Error Status</strong>: Sets the span status to error if an error is passed</li>
+<li><strong>Metrics Recording</strong>: Updates any configured Prometheus metrics</li>
+<li><strong>Performance Stats</strong>: Updates gocore.Stat performance statistics</li>
+<li><strong>Logging</strong>: Logs completion with timing information</li>
+</ol>
+<h3 id="what-happens-if-you-dont-end-a-span">What Happens If You Don't End a Span</h3>
+<ul>
+<li><strong>Memory Leak</strong>: Spans remain in memory and are never sent to the tracing backend</li>
+<li><strong>Incomplete Traces</strong>: The distributed trace will show incomplete operations</li>
+<li><strong>Missing Metrics</strong>: Prometheus metrics won't be updated</li>
+<li><strong>No Timing Data</strong>: Operation duration won't be recorded</li>
+<li><strong>Lost Error Information</strong>: Errors won't be associated with the trace</li>
+</ul>
+<h3 id="best-practices-for-ending-spans">Best Practices for Ending Spans</h3>
+<ol>
+<li>
+<p><strong>Always Use defer</strong>: Place <code>defer endSpan()</code> immediately after starting a span</p>
+<pre><code class="language-go">ctx, span, endSpan := tracer.Start(ctx, <span class="hljs-string">&quot;Operation&quot;</span>)
+<span class="hljs-keyword">defer</span> endSpan() <span class="hljs-comment">// Do this immediately</span>
+</code></pre>
+</li>
+<li>
+<p><strong>Handle Panics</strong>: The defer ensures endSpan is called even if the function panics</p>
+<pre><code class="language-go"><span class="hljs-keyword">defer</span> <span class="hljs-function"><span class="hljs-keyword">func</span><span class="hljs-params">()</span></span> {
+    <span class="hljs-keyword">if</span> r := <span class="hljs-built_in">recover</span>(); r != <span class="hljs-literal">nil</span> {
+        err := fmt.Errorf(<span class="hljs-string">&quot;panic: %v&quot;</span>, r)
+        endSpan(err)
+        <span class="hljs-built_in">panic</span>(r) <span class="hljs-comment">// Re-panic after recording</span>
+    }
+}()
+</code></pre>
+</li>
+<li>
+<p><strong>Named Returns for Errors</strong>: Use named returns to automatically capture errors</p>
+<pre><code class="language-go"><span class="hljs-function"><span class="hljs-keyword">func</span> <span class="hljs-title">MyFunc</span><span class="hljs-params">()</span></span> (result <span class="hljs-type">string</span>, err <span class="hljs-type">error</span>) {
+    ctx, span, endSpan := tracer.Start(ctx, <span class="hljs-string">&quot;MyFunc&quot;</span>)
+    <span class="hljs-keyword">defer</span> endSpan(err) <span class="hljs-comment">// Will capture the final error value</span>
+    
+    <span class="hljs-comment">// Function logic</span>
+    <span class="hljs-keyword">return</span> result, err
+}
+</code></pre>
+</li>
+</ol>
+<h2 id="complete-example">Complete Example</h2>
+<pre><code class="language-go"><span class="hljs-keyword">package</span> myservice
+
+<span class="hljs-keyword">import</span> (
+    <span class="hljs-string">&quot;context&quot;</span>
+    <span class="hljs-string">&quot;fmt&quot;</span>
+    
+    <span class="hljs-string">&quot;github.com/bitcoin-sv/teranode/util/tracing&quot;</span>
+    <span class="hljs-string">&quot;go.opentelemetry.io/otel/attribute&quot;</span>
+)
+
+<span class="hljs-keyword">type</span> Service <span class="hljs-keyword">struct</span> {
+    tracer *tracing.UTracer
+}
+
+<span class="hljs-function"><span class="hljs-keyword">func</span> <span class="hljs-title">NewService</span><span class="hljs-params">()</span></span> *Service {
+    <span class="hljs-keyword">return</span> &amp;Service{
+        tracer: tracing.Tracer(<span class="hljs-string">&quot;myservice&quot;</span>),
+    }
+}
+
+<span class="hljs-function"><span class="hljs-keyword">func</span> <span class="hljs-params">(s *Service)</span></span> ProcessBatch(ctx context.Context, items []Item) (err <span class="hljs-type">error</span>) {
+    <span class="hljs-comment">// Start tracing with comprehensive options</span>
+    ctx, span, endSpan := s.tracer.Start(ctx, <span class="hljs-string">&quot;ProcessBatch&quot;</span>,
+        tracing.WithTag(<span class="hljs-string">&quot;batch.size&quot;</span>, fmt.Sprintf(<span class="hljs-string">&quot;%d&quot;</span>, <span class="hljs-built_in">len</span>(items))),
+        tracing.WithLogMessage(logger, <span class="hljs-string">&quot;Processing batch of %d items&quot;</span>, <span class="hljs-built_in">len</span>(items)),
+    )
+    <span class="hljs-keyword">defer</span> endSpan(err) <span class="hljs-comment">// Ensures span is ended with final error state</span>
+    
+    <span class="hljs-comment">// Add runtime attributes</span>
+    span.SetAttribute(<span class="hljs-string">&quot;service.version&quot;</span>, <span class="hljs-string">&quot;1.0.0&quot;</span>)
+    span.AddEvent(<span class="hljs-string">&quot;processing_started&quot;</span>)
+    
+    <span class="hljs-comment">// Process items</span>
+    <span class="hljs-keyword">var</span> processed, failed <span class="hljs-type">int</span>
+    <span class="hljs-keyword">for</span> i, item := <span class="hljs-keyword">range</span> items {
+        <span class="hljs-comment">// Create child span for each item</span>
+        _, itemSpan, endItemSpan := s.tracer.Start(ctx, <span class="hljs-string">&quot;ProcessItem&quot;</span>,
+            tracing.WithTag(<span class="hljs-string">&quot;item.id&quot;</span>, item.ID),
+            tracing.WithTag(<span class="hljs-string">&quot;item.index&quot;</span>, fmt.Sprintf(<span class="hljs-string">&quot;%d&quot;</span>, i)),
+        )
+        
+        <span class="hljs-keyword">if</span> err := s.processItem(item); err != <span class="hljs-literal">nil</span> {
+            <span class="hljs-comment">// Record item error</span>
+            itemSpan.RecordError(err)
+            endItemSpan(err)
+            failed++
+            <span class="hljs-keyword">continue</span>
+        }
+        
+        endItemSpan() <span class="hljs-comment">// Success - no error</span>
+        processed++
+    }
+    
+    <span class="hljs-comment">// Record final metrics</span>
+    span.SetAttribute(<span class="hljs-string">&quot;batch.processed&quot;</span>, processed)
+    span.SetAttribute(<span class="hljs-string">&quot;batch.failed&quot;</span>, failed)
+    span.AddEvent(<span class="hljs-string">&quot;processing_completed&quot;</span>)
+    
+    <span class="hljs-keyword">if</span> failed &gt; <span class="hljs-number">0</span> {
+        err = fmt.Errorf(<span class="hljs-string">&quot;failed to process %d out of %d items&quot;</span>, failed, <span class="hljs-built_in">len</span>(items))
+        <span class="hljs-keyword">return</span> err
+    }
+    
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">nil</span>
+}
+</code></pre>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>Always create spans for significant operations</li>
+<li>Always defer the endSpan function immediately after starting a span</li>
+<li>Pass errors to endSpan to automatically record them</li>
+<li>Use meaningful span names and attributes for better observability</li>
+<li>Create child spans for sub-operations to maintain trace hierarchy</li>
+</ul>
+
+            
+            
+        </body>
+        </html>

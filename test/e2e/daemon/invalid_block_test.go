@@ -24,9 +24,8 @@ import (
 
 func TestOrphanTx(t *testing.T) {
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:  true,
-		EnableP2P:  true,
-		UseTracing: true,
+		EnableRPC: true,
+		EnableP2P: true,
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
@@ -38,8 +37,7 @@ func TestOrphanTx(t *testing.T) {
 	})
 
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableP2P:  true,
-		UseTracing: true,
+		EnableP2P: true,
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
@@ -144,7 +142,6 @@ func TestOrphanTx(t *testing.T) {
 	node1 = daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:         true,
 		EnableP2P:         true,
-		UseTracing:        false,
 		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
 		SettingsContext:   "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
@@ -457,9 +454,8 @@ confirm node 2 is now in a broken state because it can't spend childTx1 because 
 func TestUnminedConflictResolution(t *testing.T) {
 
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:  true,
-		EnableP2P:  true,
-		UseTracing: false,
+		EnableRPC: true,
+		EnableP2P: true,
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
@@ -473,9 +469,8 @@ func TestUnminedConflictResolution(t *testing.T) {
 	defer node1.Stop(t)
 
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:  true,
-		EnableP2P:  true,
-		UseTracing: false,
+		EnableRPC: true,
+		EnableP2P: true,
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
@@ -579,7 +574,6 @@ func TestUnminedConflictResolution(t *testing.T) {
 	// node1 = daemon.NewTestDaemon(t, daemon.TestOptions{
 	// 	EnableRPC:  true,
 	// 	EnableP2P:  true,
-	// 	UseTracing: false,
 	// 	SkipRemoveDataDir: true,
 	// 	EnableFullLogging: true,
 	// 	SettingsContext: "docker.host.teranode1.daemon",

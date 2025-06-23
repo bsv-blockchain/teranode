@@ -12,6 +12,9 @@ type Settings struct {
 	Version                    string
 	Context                    string
 	ServiceName                string
+	TracingEnabled             bool
+	TracingSampleRate          float64
+	TracingCollectorURL        *url.URL
 	ClientName                 string
 	DataFolder                 string
 	SecurityLevelHTTP          int
@@ -25,7 +28,6 @@ type Settings struct {
 	PrometheusEndpoint         string
 	HealthCheckPort            int
 	UseDatadogProfiler         bool
-	TracingSampleRate          float64
 	LocalTestStartFromState    string
 	PostgresCheckAddress       string
 	UseCgoVerifier             bool
@@ -34,7 +36,6 @@ type Settings struct {
 	GRPCRetryBackoff           time.Duration
 	SecurityLevelGRPC          int
 	UsePrometheusGRPCMetrics   bool
-	TracingCollectorURL        *url.URL
 	GRPCAdminAPIKey            string
 	ChainCfgParams             *chaincfg.Params
 	Policy                     *PolicySettings
@@ -58,7 +59,6 @@ type Settings struct {
 	RPC                        RPCSettings
 	Faucet                     FaucetSettings
 	Dashboard                  DashboardSettings
-	TracingEnabled             bool
 	GlobalBlockHeightRetention uint32
 }
 
@@ -67,27 +67,27 @@ type DashboardSettings struct {
 }
 
 type KafkaSettings struct {
-	Blocks             string
-	BlocksFinal        string
-	BlocksValidate     string
-	Hosts              string
-	InvalidBlocks      string
-	LegacyInv          string
-	Partitions         int
-	Port               int
-	RejectedTx         string
-	ReplicationFactor  int
-	Subtrees           string
-	TxMeta             string
-	UnitTest           string
-	ValidatorTxsConfig *url.URL
-	TxMetaConfig       *url.URL
-	LegacyInvConfig    *url.URL
-	BlocksFinalConfig  *url.URL
-	RejectedTxConfig   *url.URL
+	Blocks              string
+	BlocksFinal         string
+	BlocksValidate      string
+	Hosts               string
+	InvalidBlocks       string
+	LegacyInv           string
+	Partitions          int
+	Port                int
+	RejectedTx          string
+	ReplicationFactor   int
+	Subtrees            string
+	TxMeta              string
+	UnitTest            string
+	ValidatorTxsConfig  *url.URL
+	TxMetaConfig        *url.URL
+	LegacyInvConfig     *url.URL
+	BlocksFinalConfig   *url.URL
+	RejectedTxConfig    *url.URL
 	InvalidBlocksConfig *url.URL
-	SubtreesConfig     *url.URL
-	BlocksConfig       *url.URL
+	SubtreesConfig      *url.URL
+	BlocksConfig        *url.URL
 }
 
 type AerospikeSettings struct {

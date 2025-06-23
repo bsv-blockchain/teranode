@@ -24,8 +24,6 @@ func init() {
 	gocore.Config().Set("network", "regtest")
 	gocore.Config().Set("use_cgo_verifier", "false")
 	gocore.Config().Set("use_cgo_signer", "false")
-	gocore.Config().Set("use_otel_tracing", "false")
-	gocore.Config().Set("use_open_tracing", "false")
 	gocore.Config().Set("profilerAddr", "")
 	gocore.Config().Set("prometheusEndpoint", "")
 }

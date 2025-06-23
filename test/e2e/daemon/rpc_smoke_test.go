@@ -13,6 +13,7 @@ import (
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
@@ -22,16 +23,7 @@ import (
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel/trace"
 )
-
-func requireNoError(t *testing.T, span trace.Span, err error, msgAndArgs ...any) {
-	if span != nil {
-		span.RecordError(err)
-	}
-
-	require.NoError(t, err, msgAndArgs...)
-}
 
 func TestTracing(t *testing.T) {
 	tSettings := settings.NewSettings()
@@ -67,7 +59,6 @@ func TestTracing(t *testing.T) {
 func TestSendTxAndCheckState(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
-		UseTracing:      true,
 		SettingsContext: "dev.system.test",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.TracingEnabled = true
@@ -81,13 +72,15 @@ func TestSendTxAndCheckState(t *testing.T) {
 	// Use tracerName (component identifier) not serviceName (global identifier)
 	tracer := tracing.Tracer("rpc_smoke_test")
 
-	ctx, span, endSpan := tracer.Start(
+	ctx, _, endSpan := tracer.Start(
 		context.Background(),
 		"TestSendTxAndCheckState",
 	)
 
+	var err error
+
 	defer func() {
-		endSpan()
+		endSpan(err)
 		td.Stop(t)
 	}()
 
@@ -101,8 +94,8 @@ func TestSendTxAndCheckState(t *testing.T) {
 	// t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
 	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
 
-	_, err := td.CallRPC(ctx, "sendrawtransaction", []any{txBytes})
-	requireNoError(t, span, err, "Failed to send new tx with rpc")
+	_, err = td.CallRPC(ctx, "sendrawtransaction", []any{txBytes})
+	require.NoError(t, err, "Failed to send new tx with rpc")
 	// t.Logf("Transaction sent with RPC: %s\n", resp)
 
 	// Wait for transaction to be processed
@@ -117,21 +110,24 @@ func TestSendTxAndCheckState(t *testing.T) {
 	block := td.MineAndWait(t, 1)
 
 	err = block.GetAndValidateSubtrees(ctx, td.Logger, td.SubtreeStore, nil)
-	requireNoError(t, span, err)
+	require.NoError(t, err)
 
 	err = block.CheckMerkleRoot(ctx)
-	requireNoError(t, span, err)
+	require.NoError(t, err)
 
 	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
 		return block.SubTreesFromBytes(subtreeHash[:])
 	}
 
-	subtree, err := block.GetSubtrees(ctx, td.Logger, td.SubtreeStore, fallbackGetFunc)
-	requireNoError(t, span, err)
+	var subtree []*util.Subtree
+
+	subtree, err = block.GetSubtrees(ctx, td.Logger, td.SubtreeStore, fallbackGetFunc)
+	require.NoError(t, err)
 
 	blFound := false
 	for i := 0; i < len(subtree); i++ {
 		st := subtree[i]
+
 		for _, node := range st.Nodes {
 			// t.Logf("node.Hash: %s", node.Hash.String())
 			// t.Logf("tx.TxIDChainHash().String(): %s", newTx.TxIDChainHash().String())
@@ -145,12 +141,15 @@ func TestSendTxAndCheckState(t *testing.T) {
 
 	assert.True(t, blFound, "TX not found in the blockstore")
 
-	resp, err := td.CallRPC(ctx, "getblockchaininfo", []any{})
-	requireNoError(t, span, err)
+	var resp string
+
+	resp, err = td.CallRPC(ctx, "getblockchaininfo", []any{})
+	require.NoError(t, err)
 
 	var blockchainInfo helper.BlockchainInfo
-	errJSON := json.Unmarshal([]byte(resp), &blockchainInfo)
-	requireNoError(t, span, errJSON)
+
+	err = json.Unmarshal([]byte(resp), &blockchainInfo)
+	require.NoError(t, err)
 
 	td.LogJSON(t, "blockchainInfo", blockchainInfo)
 	assert.Equal(t, int(td.Settings.ChainCfgParams.CoinbaseMaturity+2), blockchainInfo.Result.Blocks)
@@ -167,11 +166,12 @@ func TestSendTxAndCheckState(t *testing.T) {
 	assert.Nil(t, blockchainInfo.ID)
 
 	resp, err = td.CallRPC(ctx, "getinfo", []any{})
-	requireNoError(t, span, err)
+	require.NoError(t, err)
 
 	var getInfo helper.GetInfo
-	errJSON = json.Unmarshal([]byte(resp), &getInfo)
-	requireNoError(t, span, errJSON)
+
+	err = json.Unmarshal([]byte(resp), &getInfo)
+	require.NoError(t, err)
 	require.NotNil(t, getInfo.Result)
 
 	td.LogJSON(t, "getInfo", getInfo)
@@ -192,21 +192,20 @@ func TestSendTxAndCheckState(t *testing.T) {
 	var getDifficulty helper.GetDifficultyResponse
 
 	resp, err = td.CallRPC(ctx, "getdifficulty", []any{})
+	require.NoError(t, err)
 
-	requireNoError(t, span, err)
-
-	errJSON = json.Unmarshal([]byte(resp), &getDifficulty)
-	requireNoError(t, span, errJSON)
+	err = json.Unmarshal([]byte(resp), &getDifficulty)
+	require.NoError(t, err)
 
 	// t.Logf("getDifficulty: %+v", getDifficulty)
 	assert.Equal(t, float64(4.6565423739069247e-10), getDifficulty.Result)
 
 	resp, err = td.CallRPC(ctx, "getblockhash", []any{td.Settings.ChainCfgParams.CoinbaseMaturity + 2})
-	requireNoError(t, span, err, "Failed to get block hash")
+	require.NoError(t, err, "Failed to get block hash")
 
 	var getBlockHash helper.GetBlockHashResponse
-	errJSON = json.Unmarshal([]byte(resp), &getBlockHash)
-	requireNoError(t, span, errJSON)
+	err = json.Unmarshal([]byte(resp), &getBlockHash)
+	require.NoError(t, err)
 
 	// t.Logf("getBlockHash: %+v", getBlockHash)
 	assert.Equal(t, block.Hash().String(), getBlockHash.Result)
@@ -214,16 +213,16 @@ func TestSendTxAndCheckState(t *testing.T) {
 	td.LogJSON(t, "getBlockHash", getBlockHash)
 
 	resp, err = td.CallRPC(ctx, "getblockbyheight", []any{td.Settings.ChainCfgParams.CoinbaseMaturity + 2})
-	requireNoError(t, span, err, "Failed to get block by height")
+	require.NoError(t, err, "Failed to get block by height")
 
 	var getBlockByHeightResp helper.GetBlockByHeightResponse
-	errJSON = json.Unmarshal([]byte(resp), &getBlockByHeightResp)
-	requireNoError(t, span, errJSON)
+	err = json.Unmarshal([]byte(resp), &getBlockByHeightResp)
+	require.NoError(t, err)
 
 	td.LogJSON(t, "getBlockByHeightResp", getBlockByHeightResp)
 
 	penultimateBlock, err := td.BlockchainClient.GetBlockByHeight(ctx, getBlockByHeightResp.Result.Height-1)
-	requireNoError(t, span, err)
+	require.NoError(t, err)
 
 	// Assert block properties
 	assert.Equal(t, block.Hash().String(), getBlockByHeightResp.Result.Hash)
