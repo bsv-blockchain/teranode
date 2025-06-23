@@ -394,7 +394,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	)
 
 	// this will reverse the spends if there is an error
-	if spentUtxos, err = v.spendUtxos(ctx, tx, validationOptions.IgnoreUnspendable); err != nil {
+	if spentUtxos, err = v.spendUtxos(decoupledCtx, tx, validationOptions.IgnoreUnspendable); err != nil {
 		if errors.Is(err, errors.ErrTxInvalid) {
 			saveAsConflicting := false
 
