@@ -581,6 +581,7 @@ func getReader(path string, logger ulogger.Logger, settings *settings.Settings) 
 		store := getBlockStore(logger, settings)
 
 		var storeReader io.Reader
+
 		storeReader, err = store.GetIoReader(context.Background(), hash[:], fileformat.FileType(ext))
 		if err != nil {
 			return "", "", "", nil, errors.NewProcessingError("error getting reader from store", err)

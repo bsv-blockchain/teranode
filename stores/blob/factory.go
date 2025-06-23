@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/file"
 	"github.com/bitcoin-sv/teranode/stores/blob/http"
 	"github.com/bitcoin-sv/teranode/stores/blob/localdah"
+	storelogger "github.com/bitcoin-sv/teranode/stores/blob/logger"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/null"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -30,6 +31,7 @@ var (
 	_ Store = (*memory.Memory)(nil)
 	_ Store = (*null.Null)(nil)
 	_ Store = (*s3.S3)(nil)
+	_ Store = (*storelogger.Logger)(nil)
 )
 
 // NewStore creates a new blob store based on the provided URL scheme and options.
@@ -88,6 +90,11 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		if err != nil {
 			return nil, errors.NewStorageError("error creating local DAH blob store", err)
 		}
+	}
+
+	if storeURL.Query().Get("logger") == "true" {
+		logger.Infof("enabling blob store logging at DEBUG level")
+		store = storelogger.New(logger, store)
 	}
 
 	return

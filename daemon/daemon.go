@@ -140,16 +140,18 @@ func New(opts ...Option) *Daemon {
 		stopCh:           make(chan struct{}),
 		server:           nil,
 		externalServices: make([]*externalService, 0),
-		// Default logger factory
-		loggerFactory: func(serviceName string) ulogger.Logger {
-			return ulogger.New(serviceName)
-		},
-		daemonStores: &Stores{},
+		daemonStores:     &Stores{},
 	}
 
 	// Apply functional options
 	for _, opt := range opts {
 		opt(d)
+	}
+
+	if d.loggerFactory == nil {
+		d.loggerFactory = func(serviceName string) ulogger.Logger {
+			return ulogger.New(serviceName, ulogger.WithLevel("DEBUG"))
+		}
 	}
 
 	// Initialize ServiceManager with the configured logger factory
@@ -267,6 +269,12 @@ func (d *Daemon) updateServiceStatuses(logger ulogger.Logger) {
 
 // Start initializes and starts the Daemon and its services.
 func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settings.Settings, readyChannel ...chan struct{}) {
+	if d.loggerFactory == nil {
+		d.loggerFactory = func(serviceName string) ulogger.Logger {
+			return ulogger.New(serviceName, ulogger.WithLevel(appSettings.LogLevel))
+		}
+	}
+
 	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
 	if d.shouldStart("wait_for_postgres", args) {
 		if err := waitForPostgresToStart(logger, appSettings.PostgresCheckAddress); err != nil {
