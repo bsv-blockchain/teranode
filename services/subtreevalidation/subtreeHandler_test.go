@@ -92,7 +92,7 @@ func TestSubtreesHandler(t *testing.T) {
 					Value: func() []byte {
 						msg := &kafkamessage.KafkaSubtreeTopicMessage{
 							Hash: subtreeHash.String(),
-							URL:  "http://example.com",
+							URL:  "http://localhost:8000",
 						}
 						data, _ := proto.Marshal(msg)
 						return data
@@ -124,7 +124,7 @@ func TestSubtreesHandler(t *testing.T) {
 					Value: func() []byte {
 						msg := &kafkamessage.KafkaSubtreeTopicMessage{
 							Hash: "invalid",
-							URL:  "http://example.com",
+							URL:  "http://localhost:8000",
 						}
 						data, _ := proto.Marshal(msg)
 						return data
@@ -156,7 +156,7 @@ func TestSubtreesHandler(t *testing.T) {
 					Value: func() []byte {
 						msg := &kafkamessage.KafkaSubtreeTopicMessage{
 							Hash: "d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcae",
-							URL:  "http://example.com",
+							URL:  "http://localhost:8000",
 						}
 						data, _ := proto.Marshal(msg)
 						return data
@@ -177,7 +177,7 @@ func TestSubtreesHandler(t *testing.T) {
 					Value: func() []byte {
 						msg := &kafkamessage.KafkaSubtreeTopicMessage{
 							Hash: "d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcafd",
-							URL:  "http://example.com",
+							URL:  "http://localhost:8000",
 						}
 						data, _ := proto.Marshal(msg)
 						return data
