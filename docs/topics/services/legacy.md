@@ -375,7 +375,7 @@ The Legacy service bridges traditional Bitcoin nodes with the Teranode architect
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
 | `legacy_orphanEvictionDuration` | duration | 10m | How long orphan transactions are kept before eviction | Affects memory usage and ability to process delayed transactions |
-| `legacy_writeMsgBlocksToDisk` | bool | false | Write blocks to disk when syncing | Reduces memory footprint during blockchain synchronization |
+| `legacy_writeMsgBlocksToDisk` | bool | false | **Enable disk-based block queueing during synchronization** | **Significantly reduces memory usage** by writing incoming blocks to temporary disk storage with 4MB buffered I/O and automatic 10-minute cleanup. Essential for resource-constrained environments and high-volume sync operations. |
 | `legacy_storeBatcherSize` | int | 1024 | Batch size for store operations | Affects efficiency of storage operations and memory usage |
 | `legacy_spendBatcherSize` | int | 1024 | Batch size for spend operations | Affects efficiency of spend operations and memory usage |
 | `legacy_outpointBatcherSize` | int | 1024 | Batch size for outpoint operations | Affects efficiency of outpoint processing |
@@ -429,6 +429,49 @@ Several settings affect the memory usage patterns of the Legacy service:
 - The various batcher size settings control memory usage during batch operations
 
 For resource-constrained environments, enable `legacy_writeMsgBlocksToDisk` and use smaller batch sizes.
+
+#### Disk-Based Block Queueing (`legacy_writeMsgBlocksToDisk`)
+
+The `legacy_writeMsgBlocksToDisk` setting enables a sophisticated disk-based queueing mechanism that fundamentally changes how the Legacy service handles incoming blocks during synchronization.
+
+**How It Works:**
+- It creates a streaming pipeline that writes blocks directly to disk, employing 4MB buffered readers for optimal disk performance.
+- Blocks are stored with a 10-minute TTL to prevent disk accumulation
+
+**Technical Implementation:**
+```
+Incoming Block → io.Pipe() → 4MB Buffer → Temporary Disk Storage → Validation Queue
+                     ↓
+              Background Goroutine
+```
+
+**Benefits:**
+- **Memory Efficiency**: Prevents memory exhaustion during large-scale synchronization
+- **Scalability**: Handles high-volume block arrivals without resource constraints
+- **Reliability**: Reduces risk of out-of-memory errors during initial sync
+- **Performance**: Maintains processing throughput while using minimal memory
+
+**When to Enable:**
+- ✅ **Initial blockchain synchronization** - Essential for syncing from genesis
+- ✅ **Resource-constrained environments** - Servers with limited RAM
+- ✅ **High-throughput scenarios** - Networks with frequent block arrivals
+- ✅ **Production deployments** - Recommended for stability
+
+**Storage Requirements:**
+- Temporary disk space for concurrent blocks (typically < 1GB)
+- Fast storage (SSD recommended) for optimal I/O performance
+- Automatic cleanup prevents long-term storage accumulation
+
+**Configuration Example:**
+```bash
+# Enable disk-based block queueing
+export legacy_writeMsgBlocksToDisk=true
+
+# Ensure adequate working directory space
+export legacy_workingDir="/path/to/fast/storage"
+```
+
+![legacy_disk_block_queueing.svg](img/plantuml/legacyp2p/legacy_disk_block_queueing.svg)
 
 ### Batch Processing Pipeline
 

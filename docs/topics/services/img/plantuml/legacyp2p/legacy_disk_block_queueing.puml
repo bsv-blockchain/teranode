@@ -1,0 +1,97 @@
+@startuml disk_block_queueing
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam queue {
+  BorderColor #666666
+  BackgroundColor #E2E2F0
+}
+
+participant "BSV Peer" as peer
+participant "Legacy Service\nSync Manager" as syncMgr
+control "io.Pipe()\nStreaming Pipeline" as pipe
+database "Temporary Disk Store\n(4MB Buffered I/O)" as tempStore
+queue "Block Validation\nQueue" as blockQueue
+participant "Block Validator" as validator
+
+== Disk-Based Block Queueing Process ==
+
+peer -> syncMgr : OnBlock(peer, msgBlock, bytes)
+activate syncMgr
+
+alt legacy_writeMsgBlocksToDisk = true
+    note over syncMgr : **Disk Queueing Mode**\nReduces memory footprint
+
+    syncMgr -> pipe : Create io.Pipe()
+    activate pipe
+
+    syncMgr -> syncMgr : Create 4MB buffered reader
+
+    par Background Serialization
+        syncMgr -> pipe : Serialize block to writer\n(async goroutine)
+        note right : Non-blocking serialization\nto prevent pipeline stalls
+        pipe -> pipe : Stream block data and Disk Storage
+        syncMgr -> tempStore : SetFromReader(blockHash, bufferedReader)
+        note right : **Storage Options:**\n• TTL: 10 minutes\n• Subdirectory: "blocks"\n• Allow overwrite: true
+        activate tempStore
+        tempStore -> tempStore : Write block to disk\n(4MB buffered I/O)
+        tempStore --> syncMgr : Storage complete
+        deactivate tempStore
+    end
+
+    syncMgr -> pipe : Close writer & reader
+    deactivate pipe
+
+    syncMgr -> syncMgr : Set msgBlock = nil\n(disk-based mode)
+
+else legacy_writeMsgBlocksToDisk = false
+    note over syncMgr : **Memory Mode**\nTraditional in-memory processing
+    syncMgr -> syncMgr : msgBlock = msg.block.MsgBlock()
+end
+
+syncMgr -> blockQueue : Enqueue blockQueueMsg{\nblock: msgBlock,\nblockHash: hash,\nblockHeight: height,\npeer: peer\n}
+activate blockQueue
+
+note over blockQueue : **Queue Processing**\nSame validation pipeline\nregardless of storage mode
+
+blockQueue -> validator : Dequeue block for validation
+activate validator
+
+alt Block stored on disk
+    validator -> tempStore : Retrieve block data\n(if needed)
+    tempStore --> validator : Block data
+end
+
+validator -> validator : Validate block
+validator -> validator : Process transactions
+validator -> validator : Update blockchain state
+
+deactivate validator
+deactivate blockQueue
+
+note over tempStore : **Automatic Cleanup**\nBlocks auto-deleted after 10 minutes\nPrevents disk accumulation
+
+deactivate syncMgr
+
+left footer "Legacy Service - Disk-Based Block Queueing \n Last Modified On: %date("dd-MMM-yyyy"). © 2025 Bitcoin SV. All rights reserved."
+
+left footer "Last Modified On: %date("dd-MMM-yyyy"). © 2025 Bitcoin SV. All rights reserved."
+
+@enduml
