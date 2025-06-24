@@ -442,13 +442,21 @@ func (u *BlockValidation) start(ctx context.Context) error {
 	return nil
 }
 
-// SetBlockExists marks a block as existing in the validation system.
-// This updates the internal cache to track validated blocks.
+// SetBlockExists marks a block as existing in the validation system's cache.
+//
+// This function updates the internal block existence cache to indicate that a block
+// with the specified hash is known to exist. This is typically called after a block
+// has been successfully validated or when its existence has been confirmed through
+// other means, helping to optimize future existence checks.
+//
+// The function provides a simple caching mechanism that avoids repeated expensive
+// lookups to the blockchain client for blocks that are known to exist.
 //
 // Parameters:
 //   - hash: Hash of the block to mark as existing
 //
-// Returns an error if the operation fails.
+// Returns:
+//   - error: Always returns nil in the current implementation
 func (u *BlockValidation) SetBlockExists(hash *chainhash.Hash) error {
 	u.blockExists.Set(*hash, true)
 	return nil
@@ -490,13 +498,23 @@ func (u *BlockValidation) GetBlockExists(ctx context.Context, hash *chainhash.Ha
 	return exists, nil
 }
 
-// SetSubtreeExists marks a subtree as existing in the validation system.
-// This updates the internal cache to track validated subtrees.
+// SetSubtreeExists marks a subtree as existing in the validation system's cache.
+//
+// This function updates the internal subtree existence cache to indicate that a subtree
+// with the specified hash is known to exist. This is typically called after a subtree
+// has been successfully validated or when its existence has been confirmed through
+// other means, helping to optimize future existence checks.
+//
+// The function provides a simple caching mechanism that avoids repeated expensive
+// lookups to the blockchain client for subtrees that are known to exist. The cache
+// is implemented as an expiring map, where entries are automatically removed after
+// a specified retention period.
 //
 // Parameters:
 //   - hash: Hash of the subtree to mark as existing
 //
-// Returns an error if the operation fails.
+// Returns:
+//   - error: Any error encountered during the cache update
 func (u *BlockValidation) SetSubtreeExists(hash *chainhash.Hash) error {
 	u.subtreeExists.Set(*hash, true)
 	return nil
@@ -534,14 +552,24 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 	return exists, nil
 }
 
-// setTxMined marks a block's transactions as mined in the system.
-// It updates transaction metadata and manages block state transitions.
+// setTxMined marks all transactions within a block as mined in the blockchain system.
+//
+// This function updates the mining status of all transactions contained within the specified
+// block, transitioning them from validated to mined state. This is a critical operation
+// that occurs after a block has been successfully validated and accepted into the blockchain.
+//
+// The function performs several key operations:
+// 1. Retrieves transaction metadata for all transactions in the block
+// 2. Updates the mining status in the transaction store
+// 3. Manages state transitions for transaction lifecycle tracking
+// 4. Ensures consistency between block validation and transaction mining states
 //
 // Parameters:
-//   - ctx: Context for the operation
-//   - blockHash: Hash of the block containing mined transactions
+//   - ctx: Context for the operation, enabling cancellation and timeout handling
+//   - blockHash: Hash of the block containing transactions to mark as mined
 //
-// Returns an error if the mining status update fails.
+// Returns:
+//   - error: Any error encountered during the mining status update process
 func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.Hash) (err error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "setTxMined",
 		tracing.WithParentStat(u.stats),
@@ -607,16 +635,24 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	return nil
 }
 
-// isParentMined verifies if a block's parent has been marked as mined.
-// It checks against the database of unmined blocks to determine status.
+// isParentMined verifies if a block's parent has been successfully mined and committed to the blockchain.
+//
+// This function performs a critical validation step in the block processing pipeline by
+// ensuring that a block's parent has completed the mining process before allowing the
+// current block to proceed with validation. This maintains proper blockchain ordering
+// and prevents validation of orphaned or premature blocks.
+//
+// The function queries the blockchain client to check the mining status of the parent
+// block, using the HashPrevBlock field from the provided block header. This check is
+// essential for maintaining chain consistency and proper block sequencing.
 //
 // Parameters:
-//   - ctx: Context for the operation
-//   - blockHeader: Header of the block whose parent needs checking
+//   - ctx: Context for the operation, enabling cancellation and timeout handling
+//   - blockHeader: Header of the block whose parent mining status needs verification
 //
 // Returns:
-//   - bool: Whether the parent block is mined
-//   - error: Any error encountered during verification
+//   - bool: True if the parent block has been mined, false otherwise
+//   - error: Any error encountered during the mining status verification
 func (u *BlockValidation) isParentMined(ctx context.Context, blockHeader *model.BlockHeader) (bool, error) {
 	blockNotMined, err := u.blockchainClient.GetBlocksMinedNotSet(ctx)
 	if err != nil {
@@ -1080,6 +1116,25 @@ func (u *BlockValidation) getBloomFilterFromSubtreeStore(ctx context.Context, ha
 	return createdBbf
 }
 
+// ReValidateBlock queues a block for revalidation after a previous validation failure.
+//
+// This function is called when a block that previously failed validation needs to be
+// reprocessed, typically after resolving dependency issues or when new information
+// becomes available that might allow the block to pass validation. The function
+// operates asynchronously by queuing the block for revalidation rather than
+// performing the validation immediately.
+//
+// The revalidation process is handled by a separate goroutine that processes the
+// revalidation queue, allowing this function to return quickly without blocking
+// the caller. This design prevents cascading delays when multiple blocks need
+// revalidation.
+//
+// Parameters:
+//   - block: The block that needs to be revalidated
+//   - baseURL: Source URL for retrieving additional block data if needed during revalidation
+//
+// The function logs the revalidation attempt and queues the block for processing.
+// No return value is provided as the operation is asynchronous.
 func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
 	u.logger.Errorf("[ValidateBlock][%s] re-validating block", block.String())
 	u.revalidateBlockChan <- revalidateBlockData{

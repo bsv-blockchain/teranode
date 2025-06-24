@@ -365,6 +365,22 @@ func (b *BanList) ListBanned() []string {
 	return banned
 }
 
+// createTables initializes the database schema for persistent ban storage.
+// This method creates the necessary tables to store ban information across node restarts.
+// The bans table stores the ban key, expiration time, and subnet information for each banned entity.
+//
+// The table schema includes:
+//   - key: Primary key identifying the banned IP or subnet
+//   - expiration_time: Timestamp when the ban expires
+//   - subnet: CIDR notation of the banned network range
+//
+// This method is called during ban list initialization and is thread-safe.
+//
+// Parameters:
+//   - ctx: Context for the database operation, used for cancellation and timeout control
+//
+// Returns:
+//   - Error if table creation fails, nil on success
 func (b *BanList) createTables(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -379,6 +395,20 @@ func (b *BanList) createTables(ctx context.Context) error {
 	return err
 }
 
+// savePeerToDatabase persists a ban entry to the database for long-term storage.
+// This method ensures that ban information survives node restarts by storing it
+// in the persistent database. It handles both individual IP bans and subnet bans.
+//
+// The method uses an INSERT OR REPLACE pattern to handle updates to existing bans,
+// allowing ban duration extensions without creating duplicate entries.
+//
+// Parameters:
+//   - ctx: Context for the database operation, used for cancellation and timeout control
+//   - key: Unique identifier for the ban (IP address or subnet in CIDR notation)
+//   - info: Ban information including expiration time and subnet details
+//
+// Returns:
+//   - Error if the database operation fails, nil on success
 func (b *BanList) savePeerToDatabase(ctx context.Context, key string, info BanInfo) error {
 	_, err := b.db.ExecContext(ctx, `
         INSERT INTO bans (key, expiration_time, subnet)

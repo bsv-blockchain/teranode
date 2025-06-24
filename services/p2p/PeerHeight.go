@@ -12,15 +12,48 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
+// PeerHeight manages peer height tracking and synchronization in the P2P network.
+// This component monitors the blockchain height of connected peers to ensure network
+// synchronization and coordinate operations that depend on peer consensus about
+// blockchain state. It's particularly useful for testing and validation scenarios
+// where specific height requirements must be met across the network.
+//
+// The struct maintains a mapping of peer messages and provides functionality to:
+//   - Track the latest block height reported by each peer
+//   - Wait for all peers to reach a minimum height threshold
+//   - Coordinate network-wide synchronization operations
+//   - Handle timeout scenarios when peers fail to synchronize
+//
+// All operations are thread-safe for concurrent access from multiple goroutines.
 type PeerHeight struct {
-	logger                ulogger.Logger
-	settings              *settings.Settings
-	P2PNode               P2PNode
-	numberOfExpectedPeers int
-	lastMsgByPeerID       sync.Map
-	defaultTimeout        time.Duration
+	logger                ulogger.Logger // Logger instance for peer height operations
+	settings              *settings.Settings // Global Teranode configuration settings
+	P2PNode               P2PNode // P2P node instance for network communication
+	numberOfExpectedPeers int // Expected number of peers for synchronization operations
+	lastMsgByPeerID       sync.Map // Thread-safe map of last messages received from each peer
+	defaultTimeout        time.Duration // Default timeout for synchronization operations
 }
 
+// NewPeerHeight creates a new PeerHeight instance with the specified configuration.
+// This constructor initializes a peer height tracker with P2P networking capabilities,
+// allowing it to monitor and coordinate blockchain synchronization across connected peers.
+//
+// The function sets up a P2P node with private DHT configuration for secure peer
+// communication and configures it specifically for height tracking operations.
+//
+// Parameters:
+//   - logger: Logger instance for tracking operations and debugging
+//   - tSettings: Global Teranode settings containing P2P configuration
+//   - processName: Identifier for this peer height tracker instance
+//   - numberOfExpectedPeers: Expected number of peers for synchronization operations
+//   - defaultTimeout: Default timeout duration for synchronization operations
+//   - p2pPort: Port number for P2P communication
+//   - staticPeers: List of static peer addresses to connect to
+//   - privateKey: Private key for P2P node identity
+//
+// Returns:
+//   - Configured PeerHeight instance ready for use
+//   - Error if configuration is invalid or P2P node creation fails
 func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processName string, numberOfExpectedPeers int, defaultTimeout time.Duration, p2pPort int, staticPeers []string, privateKey string) (*PeerHeight, error) {
 	p2pListenAddresses := tSettings.P2P.ListenAddresses
 	if len(p2pListenAddresses) == 0 {

@@ -14,24 +14,49 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// notificationMsg represents a WebSocket notification message sent to connected clients.
+// This structure defines the JSON format for real-time notifications about blockchain
+// events such as new blocks, mining updates, and peer status changes. The message
+// format is designed to provide comprehensive information about blockchain state
+// changes to WebSocket subscribers.
+//
+// All fields are optional (omitempty) except Type, which identifies the notification category.
+// Common notification types include block announcements, mining status updates, and peer events.
 type notificationMsg struct {
-	Timestamp    string `json:"timestamp,omitempty"`
-	Type         string `json:"type"`
-	Hash         string `json:"hash,omitempty"`
-	BaseURL      string `json:"base_url,omitempty"`
-	PeerID       string `json:"peer_id,omitempty"`
-	PreviousHash string `json:"previousblockhash,omitempty"`
-	TxCount      uint64 `json:"tx_count,omitempty"`
-	Height       uint32 `json:"height,omitempty"`
-	SizeInBytes  uint64 `json:"size_in_bytes,omitempty"`
-	Miner        string `json:"miner,omitempty"`
+	Timestamp    string `json:"timestamp,omitempty"`    // ISO 8601 timestamp when the event occurred
+	Type         string `json:"type"`                   // Required: notification type (e.g., "block", "mining", "peer")
+	Hash         string `json:"hash,omitempty"`         // Block hash or transaction hash for blockchain events
+	BaseURL      string `json:"base_url,omitempty"`     // Base URL for additional resource access
+	PeerID       string `json:"peer_id,omitempty"`      // Peer identifier for peer-related notifications
+	PreviousHash string `json:"previousblockhash,omitempty"` // Previous block hash for block chain continuity
+	TxCount      uint64 `json:"tx_count,omitempty"`     // Number of transactions in a block
+	Height       uint32 `json:"height,omitempty"`       // Block height in the blockchain
+	SizeInBytes  uint64 `json:"size_in_bytes,omitempty"` // Size of the block or data in bytes
+	Miner        string `json:"miner,omitempty"`        // Miner identifier for mining-related notifications
 }
 
+// clientChannelMap manages a thread-safe collection of WebSocket client channels.
+// This structure maintains a registry of active WebSocket connections, allowing
+// the server to broadcast notifications to all connected clients efficiently.
+// The map uses channels as keys to uniquely identify each client connection.
+//
+// All operations on this map are protected by a read-write mutex to ensure
+// thread safety when multiple goroutines are adding, removing, or broadcasting
+// to client channels concurrently.
 type clientChannelMap struct {
-	sync.RWMutex
-	channels map[chan []byte]struct{}
+	sync.RWMutex                     // Protects concurrent access to the channels map
+	channels map[chan []byte]struct{} // Set of active client channels (using struct{} for memory efficiency)
 }
 
+// newClientChannelMap creates a new thread-safe client channel registry.
+// This constructor initializes an empty map for tracking WebSocket client
+// connections and returns a ready-to-use clientChannelMap instance.
+//
+// The returned map is safe for concurrent use by multiple goroutines and
+// provides methods for adding, removing, and broadcasting to client channels.
+//
+// Returns:
+//   - Pointer to a new clientChannelMap instance with initialized internal map
 func newClientChannelMap() *clientChannelMap {
 	return &clientChannelMap{
 		channels: make(map[chan []byte]struct{}),

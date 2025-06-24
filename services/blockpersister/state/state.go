@@ -1,3 +1,24 @@
+// Package state provides persistent state management for the block persister service.
+//
+// This package handles the storage and retrieval of block processing state information,
+// enabling the block persister to track which blocks have been successfully persisted
+// and maintain consistency across service restarts. The state is stored in a local file
+// system using a simple append-only format for reliability and crash recovery.
+//
+// Key features:
+//  - Thread-safe file-based state persistence using file locking
+//  - Atomic block state updates with proper error handling
+//  - Recovery from incomplete operations through file validation
+//  - Efficient retrieval of the last persisted block height
+//
+// The state file format stores block height and hash pairs, allowing the service to
+// resume processing from the correct point after restarts or failures. File locking
+// ensures concurrent access safety when multiple processes might access the state.
+//
+// Usage:
+//  state := state.New(logger, "/path/to/state/file")
+//  height, err := state.GetLastPersistedBlockHeight()
+//  err = state.AddBlock(height+1, blockHash)
 package state
 
 import (

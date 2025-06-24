@@ -108,6 +108,32 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	return nil
 }
 
+// readSubtreeData retrieves and deserializes subtree data from the subtree store.
+//
+// This internal method handles the two-stage process of loading subtree information:
+// first retrieving the subtree structure itself, then loading the associated subtree data
+// that contains the actual transaction references and metadata.
+//
+// The function performs these operations:
+//  1. Retrieves the subtree structure from the subtree store using the provided hash
+//  2. Deserializes the subtree to understand its structure and transaction organization
+//  3. Retrieves the corresponding subtree data file containing transaction references
+//  4. Deserializes the subtree data into a usable format for transaction processing
+//
+// Both the subtree and subtree data are stored as separate files in the blob store,
+// with the subtree containing the hierarchical structure and the subtree data containing
+// the actual transaction hashes and references needed for processing.
+//
+// Parameters:
+//   - ctx: Context for the operation, enabling cancellation and timeout handling
+//   - subtreeHash: Hash identifier of the subtree to retrieve and deserialize
+//
+// Returns:
+//   - *util.SubtreeData: The deserialized subtree data ready for transaction processing
+//   - error: Any error encountered during retrieval or deserialization
+//
+// Possible errors include storage access failures, file corruption, or deserialization
+// issues. All errors are wrapped with appropriate context for debugging.
 func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash) (*util.SubtreeData, error) {
 	// 1. get the subtree from the subtree store
 	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree)

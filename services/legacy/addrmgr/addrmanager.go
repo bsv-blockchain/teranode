@@ -1,8 +1,37 @@
-// Copyright (c) 2013-2016 The btcsuite developers
-// Copyright (c) 2015-2018 The Decred developers
-// Use of this source code is governed by an ISC
-// license that can be found in the LICENSE file.
-
+// Package addrmgr provides a comprehensive address manager for Bitcoin SV peer-to-peer networking.
+//
+// This package implements a sophisticated address management system that maintains a database
+// of known Bitcoin network peers, their connection statistics, and their reliability scores.
+// It is designed to optimize peer discovery and connection management for Bitcoin SV nodes.
+//
+// Key Features:
+// - Concurrent-safe address storage and retrieval
+// - Persistent storage of peer addresses across restarts
+// - Address prioritization based on connection success rates
+// - Automatic address expiration and cleanup
+// - Support for both IPv4 and IPv6 addresses
+// - Tor .onion address handling
+// - Local address advertisement management
+// - Ban list integration for malicious peer handling
+//
+// Architecture:
+// The address manager uses a two-bucket system:
+// - New bucket: Contains addresses that haven't been successfully connected to
+// - Tried bucket: Contains addresses that have been successfully connected to
+//
+// Addresses are moved from the new bucket to the tried bucket upon successful
+// connection and version exchange. The manager maintains statistics for each
+// address including attempt counts, last attempt time, and success rates.
+//
+// Thread Safety:
+// All public methods are thread-safe and can be called concurrently from
+// multiple goroutines. The manager uses internal locking to ensure data
+// consistency during concurrent operations.
+//
+// Persistence:
+// The address manager automatically saves its state to disk periodically
+// and loads it on startup, ensuring that peer discovery information is
+// preserved across node restarts.
 package addrmgr
 
 import (
@@ -28,8 +57,32 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// AddrManager provides a concurrency safe address manager for caching potential
-// peers on the bitcoin network.
+// AddrManager provides a concurrency-safe address manager for caching and managing potential
+// peers on the Bitcoin SV network.
+//
+// AddrManager implements a sophisticated peer address management system that maintains
+// two separate buckets for organizing known network addresses:
+//
+// New Bucket System:
+// - Contains addresses that haven't been successfully connected to yet
+// - Organized into multiple buckets to prevent address clustering
+// - Addresses expire after a period of unsuccessful connection attempts
+//
+// Tried Bucket System:
+// - Contains addresses that have been successfully connected to and verified
+// - Prioritized for future connection attempts based on success history
+// - Maintains connection statistics and reliability scores
+//
+// Key Capabilities:
+// - Thread-safe concurrent access to address data
+// - Persistent storage of peer addresses across node restarts
+// - Automatic address expiration and bucket management
+// - Support for IPv4, IPv6, and Tor .onion addresses
+// - Local address advertisement for incoming connections
+// - Integration with ban management systems
+//
+// The manager uses cryptographic randomization to prevent address correlation
+// attacks and implements various anti-DoS measures to maintain network health.
 type AddrManager struct {
 	logger         ulogger.Logger
 	mtx            sync.Mutex
@@ -50,6 +103,22 @@ type AddrManager struct {
 	localAddresses map[string]*localAddress
 }
 
+// serializedKnownAddress represents the persistent storage format for a known network address.
+//
+// This struct defines the JSON serialization format used when saving address manager
+// state to disk. It contains the essential information needed to reconstruct a
+// KnownAddress object when loading from persistent storage.
+//
+// Fields:
+// - Addr: String representation of the network address (IP:port format)
+// - Src: Source address that provided this address (for tracking address sources)
+// - Attempts: Total number of connection attempts made to this address
+// - TimeStamp: Unix timestamp when this address was first learned
+// - LastAttempt: Unix timestamp of the most recent connection attempt
+// - LastSuccess: Unix timestamp of the most recent successful connection
+//
+// Note: The refcount and tried status are not serialized as they can be
+// reconstructed from the bucket context during deserialization.
 type serializedKnownAddress struct {
 	Addr        string
 	Src         string
@@ -60,6 +129,25 @@ type serializedKnownAddress struct {
 	// no refcount or tried, that is available from context.
 }
 
+// serializedAddrManager represents the complete persistent storage format for the address manager.
+//
+// This struct defines the JSON serialization format used when saving the entire
+// address manager state to disk. It contains all the information needed to fully
+// reconstruct an AddrManager instance when loading from persistent storage.
+//
+// Fields:
+// - Version: Serialization format version for backward compatibility
+// - Key: Cryptographic key used for address randomization and bucket selection
+// - Addresses: Array of all known addresses in their serialized format
+// - NewBuckets: Organization of addresses that haven't been successfully connected to
+// - TriedBuckets: Organization of addresses that have been successfully connected to
+//
+// The bucket arrays contain NetAddressKey strings that reference addresses in the
+// Addresses array, allowing efficient reconstruction of the bucket structure while
+// avoiding address duplication in the serialized format.
+//
+// This format ensures that all address manager state, including bucket organization
+// and address statistics, is preserved across node restarts.
 type serializedAddrManager struct {
 	Version      int
 	Key          [32]byte
@@ -68,13 +156,48 @@ type serializedAddrManager struct {
 	TriedBuckets [triedBucketCount][]string
 }
 
+// localAddress represents a local network address that can be advertised to remote peers.
+//
+// This struct manages local addresses that the node can advertise to other peers
+// for incoming connections. It combines the network address information with a
+// priority score that determines the order in which addresses should be advertised.
+//
+// Fields:
+// - na: The wire protocol network address containing IP, port, and service flags
+// - score: Priority level indicating how this address was discovered/configured
+//
+// Local addresses are used during the peer handshake process to inform remote
+// peers about how they can connect back to this node. The priority system ensures
+// that the most reliable and reachable addresses are advertised first.
+//
+// Address sources in priority order (highest to lowest):
+// - Interface addresses (directly bound network interfaces)
+// - Bound addresses (explicitly configured bind addresses)
+// - UPnP addresses (discovered through UPnP NAT traversal)
+// - HTTP addresses (discovered through external IP services)
+// - Manual addresses (user-specified external addresses)
 type localAddress struct {
 	na    *wire.NetAddress
 	score AddressPriority
 }
 
-// AddressPriority type is used to describe the hierarchy of local address
-// discovery methods.
+// AddressPriority represents the priority level of a local address for advertisement
+// to remote peers, based on how the address was discovered or configured.
+//
+// The priority system helps determine which local addresses should be advertised
+// first when establishing peer connections. Higher priority addresses (lower numeric
+// values) are preferred for advertisement as they are more likely to be reachable
+// by remote peers.
+//
+// Priority Hierarchy (highest to lowest):
+// - InterfacePrio: Direct interface addresses (most reliable)
+// - BoundPrio: Explicitly bound addresses (configured)
+// - UpnpPrio: UPnP discovered addresses (NAT traversal)
+// - HttpPrio: HTTP-discovered addresses (external services)
+// - ManualPrio: Manually specified addresses (user configured)
+//
+// This prioritization ensures that the most reliable and reachable addresses
+// are advertised first, improving the likelihood of successful peer connections.
 type AddressPriority int
 
 const (

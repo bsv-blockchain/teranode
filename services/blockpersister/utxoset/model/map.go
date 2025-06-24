@@ -50,6 +50,23 @@ type splitMap[K comparableAndHashable, V any] struct {
 	nrOfBuckets uint16
 }
 
+// NewSplitSwissMap creates a new sharded map using Swiss tables for high-performance UTXO operations.
+//
+// This function creates a split map that uses Swiss table implementations for each shard,
+// providing excellent performance characteristics for large-scale UTXO set operations.
+// The map is sharded across multiple buckets to reduce contention in concurrent scenarios
+// and improve cache locality.
+//
+// Swiss tables offer faster lookups and better memory efficiency compared to standard
+// Go maps, making them ideal for the high-throughput requirements of blockchain
+// transaction processing where millions of UTXOs may need to be accessed rapidly.
+//
+// Parameters:
+//   - length: Initial capacity hint for sizing the underlying storage structures
+//
+// Returns a genericMap interface backed by sharded Swiss table implementations.
+// The returned map is thread-safe and optimized for concurrent access patterns
+// typical in blockchain processing workloads.
 func NewSplitSwissMap[K comparableAndHashable, V any](length int) genericMap[K, V] {
 	ssm := &splitMap[K, V]{
 		m:           make(map[uint16]genericMap[K, V], 1024),
@@ -65,6 +82,23 @@ func NewSplitSwissMap[K comparableAndHashable, V any](length int) genericMap[K, 
 	return ssm
 }
 
+// NewSplitGoMap creates a new sharded map using standard Go maps for UTXO operations.
+//
+// This function creates a split map that uses standard Go map implementations for each shard,
+// providing good performance characteristics while maintaining compatibility with standard
+// Go runtime optimizations. The map is sharded across multiple buckets to reduce contention
+// in concurrent scenarios.
+//
+// While not as performant as Swiss tables for very large datasets, Go maps offer excellent
+// compatibility and are well-optimized by the Go runtime. This implementation is suitable
+// for moderate-scale UTXO operations or when Swiss table dependencies are not desired.
+//
+// Parameters:
+//   - length: Initial capacity hint for sizing the underlying storage structures (currently unused)
+//
+// Returns a genericMap interface backed by sharded standard Go map implementations.
+// The returned map is thread-safe and provides good performance for typical blockchain
+// processing workloads with reasonable UTXO set sizes.
 func NewSplitGoMap[K comparableAndHashable, V any](length int) genericMap[K, V] {
 	ssm := &splitMap[K, V]{
 		m:           make(map[uint16]genericMap[K, V], 1024),

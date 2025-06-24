@@ -84,22 +84,79 @@ func (c *Client) GetPeers(ctx context.Context) (*p2p_api.GetPeersResponse, error
 	return c.client.GetPeers(ctx, &emptypb.Empty{})
 }
 
+// BanPeer implements the ClientI interface method to ban a peer.
+// This method forwards the ban request to the P2P service via gRPC, allowing
+// clients to remotely manage peer bans through the service API.
+//
+// Parameters:
+//   - ctx: Context for the operation, used for cancellation and timeout control
+//   - peer: BanPeerRequest containing the peer address and ban duration
+//
+// Returns:
+//   - BanPeerResponse confirming the ban operation
+//   - Error if the gRPC call fails or the peer cannot be banned
 func (c *Client) BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
 	return c.client.BanPeer(ctx, peer)
 }
 
+// UnbanPeer implements the ClientI interface method to unban a peer.
+// This method forwards the unban request to the P2P service via gRPC, allowing
+// clients to remotely remove peer bans through the service API.
+//
+// Parameters:
+//   - ctx: Context for the operation, used for cancellation and timeout control
+//   - peer: UnbanPeerRequest containing the peer address to unban
+//
+// Returns:
+//   - UnbanPeerResponse confirming the unban operation
+//   - Error if the gRPC call fails or the peer cannot be unbanned
 func (c *Client) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error) {
 	return c.client.UnbanPeer(ctx, peer)
 }
 
+// IsBanned implements the ClientI interface method to check if a peer is banned.
+// This method queries the P2P service via gRPC to determine the ban status
+// of a specific peer address, allowing clients to verify ban states remotely.
+//
+// Parameters:
+//   - ctx: Context for the operation, used for cancellation and timeout control
+//   - peer: IsBannedRequest containing the peer address to check
+//
+// Returns:
+//   - IsBannedResponse with the ban status (true if banned, false otherwise)
+//   - Error if the gRPC call fails
 func (c *Client) IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
 	return c.client.IsBanned(ctx, peer)
 }
 
+// ListBanned implements the ClientI interface method to retrieve all banned peers.
+// This method queries the P2P service via gRPC to get a complete list of currently
+// banned peer addresses, providing clients with visibility into the ban list.
+//
+// Parameters:
+//   - ctx: Context for the operation, used for cancellation and timeout control
+//   - _: Empty request (no parameters required)
+//
+// Returns:
+//   - ListBannedResponse containing an array of banned peer addresses
+//   - Error if the gRPC call fails
 func (c *Client) ListBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ListBannedResponse, error) {
 	return c.client.ListBanned(ctx, &emptypb.Empty{})
 }
 
+// ClearBanned implements the ClientI interface method to clear all peer bans.
+// This method forwards the clear request to the P2P service via gRPC, allowing
+// clients to remotely reset the entire ban list through the service API.
+//
+// This is a destructive operation that removes all ban entries permanently.
+//
+// Parameters:
+//   - ctx: Context for the operation, used for cancellation and timeout control
+//   - _: Empty request (no parameters required)
+//
+// Returns:
+//   - ClearBannedResponse confirming the clear operation
+//   - Error if the gRPC call fails
 func (c *Client) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ClearBannedResponse, error) {
 	return c.client.ClearBanned(ctx, &emptypb.Empty{})
 }

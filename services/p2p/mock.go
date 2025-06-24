@@ -11,10 +11,25 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// MockServerP2PNode is a mock implementation of P2PNodeI
+// MockServerP2PNode is a mock implementation of P2PNodeI interface for testing purposes.
+// This mock provides a testable substitute for the real P2P node implementation, allowing
+// unit tests to verify P2P service behavior without requiring actual network connections
+// or peer discovery. The mock uses testify/mock framework to record method calls and
+// return predefined responses.
+//
+// Key features:
+//   - Records all method calls with arguments for verification
+//   - Allows setting expected return values and errors
+//   - Supports configurable peer ID for testing different scenarios
+//   - Provides full interface compatibility with P2PNodeI
+//
+// Usage in tests:
+//   mockNode := &MockServerP2PNode{}
+//   mockNode.On("Start", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+//   // Use mockNode in place of real P2PNodeI implementation
 type MockServerP2PNode struct {
-	mock.Mock
-	peerID peer.ID
+	mock.Mock        // Embedded mock for method call recording and expectations
+	peerID peer.ID   // Configurable peer ID for testing scenarios
 }
 
 func (m *MockServerP2PNode) Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error {
@@ -126,8 +141,24 @@ func (m *MockServerP2PNode) SetPeerConnectedCallback(callback func(context.Conte
 	m.Called(callback)
 }
 
+// MockBanList is a mock implementation of BanListI interface for testing purposes.
+// This mock provides a testable substitute for the real ban list implementation,
+// allowing unit tests to verify ban management behavior without requiring actual
+// database operations or persistent storage. The mock uses testify/mock framework
+// to record method calls and return predefined responses.
+//
+// Key features:
+//   - Records all method calls with arguments for verification
+//   - Allows setting expected return values and errors for ban operations
+//   - Supports testing of ban/unban workflows without database dependencies
+//   - Provides full interface compatibility with BanListI
+//
+// Usage in tests:
+//   mockBanList := &MockBanList{}
+//   mockBanList.On("IsBanned", "192.168.1.1").Return(true)
+//   // Use mockBanList in place of real BanListI implementation
 type MockBanList struct {
-	mock.Mock
+	mock.Mock // Embedded mock for method call recording and expectations
 }
 
 func (m *MockBanList) IsBanned(ipStr string) bool {
@@ -168,8 +199,24 @@ func (m *MockBanList) Clear() {
 	m.Called()
 }
 
+// MockKafkaProducer is a mock implementation of Kafka producer interface for testing purposes.
+// This mock provides a testable substitute for the real Kafka producer implementation,
+// allowing unit tests to verify message publishing behavior without requiring actual
+// Kafka broker connections. The mock uses testify/mock framework to record method
+// calls and return predefined responses.
+//
+// Key features:
+//   - Records all method calls with arguments for verification
+//   - Allows setting expected return values and errors for publishing operations
+//   - Supports testing of message publishing workflows without Kafka dependencies
+//   - Provides full interface compatibility with Kafka producer interface
+//
+// Usage in tests:
+//   mockProducer := &MockKafkaProducer{}
+//   mockProducer.On("Publish", mock.Anything).Return()
+//   // Use mockProducer in place of real Kafka producer implementation
 type MockKafkaProducer struct {
-	mock.Mock
+	mock.Mock // Embedded mock for method call recording and expectations
 }
 
 func (m *MockKafkaProducer) Publish(msg *kafka.Message) {

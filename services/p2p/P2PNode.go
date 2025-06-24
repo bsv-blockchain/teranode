@@ -250,6 +250,22 @@ func NewP2PNode(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 	return node, nil
 }
 
+// setUpPrivateNetwork creates a libp2p host configured for a private network using a pre-shared key.
+// This function establishes a secure, isolated P2P network that only allows connections between
+// nodes that possess the same shared key. It's used for creating private blockchain networks
+// or testing environments where public network access should be restricted.
+//
+// The function constructs a pre-shared key (PSK) from the provided shared key string and
+// configures the libp2p host to use this PSK for all network communications. Only peers
+// with the matching PSK can establish connections and participate in the network.
+//
+// Parameters:
+//   - config: P2P configuration containing the shared key and other network parameters
+//   - pk: Private key for the node's cryptographic identity
+//
+// Returns:
+//   - A configured libp2p host ready for private network operation
+//   - Error if the shared key is invalid or host creation fails
 func setUpPrivateNetwork(config P2PConfig, pk *crypto.PrivKey) (host.Host, error) {
 	var h host.Host
 
@@ -440,6 +456,24 @@ func (s *P2PNode) Start(ctx context.Context, streamHandler func(network.Stream),
 	return nil
 }
 
+// subscribeToTopics joins the P2P node to multiple pubsub topics for message distribution.
+// This function iterates through the provided topic names and joins each one using the
+// libp2p pubsub system. It creates a mapping of topic names to topic objects that can
+// be used for publishing and subscribing to messages.
+//
+// The function is used during node initialization to establish participation in the
+// various communication channels used by the Teranode network, such as block propagation,
+// transaction distribution, and control message topics.
+//
+// Parameters:
+//   - topicNames: Array of topic names to join
+//   - ps: The pubsub instance to use for joining topics
+//   - s: The P2P node instance for logging purposes
+//
+// Returns:
+//   - Map of topic names to topic objects for successful subscriptions
+//   - Boolean indicating if an error occurred (true if error, false if success)
+//   - Error if any topic join operation fails
 func subscribeToTopics(topicNames []string, ps *pubsub.PubSub, s *P2PNode) (map[string]*pubsub.Topic, bool, error) {
 	topics := map[string]*pubsub.Topic{}
 
@@ -594,6 +628,23 @@ func (s *P2PNode) SendToPeer(ctx context.Context, peerID peer.ID, msg []byte) (e
 	return nil
 }
 
+// generatePrivateKey creates a new Ed25519 private key for P2P node identity and stores it persistently.
+// This function generates a cryptographically secure key pair using the Ed25519 algorithm,
+// which provides the node's unique identity in the P2P network. The private key is stored
+// in the blockchain client's state store for persistence across node restarts.
+//
+// The generated key serves as the node's cryptographic identity for:
+//   - Peer authentication and verification
+//   - Message signing and validation
+//   - Secure communication establishment
+//
+// Parameters:
+//   - ctx: Context for the operation, used for state store operations
+//   - blockchainClient: Client for persistent key storage (can be nil for testing)
+//
+// Returns:
+//   - Pointer to the generated private key ready for libp2p use
+//   - Error if key generation or storage fails
 func generatePrivateKey(ctx context.Context, blockchainClient blockchain.ClientI) (*crypto.PrivKey, error) {
 	// Generate a new key pair
 	priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
@@ -616,6 +667,22 @@ func generatePrivateKey(ctx context.Context, blockchainClient blockchain.ClientI
 	return &priv, nil
 }
 
+// readPrivateKey retrieves a previously stored Ed25519 private key from the blockchain state store.
+// This function loads the node's persistent cryptographic identity from storage, allowing
+// the node to maintain the same peer ID across restarts. If no key is found in storage,
+// it indicates this is a fresh node that needs key generation.
+//
+// The function attempts to read the key from the blockchain client's state store using
+// a predefined key identifier. The retrieved key bytes are unmarshaled back into a
+// usable private key object for libp2p operations.
+//
+// Parameters:
+//   - ctx: Context for the operation, used for state store operations
+//   - blockchainClient: Client for accessing persistent key storage
+//
+// Returns:
+//   - Pointer to the retrieved private key, or nil if no key exists
+//   - Error if storage access fails or key unmarshaling fails
 func readPrivateKey(ctx context.Context, blockchainClient blockchain.ClientI) (*crypto.PrivKey, error) {
 	// Read private key from the state store
 	if blockchainClient == nil {
