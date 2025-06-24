@@ -384,6 +384,29 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	return nil
 }
 
+// storeSubtree stores a completed subtree to the subtree store with retry capability.
+// This method handles the persistence of newly created subtrees to the blob store,
+// ensuring they are available for block assembly and mining operations. It includes
+// existence checking to avoid duplicate storage and implements retry logic for
+// handling transient storage failures.
+//
+// The function performs the following operations:
+// - Checks if the subtree already exists in the store to avoid duplicates
+// - Serializes the subtree data and metadata for storage
+// - Attempts to store the subtree with error handling
+// - Queues failed storage attempts for retry with exponential backoff
+//
+// This is a critical operation for maintaining the integrity of the block assembly
+// process, as subtrees must be persistently stored before they can be included
+// in mining candidates.
+//
+// Parameters:
+//   - ctx: Context for the storage operation, allowing for cancellation and timeouts
+//   - subtreeRequest: Request containing the subtree to store and associated metadata
+//   - subtreeRetryChan: Channel for queuing failed storage attempts for retry
+//
+// Returns:
+//   - error: Any error encountered during storage, excluding retryable failures which are queued
 func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtreeprocessor.NewSubtreeRequest, subtreeRetryChan chan *subtreeRetrySend) (err error) {
 	subtree := subtreeRequest.Subtree
 
@@ -614,6 +637,28 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}, nil
 }
 
+// RemoveTx removes a transaction from the block assembly process.
+// This method handles the removal of transactions that should no longer be
+// considered for inclusion in future blocks. This can occur when transactions
+// become invalid, are double-spent, or need to be excluded for other reasons.
+//
+// The function performs the following operations:
+// - Validates the transaction ID format and length
+// - Deserializes transaction input points for proper identification
+// - Removes the transaction from the block assembler's active set
+// - Updates internal metrics and logging for monitoring
+//
+// Transaction removal is important for maintaining the integrity of the block
+// assembly process and ensuring that only valid, current transactions are
+// included in mining candidates.
+//
+// Parameters:
+//   - ctx: Context for the removal operation, allowing for cancellation and tracing
+//   - req: Request containing the transaction ID and input points to remove
+//
+// Returns:
+//   - *blockassembly_api.EmptyMessage: Empty response indicating successful removal
+//   - error: Any error encountered during transaction removal or validation
 func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.RemoveTxRequest) (*blockassembly_api.EmptyMessage, error) {
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "RemoveTx",
 		tracing.WithParentStat(ba.stats),
@@ -1088,10 +1133,43 @@ func (ba *BlockAssembly) createMerkleTreeFromSubtrees(jobID string, subtreesInJo
 	return hashMerkleRoot, nil
 }
 
+// SubtreeCount returns the current number of subtrees managed by the block assembler.
+// This method provides a real-time count of active subtrees that are available for
+// inclusion in mining candidates. The count reflects the current state of the block
+// assembly process and is used for monitoring, metrics, and operational visibility.
+//
+// The subtree count is an important indicator of the block assembler's current
+// capacity and workload. It helps operators understand how many transaction
+// groups are ready for block inclusion and can be used to monitor the health
+// and performance of the transaction processing pipeline.
+//
+// Returns:
+//   - int: The current number of active subtrees in the block assembler
 func (ba *BlockAssembly) SubtreeCount() int {
 	return ba.blockAssembler.SubtreeCount()
 }
 
+// removeSubtreesDAH removes subtrees from the Double-spend Attempt Handler (DAH) after block confirmation.
+// This method handles the cleanup of subtrees that have been successfully included in a confirmed block,
+// ensuring they are removed from the DAH to prevent potential double-spend detection false positives.
+// The DAH tracks subtrees to detect conflicting transactions, and once a block is confirmed, the
+// included subtrees should be cleaned up to maintain accurate double-spend detection.
+//
+// The function performs the following operations:
+// - Iterates through all subtrees included in the confirmed block
+// - Removes each subtree from the DAH's tracking system
+// - Uses decoupled tracing to allow background processing without blocking
+// - Handles errors gracefully while maintaining system stability
+//
+// This cleanup process is critical for maintaining the accuracy of double-spend detection
+// and ensuring the DAH doesn't accumulate stale subtree references over time.
+//
+// Parameters:
+//   - ctx: Context for the removal operation, allowing for cancellation and tracing
+//   - block: The confirmed block containing subtrees to be removed from DAH
+//
+// Returns:
+//   - error: Any error encountered during subtree removal from DAH
 func (ba *BlockAssembly) removeSubtreesDAH(ctx context.Context, block *model.Block) (err error) {
 	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "removeSubtreesDAH",
 		tracing.WithParentStat(ba.stats),

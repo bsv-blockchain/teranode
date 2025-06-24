@@ -302,8 +302,27 @@ func (s *Server) Stop(ctx context.Context) error {
 }
 
 // loadConfig loads the server configuration and initializes required services.
-// models is a list of models to auto-migrate when the datastore is created
-// if testing is true, the node will be mocked
+// This method performs the core configuration loading and service initialization for the alert server.
+// It reads configuration from Teranode settings, sets up network-specific topic names, validates
+// P2P configuration, creates necessary directories, and initializes the datastore connection.
+//
+// The configuration process includes:
+// - Reading alert system configuration from Teranode settings
+// - Adjusting topic names for non-mainnet networks (prefixed with network name)
+// - Validating P2P configuration requirements
+// - Creating private key directories if needed
+// - Initializing and connecting to the configured datastore
+// - Auto-migrating database models if specified
+//
+// Parameters:
+//   - ctx: Context for the configuration loading operation, allowing for cancellation and timeouts
+//   - models: List of database models to auto-migrate when the datastore is created.
+//     Pass nil or empty slice to skip auto-migration
+//   - isTesting: When true, the P2P node will be mocked for testing purposes instead of
+//     creating a real P2P connection
+//
+// Returns:
+//   - error: Any error encountered during configuration loading or service initialization
 func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting bool) (err error) {
 	// read configuration from Teranode settings file
 	network := s.settings.ChainCfgParams.Name
@@ -368,7 +387,23 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 	return
 }
 
-// requireP2P will ensure the P2P configuration is valid
+// requireP2P validates and ensures the P2P configuration is complete and valid.
+// This method performs validation and setup of P2P-related configuration parameters,
+// applying default values where necessary to ensure the alert system can properly
+// participate in the peer-to-peer network for alert distribution.
+//
+// The validation process includes:
+// - Setting the P2P alert system protocol ID to the default if not specified
+// - Setting the P2P topic name to the default if not specified
+// - Validating that required P2P configuration fields are present and valid
+// - Ensuring IP address and port configurations meet minimum requirements
+//
+// This method should be called during server initialization after loading the
+// basic configuration but before starting P2P services.
+//
+// Returns:
+//   - error: Any error encountered during P2P configuration validation, including
+//     missing required fields or invalid configuration values
 func (s *Server) requireP2P() error {
 	// Set the P2P alert system protocol ID if it's missing
 	if len(s.appConfig.P2P.AlertSystemProtocolID) == 0 {
@@ -407,7 +442,21 @@ func (s *Server) requireP2P() error {
 	return nil
 }
 
-// createPrivateKeyDirectory will create the private key directory
+// createPrivateKeyDirectory creates the directory for storing P2P private keys.
+// This method ensures that the directory structure exists for storing the alert system's
+// P2P private key files. It creates the directory in the user's home directory if it
+// doesn't already exist, using appropriate permissions for security.
+//
+// The directory is created at $HOME/.alert-system/ with permissions 0750 (owner: rwx, group: r-x, other: none)
+// to ensure that private key files stored within are protected from unauthorized access.
+// If the directory already exists, no error is returned.
+//
+// This method is typically called during server initialization when P2P configuration
+// requires a private key file but no explicit path has been provided.
+//
+// Returns:
+//   - error: Any error encountered during directory creation, including permission issues
+//     or inability to determine the user's home directory
 func (s *Server) createPrivateKeyDirectory() error {
 	dirName, err := os.UserHomeDir()
 	if err != nil {
@@ -423,7 +472,33 @@ func (s *Server) createPrivateKeyDirectory() error {
 	return nil
 }
 
-// loadDatastore will load an instance of Datastore into the dependencies
+// loadDatastore initializes and configures the datastore connection for the alert service.
+// This method creates a datastore client instance with appropriate configuration for the
+// alert system's persistent storage needs. It supports multiple database backends including
+// SQLite, PostgreSQL, and MySQL, with connection pooling and auto-migration capabilities.
+//
+// The datastore initialization process includes:
+// - Configuring logging integration with the alert service logger
+// - Setting up SSL/TLS connection parameters based on database URL
+// - Configuring connection pooling parameters for optimal performance
+// - Performing auto-migration of specified database models if provided
+// - Establishing the connection and verifying database accessibility
+//
+// Supported database schemes:
+// - sqlite:// and sqlitememory:// for SQLite databases
+// - postgres:// for PostgreSQL databases  
+// - mysql:// for MySQL databases
+//
+// Parameters:
+//   - ctx: Context for the datastore initialization, allowing for cancellation and timeouts
+//   - models: List of database models to auto-migrate after connection establishment.
+//     Pass nil or empty slice to skip auto-migration
+//   - dbURL: Parsed database URL containing connection parameters including scheme, host,
+//     port, database name, and connection options
+//
+// Returns:
+//   - error: Any error encountered during datastore initialization, including connection
+//     failures, unsupported database schemes, or migration errors
 func (s *Server) loadDatastore(ctx context.Context, models []interface{}, dbURL *url.URL) error {
 	// Sync collecting the options
 	var options []datastore.ClientOps

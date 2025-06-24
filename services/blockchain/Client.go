@@ -316,6 +316,26 @@ func (c *Client) GetBlockByID(ctx context.Context, id uint64) (*model.Block, err
 	return c.blockFromResponse(resp)
 }
 
+// blockFromResponse converts a gRPC GetBlockResponse into a model.Block.
+// This helper method deserializes the various components of a block response
+// from the blockchain service and reconstructs them into the internal Block model.
+//
+// The method performs the following conversions:
+// - Deserializes the block header from bytes to BlockHeader
+// - Deserializes the coinbase transaction from bytes to Transaction
+// - Converts subtree hashes from byte arrays to Hash objects
+// - Reconstructs the complete Block with all components and metadata
+//
+// This conversion is essential for maintaining type safety and providing
+// a consistent internal representation of blocks regardless of the transport
+// mechanism (gRPC, direct calls, etc.).
+//
+// Parameters:
+//   - resp: The gRPC response containing serialized block data
+//
+// Returns:
+//   - *model.Block: The reconstructed block with all components
+//   - error: Any error encountered during deserialization or reconstruction
 func (c *Client) blockFromResponse(resp *blockchain_api.GetBlockResponse) (*model.Block, error) {
 	header, err := model.NewBlockHeaderFromBytes(resp.Header)
 	if err != nil {
@@ -381,6 +401,37 @@ func (c *Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans boo
 	return resp.Blocks, nil
 }
 
+// GetLastNInvalidBlocks retrieves the most recent N invalid blocks from the blockchain.
+// This method provides access to blocks that have been rejected or invalidated during
+// the validation process, which is essential for debugging, monitoring, and network
+// analysis purposes.
+//
+// Invalid blocks are those that failed validation checks such as:
+// - Proof of work validation failures
+// - Block structure or format errors
+// - Transaction validation failures within the block
+// - Consensus rule violations
+// - Timestamp or difficulty target issues
+// - Merkle root mismatches or other cryptographic failures
+//
+// The returned blocks are ordered by their processing time, with the most recently
+// invalidated blocks appearing first in the list. This information is valuable for:
+// - Network monitoring and attack detection
+// - Debugging blockchain synchronization issues
+// - Analyzing network health and block rejection patterns
+// - Forensic analysis of potential malicious activity
+// - Performance analysis of validation processes
+//
+// The method communicates with the blockchain service via gRPC to retrieve
+// invalid block information from the underlying blockchain store.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - n: Maximum number of invalid blocks to retrieve (must be positive)
+//
+// Returns:
+//   - []*model.BlockInfo: Slice of invalid block information, ordered by recency
+//   - error: Any error encountered during the retrieval process
 func (c *Client) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
 	resp, err := c.client.GetLastNInvalidBlocks(ctx, &blockchain_api.GetLastNInvalidBlocksRequest{
 		N: n,
@@ -532,6 +583,35 @@ func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash,
 	return c.returnBlockHeaders(resp)
 }
 
+// GetBlockHeadersToCommonAncestor retrieves block headers from a target hash back to a common ancestor.
+// This method implements the Bitcoin protocol's block locator algorithm to find the common
+// ancestor between the local chain and a remote peer's chain, then returns the headers
+// from the target hash back to that common point.
+//
+// The method uses a block locator array (similar to Bitcoin's getblocks message) to
+// efficiently find the common ancestor without requiring the transmission of the entire
+// chain. The locator contains hashes at exponentially increasing intervals, allowing
+// for efficient binary-search-like discovery of the fork point.
+//
+// This functionality is essential for:
+// - Blockchain synchronization between peers
+// - Identifying chain reorganizations and forks
+// - Efficient header-first synchronization protocols
+// - P2P network block discovery and validation
+//
+// The method communicates with the blockchain service via gRPC to perform the
+// ancestor search and header retrieval from the underlying blockchain store.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - hashTarget: The target block hash to start searching backwards from
+//   - blockLocatorHashes: Array of block hashes used to locate the common ancestor
+//   - maxHeaders: Maximum number of headers to return (prevents excessive responses)
+//
+// Returns:
+//   - []*model.BlockHeader: Array of block headers from target back to common ancestor
+//   - []*model.BlockHeaderMeta: Corresponding metadata for each header
+//   - error: Any error encountered during the ancestor search or header retrieval
 func (c *Client) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	locatorBytes := make([][]byte, 0, len(blockLocatorHashes))
 	for _, hash := range blockLocatorHashes {
@@ -564,6 +644,27 @@ func (c *Client) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *cha
 }
 
 // returnBlockHeaders is a helper function to process block header responses.
+// This method converts a gRPC GetBlockHeadersResponse into slices of BlockHeader
+// and BlockHeaderMeta objects, handling the deserialization of both the headers
+// and their associated metadata.
+//
+// The method performs the following operations:
+// - Deserializes each block header from bytes to BlockHeader objects
+// - Deserializes each metadata entry from bytes to BlockHeaderMeta objects
+// - Maintains the order and correspondence between headers and metadata
+// - Handles any deserialization errors gracefully
+//
+// This helper function is used by multiple client methods that retrieve block
+// headers (GetBlockHeaders, GetBlockHeadersToCommonAncestor, etc.) to provide
+// consistent response processing and error handling.
+//
+// Parameters:
+//   - resp: The gRPC response containing serialized block headers and metadata
+//
+// Returns:
+//   - []*model.BlockHeader: Array of deserialized block headers
+//   - []*model.BlockHeaderMeta: Array of corresponding metadata objects
+//   - error: Any error encountered during deserialization
 func (c *Client) returnBlockHeaders(resp *blockchain_api.GetBlockHeadersResponse) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
 
@@ -689,6 +790,30 @@ func (c *Client) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash)
 }
 
 // GetBlockHeaderIDs retrieves block header IDs starting from a specific hash.
+// This method fetches a sequence of block header identifiers (uint32 IDs) from
+// the blockchain service, beginning with the block identified by the provided
+// hash and continuing for the requested number of headers.
+//
+// Block header IDs are lightweight identifiers used internally by the blockchain
+// store for efficient indexing and referencing. This method is particularly
+// useful for:
+// - Bulk operations that need to reference many blocks efficiently
+// - Internal synchronization processes
+// - Performance-optimized block processing pipelines
+// - Reducing memory overhead when only block references are needed
+//
+// The returned IDs correspond to the internal database identifiers and can be
+// used with other methods that accept block IDs for faster lookups compared
+// to hash-based operations.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - blockHash: Hash of the starting block for ID retrieval
+//   - numberOfHeaders: Number of consecutive block header IDs to retrieve
+//
+// Returns:
+//   - []uint32: Array of block header IDs in sequential order
+//   - error: Any error encountered during the ID retrieval operation
 func (c *Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
 	resp, err := c.client.GetBlockHeaderIDs(ctx, &blockchain_api.GetBlockHeadersRequest{
 		StartHash:       blockHash.CloneBytes(),
@@ -754,7 +879,38 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 }
 
 // SubscribeToServer establishes a subscription to the blockchain server.
-// Manages reconnection attempts and notification forwarding.
+// This method creates a persistent connection to the blockchain service for receiving
+// real-time notifications about blockchain events. It manages reconnection attempts
+// and notification forwarding to provide reliable event streaming.
+//
+// The method establishes a gRPC streaming connection to receive notifications about:
+// - New block additions to the blockchain
+// - Block invalidations and reorganizations
+// - FSM state transitions
+// - Mining status updates
+// - Other blockchain service events
+//
+// Key features of this subscription mechanism:
+// - Automatic reconnection handling for network failures
+// - Graceful shutdown when context is cancelled
+// - Connection lifecycle management
+// - Error handling and logging for debugging
+//
+// The returned channel will receive notifications until the context is cancelled
+// or an unrecoverable error occurs. The method handles connection cleanup
+// automatically when the subscription ends.
+//
+// This is typically used by services that need to react to blockchain events
+// in real-time, such as mining coordinators, transaction processors, or
+// monitoring systems.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - source: Identifier for the subscribing service (used for logging and tracking)
+//
+// Returns:
+//   - chan *blockchain_api.Notification: Channel for receiving blockchain notifications
+//   - error: Any error encountered during subscription establishment
 func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
 	ch := make(chan *blockchain_api.Notification)
 
@@ -839,6 +995,35 @@ func (c *Client) SetState(ctx context.Context, key string, data []byte) error {
 	return nil
 }
 
+// GetBlockIsMined checks whether a specific block has been marked as mined.
+// This method queries the blockchain service to determine if a block has been
+// processed through the mining pipeline and marked as successfully mined.
+//
+// In the Teranode architecture, blocks go through several processing stages:
+// 1. Initial validation and storage
+// 2. Subtree processing and organization
+// 3. Mining confirmation and marking
+//
+// This method specifically checks stage 3 - whether the block has been marked
+// as mined, indicating that it has been fully processed and confirmed by the
+// mining subsystem. This status is important for:
+// - Block processing pipeline monitoring
+// - Mining operation coordination
+// - Ensuring blocks are ready for network propagation
+// - Recovery operations and state consistency checks
+// - Performance analysis and bottleneck identification
+// - Ensuring all blocks complete the full processing workflow
+//
+// The method communicates with the blockchain service via gRPC to retrieve
+// the mining status from the underlying blockchain store.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - blockHash: Hash of the block to check for mining status
+//
+// Returns:
+//   - bool: True if the block has been marked as mined, false otherwise
+//   - error: Any error encountered during the status check operation
 func (c *Client) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	resp, err := c.client.GetBlockIsMined(ctx, &blockchain_api.GetBlockIsMinedRequest{
 		BlockHash: blockHash[:],
@@ -851,6 +1036,32 @@ func (c *Client) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash)
 }
 
 // SetBlockMinedSet marks a block as mined in the blockchain.
+// This method updates the blockchain store to indicate that a specific block
+// has been successfully processed through the mining pipeline and is ready
+// for network propagation and inclusion in the active blockchain.
+//
+// In the Teranode architecture, this method represents the final step in the
+// block processing workflow:
+// 1. Block validation and initial storage
+// 2. Subtree processing and organization
+// 3. Mining confirmation and validation
+// 4. Marking as mined (this method)
+//
+// Setting the mined status is critical for:
+// - Coordinating block propagation to network peers
+// - Ensuring blocks are ready for inclusion in subsequent mining operations
+// - Tracking mining pipeline completion for monitoring and metrics
+// - Maintaining consistency between mining and blockchain services
+//
+// The method communicates with the blockchain service via gRPC to update
+// the mining status in the underlying blockchain store.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - blockHash: Hash of the block to mark as mined
+//
+// Returns:
+//   - error: Any error encountered during the mining status update operation
 func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
 	_, err := c.client.SetBlockMinedSet(ctx, &blockchain_api.SetBlockMinedSetRequest{
 		BlockHash: blockHash[:],
@@ -863,6 +1074,32 @@ func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash
 }
 
 // GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
+// This method identifies and returns blocks that have been processed and stored
+// but have not yet completed the mining pipeline and been marked as mined.
+//
+// In the Teranode architecture, blocks progress through multiple stages:
+// 1. Initial validation and storage
+// 2. Subtree processing and organization
+// 3. Mining confirmation and marking
+//
+// This method returns blocks that are in stages 1 or 2 but not yet in stage 3,
+// indicating that their mining processing is incomplete. This is essential for:
+// - Monitoring block processing pipeline health and progress
+// - Identifying blocks that need mining completion
+// - Recovery operations after service restarts or failures
+// - Performance analysis and bottleneck identification
+// - Ensuring all blocks complete the full processing workflow
+//
+// The returned blocks are fully deserialized and can be used by mining services
+// or other components to complete the processing pipeline. This method is
+// particularly useful for operational monitoring and automated recovery systems.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//
+// Returns:
+//   - []*model.Block: Array of blocks that haven't been marked as mined
+//   - error: Any error encountered during block retrieval or deserialization
 func (c *Client) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
 	resp, err := c.client.GetBlocksMinedNotSet(ctx, &emptypb.Empty{})
 	if err != nil {
@@ -896,6 +1133,35 @@ func (c *Client) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.H
 }
 
 // GetBlocksSubtreesNotSet retrieves blocks whose subtrees haven't been set.
+// This method identifies and returns blocks that have been processed and stored
+// but whose corresponding subtree data has not yet been marked as complete in
+// the blockchain store.
+//
+// In the Teranode architecture, blocks undergo multi-stage processing:
+// 1. Initial block validation and storage
+// 2. Subtree generation and processing
+// 3. Subtree storage and organization
+// 4. Marking subtrees as "set" to indicate completion
+//
+// This method returns blocks that are in stages 1-3 but not yet in stage 4,
+// indicating that their subtree processing is incomplete. This is crucial for:
+// - Monitoring subtree processing pipeline health and progress
+// - Identifying blocks that need subtree completion
+// - Recovery operations after service restarts or failures
+// - Performance analysis of subtree processing bottlenecks
+// - Ensuring all blocks complete the full subtree workflow
+//
+// The returned blocks are fully deserialized and can be used by subtree
+// processing services or other components to complete the processing pipeline.
+// This method is essential for maintaining data consistency and operational
+// visibility in the Teranode system.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//
+// Returns:
+//   - []*model.Block: Array of blocks whose subtrees haven't been set
+//   - error: Any error encountered during block retrieval or deserialization
 func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
 	resp, err := c.client.GetBlocksSubtreesNotSet(ctx, &emptypb.Empty{})
 	if err != nil {
@@ -919,6 +1185,34 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 // FSM related endpoints
 
 // GetFSMCurrentState retrieves the current state of the finite state machine.
+// This method provides access to the blockchain service's operational state,
+// which is managed by a finite state machine (FSM) that coordinates the
+// service's lifecycle and processing modes.
+//
+// The FSM manages critical blockchain service states such as:
+// - IDLE: Service is idle and ready for operations
+// - RUNNING: Service is actively processing blocks
+// - SYNCING: Service is synchronizing with the network
+// - STOPPING: Service is gracefully shutting down
+// - ERROR: Service has encountered an error condition
+//
+// The current state information is essential for:
+// - Coordinating operations between blockchain components
+// - Monitoring service health and operational status
+// - Implementing proper shutdown and startup sequences
+// - Debugging service state transitions and issues
+// - Ensuring proper service coordination in distributed systems
+//
+// The method first checks the locally cached state for performance, and if
+// not available, queries the blockchain service directly via gRPC to retrieve
+// the authoritative current state.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//
+// Returns:
+//   - *FSMStateType: Current state of the blockchain service FSM
+//   - error: Any error encountered during state retrieval
 func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
@@ -954,7 +1248,34 @@ func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetS
 	return nil
 }
 
-// WaitUntilFSMTransitionsFromIdleState waits for the FSM to transition from the IDLE state.
+// WaitUntilFSMTransitionFromIdleState waits for the FSM to transition from the IDLE state.
+// This method blocks until the blockchain service's finite state machine transitions
+// away from the IDLE state to any other operational state, providing synchronization
+// for coordinated service startup and operational workflows.
+//
+// The method is essential for:
+// - Coordinating service startup sequences where components must wait for the
+//   blockchain service to become active before proceeding
+// - Implementing proper initialization order in distributed systems
+// - Ensuring dependent services don't start processing before blockchain is ready
+// - Synchronizing mining operations with blockchain service availability
+// - Managing graceful service recovery after maintenance or restarts
+//
+// The method continuously polls the FSM state until it detects a transition away
+// from IDLE, then logs the successful transition and returns. This provides a
+// reliable synchronization mechanism for service coordination.
+//
+// Common use cases include:
+// - Mining services waiting for blockchain to be ready
+// - Transaction processors waiting for blockchain availability
+// - Monitoring systems coordinating with blockchain lifecycle
+// - Integration tests requiring blockchain service readiness
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//
+// Returns:
+//   - error: Any error encountered during the wait operation or context cancellation
 func (c *Client) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error {
 	c.logger.Infof("[Blockchain Client] Waiting for FSM to transition from IDLE state...")
 
@@ -1051,6 +1372,36 @@ func (c *Client) Run(ctx context.Context, source string) error {
 }
 
 // CatchUpBlocks sends a catchup blocks FSM event to the blockchain service.
+// This method initiates a blockchain synchronization process by transitioning the
+// blockchain service's finite state machine to the CATCHING_BLOCKS state, which
+// triggers the service to synchronize with the network and catch up on any
+// missing blocks.
+//
+// The method is essential for:
+// - Recovering from network disconnections or service downtime
+// - Ensuring the local blockchain is synchronized with the network
+// - Handling blockchain reorganizations and chain updates
+// - Maintaining consensus with the Bitcoin SV network
+// - Coordinating synchronization across distributed Teranode components
+//
+// The method first checks if the FSM is already in the CATCHING_BLOCKS state
+// to avoid unnecessary state transitions. If not already catching up, it sends
+// the appropriate FSM event to trigger the synchronization process.
+//
+// This operation is typically used during:
+// - Service startup when the local chain may be behind
+// - Recovery from network partitions or connectivity issues
+// - Manual synchronization requests from operators
+// - Automated catch-up processes in distributed deployments
+//
+// The method communicates with the blockchain service via gRPC to send the
+// FSM event that initiates the block catching process.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//
+// Returns:
+//   - error: Any error encountered during the FSM event transmission
 func (c *Client) CatchUpBlocks(ctx context.Context) error {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
@@ -1071,6 +1422,43 @@ func (c *Client) CatchUpBlocks(ctx context.Context) error {
 }
 
 // LegacySync sends a legacy sync FSM event to the blockchain service.
+// This method initiates a legacy synchronization process by transitioning the
+// blockchain service's finite state machine to the LEGACY_SYNCING state, which
+// triggers compatibility mode synchronization with older Bitcoin SV network
+// protocols and legacy blockchain implementations.
+//
+// The legacy sync mode is essential for:
+// - Maintaining compatibility with older Bitcoin SV network nodes
+// - Synchronizing with legacy blockchain implementations
+// - Supporting migration scenarios from older Teranode versions
+// - Ensuring interoperability across diverse network topologies
+// - Handling edge cases in blockchain synchronization protocols
+//
+// The method first checks if the FSM is already in the LEGACY_SYNCING state
+// to avoid unnecessary state transitions. If not already in legacy sync mode,
+// it sends the appropriate FSM event to trigger the legacy synchronization
+// process.
+//
+// Legacy synchronization differs from standard sync by:
+// - Using older protocol versions for network communication
+// - Implementing backward-compatible block validation rules
+// - Supporting legacy transaction formats and structures
+// - Maintaining compatibility with pre-upgrade network nodes
+//
+// This operation is typically used during:
+// - Network upgrades and migration periods
+// - Integration with legacy Bitcoin SV infrastructure
+// - Debugging synchronization issues with older nodes
+// - Ensuring network-wide compatibility during protocol transitions
+//
+// The method communicates with the blockchain service via gRPC to send the
+// FSM event that initiates the legacy synchronization process.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//
+// Returns:
+//   - error: Any error encountered during the FSM event transmission
 func (c *Client) LegacySync(ctx context.Context) error {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
@@ -1090,6 +1478,30 @@ func (c *Client) LegacySync(ctx context.Context) error {
 	return nil
 }
 
+// Idle transitions the blockchain service to the idle state via FSM event.
+// This method sends an IDLE event to the blockchain service's finite state machine,
+// causing it to transition to the IDLE state where it stops active processing
+// and waits for further commands.
+//
+// The method first checks if the FSM is already in the IDLE state to avoid
+// unnecessary transitions. If the current state is already IDLE, it returns
+// immediately without sending the event.
+//
+// The IDLE state is used for:
+// - Graceful shutdown preparation
+// - Pausing blockchain processing temporarily
+// - Testing scenarios where controlled state transitions are needed
+// - Maintenance operations that require the service to be quiescent
+//
+// This operation is part of the FSM control interface that allows external
+// services to coordinate blockchain service state transitions for operational
+// and testing purposes.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//
+// Returns:
+//   - error: Any error encountered during the FSM event transmission
 func (c *Client) Idle(ctx context.Context) error {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
@@ -1114,6 +1526,39 @@ func (c *Client) Idle(ctx context.Context) error {
 //
 
 // GetBlockLocator returns a block locator for the given block header hash and height.
+// This method generates a Bitcoin block locator, which is a compact representation
+// of the blockchain structure used for efficient synchronization between nodes.
+// The locator contains strategically selected block hashes that allow peers to
+// quickly identify common ancestors and synchronization points.
+//
+// A block locator is constructed using an exponential backoff algorithm:
+// - Recent blocks are included with high density (every block)
+// - Older blocks are included with decreasing density (exponential spacing)
+// - This creates an efficient logarithmic structure for chain comparison
+//
+// The block locator is essential for:
+// - Efficient blockchain synchronization between network peers
+// - Identifying common ancestors during chain reorganizations
+// - Minimizing network traffic during sync operations
+// - Supporting the Bitcoin protocol's getblocks and getheaders messages
+// - Enabling fast chain comparison without transmitting full block data
+//
+// The method starts from the specified block header hash and height, then
+// works backward through the blockchain to construct the locator array.
+// The resulting locator can be used by other nodes to efficiently determine
+// which blocks they need to synchronize.
+//
+// This implementation follows the standard Bitcoin protocol for block locators,
+// ensuring compatibility with the broader Bitcoin SV network.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - blockHeaderHash: Hash of the block header to start the locator from
+//   - blockHeaderHeight: Height of the starting block header
+//
+// Returns:
+//   - []*chainhash.Hash: Array of block hashes forming the block locator
+//   - error: Any error encountered during locator generation
 func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 	req := &blockchain_api.GetBlockLocatorRequest{
 		Hash:   blockHeaderHash[:],
@@ -1141,6 +1586,45 @@ func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash
 }
 
 // LocateBlockHeaders finds block headers using a locator.
+// This method implements the Bitcoin protocol's getheaders functionality,
+// using a block locator to efficiently find and return a sequence of block
+// headers starting from a common ancestor. This is a fundamental operation
+// for blockchain synchronization between network peers.
+//
+// The method works by:
+// 1. Taking a block locator (array of strategically selected block hashes)
+// 2. Finding the most recent common block hash in the locator
+// 3. Returning subsequent block headers up to the specified limits
+//
+// The locator parameter should be generated using GetBlockLocator() and
+// represents the requesting node's view of the blockchain. The method
+// finds the latest block hash in the locator that exists in the local
+// blockchain, then returns headers starting from the next block.
+//
+// This operation is essential for:
+// - Blockchain synchronization between network peers
+// - Implementing the Bitcoin protocol's getheaders message
+// - Efficient chain comparison and synchronization
+// - Supporting SPV (Simplified Payment Verification) clients
+// - Enabling lightweight blockchain synchronization
+//
+// The method respects both the maxHashes limit and the hashStop parameter:
+// - maxHashes limits the total number of headers returned
+// - hashStop provides an optional stopping point for the header sequence
+// - This prevents excessive network traffic and resource usage
+//
+// The returned headers are fully deserialized and ready for validation
+// and processing by the requesting node.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - locator: Block locator array identifying the requesting node's chain state
+//   - hashStop: Optional hash where header retrieval should stop (can be nil)
+//   - maxHashes: Maximum number of block headers to return
+//
+// Returns:
+//   - []*model.BlockHeader: Array of block headers starting from the common ancestor
+//   - error: Any error encountered during header location and retrieval
 func (c *Client) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	locatorBytes := make([][]byte, 0, len(locator))
 	for _, hash := range locator {
@@ -1188,6 +1672,27 @@ func (c *Client) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, erro
 var log2FloorMasks = []uint32{0xffff0000, 0xff00, 0xf0, 0xc, 0x2}
 
 // fastLog2Floor calculates and returns floor(log2(x)) in a constant 5 steps.
+// This function provides an efficient bit manipulation algorithm to compute the
+// floor of the base-2 logarithm of a 32-bit unsigned integer without using
+// floating-point operations or expensive mathematical functions.
+//
+// The algorithm uses a series of bit masks defined in log2FloorMasks to perform
+// a binary search-like operation that determines the position of the most
+// significant bit in constant time. This is particularly useful for:
+// - Block locator generation in blockchain synchronization
+// - Efficient power-of-2 calculations
+// - Performance-critical bit manipulation operations
+// - Reducing memory overhead when only block references are needed
+//
+// The method works by testing increasingly smaller bit ranges using predefined
+// masks, accumulating the position of the highest set bit. This approach
+// provides O(1) time complexity regardless of the input value.
+//
+// Parameters:
+//   - n: The 32-bit unsigned integer to compute the floor log2 for
+//
+// Returns:
+//   - uint8: The floor of log2(n), or 0 if n is 0
 func fastLog2Floor(n uint32) uint8 {
 	rv := uint8(0)
 	exponent := uint8(16)
@@ -1205,6 +1710,30 @@ func fastLog2Floor(n uint32) uint8 {
 }
 
 // SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
+// This method manages the processing timestamp metadata for blocks in the blockchain,
+// which is used to track when blocks have been fully processed by the system.
+//
+// The processed_at timestamp serves several important purposes:
+// - Tracking block processing completion for monitoring and metrics
+// - Identifying blocks that may need reprocessing after system restarts
+// - Supporting recovery operations and state consistency checks
+// - Enabling performance analysis of block processing pipelines
+//
+// The method supports two modes of operation:
+// 1. Setting timestamp: Records the current time as the processing completion time
+// 2. Clearing timestamp: Removes the timestamp to mark the block as unprocessed
+//
+// This functionality is particularly important in the Teranode architecture where
+// blocks undergo multiple processing stages and the system needs to track which
+// blocks have completed all processing steps.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - blockHash: Hash of the block to update the processing timestamp for
+//   - clear: Optional boolean parameter; if true, clears the timestamp instead of setting it
+//
+// Returns:
+//   - error: Any error encountered during the timestamp update operation
 func (c *Client) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
 	c.logger.Debugf("[Blockchain Client] Setting block processed at timestamp for %s, clear=%v", blockHash, clear)
 

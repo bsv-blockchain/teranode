@@ -1302,8 +1302,44 @@ func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchai
 }
 
 // Subscribe handles subscription requests to blockchain notifications.
-// It maintains the subscription until the context is cancelled or the client disconnects.
-// The source parameter identifies the subscriber for logging purposes.
+// This method establishes a persistent gRPC streaming connection that allows
+// clients to receive real-time notifications about blockchain events. It serves
+// as the primary mechanism for event-driven communication between the blockchain
+// service and its consumers.
+//
+// The subscription system is essential for:
+// - Real-time notification of new blocks added to the blockchain
+// - Broadcasting blockchain reorganizations and invalidations
+// - Distributing FSM state changes to monitoring and management systems
+// - Coordinating mining operations and block processing workflows
+// - Supporting event-driven architectures across Teranode components
+//
+// The method creates a long-lived streaming connection that remains active
+// until one of the following occurs:
+// - The client context is cancelled or times out
+// - The client disconnects from the gRPC stream
+// - The blockchain service is shutting down
+// - An unrecoverable error occurs in the notification system
+//
+// Each subscriber is registered with the internal notification system and
+// will receive all applicable notifications through the streaming connection.
+// The subscription is managed asynchronously to ensure high throughput and
+// prevent slow subscribers from impacting overall system performance.
+//
+// The source parameter from the request is used for:
+// - Logging and debugging subscription lifecycle events
+// - Identifying subscribers in monitoring and metrics systems
+// - Troubleshooting notification delivery issues
+//
+// This method implements the gRPC server streaming pattern and blocks until
+// the subscription ends, making it suitable for long-running connections.
+//
+// Parameters:
+//   - req: SubscribeRequest containing the source identifier and subscription parameters
+//   - sub: gRPC server stream for sending notifications to the client
+//
+// Returns:
+//   - error: Any error encountered during subscription management or stream handling
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(sub.Context(), "Subscribe",
 		tracing.WithParentStat(b.stats),
@@ -1340,7 +1376,40 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 }
 
 // GetState retrieves a value from the blockchain state storage by its key.
-// It provides access to arbitrary state data stored in the blockchain.
+// This method provides access to arbitrary state data stored in the blockchain
+// service's persistent state storage system. The state storage is used for
+// maintaining operational data, configuration values, and other persistent
+// information that needs to survive service restarts.
+//
+// The blockchain state storage is essential for:
+// - Storing service configuration and operational parameters
+// - Maintaining persistent counters and metrics
+// - Caching frequently accessed blockchain data
+// - Storing temporary operational state during processing
+// - Supporting stateful operations across service restarts
+// - Coordinating state between distributed blockchain components
+//
+// The method performs a direct lookup in the underlying state storage using
+// the provided key. Keys are treated as opaque strings, allowing flexible
+// data organization and naming schemes by calling services.
+//
+// Common use cases include:
+// - Retrieving service configuration values
+// - Accessing cached blockchain metadata
+// - Reading operational counters and statistics
+// - Fetching temporary processing state
+// - Coordinating distributed processing state
+//
+// The method communicates with the blockchain store via the state storage
+// interface to retrieve the requested data.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - req: GetStateRequest containing the key for the data to retrieve
+//
+// Returns:
+//   - *blockchain_api.StateResponse: Response containing the retrieved data
+//   - error: Any error encountered during state retrieval
 func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetState",
 		tracing.WithParentStat(b.stats),
@@ -1360,7 +1429,41 @@ func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateR
 }
 
 // SetState stores a value in the blockchain state storage with the specified key.
-// It allows storing arbitrary state data in the blockchain.
+// This method provides the ability to store arbitrary state data in the blockchain
+// service's persistent state storage system. The state storage persists across
+// service restarts and is used for maintaining operational data, configuration
+// values, and other persistent information.
+//
+// The blockchain state storage is essential for:
+// - Storing service configuration and operational parameters
+// - Maintaining persistent counters and metrics
+// - Caching frequently accessed blockchain data for performance
+// - Storing temporary operational state during processing
+// - Supporting stateful operations across service restarts
+// - Coordinating distributed processing state
+//
+// The method performs a direct write to the underlying state storage using
+// the provided key-value pair. Keys are treated as opaque strings, allowing
+// flexible data organization and naming schemes by calling services. The data
+// is stored as binary data and can represent any serialized format.
+//
+// Common use cases include:
+// - Storing service configuration values
+// - Caching blockchain metadata for performance
+// - Maintaining operational counters and statistics
+// - Persisting temporary processing state
+// - Coordinating distributed processing state
+//
+// The method communicates with the blockchain store via the state storage
+// interface to persist the provided data.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - req: SetStateRequest containing the key and data to store
+//
+// Returns:
+//   - *emptypb.Empty: Empty response on successful storage
+//   - error: Any error encountered during state storage
 func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateRequest) (*emptypb.Empty, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "SetState",
 		tracing.WithParentStat(b.stats),
@@ -1378,7 +1481,44 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 }
 
 // GetBlockHeaderIDs retrieves block header IDs starting from a specific hash.
-// It returns a list of block IDs for the requested number of headers.
+// This method fetches a sequence of lightweight block header identifiers (uint32 IDs)
+// from the blockchain service, beginning with the block identified by the provided
+// hash and continuing for the requested number of headers. These IDs provide an
+// efficient way to reference blocks without transmitting full header data.
+//
+// Block header IDs are essential for:
+// - Efficient block referencing in distributed systems
+// - Lightweight blockchain synchronization operations
+// - Indexing and caching systems that need compact block references
+// - Performance optimization in block processing pipelines
+// - Reducing network traffic in blockchain communication protocols
+//
+// The method returns internal blockchain store identifiers that are:
+// - Unique within the blockchain service instance
+// - Compact (32-bit integers) for efficient storage and transmission
+// - Suitable for use in indexing and caching operations
+// - Compatible with other blockchain service operations that accept IDs
+//
+// The returned IDs maintain the sequential order of blocks in the blockchain,
+// starting from the specified hash and continuing in chain order. This makes
+// them suitable for range operations and sequential processing.
+//
+// Common use cases include:
+// - Building efficient block indexes for fast lookups
+// - Implementing lightweight synchronization protocols
+// - Caching block references in memory-constrained environments
+// - Optimizing network communication between blockchain components
+//
+// The method communicates with the blockchain store to retrieve the header
+// IDs from the underlying storage system.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - request: GetBlockHeadersRequest containing the starting hash and number of headers
+//
+// Returns:
+//   - *blockchain_api.GetBlockHeaderIDsResponse: Response containing the array of header IDs
+//   - error: Any error encountered during header ID retrieval
 func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeaderIDsResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeaderIDs",
 		tracing.WithParentStat(b.stats),
@@ -1403,6 +1543,46 @@ func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_
 }
 
 // InvalidateBlock marks a block as invalid in the blockchain.
+// This method permanently marks a specific block as invalid in the blockchain
+// store, effectively removing it from the valid chain and triggering any
+// necessary blockchain reorganization processes. This is a critical operation
+// used for handling consensus failures and blockchain integrity issues.
+//
+// Block invalidation is essential for:
+// - Handling consensus rule violations discovered after block acceptance
+// - Responding to network-wide block rejections and reorganizations
+// - Managing blockchain forks and chain selection decisions
+// - Correcting blocks that fail post-acceptance validation checks
+// - Supporting manual intervention in blockchain integrity issues
+//
+// When a block is invalidated, the following occurs:
+// - The block is marked as invalid in the blockchain store
+// - Any dependent blocks may also be invalidated (chain reorganization)
+// - The blockchain may switch to an alternative valid chain
+// - Notifications are sent to subscribers about the invalidation
+// - Mining and processing operations are updated to reflect the change
+//
+// This operation is irreversible through normal blockchain operations and
+// should only be used when there is clear evidence of block invalidity.
+// The invalidation process ensures blockchain consistency and consensus
+// compliance across the network.
+//
+// Common scenarios for block invalidation include:
+// - Discovery of consensus rule violations after acceptance
+// - Network-wide rejection of previously accepted blocks
+// - Resolution of blockchain forks in favor of alternative chains
+// - Manual intervention for blockchain integrity issues
+//
+// The method communicates with the blockchain store to perform the
+// invalidation and triggers any necessary reorganization processes.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - request: InvalidateBlockRequest containing the hash of the block to invalidate
+//
+// Returns:
+//   - *emptypb.Empty: Empty response on successful invalidation
+//   - error: Any error encountered during the invalidation process
 func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_api.InvalidateBlockRequest) (*emptypb.Empty, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "InvalidateBlock",
 		tracing.WithParentStat(b.stats),
@@ -1436,6 +1616,46 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 }
 
 // RevalidateBlock restores a previously invalidated block.
+// This method reverses a previous block invalidation, marking a previously
+// invalid block as valid again in the blockchain store. This operation is
+// used to correct erroneous invalidations or restore blocks that were
+// temporarily invalidated during blockchain reorganization processes.
+//
+// Block revalidation is essential for:
+// - Correcting mistaken block invalidations
+// - Restoring blocks after resolving temporary consensus issues
+// - Managing blockchain reorganizations and fork resolutions
+// - Supporting manual intervention in blockchain integrity recovery
+// - Handling network-wide consensus corrections
+//
+// When a block is revalidated, the following occurs:
+// - The block's invalid status is removed from the blockchain store
+// - The block becomes eligible for inclusion in the valid chain again
+// - Dependent blocks may also be revalidated if appropriate
+// - The blockchain may reorganize to include the restored block
+// - Notifications are sent to subscribers about the revalidation
+//
+// This operation should be used carefully and only when there is clear
+// evidence that the previous invalidation was incorrect or no longer
+// applicable. The revalidation process ensures that blockchain integrity
+// is maintained while allowing for correction of previous decisions.
+//
+// Common scenarios for block revalidation include:
+// - Correction of erroneous invalidations
+// - Resolution of temporary network consensus issues
+// - Recovery from blockchain fork resolution errors
+// - Manual intervention for blockchain integrity restoration
+//
+// The method communicates with the blockchain store to perform the
+// revalidation and may trigger blockchain reorganization processes.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - request: RevalidateBlockRequest containing the hash of the block to revalidate
+//
+// Returns:
+//   - *emptypb.Empty: Empty response on successful revalidation
+//   - error: Any error encountered during the revalidation process
 func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_api.RevalidateBlockRequest) (*emptypb.Empty, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RevalidateBlock",
 		tracing.WithParentStat(b.stats),
@@ -1459,6 +1679,41 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 }
 
 // SendNotification broadcasts a notification to all subscribers.
+// This method provides a mechanism for broadcasting blockchain events and
+// notifications to all active subscribers in the notification system. It
+// serves as the central hub for distributing real-time blockchain events
+// across the Teranode system.
+//
+// The notification system is essential for:
+// - Broadcasting new block arrivals to interested services
+// - Notifying about blockchain reorganizations and invalidations
+// - Distributing FSM state changes to monitoring and management systems
+// - Coordinating mining operations and block processing workflows
+// - Supporting event-driven architectures across Teranode components
+//
+// The method accepts various notification types including:
+// - Block notifications for new blocks added to the chain
+// - FSM state transition notifications
+// - Mining status updates and confirmations
+// - Block invalidation and revalidation events
+// - Custom application-specific notifications
+//
+// The notification is queued in the internal notification channel and
+// processed asynchronously by the subscription management system. This
+// ensures that the sending operation is non-blocking and doesn't impact
+// the performance of the calling service.
+//
+// All active subscribers will receive the notification through their
+// respective subscription channels, enabling real-time event processing
+// across the blockchain service ecosystem.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - req: Notification containing the event type, data, and metadata
+//
+// Returns:
+//   - *emptypb.Empty: Empty response indicating successful notification queuing
+//   - error: Any error encountered during notification processing
 func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
 	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RevalidateBlock",
 		tracing.WithParentStat(b.stats),
@@ -1593,6 +1848,44 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 // FSM related endpoints
 
 // GetFSMCurrentState retrieves the current state of the finite state machine.
+// This method provides access to the blockchain service's operational state,
+// which is managed by a finite state machine (FSM) that coordinates the
+// service's lifecycle and processing modes. The FSM is central to the
+// blockchain service's operational coordination and state management.
+//
+// The FSM manages critical blockchain service states such as:
+// - IDLE: Service is idle and ready for operations
+// - RUNNING: Service is actively processing blocks and transactions
+// - SYNCING: Service is synchronizing with the network
+// - CATCHING_BLOCKS: Service is catching up on missing blocks
+// - LEGACY_SYNCING: Service is using legacy synchronization protocols
+// - STOPPING: Service is gracefully shutting down
+// - ERROR: Service has encountered an error condition
+//
+// The current state information is essential for:
+// - Coordinating operations between blockchain components
+// - Monitoring service health and operational status
+// - Implementing proper shutdown and startup sequences
+// - Debugging service state transitions and issues
+// - Ensuring proper service coordination in distributed systems
+// - Supporting automated operational workflows and monitoring
+//
+// The method returns the authoritative current state directly from the
+// finite state machine instance, providing real-time operational status
+// information that can be used by monitoring systems, other services,
+// and operational tools.
+//
+// This is the server-side implementation that provides the authoritative
+// FSM state, complementing the client-side caching mechanisms for
+// performance optimization.
+//
+// Parameters:
+//   - ctx: Context for the operation (unused but required for gRPC interface)
+//   - _: Empty request parameter (unused but required for gRPC interface)
+//
+// Returns:
+//   - *blockchain_api.GetFSMStateResponse: Response containing the current FSM state
+//   - error: Any error encountered during state retrieval (typically nil)
 func (b *Blockchain) GetFSMCurrentState(_ context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
 	startTime := time.Now()
 	defer func() {

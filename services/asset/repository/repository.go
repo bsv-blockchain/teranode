@@ -95,6 +95,27 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 	}, nil
 }
 
+// Health performs health checks on the repository and its dependencies.
+// This method implements the standard Teranode health check protocol, supporting both
+// liveness and readiness probes. Liveness checks verify that the repository service is
+// running and responsive, while readiness checks also verify that all dependencies
+// are available and operational.
+//
+// The health check behavior:
+// - For liveness checks: Verifies basic repository operation without checking dependent services
+// - For readiness checks: Performs comprehensive verification of all connected stores and services
+//
+// This method follows the Kubernetes health check pattern, returning appropriate HTTP status
+// codes and descriptive messages to indicate the current operational state.
+//
+// Parameters:
+//   - ctx: Context for the health check operation, allowing for cancellation and timeouts
+//   - checkLiveness: When true, performs liveness check only; when false, performs full readiness check
+//
+// Returns:
+//   - int: HTTP status code indicating health status (200 for healthy, 503 for unhealthy)
+//   - string: Human-readable description of the health status with details about any issues
+//   - error: Any error encountered during health checking that prevented proper evaluation
 func (repo *Repository) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -132,6 +153,20 @@ func (repo *Repository) Health(ctx context.Context, checkLiveness bool) (int, st
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// GetTxMeta retrieves transaction metadata by its hash from the UTXO store.
+// This method provides access to transaction metadata including block height,
+// confirmation status, and other associated information stored in the UTXO store.
+//
+// The function delegates directly to the UTXO store's Get method, which returns
+// comprehensive metadata about the transaction if it exists in the store.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - hash: Hash of the transaction for which to retrieve metadata
+//
+// Returns:
+//   - *meta.Data: Transaction metadata containing block height, confirmation details, and other information
+//   - error: Any error encountered during metadata retrieval, including transaction not found errors
 func (repo *Repository) GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	return repo.UtxoStore.Get(ctx, hash)
 }
@@ -337,8 +372,29 @@ func (repo *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Has
 	return blockHeaders, blockHeaderMetas, nil
 }
 
-func (repo *Repository) GetBlockHeadersToCommonAncestor(ctx context.Context, hasTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return repo.BlockchainClient.GetBlockHeadersToCommonAncestor(ctx, hasTarget, blockLocatorHashes, maxHeaders)
+// GetBlockHeadersToCommonAncestor retrieves block headers from a target hash back to a common ancestor.
+// This method is used in blockchain synchronization to find the point where two chains diverge
+// and retrieve the headers needed to bring a client up to date with the main chain.
+//
+// The function uses block locator hashes to efficiently find the common ancestor between
+// the target block and the client's current chain state, then returns headers from that
+// point forward up to the specified maximum number of headers.
+//
+// This is a critical operation for peer-to-peer synchronization and chain reorganization
+// handling, allowing nodes to efficiently discover and download missing block headers.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - hashTarget: Target block hash to work backwards from
+//   - blockLocatorHashes: Array of block hashes representing the client's current chain state
+//   - maxHeaders: Maximum number of headers to return to prevent excessive response sizes
+//
+// Returns:
+//   - []*model.BlockHeader: Array of block headers from common ancestor to target
+//   - []*model.BlockHeaderMeta: Array of corresponding block header metadata
+//   - error: Any error encountered during header retrieval or common ancestor detection
+func (repo *Repository) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return repo.BlockchainClient.GetBlockHeadersToCommonAncestor(ctx, hashTarget, blockLocatorHashes, maxHeaders)
 }
 
 // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
@@ -463,6 +519,21 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 	return subtree, nil
 }
 
+// GetSubtreeExists checks whether a subtree exists in the subtree store.
+// This method provides a lightweight way to verify subtree existence without
+// retrieving the actual subtree data, which is useful for validation and
+// conditional processing logic.
+//
+// The function delegates to the subtree store's Exists method, checking for
+// the presence of a subtree file with the specified hash and file type.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - hash: Hash of the subtree to check for existence
+//
+// Returns:
+//   - bool: True if the subtree exists in the store, false otherwise
+//   - error: Any error encountered during the existence check
 func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
 }

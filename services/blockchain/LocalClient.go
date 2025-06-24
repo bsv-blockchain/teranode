@@ -37,6 +37,32 @@ func NewLocalClient(logger ulogger.Logger, store blockchain.Store, subtreeStore 
 	}, nil
 }
 
+// Health performs health checks for the LocalClient and its dependencies.
+// This method implements the ClientI interface health check functionality by
+// examining the status of the blockchain store, subtree store, and UTXO store.
+//
+// The method supports two types of health checks based on the checkLiveness parameter:
+// - Liveness checks: Verify that the service itself is running and responsive
+// - Readiness checks: Verify that the service and all its dependencies are ready to serve requests
+//
+// For liveness checks, the method performs minimal validation to ensure the service
+// is not stuck or deadlocked. For readiness checks, it validates all configured
+// store dependencies to ensure they are healthy and accessible.
+//
+// The health check process:
+// - If checkLiveness is true, returns OK immediately (liveness check)
+// - If checkLiveness is false, checks all configured stores (readiness check)
+// - Aggregates results from all dependency health checks
+// - Returns appropriate HTTP status codes and messages
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - checkLiveness: If true, performs liveness check; if false, performs readiness check
+//
+// Returns:
+//   - int: HTTP status code (200 for healthy, 503 for unhealthy)
+//   - string: Human-readable status message describing the health state
+//   - error: Any error encountered during health checking
 func (c LocalClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -274,6 +300,34 @@ func (c LocalClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chain
 func (c LocalClient) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	return nil, nil
 }
+
+// GetBestHeightAndTime retrieves the height and median timestamp of the best block.
+// This method provides essential blockchain state information by returning both the
+// current blockchain height and the median timestamp calculated from recent blocks.
+//
+// The method performs the following operations:
+// - Retrieves the current best block header and its metadata from the store
+// - Fetches the last 11 block headers to calculate the median timestamp
+// - Calculates the median timestamp using Bitcoin's median time past algorithm
+// - Converts the timestamp to a safe uint32 representation
+//
+// The median timestamp calculation follows Bitcoin protocol rules where the median
+// time past is calculated from the timestamps of the previous 11 blocks. This
+// provides a more stable time reference that prevents timestamp manipulation attacks
+// and ensures consistent time-based validation across the network.
+//
+// This information is commonly used for:
+// - Time-based transaction validation (nLockTime, CSV)
+// - Network synchronization and block validation
+// - Mining operations that require current blockchain state
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//
+// Returns:
+//   - uint32: The height of the best block in the main chain
+//   - uint32: The median timestamp of recent blocks as a Unix timestamp
+//   - error: Any error encountered during block retrieval or timestamp calculation
 func (c LocalClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
 	blockHeader, meta, err := c.store.GetBestBlockHeader(ctx)
 	if err != nil {

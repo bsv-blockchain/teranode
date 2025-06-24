@@ -494,6 +494,22 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 }
 
 func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.BlockHeader, height uint32) {
+	// setBestBlockHeader updates the internal best block header and height atomically.
+	// This method is used internally to maintain the current blockchain state within
+	// the block assembler. It updates both the best block header and height in a
+	// thread-safe manner using atomic operations.
+	//
+	// The function performs the following operations:
+	// - Logs the update operation with block hash and height
+	// - Atomically stores the new best block header
+	// - Atomically stores the new block height
+	//
+	// This method is critical for maintaining consistency between the block assembler's
+	// view of the blockchain state and the actual blockchain tip.
+	//
+	// Parameters:
+	//   - bestBlockchainBlockHeader: The new best block header to set
+	//   - height: The height of the new best block
 	b.logger.Infof("[BlockAssembler][%s] setting best block header: %d", bestBlockchainBlockHeader.Hash(), height)
 
 	b.bestBlockHeader.Store(bestBlockchainBlockHeader)
@@ -1094,6 +1110,26 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 	return nbit, nil
 }
 
+// loadUnminedTransactions loads previously unmined transactions from the UTXO store.
+// This method is called during block assembler initialization to restore the state
+// of transactions that were previously processed but not yet included in a mined block.
+// It helps maintain continuity across service restarts by reloading pending transactions.
+//
+// The function performs the following operations:
+// - Checks if a UTXO store is available (logs warning and returns if not)
+// - Creates an iterator for unmined transactions from the UTXO store
+// - Processes each unmined transaction and adds it to the subtree processor
+// - Handles any errors during transaction loading and processing
+//
+// This is an important initialization step that ensures the block assembler can
+// continue processing transactions that were in progress before a restart or
+// service interruption.
+//
+// Parameters:
+//   - ctx: Context for the loading operation, allowing for cancellation
+//
+// Returns:
+//   - error: Any error encountered during transaction loading or processing
 func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) error {
 	if b.utxoStore == nil {
 		b.logger.Warnf("[BlockAssembler] no utxostore, skipping load unmined transactions")
