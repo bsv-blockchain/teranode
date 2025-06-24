@@ -156,6 +156,15 @@ func ShouldStoreOutputAsUTXO(isCoinbase bool, output *bt.Output, blockHeight uin
 	return !(opReturn || opFalseOpReturn)
 }
 
+// GetSpends creates Spend objects for all inputs of a transaction.
+// Each Spend represents a UTXO being consumed by the transaction.
+//
+// Parameters:
+//   - tx: The transaction to analyze for input spending
+//
+// Returns:
+//   - []*Spend: Array of Spend objects, one for each transaction input
+//   - error: Any error encountered during processing
 func GetSpends(tx *bt.Tx) (spends []*Spend, err error) {
 	var (
 		txIDChainHash = tx.TxIDChainHash()

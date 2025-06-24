@@ -290,18 +290,27 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	return s, nil
 }
 
+// SetLogger updates the logger instance used by the store.
+// This method is safe to call concurrently.
 func (s *Store) SetLogger(logger ulogger.Logger) {
 	s.logger = logger
 }
 
+// GetClient returns the underlying Aerospike client instance.
+// This method is safe to call concurrently and is primarily used for testing
+// and advanced operations that require direct access to the Aerospike client.
 func (s *Store) GetClient() *uaerospike.Client {
 	return s.client
 }
 
+// GetNamespace returns the Aerospike namespace used by this store.
+// This method is safe to call concurrently.
 func (s *Store) GetNamespace() string {
 	return s.namespace
 }
 
+// GetSet returns the Aerospike set name used by this store.
+// This method is safe to call concurrently.
 func (s *Store) GetSet() string {
 	return s.setName
 }
@@ -381,6 +390,15 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 	return http.StatusOK, details, nil
 }
 
+// calculateOffsetForOutput calculates the offset within a batch for a given output index.
+// This is used to determine which batch record contains a specific UTXO when transactions
+// have more outputs than can fit in a single Aerospike record.
+//
+// Parameters:
+//   - vout: The output index to calculate the offset for
+//
+// Returns:
+//   - uint32: The offset within the batch, or 0 if utxoBatchSize is invalid
 func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {
 	if s.utxoBatchSize <= 0 {
 		s.logger.Errorf("utxoBatchSize is zero or negative, cannot calculate offset (vout=%d)", vout)

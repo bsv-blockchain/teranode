@@ -22,6 +22,16 @@ type unminedTxIterator struct {
 	result    <-chan *as.Result
 }
 
+// newUnminedTxIterator creates a new iterator for scanning unmined transactions in Aerospike.
+// The iterator uses a scan operation to traverse all records in the set and filters
+// for transactions that don't have block IDs (indicating they are unmined/mempool transactions).
+//
+// Parameters:
+//   - store: The Aerospike store instance to iterate over
+//
+// Returns:
+//   - *unminedTxIterator: A new iterator instance ready for use
+//   - error: Any error encountered during iterator initialization
 func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 	it := &unminedTxIterator{
 		store: store,
@@ -49,6 +59,17 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 	return it, nil
 }
 
+// Next advances the iterator and returns the next unmined transaction.
+// It filters records to only return transactions that don't have block IDs,
+// indicating they are unmined (in mempool). The method handles external storage
+// retrieval for large transactions when necessary.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - *utxo.UnminedTransaction: The next unmined transaction, or nil if iteration is complete
+//   - error: Any error encountered during iteration
 func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction, error) {
 	if it.done || it.err != nil || it.recordset == nil {
 		return nil, it.err
@@ -191,16 +212,39 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 	}, nil
 }
 
+// Err returns the first error encountered during iteration, if any.
+// This should be called after Next returns nil to check if iteration
+// completed successfully or due to an error.
+//
+// Returns:
+//   - error: The error that caused iteration to stop, or nil if no error occurred
 func (it *unminedTxIterator) Err() error {
 	return it.err
 }
 
+// Close releases resources held by the iterator and marks it as done.
+// It's safe to call Close multiple times. After calling Close, subsequent
+// calls to Next will return nil.
+//
+// Returns:
+//   - error: Always returns nil (kept for interface compatibility)
 func (it *unminedTxIterator) Close() error {
 	it.done = true
 
 	return it.recordset.Close()
 }
 
+// toUint64 converts various numeric interface{} types to uint64.
+// This utility function handles type assertions for Aerospike record values
+// which can come in different numeric types depending on the data source.
+//
+// Parameters:
+//   - val: The interface{} value to convert (should be a numeric type)
+//
+// Returns:
+//   - uint64: The converted value
+//   - error: Error if the value cannot be converted to uint64
+//
 // nolint: gosec
 func toUint64(val interface{}) (uint64, error) {
 	switch v := val.(type) {

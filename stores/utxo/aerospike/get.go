@@ -99,12 +99,26 @@ type batchGetItem struct {
 	done   chan batchGetItemData // Channel for result
 }
 
+// batchOutpoint represents a single outpoint in a batch previous output operation.
+// It is used to efficiently retrieve previous output data for transaction inputs
+// by batching multiple requests together to optimize database access.
 type batchOutpoint struct {
-	outpoint *meta.PreviousOutput
-	errCh    chan error
+	outpoint *meta.PreviousOutput // The previous output to retrieve data for
+	errCh    chan error           // Channel to receive any error from the batch operation
 }
 
 // GetSpend checks if a UTXO has been spent and returns its current status.
+// This method performs efficient UTXO status verification by querying the Aerospike
+// database for the specified transaction output.
+//
+// Parameters:
+//   - ctx: Context for cancellation (currently unused but kept for interface consistency)
+//   - spend: The UTXO spend information containing transaction ID and output index
+//
+// Returns:
+//   - *utxo.SpendResponse: Response containing UTXO status and spending details, or nil if error
+//   - error: Any error encountered during the operation
+//
 // The response includes:
 //   - Current UTXO status (OK, SPENT, FROZEN, etc)
 //   - Spending transaction ID if spent
@@ -112,10 +126,10 @@ type batchOutpoint struct {
 //   - Lock time if applicable
 //
 // This operation verifies:
-//   - UTXO exists
-//   - UTXO hash matches
-//   - Frozen status
-//   - Current spend state
+//   - UTXO exists in the database
+//   - UTXO hash matches the expected value
+//   - Frozen status for compliance operations
+//   - Current spend state and spending transaction details
 func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	prometheusUtxoMapGet.Inc()
 
@@ -236,30 +250,23 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	}, nil
 }
 
-// GetMeta retrieves only transaction metadata without the full transaction data.
-// This is an optimized version of Get that excludes transaction body.
-func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return s.get(ctx, hash, utxo.MetaFields)
-}
-
-// Get operations in the Aerospike UTXO store support efficient retrieval
-// of transaction data with configurable field selection and batching.
-// The store provides several interfaces for data retrieval:
-//   - Get: Retrieves full transaction data
-//   - GetMeta: Retrieves only metadata
-//   - GetSpend: Checks UTXO spend status
-//   - BatchDecorate: Efficiently fetches data for multiple transactions
-//   - PreviousOutputsDecorate: Retrieves previous output data
-
 // Get retrieves transaction data with optional field selection.
+// This method provides flexible access to transaction data stored in Aerospike,
+// allowing callers to specify which fields to retrieve for optimal performance.
+//
 // Parameters:
-//   - ctx: Context for cancellation
-//   - hash: Transaction hash
-//   - fields: Optional list of fields to retrieve, defaults to all fields
+//   - ctx: Context for cancellation and timeout control
+//   - hash: Transaction hash to retrieve data for
+//   - fields: Optional variadic list of specific fields to retrieve. If empty, defaults to all metadata fields with transaction data
 //
 // Returns:
-//   - Transaction metadata
-//   - Any error encountered
+//   - *meta.Data: Complete transaction metadata including specified fields, or nil if transaction not found
+//   - error: Any error encountered during retrieval operation
+//
+// Field Selection:
+// When no fields are specified, retrieves all metadata fields plus transaction data.
+// When specific fields are provided, only those fields are retrieved from the database,
+// which can significantly improve performance for large transactions.
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	bins := utxo.MetaFieldsWithTx
 	if len(fields) > 0 {
@@ -269,6 +276,46 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.
 	return s.get(ctx, hash, bins)
 }
 
+// GetMeta retrieves only transaction metadata without the full transaction data.
+// This is an optimized version of Get that excludes transaction body data to improve
+// performance when only metadata fields are needed.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - hash: Transaction hash to retrieve metadata for
+//
+// Returns:
+//   - *meta.Data: Transaction metadata including UTXOs, block references, and status, or nil if not found
+//   - error: Any error encountered during retrieval
+//
+// This method is more efficient than Get() when you only need metadata fields such as:
+//   - UTXO information and spend status
+//   - Block height and block ID references
+//   - Transaction flags (coinbase, frozen status)
+//   - Subtree indices and validation data
+func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	return s.get(ctx, hash, utxo.MetaFields)
+}
+
+// get is an internal method that retrieves transaction data using batch processing.
+// It queues the request for batch processing to optimize database access by reducing
+// the number of individual database queries and improving overall throughput.
+//
+// This method uses a channel-based batching system where multiple get requests are
+// collected and processed together in a single database operation.
+//
+// Parameters:
+//   - ctx: Context for cancellation (currently unused but kept for interface consistency)
+//   - hash: Transaction hash to retrieve data for
+//   - bins: Field names to retrieve from the database (specific Aerospike bins)
+//
+// Returns:
+//   - *meta.Data: Transaction metadata containing the requested fields, or nil if transaction not found
+//   - error: Any error encountered during retrieval, including database connection errors or data parsing failures
+//
+// Implementation Details:
+// The method creates a batchGetItem with the request parameters and sends it to the
+// getBatcher for processing. It then waits on a done channel for the result.
 func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []fields.FieldName) (*meta.Data, error) {
 	done := make(chan batchGetItemData)
 	item := &batchGetItem{hash: *hash, fields: bins, done: done}
@@ -292,6 +339,24 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []fields.Field
 	return data.Data, data.Err
 }
 
+// getTxFromBins reconstructs a Bitcoin transaction from Aerospike bin data.
+// This internal method parses the binary transaction data stored in Aerospike
+// bins and converts it back into a structured Bitcoin transaction object.
+//
+// The function handles:
+//   - Version and locktime field extraction and validation
+//   - Transaction data deserialization from binary format
+//   - Error handling for malformed or missing data
+//
+// Parameters:
+//   - bins: Aerospike BinMap containing transaction data fields
+//
+// Returns:
+//   - *bt.Tx: Reconstructed Bitcoin transaction, or nil if error
+//   - error: Any error encountered during reconstruction, including:
+//   - Type conversion errors for version/locktime fields
+//   - Missing required transaction data
+//   - Malformed binary transaction data
 func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 	versionUint32, err := util.SafeIntToUint32(bins[fields.Version.String()].(int))
 	if err != nil {
@@ -344,6 +409,23 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 	return tx, nil
 }
 
+// addAbstractedBins expands the list of field names to include dependent fields.
+// This internal method ensures that when certain abstracted fields are requested,
+// all necessary underlying fields are also retrieved from the database.
+//
+// The function handles field dependencies such as:
+//   - TxInpoints requires Inputs and External fields
+//   - BlockIDs requires BlockHeights field
+//   - Other abstracted field mappings
+//
+// This abstraction layer allows callers to request high-level fields without
+// needing to know the underlying storage implementation details.
+//
+// Parameters:
+//   - bins: Original list of field names to retrieve
+//
+// Returns:
+//   - []fields.FieldName: Expanded list including all dependent fields
 func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 	// copy the bins slice to avoid modifying the original
 	newBins := append([]fields.FieldName{}, bins...)
@@ -654,6 +736,25 @@ NEXT_BATCH_RECORD:
 	return nil
 }
 
+// processInputsToTxInpoints converts stored input data into transaction input points.
+// This function processes the raw input data from Aerospike bins and reconstructs
+// the transaction input references (previous transaction outputs being spent).
+//
+// The function:
+//   - Extracts input data from the bins
+//   - Reconstructs transaction inputs with previous output references
+//   - Converts to TxInpoints format for metadata processing
+//   - Handles malformed or missing input data
+//
+// Parameters:
+//   - bins: Aerospike BinMap containing transaction input data
+//
+// Returns:
+//   - meta.TxInpoints: Processed transaction input points
+//   - error: Any error encountered during processing, including:
+//   - Missing or malformed input data
+//   - Invalid transaction input structure
+//   - Data conversion errors
 func processInputsToTxInpoints(bins aerospike.BinMap) (txInpoints meta.TxInpoints, err error) {
 	inputInterfaces, ok := bins[fields.Inputs.String()].([]interface{})
 	if !ok {
@@ -667,7 +768,8 @@ func processInputsToTxInpoints(bins aerospike.BinMap) (txInpoints meta.TxInpoint
 		input := inputInterface.([]byte)
 		tx.Inputs[i] = &bt.Input{}
 
-		if _, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input)); err != nil {
+		_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
+		if err != nil {
 			return txInpoints, errors.NewProcessingError("could not read input", err)
 		}
 	}
@@ -679,6 +781,23 @@ func processInputsToTxInpoints(bins aerospike.BinMap) (txInpoints meta.TxInpoint
 	return txInpoints, nil
 }
 
+// processBlockIDs extracts and validates block ID data from Aerospike bins.
+// This function processes the stored block ID information and converts it
+// from the raw interface{} format to a properly typed uint32 slice.
+//
+// Block IDs represent the blocks that contain this transaction, supporting
+// scenarios where a transaction may appear in multiple blocks during
+// blockchain reorganizations.
+//
+// Parameters:
+//   - bins: Aerospike BinMap containing block ID data
+//
+// Returns:
+//   - []uint32: Array of block IDs containing this transaction
+//   - error: Any error encountered during processing, including:
+//   - Missing block ID data
+//   - Invalid data format or type conversion errors
+//   - Empty block ID arrays (when not expected)
 func processBlockIDs(bins aerospike.BinMap) ([]uint32, error) {
 	blockIDs, ok := bins[fields.BlockIDs.String()].([]interface{})
 	if !ok {
@@ -708,6 +827,23 @@ func processBlockIDs(bins aerospike.BinMap) ([]uint32, error) {
 	return res, nil
 }
 
+// processBlockHeights extracts and validates block height data from Aerospike bins.
+// This function processes the stored block height information and converts it
+// from the raw interface{} format to a properly typed uint32 slice.
+//
+// Block heights represent the heights of the blocks that contain this transaction,
+// supporting scenarios where a transaction may appear in multiple blocks during
+// blockchain reorganizations.
+//
+// Parameters:
+//   - bins: Aerospike BinMap containing block height data
+//
+// Returns:
+//   - []uint32: Array of block heights containing this transaction
+//   - error: Any error encountered during processing, including:
+//   - Missing block height data
+//   - Invalid data format or type conversion errors
+//   - Empty block height arrays (when not expected)
 func processBlockHeights(bins aerospike.BinMap) ([]uint32, error) {
 	blockHeights, ok := bins[fields.BlockHeights.String()].([]interface{})
 	if !ok {
@@ -737,6 +873,23 @@ func processBlockHeights(bins aerospike.BinMap) ([]uint32, error) {
 	return res, nil
 }
 
+// processSubtreeIdxs extracts and validates subtree index data from Aerospike bins.
+// This function processes the stored subtree index information and converts it
+// from the raw interface{} format to a properly typed int slice.
+//
+// Subtree indices represent the indices of the subtrees that contain this transaction,
+// supporting scenarios where a transaction may appear in multiple subtrees during
+// blockchain reorganizations.
+//
+// Parameters:
+//   - bins: Aerospike BinMap containing subtree index data
+//
+// Returns:
+//   - []int: Array of subtree indices containing this transaction
+//   - error: Any error encountered during processing, including:
+//   - Missing subtree index data
+//   - Invalid data format or type conversion errors
+//   - Empty subtree index arrays (when not expected)
 func processSubtreeIdxs(bins aerospike.BinMap) ([]int, error) {
 	subtreeIdxs, ok := bins[fields.SubtreeIdxs.String()].([]interface{})
 	if !ok {
@@ -761,6 +914,24 @@ func processSubtreeIdxs(bins aerospike.BinMap) ([]int, error) {
 	return res, nil
 }
 
+// processUTXOs extracts and processes UTXO data from Aerospike bins.
+// This function handles the reconstruction of UTXO spending data from stored
+// binary format, including handling of paginated records for large transactions.
+//
+// The function:
+//   - Extracts total UTXO count and UTXO array data
+//   - Converts binary UTXO data to SpendingData structures
+//   - Handles extra UTXOs from child records (pagination)
+//   - Manages nil entries for spent or invalid UTXOs
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - txid: Transaction ID for retrieving additional records
+//   - bins: Aerospike BinMap containing UTXO data
+//
+// Returns:
+//   - []*spendpkg.SpendingData: Array of UTXO spending data (may contain nil entries)
+//   - error: Any error encountered during processing
 func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aerospike.BinMap) ([]*spendpkg.SpendingData, error) {
 	totalUtxos, ok := bins[fields.TotalUtxos.String()].(int)
 	if !ok {
@@ -799,6 +970,22 @@ func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aer
 	return spendingDatas, nil
 }
 
+// processConflictingChildren extracts and processes conflicting children data from Aerospike bins.
+// This function handles the reconstruction of conflicting transaction child references
+// from the stored binary format, supporting double-spend detection and conflict resolution.
+//
+// Conflicting children represent transactions that attempt to spend the same UTXOs,
+// which is essential for managing blockchain reorganizations and double-spend scenarios.
+//
+// Parameters:
+//   - bins: Aerospike BinMap containing conflicting children data
+//
+// Returns:
+//   - []chainhash.Hash: Array of conflicting child transaction hashes
+//   - error: Any error encountered during processing, including:
+//   - Invalid hash format or length
+//   - Data conversion errors
+//   - Malformed conflicting children data
 func processConflictingChildren(bins aerospike.BinMap) (conflictingChildren []chainhash.Hash, err error) {
 	conflictingChildrenIfc, ok := bins[fields.ConflictingChildren.String()].([]interface{})
 	if ok {
@@ -1013,13 +1200,6 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
 }
 
-func sendErrorAndClose(errCh chan error, err error) {
-	select {
-	case errCh <- err:
-	default:
-	}
-	close(errCh)
-}
 
 func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
 	ctx, _, _ = tracing.Tracer("aerospike").Start(ctx, "GetOutpointsFromExternalStore",
@@ -1190,4 +1370,22 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 			Err:  item.Err,
 		}
 	}
+}
+
+// sendErrorAndClose sends an error to a channel and closes it safely.
+// This utility function handles the common pattern of sending an error result
+// and closing the channel, with protection against blocking on a full channel.
+//
+// The function uses a non-blocking select to avoid deadlocks when the receiving
+// goroutine has already stopped listening on the channel.
+//
+// Parameters:
+//   - errCh: Error channel to send the error to and close
+//   - err: Error to send (may be nil)
+func sendErrorAndClose(errCh chan error, err error) {
+	select {
+	case errCh <- err:
+	default:
+	}
+	close(errCh)
 }

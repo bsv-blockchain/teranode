@@ -180,6 +180,18 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opts .
 	return txMetaData, nil
 }
 
+// Get retrieves transaction metadata from memory with optional field selection.
+// Unlike other store implementations, this always returns full transaction data
+// regardless of the fields parameter, as all data is already in memory.
+//
+// Parameters:
+//   - ctx: Context for cancellation (currently unused)
+//   - hash: Transaction hash to retrieve
+//   - fields: Optional field selection (ignored in memory implementation)
+//
+// Returns:
+//   - *meta.Data: Complete transaction metadata, or nil if not found
+//   - error: ErrTxNotFound if transaction doesn't exist, or other processing errors
 func (m *Memory) Get(_ context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -265,10 +277,31 @@ func (m *Memory) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResp
 	}, nil
 }
 
+// GetMeta retrieves transaction metadata without the full transaction data.
+// In the memory implementation, this is identical to Get() since all data
+// is already in memory and there's no performance benefit to excluding fields.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - hash: Transaction hash to retrieve
+//
+// Returns:
+//   - *meta.Data: Transaction metadata, or nil if not found
+//   - error: Any error encountered during retrieval
 func (m *Memory) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	return m.Get(ctx, hash)
 }
 
+// Delete removes a transaction and all its associated UTXOs from memory.
+// If the transaction doesn't exist, the operation succeeds silently.
+// This is a complete deletion that removes all transaction data.
+//
+// Parameters:
+//   - ctx: Context for cancellation (currently unused)
+//   - hash: Transaction hash to delete
+//
+// Returns:
+//   - error: Always returns nil (deletion failures are not possible in memory)
 func (m *Memory) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -385,6 +418,15 @@ func (m *Memory) Unspend(_ context.Context, spends []*utxo.Spend, flagAsUnspenda
 	return m.unspendUnlocked(spends)
 }
 
+// unspendUnlocked is an internal method that reverses spend operations without acquiring locks.
+// This method assumes the caller has already acquired the necessary mutex locks.
+// It clears the spending transaction ID from UTXOs, making them spendable again.
+//
+// Parameters:
+//   - spends: Array of spend operations to reverse
+//
+// Returns:
+//   - error: Any error encountered during the unspend operation
 func (m *Memory) unspendUnlocked(spends []*utxo.Spend) error {
 	for _, spend := range spends {
 		if _, ok := m.txs[*spend.TxID]; !ok {
@@ -420,6 +462,13 @@ func (m *Memory) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, mine
 	return nil
 }
 
+// GetUnminedTxIterator returns an iterator for unmined transactions.
+// Currently not implemented for the memory store and returns an error.
+// This method exists to satisfy the Store interface but is not functional.
+//
+// Returns:
+//   - utxo.UnminedTxIterator: Always nil
+//   - error: Always returns "iterator not implemented" error
 func (m *Memory) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	return nil, errors.NewProcessingError("iterator not implemented")
 }
@@ -564,6 +613,18 @@ func (m *Memory) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *u
 	return nil
 }
 
+// GetCounterConflicting returns all transactions that conflict with the given transaction.
+// A transaction conflicts with another if they attempt to spend the same UTXOs.
+// This method traverses the transaction's inputs to find other transactions
+// that also attempt to spend the same outputs.
+//
+// Parameters:
+//   - ctx: Context for cancellation (currently unused)
+//   - txHash: Hash of the transaction to find conflicts for
+//
+// Returns:
+//   - []chainhash.Hash: Array of transaction hashes that conflict with the given transaction
+//   - error: ErrTxNotFound if the transaction doesn't exist, or other processing errors
 func (m *Memory) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -602,6 +663,18 @@ func (m *Memory) GetCounterConflicting(ctx context.Context, txHash chainhash.Has
 	return counterConflicting, nil
 }
 
+// GetConflictingChildren returns the child transactions of a conflicting transaction.
+// This method retrieves the list of transactions that are marked as children
+// of the given conflicting transaction, which is used for conflict resolution
+// and transaction dependency tracking.
+//
+// Parameters:
+//   - ctx: Context for cancellation (currently unused)
+//   - txHash: Hash of the conflicting transaction to get children for
+//
+// Returns:
+//   - []chainhash.Hash: Array of child transaction hashes
+//   - error: ErrTxNotFound if the transaction doesn't exist, or other processing errors
 func (m *Memory) GetConflictingChildren(_ context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -624,6 +697,20 @@ func (m *Memory) GetConflictingChildren(_ context.Context, txHash chainhash.Hash
 	return conflicting, nil
 }
 
+// SetConflicting marks transactions as conflicting or non-conflicting.
+// This method updates the conflicting status of multiple transactions and returns
+// information about affected parent spends and spending transaction hashes.
+// Used for managing transaction conflicts in the mempool.
+//
+// Parameters:
+//   - ctx: Context for cancellation (currently unused)
+//   - txHashes: Array of transaction hashes to update
+//   - setValue: True to mark as conflicting, false to mark as non-conflicting
+//
+// Returns:
+//   - []*utxo.Spend: Array of affected parent spends
+//   - []chainhash.Hash: Array of spending transaction hashes
+//   - error: Any error encountered during the operation
 func (m *Memory) SetConflicting(_ context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
@@ -664,6 +751,18 @@ func (m *Memory) SetConflicting(_ context.Context, txHashes []chainhash.Hash, se
 	return affectedParentSpends, spendingTxHashes, nil
 }
 
+// SetUnspendable marks transactions as unspendable or spendable.
+// This method updates the unspendable status of multiple transactions,
+// which prevents them from being spent even if they are otherwise valid.
+// Used for managing transaction validity in the mempool.
+//
+// Parameters:
+//   - ctx: Context for cancellation (currently unused)
+//   - txHashes: Array of transaction hashes to update
+//   - setValue: True to mark as unspendable, false to mark as spendable
+//
+// Returns:
+//   - error: ErrTxNotFound if any transaction doesn't exist, or other processing errors
 func (m *Memory) SetUnspendable(_ context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()

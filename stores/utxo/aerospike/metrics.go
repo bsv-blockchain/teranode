@@ -95,10 +95,16 @@ var (
 	prometheusMetricsInitOnce sync.Once
 )
 
+// InitPrometheusMetrics initializes all Prometheus metrics for the Aerospike UTXO store.
+// This function is safe to call multiple times as it uses sync.Once to ensure
+// initialization happens only once. It should be called before any UTXO store
+// operations that generate metrics.
 func InitPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
 
+// _initPrometheusMetrics performs the actual initialization of all Prometheus metrics.
+// This is called only once via sync.Once from InitPrometheusMetrics.
 func _initPrometheusMetrics() {
 	prometheusTxMetaAerospikeMapGet = promauto.NewCounter(
 		prometheus.CounterOpts{

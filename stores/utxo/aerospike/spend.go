@@ -575,11 +575,17 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 	return nil
 }
 
-// handleSpentRecords manages cleanup when all UTXOs in a transaction are spent:
-//  1. Decrements record count for pagination
-//  2. Sets DAH for cleanup
-//  3. Updates external storage DAH
-
+// handleExtraRecords manages the record count for paginated transactions when UTXOs are spent.
+// This function is called when spending operations affect transactions with multiple records
+// to maintain accurate pagination counts for cleanup operations.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - txID: Transaction ID whose record count needs updating
+//   - increment: Amount to increment (can be negative for decrement)
+//
+// Returns:
+//   - error: Any error encountered during the record count update
 func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, increment int) error {
 	res, err := s.IncrementSpentRecords(txID, increment) // This is a batch operation
 	if err != nil {
@@ -619,6 +625,17 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 	return nil
 }
 
+// setDAHExternalTransaction sets the Delete-At-Height (DAH) for a transaction stored in external storage.
+// This is used to schedule cleanup of large transactions that are stored in blob storage
+// rather than directly in Aerospike records.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - txid: Transaction ID to set DAH for
+//   - newDAH: Block height at which the transaction should be deleted
+//
+// Returns:
+//   - error: Any error encountered, or nil if successful or transaction not found
 func (s *Store) setDAHExternalTransaction(ctx context.Context, txid *chainhash.Hash, newDAH uint32) error {
 	if err := s.externalStore.SetDAH(ctx,
 		txid[:],
@@ -648,6 +665,15 @@ func (s *Store) setDAHExternalTransaction(ctx context.Context, txid *chainhash.H
 	return nil
 }
 
+// dahOperation returns a human-readable string describing the DAH operation.
+// This is used for logging and error messages to indicate whether DAH is being
+// set to a specific block height or unset (cleared).
+//
+// Parameters:
+//   - dah: Delete-At-Height value (0 means unset, >0 means set to that height)
+//
+// Returns:
+//   - string: "set at <height>" if dah > 0, "unset" if dah == 0
 func dahOperation(dah uint32) string {
 	if dah > 0 {
 		return fmt.Sprintf("set at %d", dah)
