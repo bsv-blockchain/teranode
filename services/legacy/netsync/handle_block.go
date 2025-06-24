@@ -422,7 +422,11 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			subtreeFileExtension,
 			options.WithDeleteAt(dah),
 		)
-		if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		if err != nil {
+			if errors.Is(err, errors.ErrBlobAlreadyExists) {
+				return nil
+			}
+
 			return errors.NewStorageError("[writeSubtree][%s] failed to create subtree file", subtree.RootHash().String(), err)
 		}
 
@@ -497,7 +501,11 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 				fileformat.FileTypeSubtreeMeta,
 				options.WithDeleteAt(dah),
 			)
-			if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+			if err != nil {
+				if errors.Is(err, errors.ErrBlobAlreadyExists) {
+					return nil
+				}
+
 				return errors.NewStorageError("[writeSubtree][%s] failed to store subtree meta data", subtree.RootHash().String(), err)
 			}
 
