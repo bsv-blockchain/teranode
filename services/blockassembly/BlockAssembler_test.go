@@ -214,6 +214,11 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 				assert.Len(t, subtree.Nodes, 4)
 				assert.Equal(t, uint64(666), subtree.Fees)
+
+				if subtreeRequest.ErrChan != nil {
+					subtreeRequest.ErrChan <- nil
+				}
+
 				wg.Done()
 			}
 		}()
@@ -544,6 +549,11 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 			assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
 			assert.NotEqual(t, uint64(5000000556), subtree.Fees)
+
+			if subtreeRequest.ErrChan != nil {
+				subtreeRequest.ErrChan <- nil
+			}
+
 			wg.Done()
 		}()
 
@@ -639,6 +649,11 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 			assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
 			assert.Equal(t, uint64(999), subtree.Fees)
+
+			if subtreeRequest.ErrChan != nil {
+				subtreeRequest.ErrChan <- nil
+			}
+
 			wg.Done()
 		}()
 
@@ -751,6 +766,11 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 					// assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 					assert.Len(t, subtree.Nodes, 4)
 					// assert.Equal(t, uint64(4000000000), subtree.Fees)
+
+					if subtreeRequest.ErrChan != nil {
+						subtreeRequest.ErrChan <- nil
+					}
+
 					wg.Done()
 				case <-ctx.Done():
 					return
@@ -861,6 +881,11 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 			assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
 			assert.Equal(t, uint64(3000000000), subtree.Fees)
+
+			if subtreeRequest.ErrChan != nil {
+				subtreeRequest.ErrChan <- nil
+			}
+
 			wg.Done()
 		}()
 

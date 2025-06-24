@@ -98,6 +98,10 @@ func TestRotate(t *testing.T) {
 			merkleRoot = subtree.ReplaceRootNode(coinbaseHash, 0, 0)
 			assert.Equal(t, "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766", merkleRoot.String())
 
+			if subtreeRequest.ErrChan != nil {
+				subtreeRequest.ErrChan <- nil
+			}
+
 			endTestChan <- true
 		}
 	}()
@@ -272,7 +276,12 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 		go func() {
 			for {
 				// just read the subtrees of the processor
-				<-newSubtreeChan
+				newSubtreeRequest := <-newSubtreeChan
+
+				if newSubtreeRequest.ErrChan != nil {
+					newSubtreeRequest.ErrChan <- nil
+				}
+
 				wg.Done()
 			}
 		}()
@@ -307,7 +316,12 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 		go func() {
 			for {
 				// just read the subtrees of the processor
-				<-newSubtreeChan
+				newSubtreeRequest := <-newSubtreeChan
+
+				if newSubtreeRequest.ErrChan != nil {
+					newSubtreeRequest.ErrChan <- nil
+				}
+
 				wg.Done()
 			}
 		}()
@@ -379,7 +393,12 @@ func TestMoveForwardBlock(t *testing.T) {
 	go func() {
 		for {
 			// just read the subtrees of the processor
-			<-newSubtreeChan
+			newSubtreeRequest := <-newSubtreeChan
+
+			if newSubtreeRequest.ErrChan != nil {
+				newSubtreeRequest.ErrChan <- nil
+			}
+
 			wg.Done()
 		}
 	}()
@@ -522,7 +541,12 @@ func TestIncompleteSubtreeMoveForwardBlock(t *testing.T) {
 	go func() {
 		for {
 			// just read the subtrees of the processor
-			<-newSubtreeChan
+			newSubtreeRequest := <-newSubtreeChan
+
+			if newSubtreeRequest.ErrChan != nil {
+				newSubtreeRequest.ErrChan <- nil
+			}
+
 			wg.Done()
 		}
 	}()
@@ -611,7 +635,12 @@ func TestSubtreeMoveForwardBlockNewCurrent(t *testing.T) {
 	go func() {
 		for {
 			// just read the subtrees of the processor
-			<-newSubtreeChan
+			newSubtreeRequest := <-newSubtreeChan
+
+			if newSubtreeRequest.ErrChan != nil {
+				newSubtreeRequest.ErrChan <- nil
+			}
+
 			wg.Done()
 		}
 	}()
@@ -699,7 +728,12 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	go func() {
 		// just read and discard
 		for {
-			<-newSubtreeChan
+			newSubtreeRequest := <-newSubtreeChan
+
+			if newSubtreeRequest.ErrChan != nil {
+				newSubtreeRequest.ErrChan <- nil
+			}
+
 			wg.Done()
 		}
 	}()
@@ -788,7 +822,11 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		go func() {
 			// just read and discard
 			for {
-				<-newSubtreeChan
+				newSubtreeRequest := <-newSubtreeChan
+
+				if newSubtreeRequest.ErrChan != nil {
+					newSubtreeRequest.ErrChan <- nil
+				}
 			}
 		}()
 
@@ -903,7 +941,11 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 
 	go func() {
 		for {
-			<-newSubtreeChan
+			newSubtreeRequest := <-newSubtreeChan
+
+			if newSubtreeRequest.ErrChan != nil {
+				newSubtreeRequest.ErrChan <- nil
+			}
 		}
 	}()
 
@@ -984,7 +1026,11 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		go func() {
 			for {
 				select {
-				case <-newSubtreeChan:
+				case newSubtreeRequest := <-newSubtreeChan:
+					if newSubtreeRequest.ErrChan != nil {
+						newSubtreeRequest.ErrChan <- nil
+					}
+
 					wg.Done()
 				case <-processingDone:
 					return
@@ -1107,8 +1153,12 @@ func TestMoveBackBlocks(t *testing.T) {
 
 		go func() {
 			for {
-				<-newSubtreeChan
-				// fmt.Println("subtreee", subtreee.Subtree.Length())
+				newSubtreeRequest := <-newSubtreeChan
+
+				if newSubtreeRequest.ErrChan != nil {
+					newSubtreeRequest.ErrChan <- nil
+				}
+
 				wg.Done()
 			}
 		}()
@@ -1230,7 +1280,11 @@ func Test_removeMap(t *testing.T) {
 
 		go func() {
 			for {
-				<-newSubtreeChan
+				newSubtreeRequest := <-newSubtreeChan
+
+				if newSubtreeRequest.ErrChan != nil {
+					newSubtreeRequest.ErrChan <- nil
+				}
 			}
 		}()
 
@@ -1451,7 +1505,11 @@ func initTestAddNodeBenchmark(b *testing.B) (*errgroup.Group, *SubtreeProcessor,
 
 	g.Go(func() error {
 		for {
-			<-newSubtreeChan
+			newSubtreeRequest := <-newSubtreeChan
+
+			if newSubtreeRequest.ErrChan != nil {
+				newSubtreeRequest.ErrChan <- nil
+			}
 
 			n++
 
