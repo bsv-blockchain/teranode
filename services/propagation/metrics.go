@@ -1,6 +1,27 @@
 // Package propagation implements Bitcoin SV transaction propagation and validation services.
-// This file contains the Prometheus metrics definitions and initialization for monitoring
-// the performance, throughput, and error rates of the propagation service.
+// This file contains the Prometheus metrics definitions and initialization for comprehensive
+// monitoring of the propagation service's performance, throughput, and operational health.
+//
+// The metrics system provides detailed observability into:
+//   - Transaction processing rates and latencies
+//   - Batch processing performance and efficiency
+//   - Error rates and failure patterns across different operations
+//   - Health check response times and availability
+//   - Resource utilization and system performance indicators
+//
+// Metrics Collection:
+// All metrics are automatically registered with Prometheus and collected at regular intervals.
+// The metrics follow standard Prometheus naming conventions and include appropriate labels
+// for dimensional analysis and filtering.
+//
+// Key Metric Categories:
+//   - Histograms: For measuring latencies and processing times
+//   - Counters: For tracking event occurrences and error rates
+//   - Gauges: For measuring current resource levels and states
+//
+// Integration:
+// These metrics integrate with the broader Teranode monitoring infrastructure and can be
+// scraped by Prometheus servers for alerting, dashboards, and long-term trend analysis.
 package propagation
 
 import (
@@ -11,6 +32,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// Prometheus metrics for monitoring propagation service performance and health.
+// These metrics provide comprehensive observability into transaction processing,
+// system performance, and error conditions across all service operations.
 var (
 	prometheusHealth                    prometheus.Histogram
 	prometheusProcessedTransactions     prometheus.Histogram
@@ -21,6 +45,7 @@ var (
 	prometheusInvalidTransactions       prometheus.Counter
 )
 
+// Synchronization primitive for ensuring metrics are initialized exactly once.
 var (
 	prometheusMetricsInitOnce sync.Once
 )

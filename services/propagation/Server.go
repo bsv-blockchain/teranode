@@ -59,8 +59,18 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// Request processing limits for the propagation service.
+// These constants define the maximum capacity constraints for transaction processing
+// to ensure system stability and prevent resource exhaustion attacks.
 const (
+	// maxTransactionsPerRequest defines the maximum number of transactions that can be
+	// processed in a single batch request. This limit prevents memory exhaustion and
+	// ensures reasonable processing times for batch operations.
 	maxTransactionsPerRequest = 1024
+	
+	// maxDataPerRequest defines the maximum total data size (in bytes) that can be
+	// processed in a single request. This limit prevents oversized requests from
+	// consuming excessive memory and network resources (32 MB limit).
 	maxDataPerRequest         = 32 * 1024 * 1024
 )
 
@@ -72,9 +82,35 @@ var (
 )
 
 // PropagationServer implements the transaction propagation service for Bitcoin SV.
-// It handles transaction validation, storage, and distribution across the network
-// while managing connections to various backend services including validators,
-// blockchain clients, and Kafka producers.
+// This server provides the core transaction processing infrastructure for the Teranode system,
+// handling transaction validation, storage, and distribution across the Bitcoin SV network.
+// It serves as the primary entry point for transaction ingress and manages the complete
+// transaction lifecycle from initial receipt through validation and network propagation.
+//
+// The server supports multiple ingress protocols:
+//   - gRPC API for high-performance programmatic access
+//   - HTTP REST API for web-based integrations
+//   - UDP6 multicast for efficient network-wide distribution
+//
+// Key responsibilities:
+//   - Transaction format validation and integrity checking
+//   - Persistent storage of transactions in configured blob stores
+//   - Asynchronous validation through integration with validator services
+//   - Batch processing for high-throughput scenarios
+//   - Size-based routing with fallback mechanisms for large transactions
+//   - Integration with blockchain services for state verification
+//   - Kafka-based event publishing for downstream processing
+//   - Comprehensive metrics collection and monitoring
+//
+// Architecture:
+// The server maintains connections to various backend services including validators,
+// blockchain clients, and Kafka producers. It implements rate limiting, request
+// validation, and error handling to ensure system stability under high load.
+//
+// Thread Safety:
+// The PropagationServer is designed for concurrent operation and maintains internal
+// synchronization for shared resources. Multiple goroutines can safely process
+// transactions simultaneously through the same server instance.
 type PropagationServer struct {
 	propagation_api.UnsafePropagationAPIServer
 	logger                       ulogger.Logger

@@ -105,7 +105,29 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	return s.blockToJSON(ctx, b, *c.Verbosity)
 }
 
-// handleGetBlockByHeight implements the getblockbyheight command.
+// handleGetBlockByHeight implements the getblockbyheight command, which retrieves information
+// about a block from the blockchain based on its height (block number).
+//
+// This command provides an alternative to getblock for retrieving block data when the
+// block hash is not known but the height is available. It supports the same verbosity
+// levels as getblock to control the amount of information returned:
+// - 0: Returns the serialized block as a hex-encoded string
+// - 1: Returns a JSON object with block header information and transaction details
+//
+// The handler interfaces with the blockchain service to locate the block at the specified
+// height and performs format conversion appropriate to the requested verbosity level.
+// This is particularly useful for blockchain explorers and applications that need to
+// iterate through blocks sequentially.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.GetBlockByHeightCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Block data in the requested format (string or bsvjson.GetBlockVerboseResult)
+//   - error: Any error encountered during processing, including if height is invalid
 func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockByHeight",
 		tracing.WithParentStat(RPCStat),
@@ -125,7 +147,28 @@ func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, 
 	return s.blockToJSON(ctx, b, *c.Verbosity)
 }
 
-// handleGetBlockHash implements the getblockhash command.
+// handleGetBlockHash implements the getblockhash command, which returns the hash
+// of the block at the specified height in the main blockchain.
+//
+// This command provides a simple way to retrieve the block hash when only the
+// block height (index) is known. It's commonly used by blockchain explorers,
+// wallets, and other applications that need to iterate through the blockchain
+// or verify specific blocks by height.
+//
+// The command takes a single parameter (the block height) and returns the
+// corresponding block hash as a hex-encoded string. This is often used in
+// conjunction with getblock to first obtain the hash, then retrieve detailed
+// block information.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.GetBlockHashCmd)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: String containing the hash of the block at the specified height
+//   - error: Any error encountered during processing, including if height is invalid or out of range
 func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockHash",
 		tracing.WithParentStat(RPCStat),
@@ -150,7 +193,7 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	return b.Hash().String(), nil
 }
 
-// handleGetBlockHash implements the getblockheader command.
+// handleGetBlockHeader implements the getblockheader command.
 func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetBlockHeader",
 		tracing.WithParentStat(RPCStat),
@@ -384,6 +427,7 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 // - Resource intensive for servers with large transaction history
 // - May be subject to rate limiting in production environments
 // - Can be optimized with indexing for faster lookups
+// - Performance critical for high-volume applications like payment processors
 //
 // TODO: this is not implemented correctly, it should return the transaction in the same format as bitcoind
 //
@@ -731,7 +775,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 //
 // Security and operational notes:
 // - This command is typically disabled on production nodes
-// - Resource intensive operation that may temporarily reduce node responsiveness
+// - Resource-intensive operation that may temporarily reduce node responsiveness
 // - Generated blocks will only be accepted by the network if valid
 // - Not suitable for actual mining revenue generation
 //
@@ -962,6 +1006,35 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 	return jsonMap, nil
 }
 
+// handleGetpeerinfo implements the getpeerinfo command, which returns information
+// about all currently connected peers in the network.
+//
+// This command provides detailed information about each peer connection, including:
+// - Connection details (IP address, port, connection time)
+// - Protocol information (version, user agent, services)
+// - Network statistics (bytes sent/received, ping times)
+// - Synchronization status (starting height, current height)
+//
+// The handler aggregates peer information from both the legacy peer service and
+// the modern P2P service to provide a comprehensive view of all network connections.
+// Results are cached briefly to improve performance when called frequently by
+// monitoring tools.
+//
+// This command is commonly used by:
+// - Network monitoring and debugging tools
+// - Node operators checking connection health
+// - Applications that need to understand network topology
+// - Diagnostic tools for troubleshooting connectivity issues
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (no specific parameters)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Array of peer information objects with detailed connection data
+//   - error: Any error encountered while retrieving peer information
 func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetpeerinfo",
 		tracing.WithParentStat(RPCStat),
@@ -1073,6 +1146,33 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	return infos, nil
 }
 
+// handleGetDifficulty implements the getdifficulty command, which returns the current
+// proof-of-work difficulty as a multiple of the minimum difficulty.
+//
+// This command provides the current network difficulty target, which represents how
+// difficult it is to find a hash below the target threshold. The difficulty is
+// expressed as a floating-point number that indicates how many times more difficult
+// the current target is compared to the minimum possible difficulty.
+//
+// The difficulty value is crucial for:
+// - Miners to understand the current network hash rate and competition level
+// - Applications calculating expected mining times and profitability
+// - Network monitoring tools tracking blockchain security and stability
+// - Block explorers displaying network statistics
+//
+// The difficulty adjusts automatically every 2016 blocks (approximately every 2 weeks)
+// to maintain an average block time of 10 minutes, regardless of changes in total
+// network hash rate.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (no specific parameters)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Float64 representing the current difficulty as a multiple of minimum difficulty
+//   - error: Any error encountered while retrieving difficulty information
 func handleGetDifficulty(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetDifficulty",
 		tracing.WithParentStat(RPCStat),
@@ -1089,6 +1189,34 @@ func handleGetDifficulty(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 	return difficulty, nil
 }
 
+// handleGetblockchaininfo implements the getblockchaininfo command, which returns
+// information about the current state of the blockchain.
+//
+// This command provides a comprehensive overview of the blockchain, including:
+// - The current chain name (main, test, regtest)
+// - The current block count
+// - The current block header count
+// - The best block hash
+// - The current difficulty
+// - The median time of the last 11 blocks
+// - The verification progress (not implemented)
+// - The chain work (not implemented)
+// - Whether the blockchain is pruned (not implemented)
+//
+// The command is commonly used by:
+// - Blockchain explorers to display network statistics
+// - Node operators to monitor blockchain health
+// - Applications that need to understand the current blockchain state
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (no specific parameters)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: A map of blockchain information
+//   - error: Any error encountered while retrieving blockchain information
 func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetblockchaininfo",
 		tracing.WithParentStat(RPCStat),
@@ -1773,6 +1901,35 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	return nil, nil
 }
 
+// handleGetMiningInfo implements the getmininginfo command, which returns information
+// about the current mining state and network statistics.
+//
+// This command provides comprehensive mining-related information including:
+// - Current block count and blockchain height
+// - Current difficulty target for proof-of-work
+// - Estimated network hash rate (hashes per second)
+// - Number of transactions in the memory pool
+// - Current block size and transaction count being assembled
+// - Any errors or warnings related to mining operations
+//
+// The information returned is essential for:
+// - Miners monitoring network conditions and profitability
+// - Mining pool operators tracking network statistics
+// - Applications calculating mining difficulty and expected returns
+// - Network monitoring tools assessing blockchain health and security
+//
+// The command aggregates data from multiple sources including the blockchain service,
+// block assembly service, and network statistics to provide a complete mining overview.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (no specific parameters)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Object containing comprehensive mining information and network statistics
+//   - error: Any error encountered while retrieving mining information
 func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetMiningInfo",
 		tracing.WithParentStat(RPCStat),
@@ -1810,6 +1967,39 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 	}, nil
 }
 
+// handleFreeze implements the freeze command, which marks a specific UTXO as frozen,
+// preventing it from being spent in future transactions.
+//
+// This command provides UTXO management functionality by allowing administrators to
+// temporarily or permanently prevent specific transaction outputs from being spent.
+// When a UTXO is frozen, it remains in the UTXO set but cannot be used as an input
+// for new transactions until it is explicitly unfrozen.
+//
+// Common use cases for freezing UTXOs include:
+// - Compliance requirements for suspicious or disputed funds
+// - Temporary holds during investigation or audit processes
+// - Risk management for high-value outputs
+// - Testing and debugging scenarios
+// - Regulatory compliance and law enforcement cooperation
+//
+// The freeze operation is reversible through the unfreeze command, allowing for
+// flexible UTXO management based on changing circumstances or investigation outcomes.
+//
+// Security considerations:
+// - Requires admin privileges to execute
+// - Changes persist across node restarts
+// - Affects transaction validation and mempool acceptance
+// - Should be used carefully to avoid disrupting legitimate transactions
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.FreezeCmd with TxID and Vout)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Null on success
+//   - error: Any error encountered during the freeze operation
 func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleFreeze",
 		tracing.WithParentStat(RPCStat),
@@ -1834,6 +2024,31 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	return nil, nil
 }
 
+// handleUnfreeze implements the unfreeze command, which removes the frozen status from
+// a previously frozen UTXO, allowing it to be spent in future transactions.
+//
+// This command reverses the effect of freeze by undoing the manual freezing of a UTXO.
+// This allows the node to consider the UTXO for spending during its normal transaction
+// validation process and potentially accept it if it follows consensus rules.
+//
+// The unfreeze operation is used to correct mistaken manual interventions in the UTXO
+// management process.
+//
+// Security considerations:
+// - Requires admin privileges to execute
+// - May trigger transaction reordering in the transaction processing system
+// - Changes persist across node restarts
+// - Should be used carefully to avoid disrupting legitimate transactions
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.UnfreezeCmd with TxID and Vout)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Null on success
+//   - error: Any error encountered during the unfreeze operation
 func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleUnfreeze",
 		tracing.WithParentStat(RPCStat),
@@ -1858,6 +2073,32 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	return nil, nil
 }
 
+// handleReassign implements the reassign command, which reassigns a specific UTXO to a
+// new UTXO hash, allowing for flexible UTXO management.
+//
+// This command provides a way to update the UTXO set by reassigning a UTXO to a new
+// UTXO hash. This is useful in scenarios such as:
+// - Correcting errors in the UTXO set
+// - Updating the UTXO set after a chain reorganization
+// - Managing UTXOs during testing and debugging
+//
+// The reassign operation is used to correct mistakes in the UTXO management process.
+//
+// Security considerations:
+// - Requires admin privileges to execute
+// - May trigger transaction reordering in the transaction processing system
+// - Changes persist across node restarts
+// - Should be used carefully to avoid disrupting legitimate transactions
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - cmd: The parsed command arguments (bsvjson.ReassignCmd with OldTxID, OldVout, and NewUTXOHash)
+//   - _: Unused channel for close notification
+//
+// Returns:
+//   - interface{}: Null on success
+//   - error: Any error encountered during the reassign operation
 func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleReassign",
 		tracing.WithParentStat(RPCStat),

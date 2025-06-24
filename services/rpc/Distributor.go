@@ -1,3 +1,22 @@
+// Package rpc implements the Bitcoin JSON-RPC API service for Teranode.
+//
+// The Distributor.go file contains the transaction distribution component that handles
+// reliable propagation of transactions to multiple propagation service instances.
+// This component provides fault-tolerant transaction broadcasting with retry logic,
+// load balancing, and failure handling to ensure transactions reach the network
+// even when individual propagation services are unavailable.
+//
+// Key Features:
+//   - Multi-server transaction distribution with automatic failover
+//   - Configurable retry logic with exponential backoff
+//   - Failure tolerance allowing partial success scenarios
+//   - Performance monitoring and response time tracking
+//   - Concurrent transaction submission for improved throughput
+//   - HTTP client connection pooling and reuse
+//
+// The Distributor is used by RPC handlers that need to submit transactions to the
+// network, particularly the sendrawtransaction command, providing reliability
+// and performance optimization for transaction propagation operations.
 package rpc
 
 import (
@@ -16,6 +35,31 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+// Distributor manages reliable transaction propagation to multiple propagation service instances.
+// It provides fault-tolerant transaction broadcasting with retry logic, load balancing,
+// and failure handling to ensure transactions reach the Bitcoin SV network reliably.
+//
+// The Distributor maintains connections to multiple propagation services and attempts
+// to submit transactions to all available instances. It handles partial failures
+// gracefully, allowing transactions to succeed as long as a minimum number of
+// propagation services accept them.
+//
+// Key capabilities:
+//   - Concurrent submission to multiple propagation services
+//   - Configurable retry attempts with exponential backoff
+//   - Failure tolerance with configurable success thresholds
+//   - Performance monitoring and response time tracking
+//   - Connection pooling and reuse for optimal performance
+//   - Graceful handling of service unavailability
+//
+// Thread Safety:
+// The Distributor is designed for concurrent use and can safely handle multiple
+// simultaneous transaction submissions. Internal state is protected appropriately
+// and connections are managed safely across goroutines.
+//
+// Configuration:
+// The Distributor behavior can be customized through functional options including
+// retry attempts, backoff duration, failure tolerance, and timing parameters.
 type Distributor struct {
 	logger             ulogger.Logger
 	settings           *settings.Settings

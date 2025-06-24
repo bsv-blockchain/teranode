@@ -1,5 +1,29 @@
-// Package propagation provides Bitcoin SV transaction propagation functionality.
-// This file implements a batching client for efficient transaction processing.
+// Package propagation provides Bitcoin SV transaction propagation functionality for the Teranode system.
+// This package implements efficient transaction processing and distribution across the Bitcoin SV network,
+// supporting both individual transaction handling and high-throughput batch processing operations.
+//
+// Key Features:
+//   - Batching client for efficient transaction processing with configurable batch sizes
+//   - HTTP and gRPC interfaces for transaction submission and status queries
+//   - Large transaction fallback mechanisms for handling oversized transactions
+//   - Comprehensive error handling and retry logic for network resilience
+//   - Integration with OpenTelemetry for distributed tracing and monitoring
+//   - Support for both synchronous and asynchronous transaction processing
+//
+// Architecture:
+// The propagation service acts as a bridge between transaction producers (such as mining pools,
+// wallets, and applications) and the Bitcoin SV network. It optimizes transaction throughput
+// through intelligent batching while maintaining reliability through robust error handling.
+//
+// The service provides multiple interfaces:
+//   - gRPC API for high-performance programmatic access
+//   - HTTP REST API for web-based integrations
+//   - Batch processing for high-volume transaction scenarios
+//
+// Integration:
+// This package integrates with other Teranode services including the mempool, validator,
+// and P2P services to ensure transactions are properly validated and distributed across
+// the network according to Bitcoin SV protocol specifications.
 package propagation
 
 import (
@@ -42,8 +66,35 @@ type batchItem struct {
 }
 
 // Client implements a batching transaction client for the BSV propagation service.
-// It supports both individual transaction processing and efficient batch processing
-// with configurable batch sizes and timeouts.
+// This client provides efficient transaction processing through intelligent batching mechanisms,
+// supporting both individual transaction submission and high-throughput batch operations.
+//
+// The Client maintains persistent gRPC connections to the propagation service and manages
+// transaction batching according to configurable size and timeout parameters. It handles
+// both synchronous and asynchronous transaction processing patterns.
+//
+// Key capabilities:
+//   - Automatic transaction batching for improved throughput
+//   - Configurable batch sizes and timeout intervals
+//   - Fallback mechanisms for large transactions that exceed batch limits
+//   - HTTP endpoint support for REST API compatibility
+//   - Comprehensive error handling and retry logic
+//   - Integration with distributed tracing for monitoring and debugging
+//
+// Thread Safety:
+// The Client is designed for concurrent use and maintains internal synchronization
+// for batch processing operations. Multiple goroutines can safely submit transactions
+// simultaneously through the same Client instance.
+//
+// Fields:
+//   - client: gRPC client for communicating with the propagation service
+//   - conn: Persistent gRPC connection for efficient communication
+//   - batchSize: Maximum number of transactions per batch
+//   - batchCh: Channel for coordinating batch processing operations
+//   - batcher: Batching utility for managing transaction grouping and timing
+//   - logger: Structured logger for debugging and monitoring
+//   - settings: Global configuration settings for the client
+//   - propagationHTTPAddr: HTTP endpoint URL for REST API fallback operations
 type Client struct {
 	client              propagation_api.PropagationAPIClient
 	conn                *grpc.ClientConn

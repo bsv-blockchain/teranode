@@ -27,6 +27,22 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// Prometheus metrics for monitoring individual RPC command performance and latency.
+// Each histogram tracks the processing time for a specific Bitcoin JSON-RPC command,
+// enabling detailed performance analysis and identification of bottlenecks.
+//
+// The metrics cover all major RPC command categories:
+//   - Block operations: GetBlock, GetBlockByHeight, GetBlockHash, GetBlockHeader, GetBestBlockHash
+//   - Transaction operations: GetRawTransaction, CreateRawTransaction, SendRawTransaction
+//   - Mining operations: Generate, GenerateToAddress, GetMiningCandidate, SubmitMiningSolution, GetMiningInfo
+//   - Network operations: GetPeerInfo, SetBan, IsBanned, ListBanned, ClearBanned
+//   - Blockchain info: GetBlockchainInfo, GetInfo, GetDifficulty
+//   - Block management: InvalidateBlock, ReconsiderBlock
+//   - UTXO operations: Freeze, Unfreeze, Reassign
+//   - Help system: Help command
+//
+// All histograms use consistent bucket definitions optimized for RPC response times,
+// typically ranging from sub-millisecond to several seconds depending on command complexity.
 var (
 	// prometheusHealth                     prometheus.Counter
 	prometheusHandleGetBlock             prometheus.Histogram
