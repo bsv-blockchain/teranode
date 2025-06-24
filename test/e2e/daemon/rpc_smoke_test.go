@@ -96,7 +96,23 @@ func TestSendTxAndCheckState(t *testing.T) {
 
 	_, err = td.CallRPC(ctx, "sendrawtransaction", []any{txBytes})
 	require.NoError(t, err, "Failed to send new tx with rpc")
+	t.Logf("Transaction sent with RPC: %s\n", newTx.TxIDChainHash().String())
 	// t.Logf("Transaction sent with RPC: %s\n", resp)
+
+	// get raw transaction
+	resp, err := td.CallRPC(ctx, "getrawtransaction", []any{newTx.TxIDChainHash().String(), 1})
+	require.NoError(t, err, "Failed to get raw transaction with rpc")
+
+	td.LogJSON(t, "getRawTransaction", resp)
+
+	var getRawTransaction helper.GetRawTransactionResponse
+	err = json.Unmarshal([]byte(resp), &getRawTransaction)
+	require.NoError(t, err)
+
+	td.LogJSON(t, "getRawTransaction", getRawTransaction)
+
+	// Assert transaction properties
+	assert.Equal(t, newTx.TxIDChainHash().String(), getRawTransaction.Result.Txid)
 
 	// Wait for transaction to be processed
 	delay := td.Settings.BlockAssembly.DoubleSpendWindow
@@ -140,8 +156,6 @@ func TestSendTxAndCheckState(t *testing.T) {
 	}
 
 	assert.True(t, blFound, "TX not found in the blockstore")
-
-	var resp string
 
 	resp, err = td.CallRPC(ctx, "getblockchaininfo", []any{})
 	require.NoError(t, err)

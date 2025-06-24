@@ -439,52 +439,65 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	}
 
 	// parse the transaction
-	tx, err := bsvutil.NewTxFromBytes(body)
+
+	bytes, err := hex.DecodeString(string(body))
+	if err != nil {
+		return nil, errors.NewServiceError("Error parsing transaction", err)
+	}
+
+	tx, err := bt.NewTxFromBytes(bytes)
 	if err != nil {
 		return nil, errors.NewServiceError("Error parsing transaction", err)
 	}
 
 	// inputs
-	inputs := make([]bsvjson.Vin, len(tx.MsgTx().TxIn))
-	for i, txIn := range tx.MsgTx().TxIn {
+	inputs := make([]bsvjson.Vin, len(tx.Inputs))
+
+	for i, txIn := range tx.Inputs {
+		asm, err := txscript.DisasmString(txIn.UnlockingScript.Bytes())
+		if err != nil {
+			return nil, errors.NewServiceError("Error disassembling script", err)
+		}
+
 		inputs[i] = bsvjson.Vin{
-			Txid: txIn.PreviousOutPoint.Hash.String(),
-			Vout: txIn.PreviousOutPoint.Index,
+			Txid: txIn.PreviousTxIDStr(),
+			Vout: txIn.PreviousTxOutIndex,
 			ScriptSig: &bsvjson.ScriptSig{
-				Asm: "",
-				Hex: "",
+				Asm: asm,
+				Hex: txIn.UnlockingScript.String(),
 			},
-			Sequence: txIn.Sequence,
+			Sequence: txIn.SequenceNumber,
 		}
 	}
 
 	// outputs
-	outputs := make([]bsvjson.Vout, len(tx.MsgTx().TxOut))
+	outputs := make([]bsvjson.Vout, len(tx.Outputs))
 
-	for i, txOut := range tx.MsgTx().TxOut {
-		pkScriptClass, addresses, _, err := txscript.ExtractPkScriptAddrs(txOut.PkScript, s.settings.ChainCfgParams)
+	for i, txOut := range tx.Outputs {
+		addresses, err := txOut.LockingScript.Addresses()
 		if err != nil {
 			return nil, errors.NewServiceError("Error extracting script addresses", err)
 		}
 
-		// Convert []bsvutil.Address to []string
+		// Convert addresses to []string
+		// Can't use copy() here because we're converting between different types
 		addressStrings := make([]string, len(addresses))
-		for j, addr := range addresses {
-			addressStrings[j] = addr.EncodeAddress()
+		for j, addr := range addresses { //nolint:gosimple
+			addressStrings[j] = addr // Type conversion happens here
 		}
 
-		asm, err := txscript.DisasmString(txOut.PkScript)
+		asm, err := txscript.DisasmString(txOut.LockingScript.Bytes())
 		if err != nil {
 			return nil, errors.NewServiceError("Error disassembling script", err)
 		}
 
 		outputs[i] = bsvjson.Vout{
-			Value: float64(txOut.Value),
+			Value: float64(txOut.Satoshis),
 			ScriptPubKey: bsvjson.ScriptPubKeyResult{
 				Addresses: addressStrings,
 				Asm:       asm,
-				Hex:       hex.EncodeToString(txOut.PkScript),
-				Type:      pkScriptClass.String(),
+				Hex:       hex.EncodeToString(txOut.LockingScript.Bytes()),
+				Type:      txOut.LockingScript.ScriptType(),
 			},
 		}
 	}
@@ -493,11 +506,11 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	// do we want to send all the vin and vout data?
 	return bsvjson.TxRawResult{
 		Hex:      string(body),
-		Txid:     tx.Hash().String(),
-		Hash:     tx.Hash().String(),
-		Size:     int32(tx.MsgTx().SerializeSize()), //nolint:gosec
-		Version:  tx.MsgTx().Version,
-		LockTime: tx.MsgTx().LockTime,
+		Txid:     tx.TxID(),
+		Hash:     tx.TxID(),
+		Size:     int32(tx.Size()),  //nolint:gosec
+		Version:  int32(tx.Version), //nolint:gosec
+		LockTime: tx.LockTime,
 		Vin:      inputs,
 		Vout:     outputs,
 	}, nil

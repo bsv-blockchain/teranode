@@ -173,3 +173,16 @@ type CreateRawTransactionResp struct {
 	Error  *JSONError `json:"error"`
 	ID     int        `json:"id"`
 }
+
+type GetRawTransactionResponse struct {
+	Result struct {
+		Hex      string `json:"hex"`
+		Txid     string `json:"txid"`
+		Hash     string `json:"hash"`
+		Size     int32  `json:"size"`
+		Version  int32  `json:"version"`
+		LockTime uint32 `json:"locktime"`
+	}
+	Error *JSONError `json:"error"`
+	ID    int        `json:"id"`
+}
