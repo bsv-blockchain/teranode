@@ -68,7 +68,7 @@ func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processN
 func (p *PeerHeight) Start(ctx context.Context) error {
 	topicPrefix := p.settings.ChainCfgParams.TopicPrefix
 	if topicPrefix == "" {
-		return errors.NewConfigurationError("[PeerHeight] p2p_topic_prefix not set in config")
+		return errors.NewConfigurationError("[PeerHeight] missing config ChainCfgParams.TopicPrefix")
 	}
 
 	topic := p.settings.P2P.BlockTopic

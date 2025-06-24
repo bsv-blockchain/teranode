@@ -2,28 +2,45 @@
 
 ## Index
 
-1. [Description](#1-description)
-2. [Functionality](#2-functionality)
+- [🌐 P2P Service](#-p2p-service)
+  - [Index](#index)
+  - [1. Description](#1-description)
+  - [2. Functionality](#2-functionality)
     - [2.1. Creating, initializing and starting a new P2P Server](#21-creating-initializing-and-starting-a-new-p2p-server)
-        - [2.1.1. Creating a New P2P Server](#211-creating-a-new-p2p-server)
-        - [2.1.2. Initializing the P2P Server](#212-initializing-the-p2p-server)
-        - [2.1.3. Starting the P2P Server](#213-starting-the-p2p-server)
+    - [2.1.1. Creating a New P2P Server](#211-creating-a-new-p2p-server)
+    - [2.1.2. Initializing the P2P Server](#212-initializing-the-p2p-server)
+    - [2.1.3. Starting the P2P Server](#213-starting-the-p2p-server)
     - [2.2. Peer Discovery and Connection](#22-peer-discovery-and-connection)
     - [2.3. Best Block Messages](#23-best-block-messages)
     - [2.4. Blockchain Messages](#24-blockchain-messages)
     - [2.5. TX Validator Messages](#25-tx-validator-messages)
     - [2.6. Websocket notifications](#26-websocket-notifications)
     - [2.7. Ban Management System](#27-ban-management-system)
-        - [2.7.1. Ban List Management](#271-ban-list-management)
-        - [2.7.2. Ban Operations](#272-ban-operations)
-        - [2.7.3. Ban Event Handling](#273-ban-event-handling)
-        - [2.7.4. Configuration](#274-configuration)
-3. [Technology](#3-technology)
-4. [Data Model](#4-data-model)
-5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
-6. [How to run](#6-how-to-run)
-7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
-8. [Other Resources](#8-other-resources)
+      - [2.7.1. Ban List Management](#271-ban-list-management)
+      - [2.7.2. Ban Operations](#272-ban-operations)
+      - [2.7.3. Ban Event Handling](#273-ban-event-handling)
+      - [2.7.4. Configuration](#274-configuration)
+  - [3. Technology](#3-technology)
+  - [4. Data Model](#4-data-model)
+  - [5. Directory Structure and Main Files](#5-directory-structure-and-main-files)
+  - [6. How to run](#6-how-to-run)
+  - [7. Configuration options (settings flags)](#7-configuration-options-settings-flags)
+    - [Network and Discovery Settings](#network-and-discovery-settings)
+    - [Service Endpoints](#service-endpoints)
+    - [Peer-to-Peer Topics](#peer-to-peer-topics)
+    - [Authentication and Security](#authentication-and-security)
+    - [Ban Management](#ban-management)
+  - [Configuration Validation Rules](#configuration-validation-rules)
+    - [Required Configuration](#required-configuration)
+    - [Network Address Validation](#network-address-validation)
+    - [Private Network Requirements](#private-network-requirements)
+    - [Key Management](#key-management)
+  - [Configuration Dependencies](#configuration-dependencies)
+  - [Configuration Interactions and Dependencies](#configuration-interactions-and-dependencies)
+    - [Network Binding and Discovery](#network-binding-and-discovery)
+    - [Peer Discovery and Connection](#peer-discovery-and-connection)
+    - [Security and Authentication](#security-and-authentication)
+  - [8. Other Resources](#8-other-resources)
 
 
 ## 1. Description
@@ -109,7 +126,7 @@ The startup process of the node involves the `main.go` file calling the `p2p.New
 ![p2p_private_key_persistence.svg](img/plantuml/p2p/p2p_private_key_persistence.svg)
 
 2. **Configuration Retrieval and Topic Registration**:
-    - Retrieves required configuration settings like `p2p_listen_addresses`, `p2p_port`, and `p2p_topic_prefix`.
+    - Retrieves required configuration settings like `p2p_listen_addresses` and `p2p_port`.
     - It registers specific topic names derived from the configuration, such as `p2p_block_topic`, `p2p_subtree_topic`, `p2p_bestblock_topic`, `p2p_mining_on_topic`, and `p2p_rejected_tx_topic`.
 
 3. **P2P Node Initialization**:
@@ -469,7 +486,6 @@ The P2P service serves as the communication backbone of the Teranode network, en
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
-| `p2p_topic_prefix` | string | "" | **REQUIRED** - Prefix for all P2P topics | Ensures topics are unique across different environments. Service will fail to start if not configured. |
 | `p2p_block_topic` | string | "" | Topic name for block announcements | Controls subscription and publication to the block channel |
 | `p2p_subtree_topic` | string | "" | Topic name for subtree announcements | Controls subscription and publication to the subtree channel |
 | `p2p_mining_on_topic` | string | "" | Topic name for mining status announcements | Controls subscription and publication to the mining status channel |
@@ -496,7 +512,6 @@ The P2P service serves as the communication backbone of the Teranode network, en
 The P2P service enforces several validation rules during startup:
 
 ### Required Configuration
-- `p2p_topic_prefix` - Must be set or service will fail with "p2p_topic_prefix not set in config"
 - `p2p_handshake_topic` - Must be set or service will fail with "p2p_handshake_topic not set in config"
 
 ### Network Address Validation

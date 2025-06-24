@@ -259,7 +259,6 @@ The following settings can be configured for the p2p service:
 - `p2p_listen_addresses`: Specifies the IP addresses for the P2P service to bind to.
 - `p2p_advertise_addresses`: Addresses to advertise to other peers in the network. Each address can be specified with or without a port (e.g., `192.168.1.1` or `example.com:9906`). When a port is not specified, the system will use the value from `p2p_port` as the default. Both IP addresses and domain names are supported. Format examples: `192.168.1.1`, `example.com:9906`, `node.local:8001`.
 - `p2p_port`: Defines the port number on which the P2P service listens.
-- `p2p_topic_prefix`: Used as a prefix for naming P2P topics to ensure they are unique across different deployments or environments.
 - `p2p_block_topic`: The topic name used for block-related messages in the P2P network.
 - `p2p_subtree_topic`: Specifies the topic for subtree-related messages within the P2P network.
 - `p2p_handshake_topic`: Defines the topic for peer handshake messages, used for version and verack exchanges.

@@ -225,7 +225,7 @@ type Params struct {
 var MainNetParams = Params{
 	Name:        "mainnet",
 	Net:         wire.MainNet,
-	TopicPrefix: "mainnet.github.com/bitcoin-sv/teranode",
+	TopicPrefix: "bitcoin/mainnet",
 	DefaultPort: "8333",
 	DNSSeeds: []DNSSeed{
 		{"seed.bitcoinsv.io", true},
@@ -337,7 +337,7 @@ var MainNetParams = Params{
 var StnParams = Params{
 	Name:        "stn",
 	Net:         wire.STN,
-	TopicPrefix: "stn.github.com/bitcoin-sv/teranode",
+	TopicPrefix: "bitcoin/stn",
 	DefaultPort: "9333",
 	DNSSeeds:    []DNSSeed{},
 
@@ -417,7 +417,7 @@ var StnParams = Params{
 var RegressionNetParams = Params{
 	Name:        "regtest",
 	Net:         wire.RegTestNet,
-	TopicPrefix: "regtest.github.com/bitcoin-sv/teranode",
+	TopicPrefix: "bitcoin/regtest",
 	DefaultPort: "18444",
 	DNSSeeds:    []DNSSeed{},
 
@@ -497,7 +497,7 @@ var RegressionNetParams = Params{
 var TestNetParams = Params{
 	Name:        "testnet",
 	Net:         wire.TestNet,
-	TopicPrefix: "testnet.github.com/bitcoin-sv/teranode",
+	TopicPrefix: "bitcoin/testnet",
 	DefaultPort: "18333",
 	DNSSeeds: []DNSSeed{
 		{"testnet-seed.bitcoinsv.io", true},
@@ -595,7 +595,7 @@ var TestNetParams = Params{
 var TeraTestNetParams = Params{
 	Name:        "teratestnet",
 	Net:         wire.TeraTestNet,
-	TopicPrefix: "teratestnet.github.com/bitcoin-sv/teranode",
+	TopicPrefix: "bitcoin/teratestnet",
 	DefaultPort: "18333",
 
 	// Chain parameters
@@ -667,7 +667,7 @@ var TeraTestNetParams = Params{
 var TeraScalingTestNetParams = Params{
 	Name:        "tstn",
 	Net:         wire.TeraScalingTestNet,
-	TopicPrefix: "tstn.github.com/bitcoin-sv/teranode",
+	TopicPrefix: "bitcoin/tstn",
 	DefaultPort: "18333",
 
 	// Chain parameters

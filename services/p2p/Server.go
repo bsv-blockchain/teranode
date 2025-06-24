@@ -138,7 +138,7 @@ func NewServer(
 
 	topicPrefix := tSettings.ChainCfgParams.TopicPrefix
 	if topicPrefix == "" {
-		return nil, errors.NewConfigurationError("p2p_topic_prefix not set in config")
+		return nil, errors.NewConfigurationError("missing config ChainCfgParams.TopicPrefix")
 	}
 
 	btn := tSettings.P2P.BlockTopic
