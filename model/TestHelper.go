@@ -371,7 +371,6 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 
 			g.Go(func() error {
 				for _, data := range saveBatch {
-					data := data
 					if err = txMetaStore.SetCache(&data.hash, &meta.Data{
 						Fee:         data.fee,
 						SizeInBytes: data.sizeInBytes,

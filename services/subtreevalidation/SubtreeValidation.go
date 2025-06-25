@@ -57,18 +57,6 @@ func (u *Server) GetSubtreeExists(_ context.Context, _ *chainhash.Hash) (bool, e
 	return false, nil
 }
 
-// SetTxMetaCache stores transaction metadata in the cache if caching is enabled.
-func (u *Server) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *meta.Data) error {
-	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
-		_, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "SubtreeValidation:SetTxMetaCache")
-		defer deferFn()
-
-		return cache.SetCache(hash, txMeta)
-	}
-
-	return nil
-}
-
 // to help mocking the operations
 type txMetaCacheOps interface {
 	Delete(ctx context.Context, hash *chainhash.Hash) error

@@ -46,6 +46,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		metaGet, err := c.GetMeta(ctx, hash)
 		require.NoError(t, err)
 
+		meta.Tx = nil // Tx should not be set in the cache, so we set it to nil for comparison
 		require.Equal(t, meta, metaGet)
 	})
 
@@ -69,6 +70,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		metaGet, err := c.GetMeta(ctx, hash)
 		require.NoError(t, err)
 
+		metaData.Tx = nil // Tx should not be set in the cache, so we set it to nil for comparison
 		require.Equal(t, metaData, metaGet)
 	})
 

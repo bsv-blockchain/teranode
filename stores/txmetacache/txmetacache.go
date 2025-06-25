@@ -326,6 +326,7 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash) (*me
 // with a caching layer in between for improved performance.
 func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
+
 	err := t.cache.Get(&cachedBytes, hash[:])
 	if err != nil {
 		return nil, err
@@ -363,8 +364,10 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 
 	// add to cache, but only if the blockIDs have not been set
 	if len(txMeta.BlockIDs) == 0 {
-		txMeta.Tx = nil
-		_ = t.SetCache(hash, txMeta)
+		err = t.SetCache(hash, txMeta)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return txMeta, nil
@@ -385,36 +388,55 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 //
 // This method first checks the cache for the requested data, and if not found or if
 // specific fields are requested, it falls back to the underlying store.
-func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
-	cachedBytes := make([]byte, 0)
+func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	skipCache := false
 
-	err := t.cache.Get(&cachedBytes, hash[:])
-	if err != nil {
-		return nil, err
+	var err error
+
+	if len(f) > 0 {
+		// if any of the fields are tx, skip the cache as the cache specifically skips storing tx
+		for _, field := range f {
+			if field == fields.Tx {
+				skipCache = true
+
+				t.logger.Warnf("txMetaCache GET - skipping cache check as requesting Tx data for %s, fields: %v", hash.String(), f)
+
+				break
+			}
+		}
 	}
 
-	// if found in cache
-	if len(cachedBytes) > 0 {
-		if !t.returnValue(cachedBytes) {
-			t.logger.Debugf("txMetaCache has the value %s, but it is too old with height: %d, returning nil", hash.String(), readHeightFromValue(cachedBytes))
-			t.metrics.hitOldTx.Add(1)
+	if !skipCache {
+		cachedBytes := make([]byte, 0)
 
-			return nil, nil
-		}
-
-		t.metrics.hits.Add(1)
-
-		txmetaData := meta.Data{}
-		if err = meta.NewMetaDataFromBytes(cachedBytes, &txmetaData); err != nil {
+		err = t.cache.Get(&cachedBytes, hash[:])
+		if err != nil {
 			return nil, err
 		}
 
-		return &txmetaData, nil
-	}
+		// if found in cache
+		if len(cachedBytes) > 0 {
+			if !t.returnValue(cachedBytes) {
+				t.logger.Debugf("txMetaCache has the value %s, but it is too old with height: %d, returning nil", hash.String(), readHeightFromValue(cachedBytes))
+				t.metrics.hitOldTx.Add(1)
 
-	// if not found in the cache, add it to the cache, record cache miss
-	t.metrics.misses.Add(1)
-	t.logger.Warnf("txMetaCache GET miss for %s", hash.String())
+				return nil, nil
+			}
+
+			t.metrics.hits.Add(1)
+
+			txmetaData := meta.Data{}
+			if err = meta.NewMetaDataFromBytes(cachedBytes, &txmetaData); err != nil {
+				return nil, err
+			}
+
+			return &txmetaData, nil
+		}
+
+		// if not found in the cache, add it to the cache, record cache miss
+		t.metrics.misses.Add(1)
+		t.logger.Warnf("txMetaCache GET miss for %s", hash.String())
+	}
 
 	txMeta, err := t.utxoStore.Get(ctx, hash)
 
@@ -426,8 +448,10 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, fields ...f
 
 	// add to cache, but only if the blockIDs have not been set
 	if len(txMeta.BlockIDs) == 0 {
-		txMeta.Tx = nil
-		_ = t.SetCache(hash, txMeta)
+		err = t.SetCache(hash, txMeta)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return txMeta, nil
@@ -455,8 +479,6 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 
 	for _, data := range hashes {
 		if data.Data != nil {
-			data.Data.Tx = nil
-
 			if len(data.Data.TxInpoints.ParentTxHashes) > 48 {
 				t.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", data.Data.SizeInBytes, len(data.Data.TxInpoints.ParentTxHashes))
 			}
@@ -509,8 +531,10 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 
 	// add to cache, but only if the blockIDs have not been set
 	if len(txMeta.BlockIDs) == 0 && !txMeta.Conflicting {
-		txMeta.Tx = nil
-		_ = t.SetCache(txHash, txMeta)
+		err = t.SetCache(txHash, txMeta)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return txMeta, nil
@@ -548,8 +572,10 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 
 	// if the blockID is not set, then we need to set it
 	if len(txMeta.BlockIDs) == 0 {
-		txMeta.Tx = nil
-		_ = t.SetCache(hash, txMeta)
+		err = t.SetCache(hash, txMeta)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -668,9 +694,6 @@ func (t *TxMetaCache) setMinedInCacheParallel(ctx context.Context, hashes []*cha
 				txMeta.BlockIDs = append(txMeta.BlockIDs, blockID)
 			}
 
-			txMeta.Tx = nil
-
-			// t.SetCache(hash, txMeta) always returns nil
 			return t.SetCache(hash, txMeta)
 		})
 	}
