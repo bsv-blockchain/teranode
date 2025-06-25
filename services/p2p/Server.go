@@ -1567,7 +1567,7 @@ func (s *Server) startInvalidBlockConsumer(ctx context.Context) error {
 
 		// For non-memory schemes, we need to extract broker URLs from the host
 		if kafkaURL.Scheme != "memory" {
-			brokerURLs = []string{kafkaURL.Host}
+			brokerURLs = strings.Split(kafkaURL.Host, ",")
 		}
 	} else {
 		// Fall back to the old way of constructing the URL
