@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['prometheus:9090']
+
+  - job_name: 'teranode'
+    static_configs:
+      - targets: ['legacy:9091', 'blockchain:9091', 'asset:9091', 'rpc:9091', 'subtreevalidation:9091', 'blockvalidation:9091', 'blockassembly:9091']
+
+  - job_name: 'aerospike'
+    static_configs:
+      # this is the target for the docker based Aerospike exporter
+      - targets: ['aerospike-exporter:10145']
+      # if you have a dedicated aerospike cluster, you can add the aerospike cluster nodes here
+      # see https://aerospike.com/docs/monitorstack/install/linux on how to install
+      # - targets: ['172.x.x.x:9145', '10.x.x.x:9145']

@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    io.kompose.service: kafka-shared
+  name: kafka-shared
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: kafka-shared
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f docker-services.yml
+        kompose.version: 1.35.0 (HEAD)
+      labels:
+        io.kompose.service: kafka-shared
+    spec:
+      containers:
+        - args:
+            - redpanda start
+            - --smp 1
+            - --overprovisioned
+            - --node-id 0
+            - --kafka-addr PLAINTEXT://0.0.0.0:9092
+            - --advertise-kafka-addr PLAINTEXT://kafka-shared:9092
+            - --pandaproxy-addr 0.0.0.0:9093
+            - --advertise-pandaproxy-addr localhost:9093
+          image: redpandadata/redpanda:latest
+          name: kafka-shared
+          ports:
+            - containerPort: 8081
+              protocol: TCP
+            - containerPort: 9092
+              protocol: TCP
+            - containerPort: 9093
+              protocol: TCP
+          resources:
+            limits:
+              memory: "268435456"
+      restartPolicy: Always

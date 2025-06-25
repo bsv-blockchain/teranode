@@ -1,0 +1,184 @@
+---
+apiVersion: teranode.bsvblockchain.org/v1alpha1
+kind: Cluster
+metadata:
+  name: teranode-cluster
+spec:
+  alertSystem:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        imagePullPolicy: Never
+        replicas: 1
+        resources:
+          requests:
+            cpu: 1
+            memory: 1Gi
+  asset:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 1
+            memory: 1Gi
+      grpcIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: ast-grpc
+        className: traefik-internal
+        host: mainnet-eu-1.example.com
+      httpIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: web
+        className: traefik-internal
+        host: mainnet-eu-1.example.com
+      httpsIngress:
+        annotations:
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+          traefik.ingress.kubernetes.io/router.entrypoints: websecure
+        className: traefik-internal
+        host: mainnet-eu-1.example.com
+  blockAssembly:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 1
+            memory: 4Gi
+  blockPersister:
+    enabled: false
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 1
+            memory: 4Gi
+      storageClass: fsx-lustre
+      storageResources:
+        requests:
+          storage: 1200Gi
+  blockValidator:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 2
+            memory: 8Gi
+  blockchain:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 1
+            memory: 1Gi
+  bootstrap:
+    enabled: false
+    spec: {}
+  coinbase:
+    enabled: false
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 1
+            memory: 1Gi
+  configMapName: teranode-operator-config
+  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.7.4
+  legacy:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 2
+            memory: 64Gi
+  peer:
+    enabled: false
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 1
+            memory: 1Gi
+      grpcIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: peer-grpc
+        className: traefik-internal
+        host: mainnet-eu-1.example.com
+      wsIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: p2p-ws
+        className: traefik-internal
+        host: mainnet-eu-1.example.com
+      wssIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: p2p-wss
+        className: traefik-internal
+        host: mainnet-eu-1.example.com
+  propagation:
+    enabled: false
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 1
+            memory: 1Gi
+      grpcIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: prop-grpc
+        className: traefik-internal
+        host: mainnet-eu-1.example.com
+      serviceAnnotations:
+        traefik.ingress.kubernetes.io/service.serversscheme: h2c
+  rpc:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 1
+            memory: 1Gi
+  subtreeValidator:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 1
+            memory: 8Gi
+      storageClass: fsx-lustre
+      storageResources:
+        requests:
+          storage: 4800Gi
+  utxoPersister:
+    enabled: false
+    spec:
+      deploymentOverrides:
+        replicas: 1
+        resources:
+          requests:
+            cpu: 1
+            memory: 8Gi
+  validator:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        replicas: 8
+        resources:
+          requests:
+            cpu: 1
+            memory: 8Gi

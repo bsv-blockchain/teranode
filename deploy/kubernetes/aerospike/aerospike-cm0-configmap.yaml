@@ -1,0 +1,92 @@
+apiVersion: v1
+data:
+  aerospike.conf: |2
+    # Aerospike database configuration file
+    # This template sets up a single-node, single namespace developer environment.
+    #
+    # Alternatively, you can pass in your own configuration file.
+    # You can see more examples at
+    # https://github.com/aerospike/aerospike-server/tree/master/as/etc
+
+    # This stanza must come first.
+    service {
+    	cluster-name docker
+    }
+
+    logging {
+    	# Send log messages to stdout
+    	console {
+    		context any info
+    	}
+    }
+
+    network {
+    	service {
+    		address any
+    		port 3000
+
+    		# Uncomment the following to set the 'access-address' parameter to the
+    		# IP address of the Docker host. This will the allow the server to correctly
+    		# publish the address which applications and other nodes in the cluster to
+    		# use when addressing this node.
+    		# access-address <IPADDR>
+    	}
+
+    	heartbeat {
+    		# mesh is used for environments that do not support multicast
+    		mode mesh
+    		address local
+    		port 3002
+    		interval 150
+    		timeout 10
+    	}
+
+    	fabric {
+    		# Intra-cluster communication port (migrates, replication, etc)
+    		# default to same address in 'service'
+    		address local
+    		port 3001
+    	}
+
+    }
+
+    namespace utxo-store {
+        stop-writes-sys-memory-pct 90
+
+        default-ttl           0
+        nsup-period           10
+        nsup-threads          4
+        truncate-threads      10
+        transaction-pending-limit 0
+
+        replication-factor    1
+        partition-tree-sprigs 512
+
+        storage-engine device {
+            # for full IBD, direct disk access is preferred
+            # device            /dev/nvme2n1  # replace nvme2n1 with your actual disk identifier
+
+            # multiple devices is recommended, max is 640GB per instance
+            file              /opt/aerospike/data/utxostore.dat
+            filesize          640G
+
+            # for testing purposes you can also define a smaller file
+            # file              /opt/aerospike/data/test.dat
+            # filesize          100G
+
+            flush-size 128K
+            stop-writes-avail-pct 5
+
+            # high number to allow slow storage to keep up in case of traffic peaks
+            # can be dangerous if the instance crashes or the storage can't keep up at all
+            # monitor the queue with `asadm -e "show statistics like write_q"`
+            max-write-cache 1024M
+        }
+    }
+kind: ConfigMap
+metadata:
+  annotations:
+    use-subpath: "true"
+  labels:
+    io.kompose.service: aerospike
+  name: aerospike-cm0

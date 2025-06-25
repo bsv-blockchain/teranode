@@ -1,0 +1,231 @@
+x-teranode-base:
+  &teranode-base
+  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.8.12
+  networks:
+    - teranode-network
+  volumes:
+    - ./wait.sh:/app/wait.sh
+    - ./entrypoint.sh:/app/entrypoint.sh
+    - ./settings_local.conf:/app/settings_local.conf
+    - ${DATA_PATH}/teranode:/app/data
+  expose:
+    - 3005
+    - 8081-8093
+    - 8098
+    - 9095-9096
+    - 9292
+  environment:
+    SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.m}
+    USE_LOCAL_AEROSPIKE: true
+    USE_LOCAL_POSTGRES: true
+    USE_LOCAL_KAFKA: true
+
+services:
+  blockchain:
+    <<: *teranode-base
+    container_name: blockchain
+    entrypoint: [ "/app/entrypoint.sh" ]
+    command: [ "-blockchain=1" ]
+    ports:
+      - 4040
+      - 8000
+      - 8082
+      - 8087
+      - 9091
+    healthcheck:
+      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8087" ]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+    restart: on-failure
+
+  asset:
+    <<: *teranode-base
+    container_name: asset
+    entrypoint: [ "/app/entrypoint.sh" ]
+    command: [ "-asset=1" ]
+    ports:
+      - 4040
+      - 8000
+      - 8090:8090 # expose the blockchain viewer to localhost
+      - 8091
+      - 9091
+    depends_on:
+      blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8091" ]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+    restart: on-failure
+
+  legacy:
+    <<: *teranode-base
+    container_name: legacy
+    entrypoint: [ "/app/entrypoint.sh" ]
+    command: [ "-legacy=1" ]
+    mem_limit: 32768m
+    ports:
+      - 4040
+      - 8000
+      - 8098
+      - 8099
+      - 9091
+      - 8333:8333
+      - 18333:18333
+    depends_on:
+      blockchain:
+        condition: service_healthy
+    # Some known timing issue with legacy related to block header retrieval
+    restart: on-failure
+
+  subtreevalidation:
+    <<: *teranode-base
+    container_name: subtreevalidation
+    entrypoint: [ "/app/entrypoint.sh" ]
+    command: [ "-subtreevalidation=1" ]
+    mem_limit: 32768m
+    ports:
+      - 4040
+      - 8000
+      - 8086
+      - 9091
+    depends_on:
+      blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8086" ]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+    restart: on-failure
+
+  blockvalidation:
+    <<: *teranode-base
+    container_name: blockvalidation
+    entrypoint: [ "/app/entrypoint.sh" ]
+    command: [ "-blockvalidation=1" ]
+    mem_limit: 32768m
+    ports:
+      - 4040
+      - 8000
+      - 8088
+      - 8188
+      - 9091
+    depends_on:
+      blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8088" ]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+    restart: on-failure
+
+  blockassembly:
+    <<: *teranode-base
+    container_name: blockassembly
+    entrypoint: [ "/app/entrypoint.sh" ]
+    command: [ "-blockassembly=1" ]
+    ports:
+      - 4040
+      - 8000
+      - 8085
+      - 8285
+      - 9091
+    depends_on:
+      blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8085" ]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+    restart: on-failure
+
+  blockpersister:
+    <<: *teranode-base
+    container_name: blockpersister
+    entrypoint: [ "/app/entrypoint.sh" ]
+    command: [ "-blockpersister=1" ]
+    ports:
+      - 4040
+      - 8000
+    depends_on:
+      blockchain:
+        condition: service_healthy
+      blockvalidation:
+        condition: service_healthy
+      blockassembly:
+        condition: service_healthy
+    restart: on-failure
+
+  propagation:
+    <<: *teranode-base
+    container_name: propagation
+    entrypoint: [ "/app/entrypoint.sh" ]
+    command: [ "-propagation=1" ]
+    ports:
+      - 4040
+      - 8000
+      - 8833
+      - 8084
+      - 8384
+      - 9091
+    depends_on:
+      blockchain:
+        condition: service_healthy
+      blockvalidation:
+        condition: service_healthy
+      blockassembly:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8084" ]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+    restart: on-failure
+
+  peer:
+    <<: *teranode-base
+    container_name: peer
+    entrypoint: [ "/app/entrypoint.sh" ]
+    command: [ "-p2p=1" ]
+    ports:
+      - 4040
+      - 8000
+      - 9091
+      - 9905:9905
+      - 9906
+    depends_on:
+      blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "9905" ]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+    restart: on-failure
+
+  rpc:
+    <<: *teranode-base
+    container_name: rpc
+    entrypoint: [ "/app/entrypoint.sh" ]
+    command: [ "-rpc=1" ]
+    ports:
+      - 4040
+      - 8000
+      - 9091
+      - 9292:9292
+    depends_on:
+      blockchain:
+        condition: service_healthy
+    restart: on-failure

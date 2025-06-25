@@ -1,0 +1,19 @@
+apiVersion: v1
+data:
+  init.sql: |
+    CREATE ROLE teranode LOGIN
+      PASSWORD 'teranode'
+      SUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+    grant teranode to postgres;
+    CREATE
+    DATABASE teranode
+      WITH OWNER = teranode
+      ENCODING = 'UTF8'
+      CONNECTION LIMIT = -1;
+kind: ConfigMap
+metadata:
+  annotations:
+    use-subpath: "true"
+  labels:
+    io.kompose.service: postgres
+  name: postgres-cm0

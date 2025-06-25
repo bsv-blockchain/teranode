@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: aerospike
+  labels:
+    io.kompose.service: aerospike
+spec:
+  serviceName: aerospike
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: aerospike
+  template:
+    metadata:
+      labels:
+        io.kompose.service: aerospike
+    spec:
+      containers:
+        - name: aerospike
+          image: aerospike:ce-7.2.0.6
+          args:
+            - --config-file
+            - /etc/aerospike.conf
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /etc/aerospike.conf
+              name: aerospike-cm0
+              subPath: aerospike.conf
+            - mountPath: /opt/aerospike/data
+              name: aerospike-data
+      volumes:
+        - name: aerospike-cm0
+          configMap:
+            name: aerospike-cm0
+            items:
+              - key: aerospike.conf
+                path: aerospike.conf
+  volumeClaimTemplates:
+    - metadata:
+        name: aerospike-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

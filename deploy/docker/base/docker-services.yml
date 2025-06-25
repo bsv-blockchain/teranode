@@ -1,0 +1,176 @@
+services:
+  postgres:
+    container_name: postgres
+    image: postgres:latest
+    networks:
+      - teranode-network
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: really_strong_password_change_me
+      POSTGRES_DB: postgres
+    ports:
+      - 5432:5432
+    expose:
+      - 5432
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ${DATA_PATH}/postgres:/var/lib/postgresql/data
+    restart: on-failure
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kafka-shared:
+    container_name: kafka-shared
+    image: redpandadata/redpanda:latest
+    mem_limit: 1024m
+    restart: on-failure
+    networks:
+      - teranode-network
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://kafka-shared:9092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:9093
+    ports:
+      - 8081
+      - 9092:9092
+      - 9093:9093
+
+  kafka-console-shared:
+    container_name: kafka-console-shared
+    image: docker.redpanda.com/redpandadata/console:latest
+    networks:
+      - teranode-network
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["kafka-shared:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://kafka-shared:8081"]
+    ports:
+      - 8080:8080
+    depends_on:
+      - kafka-shared
+
+  # Primary Aerospike node (maintains original name for compatibility)
+  aerospike:
+    container_name: aerospike
+    image: aerospike:ce-8.0.0.7
+    command: --config-file /etc/aerospike.conf
+    networks:
+      - teranode-network
+    ports:
+      - 3000:3000
+    expose:
+      - 3000
+      - 3001
+      - 3002
+    restart: on-failure
+    volumes:
+      - ./aerospike.conf:/etc/aerospike.conf
+      - ${DATA_PATH}/aerospike/data:/opt/aerospike/data
+    privileged: true  # Allow the container to access raw devices
+    hostname: aerospike
+
+  # Optional second Aerospike node
+  aerospike-2:
+    container_name: aerospike-2
+    image: aerospike:ce-8.0.0.7
+    command: --config-file /etc/aerospike.conf
+    networks:
+      - teranode-network
+    ports:
+      - 3010:3000  # Map to different host port to avoid conflicts
+    expose:
+      - 3000
+      - 3001
+      - 3002
+    restart: on-failure
+    volumes:
+      - ./aerospike.conf:/etc/aerospike.conf
+      - ${DATA_PATH}/aerospike-2/data:/opt/aerospike/data
+    privileged: true
+    hostname: aerospike-2
+
+  # Aerospike exporter for the primary node
+  aerospike-exporter:
+    image: aerospike/aerospike-prometheus-exporter:latest
+    container_name: aerospike-exporter
+    environment:
+      AS_HOST: aerospike
+      AS_PORT: 3000
+      AGENT_BIND_PORT: 10145
+      METRIC_LABELS: "type='development',source='aerospike'"
+    networks:
+      - teranode-network
+
+  # Optional exporter for the second node
+  aerospike-exporter-2:
+    image: aerospike/aerospike-prometheus-exporter:latest
+    container_name: aerospike-exporter-2
+    environment:
+      AS_HOST: aerospike-2
+      AS_PORT: 3000
+      AGENT_BIND_PORT: 10146
+      METRIC_LABELS: "type='development',source='aerospike-2',node='2'"
+    networks:
+      - teranode-network
+
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus:v2.44.0
+    ports:
+      - 9090:9090
+    networks:
+      - teranode-network
+    user: "0:0"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ${DATA_PATH}/prometheus:/prometheus
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:latest
+    ports:
+      - 3005:3000
+    networks:
+      - teranode-network
+    user: "0:0"
+    volumes:
+      - ./grafana_datasource.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./grafana_dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./grafana_dashboards:/var/lib/grafana/dashboards
+      - ${DATA_PATH}/grafana/grafana.db:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  asset-cache:
+    container_name: asset-cache
+    image: nginx:1.27.4
+    networks:
+      - teranode-network
+    ports:
+      - 8000:8000
+    depends_on:
+      - asset
+    volumes:
+      - ./asset-cache-nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${DATA_PATH}/nginx:/tmp/nginx
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

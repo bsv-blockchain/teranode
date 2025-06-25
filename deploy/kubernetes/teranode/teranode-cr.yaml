@@ -1,0 +1,157 @@
+apiVersion: teranode.bsvblockchain.org/v1alpha1
+kind: Cluster
+metadata:
+  name: teranode-cluster
+spec:
+  alertSystem:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        imagePullPolicy: Never
+        replicas: 1
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+  asset:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        imagePullPolicy: Never
+        replicas: 1
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+      grpcIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: ast-grpc
+        className: traefik-internal
+        host: teranode.local
+      httpIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: web
+        className: traefik-internal
+        host: teranode.local
+      httpsIngress:
+        annotations:
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+          traefik.ingress.kubernetes.io/router.entrypoints: websecure
+        className: traefik-internal
+        host: teranode.local
+  blockAssembly:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        imagePullPolicy: Never
+        replicas: 1
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+  blockPersister:
+    enabled: false
+    spec: {}
+  blockValidator:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        imagePullPolicy: Never
+        replicas: 1
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+  blockchain:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        imagePullPolicy: Never
+        replicas: 1
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+  bootstrap:
+    enabled: false
+    spec: {}
+  coinbase:
+    enabled: false
+    spec: {}
+  configMapName: teranode-operator-config
+  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.7.4
+  legacy:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        imagePullPolicy: Never
+        replicas: 1
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+  peer:
+    enabled: false
+    spec:
+      deploymentOverrides:
+        imagePullPolicy: Never
+        replicas: 1
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+      grpcIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: peer-grpc
+        className: traefik-internal
+        host: teranode.local
+      wsIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: p2p-ws
+        className: traefik-internal
+        host: teranode.local
+      wssIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: p2p-wss
+        className: traefik-internal
+        host: teranode.local
+  propagation:
+    enabled: false
+    spec:
+      grpcIngress:
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: prop-grpc
+        className: traefik-internal
+        host: teranode.local
+      serviceAnnotations:
+        traefik.ingress.kubernetes.io/service.serversscheme: h2c
+  rpc:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        imagePullPolicy: Never
+        replicas: 1
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+  subtreeValidator:
+    enabled: true
+    spec:
+      deploymentOverrides:
+        imagePullPolicy: Never
+        replicas: 1
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+      storageVolume: nfs-pv
+      storageResources:
+        requests:
+          storage: 10Gi
+  utxoPersister:
+    enabled: false
+    spec: {}
+  validator:
+    enabled: false
+    spec: {}
