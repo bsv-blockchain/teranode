@@ -13,36 +13,27 @@ const maxMessages = 100
 const MAX_RECONNECT_ATTEMPTS = 5
 const BASE_RECONNECT_DELAY = 2000 // Start with 2 seconds
 
-export function connectToP2PServer() {
+export async function connectToP2PServer() {
   // Reset connection attempts when manually connecting
   connectionAttempts.set(0)
   if (!import.meta.env.SSR && window && window.location) {
-    const url = new URL(window.location.href)
-    url.protocol = url.protocol === 'http:' ? 'ws' : 'wss'
-
-    // Determine the correct WebSocket URL based on the current environment
-    if (url.host.includes('localhost:517') || url.host.includes('localhost:417')) {
-      // Development environment
-      url.protocol = 'ws:'
-      url.host = 'localhost'
-      url.port = '9906'
-    } else if (url.host.includes('localhost')) {
-      // Local environment but different port
-      url.protocol = 'ws:'
-      // Keep the host as localhost but ensure we have the right port for the WebSocket
-      // Use port 9906 for the WebSocket connection (P2P_HTTP_PORT)
-      url.port = '9906'
-    }
-
-    url.pathname = '/p2p-ws'
-
-    console.log(`Attempting to connect to P2P WebSocket at: ${url.toString()}`)
-    wsUrl.set(url)
-    error.set(null)
-
-    let socket: any
     try {
-      socket = new WebSocket(url)
+      // Fetch WebSocket configuration from the backend
+      const response = await fetch('/api/config/websocket')
+      if (!response.ok) {
+        throw new Error(`Failed to fetch WebSocket config: ${response.statusText}`)
+      }
+
+      const config = await response.json()
+      const url = new URL(config.websocketUrl)
+
+      console.log(`Attempting to connect to P2P WebSocket at: ${url.toString()}`)
+      wsUrl.set(url)
+      error.set(null)
+
+      let socket: any
+      try {
+        socket = new WebSocket(url)
 
       socket.onerror = (event: any) => {
         error.set(event)
@@ -79,9 +70,10 @@ export function connectToP2PServer() {
           }
 
           if (!json?.pub?.data) {
-            console.log('p2pWS: Received data:', json)
+            console.log('p2pWS: Received non-pub data:', json)
             return
           }
+
 
           const jsonData = json.pub.data
 
@@ -93,28 +85,39 @@ export function connectToP2PServer() {
           }
 
           const miningNodeSet: any = get(miningNodes)
+
+          // Always process every message for miningNodes
           if (jsonData.type === 'mining_on') {
-            miningNodeSet[baseUrl] = jsonData
+            miningNodeSet[baseUrl] = {
+              ...miningNodeSet[baseUrl],
+              ...jsonData,
+              base_url: baseUrl,
+              receivedAt: new Date()
+            }
+            miningNodes.set(miningNodeSet)
+          } else if (jsonData.type === 'block') {
+            if (!miningNodeSet[baseUrl]) {
+              miningNodeSet[baseUrl] = { base_url: baseUrl }
+            }
+            miningNodeSet[baseUrl] = {
+              ...miningNodeSet[baseUrl],
+              hash: jsonData.hash,
+              height: jsonData.height,
+              timestamp: jsonData.timestamp,
+              receivedAt: new Date()
+            }
             miningNodes.set(miningNodeSet)
           } else if (baseUrl && !miningNodeSet[baseUrl]) {
             miningNodeSet[baseUrl] = {
               base_url: baseUrl,
+              receivedAt: new Date()
             }
-            // const res: any = await api.getBestBlockHeaderFromServer({ baseUrl })
-            // if (res.ok && res.data) {
-            //   miningNodeSet[baseUrl] = {
-            //     ...res.data,
-            //     tx_count: res.data.txCount,
-            //     size_in_bytes: res.data.sizeInBytes,
-            //     base_url: baseUrl,
-            //   }
-            // }
             miningNodes.set(miningNodeSet)
           } else if (miningNodeSet[baseUrl]) {
             miningNodeSet[baseUrl].receivedAt = new Date()
             miningNodes.set(miningNodeSet)
           }
-          //console.log('miningNodes', miningNodes)
+
 
           let m: any = get(messages)
           m = [jsonData, ...m].slice(0, maxMessages)
@@ -146,16 +149,33 @@ export function connectToP2PServer() {
           console.log('Maximum reconnection attempts reached. Please refresh the page to try again.')
         }
       }
+      } catch (err: any) {
+        console.error('Error creating WebSocket connection:', err)
+        error.set(err)
+
+        const attempts = get(connectionAttempts) + 1
+        connectionAttempts.set(attempts)
+
+        if (attempts <= MAX_RECONNECT_ATTEMPTS) {
+          const reconnectDelay = Math.min(30000, BASE_RECONNECT_DELAY * Math.pow(1.5, attempts - 1))
+          console.log(`Error connecting. Retrying (${attempts}/${MAX_RECONNECT_ATTEMPTS}) in ${reconnectDelay/1000} seconds`)
+
+          setTimeout(() => {
+            connectToP2PServer()
+          }, reconnectDelay)
+        }
+      }
     } catch (err: any) {
-      console.error('Error creating WebSocket connection:', err)
+      console.error('Error fetching WebSocket configuration:', err)
       error.set(err)
 
+      // If we can't fetch the config, fall back to the default behavior
       const attempts = get(connectionAttempts) + 1
       connectionAttempts.set(attempts)
 
       if (attempts <= MAX_RECONNECT_ATTEMPTS) {
         const reconnectDelay = Math.min(30000, BASE_RECONNECT_DELAY * Math.pow(1.5, attempts - 1))
-        console.log(`Error connecting. Retrying (${attempts}/${MAX_RECONNECT_ATTEMPTS}) in ${reconnectDelay/1000} seconds`)
+        console.log(`Error fetching config. Retrying (${attempts}/${MAX_RECONNECT_ATTEMPTS}) in ${reconnectDelay/1000} seconds`)
 
         setTimeout(() => {
           connectToP2PServer()

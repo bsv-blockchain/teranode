@@ -14,9 +14,11 @@ import (
 )
 
 const (
-	authPathLogin  = "/api/auth/login"
-	authPathLogout = "/api/auth/logout"
-	authPathCheck  = "/api/auth/check"
+	authPathLogin       = "/api/auth/login"
+	authPathLogout      = "/api/auth/logout"
+	authPathCheck       = "/api/auth/check"
+	configPathWebSocket = "/api/config/websocket"
+	configPathNode      = "/api/config/node"
 )
 
 var (
@@ -51,6 +53,10 @@ func AppHandler(c echo.Context) error {
 		return authHandler.LogoutHandler(c)
 	case path == authPathCheck:
 		return authHandler.CheckAuthHandler(c)
+	case path == configPathWebSocket:
+		return authHandler.WebSocketConfigHandler(c)
+	case path == configPathNode:
+		return authHandler.NodeConfigHandler(c)
 	}
 
 	// Check authentication for admin paths

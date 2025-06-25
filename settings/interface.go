@@ -63,7 +63,10 @@ type Settings struct {
 }
 
 type DashboardSettings struct {
-	Enabled bool
+	Enabled        bool
+	DevServerPorts []int  // Vite dev server ports (e.g., 517, 417)
+	WebSocketPort  string // WebSocket port for development environment
+	WebSocketPath  string // WebSocket path (e.g., "/connection/websocket")
 }
 
 type KafkaSettings struct {

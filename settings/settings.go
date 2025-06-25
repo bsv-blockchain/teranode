@@ -441,7 +441,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			HTTPListenAddress: getString("faucet_httpListenAddress", "", alternativeContext...),
 		},
 		Dashboard: DashboardSettings{
-			Enabled: getBool("dashboard_enabled", false, alternativeContext...),
+			Enabled:        getBool("dashboard_enabled", false, alternativeContext...),
+			DevServerPorts: getIntSlice("dashboard_devServerPorts", []int{5173, 4173}, alternativeContext...),
+			WebSocketPort:  getString("dashboard_websocketPort", "8090", alternativeContext...),
+			WebSocketPath:  getString("dashboard_websocketPath", "/connection/websocket", alternativeContext...),
 		},
 	}
 }

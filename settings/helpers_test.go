@@ -146,3 +146,91 @@ func TestGetDuration_invalid(t *testing.T) {
 		t.Errorf("Expected 0, got %v", result)
 	}
 }
+
+func TestGetIntSlice(t *testing.T) {
+	tests := []struct {
+		name         string
+		configValue  string
+		defaultValue []int
+		expected     []int
+	}{
+		{
+			name:         "valid comma-separated values",
+			configValue:  "517,417,8080",
+			defaultValue: []int{},
+			expected:     []int{517, 417, 8080},
+		},
+		{
+			name:         "single value",
+			configValue:  "8080",
+			defaultValue: []int{},
+			expected:     []int{8080},
+		},
+		{
+			name:         "empty config returns default",
+			configValue:  "",
+			defaultValue: []int{5173, 4173},
+			expected:     []int{5173, 4173},
+		},
+		{
+			name:         "invalid values are skipped",
+			configValue:  "517,invalid,417",
+			defaultValue: []int{},
+			expected:     []int{517, 417},
+		},
+		{
+			name:         "all invalid values return default",
+			configValue:  "invalid,not-a-number",
+			defaultValue: []int{8080},
+			expected:     []int{8080},
+		},
+		{
+			name:         "values with spaces",
+			configValue:  "5173, 4173, 8080",
+			defaultValue: []int{},
+			expected:     []int{5173, 4173, 8080},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set config value if not empty
+			if tt.configValue != "" {
+				gocore.Config().Set("test_int_slice", tt.configValue)
+				defer gocore.Config().Unset("test_int_slice")
+			}
+
+			result := getIntSlice("test_int_slice", tt.defaultValue)
+
+			// Check length
+			if len(result) != len(tt.expected) {
+				t.Errorf("Expected slice length %d, got %d", len(tt.expected), len(result))
+				return
+			}
+
+			// Check values
+			for i, v := range result {
+				if v != tt.expected[i] {
+					t.Errorf("Expected value %d at index %d, got %d", tt.expected[i], i, v)
+				}
+			}
+		})
+	}
+}
+
+func TestGetIntSlice_MissingKey(t *testing.T) {
+	// Test with missing key returns default
+	defaultValue := []int{5173, 4173}
+	result := getIntSlice("non_existent_key", defaultValue)
+
+	if len(result) != len(defaultValue) {
+		t.Errorf("Expected default slice length %d, got %d", len(defaultValue), len(result))
+		return
+	}
+
+	for i, v := range result {
+		if v != defaultValue[i] {
+			t.Errorf("Expected default value %d at index %d, got %d", defaultValue[i], i, v)
+		}
+	}
+}

@@ -1770,6 +1770,8 @@ func TestHandleMiningOnTopic(t *testing.T) {
 		mockBanList := new(MockBanList)
 		mockBanList.On("IsBanned", bannedPeerIDStr).Return(true)
 
+		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
+
 		// Create server with mocks
 		server := &Server{
 			P2PNode:        mockP2PNode,

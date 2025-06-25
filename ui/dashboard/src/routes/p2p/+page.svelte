@@ -21,10 +21,25 @@
   let currentNodeUrl = ''
 
   // Get the current node's URL to filter out self-messages
-  onMount(() => {
+  onMount(async () => {
     if (!import.meta.env.SSR && window && window.location) {
-      const url = new URL(window.location.href)
-      currentNodeUrl = url.origin
+      try {
+        // Try to get the node configuration from the backend
+        const response = await fetch('/api/config/node')
+        if (response.ok) {
+          const config = await response.json()
+          if (config.nodeBaseUrl) {
+            currentNodeUrl = config.nodeBaseUrl
+          } else {
+            throw new Error('No nodeBaseUrl in config')
+          }
+        } else {
+          throw new Error('Config endpoint not available')
+        }
+      } catch (error) {
+        currentNodeUrl = '' // Disable filtering if we can't determine the node URL
+      }
+
     }
   })
 
@@ -67,15 +82,20 @@
   $: data = dataSnapshot ? dataSnapshot : $messages
 
   $: {
+
     // Transform types to be lower case, as they have been changing case in the BE
     // Filter messages based on the showLocalMessages toggle
     filteredMessages = data
       .filter((item) => {
+
         // Only filter out local messages if showLocalMessages is false
         if (!showLocalMessages && currentNodeUrl && item.base_url) {
-          const itemUrl = item.base_url.replace(/\/$/, '') // Remove trailing slash if present
+          // Extract base URL without path for comparison
+          const itemBaseUrl = item.base_url.replace(/\/api\/v1.*$/, '') // Remove /api/v1 and everything after
           const normalizedCurrentUrl = currentNodeUrl.replace(/\/$/, '') // Remove trailing slash if present
-          return !itemUrl.includes(normalizedCurrentUrl)
+
+
+          return itemBaseUrl !== normalizedCurrentUrl // Keep message if it's NOT from current node
         }
         return true
       })
@@ -90,17 +110,27 @@
       })
     }
 
+
     if (byPeer) {
       let newGroupedMessages: any = {}
 
-      filteredMessages.forEach((message) => {
-        if (message.type !== MessageType.ping) {
-          if (!newGroupedMessages[message.peer_id]) {
-            newGroupedMessages[message.peer_id] = []
+
+      filteredMessages.forEach((message, index) => {
+
+        // Compare with lowercase since we convert types to lowercase
+        if (message.type !== MessageType.ping.toLowerCase()) {
+
+          // Check for peer_id, peerID, or peer field
+          const peerId = message.peer_id || message.peerID || message.peer || 'unknown'
+
+          if (!newGroupedMessages[peerId]) {
+            newGroupedMessages[peerId] = []
           }
-          newGroupedMessages[message.peer_id].push(message)
+          newGroupedMessages[peerId].push(message)
+        } else {
         }
       })
+
 
       // Sort messages in descending order by receivedAt timestamp
       Object.keys(newGroupedMessages).forEach((peer_id) => {

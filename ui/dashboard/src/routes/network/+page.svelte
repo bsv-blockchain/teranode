@@ -15,10 +15,10 @@
 
   function updateData() {
     const mNodes: any[] = []
-    // console.log($miningNodes)
     Object.values($miningNodes).forEach((node) => {
       mNodes.push(node)
     })
+
     const sorted = mNodes.sort((a: any, b: any) => {
       if (a.base_url < b.base_url) {
         return -1

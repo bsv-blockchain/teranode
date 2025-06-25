@@ -239,6 +239,98 @@ func (h *AuthHandler) CheckAuthHandler(c echo.Context) error {
 	})
 }
 
+// WebSocketConfigHandler returns the WebSocket configuration
+func (h *AuthHandler) WebSocketConfigHandler(c echo.Context) error {
+	// Determine the WebSocket URL based on the current host
+	host := c.Request().Host
+	wsProtocol := "ws"
+
+	var wsPort string
+
+	// Check if using HTTPS/WSS
+	if c.Scheme() == "https" || c.Request().TLS != nil {
+		wsProtocol = "wss"
+	}
+
+	// Extract hostname without port
+	hostname := host
+	currentPort := ""
+
+	if colonPos := strings.LastIndex(host, ":"); colonPos != -1 {
+		hostname = host[:colonPos]
+		currentPort = host[colonPos+1:]
+	}
+
+	// Determine the port based on the environment
+	isDevelopmentServer := false
+
+	for _, devPort := range h.settings.Dashboard.DevServerPorts {
+		if strings.Contains(host, fmt.Sprintf("localhost:%d", devPort)) {
+			isDevelopmentServer = true
+			break
+		}
+	}
+
+	// Use a switch statement to determine the WebSocket port based on environment
+	switch {
+	case isDevelopmentServer:
+		// Development environment - Vite dev server
+		// WebSocket runs on the asset service port
+		wsPort = h.settings.Dashboard.WebSocketPort
+		hostname = "localhost"
+	default:
+		// For both local docker and production environments
+		// The WebSocket is served from the same port as the dashboard
+		// If behind a reverse proxy, the proxy handles the WebSocket upgrade
+		wsPort = currentPort
+	}
+
+	// Build the WebSocket URL
+	var wsURL string
+	if wsPort != "" {
+		wsURL = fmt.Sprintf("%s://%s:%s%s", wsProtocol, hostname, wsPort, h.settings.Dashboard.WebSocketPath)
+	} else {
+		// Standard ports (80/443) - no explicit port needed
+		wsURL = fmt.Sprintf("%s://%s%s", wsProtocol, hostname, h.settings.Dashboard.WebSocketPath)
+	}
+
+	h.logger.Debugf("WebSocket config requested from %s, returning URL: %s", host, wsURL)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"websocketUrl": wsURL,
+	})
+}
+
+// NodeConfigHandler returns the current node configuration for local message filtering
+func (h *AuthHandler) NodeConfigHandler(c echo.Context) error {
+	// Get the Asset HTTP address from settings to determine the node's base URL
+	assetHTTPAddress := h.settings.Asset.HTTPAddress
+
+	// Parse the Asset HTTP address to get the hostname and port
+	if assetHTTPAddress != "" {
+		// The Asset HTTP address should be in format like "localhost:8090" or "teranode1:8090"
+		// We need to construct the full URL for comparison with message base_urls
+		var nodeBaseURL string
+		if strings.HasPrefix(assetHTTPAddress, "http") {
+			nodeBaseURL = assetHTTPAddress
+		} else {
+			nodeBaseURL = "http://" + assetHTTPAddress
+		}
+
+		h.logger.Debugf("Node config requested, returning base URL: %s", nodeBaseURL)
+
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"nodeBaseUrl": nodeBaseURL,
+		})
+	}
+
+	h.logger.Warnf("Asset HTTP address not configured, cannot determine node base URL")
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"nodeBaseUrl": "",
+	})
+}
+
 // AuthMiddleware is a middleware that checks if the user is authenticated
 func (h *AuthHandler) AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {

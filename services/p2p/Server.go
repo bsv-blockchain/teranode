@@ -490,8 +490,8 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Define protected methods - use the full gRPC method path
 	protectedMethods := map[string]bool{
-		"/p2p_api.PeerService/BanPeer":     true,
-		"/p2p_api.PeerService/Unba§knPeer": true,
+		"/p2p_api.PeerService/BanPeer":   true,
+		"/p2p_api.PeerService/UnbanPeer": true,
 	}
 
 	// Create auth options
@@ -790,6 +790,22 @@ func (s *Server) handleMiningOnNotification(ctx context.Context) error {
 	if err := s.P2PNode.Publish(ctx, s.miningOnTopicName, msgBytes); err != nil {
 		return errors.NewError("miningOnMessage - publish error: %w", err)
 	}
+
+	// Also send to local WebSocket clients
+	s.logger.Infof("[handleMiningOnNotification] Sending own mining_on message to WebSocket clients")
+	s.notificationCh <- &notificationMsg{
+		Timestamp:    time.Now().UTC().Format(isoFormat),
+		Type:         "mining_on",
+		Hash:         miningOnMessage.Hash,
+		BaseURL:      miningOnMessage.DataHubURL,
+		PeerID:       miningOnMessage.PeerID,
+		PreviousHash: miningOnMessage.PreviousHash,
+		Height:       miningOnMessage.Height,
+		Miner:        miningOnMessage.Miner,
+		SizeInBytes:  miningOnMessage.SizeInBytes,
+		TxCount:      miningOnMessage.TxCount,
+	}
+	s.logger.Infof("[handleMiningOnNotification] Successfully sent mining_on message to WebSocket clients")
 
 	return nil
 }
@@ -1128,9 +1144,30 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 		return
 	}
 
+	s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification for %s from %s", miningOnMessage.Hash, miningOnMessage.PeerID)
+
+	// Send to notification channel first (including our own messages for WebSocket clients)
+	s.logger.Debugf("[handleMiningOnTopic] sending mining_on message to notificationCh for WebSocket clients")
+	s.notificationCh <- &notificationMsg{
+		Timestamp:    time.Now().UTC().Format(isoFormat),
+		Type:         "mining_on",
+		Hash:         miningOnMessage.Hash,
+		BaseURL:      miningOnMessage.DataHubURL,
+		PeerID:       miningOnMessage.PeerID,
+		PreviousHash: miningOnMessage.PreviousHash,
+		Height:       miningOnMessage.Height,
+		Miner:        miningOnMessage.Miner,
+		SizeInBytes:  miningOnMessage.SizeInBytes,
+		TxCount:      miningOnMessage.TxCount,
+	}
+
+	// Skip further processing for our own messages
 	if from == s.P2PNode.HostID().String() {
 		return
 	}
+
+	// add height to peer info
+	s.P2PNode.UpdatePeerHeight(peer.ID(miningOnMessage.PeerID), int32(miningOnMessage.Height)) //nolint:gosec
 
 	// is it from a banned peer
 	peerID, err := peer.Decode(from)
@@ -1145,24 +1182,6 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 			s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification from banned peer %s", from)
 			return
 		}
-	}
-
-	s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification for %s from %s", miningOnMessage.Hash, miningOnMessage.PeerID)
-
-	// add height to peer info
-	s.P2PNode.UpdatePeerHeight(peer.ID(miningOnMessage.PeerID), int32(miningOnMessage.Height)) //nolint:gosec
-
-	s.notificationCh <- &notificationMsg{
-		Timestamp:    time.Now().UTC().Format(isoFormat),
-		Type:         "mining_on",
-		Hash:         miningOnMessage.Hash,
-		BaseURL:      miningOnMessage.DataHubURL,
-		PeerID:       miningOnMessage.PeerID,
-		PreviousHash: miningOnMessage.PreviousHash,
-		Height:       miningOnMessage.Height,
-		Miner:        miningOnMessage.Miner,
-		SizeInBytes:  miningOnMessage.SizeInBytes,
-		TxCount:      miningOnMessage.TxCount,
 	}
 }
 

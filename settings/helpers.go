@@ -80,3 +80,30 @@ func getPort(key string, defaultValue int, alternativeContext ...string) int {
 
 	return portInt
 }
+
+func getIntSlice(key string, defaultValue []int, alternativeContext ...string) []int {
+	// Get the string values
+	strValues := getMultiString(key, ",", []string{}, alternativeContext...)
+
+	// If no values found, return default
+	if len(strValues) == 0 {
+		return defaultValue
+	}
+
+	// Convert strings to ints
+	result := make([]int, 0, len(strValues))
+
+	for _, str := range strValues {
+		val, err := strconv.Atoi(str)
+		if err == nil {
+			result = append(result, val)
+		}
+	}
+
+	// If conversion failed for all values, return default
+	if len(result) == 0 {
+		return defaultValue
+	}
+
+	return result
+}
