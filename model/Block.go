@@ -18,7 +18,7 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/settings"
-	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -347,7 +347,11 @@ func (b *Block) String() string {
 	return fmt.Sprintf("Block %s (height: %d, id: %d, txCount: %d, size: %d)", b.Hash().String(), b.Height, b.ID, b.TransactionCount, b.SizeInBytes)
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32],
+type SubtreeStore interface {
+	GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error)
+}
+
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32],
 	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
 		tracing.WithHistogram(prometheusBlockValid),
@@ -611,7 +615,7 @@ func (b *Block) checkDuplicateTransactionsInSubtree(subtree *util.Subtree, subId
 	return nil
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, subtreeStore blob.Store,
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, subtreeStore SubtreeStore,
 	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats,
 	oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32]) error {
 	if b.txMap == nil {
@@ -947,7 +951,7 @@ func (b *Block) getFromAerospike(logger ulogger.Logger, parentTxStruct missingPa
 	return errors.NewServiceError("aerospike response: %v", response)
 }
 
-func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, fallbackGetFunc func(subtreeHash chainhash.Hash) error) ([]*util.Subtree, error) {
+func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, fallbackGetFunc func(subtreeHash chainhash.Hash) error) ([]*util.Subtree, error) {
 	startTime := time.Now()
 	defer func() {
 		prometheusBlockGetSubtrees.Observe(time.Since(startTime).Seconds())
@@ -961,7 +965,7 @@ func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeS
 	return b.SubtreeSlices, nil
 }
 
-func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, fallbackGetFunc func(subtreeHash chainhash.Hash) error) error {
+func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, fallbackGetFunc func(subtreeHash chainhash.Hash) error) error {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "GetAndValidateSubtrees",
 		tracing.WithHistogram(prometheusBlockGetAndValidateSubtrees),
 	)
@@ -1081,7 +1085,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	return nil
 }
 
-func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore blob.Store, subtreeHash chainhash.Hash, subtree *util.Subtree) (*util.SubtreeMeta, error) {
+func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeStore, subtreeHash chainhash.Hash, subtree *util.Subtree) (*util.SubtreeMeta, error) {
 	// get subtree meta
 	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 	if err != nil {
@@ -1284,7 +1288,7 @@ func (b *Block) Bytes() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store) (*blobloom.Filter, error) {
+func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore) (*blobloom.Filter, error) {
 	err := b.GetAndValidateSubtrees(ctx, logger, subtreeStore, nil)
 	if err != nil {
 		// just return the error from the call above

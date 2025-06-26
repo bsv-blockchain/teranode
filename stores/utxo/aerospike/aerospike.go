@@ -318,6 +318,7 @@ func (s *Store) GetSet() string {
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.logger.Debugf("setting block height to %d", blockHeight)
 	s.blockHeight.Store(blockHeight)
+	s.externalStore.SetCurrentBlockHeight(blockHeight)
 
 	return nil
 }

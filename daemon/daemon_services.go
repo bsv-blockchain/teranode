@@ -321,7 +321,7 @@ func startAssetService(ctx context.Context, d *Daemon, appSettings *settings.Set
 	var subtreeStore blob.Store
 
 	subtreeStore, err = d.daemonStores.GetSubtreeStore(
-		createLogger(loggerSubtrees), appSettings,
+		ctx, createLogger(loggerSubtrees), appSettings,
 	)
 	if err != nil {
 		return err
@@ -331,7 +331,7 @@ func startAssetService(ctx context.Context, d *Daemon, appSettings *settings.Set
 	var blockPersisterStore blob.Store
 
 	blockPersisterStore, err = d.daemonStores.GetBlockPersisterStore(
-		createLogger(loggerBlockPersisterStore), appSettings,
+		ctx, createLogger(loggerBlockPersisterStore), appSettings,
 	)
 	if err != nil {
 		return err
@@ -449,7 +449,7 @@ func startAlertService(ctx context.Context, d *Daemon, appSettings *settings.Set
 func startBlockPersisterService(ctx context.Context, d *Daemon, appSettings *settings.Settings,
 	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
 	// Create the block store for the BlockPersister service
-	blockStore, err := d.daemonStores.GetBlockStore(createLogger(loggerBlockPersisterStore), appSettings)
+	blockStore, err := d.daemonStores.GetBlockStore(ctx, createLogger(loggerBlockPersisterStore), appSettings)
 	if err != nil {
 		return err
 	}
@@ -457,7 +457,7 @@ func startBlockPersisterService(ctx context.Context, d *Daemon, appSettings *set
 	// Create the subtree store for the BlockPersister service
 	var subtreeStore blob.Store
 
-	subtreeStore, err = d.daemonStores.GetSubtreeStore(createLogger(loggerSubtrees), appSettings)
+	subtreeStore, err = d.daemonStores.GetSubtreeStore(ctx, createLogger(loggerSubtrees), appSettings)
 	if err != nil {
 		return err
 	}
@@ -495,7 +495,7 @@ func startBlockPersisterService(ctx context.Context, d *Daemon, appSettings *set
 func startUTXOPersisterService(ctx context.Context, d *Daemon, appSettings *settings.Settings,
 	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
 	// Create the block store for the UTXOPersister service
-	blockStore, err := d.daemonStores.GetBlockStore(createLogger(loggerBlockPersisterStore), appSettings)
+	blockStore, err := d.daemonStores.GetBlockStore(ctx, createLogger(loggerBlockPersisterStore), appSettings)
 	if err != nil {
 		return err
 	}
@@ -544,7 +544,7 @@ func startBlockAssemblyService(ctx context.Context, d *Daemon, appSettings *sett
 	// Create the subtree store for the BlockAssembly service
 	var subtreeStore blob.Store
 
-	subtreeStore, err = d.daemonStores.GetSubtreeStore(createLogger(loggerSubtrees), appSettings)
+	subtreeStore, err = d.daemonStores.GetSubtreeStore(ctx, createLogger(loggerSubtrees), appSettings)
 	if err != nil {
 		return err
 	}
@@ -597,7 +597,7 @@ func startValidationService(
 	createLogger func(string) ulogger.Logger, validationType string,
 ) error {
 	// Common dependencies shared by all validation services
-	subtreeStore, err := d.daemonStores.GetSubtreeStore(createLogger(loggerSubtrees), appSettings)
+	subtreeStore, err := d.daemonStores.GetSubtreeStore(ctx, createLogger(loggerSubtrees), appSettings)
 	if err != nil {
 		return err
 	}
@@ -880,7 +880,7 @@ func startLegacyService(
 	// Get the subtree store
 	var subtreeStore blob.Store
 
-	subtreeStore, err = d.daemonStores.GetSubtreeStore(logger, appSettings)
+	subtreeStore, err = d.daemonStores.GetSubtreeStore(ctx, logger, appSettings)
 	if err != nil {
 		return err
 	}
@@ -888,7 +888,7 @@ func startLegacyService(
 	// Get the temporary store
 	var tempStore blob.Store
 
-	tempStore, err = d.daemonStores.GetTempStore(logger, appSettings)
+	tempStore, err = d.daemonStores.GetTempStore(ctx, logger, appSettings)
 	if err != nil {
 		return err
 	}

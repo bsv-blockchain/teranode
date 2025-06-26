@@ -1249,7 +1249,7 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 	}
 
 	// record the bloom filter in the subtreestore
-	err = u.subtreeStore.Set(ctx, block.Hash()[:], fileformat.FileTypeBloomFilter, filterBytes, options.WithDeleteAt(u.bloomFilterRetentionSize))
+	err = u.subtreeStore.Set(ctx, block.Hash()[:], fileformat.FileTypeBloomFilter, filterBytes, options.WithDeleteAt(block.Height+u.bloomFilterRetentionSize))
 	if err != nil {
 		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to record bloom filter in subtree store: %s", block.Hash().String(), err)
 	}

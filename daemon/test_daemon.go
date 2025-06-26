@@ -262,9 +262,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	privKey := w.PrivKey
 
-	var subtreeStore blob.Store
-
-	subtreeStore, err = d.daemonStores.GetSubtreeStore(logger, appSettings)
+	subtreeStore, err := d.daemonStores.GetSubtreeStore(ctx, logger, appSettings)
 	require.NoError(t, err)
 
 	var utxoStore utxo.Store

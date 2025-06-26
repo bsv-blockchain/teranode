@@ -43,6 +43,8 @@ type Options struct {
 	PersistSubDir string
 	// LongtermStoreURL is the URL for a longterm storage backend in tiered storage models
 	LongtermStoreURL *url.URL
+	// BlockHeightCh is a channel for tracking block heights
+	BlockHeightCh chan uint32
 }
 
 // StoreOption is a function type for configuring store-level options.
@@ -162,6 +164,13 @@ func WithLongtermStorage(persistSubDir string, longtermStoreURL *url.URL) StoreO
 		s.PersistSubDir = persistSubDir
 
 		s.LongtermStoreURL = longtermStoreURL
+	}
+}
+
+// WithBlockHeightCh configures the block height channel for the store.
+func WithBlockHeightCh(blockHeightCh chan uint32) StoreOption {
+	return func(s *Options) {
+		s.BlockHeightCh = blockHeightCh
 	}
 }
 

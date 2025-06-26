@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -535,4 +537,40 @@ func waitForPostgresToStart(logger ulogger.Logger, address string) error {
 
 		return nil
 	}
+}
+
+func getBlockHeightTrackerCh(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI) (chan uint32, error) {
+	blockchainSubscriptionCh, err := blockchainClient.Subscribe(ctx, "File BlockHeight")
+	if err != nil {
+		return nil, errors.NewServiceError("error subscribing to blockchain", err)
+	}
+
+	blockHeight, _, err := blockchainClient.GetBestHeightAndTime(ctx)
+	if err != nil {
+		return nil, errors.NewServiceError("error getting best height and time", err)
+	}
+
+	ch := make(chan uint32)
+
+	go func() {
+		ch <- blockHeight
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case notification := <-blockchainSubscriptionCh:
+				if notification.Type == model.NotificationType_Block {
+					blockHeight, _, err = blockchainClient.GetBestHeightAndTime(ctx)
+					if err != nil {
+						logger.Errorf("[File] error getting best height and time: %v", err)
+					} else {
+						ch <- blockHeight
+					}
+				}
+			}
+		}
+	}()
+
+	return ch, nil
 }

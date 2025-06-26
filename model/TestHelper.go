@@ -458,38 +458,7 @@ func NewLocalSubtreeStore() *TestLocalSubtreeStore {
 	}
 }
 
-func (l TestLocalSubtreeStore) Health(_ context.Context, _ bool) (int, string, error) {
-	return 0, "", nil
-}
-
-func (l TestLocalSubtreeStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
-	if len(key) == 0 {
-		return false, errors.NewProcessingError("key cannot be empty")
-	}
-
-	// Parse options
-	var opt options.Options
-	for _, o := range opts {
-		o(&opt)
-	}
-
-	// Check if it exists in the FileData map
-	keyString := string(key)
-	keyString = keyString + "." + fileType.String()
-
-	if l.FileData != nil {
-		if _, ok := l.FileData[keyString]; ok {
-			return true, nil
-		}
-	}
-
-	// Check if it exists in the Files map
-	_, ok := l.Files[chainhash.Hash(key)]
-
-	return ok, nil
-}
-
-func (l TestLocalSubtreeStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
+func (l TestLocalSubtreeStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType) ([]byte, error) {
 	if len(key) == 0 {
 		return nil, errors.NewProcessingError("key cannot be empty")
 	}
@@ -532,7 +501,7 @@ func (l TestLocalSubtreeStore) GetIoReader(_ context.Context, key []byte, fileTy
 	return subtreeFile, nil
 }
 
-func (l *TestLocalSubtreeStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
+func (l *TestLocalSubtreeStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte) error {
 	if len(key) == 0 {
 		return errors.NewProcessingError("key cannot be empty")
 	}
@@ -553,30 +522,6 @@ func (l *TestLocalSubtreeStore) Set(ctx context.Context, key []byte, fileType fi
 	return nil
 }
 
-func (l TestLocalSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ fileformat.FileType, _ io.ReadCloser, _ ...options.FileOption) error {
-	panic(notImplemented)
-}
-
-func (l TestLocalSubtreeStore) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ uint32, _ ...options.FileOption) error {
-	panic(notImplemented)
-}
-
-func (l TestLocalSubtreeStore) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (uint32, error) {
-	panic(notImplemented)
-}
-
-func (l TestLocalSubtreeStore) Del(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) error {
-	panic(notImplemented)
-}
-
-func (l TestLocalSubtreeStore) Close(_ context.Context) error {
-	panic(notImplemented)
-}
-
-func (l TestLocalSubtreeStore) SetCurrentBlockHeight(_ uint32) {
-	// noop
-}
-
 type BlobStoreStub struct {
 	logger ulogger.Logger
 }
@@ -588,31 +533,6 @@ func New(logger ulogger.Logger) (*BlobStoreStub, error) {
 		logger: logger,
 	}, nil
 }
-
-func (n *BlobStoreStub) Health(_ context.Context, _ bool) (int, string, error) {
-	return 0, "BlobStoreStub Store", nil
-}
-
-func (n *BlobStoreStub) Close(_ context.Context) error {
-	return nil
-}
-
-func (n *BlobStoreStub) SetFromReader(_ context.Context, _ []byte, _ fileformat.FileType, _ io.ReadCloser, _ ...options.FileOption) error {
-	return nil
-}
-
-func (n *BlobStoreStub) Set(_ context.Context, _ []byte, _ fileformat.FileType, _ []byte, _ ...options.FileOption) error {
-	return nil
-}
-
-func (n *BlobStoreStub) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ uint32, _ ...options.FileOption) error {
-	return nil
-}
-
-func (n *BlobStoreStub) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (uint32, error) {
-	return 0, nil
-}
-
 func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (io.ReadCloser, error) {
 	path := filepath.Join("testdata", "testSubtreeHex.bin")
 
@@ -623,28 +543,4 @@ func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte, _ fileformat.Fi
 	}
 
 	return subtreeReader, nil
-}
-
-func (n *BlobStoreStub) Get(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) ([]byte, error) {
-	path := filepath.Join("testdata", "testSubtreeHex.bin")
-
-	// read the file
-	subtreeBytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil, errors.NewProcessingError("failed to read file: %s", err)
-	}
-
-	return subtreeBytes, nil
-}
-
-func (n *BlobStoreStub) Exists(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (bool, error) {
-	return false, nil
-}
-
-func (n *BlobStoreStub) Del(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) error {
-	return nil
-}
-
-func (n *BlobStoreStub) SetCurrentBlockHeight(_ uint32) {
-	// noop
 }

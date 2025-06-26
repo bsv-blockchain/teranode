@@ -16,7 +16,6 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/settings"
-	"github.com/bitcoin-sv/teranode/stores/blob/null"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -264,7 +263,7 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 		123, 0, 0, nil)
 	require.NoError(t, err)
 
-	subtreeStore, _ := null.New(ulogger.TestLogger{})
+	mockBlobStore, _ := New(ulogger.TestLogger{})
 	txMetaStore := memory.New(ulogger.TestLogger{})
 
 	currentChain := make([]*BlockHeader, 11)
@@ -282,7 +281,7 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 	oldBlockIDs := util.NewSyncedMap[chainhash.Hash, []uint32]()
-	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
+	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, mockBlobStore, txMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
 

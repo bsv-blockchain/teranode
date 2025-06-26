@@ -221,19 +221,32 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, dahCleanerInterval time.
 		}
 	}
 
+	if options.BlockHeightCh != nil {
+		go func() {
+			for {
+				select {
+				case <-fileDAHsCtx.Done():
+					return
+				case blockHeight := <-options.BlockHeightCh:
+					fileStore.SetCurrentBlockHeight(blockHeight)
+				}
+			}
+		}()
+	}
+
 	if dahCleanerInterval != 0 {
 		_, loaded := fileCleanerOnce.LoadOrStore(storeURL.String(), true)
 		if !loaded { // i.e. it was stored and not loaded
-			// load dah's in the background and start the dah cleaner
+			// load dah's in the background
 			go func() {
 				if err := fileStore.loadDAHs(); err != nil {
 					fileStore.logger.Warnf("[File] failed to load dahs: %v", err)
 				}
-
-				// start the dah cleaner
-				go fileStore.dahCleaner(fileDAHsCtx, dahCleanerInterval)
 			}()
 		}
+
+		// start the dah cleaner
+		go fileStore.dahCleaner(fileDAHsCtx, dahCleanerInterval)
 	}
 
 	return fileStore, nil
@@ -877,6 +890,10 @@ func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.
 	}
 
 	return f, nil
+}
+
+func (s *File) GetReader(ctx context.Context, key []byte, fileType fileformat.FileType) (io.ReadCloser, error) {
+	return s.GetIoReader(ctx, key, fileType)
 }
 
 // validateFileHeader reads and validates the file header.

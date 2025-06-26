@@ -712,7 +712,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		merkleRoot[:],
 		fileformat.FileTypeSubtree,
 		completeSubtreeBytes,
-		options.WithDeleteAt(u.settings.GlobalBlockHeightRetention),
+		options.WithDeleteAt(dah),
 	)
 
 	stat.NewStat("8. storeSubtree").AddTime(start)

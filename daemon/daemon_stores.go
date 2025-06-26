@@ -201,7 +201,7 @@ func (d *Stores) GetTxStore(logger ulogger.Logger, appSettings *settings.Setting
 // GetSubtreeStore returns the main subtree store instance. If the store hasn't been initialized yet,
 // it creates a new one using the URL from settings. The store is configured with a hash prefix
 // of 2 for optimized storage organization.
-func (d *Stores) GetSubtreeStore(logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
+func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
 	if d.mainSubtreeStore != nil {
 		return d.mainSubtreeStore, nil
 	}
@@ -222,7 +222,17 @@ func (d *Stores) GetSubtreeStore(logger ulogger.Logger, appSettings *settings.Se
 		}
 	}
 
-	d.mainSubtreeStore, err = blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(hashPrefix))
+	blockchainClient, err := d.GetBlockchainClient(ctx, logger, appSettings, "subtree")
+	if err != nil {
+		return nil, errors.NewServiceError("could not create blockchain client for subtree store", err)
+	}
+
+	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
+	if err != nil {
+		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+	}
+
+	d.mainSubtreeStore, err = blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(hashPrefix), options.WithBlockHeightCh(ch))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}
@@ -233,7 +243,7 @@ func (d *Stores) GetSubtreeStore(logger ulogger.Logger, appSettings *settings.Se
 // GetTempStore returns the main temporary store instance. If the store hasn't been initialized yet,
 // it creates a new one using the configured URL from settings, defaulting to "./tmp" if not specified.
 // This store is used for temporary data storage during processing.
-func (d *Stores) GetTempStore(logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
+func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
 	if d.mainTempStore != nil {
 		return d.mainTempStore, nil
 	}
@@ -243,9 +253,17 @@ func (d *Stores) GetTempStore(logger ulogger.Logger, appSettings *settings.Setti
 		return nil, errors.NewConfigurationError("temp_store config not found")
 	}
 
-	var err error
+	blockchainClient, err := d.GetBlockchainClient(ctx, logger, appSettings, "temp")
+	if err != nil {
+		return nil, errors.NewServiceError("could not create blockchain client for temp store", err)
+	}
 
-	d.mainTempStore, err = blob.NewStore(logger, tempStoreURL)
+	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
+	if err != nil {
+		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+	}
+
+	d.mainTempStore, err = blob.NewStore(logger, tempStoreURL, options.WithBlockHeightCh(ch))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create temp_store", err)
 	}
@@ -256,7 +274,7 @@ func (d *Stores) GetTempStore(logger ulogger.Logger, appSettings *settings.Setti
 // GetBlockStore returns the main block store instance. If the store hasn't been initialized yet,
 // it creates a new one using the configured URL from settings. This store is responsible for
 // persisting blockchain blocks.
-func (d *Stores) GetBlockStore(logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
+func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
 	if d.mainBlockStore != nil {
 		return d.mainBlockStore, nil
 	}
@@ -277,7 +295,17 @@ func (d *Stores) GetBlockStore(logger ulogger.Logger, appSettings *settings.Sett
 		}
 	}
 
-	d.mainBlockStore, err = blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
+	blockchainClient, err := d.GetBlockchainClient(ctx, logger, appSettings, "block")
+	if err != nil {
+		return nil, errors.NewServiceError("could not create blockchain client for block store", err)
+	}
+
+	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
+	if err != nil {
+		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+	}
+
+	d.mainBlockStore, err = blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix), options.WithBlockHeightCh(ch))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block store", err)
 	}
@@ -288,8 +316,7 @@ func (d *Stores) GetBlockStore(logger ulogger.Logger, appSettings *settings.Sett
 // GetBlockPersisterStore returns the main block persister store instance. If the store hasn't been
 // initialized yet, it creates a new one using the configured URL from settings. This store is
 // specifically used for block persistence operations.
-func (d *Stores) GetBlockPersisterStore(logger ulogger.Logger,
-	appSettings *settings.Settings) (blob.Store, error) {
+func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
 	if d.mainBlockPersisterStore != nil {
 		return d.mainBlockPersisterStore, nil
 	}
@@ -310,7 +337,17 @@ func (d *Stores) GetBlockPersisterStore(logger ulogger.Logger,
 		}
 	}
 
-	d.mainBlockPersisterStore, err = blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
+	blockchainClient, err := d.GetBlockchainClient(ctx, logger, appSettings, "blockpersister")
+	if err != nil {
+		return nil, errors.NewServiceError("could not create blockchain client for block persister store", err)
+	}
+
+	ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
+	if err != nil {
+		return nil, errors.NewServiceError("could not create block height tracker channel", err)
+	}
+
+	d.mainBlockPersisterStore, err = blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix), options.WithBlockHeightCh(ch))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block persister store", err)
 	}
