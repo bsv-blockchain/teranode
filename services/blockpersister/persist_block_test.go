@@ -136,7 +136,7 @@ func (m *MockStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUns
 	return nil
 }
 
-func (m *MockStore) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+func (m *MockStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 

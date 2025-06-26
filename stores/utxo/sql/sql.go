@@ -1262,7 +1262,7 @@ func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*ut
 }
 
 // PreviousOutputsDecorate fetches output information for transaction inputs.
-func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
@@ -1276,17 +1276,17 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 		AND o.idx = $2
 	`
 
-	for _, outpoint := range outpoints {
+	for _, input := range tx.Inputs {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 
 		default:
-			if outpoint == nil {
+			if input == nil {
 				continue
 			}
 
-			err := s.db.QueryRowContext(ctx, q, outpoint.PreviousTxID[:], outpoint.Vout).Scan(&outpoint.LockingScript, &outpoint.Satoshis)
+			err := s.db.QueryRowContext(ctx, q, input.PreviousTxIDChainHash()[:], input.PreviousTxOutIndex).Scan(&input.PreviousTxScript, &input.PreviousTxSatoshis)
 			if err != nil {
 				return err
 			}

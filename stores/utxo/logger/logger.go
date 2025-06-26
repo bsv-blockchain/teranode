@@ -217,9 +217,9 @@ func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*ut
 	return err
 }
 
-func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
-	err := s.store.PreviousOutputsDecorate(ctx, outpoints)
-	s.logger.Debugf("[UTXOStore][logger][PreviousOutputsDecorate] outpoints %v err %v : %s", outpoints, err, caller())
+func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
+	err := s.store.PreviousOutputsDecorate(ctx, tx)
+	s.logger.Debugf("[UTXOStore][logger][PreviousOutputsDecorate] outpoints %v err %v : %s", tx, err, caller())
 
 	return err
 }

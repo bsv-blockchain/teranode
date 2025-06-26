@@ -73,25 +73,6 @@ type Data struct {
 	SpendingDatas []*spendpkg.SpendingData `json:"spendingDatas"`
 }
 
-// PreviousOutput represents an input's previous output information.
-// It's used when decorating transaction inputs with their source output data.
-type PreviousOutput struct {
-	// PreviousTxID is the transaction ID containing the output
-	PreviousTxID chainhash.Hash
-
-	// Vout is the output index in the previous transaction
-	Vout uint32
-
-	// Idx is the input index in the spending transaction
-	Idx int
-
-	// LockingScript is the output's locking script
-	LockingScript []byte
-
-	// Satoshis is the amount in satoshis
-	Satoshis uint64
-}
-
 // NewMetaDataFromBytes creates a new Data object from a byte slice.
 // This function populates an existing Data object with metadata extracted from the binary format.
 // It's optimized for performance by avoiding allocations and operating directly on the provided slice.

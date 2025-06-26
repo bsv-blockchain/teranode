@@ -28,13 +28,13 @@ type TxInpoints struct {
 
 func NewTxInpoints() TxInpoints {
 	return TxInpoints{
-		ParentTxHashes: make([]chainhash.Hash, 0),
-		Idxs:           make([][]uint32, 0),
+		ParentTxHashes: make([]chainhash.Hash, 0, 8), // initial capacity of 8, can grow as needed
+		Idxs:           make([][]uint32, 0, 16),      // initial capacity of 16, can grow as needed
 	}
 }
 
 func NewTxInpointsFromTx(tx *bt.Tx) (TxInpoints, error) {
-	p := TxInpoints{}
+	p := NewTxInpoints()
 	if err := p.addTx(tx); err != nil {
 		return p, err
 	}
@@ -82,12 +82,8 @@ func (p *TxInpoints) String() string {
 func (p *TxInpoints) addTx(tx *bt.Tx) error {
 	// Do not error out for transactions without inputs, seeded Teranodes will have txs without inputs
 
-	var (
-		hash chainhash.Hash
-	)
-
 	for _, input := range tx.Inputs {
-		hash = *input.PreviousTxIDChainHash()
+		hash := *input.PreviousTxIDChainHash()
 
 		index := slices.Index(p.ParentTxHashes, hash)
 		if index != -1 {

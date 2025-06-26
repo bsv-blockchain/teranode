@@ -27,7 +27,6 @@ import (
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -835,16 +834,7 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 		return nil
 	}
 
-	outpoints := make([]*meta.PreviousOutput, len(tx.Inputs))
-
-	for i, input := range tx.Inputs {
-		outpoints[i] = &meta.PreviousOutput{
-			PreviousTxID: *input.PreviousTxIDChainHash(),
-			Vout:         input.PreviousTxOutIndex,
-		}
-	}
-
-	if err := v.utxoStore.PreviousOutputsDecorate(ctx, outpoints); err != nil {
+	if err := v.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
 		if errors.Is(err, errors.ErrTxNotFound) {
 			err = errors.NewTxMissingParentError("error extending transaction, parent tx not found")
 			span.RecordError(err)
@@ -856,11 +846,6 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 		span.RecordError(err)
 
 		return err
-	}
-
-	for i, input := range tx.Inputs {
-		input.PreviousTxScript = bscript.NewFromBytes(outpoints[i].LockingScript)
-		input.PreviousTxSatoshis = outpoints[i].Satoshis
 	}
 
 	tx.SetExtended(true)

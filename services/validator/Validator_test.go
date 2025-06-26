@@ -723,18 +723,14 @@ func TestExtendedTxa1f6a4ffcfd7bb4775790932aff1f82ac6a9b3b3e76c8faf8b11328e948af
 	_, err = db.Create(ctx, parentTx, 500_000)
 	require.NoError(t, err)
 
-	previousOutput := &meta.PreviousOutput{
-		PreviousTxID: *parentTx.TxIDChainHash(),
-		Vout:         0,
-	}
-
-	err = db.PreviousOutputsDecorate(ctx, []*meta.PreviousOutput{previousOutput})
+	err = db.PreviousOutputsDecorate(ctx, tx)
 	require.NoError(t, err)
 
-	tx.Inputs[0].PreviousTxSatoshis = previousOutput.Satoshis
-	tx.Inputs[0].PreviousTxScript = bscript.NewFromBytes(previousOutput.LockingScript)
-
 	assert.True(t, tx.IsExtended())
+
+	for _, input := range tx.Inputs {
+		assert.NotNil(t, input.PreviousTxScript, "PreviousTxScript should not be nil")
+	}
 }
 
 func Test_getUtxoBlockHeights(t *testing.T) {

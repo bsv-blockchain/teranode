@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -19,7 +20,6 @@ import (
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/bitcoin-sv/teranode/util/tracing"
@@ -302,7 +302,6 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 	var (
 		subtree    *util.Subtree
-		txMap      map[chainhash.Hash]*TxMapWrapper
 		legacyMode bool
 	)
 
@@ -322,7 +321,10 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		subtreeData := util.NewSubtreeData(subtree)
 		subtreeMetaData := util.NewSubtreeMeta(subtree)
 
-		if txMap, err = sm.createTxMap(ctx, block); err != nil {
+		// Create a map of all transactions in the block
+		txMap := util.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+
+		if err = sm.createTxMap(ctx, block, txMap); err != nil {
 			return nil, err
 		}
 
@@ -526,7 +528,8 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 	return g.Wait()
 }
 
-func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*TxMapWrapper, block *bsvutil.Block) (err error) {
+func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap *util.SyncedMap[chainhash.Hash, *TxMapWrapper],
+	block *bsvutil.Block) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "validateTransactionsLegacyMode",
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactionsLegacyMode),
 		tracing.WithLogMessage(sm.logger, "[validateTransactionsLegacyMode] called for block %s, height %d", block.Hash(), block.Height()),
@@ -540,7 +543,7 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 		return err
 	}
 
-	sm.logger.Infof("[validateTransactionsLegacyMode] created utxos with %d items", len(txMap))
+	sm.logger.Infof("[validateTransactionsLegacyMode] created utxos with %d items", txMap.Length())
 
 	blockHeightUint32, err := util.SafeInt32ToUint32(block.Height())
 	if err != nil {
@@ -558,7 +561,7 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 // createUtxos creates all the utxos for the transactions in the block in parallel
 // before any spending is done. This only occurs in legacy mode when we assume the
 // block is valid.
-func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash]*TxMapWrapper, block *bsvutil.Block) (err error) {
+func (sm *SyncManager) createUtxos(ctx context.Context, txMap *util.SyncedMap[chainhash.Hash, *TxMapWrapper], block *bsvutil.Block) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createUtxos",
 		tracing.WithLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", block.Hash(), block.Height()),
 		tracing.WithHistogram(prometheusLegacyNetsyncCreateUtxos),
@@ -584,11 +587,16 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 	}
 
 	// create all the utxos first
-	for txHash := range txMap {
+	for _, txHash := range txMap.Keys() {
 		txHash := txHash
 
 		g.Go(func() error {
-			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].Tx, blockHeightUint32); err != nil {
+			txWrapper, ok := txMap.Get(txHash)
+			if !ok {
+				return errors.NewProcessingError("transaction %s not found in txMap", txHash.String())
+			}
+
+			if _, err := sm.utxoStore.Create(gCtx, txWrapper.Tx, blockHeightUint32); err != nil {
 				if errors.Is(err, errors.ErrTxExists) {
 					sm.logger.Debugf("failed to create utxo for tx %s: %s", txHash.String(), err)
 				} else {
@@ -610,7 +618,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 
 // PreValidateTransactions pre-validates all the transactions in the block before
 // sending them to subtree validation.
-func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*TxMapWrapper,
+func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *util.SyncedMap[chainhash.Hash, *TxMapWrapper],
 	blockHash chainhash.Hash, blockHeight uint32) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "PreValidateTransactions",
 		tracing.WithLogMessage(sm.logger, "[PreValidateTransactions] called for block %s / height %d", blockHash, blockHeight),
@@ -633,7 +641,7 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap map[ch
 	util.SafeSetLimit(g, spendBatcherSize*spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 	// validate all the transactions in parallel
-	for txHash := range txMap {
+	for _, txHash := range txMap.Keys() {
 		txHash := txHash
 
 		g.Go(func() (err error) {
@@ -642,9 +650,14 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap map[ch
 				prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 			}()
 
+			txWrapper, ok := txMap.Get(txHash)
+			if !ok {
+				return errors.NewProcessingError("transaction %s not found in txMap", txHash.String())
+			}
+
 			// call the validator to validate the transaction, but skip the utxo creation
 			_, err = sm.validationClient.Validate(gCtx,
-				txMap[txHash].Tx,
+				txWrapper.Tx,
 				blockHeight,
 				validator.WithSkipUtxoCreation(true),
 				validator.WithAddTXToBlockAssembly(false),
@@ -738,7 +751,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	return nil
 }
 
-func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*TxMapWrapper) (err error) {
+func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap *util.SyncedMap[chainhash.Hash, *TxMapWrapper]) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "extendTransactions",
 		tracing.WithLogMessage(sm.logger, "[extendTransactions] called for block %s / height %d", block.Hash(), block.Height()),
 		tracing.WithHistogram(prometheusLegacyNetsyncExtendTransactions),
@@ -753,39 +766,44 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 	}()
 
 	outpointBatcherSize := sm.settings.Legacy.OutpointBatcherSize
-	outpointBatcherConcurrency := sm.settings.Legacy.OutpointBatcherConcurrency
 
-	g, gCtx := errgroup.WithContext(ctx)                                 // we don't want the tracing to be linked to these calls
-	util.SafeSetLimit(g, outpointBatcherSize*outpointBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
+	g, gCtx := errgroup.WithContext(ctx)      // we don't want the tracing to be linked to these calls
+	util.SafeSetLimit(g, outpointBatcherSize) // we limit the number of concurrent requests, to not overload Aerospike
 
-	for _, wireTx := range block.Transactions() {
+	for idx, wireTx := range block.Transactions() {
+		if idx == 0 {
+			// skip the coinbase transaction, as it cannot be extended
+			continue
+		}
+
 		txHash := *wireTx.Hash()
 
 		// the coinbase transaction is not part of the txMap
-		if txWrapper, found := txMap[txHash]; found {
+		if txWrapper, found := txMap.Get(txHash); found {
 			tx := txWrapper.Tx
 
-			if !tx.IsCoinbase() {
-				g.Go(func() error {
-					if err := sm.ExtendTransaction(gCtx, tx, txMap); err != nil {
-						return errors.NewTxError("failed to extend transaction", err)
-					}
+			g.Go(func() error {
+				if err := sm.ExtendTransaction(gCtx, tx, txMap); err != nil {
+					return errors.NewTxError("failed to extend transaction", err)
+				}
 
-					return nil
-				})
-			}
+				return nil
+			})
+		} else {
+			// we don't have the transaction in the txMap, so we cannot extend it
+			return errors.NewTxError("transaction %s not found in txMap", txHash.String())
 		}
 	}
 
 	// wait for all tx to be processed - we don't need to process errors here
-	if err := g.Wait(); err != nil {
+	if err = g.Wait(); err != nil {
 		return errors.NewProcessingError("failed to process transactions", err)
 	}
 
 	return nil
 }
 
-func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*TxMapWrapper,
+func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, txMap *util.SyncedMap[chainhash.Hash, *TxMapWrapper],
 	subtree *util.Subtree, subtreeData *util.SubtreeData, subtreeMetaData *util.SubtreeMeta) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createSubtree",
 		tracing.WithLogMessage(sm.logger, "[createSubtree] called for block %s / height %d", block.Hash(), block.Height()),
@@ -804,7 +822,7 @@ func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, 
 		txHash := *wireTx.Hash()
 
 		// the coinbase transaction is not part of the txMap
-		if txWrapper, found := txMap[txHash]; found {
+		if txWrapper, found := txMap.Get(txHash); found {
 			tx := txWrapper.Tx
 
 			txSize, err := util.SafeIntToUint64(tx.Size())
@@ -874,7 +892,7 @@ func calculateTransactionFee(tx *bt.Tx) (uint64, error) {
 	return inputValue - outputValue, nil
 }
 
-func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (map[chainhash.Hash]*TxMapWrapper, error) {
+func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, txMap *util.SyncedMap[chainhash.Hash, *TxMapWrapper]) error {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createTxMap",
 		tracing.WithDebugLogMessage(
 			sm.logger,
@@ -885,32 +903,26 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (m
 	)
 	defer deferFn()
 
-	blockTransactions := block.Transactions()
+	for _, wireTx := range block.Transactions() {
+		tx := &bt.Tx{}
 
-	// Create a map of all transactions in the block
-	txMap := make(map[chainhash.Hash]*TxMapWrapper, len(blockTransactions))
-
-	for _, wireTx := range blockTransactions {
-		txHash := *wireTx.Hash()
-
-		tx, err := WireTxToGoBtTx(wireTx)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to convert wire.Tx to bt.Tx", err)
+		if err := WireTxToGoBtTx(wireTx, tx); err != nil {
+			return errors.NewProcessingError("failed to convert wire.Tx to bt.Tx", err)
 		}
 
 		// don't add the coinbase to the txMap, we cannot process it anyway
 		if !tx.IsCoinbase() {
-			tx.SetTxHash(&txHash)
-			txMap[txHash] = &TxMapWrapper{Tx: tx}
+			tx.SetTxHash(wireTx.Hash())
+			txMap.Set(*tx.TxIDChainHash(), &TxMapWrapper{Tx: tx})
 		}
 	}
 
-	return txMap, nil
+	return nil
 }
 
 // prepareTxsPerLevel prepares the transactions per level for processing
 // levels are determined by the number of parents in the block
-func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*TxMapWrapper) (uint32, map[uint32][]*bt.Tx) {
+func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Block, txMap *util.SyncedMap[chainhash.Hash, *TxMapWrapper]) (uint32, map[uint32][]*bt.Tx) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "prepareTxsPerLevel")
 	defer deferFn()
 
@@ -920,25 +932,25 @@ func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Bl
 
 	for _, wireTx := range block.Transactions() {
 		txHash := *wireTx.Hash()
-		if _, found := txMap[txHash]; found {
-			if txMap[txHash].SomeParentsInBlock {
-				for _, input := range txMap[txHash].Tx.Inputs {
+		if txWrapper, found := txMap.Get(txHash); found {
+			if txWrapper.SomeParentsInBlock {
+				for _, input := range txWrapper.Tx.Inputs {
 					parentTxHash := *input.PreviousTxIDChainHash()
-					if parentTxWrapper, found := txMap[parentTxHash]; found {
+					if parentTxWrapper, found := txMap.Get(parentTxHash); found {
 						// if the parent from this input is at the same level or higher,
 						// we need to increase the child level of this transaction
-						if parentTxWrapper.ChildLevelInBlock >= txMap[txHash].ChildLevelInBlock {
-							txMap[txHash].ChildLevelInBlock = parentTxWrapper.ChildLevelInBlock + 1
+						if parentTxWrapper.ChildLevelInBlock >= txWrapper.ChildLevelInBlock {
+							txWrapper.ChildLevelInBlock = parentTxWrapper.ChildLevelInBlock + 1
 						}
 
-						if txMap[txHash].ChildLevelInBlock > maxLevel {
-							maxLevel = txMap[txHash].ChildLevelInBlock
+						if txWrapper.ChildLevelInBlock > maxLevel {
+							maxLevel = txWrapper.ChildLevelInBlock
 						}
 					}
 				}
 			}
 
-			sizePerLevel[txMap[txHash].ChildLevelInBlock] += 1
+			sizePerLevel[txWrapper.ChildLevelInBlock] += 1
 		}
 	}
 
@@ -948,14 +960,14 @@ func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Bl
 	}
 
 	// put all transactions in a map per level for processing
-	for _, txWrapper := range txMap {
+	for _, txWrapper := range txMap.Range() {
 		blockTxsPerLevel[txWrapper.ChildLevelInBlock] = append(blockTxsPerLevel[txWrapper.ChildLevelInBlock], txWrapper.Tx)
 	}
 
 	return maxLevel, blockTxsPerLevel
 }
 
-func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap map[chainhash.Hash]*TxMapWrapper) error {
+func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap *util.SyncedMap[chainhash.Hash, *TxMapWrapper]) error {
 	timeStart := time.Now()
 	defer func() {
 		prometheusLegacyNetsyncBlockTxSize.Observe(float64(tx.Size()))
@@ -964,31 +976,69 @@ func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap m
 		prometheusLegacyNetsyncBlockTxExtend.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 	}()
 
-	previousOutputs := make([]*meta.PreviousOutput, 0, len(tx.Inputs))
-
-	txWrapper, found := txMap[*tx.TxIDChainHash()]
+	txWrapper, found := txMap.Get(*tx.TxIDChainHash())
 	if !found {
 		return errors.NewProcessingError("tx %s not found in txMap", tx.TxIDChainHash())
 	}
 
+	inputLen := len(tx.Inputs)
+	populatedInputs := 0
+
+	g := errgroup.Group{}
+	inputsLock := sync.Mutex{} // to protect the inputs slice from concurrent writes
+
 	for i, input := range tx.Inputs {
+		i := i         // capture the loop variable
+		input := input // capture the input variable
 		prevTxHash := *input.PreviousTxIDChainHash()
 
-		if prevTxWrapper, found := txMap[prevTxHash]; found {
-			txWrapper.SomeParentsInBlock = true
+		if prevTxWrapper, found := txMap.Get(prevTxHash); found {
+			g.Go(func() error {
+				txWrapper.SomeParentsInBlock = true
 
-			tx.Inputs[i].PreviousTxSatoshis = prevTxWrapper.Tx.Outputs[input.PreviousTxOutIndex].Satoshis
-			tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevTxWrapper.Tx.Outputs[input.PreviousTxOutIndex].LockingScript)
-		} else {
-			previousOutputs = append(previousOutputs, &meta.PreviousOutput{
-				PreviousTxID: prevTxHash,
-				Vout:         input.PreviousTxOutIndex,
-				Idx:          i,
+				// we do have a parent, but since everything is happening in parallel, we need to check if the parent has
+				// already been extended
+				timeOut := time.After(120 * time.Second)
+
+			WaitForParent:
+				for {
+					select {
+					case <-timeOut:
+						return errors.NewProcessingError("timed out waiting for parent transaction %s to be extended", prevTxHash.String())
+					default:
+						if prevTxWrapper.Tx.IsExtended() {
+							break WaitForParent
+						}
+
+						time.Sleep(10 * time.Millisecond) // wait for the parent transaction to be extended
+					}
+				}
+
+				// lock the inputs slice to prevent concurrent writes
+				inputsLock.Lock()
+
+				tx.Inputs[i].PreviousTxSatoshis = prevTxWrapper.Tx.Outputs[input.PreviousTxOutIndex].Satoshis
+				tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevTxWrapper.Tx.Outputs[input.PreviousTxOutIndex].LockingScript)
+
+				populatedInputs++
+
+				inputsLock.Unlock() // unlock the inputs slice
+
+				return nil
 			})
 		}
 	}
 
-	if err := sm.utxoStore.PreviousOutputsDecorate(ctx, previousOutputs); err != nil {
+	if err := g.Wait(); err != nil {
+		return errors.NewProcessingError("failed to extend transaction %s", tx.TxIDChainHash(), err)
+	}
+
+	if populatedInputs == inputLen {
+		// all inputs were populated, we can return early
+		return nil
+	}
+
+	if err := sm.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
 		if errors.Is(err, errors.ErrProcessing) || errors.Is(err, errors.ErrTxNotFound) {
 			// we could not decorate the transaction. This could be because the parent transaction has been DAH'd, which
 			// can only happen if this transaction has been processed. In that case, we can try getting the transaction
@@ -1009,46 +1059,36 @@ func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap m
 		return errors.NewProcessingError("failed to decorate previous outputs for tx %s", tx.TxIDChainHash(), err)
 	}
 
-	// run through the previous outputs and extend the transaction
-	for _, po := range previousOutputs {
-		if po.LockingScript == nil {
-			return errors.NewProcessingError("previous output script is empty for %s:%d", po.PreviousTxID, po.Vout)
-		}
-
-		tx.Inputs[po.Idx].PreviousTxSatoshis = po.Satoshis
-		tx.Inputs[po.Idx].PreviousTxScript = bscript.NewFromBytes(po.LockingScript)
-	}
-
 	return nil
 }
 
 // WireTxToGoBtTx converts a wire.Tx to a bt.Tx
 // This does not use the bytes methods, but directly uses the fields of the wire.Tx
-func WireTxToGoBtTx(wireTx *bsvutil.Tx) (*bt.Tx, error) {
+func WireTxToGoBtTx(wireTx *bsvutil.Tx, tx *bt.Tx) error {
 	wTx := wireTx.MsgTx()
 
-	tx := &bt.Tx{
-		Version:  uint32(wTx.Version),
-		LockTime: wTx.LockTime,
-	}
+	tx.Version = uint32(wTx.Version) //nolint:gosec
+	tx.LockTime = wTx.LockTime
 
 	tx.Inputs = make([]*bt.Input, len(wTx.TxIn))
 	for i, in := range wTx.TxIn {
 		tx.Inputs[i] = &bt.Input{
-			UnlockingScript:    bscript.NewFromBytes(in.SignatureScript),
+			UnlockingScript:    &bscript.Script{},
 			PreviousTxOutIndex: in.PreviousOutPoint.Index,
 			SequenceNumber:     in.Sequence,
 		}
 		_ = tx.Inputs[i].PreviousTxIDAdd(&in.PreviousOutPoint.Hash)
+		*tx.Inputs[i].UnlockingScript = in.SignatureScript
 	}
 
 	tx.Outputs = make([]*bt.Output, len(wTx.TxOut))
 	for i, out := range wTx.TxOut {
 		tx.Outputs[i] = &bt.Output{
 			Satoshis:      uint64(out.Value),
-			LockingScript: bscript.NewFromBytes(out.PkScript),
+			LockingScript: &bscript.Script{},
 		}
+		*tx.Outputs[i].LockingScript = out.PkScript
 	}
 
-	return tx, nil
+	return nil
 }

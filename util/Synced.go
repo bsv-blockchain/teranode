@@ -66,6 +66,20 @@ func (m *SyncedMap[K, V]) Range() map[K]V {
 	return items
 }
 
+// Keys returns a slice of keys in the map.
+func (m *SyncedMap[K, V]) Keys() []K {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	keys := make([]K, 0, len(m.m))
+
+	for k := range m.m {
+		keys = append(keys, k)
+	}
+
+	return keys
+}
+
 // Iterate iterates over the map and calls the function f for each key-value pair.
 // unlike Range(), Iterate does not return a copy of the map and keeps the lock for the duration of the iteration.
 // If f returns false, the iteration stops.

@@ -63,3 +63,12 @@ func TestTxInpoints(t *testing.T) {
 		assert.Equal(t, p.Idxs[0][0], p2.Idxs[0][0])
 	})
 }
+
+func BenchmarkNewTxInpoints(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, err := NewTxInpointsFromTx(tx)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}

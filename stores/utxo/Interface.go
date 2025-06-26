@@ -255,7 +255,7 @@ type Store interface {
 	BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...fields.FieldName) error
 
 	// PreviousOutputsDecorate fetches information about transaction inputs' previous outputs.
-	PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error
+	PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error
 
 	// functions related to Alert System
 

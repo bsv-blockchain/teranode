@@ -878,8 +878,8 @@ func (t *TxMetaCache) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsU
 //
 // Returns:
 // - Error if the decoration operation fails
-func (t *TxMetaCache) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
-	return t.utxoStore.PreviousOutputsDecorate(ctx, outpoints)
+func (t *TxMetaCache) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
+	return t.utxoStore.PreviousOutputsDecorate(ctx, tx)
 }
 
 // FreezeUTXOs marks UTXOs as frozen (temporarily unspendable) in the underlying store

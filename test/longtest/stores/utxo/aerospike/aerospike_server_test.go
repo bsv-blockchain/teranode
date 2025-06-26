@@ -1133,55 +1133,61 @@ func TestStoreDecorate(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		items := []*meta.PreviousOutput{
-			{
-				PreviousTxID: *tx.TxIDChainHash(),
-				Vout:         0,
-				Idx:          0,
-			},
-			{
-				PreviousTxID: *tx.TxIDChainHash(),
-				Vout:         4,
-				Idx:          1,
-			},
-			{
-				PreviousTxID: *tx.TxIDChainHash(),
-				Vout:         3,
-				Idx:          2,
-			},
-			{
-				PreviousTxID: *tx.TxIDChainHash(),
-				Vout:         2,
-				Idx:          3,
-			},
-			{
-				PreviousTxID: *tx.TxIDChainHash(),
-				Vout:         1,
-				Idx:          4,
-			},
+		childTx := &bt.Tx{}
+		childTx.Inputs = make([]*bt.Input, 0)
+
+		input := &bt.Input{
+			PreviousTxOutIndex: 0,
 		}
-		err = store.PreviousOutputsDecorate(ctx, items)
+		_ = input.PreviousTxIDAdd(tx.TxIDChainHash())
+		childTx.Inputs = append(childTx.Inputs, input)
+
+		input = &bt.Input{
+			PreviousTxOutIndex: 4,
+		}
+		_ = input.PreviousTxIDAdd(tx.TxIDChainHash())
+		childTx.Inputs = append(childTx.Inputs, input)
+
+		input = &bt.Input{
+			PreviousTxOutIndex: 3,
+		}
+		_ = input.PreviousTxIDAdd(tx.TxIDChainHash())
+		childTx.Inputs = append(childTx.Inputs, input)
+
+		input = &bt.Input{
+			PreviousTxOutIndex: 2,
+		}
+		_ = input.PreviousTxIDAdd(tx.TxIDChainHash())
+		childTx.Inputs = append(childTx.Inputs, input)
+
+		input = &bt.Input{
+			PreviousTxOutIndex: 1,
+		}
+		_ = input.PreviousTxIDAdd(tx.TxIDChainHash())
+		childTx.Inputs = append(childTx.Inputs, input)
+
+		err = store.PreviousOutputsDecorate(ctx, childTx)
 		require.NoError(t, err)
 
 		// check field values for vout 0 - item 0
-		assert.Len(t, items[0].LockingScript, 25)
-		assert.Equal(t, uint64(5_000_000), items[0].Satoshis)
+		assert.Len(t, *childTx.Inputs[0].PreviousTxScript, 25)
+		assert.Equal(t, uint64(5_000_000), childTx.Inputs[0].PreviousTxSatoshis)
 
 		// check field values for vout 4 - item 1
-		assert.Len(t, items[1].LockingScript, 25)
-		assert.Equal(t, uint64(2_817_689), items[1].Satoshis)
+		assert.Len(t, *childTx.Inputs[1].PreviousTxScript, 25)
+		assert.Equal(t, uint64(2_817_689), childTx.Inputs[1].PreviousTxSatoshis)
 
 		// check field values for vout 3 - item 2
-		assert.Len(t, items[2].LockingScript, 25)
-		assert.Equal(t, uint64(20_000), items[2].Satoshis)
+		assert.Len(t, *childTx.Inputs[2].PreviousTxScript, 25)
+		assert.Equal(t, uint64(20_000), childTx.Inputs[2].PreviousTxSatoshis)
 
 		// check field values for vout 2 - item 3
-		assert.Len(t, items[3].LockingScript, 25)
-		assert.Equal(t, uint64(20_000), items[3].Satoshis)
+		assert.Len(t, *childTx.Inputs[3].PreviousTxScript, 25)
+		assert.Equal(t, uint64(20_000), childTx.Inputs[3].PreviousTxSatoshis)
 
 		// check field values for vout 1 - item 4
-		assert.Len(t, items[4].LockingScript, 25)
-		assert.Equal(t, uint64(2_000_000), items[4].Satoshis)
+		assert.Len(t, *childTx.Inputs[4].PreviousTxScript, 25)
+		assert.Equal(t, uint64(2_000_000), childTx.Inputs[4].PreviousTxSatoshis)
 	})
 }
 

@@ -49,7 +49,6 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
 	utxo2 "github.com/bitcoin-sv/teranode/test/longtest/stores/utxo"
@@ -376,16 +375,17 @@ func TestPreviousOutputsDecorate(t *testing.T) {
 	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
-	previousOutput := &meta.PreviousOutput{
-		PreviousTxID: *tx.TxIDChainHash(),
-		Vout:         0,
-	}
-
-	err = store.PreviousOutputsDecorate(ctx, []*meta.PreviousOutput{previousOutput})
+	parentTx, err := bt.NewTxFromString("010000000000000000ef012935b177236ec1cb75cd9fba86d84acac9d76ced9c1b22ba8de4cd2de85a8393000000004948304502200f653627aff050093a83dabc12a2a9b627041d424f2eb18849a2d587f1acd38f022100a23f94acd94a4d24049140d5fbe12448a880fd8f8c1c2b4141f83bef2be409be01ffffffff00f2052a01000000434104ed83808a903a7e25be91349815f5d545f0c9dbec60b8ea914a6d6cbe9f830628039641231e2dbc1c0ca809f13405eb01f3a06614717f7859b788bd1305d9a3f2ac0100f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac00000000")
 	require.NoError(t, err)
 
-	assert.Equal(t, uint64(556_000_000), previousOutput.Satoshis)
-	assert.Len(t, previousOutput.LockingScript, 25)
+	_, err = store.Create(ctx, parentTx, 0)
+	require.NoError(t, err)
+
+	err = store.PreviousOutputsDecorate(ctx, tx)
+	require.NoError(t, err)
+
+	assert.Equal(t, uint64(5_000_000_000), tx.Inputs[0].PreviousTxSatoshis)
+	assert.Len(t, *tx.Inputs[0].PreviousTxScript, 25)
 }
 
 func TestCreateCoinbase(t *testing.T) {

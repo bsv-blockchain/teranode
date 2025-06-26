@@ -504,27 +504,27 @@ func (m *Memory) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*u
 }
 
 // PreviousOutputsDecorate fetches previous output data for transaction inputs.
-func (m *Memory) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+func (m *Memory) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
-	for _, outpoint := range outpoints {
-		data, ok := m.txs[outpoint.PreviousTxID]
+	for _, outpoint := range tx.Inputs {
+		data, ok := m.txs[*outpoint.PreviousTxIDChainHash()]
 		if !ok {
-			return errors.NewTxNotFoundError("previous Tx %v not found", outpoint.PreviousTxID)
+			return errors.NewTxNotFoundError("previous Tx %s not found", outpoint.PreviousTxIDChainHash().String())
 		}
 
-		if len(data.tx.Outputs) <= int(outpoint.Vout) {
-			return errors.NewTxNotFoundError("previous Tx %v not found", outpoint.PreviousTxID)
+		if len(data.tx.Outputs) <= int(outpoint.PreviousTxOutIndex) {
+			return errors.NewTxNotFoundError("previous Tx %s not found", outpoint.PreviousTxIDChainHash().String())
 		}
 
-		input := data.tx.Inputs[outpoint.Vout]
+		input := data.tx.Inputs[outpoint.PreviousTxOutIndex]
 		if input == nil {
-			return errors.NewTxNotFoundError("previous Tx %v not found", outpoint.PreviousTxID)
+			return errors.NewTxNotFoundError("previous Tx %s not found", outpoint.PreviousTxIDChainHash().String())
 		}
 
-		outpoint.LockingScript = *input.PreviousTxScript
-		outpoint.Satoshis = input.PreviousTxSatoshis
+		outpoint.PreviousTxScript = input.PreviousTxScript
+		outpoint.PreviousTxSatoshis = input.PreviousTxSatoshis
 	}
 
 	return nil

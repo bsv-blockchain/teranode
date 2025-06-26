@@ -71,8 +71,8 @@ func (m *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSli
 	return args.Error(0)
 }
 
-func (m *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
-	args := m.Called(ctx, outpoints)
+func (m *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
+	args := m.Called(ctx, tx)
 	return args.Error(0)
 }
 

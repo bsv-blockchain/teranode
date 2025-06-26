@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -61,11 +62,20 @@ func (m *NullStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Da
 	return m.Get(ctx, hash)
 }
 
-func (m *NullStore) MetaBatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
+func (m *NullStore) MetaBatchDecorate(_ context.Context, _ []*utxo.UnresolvedMetaData, _ ...string) error {
 	return nil
 }
 
-func (m *NullStore) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+func (m *NullStore) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
+	for _, input := range tx.Inputs {
+		if input == nil {
+			continue
+		}
+
+		input.PreviousTxScript = bscript.NewFromBytes([]byte("test"))
+		input.PreviousTxSatoshis = 100_000_000_000
+	}
+
 	return nil
 }
 

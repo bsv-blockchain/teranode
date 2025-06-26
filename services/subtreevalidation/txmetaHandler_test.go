@@ -141,8 +141,8 @@ func (m *mockCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash,
 	return args.Error(0)
 }
 
-func (m *mockCache) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
-	args := m.Called(ctx, outpoints)
+func (m *mockCache) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
+	args := m.Called(ctx, tx)
 	return args.Error(0)
 }
 

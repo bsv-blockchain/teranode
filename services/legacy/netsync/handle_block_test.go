@@ -6,12 +6,90 @@ import (
 	"os"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-wire"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
+	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockvalidation"
+	"github.com/bitcoin-sv/teranode/services/legacy/peer"
 	"github.com/bitcoin-sv/teranode/services/legacy/testdata"
+	"github.com/bitcoin-sv/teranode/services/validator"
+	"github.com/bitcoin-sv/teranode/stores/blob/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/nullstore"
+	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-bitcoin"
+	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+var (
+	rpcHost  = "localhost"
+	rpcPort  = 8332
+	username = "bitcoin"
+	password = "bitcoin"
+)
+
+func TestSyncManager_HandleBlockDirect(t *testing.T) {
+	t.Skip("This test requires a running Bitcoin SV node with RPC enabled")
+
+	initPrometheusMetrics()
+
+	blockHex := "0000000000000000046bb497bda05586305fee1e86fdde1bb2802821729ec16b"
+
+	blockHash, err := chainhash.NewHashFromStr(blockHex)
+	require.NoError(t, err)
+
+	b, err := bitcoin.New(rpcHost, rpcPort, username, password, false)
+	require.NoError(t, err)
+
+	t.Logf("Getting block %s", blockHex)
+	blockBytes, err := b.GetRawBlock(blockHex)
+	require.NoError(t, err)
+
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.Mock.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	blockchainClient.Mock.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil)
+	blockchainClient.Mock.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+
+	blockAssembly := blockassembly.NewMock()
+	blockAssembly.Mock.On("GetBlockAssemblyState", mock.Anything).Return(&blockassembly_api.StateMessage{}, nil)
+
+	utxoStore := &nullstore.NullStore{}
+
+	validationClient := &validator.MockValidatorClient{
+		UtxoStore: utxoStore,
+	}
+
+	subtreeStore := memory.New()
+
+	blockValidation := &blockvalidation.MockBlockValidation{}
+
+	sm := &SyncManager{
+		settings:         test.CreateBaseTestSettings(),
+		logger:           ulogger.TestLogger{},
+		orphanTxs:        expiringmap.New[chainhash.Hash, *orphanTxAndParents](10),
+		blockchainClient: blockchainClient,
+		blockAssembly:    blockAssembly,
+		utxoStore:        utxoStore,
+		validationClient: validationClient,
+		subtreeStore:     subtreeStore,
+		blockValidation:  blockValidation,
+	}
+
+	msgBlock := &wire.MsgBlock{}
+	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))
+	require.NoError(t, err)
+
+	err = sm.HandleBlockDirect(t.Context(), &peer.Peer{}, *blockHash, msgBlock)
+	require.NoError(t, err)
+}
 
 func TestSyncManager_createTxMap(t *testing.T) {
 	// Define test cases with block file paths and expected lengths of the txMap
@@ -49,9 +127,11 @@ func TestSyncManager_createTxMap(t *testing.T) {
 
 			sm := &SyncManager{}
 
-			txMap, err := sm.createTxMap(context.Background(), block)
+			txMap := util.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+
+			err = sm.createTxMap(context.Background(), block, txMap)
 			require.NoError(t, err)
-			require.Len(t, txMap, tc.expectedTxMapLen)
+			require.Equal(t, txMap.Length(), tc.expectedTxMapLen)
 		})
 	}
 }
@@ -92,20 +172,21 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 			require.NoError(t, err)
 
 			sm := &SyncManager{}
-			// sm.utxoStore = utxostore.New(ulogger.TestLogger{})
-			txMap, err := sm.createTxMap(context.Background(), block)
+			txMap := util.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+
+			err = sm.createTxMap(context.Background(), block, txMap)
 			require.NoError(t, err)
-			require.Len(t, txMap, tc.expectedTxMapLen)
+			require.Equal(t, txMap.Length(), tc.expectedTxMapLen)
 
 			for _, wireTx := range block.Transactions() {
 				txHash := *wireTx.Hash()
 				// extend transaction
-				if txWrapper, found := txMap[txHash]; found {
+				if txWrapper, found := txMap.Get(txHash); found {
 					tx := txWrapper.Tx
 
 					for _, input := range tx.Inputs {
 						prevTxHash := *input.PreviousTxIDChainHash()
-						if _, found := txMap[prevTxHash]; found {
+						if _, found := txMap.Get(prevTxHash); found {
 							txWrapper.SomeParentsInBlock = true
 						}
 					}
@@ -136,7 +217,8 @@ func TestWireTxToGoBtTx(t *testing.T) {
 		require.NoError(t, err)
 
 		// Convert the wire tx to GoBtTx
-		gobtTx, err := WireTxToGoBtTx(wireTx)
+		gobtTx := &bt.Tx{}
+		err = WireTxToGoBtTx(wireTx, gobtTx)
 		require.NoError(t, err)
 
 		// Serialize the GoBtTx
@@ -152,10 +234,12 @@ func BenchmarkCreateTxMap(b *testing.B) {
 
 	sm := &SyncManager{}
 
+	txMap := util.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err := sm.createTxMap(context.Background(), block)
+		err = sm.createTxMap(context.Background(), block, txMap)
 		require.NoError(b, err)
 	}
 }
@@ -204,7 +288,9 @@ func Benchmark_createSubtree(b *testing.B) {
 
 	sm := &SyncManager{}
 
-	txMap, err := sm.createTxMap(b.Context(), block)
+	txMap := util.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+
+	err = sm.createTxMap(b.Context(), block, txMap)
 	require.NoError(b, err)
 
 	b.ResetTimer()

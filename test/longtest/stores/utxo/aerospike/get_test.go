@@ -208,7 +208,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 
 	parentTxs := make(map[string]struct{})
 
-	txMap := make(map[chainhash.Hash]*netsync.TxMapWrapper)
+	txMap := util.NewSyncedMap[chainhash.Hash, *netsync.TxMapWrapper]()
 
 	t.Logf("Getting %d transactions from block %s", len(block.Tx), blockHex)
 	for idx, txID := range block.Tx {
@@ -223,9 +223,9 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 			t.Fatal(err)
 		}
 
-		txMap[*tx.TxIDChainHash()] = &netsync.TxMapWrapper{
+		txMap.Set(*tx.TxIDChainHash(), &netsync.TxMapWrapper{
 			Tx: tx,
-		}
+		})
 
 		if err = ProcessTx(ctx, txStore, b, store, tx, blockHeight, &parentTxs); err != nil {
 			t.Fatal(err)

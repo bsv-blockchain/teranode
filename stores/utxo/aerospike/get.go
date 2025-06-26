@@ -103,8 +103,8 @@ type batchGetItem struct {
 // It is used to efficiently retrieve previous output data for transaction inputs
 // by batching multiple requests together to optimize database access.
 type batchOutpoint struct {
-	outpoint *meta.PreviousOutput // The previous output to retrieve data for
-	errCh    chan error           // Channel to receive any error from the batch operation
+	outpoint *bt.Input  // The previous output to retrieve data for
+	errCh    chan error // Channel to receive any error from the batch operation
 }
 
 // GetSpend checks if a UTXO has been spent and returns its current status.
@@ -1059,16 +1059,21 @@ func (s *Store) getAllExtraUTXOs(ctx context.Context, txID *chainhash.Hash, tota
 //   - Deduplicates requests for the same transaction
 //   - Handles both internal and external storage
 //   - Returns locking scripts and amounts
-func (s *Store) PreviousOutputsDecorate(_ context.Context, outpoints []*meta.PreviousOutput) error {
-	errChans := make([]chan error, len(outpoints))
+func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
+	errChans := make([]chan error, 0, len(tx.Inputs))
 
-	for i, outpoint := range outpoints {
+	for _, input := range tx.Inputs {
+		if input.PreviousTxScript != nil {
+			// skip if the input already has a previous output script
+			continue
+		}
+
 		errChan := make(chan error, 1)
-		errChans[i] = errChan
+		errChans = append(errChans, errChan)
 
 		// Wrap the outpoint in OutpointRequest and put it in the batcher
 		s.outpointBatcher.Put(&batchOutpoint{
-			outpoint: outpoint,
+			outpoint: input,
 			errCh:    errChan,
 		})
 	}
@@ -1104,7 +1109,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	// this is done by using a map of txHashes
 	uniqueTxHashes := make(map[chainhash.Hash]struct{})
 	for _, item := range batch {
-		uniqueTxHashes[item.outpoint.PreviousTxID] = struct{}{}
+		uniqueTxHashes[*item.outpoint.PreviousTxIDChainHash()] = struct{}{}
 	}
 
 	// Create a batch of records to read from the txHashes
@@ -1179,9 +1184,9 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	// Now we have all the txs, we can decorate the outpoints
 	for _, batchItem := range batch {
-		previousTx := txs[batchItem.outpoint.PreviousTxID]
+		previousTx := txs[*batchItem.outpoint.PreviousTxIDChainHash()]
 		if previousTx == nil {
-			if err, ok := txErrors[batchItem.outpoint.PreviousTxID]; ok {
+			if err, ok := txErrors[*batchItem.outpoint.PreviousTxIDChainHash()]; ok {
 				sendErrorAndClose(batchItem.errCh, err)
 			} else {
 				sendErrorAndClose(batchItem.errCh, errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID))
@@ -1190,8 +1195,8 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			continue
 		}
 
-		batchItem.outpoint.Satoshis = previousTx.Outputs[batchItem.outpoint.Vout].Satoshis
-		batchItem.outpoint.LockingScript = *previousTx.Outputs[batchItem.outpoint.Vout].LockingScript
+		batchItem.outpoint.PreviousTxSatoshis = previousTx.Outputs[batchItem.outpoint.PreviousTxOutIndex].Satoshis
+		batchItem.outpoint.PreviousTxScript = previousTx.Outputs[batchItem.outpoint.PreviousTxOutIndex].LockingScript
 		batchItem.errCh <- nil
 		close(batchItem.errCh)
 	}
@@ -1199,7 +1204,6 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	prometheusTxMetaAerospikeMapGetMulti.Inc()
 	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
 }
-
 
 func (s *Store) GetOutpointsFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
 	ctx, _, _ = tracing.Tracer("aerospike").Start(ctx, "GetOutpointsFromExternalStore",
