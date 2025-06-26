@@ -14,6 +14,7 @@ This tool is typically used to ensure the correctness of blockchain data after g
 2. Run the node for at least 110 blocks:
    ```shell
    docker compose --profile chainintegrity -f compose/docker-compose-host.yml up -d
+   docker compose --profile chainintegrity -f compose/docker-compose-chainintegrity.yml up -d
    ```
 
 3. Stop the node after mining 110+ blocks:

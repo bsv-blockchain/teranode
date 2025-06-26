@@ -75,7 +75,7 @@ jobs:
         run: rm -rf data
 
       - name: Start Teranode nodes with block generator (docker compose up)
-        run: docker compose --profile chainintegrity -f compose/docker-compose-host.yml up -d
+        run: docker compose --profile chainintegrity -f compose/docker-compose-chainintegrity.yml up -d
 
       - name: Wait for mining to complete (all nodes at height 110+ and in sync)
         run: |
@@ -98,7 +98,7 @@ jobs:
             
             # Single command pattern that works for both initial and subsequent checks
             local errors
-            errors=$(docker compose -f compose/docker-compose-host.yml logs --no-color $since_param teranode-1 teranode-2 teranode-3 | grep -i "| ERROR |" || true)
+            errors=$(docker compose -f compose/docker-compose-chainintegrity.yml logs --no-color $since_param teranode1 teranode2 teranode3 | grep -i "| ERROR |" || true)
             
             # Update timestamp for next check
             last_check_time=$current_time
@@ -162,8 +162,8 @@ jobs:
           name: container-logs
           path: container-logs/
 
-      - name: Stop Teranode nodes (docker compose down for teranode-1/2/3)
-        run: docker compose -f compose/docker-compose-host.yml down teranode-1 teranode-2 teranode-3
+      - name: Stop Teranode nodes (docker compose down for teranode1/2/3)
+        run: docker compose -f compose/docker-compose-chainintegrity.yml down teranode1 teranode2 teranode3
 
       - name: Build chainintegrity binary
         run: make build-chainintegrity
@@ -188,4 +188,4 @@ jobs:
 
       - name: Cleanup (docker compose down)
         if: always()
-        run: docker compose -f compose/docker-compose-host.yml down
+        run: docker compose -f compose/docker-compose-chainintegrity.yml down
