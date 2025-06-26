@@ -13,6 +13,9 @@ import (
 
 // TestShouldAllowSpendAllUtxos tests that we can spend all UTXOs with multiple transactions
 func TestShouldAllowSpendAllUtxos(t *testing.T) {
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
+
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,

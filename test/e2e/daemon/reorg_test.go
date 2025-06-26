@@ -1,7 +1,6 @@
 package smoke
 
 import (
-	"sync"
 	"testing"
 	"time"
 
@@ -15,14 +14,13 @@ import (
 )
 
 var (
-	testLock sync.Mutex
 	// Reasonable timeout for block synchronization
 	blockWait = 10 * time.Second
 )
 
 func TestMoveUp(t *testing.T) {
-	testLock.Lock()
-	defer testLock.Unlock()
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
 
 	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
 	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
@@ -48,6 +46,10 @@ func TestMoveUp(t *testing.T) {
 
 	defer node1.Stop(t)
 
+	// Wait for node1 to have at least one peer (node2)
+	err = helper.WaitForNodePeerCount(t.Context(), node1, 1, blockWait)
+	require.NoError(t, err)
+
 	// wait for node1 to catchup to block 1
 	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 1, blockWait)
 	require.NoError(t, err)
@@ -66,8 +68,8 @@ func TestMoveUp(t *testing.T) {
 }
 
 func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
-	testLock.Lock()
-	defer testLock.Unlock()
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
 
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
@@ -123,6 +125,10 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		},
 	})
 
+	// Wait for node2 to have at least one peer (node1)
+	err = helper.WaitForNodePeerCount(t.Context(), node2, 1, blockWait)
+	require.NoError(t, err)
+
 	_, err = node2.CallRPC(node2.Ctx, "generate", []any{1})
 	require.NoError(t, err)
 
@@ -142,8 +148,8 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 }
 
 func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
-	testLock.Lock()
-	defer testLock.Unlock()
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
 
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
@@ -190,6 +196,10 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		},
 	})
 
+	// Wait for node2 to have at least one peer (node1)
+	err = helper.WaitForNodePeerCount(t.Context(), node2, 1, blockWait)
+	require.NoError(t, err)
+
 	defer func() {
 		node1.Stop(t)
 		node2.Stop(t)
@@ -205,8 +215,8 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 }
 
 func TestTDRestart(t *testing.T) {
-	testLock.Lock()
-	defer testLock.Unlock()
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
 
 	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
 	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
@@ -289,8 +299,8 @@ func checkSubtrees(t *testing.T, td *daemon.TestDaemon, expectedTxCount int) {
 
 func TestDynamicSubtreeSize(t *testing.T) {
 	t.Skip("Skipping dynamic subtree size test")
-	testLock.Lock()
-	defer testLock.Unlock()
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
 
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -362,8 +372,8 @@ func TestDynamicSubtreeSize(t *testing.T) {
 }
 
 func TestInvalidBlock(t *testing.T) {
-	testLock.Lock()
-	defer testLock.Unlock()
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
 
 	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
 	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
@@ -396,8 +406,8 @@ func TestInvalidBlock(t *testing.T) {
 }
 
 func TestBlockValidationCatchup(t *testing.T) {
-	testLock.Lock()
-	defer testLock.Unlock()
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
 
 	// Start node2
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -427,7 +437,15 @@ func TestBlockValidationCatchup(t *testing.T) {
 	})
 	defer node1.Stop(t)
 
-	_, err := node1.CallRPC(node1.Ctx, "generate", []any{100})
+	// Wait for node1 to have at least one peer (node2)
+	err := helper.WaitForNodePeerCount(t.Context(), node1, 1, blockWait)
+	require.NoError(t, err)
+
+	// Print peer info for debugging
+	_, err = helper.GetAndPrintPeerInfo(t.Context(), node1)
+	require.NoError(t, err)
+
+	_, err = node1.CallRPC(node1.Ctx, "generate", []any{100})
 	require.NoError(t, err)
 	// 0 -> 1 ... 100 (node1 main chain)
 
@@ -487,6 +505,14 @@ func TestBlockValidationCatchup(t *testing.T) {
 		},
 	})
 	defer node2.Stop(t)
+
+	// Wait for node2 to have at least one peer (node1)
+	err = helper.WaitForNodePeerCount(t.Context(), node2, 1, blockWait)
+	require.NoError(t, err)
+
+	// Print peer info for debugging
+	_, err = helper.GetAndPrintPeerInfo(t.Context(), node2)
+	require.NoError(t, err)
 
 	// _, err = node2.CallRPC(node2.Ctx, "generate", []any{1})
 	// require.NoError(t, err)

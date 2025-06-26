@@ -25,6 +25,9 @@ import (
 )
 
 func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
+
 	ctx := context.Background()
 
 	pg, errPsql := postgres.RunPostgresTestContainer(ctx, "fairtx")
@@ -262,6 +265,9 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 }
 
 func TestShouldNotProcessNonFinalTxWithPostgres(t *testing.T) {
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
+
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
@@ -316,7 +322,7 @@ func TestShouldNotProcessNonFinalTxWithPostgres(t *testing.T) {
 	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
 	require.NoError(t, err)
 
-	// When a transaction’s nLockTime is set (e.g., 500 for block height),
+	// When a transaction's nLockTime is set (e.g., 500 for block height),
 	// nSequence must be less than 0xffffffff for the locktime to be enforced.
 	// Otherwise, the locktime is ignored.
 	newTx.Inputs[0].SequenceNumber = 0x10000005

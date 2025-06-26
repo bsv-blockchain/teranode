@@ -99,7 +99,7 @@ jobs:
       - name: Run Smoke tests
         run: |
           cd test/e2e/daemon && \
-          go test -v -count=1 -race -timeout=5m -run '^(TestBlockSubsidy|TestMoveUp|TestMoveDownMoveUpWhenNewBlockIsGenerated|TestMoveDownMoveUpWhenNoNewBlockIsGenerated|TestTDRestart|TestShouldAllowFairTxUseRpc)$' .
+          go test -v -count=1 -race -timeout=5m -run '^(TestBlockSubsidy|TestMoveUp|TestMoveDownMoveUpWhenNewBlockIsGenerated|TestMoveDownMoveUpWhenNoNewBlockIsGenerated|TestTDRestart|TestGetBlockVerbosity|TestGetBlockHeaderVerbose|TestGetMiningCandidate|TestGenerateToAddress|TestBlockManagement|TestSendTxAndCheckState|TestShouldNotProcessNonFinalTx|TestShouldRejectOversizedTx|TestShouldRejectOversizedScript|TestShouldAllowChainedTransactionsUseRpc|TestDoubleInput|TestGetBestBlockHash|TestGetPeerInfo|TestGetMiningInfo|TestVersion|TestShouldAllowFairTxUseRpcWithPostgres|TestShouldAllowReassign|TestShouldAllowSpendAllUtxos)$' .
         continue-on-error: false
         env:
           settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}

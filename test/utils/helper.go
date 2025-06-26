@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/go-sdk/script"
+	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/errors"
 	block_model "github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
@@ -1425,4 +1426,61 @@ func WaitForNodeBlockHeight(ctx context.Context, blockchainClient blockchain.Cli
 
 		time.Sleep(1 * time.Second)
 	}
+}
+
+// WaitForNodePeerCount waits for a node to have at least the specified number of peers
+func WaitForNodePeerCount(ctx context.Context, node *daemon.TestDaemon, minPeerCount int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		resp, err := node.CallRPC(ctx, "getpeerinfo", []any{})
+		if err != nil {
+			node.Logger.Infof("Error calling getpeerinfo: %v", err)
+			time.Sleep(1 * time.Second)
+
+			continue
+		}
+
+		var p2pResp P2PRPCResponse
+		err = json.Unmarshal([]byte(resp), &p2pResp)
+
+		if err != nil {
+			node.Logger.Infof("Error unmarshaling peer response: %v", err)
+			time.Sleep(1 * time.Second)
+
+			continue
+		}
+
+		node.Logger.Infof("Current peer count: %d, waiting for at least %d", len(p2pResp.Result), minPeerCount)
+
+		if len(p2pResp.Result) >= minPeerCount {
+			node.Logger.Infof("Successfully reached peer count: %d", len(p2pResp.Result))
+			return nil
+		}
+
+		time.Sleep(1 * time.Second)
+	}
+
+	return errors.NewProcessingError("timeout waiting for peer count to reach %d", minPeerCount)
+}
+
+// GetAndPrintPeerInfo gets peer info from a node and prints it for debugging
+func GetAndPrintPeerInfo(ctx context.Context, node *daemon.TestDaemon) ([]P2PNode, error) {
+	resp, err := node.CallRPC(ctx, "getpeerinfo", []any{})
+	if err != nil {
+		return nil, err
+	}
+
+	var p2pResp P2PRPCResponse
+	err = json.Unmarshal([]byte(resp), &p2pResp)
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Print peer info for debugging
+	node.Logger.Infof("Peer info response: %s", resp)
+	node.Logger.Infof("Number of peers: %d", len(p2pResp.Result))
+
+	return p2pResp.Result, nil
 }

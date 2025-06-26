@@ -13,6 +13,9 @@ import (
 )
 
 func TestVerifyMerkleRootCalculation(t *testing.T) {
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
+
 	ctx := context.Background()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{

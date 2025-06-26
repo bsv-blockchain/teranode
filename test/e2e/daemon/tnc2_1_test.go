@@ -16,6 +16,9 @@ import (
 
 // TestUniqueCandidateIdentifiers verifies that each mining candidate has a unique identifier
 func TestUniqueCandidateIdentifiers(t *testing.T) {
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
+
 	ctx := context.Background()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -62,6 +65,9 @@ func TestUniqueCandidateIdentifiers(t *testing.T) {
 // when requesting multiple candidates concurrently.
 // TODO: Retest this, in conflict with the first
 func TestConcurrentCandidateIdentifiers(t *testing.T) {
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
+
 	ctx := context.Background()
 	numRequests := 3
 	candidateIds := make(chan []byte, numRequests)
