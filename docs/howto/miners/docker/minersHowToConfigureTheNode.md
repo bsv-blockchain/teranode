@@ -41,4 +41,4 @@ The Block and UTXO persister services are optional and can be disabled. If enabl
 
 ## Settings Reference
 
-You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode-public/blob/main/docker/base/settings_local.conf). These are the pre-configured settings in your docker compose. You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+You can find the pre-configured settings file [here](../../../../settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

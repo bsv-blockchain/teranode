@@ -199,7 +199,7 @@ For production deployments, consider:
 - Configuring appropriate resource requests and limits
 - Setting up proper backup and disaster recovery procedures
 
-An example CR for a mainnet deployment is available in [kubernetes/teranode/teranode-cr-mainnet.yaml](https://github.com/bitcoin-sv/teranode-public/blob/feature/kube-docs/kubernetes/teranode/teranode-cr-mainnet.yaml).
+An example CR for a mainnet deployment is available in [kubernetes/teranode/teranode-cr-mainnet.yaml](../../../../deploy/kubernetes/teranode/teranode-cr-mainnet.yaml).
 
 ## Other Resources
 

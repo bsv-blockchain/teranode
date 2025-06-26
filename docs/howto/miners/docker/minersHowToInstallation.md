@@ -222,8 +222,8 @@ Note: The Docker Compose method is recommended for testing in single node enviro
 
 ```bash
 cd $YOUR_WORKING_DIR
-git clone git@github.com:bitcoin-sv/teranode-public.git
-cd teranode-public
+git clone git@github.com:bitcoin-sv/teranode.git
+cd teranode
 ```
 
 **Step 2: Configure Environment Settings Context [Optional]**
@@ -239,7 +239,7 @@ This step is not mandatory, but useful if you want to create settings variants f
 
 **Step 3: Prepare Local Settings**
 
-1. You can see the current settings under the `$YOUR_WORKING_DIR/docker/base/settings_local.conf` file. You can override any settings here.
+1. You can see the current settings under the `$YOUR_WORKING_DIR/teranode/settings.conf` file. You can override any settings here.
 2. For a list of settings, and their default values, please refer to the reference at the end of this document.
 
 
@@ -255,13 +255,13 @@ aws ecr get-login-password --region eu-north-1 | docker login --username AWS --p
 1. Go to either the testnet Docker compose folder:
 
 ```bash
-cd $YOUR_WORKING_DIR/teranode-public/docker/testnet
+cd $YOUR_WORKING_DIR/teranode/deploy/docker/testnet
 ```
 
 Or to the mainnet Docker compose folder:
 
 ```bash
-cd $YOUR_WORKING_DIR/teranode-public/docker/mainnet
+cd $YOUR_WORKING_DIR/teranode/deploy/docker/mainnet
 ```
 
 
@@ -411,4 +411,4 @@ If you have local access to SV Nodes, you can use them to speed up the initial b
 
 ## Settings Reference
 
-You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/settings_local.conf). These are the pre-configured settings in your Docker Compose. You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+You can find the pre-configured settings file [here](../../../../settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

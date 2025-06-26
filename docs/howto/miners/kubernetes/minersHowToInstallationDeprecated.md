@@ -190,7 +190,7 @@ data:
   utxostore: 'aerospike://...'
 ```
 
-To review the list of settings you could configure in the ConfigMap, please refer to the list [here](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/settings_local.conf).
+To review the list of settings you could configure in the ConfigMap, please refer to the list [here](../../../../settings.conf).
 
 ##### Storage Requirements
 Teranode uses PersistentVolumeClaims (PVCs) for storage in some components. For example, the SubtreeValidator specifies storage resources and a storage class. Users should ensure their Kubernetes cluster has the necessary storage classes and capacity available.
@@ -435,4 +435,4 @@ If you have local access to SV Nodes, you can use them to speed up the initial b
 
 ## Reference - Settings
 
-You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/settings_local.conf). These are the pre-configured settings in your docker compose. You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+You can find the pre-configured settings file [here](../../../../settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

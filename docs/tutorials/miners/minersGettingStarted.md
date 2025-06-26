@@ -81,8 +81,8 @@ Your Teranode Docker Compose setup will include:
 - Checkout the Teranode public repository:
 ```bash
 cd $YOUR_WORKING_DIR
-git clone git@github.com:bitcoin-sv/teranode-public.git
-cd teranode-public
+git clone git@github.com:bitcoin-sv/teranode.git
+cd teranode
 ```
 
 
@@ -91,7 +91,7 @@ cd teranode-public
 - Go to the testnet docker compose path:
 
 ```bash
-cd $YOUR_WORKING_DIR/teranode-public/docker/testnet
+cd $YOUR_WORKING_DIR/teranode/deploy/docker/testnet
 ```
 
 - Authenticate with AWS ECR (only required during the private beta phase)

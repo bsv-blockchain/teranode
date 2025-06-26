@@ -20,13 +20,13 @@ Follow these steps to **start** your node:
 Go to either the testnet Docker compose folder:
 
 ```bash
-cd $YOUR_WORKING_DIR/teranode-public/docker/testnet
+cd $YOUR_WORKING_DIR/teranode/deploy/docker/testnet
 ```
 
 Or to the mainnet Docker compose folder:
 
 ```bash
-cd $YOUR_WORKING_DIR/teranode-public/docker/mainnet
+cd $YOUR_WORKING_DIR/teranode/deploy/docker/mainnet
 ```
 2. **Pull Latest Images **(optional, but recommended before each start)**:**
 
@@ -115,13 +115,13 @@ Properly stopping your Teranode instance is crucial to maintain data integrity a
 Go to either the testnet Docker compose folder:
 
 ```bash
-cd $YOUR_WORKING_DIR/teranode-public/docker/testnet
+cd $YOUR_WORKING_DIR/teranode/deploy/docker/testnet
 ```
 
 Or to the mainnet Docker compose folder:
 
 ```bash
-cd $YOUR_WORKING_DIR/teranode-public/docker/mainnet
+cd $YOUR_WORKING_DIR/teranode/deploy/docker/mainnet
 ```
 
 2. **Graceful Shutdown:**
