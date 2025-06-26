@@ -284,10 +284,13 @@ func (b *BanList) IsBanned(ipStr string) bool {
 		return false
 	}
 
-	// If it contains a port, strip it off
-	if strings.Contains(ipStr, ":") {
-		ipStr = strings.Split(ipStr, ":")[0]
+	// Strip port from IP address (handles both IPv4 and IPv6)
+	host, _, err := net.SplitHostPort(ipStr)
+	if err == nil {
+		// Successfully split host and port
+		ipStr = host
 	}
+	// If SplitHostPort fails, assume it's just an IP without port
 
 	// First try direct lookup in our map
 	b.mu.RLock()
@@ -583,10 +586,11 @@ func parseAddress(ipOrSubnet string) (subnet *net.IPNet, err error) {
 
 		return subnet, nil
 	} else {
-		if strings.Contains(ipOrSubnet, ":") {
-			// remove port
-			ipOrSubnet = strings.Split(ipOrSubnet, ":")[0]
+		// Strip port from IP address (handles both IPv4 and IPv6)
+		if host, _, err := net.SplitHostPort(ipOrSubnet); err == nil {
+			ipOrSubnet = host
 		}
+		// If SplitHostPort fails, assume it's just an IP without port
 		// It's an IP address
 		ip := net.ParseIP(ipOrSubnet)
 		if ip == nil {

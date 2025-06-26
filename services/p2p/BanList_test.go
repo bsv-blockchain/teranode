@@ -346,3 +346,65 @@ func TestLoadFromDatabase(t *testing.T) {
 	bannedPeers := banList.bannedPeers
 	require.Equal(t, 2, len(bannedPeers))
 }
+
+// TestIPv6Compatibility tests that the ban list correctly handles IPv6 addresses with ports
+func TestIPv6Compatibility(t *testing.T) {
+	banList, _, err := setupBanList(t)
+	require.NoError(t, err)
+
+	// Test IPv6 addresses with and without ports
+	testCases := []struct {
+		name     string
+		banIP    string
+		testIP   string
+		expected bool
+	}{
+		{
+			name:     "IPv6 exact match without port",
+			banIP:    "2406:da18:1f7:353a:b079:da22:c7d5:e166",
+			testIP:   "2406:da18:1f7:353a:b079:da22:c7d5:e166",
+			expected: true,
+		},
+		{
+			name:     "IPv6 with port should match bare IP",
+			banIP:    "2406:da18:1f7:353a:b079:da22:c7d5:e166",
+			testIP:   "[2406:da18:1f7:353a:b079:da22:c7d5:e166]:8333",
+			expected: true,
+		},
+		{
+			name:     "IPv6 different address should not match",
+			banIP:    "2406:da18:1f7:353a:b079:da22:c7d5:e166",
+			testIP:   "2406:da18:1f7:353a:b079:da22:c7d5:e167",
+			expected: false,
+		},
+		{
+			name:     "IPv4 with port should work",
+			banIP:    "192.168.1.1",
+			testIP:   "192.168.1.1:8333",
+			expected: true,
+		},
+		{
+			name:     "IPv4 without port should work",
+			banIP:    "192.168.1.1",
+			testIP:   "192.168.1.1",
+			expected: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Clear ban list
+			banList.Clear()
+
+			// Add the ban
+			err := banList.Add(context.Background(), tc.banIP, time.Now().Add(time.Hour))
+			require.NoError(t, err)
+
+			// Test if the IP is banned
+			result := banList.IsBanned(tc.testIP)
+			require.Equal(t, tc.expected, result,
+				"Expected IsBanned(%s) to be %v when %s is banned",
+				tc.testIP, tc.expected, tc.banIP)
+		})
+	}
+}

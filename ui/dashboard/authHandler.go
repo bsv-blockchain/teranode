@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 
@@ -252,14 +253,15 @@ func (h *AuthHandler) WebSocketConfigHandler(c echo.Context) error {
 		wsProtocol = "wss"
 	}
 
-	// Extract hostname without port
+	// Extract hostname and port (handles both IPv4 and IPv6)
 	hostname := host
 	currentPort := ""
 
-	if colonPos := strings.LastIndex(host, ":"); colonPos != -1 {
-		hostname = host[:colonPos]
-		currentPort = host[colonPos+1:]
+	if h, p, err := net.SplitHostPort(host); err == nil {
+		hostname = h
+		currentPort = p
 	}
+	// If SplitHostPort fails, assume it's just a hostname without port
 
 	// Determine the port based on the environment
 	isDevelopmentServer := false

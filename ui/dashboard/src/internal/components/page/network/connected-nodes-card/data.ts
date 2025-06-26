@@ -94,6 +94,36 @@ export const renderCells = {
       value: '',
     }
   },
+  tx_count: (idField, item, colId) => {
+    return {
+      component: RenderSpan,
+      props: {
+        value: item[colId] ? formatNum(item[colId]) : '-',
+        className: 'num',
+      },
+      value: '',
+    }
+  },
+  size_in_bytes: (idField, item, colId) => {
+    return {
+      component: RenderSpan,
+      props: {
+        value: item[colId] ? formatNum(item[colId]) : '-',
+        className: 'num',
+      },
+      value: '',
+    }
+  },
+  miner: (idField, item, colId) => {
+    return {
+      component: RenderSpan,
+      props: {
+        value: item[colId] || '-',
+        className: '',
+      },
+      value: '',
+    }
+  },
   hash: (idField, item, colId) => {
     return {
       component: item[colId] ? RenderLink : null,

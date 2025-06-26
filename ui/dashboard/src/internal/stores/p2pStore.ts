@@ -99,6 +99,7 @@ export async function connectToP2PServer() {
             if (!miningNodeSet[baseUrl]) {
               miningNodeSet[baseUrl] = { base_url: baseUrl }
             }
+            // Update only the specific block fields, preserving existing mining_on data
             miningNodeSet[baseUrl] = {
               ...miningNodeSet[baseUrl],
               hash: jsonData.hash,
