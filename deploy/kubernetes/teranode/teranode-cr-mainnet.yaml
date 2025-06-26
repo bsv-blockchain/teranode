@@ -57,10 +57,6 @@ spec:
           requests:
             cpu: 1
             memory: 4Gi
-      storageClass: fsx-lustre
-      storageResources:
-        requests:
-          storage: 1200Gi
   blockValidator:
     enabled: true
     spec:
@@ -92,7 +88,7 @@ spec:
             cpu: 1
             memory: 1Gi
   configMapName: teranode-operator-config
-  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.7.4
+  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.9.11
   legacy:
     enabled: true
     spec:
@@ -151,6 +147,11 @@ spec:
           requests:
             cpu: 1
             memory: 1Gi
+  sharedStorage:
+    storageClass: fsx-lustre
+    storageResources:
+      requests:
+        storage: 4800Gi
   subtreeValidator:
     enabled: true
     spec:
@@ -160,10 +161,6 @@ spec:
           requests:
             cpu: 1
             memory: 8Gi
-      storageClass: fsx-lustre
-      storageResources:
-        requests:
-          storage: 4800Gi
   utxoPersister:
     enabled: false
     spec:

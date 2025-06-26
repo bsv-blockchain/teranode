@@ -130,8 +130,8 @@ aws ecr list-images \
   --output text
 
 # Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)
-export OPERATOR_VERSION=v0.4.5
-export TERANODE_VERSION=v0.8.7
+export OPERATOR_VERSION=v0.5.0
+export TERANODE_VERSION=v0.9.11
 export ECR_REGISTRY=434394763103.dkr.ecr.eu-north-1.amazonaws.com
 
 # Login to ECR

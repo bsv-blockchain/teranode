@@ -3,7 +3,7 @@ deployment:
     watch_namespace: "teranode-operator"
   image:
     repository: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-operator
-    tag: v0.4.6
+    tag: v0.5.0
     # pullPolicy: Never is only important when using Minikube
     pullPolicy: Never
   replicaCount: 1
