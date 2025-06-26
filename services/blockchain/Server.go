@@ -257,13 +257,6 @@ func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, strin
 // - HealthResponse with current service status, human-readable details, and timestamp
 // - Error if the health check fails unexpectedly (wrapped for gRPC transmission)
 func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
-	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "HealthGRPC",
-		tracing.WithParentStat(b.stats),
-		tracing.WithCounter(prometheusBlockchainHealth),
-		tracing.WithDebugLogMessage(b.logger, "[HealthGRPC] called"),
-	)
-	defer deferFn()
-
 	status, details, err := b.Health(ctx, false)
 
 	return &blockchain_api.HealthResponse{

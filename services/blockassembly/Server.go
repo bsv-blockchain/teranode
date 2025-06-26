@@ -210,13 +210,6 @@ func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, s
 //   - *blockassembly_api.HealthResponse: Health check response
 //   - error: Any error encountered during health check
 func (ba *BlockAssembly) HealthGRPC(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.HealthResponse, error) {
-	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "HealthGRPC",
-		tracing.WithParentStat(ba.stats),
-		tracing.WithCounter(prometheusBlockAssemblyHealth),
-		tracing.WithDebugLogMessage(ba.logger, "[HealthGRPC] called"),
-	)
-	defer deferFn()
-
 	status, details, err := ba.Health(ctx, false)
 
 	return &blockassembly_api.HealthResponse{
