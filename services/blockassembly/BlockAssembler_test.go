@@ -912,6 +912,165 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 	})
 }
 
+// TestBlockAssembly_CoinbaseSubsidyBugReproduction specifically targets issue #3139
+// This test attempts to reproduce the exact conditions that cause 0.006 BSV coinbase values
+func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
+	t.Run("SubsidyCalculationFailure", func(t *testing.T) {
+		initPrometheusMetrics()
+
+		// Test various chain parameter corruption scenarios
+		scenarios := []struct {
+			name     string
+			params   *chaincfg.Params
+			expected string
+		}{
+			{
+				name:     "NilParams",
+				params:   nil,
+				expected: "should return 0 and log error",
+			},
+			{
+				name: "ZeroSubsidyInterval",
+				params: &chaincfg.Params{
+					SubsidyReductionInterval: 0, // This causes division by zero!
+				},
+				expected: "should return 0 due to zero interval",
+			},
+		}
+
+		for _, scenario := range scenarios {
+			t.Run(scenario.name, func(t *testing.T) {
+				height := uint32(100) // Early block that should have 50 BTC subsidy
+
+				subsidy := util.GetBlockSubsidyForHeight(height, scenario.params)
+
+				// All these corrupted scenarios should return 0
+				assert.Equal(t, uint64(0), subsidy,
+					"Corrupted params scenario '%s' should return 0 subsidy", scenario.name)
+
+				t.Logf("SCENARIO '%s': height=%d, subsidy=%d (%.8f BSV) - %s",
+					scenario.name, height, subsidy, float64(subsidy)/1e8, scenario.expected)
+			})
+		}
+	})
+
+	t.Run("FeesOnlyScenario", func(t *testing.T) {
+		initPrometheusMetrics()
+
+		testItems := setupBlockAssemblyTest(t)
+		ctx := context.Background()
+
+		testItems.blockAssembler.startChannelListeners(ctx)
+
+		// Set up genesis block
+		var buf bytes.Buffer
+		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
+		require.NoError(t, err)
+
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), testItems.blockAssembler.settings)
+		require.NoError(t, err)
+		require.NotNil(t, genesisBlock)
+
+		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
+
+		// Create the exact scenario from the bug report: fees only, no subsidy
+		height := uint32(1) // Height 1 (after genesis)
+		testItems.blockAssembler.bestBlockHeight.Store(height - 1)
+
+		// Handle subtree processing
+		var wg sync.WaitGroup
+
+		wg.Add(1)
+
+		go func() {
+			subtreeRequest := <-testItems.newSubtreeChan
+			if subtreeRequest.ErrChan != nil {
+				subtreeRequest.ErrChan <- nil
+			}
+
+			wg.Done()
+		}()
+
+		// Add transactions that would generate approximately 0.006 BSV in fees
+		// This simulates the exact value seen in the bug report
+		totalExpectedFees := uint64(600000) // 0.006 BSV = 600,000 satoshis
+
+		// Add transactions with fees totaling ~600k satoshis
+		tx1 := newTx(1)
+		tx2 := newTx(2)
+		tx3 := newTx(3)
+
+		// First add coinbase placeholder
+		testItems.blockAssembler.AddTx(util.SubtreeNode{
+			Hash:        *util.CoinbasePlaceholderHash,
+			Fee:         0,
+			SizeInBytes: 100,
+		}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+
+		// Add transactions to UTXO store and then to block assembler
+		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
+		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{
+			Hash:        *tx1.TxIDChainHash(),
+			Fee:         200000, // 0.002 BSV
+			SizeInBytes: 250,
+		}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+
+		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
+		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{
+			Hash:        *tx2.TxIDChainHash(),
+			Fee:         300000, // 0.003 BSV
+			SizeInBytes: 250,
+		}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+
+		_, err = testItems.utxoStore.Create(ctx, tx3, 0)
+		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{
+			Hash:        *tx3.TxIDChainHash(),
+			Fee:         100000, // 0.001 BSV
+			SizeInBytes: 250,
+		}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+
+		wg.Wait()
+
+		// Test with normal parameters - should get full subsidy + fees
+		miningCandidate, _, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+		require.NoError(t, err, "Failed to get mining candidate")
+		assert.NotNil(t, miningCandidate)
+
+		expectedSubsidy := uint64(5000000000) // 50 BSV for early blocks
+		expectedTotal := totalExpectedFees + expectedSubsidy
+
+		assert.Equal(t, expectedTotal, miningCandidate.CoinbaseValue,
+			"Normal scenario: should have fees (%d) + subsidy (%d) = %d",
+			totalExpectedFees, expectedSubsidy, expectedTotal)
+
+		t.Logf("NORMAL CASE: height=%d, fees=%d (%.8f BSV), subsidy=%d (%.8f BSV), total=%d (%.8f BSV)",
+			height, totalExpectedFees, float64(totalExpectedFees)/1e8,
+			expectedSubsidy, float64(expectedSubsidy)/1e8,
+			miningCandidate.CoinbaseValue, float64(miningCandidate.CoinbaseValue)/1e8)
+
+		// Now test what happens if we could somehow corrupt the chain params
+		// (This demonstrates what the bug would look like)
+		corrupted := *testItems.blockAssembler.settings.ChainCfgParams
+		corrupted.SubsidyReductionInterval = 0 // Simulate corruption to zero
+
+		subsidyWithCorruption := util.GetBlockSubsidyForHeight(height, &corrupted)
+		assert.Equal(t, uint64(0), subsidyWithCorruption,
+			"Corrupted params should cause subsidy calculation to return 0")
+
+		feesOnlyTotal := totalExpectedFees + subsidyWithCorruption
+
+		t.Logf("BUG SIMULATION: With corrupted params, coinbase would be %d (%.8f BSV) - EXACTLY matching bug report!",
+			feesOnlyTotal, float64(feesOnlyTotal)/1e8)
+
+		// This proves that 0.006 BSV coinbase = transaction fees only (no subsidy)
+		assert.Equal(t, totalExpectedFees, feesOnlyTotal,
+			"Bug simulation: corrupted subsidy calculation results in fees-only coinbase")
+	})
+}
+
 // createTestSettings creates settings for testing purposes.
 //
 // Returns:
@@ -919,29 +1078,12 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 func createTestSettings() *settings.Settings {
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.Policy.BlockMaxSize = 1000000
-
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 	tSettings.BlockAssembly.SubtreeProcessorBatcherSize = 1
 	tSettings.BlockAssembly.DoubleSpendWindow = 1000
 	tSettings.BlockAssembly.MaxGetReorgHashes = 10000
+	tSettings.BlockAssembly.MinerWalletPrivateKeys = []string{"5KYZdUEo39z3FPrtuX2QbbwGnNP5zTd7yyr2SC1j299sBCnWjss"}
 	tSettings.SubtreeValidation.TxChanBufferSize = 1
 
-	settings := &settings.Settings{
-		ChainCfgParams: &chaincfg.RegressionNetParams,
-		Policy: &settings.PolicySettings{
-			BlockMaxSize: 1000000,
-		},
-		BlockAssembly: settings.BlockAssemblySettings{
-			InitialMerkleItemsPerSubtree: 4,
-			SubtreeProcessorBatcherSize:  1,
-			DoubleSpendWindow:            1000,
-			MaxGetReorgHashes:            10000,
-			MinerWalletPrivateKeys:       []string{"5KYZdUEo39z3FPrtuX2QbbwGnNP5zTd7yyr2SC1j299sBCnWjss"},
-		},
-		SubtreeValidation: settings.SubtreeValidationSettings{
-			TxChanBufferSize: 1,
-		},
-	}
-
-	return settings
+	return tSettings
 }

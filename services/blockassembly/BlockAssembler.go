@@ -780,6 +780,10 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 
 	var coinbaseValue uint64
 
+	currentHeight := b.bestBlockHeight.Load() + 1
+	// Log initial state for debugging
+	b.logger.Infof("Starting coinbase calculation for height %d", currentHeight)
+
 	// Get the hash of the last subtree in the list...
 	// We do this by using the same subtree processor logic to get the top tree hash.
 	id := &chainhash.Hash{}
@@ -801,21 +805,31 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 
 	if len(subtrees) == 0 {
 		txCount = 1
+
+		b.logger.Infof("No subtrees to include, creating empty block with coinbase only")
 	} else {
 		currentBlockSize := uint64(0)
+		totalFees := uint64(0)
+		subtreeCount := 0
 
 		topTree, err := util.NewIncompleteTreeByLeafCount(len(subtrees))
 		if err != nil {
 			return nil, nil, errors.NewProcessingError("error creating top tree", err)
 		}
 
+		b.logger.Infof("Processing %d subtrees for inclusion", len(subtrees))
+
 		for _, subtree := range subtrees {
 			if b.settings.Policy.BlockMaxSize == 0 || currentBlockSize+subtree.SizeInBytes <= blockMaxSizeUint64 {
 				subtreesToInclude = append(subtreesToInclude, subtree)
 				subtreeBytesToInclude = append(subtreeBytesToInclude, subtree.RootHash().CloneBytes())
 				coinbaseValue += subtree.Fees
+				totalFees += subtree.Fees
+				subtreeCount++
 				currentBlockSize += subtree.SizeInBytes
 				_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
+
+				b.logger.Debugf("Included subtree %d: fees=%d, size=%d, total_fees=%d", subtreeCount, subtree.Fees, subtree.SizeInBytes, totalFees)
 
 				lenSubtreeNodesUint32, err := util.SafeIntToUint32(len(subtree.Nodes))
 				if err != nil {
@@ -829,6 +843,8 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 				break
 			}
 		}
+
+		b.logger.Infof("Fee accumulation complete: included %d subtrees, total_fees=%d satoshis (%.8f BSV)", subtreeCount, totalFees, float64(totalFees)/1e8)
 
 		if len(subtreesToInclude) > 0 {
 			coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtreesToInclude)
@@ -880,7 +896,37 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	timeBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
 
-	coinbaseValue += util.GetBlockSubsidyForHeight(b.bestBlockHeight.Load()+1, b.settings.ChainCfgParams)
+	// Log coinbase value before adding subsidy
+	feesOnly := coinbaseValue
+	b.logger.Infof("Before adding subsidy: coinbase_value=%d satoshis (%.8f BSV) from transaction fees", feesOnly, float64(feesOnly)/1e8)
+
+	// Critical subsidy calculation - add comprehensive logging
+	subsidyHeight := b.bestBlockHeight.Load() + 1
+	b.logger.Infof("Calculating block subsidy for height %d", subsidyHeight)
+
+	// Validate ChainCfgParams before using
+	if b.settings.ChainCfgParams == nil {
+		b.logger.Errorf("CRITICAL: ChainCfgParams is nil! This will cause subsidy calculation to fail")
+		return nil, nil, errors.NewProcessingError("ChainCfgParams is nil")
+	}
+
+	blockSubsidy := util.GetBlockSubsidyForHeight(subsidyHeight, b.settings.ChainCfgParams)
+	b.logger.Infof("Block subsidy calculated: %d satoshis (%.8f BSV) for height %d", blockSubsidy, float64(blockSubsidy)/1e8, subsidyHeight)
+
+	coinbaseValue += blockSubsidy
+
+	// Log final coinbase value
+	b.logger.Infof("Final coinbase value: fees=%d + subsidy=%d = total=%d satoshis (%.8f BSV)",
+		feesOnly, blockSubsidy, coinbaseValue, float64(coinbaseValue)/1e8)
+
+	// Additional validation - check for suspicious values
+	if blockSubsidy == 0 && subsidyHeight < 6930000 {
+		b.logger.Errorf("SUSPICIOUS: Block subsidy is 0 for height %d (should be non-zero until height 6930000)", subsidyHeight)
+	}
+
+	if coinbaseValue < blockSubsidy {
+		b.logger.Errorf("CRITICAL BUG: Final coinbase value %d is less than subsidy %d - this indicates an overflow or logic error", coinbaseValue, blockSubsidy)
+	}
 
 	previousHash := b.bestBlockHeader.Load().Hash().CloneBytes()
 
