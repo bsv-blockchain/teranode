@@ -7,15 +7,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"runtime"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
@@ -293,9 +295,18 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 
 func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 	ctx := context.Background()
-	c, _ := txmetacache.NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), txmetacache.Unallocated, 2048)
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	c, _ := txmetacache.NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, txmetacache.Unallocated, 2048)
 	cache := c.(*txmetacache.TxMetaCache)
-	var err error
 
 	for i := 0; i < 1_000_000; i++ {
 		hash := chainhash.HashH([]byte(string(rune(i))))

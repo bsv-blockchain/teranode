@@ -184,6 +184,18 @@ func (m *MockStore) SetUnspendable(ctx context.Context, txHashes []chainhash.Has
 	return nil
 }
 
+func (m *MockStore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+
+func (m *MockStore) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
+	return nil
+}
+
+func (m *MockStore) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
+	return nil
+}
+
 // TestBlock validates the block persistence functionality by:
 // - Creating a test block from mainnet block 100,000
 // - Processing and validating its transactions

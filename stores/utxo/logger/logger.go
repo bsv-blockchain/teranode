@@ -272,3 +272,24 @@ func (s *Store) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, s
 
 	return err
 }
+
+func (s *Store) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
+	hashes, err := s.store.QueryOldUnminedTransactions(ctx, cutoffBlockHeight)
+	s.logger.Debugf("[UTXOStore][logger][QueryOldUnminedTransactions] cutoffBlockHeight %d count %d err %v : %s", cutoffBlockHeight, len(hashes), err, caller())
+
+	return hashes, err
+}
+
+func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
+	err := s.store.PreserveTransactions(ctx, txIDs, preserveUntilHeight)
+	s.logger.Debugf("[UTXOStore][logger][PreserveTransactions] txIDs count %d preserveUntilHeight %d err %v : %s", len(txIDs), preserveUntilHeight, err, caller())
+
+	return err
+}
+
+func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
+	err := s.store.ProcessExpiredPreservations(ctx, currentHeight)
+	s.logger.Debugf("[UTXOStore][logger][ProcessExpiredPreservations] currentHeight %d err %v : %s", currentHeight, err, caller())
+
+	return err
+}

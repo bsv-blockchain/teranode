@@ -48,6 +48,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -194,9 +195,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		txMeta.Unspendable = true
 	}
 
-	var notMined bool // false
+	var unminedSince interface{} = nil // Use nil for mined transactions
 	if len(options.MinedBlockInfos) == 0 {
-		notMined = true
+		unminedSince = blockHeight // Set UnminedSince only for unmined transactions
 	}
 
 	// Insert the transaction row...
@@ -211,7 +212,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		,frozen
 		,conflicting
 		,unspendable
-		,not_mined
+		,unmined_since
 	  ) VALUES (
 		 $1
 		,$2
@@ -263,7 +264,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		options.Frozen,
 		options.Conflicting,
 		options.Unspendable,
-		notMined,
+		unminedSince,
 	).Scan(&transactionID)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
@@ -299,7 +300,18 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	`
 
 	for i, input := range tx.Inputs {
-		_, err = txn.ExecContext(ctx, q, transactionID, i, input.PreviousTxIDChainHash()[:], input.PreviousTxOutIndex, input.PreviousTxSatoshis, input.PreviousTxScript, input.UnlockingScript, input.SequenceNumber)
+		_, err = txn.ExecContext(
+			ctx,
+			q,
+			transactionID,
+			i,
+			input.PreviousTxIDChainHash()[:],
+			input.PreviousTxOutIndex,
+			input.PreviousTxSatoshis,
+			input.PreviousTxScript,
+			input.UnlockingScript,
+			input.SequenceNumber,
+		)
 		if err != nil {
 			if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 				return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
@@ -350,7 +362,17 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 				return nil, err
 			}
 
-			_, err = txn.ExecContext(ctx, q, transactionID, i, output.LockingScript, output.Satoshis, coinbaseSpendingHeight, utxoHash[:], nil)
+			_, err = txn.ExecContext(
+				ctx,
+				q,
+				transactionID,
+				i,
+				output.LockingScript,
+				output.Satoshis,
+				coinbaseSpendingHeight,
+				utxoHash[:],
+				nil,
+			)
 			if err != nil {
 				if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 					return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
@@ -467,6 +489,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		,frozen
 		,conflicting
 		,unspendable
+		,unmined_since
 		FROM transactions
 		WHERE hash = $1
 	`
@@ -478,15 +501,24 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		version           uint32
 		lockTime          uint32
 		spendingDataBytes []byte
+		unminedSince      sql.NullInt64
 	)
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Unspendable)
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Unspendable, &unminedSince)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewTxNotFoundError("transaction %s not found", hash, err)
 		}
 
 		return nil, err
+	}
+
+	// Set UnminedSince from nullable field
+	if unminedSince.Valid {
+		const maxUint32 = 0xFFFFFFFF
+		if unminedSince.Int64 >= 0 && unminedSince.Int64 <= maxUint32 {
+			data.UnminedSince = uint32(unminedSince.Int64)
+		}
 	}
 
 	tx := bt.Tx{
@@ -558,12 +590,12 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 
 	if contains(bins, fields.BlockIDs) {
 		q := `
-			SELECT 
+			SELECT
 			    block_id,
 				block_height,
 				subtree_idx
-			FROM block_ids 
-			WHERE transaction_id = $1 
+			FROM block_ids
+			WHERE transaction_id = $1
 			ORDER BY block_id
 		`
 
@@ -630,7 +662,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		q := `
 			SELECT o.idx, o.spending_data, o.frozen
 			FROM transactions as t, outputs as o
-			WHERE t.hash = $1 
+			WHERE t.hash = $1
 			  AND t.id = o.transaction_id
 			ORDER BY o.idx
 		`
@@ -979,7 +1011,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 
 	q2 := `
 		UPDATE transactions
-		SET 
+		SET
 			unspendable = $2
 		WHERE id = $1
 	`
@@ -1130,10 +1162,10 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 		ON CONFLICT DO NOTHING;
     `
 
-	q2 := `		
+	q2 := `
 		UPDATE transactions SET
 		 unspendable = false
-		,not_mined = false
+		,unmined_since = NULL
 		WHERE hash = $1;
 	`
 
@@ -1451,8 +1483,9 @@ func createPostgresSchema(db *usql.DB) error {
 		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
         ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
         ,unspendable      BOOLEAN DEFAULT FALSE NOT NULL
-		,not_mined        BOOLEAN DEFAULT FALSE NOT NULL
         ,delete_at_height BIGINT
+        ,unmined_since    BIGINT
+        ,preserve_until   BIGINT
         ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -1465,9 +1498,9 @@ func createPostgresSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create ux_transactions_hash index - [%+v]", err)
 	}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_not_mined_transactions ON transactions (not_mined) WHERE not_mined = TRUE;`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_unmined_since_transactions ON transactions (unmined_since) WHERE unmined_since IS NOT NULL;`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create px_not_mined_transactions index - [%+v]", err)
+		return errors.NewStorageError("could not create px_unmined_since_transactions index - [%+v]", err)
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS ux_transactions_delete_at_height ON transactions (delete_at_height) WHERE delete_at_height IS NOT NULL;`); err != nil {
@@ -1498,8 +1531,8 @@ func createPostgresSchema(db *usql.DB) error {
 		DO $$
 		BEGIN
 			IF EXISTS (
-				SELECT 1 FROM information_schema.table_constraints 
-				WHERE table_name = 'inputs' 
+				SELECT 1 FROM information_schema.table_constraints
+				WHERE table_name = 'inputs'
 				AND constraint_type = 'FOREIGN KEY'
 				AND constraint_name = 'inputs_transaction_id_fkey'
 			) THEN
@@ -1513,9 +1546,9 @@ func createPostgresSchema(db *usql.DB) error {
 
 	// Add the new foreign key constraint with ON DELETE CASCADE for inputs
 	if _, err := db.Exec(`
-		ALTER TABLE inputs 
-		ADD CONSTRAINT inputs_transaction_id_fkey 
-		FOREIGN KEY (transaction_id) 
+		ALTER TABLE inputs
+		ADD CONSTRAINT inputs_transaction_id_fkey
+		FOREIGN KEY (transaction_id)
 		REFERENCES transactions(id) ON DELETE CASCADE;
 	`); err != nil {
 		_ = db.Close()
@@ -1548,8 +1581,8 @@ func createPostgresSchema(db *usql.DB) error {
 		DO $$
 		BEGIN
 			IF EXISTS (
-				SELECT 1 FROM information_schema.table_constraints 
-				WHERE table_name = 'outputs' 
+				SELECT 1 FROM information_schema.table_constraints
+				WHERE table_name = 'outputs'
 				AND constraint_type = 'FOREIGN KEY'
 				AND constraint_name = 'outputs_transaction_id_fkey'
 			) THEN
@@ -1563,9 +1596,9 @@ func createPostgresSchema(db *usql.DB) error {
 
 	// Add the new foreign key constraint with ON DELETE CASCADE for outputs
 	if _, err := db.Exec(`
-		ALTER TABLE outputs 
-		ADD CONSTRAINT outputs_transaction_id_fkey 
-		FOREIGN KEY (transaction_id) 
+		ALTER TABLE outputs
+		ADD CONSTRAINT outputs_transaction_id_fkey
+		FOREIGN KEY (transaction_id)
 		REFERENCES transactions(id) ON DELETE CASCADE;
 	`); err != nil {
 		_ = db.Close()
@@ -1602,13 +1635,39 @@ func createPostgresSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not add new columns to block_ids table - [%+v]", err)
 	}
 
+	// Add unmined_since column to transactions table if it doesn't exist
+	if _, err := db.Exec(`
+		DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'unmined_since') THEN
+				ALTER TABLE transactions ADD COLUMN unmined_since BIGINT;
+			END IF;
+		END $$;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add unmined_since column to transactions table - [%+v]", err)
+	}
+
+	// Add preserve_until column to transactions table if it doesn't exist
+	if _, err := db.Exec(`
+		DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'preserve_until') THEN
+				ALTER TABLE transactions ADD COLUMN preserve_until BIGINT;
+			END IF;
+		END $$;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
+	}
+
 	// Drop the existing foreign key constraint if it exists
 	if _, err := db.Exec(`
 		DO $$
 		BEGIN
 			IF EXISTS (
-				SELECT 1 FROM information_schema.table_constraints 
-				WHERE table_name = 'block_ids' 
+				SELECT 1 FROM information_schema.table_constraints
+				WHERE table_name = 'block_ids'
 				AND constraint_type = 'FOREIGN KEY'
 			) THEN
 				ALTER TABLE block_ids DROP CONSTRAINT block_ids_transaction_id_fkey;
@@ -1621,9 +1680,9 @@ func createPostgresSchema(db *usql.DB) error {
 
 	// Add the new foreign key constraint with ON DELETE CASCADE
 	if _, err := db.Exec(`
-		ALTER TABLE block_ids 
-		ADD CONSTRAINT block_ids_transaction_id_fkey 
-		FOREIGN KEY (transaction_id) 
+		ALTER TABLE block_ids
+		ADD CONSTRAINT block_ids_transaction_id_fkey
+		FOREIGN KEY (transaction_id)
 		REFERENCES transactions(id) ON DELETE CASCADE;
 	`); err != nil {
 		_ = db.Close()
@@ -1657,8 +1716,9 @@ func createSqliteSchema(db *usql.DB) error {
 		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
         ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
         ,unspendable      BOOLEAN DEFAULT FALSE NOT NULL
-		,not_mined        BOOLEAN DEFAULT FALSE NOT NULL
         ,delete_at_height BIGINT
+        ,unmined_since    BIGINT
+        ,preserve_until   BIGINT
         ,inserted_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -1671,9 +1731,9 @@ func createSqliteSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create ux_transactions_hash idx - [%+v]", err)
 	}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_not_mined_transactions ON transactions (not_mined) WHERE not_mined = TRUE;`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_unmined_since_transactions ON transactions (unmined_since) WHERE unmined_since IS NOT NULL;`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create px_not_mined_transactions idx - [%+v]", err)
+		return errors.NewStorageError("could not create px_unmined_since_transactions idx - [%+v]", err)
 	}
 
 	// The previous transaction hash may exist in this table
@@ -1741,8 +1801,8 @@ func createSqliteSchema(db *usql.DB) error {
 
 	// Check if we need to migrate the block_ids table in SQLite
 	rows, err := db.Query(`
-		SELECT COUNT(*) 
-		FROM pragma_table_info('block_ids') 
+		SELECT COUNT(*)
+		FROM pragma_table_info('block_ids')
 		WHERE name IN ('block_height', 'subtree_idx')
 	`)
 	if err != nil {
@@ -1774,8 +1834,8 @@ func createSqliteSchema(db *usql.DB) error {
 				,PRIMARY KEY (transaction_id, block_id)
 			);
 
-			INSERT OR IGNORE INTO block_ids_new 
-			SELECT transaction_id, block_id, 0, 0 
+			INSERT OR IGNORE INTO block_ids_new
+			SELECT transaction_id, block_id, 0, 0
 			FROM block_ids;
 
 			DROP TABLE block_ids;
@@ -1789,8 +1849,8 @@ func createSqliteSchema(db *usql.DB) error {
 
 	// Check if we need to migrate the inputs table (check if ON DELETE CASCADE is missing)
 	rows, err = db.Query(`
-		SELECT sql FROM sqlite_master 
-		WHERE type='table' AND name='inputs' 
+		SELECT sql FROM sqlite_master
+		WHERE type='table' AND name='inputs'
 		AND sql NOT LIKE '%ON DELETE CASCADE%'
 	`)
 	if err != nil {
@@ -1816,11 +1876,11 @@ func createSqliteSchema(db *usql.DB) error {
 				,PRIMARY KEY (transaction_id, idx)
 			);
 
-			INSERT OR IGNORE INTO inputs_new 
+			INSERT OR IGNORE INTO inputs_new
 			SELECT * FROM inputs;
 
 			DROP TABLE inputs;
-			
+
 			ALTER TABLE inputs_new RENAME TO inputs;
 		`); err != nil {
 			_ = db.Close()
@@ -1830,8 +1890,8 @@ func createSqliteSchema(db *usql.DB) error {
 
 	// Check if we need to migrate the outputs table (check if ON DELETE CASCADE is missing)
 	rows, err = db.Query(`
-		SELECT sql FROM sqlite_master 
-		WHERE type='table' AND name='outputs' 
+		SELECT sql FROM sqlite_master
+		WHERE type='table' AND name='outputs'
 		AND sql NOT LIKE '%ON DELETE CASCADE%'
 	`)
 	if err != nil {
@@ -1854,16 +1914,191 @@ func createSqliteSchema(db *usql.DB) error {
 				,PRIMARY KEY (transaction_id, idx)
 			);
 
-			INSERT OR IGNORE INTO outputs_new 
+			INSERT OR IGNORE INTO outputs_new
 			SELECT * FROM outputs;
 
 			DROP TABLE outputs;
-			
+
 			ALTER TABLE outputs_new RENAME TO outputs;
 		`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not migrate outputs table - [%+v]", err)
 		}
+	}
+
+	// Check if we need to add the unmined_since column to transactions table
+	rows, err = db.Query(`
+		SELECT COUNT(*)
+		FROM pragma_table_info('transactions')
+		WHERE name = 'unmined_since'
+	`)
+	if err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not check transactions table for unmined_since column - [%+v]", err)
+	}
+
+	var unminedSinceColumnCount int
+
+	if rows.Next() {
+		if err := rows.Scan(&unminedSinceColumnCount); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not scan unmined_since column count - [%+v]", err)
+		}
+	}
+
+	rows.Close()
+
+	// Add unmined_since column if it doesn't exist
+	if unminedSinceColumnCount == 0 {
+		if _, err := db.Exec(`
+			ALTER TABLE transactions ADD COLUMN unmined_since BIGINT;
+		`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not add unmined_since column to transactions table - [%+v]", err)
+		}
+	}
+
+	// Check if we need to add the preserve_until column to transactions table
+	rows, err = db.Query(`
+		SELECT COUNT(*)
+		FROM pragma_table_info('transactions')
+		WHERE name = 'preserve_until'
+	`)
+	if err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not check transactions table for preserve_until column - [%+v]", err)
+	}
+
+	var preserveUntilColumnCount int
+
+	if rows.Next() {
+		if err := rows.Scan(&preserveUntilColumnCount); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not scan preserve_until column count - [%+v]", err)
+		}
+	}
+
+	rows.Close()
+
+	// Add preserve_until column if it doesn't exist
+	if preserveUntilColumnCount == 0 {
+		if _, err := db.Exec(`
+			ALTER TABLE transactions ADD COLUMN preserve_until BIGINT;
+		`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
+		}
+	}
+
+	return nil
+}
+
+// QueryOldUnminedTransactions returns transaction hashes for unmined transactions older than the cutoff height.
+// This method is used by the store-agnostic cleanup implementation.
+func (s *Store) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
+	defer cancelTimeout()
+
+	// Query to find old unmined transactions (extracted from PreserveParentsOfOldUnminedTransactions)
+	q := `
+		SELECT hash
+		FROM transactions
+		WHERE unmined_since IS NOT NULL
+		  AND unmined_since <= $1
+		ORDER BY unmined_since
+		LIMIT 1000
+	`
+
+	rows, err := s.db.QueryContext(ctx, q, cutoffBlockHeight)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to query old unmined transactions", err)
+	}
+	defer rows.Close()
+
+	var txHashes []chainhash.Hash
+
+	for rows.Next() {
+		var hashBytes []byte
+
+		if err := rows.Scan(&hashBytes); err != nil {
+			s.logger.Errorf("[QueryOldUnminedTransactions] Error scanning transaction row: %v", err)
+			continue
+		}
+
+		txHash := chainhash.Hash{}
+		copy(txHash[:], hashBytes)
+		txHashes = append(txHashes, txHash)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.NewStorageError("error iterating unmined transactions", err)
+	}
+
+	return txHashes, nil
+}
+
+// PreserveTransactions marks transactions to be preserved from deletion until a specific block height.
+// This clears any existing DeleteAtHeight and sets PreserveUntil to the specified height.
+// Used to protect parent transactions when cleaning up unmined transactions.
+func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
+	if len(txIDs) == 0 {
+		return nil
+	}
+
+	// Build placeholders for IN clause
+	placeholders := make([]string, len(txIDs))
+	args := make([]interface{}, len(txIDs)+1)
+
+	for i, txID := range txIDs {
+		placeholders[i] = "?"
+		args[i] = txID[:]
+	}
+
+	args[len(txIDs)] = preserveUntilHeight
+
+	query := fmt.Sprintf(`
+		UPDATE transactions 
+		SET preserve_until = ?, delete_at_height = NULL 
+		WHERE hash IN (%s)
+	`, strings.Join(placeholders, ","))
+
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return errors.NewStorageError("failed to preserve transactions", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		s.logger.Warnf("[PreserveTransactions] Could not get rows affected: %v", err)
+	} else {
+		s.logger.Debugf("[PreserveTransactions] Successfully preserved %d out of %d transactions", rowsAffected, len(txIDs))
+	}
+
+	return nil
+}
+
+// ProcessExpiredPreservations handles transactions whose preservation period has expired.
+// For each transaction with PreserveUntil <= currentHeight, it sets an appropriate DeleteAtHeight
+// and clears the PreserveUntil field.
+func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
+	deleteAtHeight := currentHeight + s.settings.UtxoStore.BlockHeightRetention
+
+	query := `
+		UPDATE transactions 
+		SET delete_at_height = ?, preserve_until = NULL
+		WHERE preserve_until IS NOT NULL AND preserve_until <= ?
+	`
+
+	result, err := s.db.ExecContext(ctx, query, deleteAtHeight, currentHeight)
+	if err != nil {
+		return errors.NewStorageError("failed to process expired preservations", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		s.logger.Warnf("[ProcessExpiredPreservations] Could not get rows affected: %v", err)
+	} else {
+		s.logger.Infof("[ProcessExpiredPreservations] Processed %d expired preservations at height %d", rowsAffected, currentHeight)
 	}
 
 	return nil

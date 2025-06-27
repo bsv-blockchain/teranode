@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"sync"
 	"testing"
@@ -15,8 +16,8 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	blob_memory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/null"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -143,11 +144,19 @@ func Test_RemoveTxFromSubtrees(t *testing.T) {
 	t.Run("remove transaction from subtrees", func(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
-		utxosStore := memory.New(ulogger.TestLogger{})
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+
 		tSettings := test.CreateBaseTestSettings()
 		tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
-		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, nil, utxosStore, newSubtreeChan)
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
+		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, nil, utxoStore, newSubtreeChan)
 
 		// add some random nodes to the subtrees
 		for i := uint64(0); i < 42; i++ {
@@ -169,7 +178,7 @@ func Test_RemoveTxFromSubtrees(t *testing.T) {
 		require.NoError(t, stp.CheckSubtreeProcessor())
 
 		// Remove a transaction from the subtree
-		err := stp.removeTxFromSubtrees(context.Background(), txHash)
+		err = stp.removeTxFromSubtrees(context.Background(), txHash)
 		require.NoError(t, err)
 
 		// check that the txHash node has been replaced
@@ -191,11 +200,19 @@ func TestReChainSubtrees(t *testing.T) {
 	// Create a SubtreeProcessor
 	newSubtreeChan := make(chan NewSubtreeRequest)
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
-	utxosStore := memory.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
-	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, nil, utxosStore, newSubtreeChan)
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, nil, utxoStore, newSubtreeChan)
 
 	// add some random nodes to the subtrees
 	for i := uint64(0); i < 42; i++ {
@@ -215,7 +232,7 @@ func TestReChainSubtrees(t *testing.T) {
 	node := stp.chainedSubtrees[5].Nodes[2]
 
 	// remove this node
-	err := stp.chainedSubtrees[5].RemoveNodeAtIndex(2)
+	err = stp.chainedSubtrees[5].RemoveNodeAtIndex(2)
 	require.NoError(t, err)
 
 	// delete from the currentTxMap
@@ -403,9 +420,17 @@ func TestMoveForwardBlock(t *testing.T) {
 		}
 	}()
 
-	logger := ulogger.TestLogger{}
+	logger := ulogger.NewErrorTestLogger(t)
 	subtreeStore, _ := null.New(logger)
-	utxosStore := memory.New(logger)
+
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	settings := test.CreateBaseTestSettings()
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
@@ -413,7 +438,7 @@ func TestMoveForwardBlock(t *testing.T) {
 	blockchainClient := &blockchain.Mock{}
 	blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	stp, _ := NewSubtreeProcessor(context.Background(), logger, settings, subtreeStore, blockchainClient, utxosStore, newSubtreeChan)
+	stp, _ := NewSubtreeProcessor(context.Background(), logger, settings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -451,7 +476,7 @@ func TestMoveForwardBlock(t *testing.T) {
 	wg.Add(5) // we are expecting 2 more subtrees
 
 	stp.SetCurrentBlockHeader(prevBlockHeader)
-	err := stp.MoveForwardBlock(&model.Block{
+	err = stp.MoveForwardBlock(&model.Block{
 		Header: blockHeader,
 		Subtrees: []*chainhash.Hash{
 			stp.chainedSubtrees[0].RootHash(),
@@ -474,10 +499,17 @@ func TestMoveForwardBlock(t *testing.T) {
 // TestMoveForwardBlock tests the moveForwardBlock method
 // bug #1817
 func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
 	subtreeStore := blob_memory.New()
-	utxosStore := memory.New(logger)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	require.NoError(t, err)
 
 	subtreeHash, _ := chainhash.NewHashFromStr("fd61a79793c4fb02ba14b85df98f5f60f727be359089d8fa125c4ce37945106b")
 
@@ -494,7 +526,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	blockchainClient := &blockchain.Mock{}
 	blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	subtreeProcessor, err := NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxosStore, nil)
+	subtreeProcessor, err := NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, nil)
 	require.NoError(t, err)
 
 	hash, _ := chainhash.NewHashFromStr("6affcabb2013261e764a5d4286b463b11127f4fd1de05368351530ddb3f19942")
@@ -552,15 +584,22 @@ func TestIncompleteSubtreeMoveForwardBlock(t *testing.T) {
 	}()
 
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
-	utxosStore := memory.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
 
-	settings := test.CreateBaseTestSettings()
-	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	blockchainClient := &blockchain.Mock{}
 	blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, blockchainClient, utxosStore, newSubtreeChan)
+	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -597,7 +636,7 @@ func TestIncompleteSubtreeMoveForwardBlock(t *testing.T) {
 	// moveForwardBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be moveForwardBlock
 	// new items per file is 2 so there should be 5 subtrees in the chain
-	err := stp.MoveForwardBlock(&model.Block{
+	err = stp.MoveForwardBlock(&model.Block{
 		Header: blockHeader,
 		Subtrees: []*chainhash.Hash{
 			stp.chainedSubtrees[0].RootHash(),
@@ -646,15 +685,23 @@ func TestSubtreeMoveForwardBlockNewCurrent(t *testing.T) {
 	}()
 
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
-	utxosStore := memory.New(ulogger.TestLogger{})
 
-	settings := test.CreateBaseTestSettings()
-	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	blockchainClient := &blockchain.Mock{}
 	blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, blockchainClient, utxosStore, newSubtreeChan)
+	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -689,7 +736,7 @@ func TestSubtreeMoveForwardBlockNewCurrent(t *testing.T) {
 	// moveForwardBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be moveForwardBlock
 	// new items per file is 2 so there should be 4 subtrees in the chain
-	err := stp.MoveForwardBlock(&model.Block{
+	err = stp.MoveForwardBlock(&model.Block{
 		Header: blockHeader,
 		Subtrees: []*chainhash.Hash{
 			stp.chainedSubtrees[0].RootHash(),
@@ -1039,15 +1086,23 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		}()
 
 		subtreeStore := blob_memory.New()
-		utxosStore := memory.New(ulogger.TestLogger{})
 
-		settings := test.CreateBaseTestSettings()
-		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
 
 		blockchainClient := &blockchain.Mock{}
 		blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, blockchainClient, utxosStore, newSubtreeChan)
+		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 
 		for _, txHash := range txHashes {
 			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
@@ -1086,7 +1141,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, subtreeStore.Set(context.Background(), subtree2.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
-		_, _ = utxosStore.Create(context.Background(), coinbaseTx, 0)
+		_, _ = utxoStore.Create(context.Background(), coinbaseTx, 0)
 
 		stp.SetCurrentBlockHeader(blockHeader)
 
@@ -1165,14 +1220,22 @@ func TestMoveBackBlocks(t *testing.T) {
 
 		subtreeStore := blob_memory.New()
 		blockchainClient := &blockchain.Mock{}
-		utxosStore := memory.New(ulogger.TestLogger{})
 
-		settings := test.CreateBaseTestSettings()
-		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
 
 		blockchainClient.Mock.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, blockchainClient, utxosStore, newSubtreeChan)
+		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 
 		for _, txHash := range txHashes {
 			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
@@ -1223,9 +1286,9 @@ func TestMoveBackBlocks(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, subtreeStore.Set(context.Background(), subtree3.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
 
-		_, _ = utxosStore.Create(context.Background(), coinbaseTx, 0)
-		_, _ = utxosStore.Create(context.Background(), coinbaseTx2, 0)
-		_, _ = utxosStore.Create(context.Background(), coinbaseTx3, 0)
+		_, _ = utxoStore.Create(context.Background(), coinbaseTx, 0)
+		_, _ = utxoStore.Create(context.Background(), coinbaseTx2, 0)
+		_, _ = utxoStore.Create(context.Background(), coinbaseTx3, 0)
 
 		stp.SetCurrentBlockHeader(nextBlockHeader)
 
@@ -1390,21 +1453,29 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 	t.Run("small", func(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
-		utxosStore := memory.New(ulogger.TestLogger{})
 
-		settings := test.CreateBaseTestSettings()
-		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, subtreeStore, nil, utxosStore, newSubtreeChan)
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		tSettings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
+		stp, _ := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, subtreeStore, nil, utxoStore, newSubtreeChan)
 
 		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
+		err = subtreeStore.Set(ctx, subtree1.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 		require.NoError(t, err)
 
 		subtree2 := createSubtree(t, 4, false)
 		subtreeBytes, err = subtree2.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
+		err = subtreeStore.Set(ctx, subtree2.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 		require.NoError(t, err)
 
 		block := &model.Block{
@@ -1424,7 +1495,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 
 		_ = blockSubtreesMap
 
-		transactionMap, conflictingNodes, err := stp.CreateTransactionMap(context.Background(), blockSubtreesMap, len(block.Subtrees))
+		transactionMap, conflictingNodes, err := stp.CreateTransactionMap(ctx, blockSubtreesMap, len(block.Subtrees))
 		require.NoError(t, err)
 
 		_ = conflictingNodes
@@ -1547,16 +1618,26 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
-		utxosStore := memory.New(ulogger.TestLogger{})
+
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		tSettings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		mockBlockchainClient := &blockchain.Mock{}
 
 		stp, err := NewSubtreeProcessor(
-			context.Background(),
+			ctx,
 			ulogger.TestLogger{},
 			settings,
 			subtreeStore,
 			mockBlockchainClient,
-			utxosStore,
+			utxoStore,
 			newSubtreeChan,
 		)
 		require.NoError(t, err)
@@ -1637,16 +1718,26 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
-		utxosStore := memory.New(ulogger.TestLogger{})
+
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		tSettings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		mockBlockchainClient := &blockchain.Mock{}
 
 		stp, err := NewSubtreeProcessor(
-			context.Background(),
+			ctx,
 			ulogger.TestLogger{},
 			settings,
 			subtreeStore,
 			mockBlockchainClient,
-			utxosStore,
+			utxoStore,
 			newSubtreeChan,
 		)
 		require.NoError(t, err)

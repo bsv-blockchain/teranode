@@ -22,12 +22,13 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
 	utxoStore "github.com/bitcoin-sv/teranode/stores/utxo"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	utxostoresql "github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -103,6 +104,7 @@ func newTx(lockTime uint32) *bt.Tx {
 	tx.Inputs[0] = &bt.Input{
 		PreviousTxOutIndex: 0,
 		PreviousTxSatoshis: 0,
+		UnlockingScript:    bscript.NewFromBytes([]byte{}),
 		SequenceNumber:     0,
 	}
 	_ = tx.Inputs[0].PreviousTxIDAdd(&chainhash.Hash{})
@@ -300,7 +302,7 @@ var (
 	bits, _      = model.NewNBitFromString("1d00ffff")
 	blockHeader1 = &model.BlockHeader{
 		Version:        1,
-		HashPrevBlock:  chaincfg.TestNetParams.GenesisHash,
+		HashPrevBlock:  chaincfg.RegressionNetParams.GenesisHash,
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
 		Bits:           *bits,
@@ -350,6 +352,8 @@ var (
 )
 
 func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
+	initPrometheusMetrics()
+
 	t.Run("getReorgBlocks nil", func(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		require.NotNil(t, items)
@@ -456,20 +460,29 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 //
 // Returns:
 //   - *baTestItems: Test fixtures and utilities
-func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
+func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	items := baTestItems{}
 
-	items.utxoStore = utxostore.New(ulogger.TestLogger{}) // utxo memory store
-	items.blobStore = memory.New()                        // blob memory store
-	items.txStore = memory.New()                          // tx memory store
+	items.blobStore = memory.New() // blob memory store
+	items.txStore = memory.New()   // tx memory store
 
 	items.newSubtreeChan = make(chan subtreeprocessor.NewSubtreeRequest)
 
-	storeURL, err := url.Parse("sqlitememory://")
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
-	tSettings.ChainCfgParams = &chaincfg.TestNetParams
+	tSettings := createTestSettings()
+
+	utxoStore, err := utxostoresql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	items.utxoStore = utxoStore
+
+	storeURL, err := url.Parse("sqlitememory://")
+	require.NoError(t, err)
 
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
@@ -479,15 +492,10 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 
 	stats := gocore.NewStat("test")
 
-	settings := createTestSettings()
-
-	assert.NotNil(t, settings)
-
-	// we cannot rely on the settings to be set in the test environment
 	ba, _ := NewBlockAssembler(
 		context.Background(),
 		ulogger.TestLogger{},
-		settings,
+		tSettings,
 		stats,
 		items.utxoStore,
 		items.blobStore,
@@ -519,8 +527,6 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 	t.Run("addTx", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		tSettings := createTestSettings()
-
 		ctx := context.Background()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
@@ -532,7 +538,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), tSettings)
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), nil)
 		require.NoError(t, err)
 		require.NotNil(t, genesisBlock)
 

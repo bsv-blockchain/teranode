@@ -3,6 +3,7 @@ package subtreevalidation
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"runtime/pprof"
 	"testing"
@@ -17,7 +18,7 @@ import (
 	blobmemory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka" //nolint:gci
@@ -131,7 +132,21 @@ func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store
 		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
 	)
 
-	utxoStore := memory.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.New("test")
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	if err != nil {
+		panic("failed to parse utxo store url: " + err.Error())
+	}
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	if err != nil {
+		panic("failed to create utxo store: " + err.Error())
+	}
+
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()
 

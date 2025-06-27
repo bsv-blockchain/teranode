@@ -24,7 +24,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/validator"
 	blob_memory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka"
@@ -50,8 +50,8 @@ type testContext struct {
 	syncManager  *SyncManager
 }
 
-func (ctx *testContext) Setup(config *testConfig) error {
-	ctx.cfg = *config
+func (tc *testContext) Setup(config *testConfig) error {
+	tc.cfg = *config
 
 	tSettings := test.CreateBaseTestSettings()
 
@@ -74,7 +74,19 @@ func (ctx *testContext) Setup(config *testConfig) error {
 		return errors.NewServiceError("failed to create block assembly client", err)
 	}
 
-	utxoStore := utxostore.New(ulogger.TestLogger{})
+	ctx := context.Background()
+
+	logger := ulogger.TestLogger{}
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	if err != nil {
+		return errors.NewServiceError("failed to create utxo store", err)
+	}
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	if err != nil {
+		return errors.NewServiceError("failed to create utxo store", err)
+	}
 
 	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, blockAssemblyClient)
 	if err != nil {
@@ -103,20 +115,20 @@ func (ctx *testContext) Setup(config *testConfig) error {
 		nil,
 		&Config{
 			PeerNotifier: peerNotifier,
-			ChainParams:  ctx.cfg.chainParams,
+			ChainParams:  tc.cfg.chainParams,
 			MaxPeers:     8,
 		})
 	if err != nil {
 		return errors.NewServiceError("failed to create SyncManager", err)
 	}
 
-	ctx.syncManager = syncMgr
-	ctx.peerNotifier = peerNotifier
+	tc.syncManager = syncMgr
+	tc.peerNotifier = peerNotifier
 
 	return nil
 }
 
-func (ctx *testContext) Teardown() {
+func (tc *testContext) Teardown() {
 }
 
 // TestPeerConnections tests that the SyncManager tracks the set of connected

@@ -248,6 +248,20 @@ type Store interface {
 	// GetUnminedTxIterator returns an iterator for all unmined transactions in the store.
 	GetUnminedTxIterator() (UnminedTxIterator, error)
 
+	// QueryOldUnminedTransactions returns transaction hashes for unmined transactions older than the cutoff height.
+	// This method is used by the store-agnostic cleanup implementation.
+	QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error)
+
+	// PreserveTransactions marks transactions to be preserved from deletion until a specific block height.
+	// This clears any existing DeleteAtHeight and sets PreserveUntil to the specified height.
+	// Used to protect parent transactions when cleaning up unmined transactions.
+	PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error
+
+	// ProcessExpiredPreservations handles transactions whose preservation period has expired.
+	// For each transaction with PreserveUntil <= currentHeight, it sets an appropriate DeleteAtHeight
+	// and clears the PreserveUntil field.
+	ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error
+
 	// these functions are not pure as they will update the data object in place
 
 	// BatchDecorate efficiently fetches metadata for multiple transactions.

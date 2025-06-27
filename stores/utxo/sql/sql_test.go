@@ -42,13 +42,13 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"net/url"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
 	utxo2 "github.com/bitcoin-sv/teranode/test/longtest/stores/utxo"
@@ -67,7 +67,7 @@ func setup(ctx context.Context, t *testing.T) (*Store, *bt.Tx) {
 	logger := ulogger.TestLogger{}
 
 	tSettings := test.CreateBaseTestSettings()
-	tSettings.UtxoStore.DBTimeout = 30000 * time.Millisecond
+	tSettings.UtxoStore.DBTimeout = 30 * time.Second
 
 	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
 		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
@@ -79,28 +79,28 @@ func setup(ctx context.Context, t *testing.T) (*Store, *bt.Tx) {
 
 	// storeUrl, err := url.Parse("postgres://teranode:teranode@localhost:5432/teranode")
 	// storeUrl, err := url.Parse("sqlite:///test")
-	storeURL, err := url.Parse("sqlitememory:///test")
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 
 	require.NoError(t, err)
 
 	// Create the store
-	store, err := New(ctx, logger, tSettings, storeURL)
+	utxoStore, err := New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
 
 	// Delete the tx so the tests can run cleanly...
-	err = store.Delete(ctx, tx.TxIDChainHash())
+	err = utxoStore.Delete(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 
-	return store, tx
+	return utxoStore, tx
 }
 
 func TestCreate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	utxoStore, tx := setup(ctx, t)
 
-	meta, err := store.Create(ctx, tx, 0)
+	meta, err := utxoStore.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(259), meta.SizeInBytes)
@@ -110,14 +110,14 @@ func TestCreateDuplicate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	utxoStore, tx := setup(ctx, t)
 
-	meta, err := store.Create(ctx, tx, 0)
+	meta, err := utxoStore.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(259), meta.SizeInBytes)
 
-	_, err = store.Create(ctx, tx, 0)
+	_, err = utxoStore.Create(ctx, tx, 0)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrTxExists))
 }
@@ -126,12 +126,13 @@ func TestGet(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	utxoStore, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 0)
+	blockHeight := uint32(12345)
+	_, err := utxoStore.Create(ctx, tx, blockHeight)
 	require.NoError(t, err)
 
-	meta, err := store.Get(ctx, tx.TxIDChainHash())
+	meta, err := utxoStore.Get(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(0), meta.Fee)
@@ -144,37 +145,42 @@ func TestGet(t *testing.T) {
 	assert.Equal(t, uint64(50e8), meta.Tx.Inputs[0].PreviousTxSatoshis)
 	assert.Len(t, meta.BlockIDs, 0)
 	assert.Equal(t, "fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4", tx.TxIDChainHash().String())
+	// Verify that UnminedSince is correctly retrieved for unmined transactions
+	assert.Equal(t, blockHeight, meta.UnminedSince)
 }
 
 func TestGetMeta(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	utxoStore, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 0)
+	blockHeight := uint32(54321)
+	_, err := utxoStore.Create(ctx, tx, blockHeight)
 	require.NoError(t, err)
 
-	meta, err := store.GetMeta(ctx, tx.TxIDChainHash())
+	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 
 	assert.Nil(t, meta.Tx)
+	// Verify that UnminedSince is correctly retrieved in GetMeta for unmined transactions
+	assert.Equal(t, blockHeight, meta.UnminedSince)
 }
 
 func TestGetBlockIDs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	utxoStore, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 0, utxo.WithMinedBlockInfo(
+	_, err := utxoStore.Create(ctx, tx, 0, utxo.WithMinedBlockInfo(
 		utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 123, SubtreeIdx: 1},
 		utxo.MinedBlockInfo{BlockID: 2, BlockHeight: 124, SubtreeIdx: 2},
 		utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 125, SubtreeIdx: 3},
 	))
 	require.NoError(t, err)
 
-	meta, err := store.GetMeta(ctx, tx.TxIDChainHash())
+	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 
 	assert.Len(t, meta.BlockIDs, 3)
@@ -184,12 +190,12 @@ func TestDelete(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	utxoStore, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 0)
+	_, err := utxoStore.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
-	err = store.Delete(ctx, tx.TxIDChainHash())
+	err = utxoStore.Delete(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 }
 
@@ -197,23 +203,23 @@ func TestSpend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	utxoStore, tx := setup(ctx, t)
 
 	spendTx := utxo2.GetSpendingTx(tx, 0)
 
 	spendTx2 := utxo2.GetSpendingTx(tx, 0)
 
-	_, err := store.Create(ctx, tx, 0)
+	_, err := utxoStore.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
-	_, err = store.Spend(ctx, spendTx)
+	_, err = utxoStore.Spend(ctx, spendTx)
 	require.NoError(t, err)
 
 	// Spend again with the same spendingTxID
-	_, err = store.Spend(ctx, spendTx)
+	_, err = utxoStore.Spend(ctx, spendTx)
 	require.NoError(t, err)
 
-	_, err = store.Spend(ctx, spendTx2)
+	_, err = utxoStore.Spend(ctx, spendTx2)
 	require.Error(t, err)
 }
 
@@ -221,11 +227,11 @@ func TestUnspend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	utxoStore, tx := setup(ctx, t)
 
 	spendTx := utxo2.GetSpendingTx(tx, 0)
 
-	_, err := store.Create(ctx, tx, 0)
+	_, err := utxoStore.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
@@ -241,11 +247,11 @@ func TestUnspend(t *testing.T) {
 		SpendingData: spendingData1,
 	}
 
-	_, err = store.Spend(ctx, spendTx)
+	_, err = utxoStore.Spend(ctx, spendTx)
 	require.NoError(t, err)
 
 	// Unspend the utxo
-	err = store.Unspend(ctx, []*utxo.Spend{spend})
+	err = utxoStore.Unspend(ctx, []*utxo.Spend{spend})
 	require.NoError(t, err)
 
 	// Spend again with a different spendingTxID
@@ -253,7 +259,7 @@ func TestUnspend(t *testing.T) {
 	spendingData2 := spendpkg.NewSpendingData(&test2Hash, 2)
 	spend.SpendingData = spendingData2
 
-	_, err = store.Spend(ctx, spendTx)
+	_, err = utxoStore.Spend(ctx, spendTx)
 	require.NoError(t, err)
 }
 
@@ -261,9 +267,9 @@ func TestGetSpend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	utxoStore, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 0)
+	_, err := utxoStore.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
@@ -275,7 +281,7 @@ func TestGetSpend(t *testing.T) {
 		UTXOHash: utxoHash,
 	}
 
-	res, err := store.GetSpend(ctx, spend)
+	res, err := utxoStore.GetSpend(ctx, spend)
 	require.NoError(t, err)
 
 	assert.Equal(t, int(utxo.Status_OK), res.Status)
@@ -286,19 +292,19 @@ func TestSetMinedMulti(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		store, tx := setup(ctx, t)
+		utxoStore, tx := setup(ctx, t)
 
-		_, err := store.Create(ctx, tx, 0)
+		_, err := utxoStore.Create(ctx, tx, 0)
 		require.NoError(t, err)
 
-		err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+		err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
 			BlockID:     1,
 			BlockHeight: 1,
 			SubtreeIdx:  0,
 		})
 		require.NoError(t, err)
 
-		meta, err := store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
+		meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)
 
 		assert.Len(t, meta.BlockIDs, 1)
@@ -309,26 +315,26 @@ func TestSetMinedMulti(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		store, tx := setup(ctx, t)
+		utxoStore, tx := setup(ctx, t)
 
-		_, err := store.Create(ctx, tx, 0)
+		_, err := utxoStore.Create(ctx, tx, 0)
 		require.NoError(t, err)
 
-		err = store.SetUnspendable(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, true)
+		err = utxoStore.SetUnspendable(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, true)
 		require.NoError(t, err)
 
-		meta, err := store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
+		meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)
 		assert.True(t, meta.Unspendable)
 
-		err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+		err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
 			BlockID:     1,
 			BlockHeight: 1,
 			SubtreeIdx:  0,
 		})
 		require.NoError(t, err)
 
-		meta, err = store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
+		meta, err = utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)
 
 		assert.Len(t, meta.BlockIDs, 1)
@@ -341,9 +347,9 @@ func TestBatchDecorate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	utxoStore, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 0)
+	_, err := utxoStore.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	unresolved := utxo.UnresolvedMetaData{
@@ -351,7 +357,7 @@ func TestBatchDecorate(t *testing.T) {
 		Idx:  0,
 	}
 
-	err = store.BatchDecorate(ctx, []*utxo.UnresolvedMetaData{&unresolved})
+	err = utxoStore.BatchDecorate(ctx, []*utxo.UnresolvedMetaData{&unresolved})
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(0), unresolved.Data.Fee)
@@ -370,18 +376,17 @@ func TestPreviousOutputsDecorate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	utxoStore, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 0)
-	require.NoError(t, err)
-
+	// The test transaction from setup() already has inputs that need decorating
+	// Create a parent transaction that the test tx references
 	parentTx, err := bt.NewTxFromString("010000000000000000ef012935b177236ec1cb75cd9fba86d84acac9d76ced9c1b22ba8de4cd2de85a8393000000004948304502200f653627aff050093a83dabc12a2a9b627041d424f2eb18849a2d587f1acd38f022100a23f94acd94a4d24049140d5fbe12448a880fd8f8c1c2b4141f83bef2be409be01ffffffff00f2052a01000000434104ed83808a903a7e25be91349815f5d545f0c9dbec60b8ea914a6d6cbe9f830628039641231e2dbc1c0ca809f13405eb01f3a06614717f7859b788bd1305d9a3f2ac0100f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac00000000")
 	require.NoError(t, err)
 
-	_, err = store.Create(ctx, parentTx, 0)
+	_, err = utxoStore.Create(ctx, parentTx, 0)
 	require.NoError(t, err)
 
-	err = store.PreviousOutputsDecorate(ctx, tx)
+	err = utxoStore.PreviousOutputsDecorate(ctx, tx)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(5_000_000_000), tx.Inputs[0].PreviousTxSatoshis)
@@ -392,16 +397,16 @@ func TestCreateCoinbase(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, _ := setup(ctx, t)
+	utxoStore, _ := setup(ctx, t)
 
 	// Coinbase from block 500,000
 	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff580320a107152f5669614254432f48656c6c6f20576f726c64212f2cfabe6d6dbcbb1b0222e1aeebaca2a9c905bb23a3ad0302898ec600a9033a87ec1645a446010000000000000010f829ba0b13a84def80c389cde9840000ffffffff0174fdaf4a000000001976a914f1c075a01882ae0972f95d3a4177c86c852b7d9188ac00000000")
 	require.NoError(t, err)
 
-	err = store.Delete(ctx, coinbaseTx.TxIDChainHash())
+	err = utxoStore.Delete(ctx, coinbaseTx.TxIDChainHash())
 	require.NoError(t, err)
 
-	meta, err := store.Create(ctx, coinbaseTx, 100)
+	meta, err := utxoStore.Create(ctx, coinbaseTx, 100)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(1253047668), meta.Fee)
@@ -419,23 +424,43 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, tx := setup(ctx, t)
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.UtxoStore.BlockHeightRetention = 1 // Set low retention for this test
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test_tombstone")
+	require.NoError(t, err)
+
+	utxoStore, err := New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	err = utxoStore.Delete(ctx, tx.TxIDChainHash())
+	require.NoError(t, err)
 
 	// Get the cleanup service (singleton)
-	cleanupService, err := store.GetCleanupService()
+	cleanupService, err := utxoStore.GetCleanupService()
 	require.NoError(t, err)
 
 	cleanupService.Start(ctx)
 
 	// Part 1: Test tombstone after spend
-	_, err = store.Create(ctx, tx, 0)
+	_, err = utxoStore.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	// Create a spending transaction that spends outputs 0 and 1
 	spendTx01 := utxo2.GetSpendingTx(tx, 0, 1)
 
 	// Spend the transaction
-	_, err = store.Spend(ctx, spendTx01)
+	_, err = utxoStore.Spend(ctx, spendTx01)
 	require.NoError(t, err)
 
 	doneCh := make(chan string, 1)
@@ -451,18 +476,18 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	}
 
 	// Verify the transaction is now gone (tombstoned)
-	_, err = store.Get(ctx, tx.TxIDChainHash())
+	_, err = utxoStore.Get(ctx, tx.TxIDChainHash())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
 
 	// Part 2: Test tombstone after unspend
-	err = store.SetBlockHeight(2)
+	err = utxoStore.SetBlockHeight(2)
 	require.NoError(t, err)
 
-	err = store.Delete(ctx, tx.TxIDChainHash())
+	err = utxoStore.Delete(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 
-	_, err = store.Create(ctx, tx, 0)
+	_, err = utxoStore.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	// Calculate the UTXO hash for output 0
@@ -480,11 +505,11 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	}
 
 	// Spend the transaction
-	_, err = store.Spend(ctx, spendTx01)
+	_, err = utxoStore.Spend(ctx, spendTx01)
 	require.NoError(t, err)
 
 	// Unspend output 0
-	err = store.Unspend(ctx, []*utxo.Spend{spend0})
+	err = utxoStore.Unspend(ctx, []*utxo.Spend{spend0})
 	require.NoError(t, err)
 
 	// Run cleanup for block height 1
@@ -501,7 +526,7 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	}
 
 	// Verify the transaction is still there (not tombstoned)
-	_, err = store.Get(ctx, tx.TxIDChainHash())
+	_, err = utxoStore.Get(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 
 }
@@ -656,7 +681,7 @@ func TestUnmined(t *testing.T) {
 	t.Run("check_empty_store", func(t *testing.T) {
 		count := 0
 
-		err := store.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM transactions WHERE not_mined = TRUE").Scan(&count)
+		err := store.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM transactions WHERE unmined_since IS NOT NULL").Scan(&count)
 		require.NoError(t, err)
 
 		assert.Equal(t, 0, count)
@@ -680,9 +705,59 @@ func TestUnmined(t *testing.T) {
 
 		count := 0
 
-		err = store.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM transactions WHERE not_mined = TRUE").Scan(&count)
+		err = store.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM transactions WHERE unmined_since IS NOT NULL").Scan(&count)
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, count)
 	})
+}
+
+func TestPreserveParentsOfOldUnminedTransactions(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, tx := setup(ctx, t)
+
+	// Test case 1: No parent preservation needed when blockHeight <= retention
+	count, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, 5, store.settings, store.logger)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	// Test case 2: Create unmined transaction and verify unmined_since
+	currentHeight := uint32(100)
+	_, err = store.Create(ctx, tx, currentHeight)
+	require.NoError(t, err)
+
+	// Verify the transaction has unmined_since set
+	var unminedSince sql.NullInt64
+	err = store.db.QueryRowContext(ctx, "SELECT unmined_since FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&unminedSince)
+	require.NoError(t, err)
+	require.True(t, unminedSince.Valid)
+	assert.Equal(t, int64(currentHeight), unminedSince.Int64)
+
+	// Test case 3: Transaction should not have parents preserved if it's not old enough
+	// Use the actual retention setting from the store
+	retention := store.settings.UtxoStore.UnminedTxRetention
+	cleanupHeight := currentHeight + retention - 1 // Just within retention period
+	count, err = utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, cleanupHeight, store.settings, store.logger)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	// Verify transaction is still there
+	var txCount int
+	err = store.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&txCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, txCount)
+
+	// Test case 4: Transaction should have its parents preserved when it's old enough
+	// Set a preservation height that exceeds retention period
+	cleanupHeight = currentHeight + retention + 1 // Beyond retention period
+	count, err = utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, cleanupHeight, store.settings, store.logger)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	// Verify transaction is still there (NOT deleted with the new behavior)
+	err = store.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM transactions WHERE hash = $1", tx.TxIDChainHash()[:]).Scan(&txCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, txCount) // Should still be 1, not deleted
 }

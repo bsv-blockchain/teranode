@@ -3,7 +3,6 @@ package utxo
 import (
 	"context"
 
-	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -29,6 +28,9 @@ func (m *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint3
 
 func (m *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	args := m.Called(ctx, hash, fields)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
@@ -63,7 +65,8 @@ func (m *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.H
 }
 
 func (m *MockUtxostore) GetUnminedTxIterator() (UnminedTxIterator, error) {
-	return nil, errors.NewProcessingError("not implemented")
+	args := m.Called()
+	return args.Get(0).(UnminedTxIterator), args.Error(1)
 }
 
 func (m *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...fields.FieldName) error {
@@ -129,4 +132,19 @@ func (m *MockUtxostore) SetMedianBlockTime(height uint32) error {
 func (m *MockUtxostore) GetMedianBlockTime() uint32 {
 	args := m.Called()
 	return args.Get(0).(uint32)
+}
+
+func (m *MockUtxostore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
+	args := m.Called(ctx, cutoffBlockHeight)
+	return args.Get(0).([]chainhash.Hash), args.Error(1)
+}
+
+func (m *MockUtxostore) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
+	args := m.Called(ctx, txIDs, preserveUntilHeight)
+	return args.Error(0)
+}
+
+func (m *MockUtxostore) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
+	args := m.Called(ctx, currentHeight)
+	return args.Error(0)
 }

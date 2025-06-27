@@ -20,7 +20,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/null"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -499,12 +499,19 @@ func TestStartHTTPServer(t *testing.T) {
 func Test_handleMultipleTx(t *testing.T) {
 	initPrometheusMetrics()
 
-	logger := ulogger.TestLogger{}
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.BlockAssembly.Disabled = true
 
 	t.Run("Test handleMultipleTx with valid transactions", func(t *testing.T) {
-		utxoStore := memory.New(logger)
+		ctx := context.Background()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		_ = utxoStore.SetBlockHeight(101)
 
 		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, nil)

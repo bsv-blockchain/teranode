@@ -57,6 +57,11 @@ type Data struct {
 	// This can differ from the transaction's own locktime, especially for coinbase transactions.
 	LockTime uint32 `json:"lockTime"`
 
+	// UnminedSince is the block height when an unmined transaction was first stored.
+	// When set to a block height value, it indicates the transaction is unmined.
+	// When 0, it indicates the transaction has been mined.
+	UnminedSince uint32 `json:"unminedSince"`
+
 	// Frozen is a flag indicating if the transaction is frozen
 	Frozen bool `json:"frozen"`
 

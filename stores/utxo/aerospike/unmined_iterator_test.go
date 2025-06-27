@@ -73,10 +73,15 @@ func TestUnminedTxIterator_Integration(t *testing.T) {
 		require.NoError(t, store.Delete(ctx, tx1.TxIDChainHash()))
 		require.NoError(t, store.Delete(ctx, tx2.TxIDChainHash()))
 
-		_, err = store.Create(store.ctx, tx1, 0)
+		currentBlockHeight := uint32(1)
+
+		err = store.SetBlockHeight(currentBlockHeight)
 		require.NoError(t, err)
 
-		_, err = store.Create(store.ctx, tx2, 0, utxo.WithMinedBlockInfo(
+		_, err = store.Create(store.ctx, tx1, currentBlockHeight)
+		require.NoError(t, err)
+
+		_, err = store.Create(store.ctx, tx2, currentBlockHeight, utxo.WithMinedBlockInfo(
 			utxo.MinedBlockInfo{
 				BlockID:     1,
 				BlockHeight: 1,

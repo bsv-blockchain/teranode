@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -16,8 +17,8 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	nodehelpers "github.com/bitcoin-sv/teranode/test/nodeHelpers"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -46,7 +47,16 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 	ctx, cancel := context.WithCancel(context.Background())
 	memStore := memory.New()
 	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
+
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	require.NoError(t, err)
+
 	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
 	require.NoError(t, err)
 

@@ -3,10 +3,11 @@ package alert
 
 import (
 	"context"
+	"net/url"
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -29,17 +30,30 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	t.Run("empty", func(t *testing.T) {
-		utxoStore := memory.New(ulogger.TestLogger{})
+		logger := ulogger.NewErrorTestLogger(t)
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
 
-		_, err := node.AddToConsensusBlacklist(ctx, nil)
+		_, err = node.AddToConsensusBlacklist(ctx, nil)
 		require.Error(t, err)
 	})
 
 	t.Run("freeze", func(t *testing.T) {
-		utxoStore := memory.New(ulogger.TestLogger{})
+		logger := ulogger.NewErrorTestLogger(t)
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		_ = utxoStore.SetBlockHeight(101)
-		_, err := utxoStore.Create(ctx, tx, 101)
+
+		_, err = utxoStore.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
 		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
@@ -83,16 +97,22 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 
 		// check response
 		require.Equal(t, 1, len(response.NotProcessed))
-		require.Contains(t, response.NotProcessed[0].Reason, "is already frozen")
+		require.Contains(t, response.NotProcessed[0].Reason, "already frozen")
 	})
 
 	t.Run("unfreeze", func(t *testing.T) {
-		utxoStore := memory.New(ulogger.TestLogger{})
-		_ = utxoStore.SetBlockHeight(101)
-		_, err := utxoStore.Create(ctx, tx, 101)
+		logger := ulogger.NewErrorTestLogger(t)
+		tSettings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		tSettings := test.CreateBaseTestSettings()
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
+		_ = utxoStore.SetBlockHeight(101)
+		_, err = utxoStore.Create(ctx, tx, 101)
+		require.NoError(t, err)
 
 		utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 		require.NoError(t, err)
@@ -171,9 +191,17 @@ func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 	})
 
 	t.Run("re-assign tx input 0", func(t *testing.T) {
-		utxoStore := memory.New(ulogger.TestLogger{})
+		logger := ulogger.NewErrorTestLogger(t)
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		_ = utxoStore.SetBlockHeight(101)
-		_, err := utxoStore.Create(ctx, tx, 101)
+
+		_, err = utxoStore.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
 		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
@@ -228,8 +256,6 @@ func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 
 		newUtxoHash, err := util.UTXOHashFromInput(confiscationTransaction.Inputs[0])
 		require.NoError(t, err)
-
-		tSettings := test.CreateBaseTestSettings()
 
 		// freeze the utxo
 		err = utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{

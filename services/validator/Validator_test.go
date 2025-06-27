@@ -40,9 +40,9 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
-	utxoMemorystore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/nullstore"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -73,7 +73,16 @@ func BenchmarkValidator(b *testing.B) {
 	blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
 	require.NoError(b, err)
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoMemorystore.New(ulogger.TestLogger{}), nil, nil, blockAssemblyClient)
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(b, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(b, err)
+
+	v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, blockAssemblyClient)
 	if err != nil {
 		panic(err)
 	}
@@ -98,9 +107,16 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	// need to add spendable utxo to utxo store
 
 	// delete spends set to false
-	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
 
 	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)
@@ -122,28 +138,35 @@ func TestValidate_ValidTransaction(t *testing.T) {
 		tracing.SetupMockTracer()
 
 		// delete spends set to false
-		utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
-
-		txMeta, err := utxoStore.Create(t.Context(), tests.ParentTx, 122)
-		require.NoError(t, err)
-
-		assert.Len(t, txMeta.BlockIDs, 0)
-
-		txMeta, err = utxoStore.Create(t.Context(), tests.Tx, 123)
-		require.NoError(t, err)
-
-		assert.Len(t, txMeta.BlockIDs, 0)
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
 
 		tSettings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
+		txMeta, err := utxoStore.Create(ctx, tests.ParentTx, 122)
+		require.NoError(t, err)
+
+		assert.Len(t, txMeta.BlockIDs, 0)
+
+		txMeta, err = utxoStore.Create(ctx, tests.Tx, 123)
+		require.NoError(t, err)
+
+		assert.Len(t, txMeta.BlockIDs, 0)
 
 		blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
 		require.NoError(t, err)
 
-		v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, blockAssemblyClient)
+		v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, blockAssemblyClient)
 		require.NoError(t, err)
 
 		// validate the transaction and make sure we are not getting blockIDs
-		txMeta, err = v.Validate(t.Context(), tests.Tx, 123)
+		txMeta, err = v.Validate(ctx, tests.Tx, 123)
 		require.NoError(t, err)
 
 		assert.Len(t, txMeta.BlockIDs, 0)
@@ -157,7 +180,7 @@ func TestValidate_ValidTransaction(t *testing.T) {
 		require.NoError(t, err)
 
 		// validate the transaction and make sure we are getting blockIDs
-		txMeta, err = v.Validate(t.Context(), tests.Tx, 123)
+		txMeta, err = v.Validate(ctx, tests.Tx, 123)
 		require.NoError(t, err)
 
 		assert.Len(t, txMeta.BlockIDs, 1)
@@ -232,20 +255,27 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 	tx, err := bt.NewTxFromString(txHex)
 	require.NoError(t, err)
 
-	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	initPrometheusMetrics()
 
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 
-	tSettings := test.CreateBaseTestSettings()
-	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
-
 	v := &Validator{
-		logger:                        ulogger.TestLogger{},
+		logger:                        logger,
 		settings:                      tSettings,
-		txValidator:                   NewTxValidator(ulogger.TestLogger{}, tSettings),
+		txValidator:                   NewTxValidator(logger, tSettings),
 		utxoStore:                     utxoStore,
 		blockAssembler:                nil,
 		saveInParallel:                true,
@@ -274,11 +304,23 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	tx, err := bt.NewTxFromString(txHex)
 	require.NoError(t, err)
 
-	parenTxHex := "0100000001154d5d31268f7ea94c80a7bf6de54e47812712feec25c17b8feceb570dfd9daf000000008b4830450220612b3ec065ec2b2a1757d97b7f57fba3c363645355cf6e1a5a1834411e6ab425022100bd071b90d391eb75dc9e2eea8b6774f36bf9c55439a971f0d1f4470b6448aef601410426e4e0654f72721b97a03c8170417c9ddabadcef97fe8ea626176ea62665b55ca2ff485f84df12ddec171e01ee8f9c7472c6c8467b0cf74ae8b3b614ed16cbdbffffffff0280841e00000000001976a914996ed5e55d68aef653c85339f83873fac1321f0788ac60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac00000000"
+	parenTxHex := "010000000000000000ef01154d5d31268f7ea94c80a7bf6de54e47812712feec25c17b8feceb570dfd9daf000000008b4830450220612b3ec065ec2b2a1757d97b7f57fba3c363645355cf6e1a5a1834411e6ab425022100bd071b90d391eb75dc9e2eea8b6774f36bf9c55439a971f0d1f4470b6448aef601410426e4e0654f72721b97a03c8170417c9ddabadcef97fe8ea626176ea62665b55ca2ff485f84df12ddec171e01ee8f9c7472c6c8467b0cf74ae8b3b614ed16cbdbffffffff008a6600000000001976a91429be45311cc66a5a6cc4a42516dbb7c9b126a3c188ac0280841e00000000001976a914996ed5e55d68aef653c85339f83873fac1321f0788ac60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac00000000"
+
 	parentTx, err := bt.NewTxFromString(parenTxHex)
 	require.NoError(t, err)
 
-	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
 	_ = utxoStore.SetBlockHeight(257727)
 	//nolint:gosec
 	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
@@ -288,9 +330,6 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 
 	initPrometheusMetrics()
 
-	tSettings := settings.NewSettings()
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
-
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 
@@ -298,9 +337,9 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	blockAssembler.returnError = errors.NewServiceError("block assembly error")
 
 	v := &Validator{
-		logger:                        ulogger.TestLogger{},
+		logger:                        logger,
 		settings:                      tSettings,
-		txValidator:                   NewTxValidator(ulogger.TestLogger{}, tSettings),
+		txValidator:                   NewTxValidator(logger, tSettings),
 		utxoStore:                     utxoStore,
 		blockAssembler:                blockAssembler,
 		saveInParallel:                true,
@@ -829,12 +868,19 @@ func TestFalseOrEmptyTopStackElementScriptError(t *testing.T) {
 func TestValidator_TwoPhaseCommitTransaction(t *testing.T) {
 	tracing.SetupMockTracer()
 
-	ctx := context.Background()
-
 	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
 	require.NoError(t, err)
 
-	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	_, err = utxoStore.Create(ctx, tx, 100, utxostore.WithUnspendable(true))
 	require.NoError(t, err)
@@ -870,7 +916,15 @@ func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
 	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
 	require.NoError(t, err)
 
-	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	// Add the tx as spendable (Unspendable == false)
 	_, err = utxoStore.Create(ctx, tx, 100, utxostore.WithUnspendable(false))
@@ -900,7 +954,7 @@ func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
 }
 
 type FailingUtxoStore struct {
-	utxoMemorystore.Memory
+	*sql.Store
 }
 
 func (f *FailingUtxoStore) SetUnspendable(ctx context.Context, hashes []chainhash.Hash, unspendable bool) error {
@@ -908,8 +962,23 @@ func (f *FailingUtxoStore) SetUnspendable(ctx context.Context, hashes []chainhas
 }
 
 func NewFailingUtxoStore() *FailingUtxoStore {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	if err != nil {
+		panic(err)
+	}
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	if err != nil {
+		panic(err)
+	}
+
 	return &FailingUtxoStore{
-		Memory: *utxoMemorystore.New(ulogger.TestLogger{}),
+		Store: utxoStore,
 	}
 }
 
@@ -947,11 +1016,24 @@ func TestValidator_UnspendableFlagChangedIfBlockAssemblyStoreSucceeds(t *testing
 	tracing.SetupMockTracer()
 
 	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
 
-	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	txs := transactions.CreateTestTransactionChainWithCount(t, 3)
-	_, err := utxoStore.Create(ctx, txs[0], 101, utxostore.WithUnspendable(false))
+
+	_, err = utxoStore.Create(
+		ctx,
+		txs[0],
+		1,
+		utxostore.WithUnspendable(false),
+	)
 	require.NoError(t, err)
 
 	blockAsmMock := blockassembly.NewMock()
@@ -971,8 +1053,12 @@ func TestValidator_UnspendableFlagChangedIfBlockAssemblyStoreSucceeds(t *testing
 	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(1)
 
+	err = utxoStore.SetBlockHeight(2)
+	require.NoError(t, err)
+
 	opts := &Options{AddTXToBlockAssembly: true}
-	_, err = v.ValidateWithOptions(ctx, txs[1], 100, opts)
+
+	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
 	require.NoError(t, err)
 
 	meta, err := utxoStore.GetMeta(ctx, txs[1].TxIDChainHash())
@@ -985,13 +1071,27 @@ func TestValidator_UnspendableFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *test
 
 	ctx := context.Background()
 
-	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+	logger := ulogger.NewErrorTestLogger(t)
 
-	txs := transactions.CreateTestTransactionChainWithCount(t, 3)
-	_, err := utxoStore.Create(ctx, txs[0], 101, utxostore.WithUnspendable(false))
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
 
-	_, err = utxoStore.Create(ctx, txs[1], 101, utxostore.WithUnspendable(true))
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+
+	_, err = utxoStore.Create(
+		ctx,
+		txs[0],
+		1,
+		utxostore.WithUnspendable(false),
+	)
+	require.NoError(t, err)
+
+	_, err = utxoStore.Create(ctx, txs[1], 2, utxostore.WithUnspendable(true))
 	require.NoError(t, err)
 
 	blockAsmMock := blockassembly.NewMock()
@@ -1012,7 +1112,11 @@ func TestValidator_UnspendableFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *test
 		Return(false, errors.New(errors.ERR_PROCESSING, "tx rejected")).Once()
 
 	opts := &Options{AddTXToBlockAssembly: true}
-	_, err = v.ValidateWithOptions(ctx, txs[1], 100, opts)
+
+	err = utxoStore.SetBlockHeight(2) // We need to set this for the SQL implementation
+	require.NoError(t, err)
+
+	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
 	require.NoError(t, err)
 
 	meta, err := utxoStore.GetMeta(ctx, txs[1].TxIDChainHash())

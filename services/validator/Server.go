@@ -820,7 +820,6 @@ func (v *Server) startAndMonitorHTTPServer(ctx context.Context, httpAddresses st
 			} else {
 				v.logger.Errorf("failed to start http server: %v", err)
 			}
-
 		}
 	}()
 

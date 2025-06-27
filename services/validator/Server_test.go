@@ -318,7 +318,6 @@ func TestHTTPServerIntegration(t *testing.T) {
 			} else {
 				server.logger.Errorf("failed to start http server: %v", err)
 			}
-
 		}
 
 		close(readyCh)

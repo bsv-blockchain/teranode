@@ -39,7 +39,7 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 
 	stmt := as.NewStatement(store.namespace, store.setName)
 
-	err := stmt.SetFilter(as.NewEqualFilter(fields.NotMined.String(), int64(1)))
+	err := stmt.SetFilter(as.NewRangeFilter(fields.UnminedSince.String(), 1, int64(4294967295))) // Max uint32
 	if err != nil {
 		return nil, err
 	}

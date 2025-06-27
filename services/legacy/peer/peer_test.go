@@ -23,7 +23,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/legacy/peer_api"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/btcsuite/go-socks/socks"
@@ -1170,7 +1170,14 @@ func NewTestServer(t *testing.T) (*legacy.Server, error) {
 	}
 
 	memStore := memory.New()
-	utxoStore := utxostore.New(logger)
+
+	ctx := context.Background()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	return legacy.New(logger, tSettings, blockchainClient, nil, memStore, memStore, utxoStore, nil, nil, nil), nil
 }

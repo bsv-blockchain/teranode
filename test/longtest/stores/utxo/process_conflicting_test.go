@@ -1,11 +1,14 @@
 package utxo
 
 import (
+	"context"
+	"net/url"
 	"testing"
 
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,7 +55,17 @@ var txsNeededForProcessing = []string{
 
 // GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhash.Hash) ([]chainhash.Hash, error) {
 func TestGetCounterConflictingTxHashes(t *testing.T) {
-	utxoStore := memory.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
 	blockHeight := uint32(892821)
 
 	// create all the parent transactions
@@ -74,6 +87,7 @@ func TestGetCounterConflictingTxHashes(t *testing.T) {
 	// spend the counter conflicting transaction
 	spends, err := utxoStore.Spend(t.Context(), txCounterConflicting)
 	require.NoError(t, err)
+
 	_ = spends
 
 	// create the counter conflicting transaction

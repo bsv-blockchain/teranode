@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
+	"net/url"
 	"testing"
 	"time"
 
@@ -14,8 +15,8 @@ import (
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/settings"
 	memory_blob "github.com/bitcoin-sv/teranode/stores/blob/memory"
-	memory_utxo "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -265,24 +266,28 @@ type testContext struct {
 }
 
 func setup(t *testing.T) *testContext {
-	// logger := ulogger.TestLogger{}
-	logger := ulogger.NewZeroLogger("test")
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings()
 
-	utxoStore := memory_utxo.New(logger)
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	require.NoError(t, err)
+
 	txStore := memory_blob.New()
 	blockchainClient := &blockchain.Mock{}
 	subtreeStore := memory_blob.New()
 	blockStore := memory_blob.New()
 
-	tSettings := test.CreateBaseTestSettings()
-
-	repo, err := NewRepository(logger, tSettings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+	repo, err := NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
 	require.NoError(t, err)
 
 	return &testContext{
 		repo:     repo,
 		logger:   logger,
-		settings: tSettings,
+		settings: settings,
 	}
 }
 

@@ -1056,3 +1056,21 @@ func (t *TxMetaCache) SetMedianBlockTime(height uint32) error {
 func (t *TxMetaCache) GetMedianBlockTime() uint32 {
 	return t.utxoStore.GetMedianBlockTime()
 }
+
+// QueryOldUnminedTransactions forwards the query request to the underlying UTXO store.
+// The cache doesn't directly manage unmined transactions, so this is a pass-through operation.
+func (t *TxMetaCache) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
+	return t.utxoStore.QueryOldUnminedTransactions(ctx, cutoffBlockHeight)
+}
+
+// PreserveTransactions forwards the preservation request to the underlying UTXO store.
+// The cache doesn't directly manage transaction preservation, so this is a pass-through operation.
+func (t *TxMetaCache) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
+	return t.utxoStore.PreserveTransactions(ctx, txIDs, preserveUntilHeight)
+}
+
+// ProcessExpiredPreservations forwards the request to the underlying UTXO store.
+// The cache doesn't directly manage preservation expiry, so this is a pass-through operation.
+func (t *TxMetaCache) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
+	return t.utxoStore.ProcessExpiredPreservations(ctx, currentHeight)
+}

@@ -1,7 +1,9 @@
 package blockassembly
 
 import (
+	"context"
 	"fmt"
+	"net/url"
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -10,10 +12,11 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
-	utxomemory "github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -134,15 +137,23 @@ func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *util.Subtree, *util.S
 }
 
 func setupServer(t *testing.T) (*BlockAssembly, *memory.Memory) {
-	tSettings := createTestSettings()
-
 	subtreeStore := memory.New()
 	blockchainClient := &blockchain.Mock{}
 
 	blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
 	blockchainClient.On("SendNotification", mock.Anything, mock.Anything).Return(nil)
 
-	utxoStore := utxomemory.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
 	_ = utxoStore.SetBlockHeight(123)
 
 	s := New(ulogger.TestLogger{}, tSettings, nil, utxoStore, subtreeStore, blockchainClient)

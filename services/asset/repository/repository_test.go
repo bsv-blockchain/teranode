@@ -11,7 +11,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -37,7 +37,16 @@ func TestTransaction(t *testing.T) {
 	var blockStore blob.Store
 
 	txStore := getMemoryStore(t)
-	utxoStore := memory.New(ulogger.TestLogger{})
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings()
 
@@ -148,8 +157,16 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	blockStore := getMemoryStore(t)
 	subtreeStore := getMemoryStore(t)
 	txStore := getMemoryStore(t)
-	utxoStore := memory.New(ulogger.TestLogger{})
 
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	require.NoError(t, err)
 	tSettings := test.CreateBaseTestSettings()
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)

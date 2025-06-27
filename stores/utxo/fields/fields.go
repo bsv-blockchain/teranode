@@ -67,9 +67,17 @@ const (
 	Reassignments FieldName = "reassignments"
 	// DeleteAtHeight specifies the block height at which the record should be deleted
 	DeleteAtHeight FieldName = "deleteAtHeight"
-	//  NotMined is an integer field that is set to 1 when a transaction is unminded and removed (nil) when it has.
-	// The idea is to create a secondary index on this field which will only contain records that have this field set."
-	NotMined FieldName = "notMined"
+	// CreatedAt is the timestamp when the unmined transaction was first added to the store
+	CreatedAt FieldName = "createdAt"
+	// UnminedSince is the block height when an unmined transaction was first stored.
+	// When set to a block height value, it indicates the transaction is unmined.
+	// When nil/not set, it indicates the transaction has been mined.
+	// This field replaces the combination of NotMined and StoredAtHeight for unmined transactions.
+	UnminedSince FieldName = "unminedSince"
+	// PreserveUntil specifies a block height until which a transaction should be preserved from deletion.
+	// When set, it overrides DeleteAtHeight - the transaction won't be deleted until after this height.
+	// This is used to protect parent transactions of unmined transactions from being deleted.
+	PreserveUntil FieldName = "preserveUntil"
 )
 
 // String returns the string representation of the FieldName.

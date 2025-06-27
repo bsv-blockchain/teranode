@@ -708,8 +708,13 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	batches[0] = append(batches[0], aerospike.NewBin(fields.SubtreeIdxs.String(), subtreeIdxs))
 	batches[0] = append(batches[0], aerospike.NewBin(fields.TotalUtxos.String(), len(utxos)))
 
+	// Set UnminedSince for unmined transactions (when no blockIDs/blockHeights)
 	if len(blockIDs) == 0 && len(blockHeights) == 0 && len(subtreeIdxs) == 0 {
-		batches[0] = append(batches[0], aerospike.NewBin(fields.NotMined.String(), aerospike.NewIntegerValue(1)))
+		batches[0] = append(batches[0], aerospike.NewBin(fields.UnminedSince.String(), aerospike.NewIntegerValue(int(blockHeight))))
+	}
+
+	if len(blockIDs) == 0 && len(blockHeights) == 0 && len(subtreeIdxs) == 0 {
+		batches[0] = append(batches[0], aerospike.NewBin(fields.CreatedAt.String(), aerospike.NewIntegerValue(int(time.Now().Unix()))))
 	}
 
 	if len(batches) > 1 {

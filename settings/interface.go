@@ -271,6 +271,8 @@ type AdvertisingSettings struct {
 type UtxoStoreSettings struct {
 	UtxoStore                        *url.URL
 	BlockHeightRetention             uint32
+	UnminedTxRetention               uint32
+	ParentPreservationBlocks         uint32
 	OutpointBatcherSize              int
 	OutpointBatcherDurationMillis    int
 	SpendBatcherConcurrency          int

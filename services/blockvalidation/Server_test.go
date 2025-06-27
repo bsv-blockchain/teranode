@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka"
@@ -83,7 +84,7 @@ func TestOneTransaction(t *testing.T) {
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
 
-	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
+	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size())) // nolint:gosec
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
 
@@ -150,7 +151,7 @@ func TestTwoTransactions(t *testing.T) {
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
 
-	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
+	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size())) // nolint:gosec
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
 
@@ -231,7 +232,7 @@ func TestMerkleRoot(t *testing.T) {
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
 
-	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size()))
+	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size())) // nolint:gosec
 
 	ctx := context.Background()
 	subtreeStore := memory.New()
@@ -340,7 +341,17 @@ func Test_Server_processBlockFound(t *testing.T) {
 	blockchainStore := blockchain_store.NewMockStore()
 	blockchainStore.BlockExists[*block.Header.HashPrevBlock] = true
 
-	utxoStore := utxostore.New(ulogger.TestLogger{})
+	logger := ulogger.NewErrorTestLogger(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	if err != nil {
+		panic(err)
+	}
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	if err != nil {
+		panic(err)
+	}
 
 	txStore := memory.New()
 
@@ -407,9 +418,10 @@ func TestServer_catchup(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	settings := test.CreateBaseTestSettings()
-	settings.BlockValidation.CatchupConcurrency = 1
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.BlockValidation.CatchupConcurrency = 1
 
 	baseURL := "http://test.com"
 
@@ -419,16 +431,27 @@ func TestServer_catchup(t *testing.T) {
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
 		require.NoError(t, err)
 
-		utxoStore := utxostore.New(ulogger.TestLogger{})
+		tSettings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		if err != nil {
+			panic(err)
+		}
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		if err != nil {
+			panic(err)
+		}
+
 		_ = utxoStore.SetBlockHeight(200)
 
-		settings.GlobalBlockHeightRetention = uint32(0)
+		tSettings.GlobalBlockHeightRetention = uint32(0)
 
 		server := &Server{
 			logger:               logger,
-			settings:             settings,
+			settings:             tSettings,
 			blockchainClient:     mockBlockchainClient,
-			blockValidation:      NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil),
+			blockValidation:      NewBlockValidation(ctx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
 			utxoStore:            utxoStore,
 			processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		}
@@ -477,11 +500,17 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	settings := test.CreateBaseTestSettings()
-	settings.BlockValidation.CatchupConcurrency = 1
+	logger := ulogger.NewErrorTestLogger(t)
 
-	utxoStore := utxostore.New(ulogger.TestLogger{})
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.BlockValidation.CatchupConcurrency = 1
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
 	_ = utxoStore.SetBlockHeight(110)
 
 	baseURL := "http://test.com"
@@ -492,13 +521,13 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
 		require.NoError(t, err)
 
-		settings.GlobalBlockHeightRetention = uint32(0)
+		tSettings.GlobalBlockHeightRetention = uint32(0)
 
 		server := &Server{
 			logger:               logger,
-			settings:             settings,
+			settings:             tSettings,
 			blockchainClient:     mockBlockchainClient,
-			blockValidation:      NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil),
+			blockValidation:      NewBlockValidation(ctx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
 			utxoStore:            utxoStore,
 			processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		}
@@ -543,13 +572,13 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
 		require.NoError(t, err)
 
-		settings.GlobalBlockHeightRetention = uint32(0)
+		tSettings.GlobalBlockHeightRetention = uint32(0)
 
 		server := &Server{
 			logger:               logger,
-			settings:             settings,
+			settings:             tSettings,
 			blockchainClient:     mockBlockchainClient,
-			blockValidation:      NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil),
+			blockValidation:      NewBlockValidation(ctx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
 			processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		}
 
@@ -573,12 +602,12 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
 		require.NoError(t, err)
 
-		settings.GlobalBlockHeightRetention = uint32(0)
+		tSettings.GlobalBlockHeightRetention = uint32(0)
 		server := &Server{
 			logger:               logger,
-			settings:             settings,
+			settings:             tSettings,
 			blockchainClient:     mockBlockchainClient,
-			blockValidation:      NewBlockValidation(ctx, logger, settings, mockBlockchainClient, nil, nil, nil, nil),
+			blockValidation:      NewBlockValidation(ctx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
 			processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		}
 
@@ -611,15 +640,23 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 
 func Test_checkSecretMining(t *testing.T) {
 	t.Run("secret mining 10 blocks", func(t *testing.T) {
-		settings := test.CreateBaseTestSettings()
-		settings.BlockValidation.SecretMiningThreshold = 10
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.BlockValidation.SecretMiningThreshold = 10
 
-		utxoStore := utxostore.New(ulogger.TestLogger{})
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		_ = utxoStore.SetBlockHeight(110)
 
 		blockchainClient := &blockchain.Mock{}
 
-		server := New(ulogger.TestLogger{}, settings, nil, nil, utxoStore, nil, blockchainClient, nil)
+		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil)
 
 		block := &model.Block{Height: 110}
 
@@ -645,17 +682,25 @@ func Test_checkSecretMining(t *testing.T) {
 	})
 
 	t.Run("secret mining from 0", func(t *testing.T) {
-		settings := test.CreateBaseTestSettings()
-		settings.BlockValidation.SecretMiningThreshold = 10
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.BlockValidation.SecretMiningThreshold = 10
 
-		utxoStore := utxostore.New(ulogger.TestLogger{})
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		_ = utxoStore.SetBlockHeight(0)
 
 		blockchainClient := &blockchain.Mock{}
 		blockBytes, err := hex.DecodeString("0000002006226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f1633819a69afbd7ce1f1a01c3b786fcbb023274f3b15172b24feadd4c80e6c6a8b491267ffff7f20040000000102000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
 		require.NoError(t, err)
 
-		server := New(ulogger.TestLogger{}, settings, nil, nil, utxoStore, nil, blockchainClient, nil)
+		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil)
 
 		block, err := model.NewBlockFromBytes(blockBytes, nil)
 		require.NoError(t, err)
@@ -671,17 +716,25 @@ func Test_checkSecretMining(t *testing.T) {
 
 func Test_checkSecretMining_blockchainClientError(t *testing.T) {
 	t.Run("blockchain client returns error", func(t *testing.T) {
-		settings := test.CreateBaseTestSettings()
-		settings.BlockValidation.SecretMiningThreshold = 10
+		tSettings := test.CreateBaseTestSettings()
+		tSettings.BlockValidation.SecretMiningThreshold = 10
 
-		utxoStore := utxostore.New(ulogger.TestLogger{})
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		_ = utxoStore.SetBlockHeight(100)
 
 		blockchainClient := &blockchain.Mock{}
 		errExpected := errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found")
 		blockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errExpected).Once()
 
-		server := New(ulogger.TestLogger{}, settings, nil, nil, utxoStore, nil, blockchainClient, nil)
+		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil)
 
 		secretMining, err := server.checkSecretMining(t.Context(), &chainhash.Hash{})
 		assert.Error(t, err)

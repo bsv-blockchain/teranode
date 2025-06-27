@@ -3,16 +3,18 @@ package txmetacache
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"testing"
 	"unsafe"
 
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -25,10 +27,21 @@ var (
 )
 
 func Test_txMetaCache_GetMeta(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
 	t.Run("test empty", func(t *testing.T) {
 		ctx := context.Background()
 
-		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), Unallocated)
+		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		_, err := c.GetMeta(ctx, &chainhash.Hash{})
 		require.Error(t, err)
 	})
@@ -36,7 +49,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test in cache", func(t *testing.T) {
 		ctx := context.Background()
 
-		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), Unallocated)
+		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)
 
 		meta, err := c.Create(ctx, coinbaseTx, 100)
@@ -53,7 +66,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test set cache", func(t *testing.T) {
 		ctx := context.Background()
 
-		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), Unallocated)
+		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 
 		metaData := &meta.Data{
 			Fee:         100,
@@ -77,7 +90,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test set cache from tx", func(t *testing.T) {
 		ctx := context.Background()
 
-		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), Unallocated)
+		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 
 		metaData, err := util.TxMetaDataFromTx(tests.Tx)
 		require.NoError(t, err)
@@ -101,8 +114,17 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 
 func Benchmark_txMetaCache_Set(b *testing.B) {
 	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, memory.New(logger), Unallocated)
+	logger := ulogger.NewErrorTestLogger(b)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(b, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(b, err)
+
+	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, Unallocated)
 	cache := c.(*TxMetaCache)
 
 	// Pre-generate all hashes
@@ -123,14 +145,23 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 		})
 	}
 
-	err := g.Wait()
+	err = g.Wait()
 	require.NoError(b, err)
 }
 
 func Benchmark_txMetaCache_Get(b *testing.B) {
 	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, memory.New(logger), Unallocated)
+	logger := ulogger.NewErrorTestLogger(b)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(b, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(b, err)
+
+	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, Unallocated)
 	cache := c.(*TxMetaCache)
 
 	meta := &meta.Data{
@@ -175,7 +206,7 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 		})
 	}
 
-	err := g.Wait()
+	err = g.Wait()
 	require.NoError(b, err)
 }
 
@@ -194,9 +225,19 @@ func TestMap(t *testing.T) {
 }
 
 func Test_txMetaCache_HeightEncoding(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
 	t.Run("test height encoding and retrieval", func(t *testing.T) {
 		ctx := context.Background()
-		utxoStore := memory.New(ulogger.TestLogger{})
 		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		cache := c.(*TxMetaCache)
 
@@ -229,7 +270,6 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 
 	t.Run("test height-based cache invalidation", func(t *testing.T) {
 		ctx := context.Background()
-		utxoStore := memory.New(ulogger.TestLogger{})
 		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		cache := c.(*TxMetaCache)
 
@@ -261,8 +301,6 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 
 	t.Run("test multiple transactions with different heights", func(t *testing.T) {
 		ctx := context.Background()
-		utxoStore := memory.New(ulogger.TestLogger{})
-
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)
 
@@ -320,7 +358,6 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 
 	t.Run("test edge cases", func(t *testing.T) {
 		ctx := context.Background()
-		utxoStore := memory.New(ulogger.TestLogger{})
 		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		cache := c.(*TxMetaCache)
 
@@ -365,7 +402,12 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 func Test_txMetaCache_GetFunctions(t *testing.T) {
 	t.Run("test GetMetaCached with height encoding", func(t *testing.T) {
 		ctx := context.Background()
-		utxoStore := memory.New(ulogger.TestLogger{})
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, settings.NewSettings(), utxoStoreURL)
+		require.NoError(t, err)
+
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)
 
@@ -407,7 +449,11 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 
 	t.Run("test Get with height encoding", func(t *testing.T) {
 		ctx := context.Background()
-		utxoStore := memory.New(ulogger.TestLogger{})
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, settings.NewSettings(), utxoStoreURL)
+		require.NoError(t, err)
 
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)
@@ -450,7 +496,11 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 
 	t.Run("test Get with specific fields", func(t *testing.T) {
 		ctx := context.Background()
-		utxoStore := memory.New(ulogger.TestLogger{})
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, settings.NewSettings(), utxoStoreURL)
+		require.NoError(t, err)
 
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)
@@ -485,7 +535,11 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 
 	t.Run("test Get with non-existent hash", func(t *testing.T) {
 		ctx := context.Background()
-		utxoStore := memory.New(ulogger.TestLogger{})
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, settings.NewSettings(), utxoStoreURL)
+		require.NoError(t, err)
 
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)
@@ -510,7 +564,12 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 func Test_txMetaCache_MultiOperations(t *testing.T) {
 	t.Run("test SetCacheMulti with height encoding", func(t *testing.T) {
 		ctx := context.Background()
-		utxoStore := memory.New(ulogger.TestLogger{})
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, settings.NewSettings(), utxoStoreURL)
+		require.NoError(t, err)
+
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)
 
@@ -581,7 +640,11 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 
 	t.Run("test multi operations with height advancement", func(t *testing.T) {
 		ctx := context.Background()
-		utxoStore := memory.New(ulogger.TestLogger{})
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, settings.NewSettings(), utxoStoreURL)
+		require.NoError(t, err)
 
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)
@@ -644,7 +707,11 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 
 	t.Run("test multi operations with empty data", func(t *testing.T) {
 		ctx := context.Background()
-		utxoStore := memory.New(ulogger.TestLogger{})
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, settings.NewSettings(), utxoStoreURL)
+		require.NoError(t, err)
 
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)

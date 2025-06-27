@@ -726,6 +726,19 @@ NEXT_BATCH_RECORD:
 				}
 
 				items[idx].Data.ConflictingChildren = res
+
+			case fields.UnminedSince:
+				unminedSince, ok := bins[key.String()].(int)
+				if ok {
+					unminedSinceUint32, err := util.SafeIntToUint32(unminedSince)
+					if err != nil {
+						items[idx].Err = errors.NewTxInvalidError("invalid unmined since", err)
+
+						continue NEXT_BATCH_RECORD // because there was an error processing the unmined since.
+					}
+
+					items[idx].Data.UnminedSince = unminedSinceUint32
+				}
 			}
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"net/url"
 	"os"
 	"runtime"
 	"runtime/pprof"
@@ -20,10 +21,11 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -95,7 +97,7 @@ func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 }
 
 // createTestBlockWithMultipleTxs creates a block with a coinbase and (txCount-1) regular transactions, builds the subtree, stores tx meta, calculates the merkle root, mines the header, and returns the block, subtree store, and tx meta store.
-func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize int) (*teranode_model.Block, *blobmemory.Memory, *memory.Memory, error) {
+func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize int) (*teranode_model.Block, *blobmemory.Memory, utxo.Store, error) {
 	ctx := context.Background()
 
 	var err error
@@ -117,11 +119,20 @@ func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize in
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	txMetaStore := memory.New(ulogger.TestLogger{})
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
 	subtreeStore := blobmemory.New()
 
 	// Store coinbase meta with block ID, since it has to be mined in the first block
-	_, err = txMetaStore.Create(ctx, coinbaseTx, blockHeight, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+	_, err = utxoStore.Create(ctx, coinbaseTx, blockHeight, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
 		BlockID:     blockID,
 		BlockHeight: blockHeight,
 		SubtreeIdx:  0,
@@ -145,7 +156,7 @@ func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize in
 		txs[i] = tx
 
 		// Store meta for this tx
-		_, err = txMetaStore.Create(ctx, tx, blockHeight)
+		_, err = utxoStore.Create(ctx, tx, blockHeight)
 		require.NoError(t, err)
 
 		prevTx = tx
@@ -255,7 +266,7 @@ func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize in
 	)
 	require.NoError(t, err)
 
-	return block, subtreeStore, txMetaStore, nil
+	return block, subtreeStore, utxoStore, nil
 }
 
 func TestBlock_WithDuplicateTransaction(t *testing.T) {
@@ -265,8 +276,19 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	teranode_model.TestSubtreeSize = 8
 
 	subtreeStore := teranode_model.NewLocalSubtreeStore()
-	txMetaStore := memory.New(ulogger.TestLogger{})
-	teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, txMetaStore, txmetacache.Unallocated, 1024)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, utxoStore, txmetacache.Unallocated, 1024)
 	require.NoError(t, err)
 	txMetaCache := teranode_model.TestCachedTxMetaStore.(*txmetacache.TxMetaCache)
 
@@ -561,8 +583,19 @@ func Test_NewOptimizedBloomFilter_EmptyBlock(t *testing.T) {
 
 func Test_LoadTxMetaIntoMemory(t *testing.T) {
 	var err error
-	txMetaStore := memory.New(ulogger.TestLogger{})
-	teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, txMetaStore, txmetacache.Unallocated)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, utxoStore, txmetacache.Unallocated)
 	require.NoError(t, err)
 
 	f, _ := os.Create("cpu.prof")
@@ -594,10 +627,19 @@ func generateBigBlockTestData(t *testing.T) (*teranode_model.TestLocalSubtreeSto
 	block, err := teranode_model.GenerateTestBlock(txCount, subtreeStore, createNewTestData)
 	require.NoError(t, err)
 
-	txMetaStore := memory.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	teranode_model.TestLoadMetaToMemoryOnce.Do(func() {
-		teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, txMetaStore, txmetacache.Unallocated, 1024)
+		teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, utxoStore, txmetacache.Unallocated, 1024)
 		require.NoError(t, err)
 		err = teranode_model.LoadTxMetaIntoMemory()
 		require.NoError(t, err)

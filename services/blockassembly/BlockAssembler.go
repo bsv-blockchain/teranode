@@ -150,6 +150,9 @@ type BlockAssembler struct {
 
 	// cleanupService manages background cleanup tasks
 	cleanupService cleanup.Service
+
+	// unminedCleanupTicker manages periodic cleanup of old unmined transactions
+	unminedCleanupTicker *time.Ticker
 }
 
 // NewBlockAssembler creates and initializes a new BlockAssembler instance.
@@ -578,7 +581,7 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 		}
 	}
 
-	// Load unmined transactions
+	// Load unmined transactions (this includes cleanup of old unmined transactions first)
 	if err := b.loadUnminedTransactions(ctx); err != nil {
 		b.logger.Errorf("[BlockAssembler] failed to load un-mined transactions", err)
 	}
@@ -625,6 +628,10 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 	}
 
 	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
+
+	// Start background cleanup of unmined transactions every 10 minutes
+	// This is started after initial cleanup and loading is complete
+	b.startUnminedTransactionCleanup(ctx)
 
 	return nil
 }
@@ -1182,6 +1189,27 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) error {
 		return nil
 	}
 
+	// Clean up old unmined transactions before loading
+	b.logger.Infof("[BlockAssembler] starting cleanup of old unmined transactions before loading")
+	currentBlockHeight := b.bestBlockHeight.Load()
+
+	if currentBlockHeight > 0 {
+		cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, b.utxoStore, currentBlockHeight, b.settings, b.logger)
+
+		switch {
+		case err != nil:
+			b.logger.Errorf("[BlockAssembler] failed to cleanup old unmined transactions: %v", err)
+		case cleanupCount > 0:
+			b.logger.Infof("[BlockAssembler] cleanup completed - removed %d old unmined transactions", cleanupCount)
+		default:
+			b.logger.Infof("[BlockAssembler] cleanup completed - no old unmined transactions found")
+		}
+	} else {
+		b.logger.Infof("[BlockAssembler] skipping cleanup - block height is 0")
+	}
+
+	b.logger.Infof("[BlockAssembler] now loading remaining unmined transactions")
+
 	it, err := b.utxoStore.GetUnminedTxIterator()
 	if err != nil {
 		return errors.NewProcessingError("error getting unmined tx iterator", err)
@@ -1207,4 +1235,54 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// startUnminedTransactionCleanup starts a background goroutine that periodically cleans up old unmined transactions.
+// The cleanup runs every 10 minutes and uses the store-agnostic cleanup function.
+func (b *BlockAssembler) startUnminedTransactionCleanup(ctx context.Context) {
+	if b.utxoStore == nil {
+		b.logger.Warnf("[BlockAssembler] no utxostore, skipping unmined transaction cleanup background job")
+		return
+	}
+
+	// Don't start if already running
+	if b.unminedCleanupTicker != nil {
+		b.logger.Debugf("[BlockAssembler] unmined transaction cleanup background job already running")
+		return
+	}
+
+	// Create a ticker for 10-minute intervals
+	b.unminedCleanupTicker = time.NewTicker(10 * time.Minute)
+
+	b.logger.Infof("[BlockAssembler] starting background cleanup of unmined transactions every 10 minutes")
+
+	go func() {
+		defer func() {
+			b.unminedCleanupTicker.Stop()
+			b.unminedCleanupTicker = nil
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				b.logger.Infof("[BlockAssembler] stopping unmined transaction cleanup background job")
+				return
+
+			case <-b.unminedCleanupTicker.C:
+				currentBlockHeight := b.bestBlockHeight.Load()
+				if currentBlockHeight > 0 {
+					cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, b.utxoStore, currentBlockHeight, b.settings, b.logger)
+
+					switch {
+					case err != nil:
+						b.logger.Errorf("[BlockAssembler] background cleanup of unmined transactions failed: %v", err)
+					case cleanupCount > 0:
+						b.logger.Infof("[BlockAssembler] background cleanup removed %d old unmined transactions", cleanupCount)
+					default:
+						b.logger.Debugf("[BlockAssembler] background cleanup found no old unmined transactions to remove")
+					}
+				}
+			}
+		}
+	}()
 }

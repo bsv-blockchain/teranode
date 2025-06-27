@@ -13,8 +13,8 @@ type HTTPHandlers struct {
 }
 
 // HTTP returns an instance of HTTPHandlers for accessing HTTP handlers
-func (s *Server) HTTP() *HTTPHandlers {
-	return &HTTPHandlers{server: s}
+func (v *Server) HTTP() *HTTPHandlers {
+	return &HTTPHandlers{server: v}
 }
 
 // HandleSingleTx returns the handler for the /tx endpoint

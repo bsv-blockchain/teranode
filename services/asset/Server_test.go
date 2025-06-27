@@ -13,7 +13,7 @@ import (
 	blobMemory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -29,10 +29,16 @@ type testCtx struct {
 }
 
 func testSetup(t *testing.T) *testCtx {
-	logger := ulogger.New("asset")
-	tSettings := test.CreateBaseTestSettings()
-	tSettings.Asset.CentrifugeDisable = true
-	utxoStore := utxostore.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	require.NoError(t, err)
+
 	subtreeStore := blobMemory.New()
 	blockPersisterStore := blobMemory.New()
 	txSore := blobMemory.New()
@@ -40,17 +46,17 @@ func testSetup(t *testing.T) *testCtx {
 	blobStore := blobMemory.New()
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
+	blockchainStore, err := blockchainstore.NewStore(logger, storeURL, settings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
-	server := NewServer(logger, tSettings, utxoStore, txSore, subtreeStore, blockPersisterStore, blockchainClient)
+	server := NewServer(logger, settings, utxoStore, txSore, subtreeStore, blockPersisterStore, blockchainClient)
 
 	return &testCtx{
 		server:           server,
 		logger:           logger,
-		settings:         tSettings,
+		settings:         settings,
 		blockchainClient: blockchainClient,
 		utxoStore:        utxoStore,
 		blobStore:        blobStore,
@@ -165,10 +171,20 @@ func TestServerInitErrors(t *testing.T) {
 }
 
 func TestHealth_LivenessCheck(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	require.NoError(t, err)
+
 	server := NewServer(
 		ulogger.New("asset"),
 		test.CreateBaseTestSettings(),
-		utxostore.New(ulogger.TestLogger{}),
+		utxoStore,
 		blobMemory.New(),
 		blobMemory.New(),
 		blobMemory.New(),
@@ -265,7 +281,7 @@ func TestHealth_ReadinessWithAllDependencies(t *testing.T) {
 	require.NotNil(t, utxoStore)
 	require.Equal(t, "200", utxoStore.Status)
 	require.Equal(t, "<nil>", utxoStore.Error)
-	require.Equal(t, "Memory Store available", utxoStore.Message)
+	require.Equal(t, "SQL Engine is sqlitememory", utxoStore.Message)
 
 	// Check TxStore
 	txStore := findDep("TxStore")

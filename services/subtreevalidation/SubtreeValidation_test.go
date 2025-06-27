@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"testing"
@@ -24,7 +25,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	blobmemory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka" //nolint:gci
@@ -128,7 +129,21 @@ func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store
 		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
 	)
 
-	utxoStore := memory.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	if err != nil {
+		panic(err)
+	}
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	if err != nil {
+		panic(err)
+	}
+
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()
 
@@ -341,7 +356,7 @@ func createTestTransactionChainWithCount(t *testing.T, count int) []*bt.Tx {
 	arbitraryData = append(arbitraryData, []byte("/Test miner/")...)
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
 
-	err = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
+	err = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50e8)
 	require.NoError(t, err)
 
 	// Create tx1 with multiple outputs for the chain
@@ -355,19 +370,17 @@ func createTestTransactionChainWithCount(t *testing.T, count int) []*bt.Tx {
 	require.NoError(t, err)
 
 	// Create enough outputs for the chain
-	outputAmount := uint64(20 * 100000000)
-	remainingAmount := coinbaseTx.Outputs[0].Satoshis
+	outputAmount := coinbaseTx.Outputs[0].Satoshis / uint64(count) // nolint: gosec
 
-	for i := 0; i < count-1; i++ {
-		if i == count-2 {
-			// Last output gets remaining amount minus fees
-			outputAmount = remainingAmount - 100000 // Leave some for fees
+	for i := 0; i < count; i++ {
+		if i == 0 {
+			// First output leaves some fees
+			err = tx1.AddP2PKHOutputFromAddress(address.AddressString, outputAmount-1000)
+			require.NoError(t, err)
+		} else {
+			err = tx1.AddP2PKHOutputFromAddress(address.AddressString, outputAmount)
+			require.NoError(t, err)
 		}
-
-		err = tx1.AddP2PKHOutputFromAddress(address.AddressString, outputAmount)
-		require.NoError(t, err)
-
-		remainingAmount -= outputAmount
 	}
 
 	err = tx1.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
@@ -376,9 +389,9 @@ func createTestTransactionChainWithCount(t *testing.T, count int) []*bt.Tx {
 	// Create the chain of transactions
 	result := []*bt.Tx{coinbaseTx, tx1}
 
-	for i := 0; i < count-2; i++ {
+	for i := 0; i < count; i++ {
 		//nolint:gosec
-		tx := createSpendingTx(t, tx1, uint32(i), 15*100000000, address, privateKey)
+		tx := createSpendingTx(t, tx1, uint32(i), tx1.Outputs[i].Satoshis-1000, address, privateKey)
 		result = append(result, tx)
 	}
 
@@ -391,19 +404,29 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 	t.Run("test get subtree tx hashes", func(t *testing.T) {
 		InitPrometheusMetrics()
 		// Setup test
-		txMetaStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
+		utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
 		defer deferFunc()
 
 		// Create test transactions
 		txs := createTestTransactionChainWithCount(t, 7)
+
 		coinbaseTx, tx1, tx2, tx3, tx4, tx5, tx6 := txs[0], txs[1], txs[2], txs[3], txs[4], txs[5], txs[6]
 
 		// Store initial transactions in txMetaStore
-		_, _ = txMetaStore.Create(context.Background(), coinbaseTx, 1)
-		_, _ = txMetaStore.Create(context.Background(), tx1, 1)
-		_, _ = txMetaStore.Create(context.Background(), tx2, 1)
-		_, _ = txMetaStore.Create(context.Background(), tx3, 1)
-		_, _ = txMetaStore.Create(context.Background(), tx4, 1)
+		_, err := utxoStore.Create(context.Background(), coinbaseTx, 1)
+		require.NoError(t, err)
+
+		_, err = utxoStore.Create(context.Background(), tx1, 1)
+		require.NoError(t, err)
+
+		_, err = utxoStore.Create(context.Background(), tx2, 1)
+		require.NoError(t, err)
+
+		_, err = utxoStore.Create(context.Background(), tx3, 1)
+		require.NoError(t, err)
+
+		_, err = utxoStore.Create(context.Background(), tx4, 1)
+		require.NoError(t, err)
 
 		// Create subtrees
 		subtree1, err := util.NewTreeByLeafCount(4)
@@ -489,7 +512,7 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 		// Setup and run validation
 		nilConsumer := &kafka.KafkaConsumerGroup{}
 		tSettings := test.CreateBaseTestSettings()
-		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
+		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 		require.NoError(t, err)
 
 		// Validate subtree1
@@ -503,17 +526,17 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify initial cache state
-		_, err = txMetaStore.Get(context.Background(), hash1)
+		_, err = utxoStore.Get(context.Background(), hash1)
 		require.NoError(t, err, "tx1 should be in cache")
-		_, err = txMetaStore.Get(context.Background(), hash2)
+		_, err = utxoStore.Get(context.Background(), hash2)
 		require.NoError(t, err, "tx2 should be in cache")
-		_, err = txMetaStore.Get(context.Background(), hash3)
+		_, err = utxoStore.Get(context.Background(), hash3)
 		require.NoError(t, err, "tx3 should be in cache")
-		_, err = txMetaStore.Get(context.Background(), hash4)
+		_, err = utxoStore.Get(context.Background(), hash4)
 		require.NoError(t, err, "tx4 should be in cache")
-		_, err = txMetaStore.Get(context.Background(), hash5)
+		_, err = utxoStore.Get(context.Background(), hash5)
 		require.Error(t, err, "tx5 should NOT be in cache before processing subtree2")
-		_, err = txMetaStore.Get(context.Background(), hash6)
+		_, err = utxoStore.Get(context.Background(), hash6)
 		require.Error(t, err, "tx6 should NOT be in cache before processing subtree2")
 
 		// Validate subtree2
@@ -527,17 +550,17 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify final cache state
-		_, err = txMetaStore.Get(context.Background(), hash1)
+		_, err = utxoStore.Get(context.Background(), hash1)
 		require.NoError(t, err, "tx1 should still be in cache")
-		_, err = txMetaStore.Get(context.Background(), hash2)
+		_, err = utxoStore.Get(context.Background(), hash2)
 		require.NoError(t, err, "tx2 should still be in cache")
-		_, err = txMetaStore.Get(context.Background(), hash3)
+		_, err = utxoStore.Get(context.Background(), hash3)
 		require.NoError(t, err, "tx3 should still be in cache")
-		_, err = txMetaStore.Get(context.Background(), hash4)
+		_, err = utxoStore.Get(context.Background(), hash4)
 		require.NoError(t, err, "tx4 should still be in cache")
-		_, err = txMetaStore.Get(context.Background(), hash5)
+		_, err = utxoStore.Get(context.Background(), hash5)
 		require.NoError(t, err, "tx5 should now be in cache")
-		_, err = txMetaStore.Get(context.Background(), hash6)
+		_, err = utxoStore.Get(context.Background(), hash6)
 		require.NoError(t, err, "tx6 should now be in cache")
 	})
 }
@@ -546,50 +569,72 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 	InitPrometheusMetrics()
 
 	t.Run("checkCounterConflictingOnCurrentChain - smoke test", func(t *testing.T) {
-		// Create a mock Server struct
-		s := &Server{
-			utxoStore: memory.New(ulogger.TestLogger{}),
-		}
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
 
-		_, err := s.utxoStore.Create(t.Context(), parentTx1, 123)
+		tSettings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		_, err = s.utxoStore.Create(t.Context(), tx1, 123)
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
+		// Create a mock Server struct
+		s := &Server{
+			utxoStore: utxoStore,
+		}
+
+		_, err = s.utxoStore.Create(ctx, parentTx1, 123)
+		require.NoError(t, err)
+
+		_, err = s.utxoStore.Create(ctx, tx1, 123)
 		require.NoError(t, err)
 
 		// Call the checkCounterConflictingOnCurrentChain method
-		err = s.checkCounterConflictingOnCurrentChain(t.Context(), *tx1.TxIDChainHash(), map[uint32]bool{})
+		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 		require.NoError(t, err)
 	})
 
 	t.Run("checkCounterConflictingOnCurrentChain - counter conflicting mined", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+
+		tSettings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		// Create a mock Server struct
 		s := &Server{
-			utxoStore: memory.New(ulogger.TestLogger{}),
+			utxoStore: utxoStore,
 		}
 
-		_, err := s.utxoStore.Create(t.Context(), parentTx1, 122)
+		_, err = s.utxoStore.Create(ctx, parentTx1, 122)
 		require.NoError(t, err)
 
 		tx1DoubleSpend := tx1.Clone()
 		tx1DoubleSpend.Version = 2
 
 		// spend the parent tx with tx2
-		_, err = s.utxoStore.Spend(t.Context(), tx1DoubleSpend)
+		_, err = s.utxoStore.Spend(ctx, tx1DoubleSpend)
 		require.NoError(t, err)
 
-		_, err = s.utxoStore.Create(t.Context(), tx1DoubleSpend, 122)
+		_, err = s.utxoStore.Create(ctx, tx1DoubleSpend, 122)
 		require.NoError(t, err)
 
-		_, err = s.utxoStore.Create(t.Context(), tx1, 123, utxo.WithConflicting(true))
+		_, err = s.utxoStore.Create(ctx, tx1, 123, utxo.WithConflicting(true))
 		require.NoError(t, err)
 
 		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
-		err = s.checkCounterConflictingOnCurrentChain(t.Context(), *tx1.TxIDChainHash(), map[uint32]bool{})
+		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 		require.NoError(t, err)
 
 		// set the tx1DoubleSpend to mined
-		err = s.utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{tx1DoubleSpend.TxIDChainHash()}, utxo.MinedBlockInfo{
+		err = s.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx1DoubleSpend.TxIDChainHash()}, utxo.MinedBlockInfo{
 			BlockID:     122,
 			BlockHeight: 122,
 			SubtreeIdx:  0,
@@ -597,7 +642,7 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 
 		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
-		err = s.checkCounterConflictingOnCurrentChain(t.Context(), *tx1.TxIDChainHash(), map[uint32]bool{
+		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{
 			122: true,
 		})
 		require.Error(t, err, "should be an error since tx1DoubleSpend has been mined")

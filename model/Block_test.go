@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -16,10 +17,12 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/blob/null"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -263,8 +266,17 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 		123, 0, 0, nil)
 	require.NoError(t, err)
 
-	mockBlobStore, _ := New(ulogger.TestLogger{})
-	txMetaStore := memory.New(ulogger.TestLogger{})
+	subtreeStore, _ := null.New(ulogger.TestLogger{})
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	require.NoError(t, err)
 
 	currentChain := make([]*BlockHeader, 11)
 	currentChainIDs := make([]uint32, 11)
@@ -281,7 +293,7 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 	oldBlockIDs := util.NewSyncedMap[chainhash.Hash, []uint32]()
-	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, mockBlobStore, txMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
+	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, utxoStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
 
@@ -359,7 +371,15 @@ func TestCheckDuplicateTransactions(t *testing.T) {
 // require.Error(t, err)
 
 func TestCheckParentExistsOnChain(t *testing.T) {
-	txMetaStore := memory.New(ulogger.TestLogger{})
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	require.NoError(t, err)
 
 	blockID1 := uint32(1)
 	blockID100 := uint32(100)
@@ -368,16 +388,15 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 	txParent := newTx(1)
 	tx := newTx(2)
 
-	_, err := txMetaStore.Create(context.Background(), txParent, blockID100, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 100, BlockHeight: 100}))
+	_, err = utxoStore.Create(context.Background(), txParent, blockID100, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 100, BlockHeight: 100}))
 	require.NoError(t, err)
-	_, err = txMetaStore.Create(context.Background(), tx, blockID101, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101}))
+	_, err = utxoStore.Create(context.Background(), tx, blockID101, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101}))
 	require.NoError(t, err)
 
 	currentBlockHeaderIDsMap := make(map[uint32]struct{})
 	currentBlockHeaderIDsMap[blockID100] = struct{}{}
 
 	block := &Block{}
-	logger := ulogger.TestLogger{}
 
 	t.Run("test parent is in a previous block", func(t *testing.T) {
 		parentTxStruct := missingParentTx{
@@ -385,7 +404,7 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 			txHash:       *tx.TxIDChainHash(),
 		}
 
-		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, utxoStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.NoError(t, err)
 		require.True(t, len(oldBlockIDs) == 0)
 	})
@@ -397,7 +416,7 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 			txHash:       *txParent.TxIDChainHash(),
 		}
 
-		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, utxoStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.Error(t, err)
 		require.True(t, len(oldBlockIDs) == 0)
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
@@ -405,13 +424,13 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 
 	t.Run("test parent has no block ID", func(t *testing.T) {
 		txParentWithNoBlockID := newTx(3)
-		_, err = txMetaStore.Create(context.Background(), txParentWithNoBlockID, 0)
+		_, err = utxoStore.Create(context.Background(), txParentWithNoBlockID, 0)
 		parentTxStruct := missingParentTx{
 			parentTxHash: *txParentWithNoBlockID.TxIDChainHash(),
 			txHash:       *tx.TxIDChainHash(),
 		}
 
-		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, utxoStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.Error(t, err)
 		require.True(t, len(oldBlockIDs) == 0)
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
@@ -424,20 +443,20 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 			txHash:       *tx.TxIDChainHash(),
 		}
 
-		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, utxoStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.True(t, len(oldBlockIDs) == 0)
 		require.NoError(t, err)
 	})
 
 	t.Run("test parent is in store and block ID is < min BlockID of last 100 blocks", func(t *testing.T) {
 		txMissingParent := newTx(4)
-		_, err = txMetaStore.Create(context.Background(), txMissingParent, blockID1, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}))
+		_, err = utxoStore.Create(context.Background(), txMissingParent, blockID1, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}))
 		parentTxStruct := missingParentTx{
 			parentTxHash: *txMissingParent.TxIDChainHash(),
 			txHash:       *tx.TxIDChainHash(),
 		}
 
-		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, utxoStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.True(t, len(oldBlockIDs) > 0)
 		require.NoError(t, err)
 	})

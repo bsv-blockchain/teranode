@@ -11,7 +11,8 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/tracing"
@@ -19,7 +20,7 @@ import (
 )
 
 func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, context.CancelFunc, error) {
-	blobStore, utxoStore, tSettings, blockchainClient, _, err := initStores()
+	blobStore, utxoStore, tSettings, blockchainClient, _, err := initStores(t)
 	require.NoError(t, err)
 
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
@@ -44,11 +45,11 @@ func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, context.Cance
 	return ba, cancelCtx, nil
 }
 
-func initStores() (*memory.Memory, *utxostore.Memory, *settings.Settings, blockchain.ClientI, *blockassembly.BlockAssembly, error) {
+func initStores(t *testing.T) (*memory.Memory, utxo.Store, *settings.Settings, blockchain.ClientI, *blockassembly.BlockAssembly, error) {
 	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
 
-	tracing.SetupMockTracer()
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
 
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.Policy.BlockMaxSize = 1000000
@@ -57,16 +58,21 @@ func initStores() (*memory.Memory, *utxostore.Memory, *settings.Settings, blockc
 	tSettings.BlockAssembly.ResetWaitCount = 0
 	tSettings.BlockAssembly.ResetWaitDuration = 0
 
-	blockchainStoreURL, _ := url.Parse("sqlitememory://")
-	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings)
-	if err != nil {
-		return nil, nil, nil, nil, nil, err
-	}
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
 
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
-	if err != nil {
-		return nil, nil, nil, nil, nil, err
-	}
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	tracing.SetupMockTracer()
+
+	blockchainStoreURL, err := url.Parse("sqlitememory://")
+	require.NoError(t, err)
+	blockchainStore, err := blockchainstore.NewStore(logger, blockchainStoreURL, tSettings)
+	require.NoError(t, err)
+
+	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
+	require.NoError(t, err)
 
 	return blobStore, utxoStore, tSettings, blockchainClient, nil, nil
 }

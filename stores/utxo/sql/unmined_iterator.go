@@ -31,7 +31,7 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 		,t.fee
 		,t.size_in_bytes
 		FROM transactions t
-		WHERE t.not_mined = TRUE
+		WHERE t.unmined_since IS NOT NULL
 	`
 
 	rows, err := store.db.Query(q)

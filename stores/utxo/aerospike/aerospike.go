@@ -221,19 +221,19 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 					}
 				}
 
-				notMinedIndexName := "notMinedIndex"
+				unminedSinceIndexName := "unminedSinceIndex"
 
-				exists, err = s.indexExists(notMinedIndexName)
+				exists, err = s.indexExists(unminedSinceIndexName)
 				if err != nil {
-					s.logger.Errorf("Failed to check notMinedIndex existence: %v", err)
+					s.logger.Errorf("Failed to check unminedSinceIndex existence: %v", err)
 					return
 				}
 
 				if !exists {
 					// Only one process should try to create the index
-					err := s.CreateIndexIfNotExists(ctx, notMinedIndexName, fields.NotMined.String(), aerospike.NUMERIC)
+					err := s.CreateIndexIfNotExists(ctx, unminedSinceIndexName, fields.UnminedSince.String(), aerospike.NUMERIC)
 					if err != nil {
-						s.logger.Errorf("Failed to create notMinedIndex: %v", err)
+						s.logger.Errorf("Failed to create unminedSinceIndex: %v", err)
 					}
 				}
 			}
@@ -532,4 +532,242 @@ func (s *Store) indexExists(indexName string) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// QueryOldUnminedTransactions returns transaction hashes for unmined transactions older than the cutoff height.
+// This method is used by the store-agnostic cleanup implementation.
+func (s *Store) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
+	s.logger.Debugf("[QueryOldUnminedTransactions] Querying unmined transactions older than block height %d", cutoffBlockHeight)
+
+	// Create a query to find all unmined transactions using the unminedSinceIndex
+	stmt := aerospike.NewStatement(s.namespace, s.setName)
+
+	// Query for records where UnminedSince <= cutoffBlockHeight
+	// This leverages the secondary index on the UnminedSince field for efficient querying
+	err := stmt.SetFilter(aerospike.NewRangeFilter(fields.UnminedSince.String(), 1, int64(cutoffBlockHeight)))
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to set filter for unmined transaction query", err)
+	}
+
+	// Use query to get old unmined transactions
+	queryPolicy := aerospike.NewQueryPolicy()
+	queryPolicy.MaxRetries = 3
+	queryPolicy.SocketTimeout = 30 * time.Second
+	queryPolicy.TotalTimeout = 120 * time.Second
+
+	recordset, err := s.client.Query(queryPolicy, stmt)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to query old unmined transactions", err)
+	}
+	defer recordset.Close()
+
+	txHashes := make([]chainhash.Hash, 0)
+
+	// Process each unmined transaction
+	for res := range recordset.Results() {
+		if res.Err != nil {
+			s.logger.Errorf("[QueryOldUnminedTransactions] Error reading record: %v", res.Err)
+			continue
+		}
+
+		record := res.Record
+		if record == nil {
+			continue
+		}
+
+		// The query already filtered by UnminedSince <= cutoffBlockHeight
+		// so all records here are candidates for cleanup
+
+		// Get the transaction hash from the record
+		txIDBytes, exists := record.Bins[fields.TxID.String()]
+		if !exists {
+			s.logger.Warnf("[QueryOldUnminedTransactions] Record missing TxID field")
+			continue
+		}
+
+		txIDBytesSlice, ok := txIDBytes.([]byte)
+		if !ok || len(txIDBytesSlice) != 32 {
+			s.logger.Warnf("[QueryOldUnminedTransactions] Invalid TxID format")
+			continue
+		}
+
+		txHash := chainhash.Hash{}
+		copy(txHash[:], txIDBytesSlice)
+		txHashes = append(txHashes, txHash)
+	}
+
+	s.logger.Debugf("[QueryOldUnminedTransactions] Found %d old unmined transactions", len(txHashes))
+
+	return txHashes, nil
+}
+
+// PreserveTransactions marks transactions to be preserved from deletion until a specific block height.
+// This clears any existing DeleteAtHeight and sets PreserveUntil to the specified height.
+// Used to protect parent transactions when cleaning up unmined transactions.
+func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
+	if len(txIDs) == 0 {
+		return nil
+	}
+
+	// Use batch operations for efficiency
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE
+
+	batchRecords := make([]aerospike.BatchRecordIfc, len(txIDs))
+
+	for i, txID := range txIDs {
+		key, err := aerospike.NewKey(s.namespace, s.setName, txID[:])
+		if err != nil {
+			s.logger.Errorf("[PreserveTransactions] Failed to create key for tx %s: %v", txID.String(), err)
+			continue
+		}
+
+		batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key,
+			aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), int(preserveUntilHeight))),
+			aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
+	}
+
+	// Execute batch operation
+	err := s.client.BatchOperate(batchPolicy, batchRecords)
+	if err != nil {
+		return errors.NewStorageError("failed to preserve transactions", err)
+	}
+
+	// Check results
+	preservedCount := 0
+
+	for i, record := range batchRecords {
+		if record.BatchRec().Err == nil {
+			preservedCount++
+		} else {
+			s.logger.Warnf("[PreserveTransactions] Failed to preserve tx %s: %v",
+				txIDs[i].String(), record.BatchRec().Err)
+		}
+	}
+
+	s.logger.Debugf("[PreserveTransactions] Successfully preserved %d out of %d transactions", preservedCount, len(txIDs))
+
+	return nil
+}
+
+// ProcessExpiredPreservations handles transactions whose preservation period has expired.
+// For each transaction with PreserveUntil <= currentHeight, it sets an appropriate DeleteAtHeight
+// and clears the PreserveUntil field.
+func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
+	// Create a query to find records with expired PreserveUntil
+	stmt := aerospike.NewStatement(s.namespace, s.setName)
+
+	// Query for records where PreserveUntil <= currentHeight
+	err := stmt.SetFilter(aerospike.NewRangeFilter(fields.PreserveUntil.String(), 1, int64(currentHeight)))
+	if err != nil {
+		return errors.NewStorageError("failed to set filter for expired preservations", err)
+	}
+
+	queryPolicy := aerospike.NewQueryPolicy()
+	queryPolicy.MaxRetries = 3
+	queryPolicy.SocketTimeout = 30 * time.Second
+	queryPolicy.TotalTimeout = 120 * time.Second
+
+	recordset, err := s.client.Query(queryPolicy, stmt)
+	if err != nil {
+		return errors.NewStorageError("failed to query expired preservations", err)
+	}
+	defer recordset.Close()
+
+	// Process records in batches
+	batchSize := 100
+	batch := make([]aerospike.BatchRecordIfc, 0, batchSize)
+	txIDs := make([]chainhash.Hash, 0, batchSize)
+
+	processedCount := 0
+
+	for res := range recordset.Results() {
+		if res.Err != nil {
+			s.logger.Errorf("[ProcessExpiredPreservations] Error reading record: %v", res.Err)
+			continue
+		}
+
+		record := res.Record
+		if record == nil {
+			continue
+		}
+
+		// Get the transaction ID
+		txIDBytes, exists := record.Bins[fields.TxID.String()]
+		if !exists {
+			continue
+		}
+
+		txIDBytesSlice, ok := txIDBytes.([]byte)
+		if !ok || len(txIDBytesSlice) != 32 {
+			continue
+		}
+
+		txHash := chainhash.Hash{}
+		copy(txHash[:], txIDBytesSlice)
+
+		key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
+		if err != nil {
+			s.logger.Errorf("[ProcessExpiredPreservations] Failed to create key for tx %s: %v", txHash.String(), err)
+			continue
+		}
+
+		// Calculate DeleteAtHeight based on retention policy
+		deleteAtHeight := currentHeight + s.settings.UtxoStore.BlockHeightRetention
+
+		batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+		batchWritePolicy.RecordExistsAction = aerospike.UPDATE
+
+		batch = append(batch, aerospike.NewBatchWrite(batchWritePolicy, key,
+			aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), int(deleteAtHeight))),
+			aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), nil))))
+
+		txIDs = append(txIDs, txHash)
+
+		// Process batch when full
+		if len(batch) >= batchSize {
+			if err := s.processBatchExpiredPreservations(ctx, batch, txIDs); err != nil {
+				s.logger.Errorf("[ProcessExpiredPreservations] Failed to process batch: %v", err)
+			} else {
+				processedCount += len(batch)
+			}
+
+			batch = batch[:0]
+			txIDs = txIDs[:0]
+		}
+	}
+
+	// Process remaining records
+	if len(batch) > 0 {
+		if err := s.processBatchExpiredPreservations(ctx, batch, txIDs); err != nil {
+			s.logger.Errorf("[ProcessExpiredPreservations] Failed to process final batch: %v", err)
+		} else {
+			processedCount += len(batch)
+		}
+	}
+
+	s.logger.Infof("[ProcessExpiredPreservations] Processed %d expired preservations at height %d", processedCount, currentHeight)
+
+	return nil
+}
+
+// processBatchExpiredPreservations is a helper function to process a batch of expired preservations
+func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []aerospike.BatchRecordIfc, txIDs []chainhash.Hash) error {
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
+
+	err := s.client.BatchOperate(batchPolicy, batch)
+	if err != nil {
+		return err
+	}
+
+	// Log any failures
+	for i, record := range batch {
+		if record.BatchRec().Err != nil {
+			s.logger.Warnf("[ProcessExpiredPreservations] Failed to update tx %s: %v",
+				txIDs[i].String(), record.BatchRec().Err)
+		}
+	}
+
+	return nil
 }

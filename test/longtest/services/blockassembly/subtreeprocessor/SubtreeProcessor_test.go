@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"net/url"
 	"os"
@@ -18,8 +19,9 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
-	utxostore "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -163,6 +165,7 @@ func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees 
 		require.NoError(t, subtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 		subtreeMeta := util.NewSubtreeMeta(subtree)
+
 		for idx, node := range subtree.Nodes {
 			if !node.Hash.IsEqual(util.CoinbasePlaceholderHash) {
 				txInpoints, ok := txMap.Get(node.Hash)
@@ -201,7 +204,7 @@ func checkMoveBlockProcessing(t *testing.T, stp *subtreeprocessor.SubtreeProcess
 
 	expectedTransactionsInSubtreeProcessor := nrTransactions - (subtreeSize * expectedSubtrees) + 1 // 128 is the initial subtree size, + 1 for the coinbase tx
 
-	assert.Equal(t, uint64(expectedTransactionsInSubtreeProcessor)+1, stp.TxCount(), "Expected tx count to be + 1 for the new coinbase tx")
+	assert.Equal(t, uint64(expectedTransactionsInSubtreeProcessor)+1, stp.TxCount(), "Expected tx count to be + 1 for the new coinbase tx") //nolint:gosec
 
 	txMap := stp.GetCurrentTxMap()
 	assert.Equal(t, expectedTransactionsInSubtreeProcessor, txMap.Length())
@@ -211,7 +214,7 @@ func checkMoveBlockProcessing(t *testing.T, stp *subtreeprocessor.SubtreeProcess
 	// move back the block and make sure all the transactions are put back
 	require.NoError(t, stp.Reorg([]*model.Block{block}, []*model.Block{block2}))
 
-	assert.Equal(t, uint64(nrTransactions)+1, stp.TxCount(), "Expected tx count to be + 1 for the new coinbase tx")
+	assert.Equal(t, uint64(nrTransactions)+1, stp.TxCount(), "Expected tx count to be + 1 for the new coinbase tx") //nolint:gosec
 
 	txMap = stp.GetCurrentTxMap()
 	assert.Equal(t, nrTransactions, txMap.Length())
@@ -221,7 +224,7 @@ func checkMoveBlockProcessing(t *testing.T, stp *subtreeprocessor.SubtreeProcess
 	// move back again and make sure all the transactions are processed
 	require.NoError(t, stp.Reorg([]*model.Block{block2}, []*model.Block{block}))
 
-	assert.Equal(t, uint64(expectedTransactionsInSubtreeProcessor)+1, stp.TxCount(), "Expected tx count to be + 1 for the new coinbase tx")
+	assert.Equal(t, uint64(expectedTransactionsInSubtreeProcessor)+1, stp.TxCount(), "Expected tx count to be + 1 for the new coinbase tx") //nolint:gosec
 
 	txMap = stp.GetCurrentTxMap()
 	assert.Equal(t, expectedTransactionsInSubtreeProcessor, txMap.Length())
@@ -274,7 +277,7 @@ func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Me
 	<-gotAllSubtrees
 
 	assert.Equal(t, 7, len(subtrees))
-	assert.Equal(t, uint64(nrTransactions+1), stp.TxCount(), "Expected tx count to be + 1 for the new coinbase tx")
+	assert.Equal(t, uint64(nrTransactions+1), stp.TxCount(), "Expected tx count to be + 1 for the new coinbase tx") //nolint:gosec
 
 	return stp, subtreeStore, subtrees, nrTransactions, subtreeSize, expectedSubtrees
 }
@@ -298,7 +301,7 @@ func waitForSubtreeProcessorQueueToEmpty(t *testing.T, stp *subtreeprocessor.Sub
 }
 
 func initSubtreeProcessor(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Memory, chan subtreeprocessor.NewSubtreeRequest) {
-	blobStore, utxoStore, tSettings, blockchainClient, _, err := initStores()
+	blobStore, utxoStore, tSettings, blockchainClient, _, err := initStores(t)
 	require.NoError(t, err)
 
 	newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest, 1)
@@ -309,11 +312,10 @@ func initSubtreeProcessor(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *me
 	return subtreeProcessor, blobStore, newSubtreeChan
 }
 
-func initStores() (*memory.Memory, *utxostore.Memory, *settings.Settings, blockchain.ClientI, *blockassembly.BlockAssembly, error) {
+func initStores(t *testing.T) (*memory.Memory, utxo.Store, *settings.Settings, blockchain.ClientI, *blockassembly.BlockAssembly, error) {
 	blobStore := memory.New()
-	utxoStore := utxostore.New(ulogger.TestLogger{})
-
-	tracing.SetupMockTracer()
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
 
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.Policy.BlockMaxSize = 1000000
@@ -323,7 +325,16 @@ func initStores() (*memory.Memory, *utxostore.Memory, *settings.Settings, blockc
 	tSettings.BlockAssembly.ResetWaitDuration = 0
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 128
 
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	tracing.SetupMockTracer()
+
 	blockchainStoreURL, _ := url.Parse("sqlitememory://")
+
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, blockchainStoreURL, tSettings)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
@@ -346,7 +357,7 @@ func generateLargeSubtreeBytes(t *testing.T, size int) []byte {
 		// int to bytes
 		//nolint:gosec
 		binary.LittleEndian.PutUint32(bb[:], uint32(i))
-		_ = st.AddNode(bb, uint64(i), uint64(i))
+		_ = st.AddNode(bb, uint64(i), uint64(i)) //nolint:gosec
 	}
 
 	ser, err := st.Serialize()

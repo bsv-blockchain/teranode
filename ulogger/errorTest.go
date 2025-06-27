@@ -4,16 +4,25 @@ import (
 	"fmt"
 	"runtime"
 	"sync/atomic"
-	"testing"
 )
 
+type TestingT interface {
+	Errorf(format string, args ...interface{})
+	FailNow()
+	Logf(format string, args ...any)
+}
+
+type tHelper = interface {
+	Helper()
+}
+
 type ErrorTestLogger struct {
-	t                *testing.T
+	t                TestingT
 	skipCancelOnFail atomic.Bool
 	cancelFn         func()
 }
 
-func NewErrorTestLogger(t *testing.T, cancelFn ...func()) *ErrorTestLogger {
+func NewErrorTestLogger(t TestingT, cancelFn ...func()) *ErrorTestLogger {
 	if len(cancelFn) == 0 {
 		return &ErrorTestLogger{
 			t: t,
@@ -34,7 +43,9 @@ func (l *ErrorTestLogger) EnableVerbose() {
 }
 
 func (l *ErrorTestLogger) SkipCancelOnFail(skip bool) {
-	l.t.Helper()
+	if h, ok := l.t.(tHelper); ok {
+		h.Helper()
+	}
 
 	l.skipCancelOnFail.Store(skip)
 }
@@ -46,13 +57,17 @@ func (l *ErrorTestLogger) LogLevel() int {
 func (l *ErrorTestLogger) SetLogLevel(level string) {}
 
 func (l *ErrorTestLogger) New(service string, options ...Option) Logger {
-	l.t.Helper()
+	if h, ok := l.t.(tHelper); ok {
+		h.Helper()
+	}
 
 	return l
 }
 
 func (l *ErrorTestLogger) Duplicate(options ...Option) Logger {
-	l.t.Helper()
+	if h, ok := l.t.(tHelper); ok {
+		h.Helper()
+	}
 
 	return l
 }
@@ -70,7 +85,9 @@ func (l *ErrorTestLogger) Warnf(format string, args ...interface{}) {
 }
 
 func (l *ErrorTestLogger) Errorf(format string, args ...interface{}) {
-	l.t.Helper()
+	if h, ok := l.t.(tHelper); ok {
+		h.Helper()
+	}
 
 	_, file, line, _ := runtime.Caller(2)
 
@@ -90,7 +107,9 @@ func (l *ErrorTestLogger) Errorf(format string, args ...interface{}) {
 }
 
 func (l *ErrorTestLogger) Fatalf(format string, args ...interface{}) {
-	l.t.Helper()
+	if h, ok := l.t.(tHelper); ok {
+		h.Helper()
+	}
 
 	_, file, line, _ := runtime.Caller(2)
 

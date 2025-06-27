@@ -370,7 +370,6 @@ func (tv *TxValidator) checkTxSize(txSize int) error {
 }
 
 func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
-
 	inputSats := tx.TotalInputSatoshis()
 	outputSats := tx.TotalOutputSatoshis()
 

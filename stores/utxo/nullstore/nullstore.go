@@ -152,3 +152,15 @@ func (m *NullStore) SetConflicting(ctx context.Context, txHashes []chainhash.Has
 func (m *NullStore) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
 }
+
+func (m *NullStore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
+	return []chainhash.Hash{}, nil
+}
+
+func (m *NullStore) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
+	return nil
+}
+
+func (m *NullStore) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
+	return nil
+}

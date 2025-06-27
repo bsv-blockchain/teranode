@@ -20,7 +20,7 @@ import (
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blockchain/sql"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	utxo_memory "github.com/bitcoin-sv/teranode/stores/utxo/memory"
+	utxosql "github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -139,22 +139,28 @@ type testContext struct {
 // setup creates a new test environment with initialized components.
 // Returns a testContext with all necessary test dependencies.
 func setup(t *testing.T) *testContext {
-	logger := ulogger.New("blockchain")
-
 	subtreeStore := blob_memory.New()
-	utxoStore := utxo_memory.New(logger)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := utxosql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
 
 	// Create SQLite store
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
-
-	store, err := sql.New(logger, storeURL, tSettings)
+	blockchainStore, err := sql.New(logger, storeURL, tSettings)
 	require.NoError(t, err)
 
-	server, err := New(context.Background(), logger, tSettings, store, nil)
+	server, err := New(context.Background(), logger, tSettings, blockchainStore, nil)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
