@@ -178,6 +178,20 @@ func (h *HTTP) GetTransaction(mode ReadMode) func(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error parsing transaction", err).Error())
 			}
 
+			// Debug logging for extended transaction format
+			h.logger.Debugf("[Asset_http] GetTransaction: Transaction %s - IsExtended: %v, IsCoinbase: %v",
+				hash.String(), tx.IsExtended(), tx.IsCoinbase())
+
+			if len(tx.Inputs) > 0 {
+				// Log details about the first few inputs
+				for i, input := range tx.Inputs {
+					if i < 3 { // Log first 3 inputs
+						h.logger.Debugf("[Asset_http] GetTransaction: Tx %s - Input[%d] PreviousTxSatoshis: %d",
+							hash.String(), i, input.PreviousTxSatoshis)
+					}
+				}
+			}
+
 			return c.JSONPretty(200, tx, "  ")
 
 		default:

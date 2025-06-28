@@ -30,7 +30,7 @@
       <div>{t(`${baseKey}.input.title`, { count: data.inputs.length })}</div>
       <div class="total">
         {t(`${baseKey}.input.total`, {
-          amount: formatSatoshi(data.inputs.reduce((acc, item) => (acc += item.vout), 0)),
+          amount: formatSatoshi(data.inputs.reduce((acc, item) => (acc += item.previousTxSatoshis || 0), 0)),
         })}
       </div>
     </div>
