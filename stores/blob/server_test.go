@@ -28,7 +28,8 @@ func TestServerOperations(t *testing.T) {
 	// Create a logger
 	logger := ulogger.New("blob-server-test")
 
-	serverStoreURL, err := url.Parse(fmt.Sprintf("file://%s?dahCleanerInterval=100ms", tempDir))
+	// Add a unique parameter to ensure a new DAH cleaner is started for this test
+	serverStoreURL, err := url.Parse(fmt.Sprintf("file://%s?testId=%d", tempDir, time.Now().UnixNano()))
 	require.NoError(t, err)
 
 	blobServer, err := NewHTTPBlobServer(
@@ -84,10 +85,16 @@ func TestServerOperations(t *testing.T) {
 		err = blobServer.setCurrentBlockHeight(2)
 		require.NoError(t, err)
 
-		time.Sleep(200 * time.Millisecond)
-
-		_, err = client.Get(context.Background(), key, fileformat.FileTypeTesting)
-		assert.Error(t, err)
+		// Wait for DAH cleanup to complete with retry
+		var getErr error
+		for i := 0; i < 10; i++ {
+			time.Sleep(100 * time.Millisecond)
+			_, getErr = client.Get(context.Background(), key, fileformat.FileTypeTesting)
+			if getErr != nil {
+				break
+			}
+		}
+		assert.Error(t, getErr)
 	})
 
 	t.Run("Exists", func(t *testing.T) {

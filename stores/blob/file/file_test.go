@@ -150,14 +150,12 @@ func TestFileLoadDAHs(t *testing.T) {
 		key := []byte("key")
 		value := []byte("value")
 
-		dahInterval := 10 * time.Millisecond
-
 		ctx := context.Background()
 
 		u, err := url.Parse("file://" + tempDir)
 		require.NoError(t, err)
 
-		f, err := newStore(ulogger.TestLogger{}, u, dahInterval)
+		f, err := newStore(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
 		err = f.Set(ctx, key, fileformat.FileTypeTesting, value)
@@ -190,14 +188,12 @@ func BenchmarkFileLoadDAHs(b *testing.B) {
 	require.NoError(b, err)
 	defer os.RemoveAll(tempDir)
 
-	dahInterval := 10 * time.Millisecond
-
 	ctx := context.Background()
 
 	u, err := url.Parse("file://" + tempDir)
 	require.NoError(b, err)
 
-	f, err := newStore(ulogger.TestLogger{}, u, dahInterval)
+	f, err := newStore(ulogger.TestLogger{}, u)
 	require.NoError(b, err)
 
 	keys := make([][]byte, b.N)
@@ -1623,52 +1619,6 @@ func TestFileURLParameters(t *testing.T) {
 
 		// hashSuffix in URL should set HashPrefix to negative value
 		require.Equal(t, -3, f.options.HashPrefix)
-	})
-
-	t.Run("dahCleanerInterval from URL", func(t *testing.T) {
-		// Create a temporary directory
-		tempDir, err := os.MkdirTemp("", "test-dah-cleaner")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		// Set up test file with DAH
-		key := []byte("test-key")
-		content := []byte("test content")
-
-		// Create URL with custom ttlCleanerInterval
-		u, err := url.Parse(fmt.Sprintf("file://%s?dahCleanerInterval=50ms", tempDir))
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		// Set content with DAH
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content, options.WithDeleteAt(1000))
-		require.NoError(t, err)
-
-		// Verify content exists
-		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-
-		// run cleaner - don't wait for cleaner to run automatically
-		f.SetCurrentBlockHeight(1000)
-		f.cleanupExpiredFiles()
-
-		// Content should be removed due to shorter cleaner interval
-		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.False(t, exists)
-	})
-
-	t.Run("invalid dahCleanerInterval in URL", func(t *testing.T) {
-		u, err := url.Parse("file://./data/subtreestore?dahCleanerInterval=invalid")
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.Error(t, err)
-		require.Nil(t, f)
-		require.Contains(t, err.Error(), "failed to parse dahCleanerInterval")
 	})
 
 	t.Run("invalid hashSuffix in URL", func(t *testing.T) {

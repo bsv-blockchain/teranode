@@ -1,7 +1,6 @@
 package smoke
 
 import (
-	"net/url"
 	"testing"
 	"time"
 
@@ -291,12 +290,6 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 		SettingsContext: "dev.system.test",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.GlobalBlockHeightRetention = 10
-
-			// replace dahCleanerInterval query param with 1 second
-			query := settings.SubtreeValidation.SubtreeStore.RawQuery
-			values, _ := url.ParseQuery(query)
-			values.Set("dahCleanerInterval", cleanerInterval.String())
-			settings.SubtreeValidation.SubtreeStore.RawQuery = values.Encode()
 		},
 	})
 

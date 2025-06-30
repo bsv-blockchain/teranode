@@ -38,7 +38,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
@@ -85,6 +84,7 @@ type File struct {
 	persistSubDir string
 	// longtermClient is an optional secondary storage backend for hybrid storage models
 	longtermClient longtermStore
+	cleanupCh      chan struct{}
 }
 
 // longtermStore defines the interface for a secondary storage backend that can be used
@@ -115,7 +115,6 @@ var fileSemaphore = make(chan struct{}, 1024)
 // - header: Custom header to prepend to blobs (can be hex-encoded or plain text)
 // - eofmarker: Custom footer marker to append to blobs (can be hex-encoded or plain text)
 // - checksum: When set to "true", enables SHA256 checksumming of blobs
-// - dahCleanerInterval: Duration between DAH cleanup operations (e.g., "5m" for 5 minutes)
 //
 // Parameters:
 //   - logger: Logger instance for recording operations and errors
@@ -130,22 +129,12 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 		return nil, errors.NewConfigurationError("storeURL is nil")
 	}
 
-	if storeURL.Query().Get("dahCleanerInterval") != "" {
-		dahCleanerInterval, err := time.ParseDuration(storeURL.Query().Get("dahCleanerInterval"))
-		if err != nil {
-			return nil, errors.NewStorageError("[File] failed to parse dahCleanerInterval", err)
-		}
-
-		return newStore(logger, storeURL, dahCleanerInterval, opts...)
-	}
-
-	return newStore(logger, storeURL, 1*time.Minute, opts...)
+	return newStore(logger, storeURL, opts...)
 }
 
-// globally limit the number of cleaners that are started to one
 var fileCleanerOnce sync.Map
 
-func newStore(logger ulogger.Logger, storeURL *url.URL, dahCleanerInterval time.Duration, opts ...options.StoreOption) (*File, error) {
+func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*File, error) {
 	logger = logger.New("file")
 
 	if storeURL == nil {
@@ -201,6 +190,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, dahCleanerInterval time.
 		fileDAHs:          make(map[string]uint32),
 		fileDAHsCtxCancel: fileDAHsCtxCancel,
 		persistSubDir:     options.PersistSubDir,
+		cleanupCh:         make(chan struct{}, 1),
 	}
 
 	// Check if longterm storage options are provided
@@ -214,7 +204,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, dahCleanerInterval time.
 		if options.LongtermStoreURL != nil {
 			var err error
 
-			fileStore.longtermClient, err = newStore(logger, options.LongtermStoreURL, 0)
+			fileStore.longtermClient, err = newStore(logger, options.LongtermStoreURL)
 			if err != nil {
 				return nil, errors.NewStorageError("[File] failed to create longterm client", err)
 			}
@@ -234,26 +224,29 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, dahCleanerInterval time.
 		}()
 	}
 
-	if dahCleanerInterval != 0 {
-		_, loaded := fileCleanerOnce.LoadOrStore(storeURL.String(), true)
-		if !loaded { // i.e. it was stored and not loaded
-			// load dah's in the background
-			go func() {
-				if err := fileStore.loadDAHs(); err != nil {
-					fileStore.logger.Warnf("[File] failed to load dahs: %v", err)
-				}
-			}()
-		}
-
-		// start the dah cleaner
-		go fileStore.dahCleaner(fileDAHsCtx, dahCleanerInterval)
+	_, loaded := fileCleanerOnce.LoadOrStore(storeURL.String(), true)
+	if !loaded { // i.e. it was stored and not loaded
+		// load dah's in the background and start the dah cleaner
+		go func() {
+			if err := fileStore.loadDAHs(); err != nil {
+				fileStore.logger.Warnf("[File] failed to load dahs: %v", err)
+			}
+		}()
 	}
+
+	// start the dah cleaner
+	go fileStore.dahCleaner(fileDAHsCtx)
 
 	return fileStore, nil
 }
 
 func (s *File) SetCurrentBlockHeight(height uint32) {
 	s.currentBlockHeight.Store(height)
+
+	select {
+	case s.cleanupCh <- struct{}{}:
+	default: // Channel is full; we are already cleaning up.
+	}
 }
 
 func (s *File) loadDAHs() error {
@@ -314,12 +307,12 @@ func (s *File) readDAHFromFile(fileName string) (uint32, error) {
 	return uint32(dah), nil
 }
 
-func (s *File) dahCleaner(ctx context.Context, interval time.Duration) {
+func (s *File) dahCleaner(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(interval):
+		case <-s.cleanupCh:
 			s.cleanupExpiredFiles()
 		}
 	}
