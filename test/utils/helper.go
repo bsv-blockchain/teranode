@@ -23,6 +23,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	block_model "github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	ba "github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/mining"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -211,7 +212,7 @@ func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store,
 
 // isTxInSubtree read the subtree binary and check if a tx with specified txid exist
 func isTxInSubtree(l ulogger.Logger, stReader io.Reader, queryTxId chainhash.Hash) (bool, error) { //nolint:stylecheck
-	st := util.Subtree{}
+	st := subtree.Subtree{}
 	err := st.DeserializeFromReader(stReader)
 
 	if err != nil {

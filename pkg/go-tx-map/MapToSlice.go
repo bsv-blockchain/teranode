@@ -1,6 +1,8 @@
-package util
+package txmap
 
-import "sync"
+import (
+	"sync"
+)
 
 func ConvertSyncMapToUint32Slice(syncMap *sync.Map) ([]uint32, bool) {
 	var sliceWithMapElements []uint32

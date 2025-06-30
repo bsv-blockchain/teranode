@@ -44,6 +44,9 @@ issues:
         - ineffassign
         - forbidigo
         - depguard
+    - path: pkg
+      linters:
+        - forbidigo
     - path: errors
       linters:
         - depguard

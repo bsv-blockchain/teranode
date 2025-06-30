@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -151,7 +151,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		var b []byte
 
 		// Deserialize the nodes from the reader will return a byte slice of the nodes directly
-		if b, err = util.DeserializeNodesFromReader(subtreeReader); err != nil {
+		if b, err = subtree.DeserializeNodesFromReader(subtreeReader); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 

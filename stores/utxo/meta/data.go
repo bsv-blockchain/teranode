@@ -19,6 +19,7 @@ import (
 	"io"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -33,7 +34,7 @@ type Data struct {
 	Tx *bt.Tx `json:"tx"`
 
 	// TxInpoints contains the transaction IDs and indexes of all parent transactions
-	TxInpoints TxInpoints `json:"txInpoints"`
+	TxInpoints subtree.TxInpoints `json:"txInpoints"`
 
 	// BlockIDs contains the block heights where this transaction appears
 	BlockIDs []uint32 `json:"blockIDs"`
@@ -104,7 +105,7 @@ func NewMetaDataFromBytes(dataBytes []byte, d *Data) (err error) {
 	d.Conflicting = (dataBytes[16] & 0b100) == 0b100
 	d.Unspendable = (dataBytes[16] & 0b1000) == 0b1000
 
-	d.TxInpoints, err = NewTxInpointsFromBytes(dataBytes[17:])
+	d.TxInpoints, err = subtree.NewTxInpointsFromBytes(dataBytes[17:])
 
 	return err
 }
@@ -153,7 +154,7 @@ func NewDataFromBytes(dataBytes []byte) (d *Data, err error) {
 	buf := bytes.NewReader(dataBytes[17:])
 
 	// read the number of parent tx inpoints
-	d.TxInpoints, err = NewTxInpointsFromReader(buf)
+	d.TxInpoints, err = subtree.NewTxInpointsFromReader(buf)
 	if err != nil {
 		return nil, errors.NewProcessingError("could not deserialize tx inpoints", err)
 	}

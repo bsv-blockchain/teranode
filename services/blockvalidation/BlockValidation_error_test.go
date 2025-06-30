@@ -9,13 +9,13 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	bloboptions "github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/libsv/go-bk/bec"
@@ -188,8 +188,8 @@ func storeTxsInUtxoStore(t *testing.T, utxoStore utxo.Store, coinbaseTx, childTx
 
 func buildAndStoreSubtree(t *testing.T, subtreeStore interface {
 	Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...bloboptions.FileOption) error
-}, childTx *bt.Tx, opts ...bloboptions.FileOption) *util.Subtree {
-	subtree, err := util.NewTreeByLeafCount(2)
+}, childTx *bt.Tx, opts ...bloboptions.FileOption) *subtreepkg.Subtree {
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*childTx.TxIDChainHash(), uint64(childTx.Size()), 0)) //nolint:gosec
@@ -200,7 +200,7 @@ func buildAndStoreSubtree(t *testing.T, subtreeStore interface {
 	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes, opts...)
 	require.NoError(t, err)
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
 
 	subtreeMetaBytes, err := subtreeMeta.Serialize()
@@ -252,7 +252,7 @@ func mineBlockHeader(t *testing.T, parentHash, merkleRoot *chainhash.Hash, nBits
 	return blockHeader
 }
 
-func createBlock(t *testing.T, header *model.BlockHeader, coinbaseTx *bt.Tx, subtreeRoot *chainhash.Hash, subtree *util.Subtree, tSettings *settings.Settings, totalSize int64) *model.Block {
+func createBlock(t *testing.T, header *model.BlockHeader, coinbaseTx *bt.Tx, subtreeRoot *chainhash.Hash, subtree *subtreepkg.Subtree, tSettings *settings.Settings, totalSize int64) *model.Block {
 	block, _ := model.NewBlock(
 		header,
 		coinbaseTx,
@@ -293,7 +293,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	subtree, _ := util.NewTreeByLeafCount(2)
+	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 	nodeBytes, err := subtree.SerializeNodes()
@@ -413,7 +413,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	subtree, _ := util.NewTreeByLeafCount(2)
+	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 	nodeBytes, err := subtree.SerializeNodes()

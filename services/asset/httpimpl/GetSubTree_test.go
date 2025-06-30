@@ -204,7 +204,7 @@ func TestGetSubtree(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "SUBTREE_ERROR (29): unable to read subtree root information -> UNKNOWN (0): unexpected EOF", echoErr.Message)
+		assert.Equal(t, "unable to read subtree root information: unexpected EOF", echoErr.Message)
 	})
 
 	t.Run("Invalid hash length", func(t *testing.T) {

@@ -5,6 +5,8 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
@@ -47,7 +49,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		idx := idx
 		txHash := txHash
 
-		if txHash.Equal(util.CoinbasePlaceholderHashValue) {
+		if txHash.Equal(subtree.CoinbasePlaceholderHashValue) {
 			// skip coinbase placeholder
 			continue
 		}
@@ -111,7 +113,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		}
 
 		for vOut, output := range tx.Outputs {
-			vOutUint32, err := util.SafeIntToUint32(vOut)
+			vOutUint32, err := safe.IntToUint32(vOut)
 			if err != nil {
 				return nil, nil, err
 			}

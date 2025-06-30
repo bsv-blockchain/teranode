@@ -6,19 +6,20 @@
 // system using a simple append-only format for reliability and crash recovery.
 //
 // Key features:
-//  - Thread-safe file-based state persistence using file locking
-//  - Atomic block state updates with proper error handling
-//  - Recovery from incomplete operations through file validation
-//  - Efficient retrieval of the last persisted block height
+//   - Thread-safe file-based state persistence using file locking
+//   - Atomic block state updates with proper error handling
+//   - Recovery from incomplete operations through file validation
+//   - Efficient retrieval of the last persisted block height
 //
 // The state file format stores block height and hash pairs, allowing the service to
 // resume processing from the correct point after restarts or failures. File locking
 // ensures concurrent access safety when multiple processes might access the state.
 //
 // Usage:
-//  state := state.New(logger, "/path/to/state/file")
-//  height, err := state.GetLastPersistedBlockHeight()
-//  err = state.AddBlock(height+1, blockHash)
+//
+//	state := state.New(logger, "/path/to/state/file")
+//	height, err := state.GetLastPersistedBlockHeight()
+//	err = state.AddBlock(height+1, blockHash)
 package state
 
 import (
@@ -32,8 +33,8 @@ import (
 	"syscall"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 )
 
 const maxInt = int(^uint(0) >> 1)
@@ -153,7 +154,7 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 
 	// Safe conversion since ParseUint with bitSize=32 ensures the value fits in uint32
 
-	heightUint32, err := util.SafeUint64ToUint32(height)
+	heightUint32, err := safe.Uint64ToUint32(height)
 	if err != nil {
 		return 0, err
 	}
@@ -223,7 +224,7 @@ func (s *State) lockFile(file *os.File, lockType int) (func(), error) {
 		return nil, errors.NewProcessingError("file descriptor too large", nil)
 	}
 
-	fdi, err := util.SafeUintptrToInt(fd)
+	fdi, err := safe.UintptrToInt(fd)
 	if err != nil {
 		return nil, err
 	}

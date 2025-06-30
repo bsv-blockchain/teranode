@@ -10,7 +10,8 @@ import (
 	"unsafe"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/cespare/xxhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -191,7 +192,7 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 
 	var c ImprovedCache
 
-	maxBucketBytes, err := util.SafeIntToUint64(maxBytes / BucketsCount)
+	maxBucketBytes, err := safe.IntToUint64(maxBytes / BucketsCount)
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to convert maxBytes", err)
 	}
@@ -533,7 +534,7 @@ type bucketTrimmed struct {
 
 	// m maps hash(k) to idx of (k, v) pair in chunks.
 	// m map[uint64]uint64
-	m *util.SplitSwissMapKVUint64
+	m *txmap.SplitSwissMapKVUint64
 	// pass txId directly. How is memory?
 	// m map[[32]byte]uint64
 
@@ -565,7 +566,7 @@ func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 
 	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
 	b.chunks = make([][]byte, maxChunks)
-	b.m = util.NewSplitSwissMapKVUint64(1024)
+	b.m = txmap.NewSplitSwissMapKVUint64(1024)
 	b.overWriting = false
 	b.Reset()
 
@@ -581,7 +582,7 @@ func (b *bucketTrimmed) Reset() {
 		chunks[i] = nil
 	}
 
-	b.m = util.NewSplitSwissMapKVUint64(1024)
+	b.m = txmap.NewSplitSwissMapKVUint64(1024)
 	b.idx = 0
 	b.gen = 1
 	b.overWriting = false
@@ -612,7 +613,7 @@ func (b *bucketTrimmed) cleanLockedMap() {
 		// Re-create b.m with valid items, which weren't expired yet instead of deleting expired items from b.m.
 		// This should reduce memory fragmentation and the number Go objects behind b.m.
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5379
-		bmNew := util.NewSplitSwissMapKVUint64(1024)
+		bmNew := txmap.NewSplitSwissMapKVUint64(1024)
 
 		for _, maps := range bm.Map() {
 			maps.Map().Iter(func(k uint64, v uint64) (stop bool) {

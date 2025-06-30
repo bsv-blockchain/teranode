@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/settings"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
@@ -141,7 +141,7 @@ func TestSendTxAndCheckState(t *testing.T) {
 		return block.SubTreesFromBytes(subtreeHash[:])
 	}
 
-	var subtree []*util.Subtree
+	var subtree []*subtree.Subtree
 
 	subtree, err = block.GetSubtrees(ctx, td.Logger, td.SubtreeStore, fallbackGetFunc)
 	require.NoError(t, err)

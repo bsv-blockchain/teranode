@@ -14,6 +14,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -474,7 +475,7 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 			// check subtrees
 			var (
 				subtreeReader io.ReadCloser
-				subtree       *util.Subtree
+				subtree       *subtreepkg.Subtree
 			)
 
 			logger.Debugf("[%s] checking subtrees: %d", loggerContext, len(block.Subtrees))
@@ -488,7 +489,7 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 					logger.Debugf("[%s] block dump: %s", loggerContext, block.Header.StringDump())
 				}
 
-				if subtree, err = util.NewSubtreeFromReader(subtreeReader); err != nil || subtree == nil {
+				if subtree, err = subtreepkg.NewSubtreeFromReader(subtreeReader); err != nil || subtree == nil {
 					logger.Errorf("[%s] failed to parse subtree %s for block %s: %s", loggerContext, subtreeHash, block, err)
 
 					_ = subtreeReader.Close()
@@ -508,7 +509,7 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 
 					logger.Debugf("[%s] subtree.Nodes: accessing index %d (len=%d)", loggerContext, nodeIdx, len(subtree.Nodes))
 
-					if !util.CoinbasePlaceholderHash.Equal(node.Hash) {
+					if !subtreepkg.CoinbasePlaceholderHash.Equal(node.Hash) {
 						logger.Debugf("[%s] checking transaction %s", loggerContext, node.Hash)
 
 						// check that the transaction does not already exist in another block

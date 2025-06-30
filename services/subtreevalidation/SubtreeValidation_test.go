@@ -19,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/testdata"
 	"github.com/bitcoin-sv/teranode/services/validator"
@@ -27,7 +28,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka" //nolint:gci
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/jarcoal/httpmock"
@@ -68,7 +68,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		txMetaStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
 		defer deferFunc()
 
-		subtree, err := util.NewTreeByLeafCount(4)
+		subtree, err := subtreepkg.NewTreeByLeafCount(4)
 		require.NoError(t, err)
 		require.NoError(t, subtree.AddNode(*hash1, 121, 0))
 		require.NoError(t, subtree.AddNode(*hash2, 122, 0))
@@ -162,7 +162,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
 	defer deferFunc()
 
-	subtree, err := util.NewTreeByLeafCount(1)
+	subtree, err := subtreepkg.NewTreeByLeafCount(1)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddNode(*hash1, 121, 0))
 
@@ -204,7 +204,7 @@ func TestBlockValidationValidateSubtreeInternalLegacy(t *testing.T) {
 	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
 	defer deferFunc()
 
-	subtree, err := util.NewTreeByLeafCount(2)
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddNode(*hash1, 121, 1))
 	require.NoError(t, subtree.AddNode(*hash2, 122, 2))
@@ -429,9 +429,9 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create subtrees
-		subtree1, err := util.NewTreeByLeafCount(4)
+		subtree1, err := subtreepkg.NewTreeByLeafCount(4)
 		require.NoError(t, err)
-		subtree2, err := util.NewTreeByLeafCount(4)
+		subtree2, err := subtreepkg.NewTreeByLeafCount(4)
 		require.NoError(t, err)
 
 		// Add transactions to subtrees
@@ -652,7 +652,7 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 func Test_getSubtreeMissingTxs(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
-	subtree, err := util.NewTreeByLeafCount(4)
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddNode(*hash1, 121, 0))
 	require.NoError(t, subtree.AddNode(*hash2, 122, 0))
@@ -779,7 +779,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			blockchainClient: blockchainClient,
 		}
 
-		coinbaseSubtree, err := util.NewIncompleteTreeByLeafCount(3)
+		coinbaseSubtree, err := subtreepkg.NewIncompleteTreeByLeafCount(3)
 		require.NoError(t, err)
 		require.NoError(t, coinbaseSubtree.AddCoinbaseNode())
 		require.NoError(t, coinbaseSubtree.AddNode(*hash2, 122, 2))
@@ -801,7 +801,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 		require.NoError(t, err)
 
 		allTxs := []chainhash.Hash{
-			util.CoinbasePlaceholderHashValue,
+			subtreepkg.CoinbasePlaceholderHashValue,
 			*hash2,
 			*hash3,
 		}
@@ -833,7 +833,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 		subtreeNodeBytes, err := hex.DecodeString("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff5335baa155f4fbfca2d0d422c150472a4fff9f858a47c3ebb8a7db51c8187273567e0824cb889ec1d55cf9c39bf83d254623d25f9bd22f3ca1dcc4a21196a55e")
 		require.NoError(t, err)
 
-		testSubtree, err := util.NewIncompleteTreeByLeafCount(3)
+		testSubtree, err := subtreepkg.NewIncompleteTreeByLeafCount(3)
 		require.NoError(t, err)
 
 		_ = testSubtree.AddCoinbaseNode()
@@ -850,7 +850,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 
 		subtreeDataReader := bytes.NewReader(subtreeDataBytes)
 
-		subtreeData, err := util.NewSubtreeDataFromReader(testSubtree, subtreeDataReader)
+		subtreeData, err := subtreepkg.NewSubtreeDataFromReader(testSubtree, subtreeDataReader)
 		require.NoError(t, err)
 
 		_ = subtreeData
@@ -906,7 +906,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 		subtreeNodeBytes, err := os.ReadFile(fmt.Sprintf("testdata/%s.subtree", subtreeHashStr))
 		require.NoError(t, err)
 
-		testSubtree, err := util.NewIncompleteTreeByLeafCount(len(subtreeNodeBytes) / chainhash.HashSize)
+		testSubtree, err := subtreepkg.NewIncompleteTreeByLeafCount(len(subtreeNodeBytes) / chainhash.HashSize)
 		require.NoError(t, err)
 
 		allTxs := make([]chainhash.Hash, 0)
@@ -921,7 +921,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 
 		subtreeDataReader := bytes.NewReader(subtreeDataBytes)
 
-		subtreeData, err := util.NewSubtreeDataFromReader(testSubtree, subtreeDataReader)
+		subtreeData, err := subtreepkg.NewSubtreeDataFromReader(testSubtree, subtreeDataReader)
 		require.NoError(t, err)
 
 		_ = subtreeData

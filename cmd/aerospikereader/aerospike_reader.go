@@ -23,6 +23,7 @@ import (
 
 	aero "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
@@ -114,7 +115,7 @@ func ReadAerospike(logger ulogger.Logger, settings *settings.Settings, txIDStrin
 		totalExtraRecords, ok = nrRecordsIfc.(int)
 		if ok {
 			var nrRecordsUint32 uint32
-			nrRecordsUint32, err = util.SafeIntToUint32(totalExtraRecords)
+			nrRecordsUint32, err = safe.IntToUint32(totalExtraRecords)
 			if err != nil {
 				fmt.Printf("Failed to convert nrRecords to uint32: %s\n", err)
 				os.Exit(1)

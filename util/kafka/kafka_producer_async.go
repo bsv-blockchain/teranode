@@ -15,6 +15,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	inmemorykafka "github.com/bitcoin-sv/teranode/util/kafka/in_memory_kafka"
@@ -84,12 +85,12 @@ type KafkaAsyncProducer struct {
 //   - *KafkaAsyncProducer: Configured async producer
 //   - error: Any error encountered during setup
 func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL) (*KafkaAsyncProducer, error) {
-	partitionsInt32, err := util.SafeIntToInt32(util.GetQueryParamInt(url, "partitions", 1))
+	partitionsInt32, err := safe.IntToInt32(util.GetQueryParamInt(url, "partitions", 1))
 	if err != nil {
 		return nil, err
 	}
 
-	replicationFactorInt16, err := util.SafeIntToInt16(util.GetQueryParamInt(url, "replication", 1))
+	replicationFactorInt16, err := safe.IntToInt16(util.GetQueryParamInt(url, "replication", 1))
 	if err != nil {
 		return nil, err
 	}

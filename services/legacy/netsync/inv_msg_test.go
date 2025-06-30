@@ -3,10 +3,10 @@ package netsync
 import (
 	"testing"
 
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	peerpkg "github.com/bitcoin-sv/teranode/services/legacy/peer"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -26,7 +26,7 @@ func Test_invMsg(t *testing.T) {
 		require.NoError(t, err)
 
 		sm := &SyncManager{
-			peerStates: util.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+			peerStates: txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		}
 
 		sm.peerStates.Set(peer, &peerSyncState{})
@@ -69,7 +69,7 @@ func Test_invMsg(t *testing.T) {
 		require.NoError(t, err)
 
 		sm := &SyncManager{
-			peerStates: util.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+			peerStates: txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		}
 
 		sm.peerStates.Set(peer, &peerSyncState{})
@@ -111,7 +111,7 @@ func Test_invMsg(t *testing.T) {
 		require.NoError(t, err)
 
 		sm := &SyncManager{
-			peerStates: util.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+			peerStates: txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		}
 
 		sm.peerStates.Set(peer, &peerSyncState{})

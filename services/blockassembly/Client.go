@@ -8,12 +8,12 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-batcher"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/settings"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
-	batcher "github.com/bitcoin-sv/teranode/util/batcher"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -204,7 +204,7 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // Returns:
 //   - bool: True if storage was successful
 //   - error: Any error encountered during storage
-func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints meta.TxInpoints) (bool, error) {
+func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
 	txInpointsBytes, err := txInpoints.Serialize()
 	if err != nil {
 		return false, err

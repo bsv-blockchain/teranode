@@ -7,6 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -71,7 +72,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		metaData := &meta.Data{
 			Fee:         100,
 			SizeInBytes: 111,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: nil},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: nil},
 			BlockIDs:    make([]uint32, 0),
 		}
 
@@ -167,7 +168,7 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 	meta := &meta.Data{
 		Fee:         100,
 		SizeInBytes: 111,
-		TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 	}
 
 	iterationCount := 50_000
@@ -249,7 +250,7 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 		metaData := &meta.Data{
 			Fee:         100,
 			SizeInBytes: 111,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    make([]uint32, 0),
 		}
 
@@ -281,7 +282,7 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 		metaData := &meta.Data{
 			Fee:         100,
 			SizeInBytes: 111,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    make([]uint32, 0),
 		}
 
@@ -314,7 +315,7 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 		metaData1 := &meta.Data{
 			Fee:         100,
 			SizeInBytes: 111,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    make([]uint32, 0),
 		}
 
@@ -336,7 +337,7 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 		metaData2 := &meta.Data{
 			Fee:         100,
 			SizeInBytes: 111,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    make([]uint32, 0),
 		}
 
@@ -368,7 +369,7 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 		metaData := &meta.Data{
 			Fee:         100,
 			SizeInBytes: 111,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    make([]uint32, 0),
 		}
 
@@ -421,7 +422,7 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 		metaData := &meta.Data{
 			Fee:         100,
 			SizeInBytes: 111,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    make([]uint32, 0),
 		}
 
@@ -468,7 +469,7 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 		metaData := &meta.Data{
 			Fee:         100,
 			SizeInBytes: 111,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    make([]uint32, 0),
 		}
 
@@ -515,7 +516,7 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 		metaData := &meta.Data{
 			Fee:         100,
 			SizeInBytes: 111,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    []uint32{1, 2, 3},
 		}
 
@@ -583,14 +584,14 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 		metaData1 := &meta.Data{
 			Fee:         100,
 			SizeInBytes: 111,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    make([]uint32, 0),
 		}
 
 		metaData2 := &meta.Data{
 			Fee:         200,
 			SizeInBytes: 222,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    make([]uint32, 0),
 		}
 
@@ -659,14 +660,14 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 		metaData1 := &meta.Data{
 			Fee:         100,
 			SizeInBytes: 111,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    make([]uint32, 0),
 		}
 
 		metaData2 := &meta.Data{
 			Fee:         200,
 			SizeInBytes: 222,
-			TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			BlockIDs:    make([]uint32, 0),
 		}
 

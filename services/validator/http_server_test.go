@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -53,7 +54,7 @@ func (m *MockValidator) Validate(ctx context.Context, tx *bt.Tx, height uint32, 
 	return &meta.Data{
 		Fee:         32279815860,
 		SizeInBytes: 245,
-		TxInpoints:  meta.TxInpoints{}, // Using nil is safe for the test
+		TxInpoints:  subtree.TxInpoints{}, // Using nil is safe for the test
 	}, nil
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/util"
 	imk "github.com/bitcoin-sv/teranode/util/kafka/in_memory_kafka"
 )
@@ -57,14 +58,14 @@ func (k *SyncKafkaProducer) GetClient() sarama.ConsumerGroup {
 // Send publishes a message to Kafka with the specified key and data.
 // The partition is determined by hashing the key.
 func (k *SyncKafkaProducer) Send(key []byte, data []byte) error {
-	kPartitionsUint32, err := util.SafeInt32ToUint32(k.Partitions)
+	kPartitionsUint32, err := safe.Int32ToUint32(k.Partitions)
 	if err != nil {
 		return err
 	}
 
 	partition := binary.LittleEndian.Uint32(key) % kPartitionsUint32
 
-	partitionInt32, err := util.SafeUint32ToInt32(partition)
+	partitionInt32, err := safe.Uint32ToInt32(partition)
 	if err != nil {
 		return err
 	}
@@ -126,12 +127,12 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 	retentionPeriod := util.GetQueryParam(kafkaURL, "retention", "600000")      // 10 minutes
 	segmentBytes := util.GetQueryParam(kafkaURL, "segment_bytes", "1073741824") // 1GB default
 
-	partitionsInt32, err := util.SafeIntToInt32(partitions)
+	partitionsInt32, err := safe.IntToInt32(partitions)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	replicationFactorInt16, err := util.SafeIntToInt16(replicationFactor)
+	replicationFactorInt16, err := safe.IntToInt16(replicationFactor)
 	if err != nil {
 		// Clean up cluster admin if topic creation prep fails
 		_ = clusterAdmin.Close() // Best effort close

@@ -2,9 +2,9 @@ package subtreeprocessor
 
 import (
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
 )
@@ -13,9 +13,9 @@ type MockSubtreeProcessor struct {
 	mock.Mock
 }
 
-func (m *MockSubtreeProcessor) GetCurrentTxMap() *util.SyncedMap[chainhash.Hash, meta.TxInpoints] {
+func (m *MockSubtreeProcessor) GetCurrentTxMap() *txmap.SyncedMap[chainhash.Hash, subtree.TxInpoints] {
 	args := m.Called()
-	return args.Get(0).(*util.SyncedMap[chainhash.Hash, meta.TxInpoints])
+	return args.Get(0).(*txmap.SyncedMap[chainhash.Hash, subtree.TxInpoints])
 }
 
 func (m *MockSubtreeProcessor) GetCurrentRunningState() State {
@@ -38,14 +38,14 @@ func (m *MockSubtreeProcessor) GetCurrentBlockHeader() *model.BlockHeader {
 	return args.Get(0).(*model.BlockHeader)
 }
 
-func (m *MockSubtreeProcessor) GetCurrentSubtree() *util.Subtree {
+func (m *MockSubtreeProcessor) GetCurrentSubtree() *subtree.Subtree {
 	args := m.Called()
-	return args.Get(0).(*util.Subtree)
+	return args.Get(0).(*subtree.Subtree)
 }
 
-func (m *MockSubtreeProcessor) GetChainedSubtrees() []*util.Subtree {
+func (m *MockSubtreeProcessor) GetChainedSubtrees() []*subtree.Subtree {
 	args := m.Called()
-	return args.Get(0).([]*util.Subtree)
+	return args.Get(0).([]*subtree.Subtree)
 }
 
 func (m *MockSubtreeProcessor) GetUtxoStore() utxostore.Store {
@@ -73,11 +73,11 @@ func (m *MockSubtreeProcessor) SubtreeCount() int {
 }
 
 // Add implements Interface.Add
-func (m *MockSubtreeProcessor) Add(node util.SubtreeNode, txInpoints meta.TxInpoints) {
+func (m *MockSubtreeProcessor) Add(node subtree.SubtreeNode, txInpoints subtree.TxInpoints) {
 	m.Called(node, txInpoints)
 }
 
-func (m *MockSubtreeProcessor) AddDirectly(node util.SubtreeNode, txInpoints meta.TxInpoints) error {
+func (m *MockSubtreeProcessor) AddDirectly(node subtree.SubtreeNode, txInpoints subtree.TxInpoints) error {
 	args := m.Called(node, txInpoints)
 
 	if args.Get(0) == nil {
@@ -112,9 +112,9 @@ func (m *MockSubtreeProcessor) Remove(hash chainhash.Hash) error {
 }
 
 // GetCompletedSubtreesForMiningCandidate implements Interface.GetCompletedSubtreesForMiningCandidate
-func (m *MockSubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree {
+func (m *MockSubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*subtree.Subtree {
 	args := m.Called()
-	return args.Get(0).([]*util.Subtree)
+	return args.Get(0).([]*subtree.Subtree)
 }
 
 // SetCurrentBlockHeader implements Interface.SetCurrentBlockHeader

@@ -23,9 +23,10 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	lockfreequeue "github.com/bitcoin-sv/teranode/pkg/go-lockfree-queue"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"golang.org/x/exp/rand"
@@ -37,21 +38,21 @@ import (
 // when working with storage backends that have high per-operation costs.
 type Batcher struct {
 	// logger provides structured logging for batcher operations and errors
-	logger           ulogger.Logger
+	logger ulogger.Logger
 	// blobStore is the underlying blob storage implementation where batches are ultimately stored
-	blobStore        blobStoreSetter
+	blobStore blobStoreSetter
 	// sizeInBytes defines the maximum size of a batch in bytes before it's flushed
-	sizeInBytes      int
+	sizeInBytes int
 	// writeKeys determines whether to store a separate index of keys for each batch
-	writeKeys        bool
+	writeKeys bool
 	// queue is a lock-free queue for storing batch items to be processed asynchronously
-	queue            *util.LockFreeQ[BatchItem]
+	queue *lockfreequeue.LockFreeQ[BatchItem]
 	// queueCtx is the context for controlling the background batch processing goroutine
-	queueCtx         context.Context
+	queueCtx context.Context
 	// queueCancel is the function to cancel the queue context and stop background processing
-	queueCancel      context.CancelFunc
+	queueCancel context.CancelFunc
 	// currentBatch holds the accumulated blob data for the current batch
-	currentBatch     []byte
+	currentBatch []byte
 	// currentBatchKeys holds the accumulated key data for the current batch (if writeKeys is true)
 	currentBatchKeys []byte
 }
@@ -60,11 +61,11 @@ type Batcher struct {
 // It contains all the necessary information to store a blob in the underlying store.
 type BatchItem struct {
 	// hash is the unique identifier for the blob, typically a transaction ID or similar hash
-	hash     chainhash.Hash
+	hash chainhash.Hash
 	// fileType indicates the type of file being stored (e.g., transaction, block, etc.)
 	fileType fileformat.FileType
 	// value contains the actual blob data to be stored
-	value    []byte
+	value []byte
 	// next  atomic.Pointer[BatchItem]
 }
 
@@ -99,7 +100,7 @@ func New(logger ulogger.Logger, blobStore blobStoreSetter, sizeInBytes int, writ
 		blobStore:        blobStore,
 		sizeInBytes:      sizeInBytes,
 		writeKeys:        writeKeys,
-		queue:            util.NewLockFreeQ[BatchItem](),
+		queue:            lockfreequeue.NewLockFreeQ[BatchItem](),
 		queueCtx:         ctx,
 		queueCancel:      cancel,
 		currentBatch:     make([]byte, 0, sizeInBytes),
@@ -187,12 +188,12 @@ func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 
 		copy(key[:hashLength], batchItem.hash[:])
 
-		currentPosUint32, err := util.SafeIntToUint32(currentPos)
+		currentPosUint32, err := safe.IntToUint32(currentPos)
 		if err != nil {
 			return err
 		}
 
-		dataSizeUint32, err := util.SafeIntToUint32(dataSize)
+		dataSizeUint32, err := safe.IntToUint32(dataSize)
 		if err != nil {
 			return err
 		}
@@ -225,7 +226,7 @@ func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 	batchKey := make([]byte, 4)
 
-	timeUint32, err := util.SafeIntToUint32(int(time.Now().Unix()))
+	timeUint32, err := safe.IntToUint32(int(time.Now().Unix()))
 	if err != nil {
 		return err
 	}
@@ -365,7 +366,7 @@ func (b *Batcher) Set(_ context.Context, hash []byte, fileType fileformat.FileTy
 //   - opts: Optional file options (unused)
 //
 // Returns:
-//   - error: Always returns errors.NewStorageError with an unsupported operation message
+//   - error: Always returns go-errors.NewStorageError with an unsupported operation message
 func (b *Batcher) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ uint32, _ ...options.FileOption) error {
 	return errors.NewStorageError("SetDAH not supported by batcher")
 }
@@ -382,7 +383,7 @@ func (b *Batcher) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ u
 //
 // Returns:
 //   - uint32: Always returns 0
-//   - error: Always returns errors.NewStorageError with an unsupported operation message
+//   - error: Always returns go-errors.NewStorageError with an unsupported operation message
 func (b *Batcher) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (uint32, error) {
 	return 0, errors.NewStorageError("GetDAH not supported by batcher")
 }
@@ -399,7 +400,7 @@ func (b *Batcher) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ .
 //
 // Returns:
 //   - io.ReadCloser: Always returns nil
-//   - error: Always returns errors.NewStorageError with an unsupported operation message
+//   - error: Always returns go-errors.NewStorageError with an unsupported operation message
 func (b *Batcher) GetIoReader(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (io.ReadCloser, error) {
 	return nil, errors.NewStorageError("GetIoReader not supported by batcher")
 }
@@ -416,7 +417,7 @@ func (b *Batcher) GetIoReader(_ context.Context, _ []byte, _ fileformat.FileType
 //
 // Returns:
 //   - []byte: Always returns nil
-//   - error: Always returns errors.NewStorageError with an unsupported operation message
+//   - error: Always returns go-errors.NewStorageError with an unsupported operation message
 func (b *Batcher) Get(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) ([]byte, error) {
 	return nil, errors.NewStorageError("Get not supported by batcher")
 }
@@ -433,7 +434,7 @@ func (b *Batcher) Get(_ context.Context, _ []byte, _ fileformat.FileType, _ ...o
 //
 // Returns:
 //   - bool: Always returns false
-//   - error: Always returns errors.NewStorageError with an unsupported operation message
+//   - error: Always returns go-errors.NewStorageError with an unsupported operation message
 func (b *Batcher) Exists(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (bool, error) {
 	return false, errors.NewStorageError("Exists not supported by batcher")
 }
@@ -449,7 +450,7 @@ func (b *Batcher) Exists(_ context.Context, _ []byte, _ fileformat.FileType, _ .
 //   - opts: Optional file options (unused)
 //
 // Returns:
-//   - error: Always returns errors.NewStorageError with an unsupported operation message
+//   - error: Always returns go-errors.NewStorageError with an unsupported operation message
 func (b *Batcher) Del(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) error {
 	return errors.NewStorageError("Del not supported by batcher")
 }

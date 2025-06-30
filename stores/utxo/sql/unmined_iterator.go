@@ -6,8 +6,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model/time"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -143,7 +143,7 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 		tx.Inputs = append(tx.Inputs, input)
 	}
 
-	txInpoints, err := meta.NewTxInpointsFromInputs(tx.Inputs)
+	txInpoints, err := subtree.NewTxInpointsFromInputs(tx.Inputs)
 	if err != nil {
 		if err = it.Close(); err != nil {
 			it.store.logger.Warnf("failed to close iterator: %v", err)

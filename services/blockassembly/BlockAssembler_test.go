@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/mining"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
@@ -22,7 +23,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
 	utxoStore "github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	utxostoresql "github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -214,7 +214,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 				assert.NotNil(t, subtree)
 
 				if i == 0 {
-					assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+					assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 				}
 
 				assert.Len(t, subtree.Nodes, 4)
@@ -230,31 +230,31 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash1, Fee: 111}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash1, Fee: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash2, Fee: 222}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash2, Fee: 222}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx3, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash3, Fee: 333}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash3, Fee: 333}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx4, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 110}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash4, Fee: 110}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx5, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 220}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash5, Fee: 220}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx6, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash6, Fee: 330}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash6, Fee: 330}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx7, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash7, Fee: 6}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash7, Fee: 6}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		wg.Wait()
 
@@ -555,7 +555,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 			subtreeRequest := <-testItems.newSubtreeChan
 			subtree := subtreeRequest.Subtree
 			assert.NotNil(t, subtree)
-			assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+			assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
 			assert.NotEqual(t, uint64(5000000556), subtree.Fees)
 
@@ -568,23 +568,23 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 
 		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *util.CoinbasePlaceholderHash, Fee: 5000000000}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash2, Fee: 222}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash2, Fee: 222}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx3, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash3, Fee: 334}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash3, Fee: 334}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx4, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash4, Fee: 444}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx5, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 555}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash5, Fee: 555}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		wg.Wait()
 
@@ -655,7 +655,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 			subtreeRequest := <-testItems.newSubtreeChan
 			subtree := subtreeRequest.Subtree
 			assert.NotNil(t, subtree)
-			assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+			assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
 			assert.Equal(t, uint64(999), subtree.Fees)
 
@@ -669,19 +669,19 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		// first add coinbase
 		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *util.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 111}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash2, Fee: 222, SizeInBytes: 222}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash2, Fee: 222, SizeInBytes: 222}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx3, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash3, Fee: 333, SizeInBytes: 333}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash3, Fee: 333, SizeInBytes: 333}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx4, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444, SizeInBytes: 444}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash4, Fee: 444, SizeInBytes: 444}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		wg.Wait()
 
@@ -696,7 +696,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		assert.Equal(t, uint64(1079), miningCandidate.SizeWithoutCoinbase)
 		assert.Equal(t, uint32(1), miningCandidate.SubtreeCount)
 		// Check the MerkleProof
-		expectedMerkleProofChainhash, err := util.GetMerkleProofForCoinbase(subtrees)
+		expectedMerkleProofChainhash, err := subtreepkg.GetMerkleProofForCoinbase(subtrees)
 		assert.NoError(t, err)
 
 		expectedMerkleProof := [][]byte{}
@@ -709,7 +709,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		assert.NotNil(t, subtrees)
 		assert.Len(t, subtrees, 1)
 		assert.Len(t, subtrees[0].Nodes, 4)
-		assert.Equal(t, util.CoinbasePlaceholderHash.String(), subtrees[0].Nodes[0].Hash.String())
+		assert.Equal(t, subtreepkg.CoinbasePlaceholderHash.String(), subtrees[0].Nodes[0].Hash.String())
 		assert.Equal(t, hash2.String(), subtrees[0].Nodes[1].Hash.String())
 		assert.Equal(t, hash3.String(), subtrees[0].Nodes[2].Hash.String())
 		assert.Equal(t, hash4.String(), subtrees[0].Nodes[3].Hash.String())
@@ -795,9 +795,9 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 
 			if i == 0 {
 				// first add coinbase
-				testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *util.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 15000}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+				testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 15000}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 			} else {
-				testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 15000}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+				testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 15000}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 			}
 		}
 
@@ -814,7 +814,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		assert.Equal(t, uint64(45080), miningCandidate.SizeWithoutCoinbase) // 3 * 1500 + 80
 		assert.Equal(t, uint32(1), miningCandidate.SubtreeCount)
 		// Check the MerkleProof
-		expectedMerkleProofChainhash, err := util.GetMerkleProofForCoinbase(subtrees)
+		expectedMerkleProofChainhash, err := subtreepkg.GetMerkleProofForCoinbase(subtrees)
 		assert.NoError(t, err)
 
 		expectedMerkleProof := [][]byte{}
@@ -827,7 +827,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		assert.NotNil(t, subtrees)
 		assert.Len(t, subtrees, 1)
 		assert.Len(t, subtrees[0].Nodes, 4)
-		assert.Equal(t, util.CoinbasePlaceholderHash.String(), subtrees[0].Nodes[0].Hash.String())
+		assert.Equal(t, subtreepkg.CoinbasePlaceholderHash.String(), subtrees[0].Nodes[0].Hash.String())
 		assert.Equal(t, hash1.String(), subtrees[0].Nodes[1].Hash.String())
 		assert.Equal(t, hash2.String(), subtrees[0].Nodes[2].Hash.String())
 		assert.Equal(t, hash3.String(), subtrees[0].Nodes[3].Hash.String())
@@ -887,7 +887,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 			subtreeRequest := <-testItems.newSubtreeChan
 			subtree := subtreeRequest.Subtree
 			assert.NotNil(t, subtree)
-			assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+			assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
 			assert.Equal(t, uint64(3000000000), subtree.Fees)
 
@@ -906,9 +906,9 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 
 			if i == 0 {
 				// first add coinbase
-				testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *util.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 100}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+				testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 100}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 			} else {
-				testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 150000}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}}) // 0.15MB
+				testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 150000}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}}) // 0.15MB
 			}
 		}
 
@@ -1010,36 +1010,36 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 		tx3 := newTx(3)
 
 		// First add coinbase placeholder
-		testItems.blockAssembler.AddTx(util.SubtreeNode{
-			Hash:        *util.CoinbasePlaceholderHash,
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+			Hash:        *subtreepkg.CoinbasePlaceholderHash,
 			Fee:         0,
 			SizeInBytes: 100,
-		}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		// Add transactions to UTXO store and then to block assembler
 		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{
 			Hash:        *tx1.TxIDChainHash(),
 			Fee:         200000, // 0.002 BSV
 			SizeInBytes: 250,
-		}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{
 			Hash:        *tx2.TxIDChainHash(),
 			Fee:         300000, // 0.003 BSV
 			SizeInBytes: 250,
-		}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx3, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{
+		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{
 			Hash:        *tx3.TxIDChainHash(),
 			Fee:         100000, // 0.001 BSV
 			SizeInBytes: 250,
-		}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		wg.Wait()
 

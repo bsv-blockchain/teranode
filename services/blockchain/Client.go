@@ -11,6 +11,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -457,7 +458,7 @@ func (c *Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash
 
 // GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specific depth.
 func (c *Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
-	depthUint32, err := util.SafeIntToUint32(depth)
+	depthUint32, err := safe.IntToUint32(depth)
 	if err != nil {
 		return nil, err
 	}
@@ -1278,12 +1279,12 @@ func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetS
 // for coordinated service startup and operational workflows.
 //
 // The method is essential for:
-// - Coordinating service startup sequences where components must wait for the
-//   blockchain service to become active before proceeding
-// - Implementing proper initialization order in distributed systems
-// - Ensuring dependent services don't start processing before blockchain is ready
-// - Synchronizing mining operations with blockchain service availability
-// - Managing graceful service recovery after maintenance or restarts
+//   - Coordinating service startup sequences where components must wait for the
+//     blockchain service to become active before proceeding
+//   - Implementing proper initialization order in distributed systems
+//   - Ensuring dependent services don't start processing before blockchain is ready
+//   - Synchronizing mining operations with blockchain service availability
+//   - Managing graceful service recovery after maintenance or restarts
 //
 // The method continuously polls the FSM state until it detects a transition away
 // from IDLE, then logs the successful transition and returns. This provides a

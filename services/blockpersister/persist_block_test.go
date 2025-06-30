@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -22,7 +23,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -45,12 +45,12 @@ func newReadCloserFromBytes(data []byte) io.ReadCloser {
 // MockStore implements a mock storage interface for testing
 type MockStore struct {
 	txs      []*bt.Tx
-	subtrees []*util.Subtree
+	subtrees []*subtreepkg.Subtree
 }
 
 // newMockStore creates a new mock store with the given transactions
 func newMockStore(txs []*bt.Tx) (*MockStore, error) {
-	subtree, err := util.NewTreeByLeafCount(4)
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func newMockStore(txs []*bt.Tx) (*MockStore, error) {
 
 	return &MockStore{
 		txs:      txs,
-		subtrees: []*util.Subtree{subtree},
+		subtrees: []*subtreepkg.Subtree{subtree},
 	}, nil
 }
 
@@ -312,7 +312,7 @@ func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *MockStore, *memory.Me
 	require.NoError(t, err)
 
 	// Create the .subtreeData file
-	subtreeData := util.NewSubtreeData(subtree)
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
 	// Add the transactions to the subtree data (skipping coinbase as it's handled specially)
 	for i, tx := range extendedTxs[1:] { // Skip coinbase
 		err = subtreeData.AddTx(tx, i+1) // +1 because index 0 is for coinbase

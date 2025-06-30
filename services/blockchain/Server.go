@@ -26,6 +26,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
@@ -2166,7 +2167,7 @@ func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty)
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[Blockchain][GetBestHeightAndTime] could not calculate median block time", err))
 	}
 
-	medianTimestampUint32, err := util.SafeTimeToUint32(*medianTimestamp)
+	medianTimestampUint32, err := safe.TimeToUint32(*medianTimestamp)
 	if err != nil {
 		return nil, err
 	}
@@ -2206,7 +2207,7 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 	var maxEntries uint8
 
 	if blockHeaderHeight <= 12 {
-		blockHeaderHeightUint8, err := util.SafeUint32ToUint8(blockHeaderHeight)
+		blockHeaderHeightUint8, err := safe.Uint32ToUint8(blockHeaderHeight)
 		if err != nil {
 			return nil, errors.WrapGRPC(err)
 		}

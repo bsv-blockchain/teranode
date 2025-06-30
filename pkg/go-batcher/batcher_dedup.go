@@ -5,28 +5,28 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/util"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 )
 
 // TimePartitionedMap is a time-partitioned map for efficient expiration of old entries.
 // It divides time into buckets (e.g., minute buckets) and stores items in the appropriate bucket.
 // This allows for efficient cleanup by simply dropping entire buckets when they expire.
 type TimePartitionedMap[K comparable, V any] struct {
-	buckets         *util.SyncedMap[int64, *util.SyncedMap[K, V]] // Map of timestamp buckets to key-value maps
-	bucketSize      time.Duration                                 // Size of each time bucket (e.g., 1 minute)
-	maxBuckets      int                                           // Maximum number of buckets to keep
-	oldestBucket    atomic.Int64                                  // Timestamp of the oldest bucket
-	newestBucket    atomic.Int64                                  // Timestamp of the newest bucket
-	itemCount       atomic.Int64                                  // Total number of items across all buckets
-	currentBucketID atomic.Int64                                  // Current bucket ID, updated periodically
-	zero            V                                             // Zero value for V
-	bucketsMu       sync.Mutex                                    // Mutex for buckets
+	buckets         *txmap.SyncedMap[int64, *txmap.SyncedMap[K, V]] // Map of timestamp buckets to key-value maps
+	bucketSize      time.Duration                                   // Size of each time bucket (e.g., 1 minute)
+	maxBuckets      int                                             // Maximum number of buckets to keep
+	oldestBucket    atomic.Int64                                    // Timestamp of the oldest bucket
+	newestBucket    atomic.Int64                                    // Timestamp of the newest bucket
+	itemCount       atomic.Int64                                    // Total number of items across all buckets
+	currentBucketID atomic.Int64                                    // Current bucket ID, updated periodically
+	zero            V                                               // Zero value for V
+	bucketsMu       sync.Mutex                                      // Mutex for buckets
 }
 
 // NewTimePartitionedMap creates a new time-partitioned map with the specified bucket size and max buckets.
 func NewTimePartitionedMap[K comparable, V any](bucketSize time.Duration, maxBuckets int) *TimePartitionedMap[K, V] {
 	m := &TimePartitionedMap[K, V]{
-		buckets:         util.NewSyncedMap[int64, *util.SyncedMap[K, V]](),
+		buckets:         txmap.NewSyncedMap[int64, *txmap.SyncedMap[K, V]](),
 		bucketSize:      bucketSize,
 		maxBuckets:      maxBuckets,
 		oldestBucket:    atomic.Int64{},
@@ -89,7 +89,7 @@ func (m *TimePartitionedMap[K, V]) Set(key K, value V) bool {
 	}
 
 	var (
-		bucket *util.SyncedMap[K, V]
+		bucket *txmap.SyncedMap[K, V]
 		exists bool
 	)
 
@@ -99,7 +99,7 @@ func (m *TimePartitionedMap[K, V]) Set(key K, value V) bool {
 
 	// Initialize bucket if it doesn't exist for the current bucketID
 	if bucket, exists = m.buckets.Get(bucketID); !exists {
-		bucket = util.NewSyncedMap[K, V]()
+		bucket = txmap.NewSyncedMap[K, V]()
 		m.buckets.Set(bucketID, bucket)
 
 		// Update newest/oldest bucket trackers since a new bucket was added

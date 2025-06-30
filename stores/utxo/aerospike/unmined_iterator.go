@@ -6,9 +6,9 @@ import (
 
 	as "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -188,10 +188,10 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 		}
 	}
 
-	var txInpoints meta.TxInpoints
+	var txInpoints subtree.TxInpoints
 
 	if external {
-		txInpoints, err = meta.NewTxInpointsFromTx(externalTx)
+		txInpoints, err = subtree.NewTxInpointsFromTx(externalTx)
 		if err != nil {
 			if err := it.Close(); err != nil {
 				it.store.logger.Warnf("failed to close iterator: %v", err)

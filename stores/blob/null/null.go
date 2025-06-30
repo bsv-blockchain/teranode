@@ -35,7 +35,7 @@ import (
 // persistence is not required.
 type Null struct {
 	// logger provides structured logging for store operations
-	logger  ulogger.Logger
+	logger ulogger.Logger
 	// options contains configuration options for the store
 	options *options.Options
 }

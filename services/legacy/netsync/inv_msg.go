@@ -5,9 +5,9 @@ import (
 	"encoding/binary"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	peerpkg "github.com/bitcoin-sv/teranode/services/legacy/peer"
-	"github.com/bitcoin-sv/teranode/util"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -32,7 +32,7 @@ func (i *invMsg) Bytes() []byte {
 
 	// first 8 bytes are the length of the peer address
 
-	lenUint64, err := util.SafeIntToUint64(len(peerBytes))
+	lenUint64, err := safe.IntToUint64(len(peerBytes))
 	if err != nil {
 		return nil
 	}
@@ -43,7 +43,7 @@ func (i *invMsg) Bytes() []byte {
 	// next bytes are the peer address
 	msgBytes = append(msgBytes, peerBytes...)
 
-	invLenUint64, err := util.SafeIntToUint64(invBytes.Len())
+	invLenUint64, err := safe.IntToUint64(invBytes.Len())
 	if err != nil {
 		return nil
 	}

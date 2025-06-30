@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 )
 
 const overflowsDestinationType = "overflows destination type %v"
@@ -369,7 +369,7 @@ func assignField(paramNum int, fieldName string, dest reflect.Value, src reflect
 				return makeError(ErrInvalidType, str)
 			}
 
-			srcInt64, err := util.SafeUint64ToInt64(srcUint)
+			srcInt64, err := safe.Uint64ToInt64(srcUint)
 			if err != nil {
 				return makeError(ErrInvalidType, err.Error())
 			}

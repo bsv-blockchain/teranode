@@ -8,9 +8,9 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
@@ -39,9 +39,9 @@ var (
 func TestOneTransaction(t *testing.T) {
 	var err error
 
-	subtrees := make([]*util.Subtree, 1)
+	subtrees := make([]*subtree.Subtree, 1)
 
-	subtrees[0], err = util.NewTree(1)
+	subtrees[0], err = subtree.NewTree(1)
 	require.NoError(t, err)
 
 	err = subtrees[0].AddCoinbaseNode()
@@ -101,9 +101,9 @@ func TestTwoTransactions(t *testing.T) {
 
 	var err error
 
-	subtrees := make([]*util.Subtree, 1)
+	subtrees := make([]*subtree.Subtree, 1)
 
-	subtrees[0], err = util.NewTree(1)
+	subtrees[0], err = subtree.NewTree(1)
 	require.NoError(t, err)
 
 	empty := &chainhash.Hash{}
@@ -160,11 +160,11 @@ func TestTwoTransactions(t *testing.T) {
 func TestMerkleRoot(t *testing.T) {
 	var err error
 
-	subtrees := make([]*util.Subtree, 2)
+	subtrees := make([]*subtree.Subtree, 2)
 
-	subtrees[0], err = util.NewTreeByLeafCount(2) // height = 1
+	subtrees[0], err = subtree.NewTreeByLeafCount(2) // height = 1
 	require.NoError(t, err)
-	subtrees[1], err = util.NewTreeByLeafCount(2) // height = 1
+	subtrees[1], err = subtree.NewTreeByLeafCount(2) // height = 1
 	require.NoError(t, err)
 
 	err = subtrees[0].AddCoinbaseNode()

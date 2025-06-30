@@ -26,6 +26,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -193,12 +195,12 @@ type isPeerBannedMsg struct {
 // peerState maintains state of inbound, persistent, outbound peers as well
 // as banned peers and outbound groups.
 type peerState struct {
-	inboundPeers    *util.SyncedMap[int32, *serverPeer]
-	outboundPeers   *util.SyncedMap[int32, *serverPeer]
-	persistentPeers *util.SyncedMap[int32, *serverPeer]
-	banned          *util.SyncedMap[string, time.Time]
-	outboundGroups  *util.SyncedMap[string, int]
-	connectionCount *util.SyncedMap[string, int]
+	inboundPeers    *txmap.SyncedMap[int32, *serverPeer]
+	outboundPeers   *txmap.SyncedMap[int32, *serverPeer]
+	persistentPeers *txmap.SyncedMap[int32, *serverPeer]
+	banned          *txmap.SyncedMap[string, time.Time]
+	outboundGroups  *txmap.SyncedMap[string, int]
+	connectionCount *txmap.SyncedMap[string, int]
 }
 
 // Count returns the count of all known peers.
@@ -1611,7 +1613,7 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 // handleDonePeerMsg deals with peers that have signalled they are done.  It is
 // invoked from the peerHandler goroutine.
 func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
-	var list *util.SyncedMap[int32, *serverPeer]
+	var list *txmap.SyncedMap[int32, *serverPeer]
 
 	switch {
 	case sp.persistent:
@@ -1786,11 +1788,11 @@ func (s *server) handleRelayTxMsg(sp serverPeerQueueInventory, msg relayMsg, fee
 
 		txHashAndFee, ok := msg.data.(*netsync.TxHashAndFee)
 		if ok {
-			fee, err = util.SafeUint64ToInt64(txHashAndFee.Fee)
+			fee, err = safe.Uint64ToInt64(txHashAndFee.Fee)
 			if err != nil {
 				s.logger.Errorf("Failed to convert tx fee %v to int64: %v", txHashAndFee.Fee, err)
 			} else {
-				size, err = util.SafeUint64ToInt64(txHashAndFee.Size)
+				size, err = safe.Uint64ToInt64(txHashAndFee.Size)
 				if err != nil {
 					s.logger.Errorf("Failed to convert tx size %v to int64: %v", txHashAndFee.Size, err)
 				} else if size > 0 {
@@ -2026,7 +2028,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 // to be located. If the peer is found, and the passed callback: `whenFound'
 // isn't nil, we call it with the peer as the argument before it is removed
 // from the peerList, and is disconnected from the server.
-func disconnectPeer(peerList *util.SyncedMap[int32, *serverPeer], compareFunc func(*serverPeer) bool, whenFound func(*serverPeer)) bool {
+func disconnectPeer(peerList *txmap.SyncedMap[int32, *serverPeer], compareFunc func(*serverPeer) bool, whenFound func(*serverPeer)) bool {
 	for addr, peer := range peerList.Range() {
 		if compareFunc(peer) {
 			if whenFound != nil {
@@ -2191,12 +2193,12 @@ func (s *server) peerHandler() {
 	defer s.wg.Done()
 
 	state := &peerState{
-		inboundPeers:    util.NewSyncedMap[int32, *serverPeer](),
-		outboundPeers:   util.NewSyncedMap[int32, *serverPeer](),
-		persistentPeers: util.NewSyncedMap[int32, *serverPeer](),
-		banned:          util.NewSyncedMap[string, time.Time](),
-		outboundGroups:  util.NewSyncedMap[string, int](),
-		connectionCount: util.NewSyncedMap[string, int](),
+		inboundPeers:    txmap.NewSyncedMap[int32, *serverPeer](),
+		outboundPeers:   txmap.NewSyncedMap[int32, *serverPeer](),
+		persistentPeers: txmap.NewSyncedMap[int32, *serverPeer](),
+		banned:          txmap.NewSyncedMap[string, time.Time](),
+		outboundGroups:  txmap.NewSyncedMap[string, int](),
+		connectionCount: txmap.NewSyncedMap[string, int](),
 	}
 
 	if !cfg.DisableDNSSeed {

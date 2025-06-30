@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
@@ -152,7 +153,7 @@ func Freeze(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore.Status_FROZEN), resp.Status)
 	require.NotNil(t, resp.SpendingData)
-	require.Equal(t, *resp.SpendingData.TxID, util.FrozenBytesTxHash)
+	require.Equal(t, *resp.SpendingData.TxID, subtree.FrozenBytesTxHash)
 	require.Equal(t, 0, resp.SpendingData.Vin)
 
 	err = db.UnFreezeUTXOs(ctx, spends, tSettings)

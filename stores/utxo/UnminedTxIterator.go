@@ -3,7 +3,7 @@ package utxo
 import (
 	"context"
 
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -12,7 +12,7 @@ type UnminedTransaction struct {
 	Hash       *chainhash.Hash
 	Fee        uint64
 	Size       uint64
-	TxInpoints meta.TxInpoints
+	TxInpoints subtree.TxInpoints
 	CreatedAt  int
 }
 

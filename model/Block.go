@@ -16,6 +16,9 @@ import (
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -53,20 +56,20 @@ type OutPoint struct {
 }
 
 type Block struct {
-	Header           *BlockHeader      `json:"header"`
-	CoinbaseTx       *bt.Tx            `json:"coinbase_tx"`
-	TransactionCount uint64            `json:"transaction_count"`
-	SizeInBytes      uint64            `json:"size_in_bytes"`
-	Subtrees         []*chainhash.Hash `json:"subtrees"`
-	SubtreeSlices    []*util.Subtree   `json:"-"`
-	Height           uint32            `json:"height"` // SAO - This can be left empty (i.e 0) as it is only used in legacy before the height was encoded in the coinbase tx (BIP-34)
-	ID               uint32            `json:"id"`
+	Header           *BlockHeader          `json:"header"`
+	CoinbaseTx       *bt.Tx                `json:"coinbase_tx"`
+	TransactionCount uint64                `json:"transaction_count"`
+	SizeInBytes      uint64                `json:"size_in_bytes"`
+	Subtrees         []*chainhash.Hash     `json:"subtrees"`
+	SubtreeSlices    []*subtreepkg.Subtree `json:"-"`
+	Height           uint32                `json:"height"` // SAO - This can be left empty (i.e 0) as it is only used in legacy before the height was encoded in the coinbase tx (BIP-34)
+	ID               uint32                `json:"id"`
 
 	// local
 	hash            atomic.Pointer[chainhash.Hash]
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
-	txMap           util.TxMap
+	txMap           txmap.TxMap
 	medianTimestamp uint32
 	settings        *settings.Settings
 }
@@ -106,12 +109,12 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Se
 		return nil, errors.NewBlockInvalidError("failed to create NBit from Bits", err)
 	}
 
-	versionUint32, err := util.SafeInt32ToUint32(msgBlock.Header.Version)
+	versionUint32, err := safe.Int32ToUint32(msgBlock.Header.Version)
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("failed to convert version to uint32", err)
 	}
 
-	timestampUint32, err := util.SafeInt64ToUint32(msgBlock.Header.Timestamp.Unix())
+	timestampUint32, err := safe.Int64ToUint32(msgBlock.Header.Timestamp.Unix())
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("failed to convert timestamp to uint32", err)
 	}
@@ -141,14 +144,14 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Se
 
 	txCount := uint64(len(msgBlock.Transactions))
 
-	sizeInBytes, err := util.SafeIntToUint64(msgBlock.SerializeSize())
+	sizeInBytes, err := safe.IntToUint64(msgBlock.SerializeSize())
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("failed to convert msgBlock size to uint64", err)
 	}
 
 	subtrees := make([]*chainhash.Hash, 0)
 
-	subtree, err := util.NewIncompleteTreeByLeafCount(len(msgBlock.Transactions))
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(len(msgBlock.Transactions))
 	if err != nil {
 		return nil, errors.NewSubtreeError("failed to create subtree", err)
 	}
@@ -305,7 +308,7 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 		return nil, errors.NewBlockInvalidError("error reading block height", err)
 	}
 
-	block.Height, err = util.SafeUint64ToUint32(blockHeight64)
+	block.Height, err = safe.Uint64ToUint32(blockHeight64)
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("error converting block height to uint32", err)
 	}
@@ -374,7 +377,7 @@ type SubtreeStore interface {
 	GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error)
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32],
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
 	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
 		tracing.WithHistogram(prometheusBlockValid),
@@ -393,7 +396,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	}
 
 	// 2. Check that the block timestamp is not more than two hours in the future.
-	twoHoursToTheFutureTimestampUint32, err := util.SafeInt64ToUint32(time.Now().Add(2 * time.Hour).Unix())
+	twoHoursToTheFutureTimestampUint32, err := safe.Int64ToUint32(time.Now().Add(2 * time.Hour).Unix())
 	if err != nil {
 		return false, errors.NewProcessingError("[BLOCK][%s] failed to convert two hours to the future timestamp to uint32", b.String(), err)
 	}
@@ -426,7 +429,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 			return false, err
 		}
 
-		b.medianTimestamp, err = util.SafeInt64ToUint32(medianTimestamp.Unix())
+		b.medianTimestamp, err = safe.Int64ToUint32(medianTimestamp.Unix())
 		if err != nil {
 			return false, err
 		}
@@ -571,18 +574,18 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 
 	concurrency := b.settings.Block.CheckDuplicateTransactionsConcurrency
 	if concurrency <= 0 {
-		concurrency = util.Max(4, runtime.NumCPU()/2)
+		concurrency = subtreepkg.Max(4, runtime.NumCPU()/2)
 	}
 
 	g := new(errgroup.Group)
 	util.SafeSetLimit(g, concurrency)
 
-	transactionCountUint32, err := util.SafeUint64ToUint32(b.TransactionCount)
+	transactionCountUint32, err := safe.Uint64ToUint32(b.TransactionCount)
 	if err != nil {
 		return errors.NewProcessingError("[checkDuplicateTransactions][%s] failed to convert transaction count to int", b.String(), err)
 	}
 
-	b.txMap = util.NewSplitSwissMapUint64(transactionCountUint32)
+	b.txMap = txmap.NewSplitSwissMapUint64(transactionCountUint32)
 	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
 		subtree := b.SubtreeSlices[subIdx]
@@ -610,17 +613,17 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 //
 // Returns:
 // - error: if a duplicate transaction is found or if there is an error adding the transaction to the txMap
-func (b *Block) checkDuplicateTransactionsInSubtree(subtree *util.Subtree, subIdx int) (err error) {
+func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree, subIdx int) (err error) {
 	var idx64 uint64
 
 	for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
-		if subIdx == 0 && txIdx == 0 && subtree.Nodes[txIdx].Hash.Equal(util.CoinbasePlaceholderHashValue) {
+		if subIdx == 0 && txIdx == 0 && subtree.Nodes[txIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			continue
 		}
 
 		subtreeNode := subtree.Nodes[txIdx]
 
-		idx64, err = util.SafeIntToUint64((subIdx * len(subtree.Nodes)) + txIdx)
+		idx64, err = safe.IntToUint64((subIdx * len(subtree.Nodes)) + txIdx)
 		if err != nil {
 			return errors.NewProcessingError("[BLOCK][%s] failed to convert index to uint64", b.String(), err)
 		}
@@ -640,7 +643,7 @@ func (b *Block) checkDuplicateTransactionsInSubtree(subtree *util.Subtree, subId
 
 func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, subtreeStore SubtreeStore,
 	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats,
-	oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32]) error {
+	oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32]) error {
 	if b.txMap == nil {
 		return errors.NewStorageError("[validOrderAndBlessed][%s] txMap is nil, cannot check transaction order", b.String())
 	}
@@ -657,13 +660,13 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 	concurrency := b.settings.Block.ValidOrderAndBlessedConcurrency
 	if concurrency <= 0 {
-		concurrency = util.Max(4, runtime.NumCPU()) // block validation runs on its own box, so we can use all cores
+		concurrency = subtreepkg.Max(4, runtime.NumCPU()) // block validation runs on its own box, so we can use all cores
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, concurrency)
 
-	parentSpendsMap := util.NewSyncedMap[meta.Inpoint, struct{}]()
+	parentSpendsMap := txmap.NewSyncedMap[subtreepkg.Inpoint, struct{}]()
 
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
@@ -671,7 +674,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 		g.Go(func() (err error) {
 			var (
-				subtreeMetaSlice    *util.SubtreeMeta
+				subtreeMetaSlice    *subtreepkg.SubtreeMeta
 				parentTxHashes      []chainhash.Hash
 				subtreeHash         = subtree.RootHash()
 				checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes))
@@ -679,7 +682,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 			subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, subtreeStore, *subtreeHash, subtree)
 			if err != nil {
-				subtreeMetaSlice, err = retry.Retry(ctx, logger, func() (*util.SubtreeMeta, error) {
+				subtreeMetaSlice, err = retry.Retry(ctx, logger, func() (*subtreepkg.SubtreeMeta, error) {
 					return b.getSubtreeMetaSlice(gCtx, subtreeStore, *subtreeHash, subtree)
 				}, retry.WithMessage(fmt.Sprintf("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice", b.String(), subtreeHash.String(), sIdx)))
 
@@ -697,7 +700,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 			for snIdx := 0; snIdx < len(subtree.Nodes); snIdx++ {
 				// ignore the very first transaction, is coinbase
-				if sIdx == 0 && snIdx == 0 && subtree.Nodes[snIdx].Hash.Equal(util.CoinbasePlaceholderHashValue) {
+				if sIdx == 0 && snIdx == 0 && subtree.Nodes[snIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 					continue
 				}
 
@@ -974,7 +977,7 @@ func (b *Block) getFromAerospike(logger ulogger.Logger, parentTxStruct missingPa
 	return errors.NewServiceError("aerospike response: %v", response)
 }
 
-func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, fallbackGetFunc func(subtreeHash chainhash.Hash) error) ([]*util.Subtree, error) {
+func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, fallbackGetFunc func(subtreeHash chainhash.Hash) error) ([]*subtreepkg.Subtree, error) {
 	startTime := time.Now()
 	defer func() {
 		prometheusBlockGetSubtrees.Observe(time.Since(startTime).Seconds())
@@ -1004,7 +1007,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		return nil
 	}
 
-	b.SubtreeSlices = make([]*util.Subtree, len(b.Subtrees))
+	b.SubtreeSlices = make([]*subtreepkg.Subtree, len(b.Subtrees))
 
 	var (
 		sizeInBytes atomic.Uint64
@@ -1013,7 +1016,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 
 	concurrency := b.settings.Block.GetAndValidateSubtreesConcurrency
 	if concurrency <= 0 {
-		concurrency = util.Max(4, runtime.NumCPU()/2)
+		concurrency = subtreepkg.Max(4, runtime.NumCPU()/2)
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
@@ -1029,7 +1032,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 			g.Go(func() error {
 				// retry to get the subtree from the store 3 times, there are instances when we get an EOF error,
 				// probably when being moved to permanent storage in another service
-				subtree := &util.Subtree{}
+				subtree := &subtreepkg.Subtree{}
 
 				findSubtree := func() (io.ReadCloser, error) {
 					readCloser, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
@@ -1108,7 +1111,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	return nil
 }
 
-func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeStore, subtreeHash chainhash.Hash, subtree *util.Subtree) (*util.SubtreeMeta, error) {
+func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeStore, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree) (*subtreepkg.SubtreeMeta, error) {
 	// get subtree meta
 	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 	if err != nil {
@@ -1120,7 +1123,7 @@ func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeSto
 	}()
 
 	// no need to check whether this fails or not, it's just a cache file and not critical
-	subtreeMetaSlice, err := util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
+	subtreeMetaSlice, err := subtreepkg.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
 	if err != nil {
 		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to deserialize subtree meta", b.String(), subtreeHash.String(), err)
 	}
@@ -1172,7 +1175,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		calculatedMerkleRootHash = &hashes[0]
 	case len(hashes) > 0:
 		// Create a new subtree with the hashes of the subtrees
-		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(b.Subtrees)))
+		st, err := subtreepkg.NewIncompleteTreeByLeafCount(len(b.Subtrees))
 		if err != nil {
 			return errors.NewProcessingError("[BLOCK][%s] error creating new root tree", b.String(), err)
 		}
@@ -1337,7 +1340,7 @@ func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logg
 		}
 
 		for nodeIdx := 0; nodeIdx < len(subtree.Nodes); nodeIdx++ {
-			if sIdx == 0 && nodeIdx == 0 && subtree.Nodes[nodeIdx].Hash.Equal(util.CoinbasePlaceholderHashValue) {
+			if sIdx == 0 && nodeIdx == 0 && subtree.Nodes[nodeIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				// skip coinbase
 				continue
 			}

@@ -33,10 +33,10 @@ import (
 	"github.com/bitcoin-sv/teranode/cmd/bitcointoutxoset/bitcoin/keys"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/btcsuite/goleveldb/leveldb"
 	"github.com/btcsuite/goleveldb/leveldb/opt"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -157,7 +157,7 @@ func ConvertBitcoinToUtxoSet(logger ulogger.Logger, _ *settings.Settings, blockc
 		}
 
 		var blockHeightUint32 uint32
-		blockHeightUint32, err = util.SafeUintToUint32(blockHeightUint)
+		blockHeightUint32, err = safe.UintToUint32(blockHeightUint)
 		if err != nil {
 			logger.Errorf("Could not convert block height to uint32: %v", err)
 			return
@@ -546,7 +546,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				if currentUTXOWrapper == nil {
 					var heightUint32 uint32
 
-					heightUint32, err = util.SafeInt64ToUint32(height)
+					heightUint32, err = safe.Int64ToUint32(height)
 					if err != nil {
 						return err
 					}
@@ -568,7 +568,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 					var heightUint32 uint32
 
-					heightUint32, err = util.SafeInt64ToUint32(height)
+					heightUint32, err = safe.Int64ToUint32(height)
 					if err != nil {
 						return err
 					}
@@ -582,14 +582,14 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 				var voutUint32 uint32
 
-				voutUint32, err = util.SafeInt64ToUint32(vout)
+				voutUint32, err = safe.Int64ToUint32(vout)
 				if err != nil {
 					return err
 				}
 
 				var amountUint64 uint64
 
-				amountUint64, err = util.SafeInt64ToUint64(amount)
+				amountUint64, err = safe.Int64ToUint64(amount)
 				if err != nil {
 					return err
 				}

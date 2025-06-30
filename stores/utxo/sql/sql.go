@@ -52,6 +52,8 @@ import (
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
@@ -352,7 +354,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	for i, output := range tx.Outputs {
 		if output != nil {
-			iUint32, err := util.SafeIntToUint32(i)
+			iUint32, err := safe.IntToUint32(i)
 			if err != nil {
 				return nil, err
 			}
@@ -682,7 +684,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 			}
 
 			if data.Frozen || frozen {
-				data.SpendingDatas[idx] = spendpkg.NewSpendingData(&util.FrozenBytesTxHash, idx)
+				data.SpendingDatas[idx] = spendpkg.NewSpendingData(&subtree.FrozenBytesTxHash, idx)
 			} else if spendingDataBytes != nil {
 				data.SpendingDatas[idx], err = spendpkg.NewSpendingDataFromBytes(spendingDataBytes)
 				if err != nil {
@@ -699,7 +701,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 	}
 
 	if contains(bins, fields.TxInpoints) {
-		data.TxInpoints, err = meta.NewTxInpointsFromInputs(tx.Inputs)
+		data.TxInpoints, err = subtree.NewTxInpointsFromInputs(tx.Inputs)
 		if err != nil {
 			return nil, errors.NewProcessingError("failed to create tx inpoints from inputs", err)
 		}
@@ -1247,7 +1249,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 	if frozen {
 		utxoStatus = utxo.Status_FROZEN
 		// this is needed in for instance conflict resolution where we check the spending data
-		spendingData = spendpkg.NewSpendingData(&util.FrozenBytesTxHash, int(spend.Vout))
+		spendingData = spendpkg.NewSpendingData(&subtree.FrozenBytesTxHash, int(spend.Vout))
 	}
 
 	if conflicting {
@@ -1418,7 +1420,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		}
 
 		for vOut, output := range txMeta.Tx.Outputs {
-			vOutUint32, err := util.SafeIntToUint32(vOut)
+			vOutUint32, err := safe.IntToUint32(vOut)
 			if err != nil {
 				return nil, nil, err
 			}

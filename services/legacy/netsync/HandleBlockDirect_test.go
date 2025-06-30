@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -22,7 +23,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -60,7 +60,7 @@ func Test_HandleBlockDirect(t *testing.T) {
 		ID:               0,
 	}
 
-	timeUint32, err := util.SafeInt64ToUint32(time.Now().Unix())
+	timeUint32, err := safe.Int64ToUint32(time.Now().Unix())
 	require.NoError(t, err)
 
 	// Create mock return values for GetBestBlockHeader

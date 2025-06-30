@@ -6,9 +6,9 @@ import (
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/settings"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
@@ -280,7 +280,7 @@ func checkSubtrees(t *testing.T, td *daemon.TestDaemon, expectedTxCount int) {
 		require.NoError(t, err, "Failed to get subtree data from store")
 
 		// Parse the subtree
-		subtree, err := util.NewSubtreeFromReader(subtreeReader)
+		subtree, err := subtree.NewSubtreeFromReader(subtreeReader)
 		_ = subtreeReader.Close() // Ensure we close the reader
 		require.NoError(t, err, "Failed to parse subtree from bytes")
 

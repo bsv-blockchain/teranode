@@ -13,6 +13,8 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -20,10 +22,8 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
@@ -40,17 +40,17 @@ var (
 	hash1 = chainhash.HashH([]byte("tx1"))
 	hash2 = chainhash.HashH([]byte("tx2"))
 
-	node1 = util.SubtreeNode{
+	node1 = subtreepkg.SubtreeNode{
 		Hash:        hash1,
 		Fee:         1,
 		SizeInBytes: 1,
 	}
-	node2 = util.SubtreeNode{
+	node2 = subtreepkg.SubtreeNode{
 		Hash:        hash2,
 		Fee:         1,
 		SizeInBytes: 1,
 	}
-	parents = meta.TxInpoints{ParentTxHashes: []chainhash.Hash{hash1, hash2}}
+	parents = subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{hash1, hash2}}
 )
 
 func Test_DeserializeHashesFromReaderIntoBuckets(t *testing.T) {
@@ -128,21 +128,21 @@ func Test_MoveBlock(t *testing.T) {
 		_ = storeMoveBlockSubtrees(t, subtreeStore, subtrees, txMap)
 
 		// create 1 subtree with all the transactions and process the block
-		newSubtree, err := util.NewTreeByLeafCount(1024)
+		newSubtree, err := subtreepkg.NewTreeByLeafCount(1024)
 		require.NoError(t, err)
 
 		require.NoError(t, newSubtree.AddCoinbaseNode())
 
 		for _, subtree := range subtrees {
 			for _, node := range subtree.Nodes {
-				if !node.Hash.IsEqual(util.CoinbasePlaceholderHash) {
+				if !node.Hash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
 					err = newSubtree.AddSubtreeNode(node)
 					require.NoError(t, err)
 				}
 			}
 		}
 
-		newSubtreeHashes := storeMoveBlockSubtrees(t, subtreeStore, []*util.Subtree{newSubtree}, txMap)
+		newSubtreeHashes := storeMoveBlockSubtrees(t, subtreeStore, []*subtreepkg.Subtree{newSubtree}, txMap)
 
 		block := &model.Block{
 			Height:     123,
@@ -154,7 +154,7 @@ func Test_MoveBlock(t *testing.T) {
 	})
 }
 
-func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees []*util.Subtree, txMap *util.SyncedMap[chainhash.Hash, meta.TxInpoints]) []*chainhash.Hash {
+func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees []*subtreepkg.Subtree, txMap *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints]) []*chainhash.Hash {
 	subtreeHashes := make([]*chainhash.Hash, 0, len(subtrees))
 
 	for _, subtree := range subtrees {
@@ -164,10 +164,10 @@ func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees 
 
 		require.NoError(t, subtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
-		subtreeMeta := util.NewSubtreeMeta(subtree)
+		subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
 		for idx, node := range subtree.Nodes {
-			if !node.Hash.IsEqual(util.CoinbasePlaceholderHash) {
+			if !node.Hash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
 				txInpoints, ok := txMap.Get(node.Hash)
 				require.True(t, ok)
 
@@ -232,9 +232,9 @@ func checkMoveBlockProcessing(t *testing.T, stp *subtreeprocessor.SubtreeProcess
 	require.NoError(t, stp.CheckSubtreeProcessor())
 }
 
-func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Memory, []*util.Subtree, int, int, int) {
+func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Memory, []*subtreepkg.Subtree, int, int, int) {
 	stp, subtreeStore, newSubtreeChan := initSubtreeProcessor(t)
-	subtrees := make([]*util.Subtree, 0)
+	subtrees := make([]*subtreepkg.Subtree, 0)
 
 	gotAllSubtrees := make(chan bool)
 
@@ -263,13 +263,13 @@ func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Me
 
 		hashes[hash] = i
 
-		node := util.SubtreeNode{
+		node := subtreepkg.SubtreeNode{
 			Hash:        hash,
 			Fee:         1,
 			SizeInBytes: 1,
 		}
 
-		stp.Add(node, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{hash1, hash2}, Idxs: [][]uint32{{0, 1}, {2, 3}}})
+		stp.Add(node, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{hash1, hash2}, Idxs: [][]uint32{{0, 1}, {2, 3}}})
 	}
 
 	waitForSubtreeProcessorQueueToEmpty(t, stp)
@@ -349,7 +349,7 @@ func initStores(t *testing.T) (*memory.Memory, utxo.Store, *settings.Settings, b
 }
 
 func generateLargeSubtreeBytes(t *testing.T, size int) []byte {
-	st, err := util.NewIncompleteTreeByLeafCount(size)
+	st, err := subtreepkg.NewIncompleteTreeByLeafCount(size)
 	require.NoError(t, err)
 
 	var bb [32]byte

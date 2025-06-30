@@ -16,6 +16,8 @@ import (
 	teranode_model "github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/settings"
 	blobmemory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -58,13 +60,13 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
-	oldBlockIDs := util.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, teranode_model.NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
 
-	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncedMapToUint32Slice(oldBlockIDs)
+	_, hasTransactionsReferencingOldBlocks := txmap.ConvertSyncedMapToUint32Slice(oldBlockIDs)
 	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
@@ -73,7 +75,7 @@ func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 	if len(hashes) == 1 {
 		calculatedMerkleRootHash = hashes[0]
 	} else if len(hashes) > 0 {
-		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(hashes)))
+		st, err := subtreepkg.NewIncompleteTreeByLeafCount(len(hashes))
 		if err != nil {
 			return nil, err
 		}
@@ -167,16 +169,16 @@ func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize in
 	subtreeCount := 0
 
 	var (
-		subtree           *util.Subtree
-		subtreeMeta       *util.SubtreeMeta
+		subtree           *subtreepkg.Subtree
+		subtreeMeta       *subtreepkg.SubtreeMeta
 		subtreeBytes      []byte
 		firstSubtreeBytes []byte
 		subtreeMetaBytes  []byte
 	)
 
-	subtree, _ = util.NewTreeByLeafCount(subtreeSize)
+	subtree, _ = subtreepkg.NewTreeByLeafCount(subtreeSize)
 	require.NoError(t, subtree.AddCoinbaseNode())
-	subtreeMeta = util.NewSubtreeMeta(subtree)
+	subtreeMeta = subtreepkg.NewSubtreeMeta(subtree)
 
 	for i := 1; i < int(txCount); i++ { //nolint:gosec
 		tx := txs[i]
@@ -201,8 +203,8 @@ func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize in
 
 			subtreeCount++
 			// Start new subtree/meta
-			subtree, _ = util.NewTreeByLeafCount(subtreeSize)
-			subtreeMeta = util.NewSubtreeMeta(subtree)
+			subtree, _ = subtreepkg.NewTreeByLeafCount(subtreeSize)
+			subtreeMeta = subtreepkg.NewSubtreeMeta(subtree)
 		}
 	}
 	// After all txs, if the last subtree is not empty, store it
@@ -220,7 +222,7 @@ func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize in
 	}
 
 	// Calculate merkle root from all subtree hashes
-	replacedCoinbaseSubtree, _ := util.NewTreeByLeafCount(subtreeSize)
+	replacedCoinbaseSubtree, _ := subtreepkg.NewTreeByLeafCount(subtreeSize)
 	require.NoError(t, replacedCoinbaseSubtree.Deserialize(firstSubtreeBytes))
 	replacedCoinbaseSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 
@@ -271,7 +273,7 @@ func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize in
 
 func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	leafCount := 8
-	subtree, err := util.NewTreeByLeafCount(leafCount)
+	subtree, err := subtreepkg.NewTreeByLeafCount(leafCount)
 	require.NoError(t, err)
 	teranode_model.TestSubtreeSize = 8
 
@@ -335,7 +337,7 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	subtreeStore.Files[*subtreeHash] = 0
 
 	// create a new subtree for replaced coinbase transaction
-	replacedCoinbaseSubtree, err := util.NewTreeByLeafCount(teranode_model.TestSubtreeSize)
+	replacedCoinbaseSubtree, err := subtreepkg.NewTreeByLeafCount(teranode_model.TestSubtreeSize)
 	require.NoError(t, err)
 
 	// deserialize the replaced coinbase subtree
@@ -398,13 +400,13 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
-	oldBlockIDs := util.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, teranode_model.NewBloomStats())
 	require.Error(t, err)
 	require.False(t, v)
 
-	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncedMapToUint32Slice(oldBlockIDs)
+	_, hasTransactionsReferencingOldBlocks := txmap.ConvertSyncedMapToUint32Slice(oldBlockIDs)
 	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
@@ -423,7 +425,7 @@ func TestBigBlock_Valid(t *testing.T) {
 	require.Equal(t, &meta.Data{
 		Fee:         1,
 		SizeInBytes: 1,
-		TxInpoints:  meta.TxInpoints{ParentTxHashes: nil, Idxs: nil},
+		TxInpoints:  subtreepkg.TxInpoints{ParentTxHashes: nil, Idxs: nil},
 	}, data)
 
 	currentChain := make([]*teranode_model.BlockHeader, 11)
@@ -447,7 +449,7 @@ func TestBigBlock_Valid(t *testing.T) {
 	defer pprof.StopCPUProfile()
 
 	start := time.Now()
-	oldBlockIDs := util.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, teranode_model.NewBloomStats())
 	require.NoError(t, err)

@@ -21,7 +21,11 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-batcher"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	teranodeblockchain "github.com/bitcoin-sv/teranode/services/blockchain"
@@ -38,8 +42,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
-	batcher "github.com/bitcoin-sv/teranode/util/batcher"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/tracing"
@@ -155,7 +157,7 @@ type headerNode struct {
 // about a peer.
 type peerSyncState struct {
 	syncCandidate   bool
-	requestQueue    *util.SyncedSlice[wire.InvVect]
+	requestQueue    *txmap.SyncedSlice[wire.InvVect]
 	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
 	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
 }
@@ -199,7 +201,7 @@ func (sps *syncPeerState) validNetworkSpeed(minSyncPeerNetworkSpeed uint64) int 
 
 type orphanTxAndParents struct {
 	tx      *bt.Tx
-	parents *util.SyncedMap[chainhash.Hash, struct{}] // map of parent tx hashes
+	parents *txmap.SyncedMap[chainhash.Hash, struct{}] // map of parent tx hashes
 	addedAt time.Time
 }
 
@@ -281,12 +283,12 @@ type SyncManager struct {
 	txAnnounceBatcher *batcher.BatcherWithDedup[TxHashAndFee]
 
 	// These fields should only be accessed from the blockHandler thread.
-	rejectedTxns    *util.SyncedMap[chainhash.Hash, struct{}]
+	rejectedTxns    *txmap.SyncedMap[chainhash.Hash, struct{}]
 	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
 	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
 	syncPeer        *peerpkg.Peer
 	syncPeerState   *syncPeerState
-	peerStates      *util.SyncedMap[*peerpkg.Peer, *peerSyncState]
+	peerStates      *txmap.SyncedMap[*peerpkg.Peer, *peerSyncState]
 
 	// The following fields are used for headers-first mode.
 	headersFirstMode bool
@@ -384,7 +386,7 @@ func (sm *SyncManager) startSync() {
 		// Add any peers on the same block to okPeers. These should
 		// only be used as a last resort.
 
-		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+		bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
 			sm.logger.Errorf("[startSync] failed to convert block height to int32: %v", err)
 
@@ -435,7 +437,7 @@ func (sm *SyncManager) startSync() {
 
 	sm.logger.Debugf("[startSync] best peer selected: %s", bestPeer.String())
 
-	bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+	bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
 		sm.logger.Errorf("[startSync] failed to convert block height to int32: %v", err)
 
@@ -621,7 +623,7 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 
 	sm.peerStates.Set(peer, &peerSyncState{
 		syncCandidate:   isSyncCandidate,
-		requestQueue:    util.NewSyncedSlice[wire.InvVect](wire.MaxInvPerMsg),
+		requestQueue:    txmap.NewSyncedSlice[wire.InvVect](wire.MaxInvPerMsg),
 		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second), // allow the node 10 seconds to respond to the tx request
 		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Minute), // allow the node 1 hour to respond to the requested blocks, needed for legacy sync/checkpoints
 	})
@@ -667,7 +669,7 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
-	bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+	bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
 		sm.logger.Errorf("failed to convert block height to int32: %v", err)
 	}
@@ -776,7 +778,7 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 		return
 	}
 
-	bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+	bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
 		sm.logger.Errorf("failed to convert block height to int32: %v", err)
 		return // add return to prevent continuing with invalid height
@@ -858,7 +860,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 				sm.logger.Debugf("orphan transaction %v added from %s", txHash, peer)
 
 				// create a map of the parents of the transaction for faster lookups
-				txParents := util.NewSyncedMap[chainhash.Hash, struct{}]()
+				txParents := txmap.NewSyncedMap[chainhash.Hash, struct{}]()
 				for _, input := range tmsg.tx.MsgTx().TxIn {
 					txParents.Set(input.PreviousOutPoint.Hash, struct{}{})
 				}
@@ -968,7 +970,7 @@ func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) boo
 	// Not current if the latest main (best) chain height is before the
 	// latest known good checkpoint (when checkpoints are enabled).
 	if len(sm.chainParams.Checkpoints) > 0 {
-		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+		bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
 			sm.logger.Errorf("failed to convert block height to int32: %v", err)
 		}
@@ -1008,7 +1010,7 @@ func (sm *SyncManager) current() bool {
 		return true
 	}
 
-	bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+	bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
 		sm.logger.Errorf("failed to convert block height to int32: %v", err)
 	}
@@ -1186,7 +1188,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		if err != nil {
 			sm.logger.Errorf("Failed to get block header for block %v: %v", bmsg.blockHash, err)
 		} else {
-			blockHeightInt32, err := util.SafeUint32ToInt32(blockHeaderMeta.Height)
+			blockHeightInt32, err := safe.Uint32ToInt32(blockHeaderMeta.Height)
 			if err != nil {
 				sm.logger.Errorf("failed to convert block height to int32: %v", err)
 			}
@@ -1383,7 +1385,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 			return
 		}
 
-		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+		bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
 			peer.DisconnectWithWarning(fmt.Sprintf("Failed to convert block height: %v", err))
 			return
@@ -1555,7 +1557,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	if lastBlock != -1 {
 		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(sm.ctx, &invVects[lastBlock].Hash)
 		if err == nil {
-			blockHeightInt32, err := util.SafeUint32ToInt32(blockHeaderMeta.Height)
+			blockHeightInt32, err := safe.Uint32ToInt32(blockHeaderMeta.Height)
 			if err != nil {
 				sm.logger.Errorf("failed to convert block height to int32: %v", err)
 			}
@@ -2079,10 +2081,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		// txMemPool:     config.TxMemPool,
 		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration),
 		chainParams:     config.ChainParams,
-		rejectedTxns:    util.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),  // give peers 10 seconds to respond
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Second),  // give peers 60 seconds to respond
-		peerStates:      util.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
+		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),   // give peers 10 seconds to respond
+		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Second),   // give peers 60 seconds to respond
+		peerStates:      txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		// progressLogger:  newBlockProgressLogger("Processed", log),
 		msgChan:    make(chan interface{}, maxMsgQueueSize),
 		headerList: list.New(),
@@ -2147,7 +2149,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	if !config.DisableCheckpoints {
-		bestBlockHeightInt32, err := util.SafeUint32ToInt32(bestBlockHeaderMeta.Height)
+		bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
 			sm.logger.Errorf("failed to convert block height to int32: %v", err)
 		}
@@ -2263,7 +2265,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 						continue
 					}
 
-					subtree, err := util.NewSubtreeFromReader(subtreeReader)
+					subtree, err := subtree.NewSubtreeFromReader(subtreeReader)
 					_ = subtreeReader.Close()
 					if err != nil {
 						sm.logger.Errorf("[Legacy Manager] failed to create subtree from bytes: %v", err)

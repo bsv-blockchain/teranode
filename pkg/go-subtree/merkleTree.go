@@ -1,22 +1,22 @@
-package util
+package subtree
 
 import (
-	sha256 "crypto/sha256"
+	"crypto/sha256"
+	"fmt"
 	"math"
 	"sync"
 
-	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func GetMerkleProofForCoinbase(subtrees []*Subtree) ([]*chainhash.Hash, error) {
 	if len(subtrees) == 0 {
-		return nil, errors.NewProcessingError("no subtrees available")
+		return nil, fmt.Errorf("no subtrees available")
 	}
 
 	merkleProof, err := subtrees[0].GetMerkleProof(0)
 	if err != nil {
-		return nil, errors.NewProcessingError("failed creating merkle proof for subtree", err)
+		return nil, fmt.Errorf("failed creating merkle proof for subtree: %s", err)
 	}
 
 	// Create a new tree with the subtreeHashes of the subtrees
@@ -34,7 +34,7 @@ func GetMerkleProofForCoinbase(subtrees []*Subtree) ([]*chainhash.Hash, error) {
 
 	topMerkleProof, err := topTree.GetMerkleProof(0)
 	if err != nil {
-		return nil, errors.NewProcessingError("failed creating merkle proofs for top tree", err)
+		return nil, fmt.Errorf("failed creating merkle proofs for top tree: %s", err)
 	}
 
 	return append(merkleProof, topMerkleProof...), nil

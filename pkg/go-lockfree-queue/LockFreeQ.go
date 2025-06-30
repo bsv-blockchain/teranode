@@ -1,4 +1,4 @@
-package util
+package lockfreequeue
 
 import (
 	"sync/atomic"

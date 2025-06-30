@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/model"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -109,7 +109,7 @@ func generateBlocks(t *testing.T, numberOfBlocks int) []*model.Block {
 	coinbase.Outputs = nil
 	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+300)
 
-	subtree, err := util.NewTreeByLeafCount(4)
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddNode(*coinbase.TxIDChainHash(), 0, 0))
 	merkleRoot := subtree.RootHash()

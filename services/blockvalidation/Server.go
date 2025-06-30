@@ -28,6 +28,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation/blockvalidation_api"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
@@ -688,7 +690,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		blockHeaderIDs[i] = blockHeaderMeta.ID
 	}
 
-	oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	// only get the bloom filters for the current chain
 	bloomFilters, err := u.blockValidation.collectNecessaryBloomFilters(ctx, block, blockHeaders)
@@ -1190,7 +1192,7 @@ func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) 
 
 		lastHash := useBlockHeaders[len(useBlockHeaders)-1].Hash()
 
-		useBlockHeadersSizeUint32, err := util.SafeIntToUint32(len(useBlockHeaders))
+		useBlockHeadersSizeUint32, err := safe.IntToUint32(len(useBlockHeaders))
 		if err != nil {
 			return nil
 		}

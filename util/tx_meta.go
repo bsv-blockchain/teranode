@@ -1,6 +1,7 @@
 package util
 
 import (
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2"
 )
@@ -11,12 +12,12 @@ func TxMetaDataFromTx(tx *bt.Tx) (*meta.Data, error) {
 		return nil, err
 	}
 
-	var txInpoints meta.TxInpoints
+	var txInpoints subtree.TxInpoints
 	if tx.IsCoinbase() {
 		// For coinbase transactions, we do not have inputs, so we create an empty TxInpoints.
-		txInpoints = meta.TxInpoints{}
+		txInpoints = subtree.TxInpoints{}
 	} else {
-		txInpoints, err = meta.NewTxInpointsFromTx(tx)
+		txInpoints, err = subtree.NewTxInpointsFromTx(tx)
 		if err != nil {
 			return nil, err
 		}

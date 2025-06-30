@@ -59,6 +59,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/util"
@@ -86,7 +87,7 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(spends))
 
-	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
+	sUtxoBatchSizeUint32, err := safe.IntToUint32(s.utxoBatchSize)
 	if err != nil {
 		return err
 	}
@@ -166,7 +167,7 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(spends))
 
-	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
+	sUtxoBatchSizeUint32, err := safe.IntToUint32(s.utxoBatchSize)
 	if err != nil {
 		return err
 	}
@@ -241,7 +242,7 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 //   - Original UTXO is not frozen
 //   - Reassignment fails
 func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
-	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
+	sUtxoBatchSizeUint32, err := safe.IntToUint32(s.utxoBatchSize)
 	if err != nil {
 		return err
 	}

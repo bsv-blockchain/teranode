@@ -33,6 +33,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -814,7 +815,7 @@ func (c *blockchainCache) GetBlockHeaders(blockHashFrom *chainhash.Hash, numberO
 		return nil, nil
 	}
 
-	limit, err := util.SafeUint64ToInt(numberOfHeaders)
+	limit, err := safe.Uint64ToInt(numberOfHeaders)
 	if err != nil {
 		return nil, nil
 	}

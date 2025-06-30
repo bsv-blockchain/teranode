@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -147,7 +147,7 @@ func (h *HTTP) GetBlockSubtrees(mode ReadMode) func(c echo.Context) error {
 
 		// get all the subtrees for the block
 		var (
-			subtreeHead *util.Subtree
+			subtreeHead *subtree.Subtree
 			numNodes    int
 		)
 

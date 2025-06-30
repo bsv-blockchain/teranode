@@ -13,13 +13,13 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
@@ -82,7 +82,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 
 	var subtreeBytes []byte
 
-	subtree, err := util.NewTreeByLeafCount(TestSubtreeSize)
+	subtree, err := subtreepkg.NewTreeByLeafCount(TestSubtreeSize)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +158,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 			}
 
 			// create new tree
-			subtree, err = util.NewTreeByLeafCount(TestSubtreeSize)
+			subtree, err = subtreepkg.NewTreeByLeafCount(TestSubtreeSize)
 			if err != nil {
 				return nil, err
 			}
@@ -202,7 +202,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 
 		if i == 0 {
 			// read the first subtree into file, replace the coinbase placeholder with the coinbase txid and calculate the merkle root
-			replacedCoinbaseSubtree, err := util.NewTreeByLeafCount(TestSubtreeSize)
+			replacedCoinbaseSubtree, err := subtreepkg.NewTreeByLeafCount(TestSubtreeSize)
 			if err != nil {
 				return nil, err
 			}
@@ -374,7 +374,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 					if err = txMetaStore.SetCache(&data.hash, &meta.Data{
 						Fee:         data.fee,
 						SizeInBytes: data.sizeInBytes,
-						TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+						TxInpoints:  subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 					}); err != nil {
 						return err
 					}
@@ -398,7 +398,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 			if err := txMetaStore.SetCache(&data.hash, &meta.Data{
 				Fee:         data.fee,
 				SizeInBytes: data.sizeInBytes,
-				TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+				TxInpoints:  subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			}); err != nil {
 				return err
 			}
@@ -423,7 +423,7 @@ func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
 		calculatedMerkleRootHash = hashes[0]
 	} else if len(hashes) > 0 {
 		// Create a new subtree with the hashes of the subtrees
-		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(hashes)))
+		st, err := subtreepkg.NewIncompleteTreeByLeafCount(len(hashes))
 		if err != nil {
 			return nil, err
 		}

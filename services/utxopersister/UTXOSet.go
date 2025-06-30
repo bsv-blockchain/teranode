@@ -24,13 +24,13 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/bytesize"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
@@ -290,7 +290,7 @@ func (us *UTXOSet) ProcessTx(tx *bt.Tx) error {
 
 	for i, output := range tx.Outputs {
 		if utxo.ShouldStoreOutputAsUTXO(tx.IsCoinbase(), output, us.blockHeight) {
-			iUint32, err := util.SafeIntToUint32(i)
+			iUint32, err := safe.IntToUint32(i)
 			if err != nil {
 				return err
 			}

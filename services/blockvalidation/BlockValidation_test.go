@@ -31,6 +31,8 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
@@ -45,7 +47,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/jarcoal/httpmock"
@@ -239,7 +240,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup()
 	defer deferFunc()
 
-	subtree, err := util.NewTreeByLeafCount(4)
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 
@@ -280,7 +281,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	// now create a subtree with the coinbase to calculate the merkle root
 	replicatedSubtree := subtree.Duplicate()
-	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) // nolint: gosec
 
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
@@ -349,11 +350,11 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup()
 	defer deferFunc()
 
-	subtree, err := util.NewTreeByLeafCount(txCount)
+	subtree, err := subtreepkg.NewTreeByLeafCount(txCount)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
 	fees := 0
 
@@ -387,7 +388,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	coinbase.Outputs = nil
-	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+uint64(fees)) //nolint: gosec
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+uint64(fees)) // nolint: gosec
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
@@ -409,7 +410,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	// now create a subtree with the coinbase to calculate the merkle root
 	replicatedSubtree := subtree.Duplicate()
-	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) // nolint: gosec
 
 	// if len(subtreeHashes) == 1 {
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
@@ -493,7 +494,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	_, err = utxoStore.Create(context.Background(), coinbase, 0)
 	require.NoError(t, err)
 
-	subtree, err := util.NewTreeByLeafCount(4)
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 
@@ -512,7 +513,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	// now create a subtree with the coinbase to calculate the merkle root
 	replicatedSubtree := subtree.Duplicate()
-	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) // nolint: gosec
 
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
@@ -542,7 +543,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	block := &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
-		TransactionCount: uint64(subtree.Length()), //nolint: gosec
+		TransactionCount: uint64(subtree.Length()), // nolint: gosec
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
@@ -582,7 +583,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	_, err = utxoStore.Create(context.Background(), coinbase, 0)
 	require.NoError(t, err)
 
-	subtree, err := util.NewTreeByLeafCount(4)
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*coinbase.TxIDChainHash(), 100, 0))
@@ -600,7 +601,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	// now create a subtree with the coinbase to calculate the merkle root
 	replicatedSubtree := subtree.Duplicate()
-	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) // nolint: gosec
 
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
@@ -630,7 +631,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	block := &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
-		TransactionCount: uint64(subtree.Length()), //nolint: gosec
+		TransactionCount: uint64(subtree.Length()), // nolint: gosec
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
@@ -661,7 +662,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup()
 	defer deferFunc()
 
-	subtree, err := util.NewTreeByLeafCount(4)
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 
@@ -669,7 +670,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	require.NoError(t, subtree.AddNode(*hash2, 100, 0))
 	require.NoError(t, subtree.AddNode(*hash3, 100, 0))
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx1))
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx2))
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx3))
@@ -717,7 +718,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 	// now create a subtree with the coinbase to calculate the merkle root
 	replicatedSubtree := subtree.Duplicate()
-	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) // nolint: gosec
 
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
@@ -747,7 +748,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	block := &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
-		TransactionCount: uint64(subtree.Length()), //nolint: gosec
+		TransactionCount: uint64(subtree.Length()), // nolint: gosec
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
@@ -801,7 +802,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	for i := 0; i < numBlocks; i++ {
-		subtree, err := util.NewTreeByLeafCount(4)
+		subtree, err := subtreepkg.NewTreeByLeafCount(4)
 		require.NoError(t, err)
 		require.NoError(t, subtree.AddCoinbaseNode())
 
@@ -835,7 +836,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 		subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 		// now create a subtree with the coinbase to calculate the merkle root
 		replicatedSubtree := subtree.Duplicate()
-		replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint: gosec
+		replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) // nolint: gosec
 
 		calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
@@ -915,11 +916,11 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	defer deferFunc()
 
 	// Create a subtree with our transactions
-	subtree, err := util.NewTreeByLeafCount(txCount)
+	subtree, err := subtreepkg.NewTreeByLeafCount(txCount)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
 	// Add transactions to the subtree
 	fees := 0
@@ -1096,7 +1097,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a subtree with our transactions
-	subtree, err := util.NewTreeByLeafCount(4) // 4 transactions excluding coinbase
+	subtree, err := subtreepkg.NewTreeByLeafCount(4) // 4 transactions excluding coinbase
 	require.NoError(t, err)
 
 	// Add transactions to subtree
@@ -1392,12 +1393,12 @@ func Test_validateBlockSubtrees(t *testing.T) {
 		Nonce:          0,
 	}
 
-	subtree1, err := util.NewTreeByLeafCount(2)
+	subtree1, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 	require.NoError(t, subtree1.AddCoinbaseNode())
 	require.NoError(t, subtree1.AddNode(*hash1, 100, 0))
 
-	subtree2, err := util.NewTreeByLeafCount(2)
+	subtree2, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 	require.NoError(t, subtree2.AddNode(*hash2, 100, 0))
 	require.NoError(t, subtree2.AddNode(*hash3, 100, 0))
@@ -1552,7 +1553,7 @@ func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore ut
 	require.NoError(t, err)
 
 	// Create a subtree with coinbase and tx1
-	subtree, err := util.NewTreeByLeafCount(2)
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*tx1.TxIDChainHash(), uint64(tx1.Size()), 0)) //nolint:gosec
@@ -1676,7 +1677,7 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	// Subtree with both double-spend txs
-	subtree, _ := util.NewTreeByLeafCount(4)
+	subtree, _ := subtreepkg.NewTreeByLeafCount(4)
 	_ = subtree.AddCoinbaseNode()
 	_ = subtree.AddNode(*tx1.TxIDChainHash(), uint64(tx1.Size()), 0) //nolint:gosec
 	_ = subtree.AddNode(*tx2.TxIDChainHash(), uint64(tx2.Size()), 1) //nolint:gosec
@@ -1783,12 +1784,12 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 	_, _ = txMetaStore.Create(context.Background(), tx2, 0)
 
 	// Subtree: coinbase, tx2, tx1 (wrong order: tx2 before tx1)
-	subtree, _ := util.NewTreeByLeafCount(4)
+	subtree, _ := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*tx2.TxIDChainHash(), uint64(tx2.Size()), 0)) //nolint:gosec
 	require.NoError(t, subtree.AddNode(*tx1.TxIDChainHash(), uint64(tx1.Size()), 1)) //nolint:gosec
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx2))
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx1))
 
@@ -1892,11 +1893,11 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 	_, _ = txMetaStore.Create(context.Background(), tx1, 0)
 
 	// Subtree: coinbase, tx1
-	subtree, _ := util.NewTreeByLeafCount(2)
+	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
 	_ = subtree.AddCoinbaseNode()
 	_ = subtree.AddNode(*tx1.TxIDChainHash(), uint64(tx1.Size()), 0) //nolint:gosec
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx1))
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -1964,7 +1965,7 @@ func Test_checkOldBlockIDs(t *testing.T) {
 			blockchainClient: blockchainMock,
 		}
 
-		oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil).Once()
 
@@ -1978,7 +1979,7 @@ func Test_checkOldBlockIDs(t *testing.T) {
 			blockchainClient: blockchainMock,
 		}
 
-		oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 		for i := uint32(0); i < 100; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
@@ -1998,7 +1999,7 @@ func Test_checkOldBlockIDs(t *testing.T) {
 			blockchainClient: blockchainMock,
 		}
 
-		oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 		blockIDs := make([]uint32, 0, 100)
 
@@ -2022,7 +2023,7 @@ func Test_checkOldBlockIDs(t *testing.T) {
 			blockchainClient: blockchainMock,
 		}
 
-		oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 		for i := uint32(0); i < 100; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
@@ -2042,7 +2043,7 @@ func Test_checkOldBlockIDs(t *testing.T) {
 			blockchainClient: blockchainMock,
 		}
 
-		oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 		for i := uint32(0); i < 100; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
@@ -2085,8 +2086,8 @@ func Test_createAppendBloomFilter(t *testing.T) {
 		blockValidation := &BlockValidation{
 			logger:                        logger,
 			blockchainClient:              blockchainMock,
-			blockBloomFiltersBeingCreated: util.NewSwissMap(0),
-			recentBlocksBloomFilters:      util.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
+			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 			subtreeStore:                  blobmemory.New(),
 		}
 
@@ -2104,8 +2105,8 @@ func Test_createAppendBloomFilter(t *testing.T) {
 		blockValidation := &BlockValidation{
 			logger:                        logger,
 			blockchainClient:              blockchainMock,
-			blockBloomFiltersBeingCreated: util.NewSwissMap(0),
-			recentBlocksBloomFilters:      util.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
+			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 			subtreeStore:                  blobmemory.New(),
 		}
 
@@ -2114,7 +2115,7 @@ func Test_createAppendBloomFilter(t *testing.T) {
 		}, nil)
 
 		// create subtree with transactions
-		subtree, err := util.NewTreeByLeafCount(4)
+		subtree, err := subtreepkg.NewTreeByLeafCount(4)
 		require.NoError(t, err)
 
 		txs := make([]chainhash.Hash, 0, 4)
@@ -2139,7 +2140,7 @@ func Test_createAppendBloomFilter(t *testing.T) {
 			TransactionCount: block.TransactionCount,
 			SizeInBytes:      block.SizeInBytes,
 			Subtrees:         []*chainhash.Hash{subtree.RootHash()},
-			SubtreeSlices:    []*util.Subtree{subtree},
+			SubtreeSlices:    []*subtreepkg.Subtree{subtree},
 			Height:           100,
 		}
 
@@ -2247,13 +2248,13 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	// Subtree: coinbase, tx1, tx2 (correct order)
-	subtree, _ := util.NewTreeByLeafCount(4)
+	subtree, _ := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*parentTx.TxIDChainHash(), uint64(parentTx.Size()), 0)) //nolint:gosec
 	require.NoError(t, subtree.AddNode(*childTx1.TxIDChainHash(), uint64(childTx1.Size()), 1)) //nolint:gosec
 	require.NoError(t, subtree.AddNode(*childTx2.TxIDChainHash(), uint64(childTx2.Size()), 2)) //nolint:gosec
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(parentTx))
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx1))
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx2))
@@ -2349,7 +2350,7 @@ func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 	}
 
 	// Build the subtree for all non-coinbase txs (chain)
-	subtree, err := util.NewTreeByLeafCount(8)
+	subtree, err := subtreepkg.NewTreeByLeafCount(8)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 
@@ -2357,7 +2358,7 @@ func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), uint64(tx.Size()), uint64(i))) //nolint:gosec
 	}
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 	for _, tx := range txs[1:] {
 		require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx))
 	}
@@ -2470,14 +2471,14 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	// Build subtree with coinbase and the same normalTx twice
-	subtree, err := util.NewTreeByLeafCount(4)
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) //nolint:gosec
 	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) //nolint:gosec
 	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) //nolint:gosec
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(normalTx))
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -2530,7 +2531,7 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
 	require.Error(t, err, "Block with duplicate transaction should be invalid")
 	// Optionally check for a specific error message if the implementation provides one
-	require.ErrorContains(t, err, "duplicate transaction")
+	require.ErrorContains(t, err, "hash already exists in map")
 }
 
 func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
@@ -2570,15 +2571,15 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 		subtreeStore:                  subtreeStore,
 		txStore:                       txStore,
 		utxoStore:                     utxoStore,
-		recentBlocksBloomFilters:      util.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 		bloomFilterRetentionSize:      0,
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
-		blockHashesCurrentlyValidated: util.NewSwissMap(0),
-		blockBloomFiltersBeingCreated: util.NewSwissMap(0),
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 		bloomFilterStats:              model.NewBloomStats(),
 		setMinedChan:                  make(chan *chainhash.Hash, 1),
 		revalidateBlockChan:           revalidateChan,
@@ -2599,7 +2600,7 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	subtree, err := util.NewTreeByLeafCount(2)
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 
@@ -2668,15 +2669,15 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		subtreeStore:                  subtreeStore,
 		txStore:                       txStore,
 		utxoStore:                     txMetaStore,
-		recentBlocksBloomFilters:      util.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 		bloomFilterRetentionSize:      0,
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
-		blockHashesCurrentlyValidated: util.NewSwissMap(0),
-		blockBloomFiltersBeingCreated: util.NewSwissMap(0),
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 		bloomFilterStats:              model.NewBloomStats(),
 		setMinedChan:                  make(chan *chainhash.Hash, 1),
 		revalidateBlockChan:           make(chan revalidateBlockData, 1),
@@ -2754,13 +2755,13 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 	require.NoError(t, err)
 
 	// Subtree: coinbase, tx1, tx2 (correct order)
-	subtree, _ := util.NewTreeByLeafCount(4)
+	subtree, _ := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*parentTx.TxIDChainHash(), uint64(parentTx.Size()), 0)) //nolint:gosec
 	require.NoError(t, subtree.AddNode(*childTx1.TxIDChainHash(), uint64(childTx1.Size()), 1)) //nolint:gosec
 	require.NoError(t, subtree.AddNode(*childTx2.TxIDChainHash(), uint64(childTx2.Size()), 2)) //nolint:gosec
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(parentTx))
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx1))
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx2))
@@ -2865,7 +2866,7 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	subtree, _ := util.NewTreeByLeafCount(2)
+	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, subtree.AddCoinbaseNode())
 
 	// Store the subtree in the subtreeStore to prevent nil dereference panics
@@ -2953,7 +2954,7 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'T', 'e', 's', 't'})
 	_ = coinbaseTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000)
 
-	subtree, _ := util.NewTreeByLeafCount(2)
+	subtree, _ := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 	nodeBytes, err := subtree.SerializeNodes()
@@ -3066,12 +3067,12 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	require.NoError(t, err)
 
 	// Build subtree with coinbase and normalTx
-	subtree, err := util.NewTreeByLeafCount(2)
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*childTx.TxIDChainHash(), uint64(childTx.Size()), 0)) //nolint:gosec
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -3188,12 +3189,12 @@ func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 	_, err = utxoStore.Create(context.Background(), childTx, 0)
 	require.NoError(t, err)
 
-	subtree, err := util.NewTreeByLeafCount(2)
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*childTx.TxIDChainHash(), uint64(childTx.Size()), 0)) //nolint:gosec
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -3300,12 +3301,12 @@ func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	_, err = utxoStore.Create(context.Background(), childTx, 0)
 	require.NoError(t, err)
 
-	subtree, err := util.NewTreeByLeafCount(2)
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*childTx.TxIDChainHash(), uint64(childTx.Size()), 0)) //nolint:gosec
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(childTx))
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -3406,12 +3407,12 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 	_ = normalTx.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000)
 	_ = normalTx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 
-	subtree, err := util.NewTreeByLeafCount(4)
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
-	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) //nolint: gosec
-	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) //nolint: gosec
-	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) //nolint: gosec
+	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) // nolint: gosec
+	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) // nolint: gosec
+	require.NoError(t, subtree.AddNode(*normalTx.TxIDChainHash(), 1, uint64(normalTx.Size()))) // nolint: gosec
 
 	nodeBytes, err := subtree.SerializeNodes()
 	require.NoError(t, err)
@@ -3430,7 +3431,7 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
 	replicatedSubtree := subtree.Duplicate()
-	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint: gosec
+	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) // nolint: gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
 	nBits, _ := model.NewNBitFromString("2000ffff")
@@ -3438,7 +3439,7 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
 		HashMerkleRoot: calculatedMerkleRootHash,
-		Timestamp:      uint32(time.Now().Unix()), //nolint: gosec
+		Timestamp:      uint32(time.Now().Unix()), // nolint: gosec
 		Bits:           *nBits,
 		Nonce:          0,
 	}
@@ -3456,8 +3457,8 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		blockHeader,
 		coinbaseTx,
 		subtreeHashes,
-		uint64(subtree.Length()), //nolint: gosec
-		uint64(totalSize),        //nolint: gosec
+		uint64(subtree.Length()), // nolint: gosec
+		uint64(totalSize),        // nolint: gosec
 		100, 0, tSettings,
 	)
 	require.NoError(t, err)
@@ -3489,7 +3490,7 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		subtreeStore:                  subtreeStore,
 		txStore:                       txStore,
 		utxoStore:                     txMetaStore,
-		recentBlocksBloomFilters:      util.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 		bloomFilterRetentionSize:      0,
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(0),
@@ -3497,8 +3498,8 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		invalidBlockKafkaProducer:     mockKafka,
 		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
-		blockHashesCurrentlyValidated: util.NewSwissMap(0),
-		blockBloomFiltersBeingCreated: util.NewSwissMap(0),
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 		bloomFilterStats:              model.NewBloomStats(),
 		setMinedChan:                  make(chan *chainhash.Hash, 1),
 		stats:                         gocore.NewStat("blockvalidation"),

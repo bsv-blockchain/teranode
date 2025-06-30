@@ -3,7 +3,7 @@ package blockassembly
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +32,7 @@ func TestData_Bytes(t *testing.T) {
 			TxIDChainHash: *hash0,
 			Fee:           1,
 			Size:          2,
-			TxInpoints: meta.TxInpoints{
+			TxInpoints: subtree.TxInpoints{
 				ParentTxHashes: []chainhash.Hash{
 					*hash1,
 					*hash2,

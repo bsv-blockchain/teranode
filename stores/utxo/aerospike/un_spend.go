@@ -62,6 +62,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
@@ -149,7 +150,7 @@ func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 func (s *Store) unspendLua(spend *utxo.Spend) error {
 	policy := util.GetAerospikeWritePolicy(s.settings, 0)
 
-	sUtxoBatchSizeUint32, err := util.SafeIntToUint32(s.utxoBatchSize)
+	sUtxoBatchSizeUint32, err := safe.IntToUint32(s.utxoBatchSize)
 	if err != nil {
 		s.logger.Errorf("Could not convert utxoBatchSize (%d) to uint32", s.utxoBatchSize)
 	}

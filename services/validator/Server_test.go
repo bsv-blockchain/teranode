@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -53,7 +54,7 @@ func TestHTTPServer_Endpoints(t *testing.T) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
-				TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+				TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
 			}, nil
 		},
 	}
@@ -191,7 +192,7 @@ func TestValidatorHTTP_Endpoints(t *testing.T) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
-				TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+				TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
 			}, nil
 		},
 	}
@@ -300,7 +301,7 @@ func TestHTTPServerIntegration(t *testing.T) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
-				TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+				TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
 			}, nil
 		},
 	}
@@ -343,7 +344,7 @@ func TestHTTPServerHandlers(t *testing.T) {
 			return &meta.Data{
 				Fee:         32279815860,
 				SizeInBytes: 245,
-				TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
+				TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*txid}, Idxs: [][]uint32{{0}}},
 			}, nil
 		},
 	}

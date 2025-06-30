@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockpersister"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
@@ -18,7 +19,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
@@ -291,12 +291,12 @@ func setup(t *testing.T) *testContext {
 	}
 }
 
-func newBlock(_ *testContext, t *testing.T, b blockInfo) (*model.Block, *util.Subtree) {
+func newBlock(_ *testContext, t *testing.T, b blockInfo) (*model.Block, *subtree.Subtree) {
 	if len(b.txs) == 0 {
 		panic("no transactions provided")
 	}
 
-	subtree, err := util.NewTreeByLeafCount(2)
+	subtree, err := subtree.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 
 	for i, tx := range b.txs {

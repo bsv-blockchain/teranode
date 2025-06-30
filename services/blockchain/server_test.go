@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	blob_memory "github.com/bitcoin-sv/teranode/stores/blob/memory"
@@ -22,7 +23,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	utxosql "github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -229,7 +229,7 @@ func Test_HealthGRPC(t *testing.T) {
 
 // mockBlock creates a mock block for testing purposes.
 func mockBlock(ctx *testContext, t *testing.T) *model.Block {
-	subtree, err := util.NewTreeByLeafCount(2)
+	subtree, err := subtree.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*hash1, 100, 0))

@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -57,18 +59,18 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 			i := i // capture range variable for goroutine
 
 			g.Go(func() error {
-				end := util.Min(i+batchSize, len(txHashes))
+				end := subtree.Min(i+batchSize, len(txHashes))
 
 				missingTxHashesCompacted := make([]*utxo.UnresolvedMetaData, 0, end-i)
 
-				for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
+				for j := 0; j < subtree.Min(batchSize, len(txHashes)-i); j++ {
 					select {
 					case <-gCtx.Done(): // Listen for cancellation signal
 						// Return the error that caused the cancellation
 						return errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
 
 					default:
-						if txHashes[i+j].Equal(*util.CoinbasePlaceholderHash) {
+						if txHashes[i+j].Equal(*subtree.CoinbasePlaceholderHash) {
 							// coinbase placeholder is not in the store
 							continue
 						}
@@ -91,7 +93,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					// Return the error that caused the cancellation
 					return errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
 				default:
-					missingTxThresholdInt32, err := util.SafeIntToInt32(missingTxThreshold)
+					missingTxThresholdInt32, err := safe.IntToInt32(missingTxThreshold)
 					if err != nil {
 						return err
 					}
@@ -132,7 +134,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 
 			g.Go(func() error {
 				// cycle through the batch size, making sure not to go over the length of the txHashes
-				for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
+				for j := 0; j < subtree.Min(batchSize, len(txHashes)-i); j++ {
 					select {
 					case <-gCtx.Done(): // Listen for cancellation signal
 						// Return the error that caused the cancellation
@@ -141,12 +143,12 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					default:
 						txHash := txHashes[i+j]
 
-						missingTxThresholdInt32, err := util.SafeIntToInt32(missingTxThreshold)
+						missingTxThresholdInt32, err := safe.IntToInt32(missingTxThreshold)
 						if err != nil {
 							return err
 						}
 
-						if txHash.Equal(*util.CoinbasePlaceholderHash) {
+						if txHash.Equal(*subtree.CoinbasePlaceholderHash) {
 							// coinbase placeholder is not in the store
 							continue
 						}

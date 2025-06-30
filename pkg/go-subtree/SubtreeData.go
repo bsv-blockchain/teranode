@@ -1,10 +1,10 @@
-package util
+package subtree
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 
-	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -29,7 +29,7 @@ func NewSubtreeDataFromBytes(subtree *Subtree, dataBytes []byte) (*SubtreeData, 
 		Subtree: subtree,
 	}
 	if err := s.serializeFromReader(bytes.NewReader(dataBytes)); err != nil {
-		return nil, errors.NewProcessingError("unable to create subtree data from bytes", err)
+		return nil, fmt.Errorf("unable to create subtree data from bytes: %s", err)
 	}
 
 	return s, nil
@@ -40,7 +40,7 @@ func NewSubtreeDataFromReader(subtree *Subtree, dataReader io.Reader) (*SubtreeD
 		Subtree: subtree,
 	}
 	if err := s.serializeFromReader(dataReader); err != nil {
-		return nil, errors.NewProcessingError("unable to create subtree data from reader", err)
+		return nil, fmt.Errorf("unable to create subtree data from reader: %s", err)
 	}
 
 	return s, nil
@@ -60,7 +60,7 @@ func (s *SubtreeData) AddTx(tx *bt.Tx, index int) error {
 
 	// check whether this is set in the main subtree
 	if !s.Subtree.Nodes[index].Hash.Equal(*tx.TxIDChainHash()) {
-		return errors.NewProcessingError("transaction hash does not match subtree node hash")
+		return fmt.Errorf("transaction hash does not match subtree node hash")
 	}
 
 	s.Txs[index] = tx
@@ -75,7 +75,7 @@ func (s *SubtreeData) serializeFromReader(buf io.Reader) error {
 	)
 
 	if s.Subtree == nil || len(s.Subtree.Nodes) == 0 {
-		return errors.NewProcessingError("subtree nodes slice is empty")
+		return fmt.Errorf("subtree nodes slice is empty")
 	}
 
 	if s.Subtree.Nodes[0].Hash.Equal(CoinbasePlaceholderHashValue) {
@@ -94,7 +94,7 @@ func (s *SubtreeData) serializeFromReader(buf io.Reader) error {
 				break
 			}
 
-			return errors.NewProcessingError("error reading transaction", err)
+			return fmt.Errorf("error reading transaction: %s", err)
 		}
 
 		if txIndex == 1 && tx.IsCoinbase() {
@@ -105,11 +105,11 @@ func (s *SubtreeData) serializeFromReader(buf io.Reader) error {
 		}
 
 		if txIndex >= len(s.Subtree.Nodes) {
-			return errors.NewProcessingError("transaction index out of bounds")
+			return fmt.Errorf("transaction index out of bounds")
 		}
 
 		if !s.Subtree.Nodes[txIndex].Hash.Equal(*tx.TxIDChainHash()) {
-			return errors.NewProcessingError("transaction hash does not match subtree node hash")
+			return fmt.Errorf("transaction hash does not match subtree node hash")
 		}
 
 		s.Txs[txIndex] = tx
@@ -125,7 +125,7 @@ func (s *SubtreeData) Serialize() ([]byte, error) {
 
 	// only serialize when we have the matching subtree
 	if s.Subtree == nil {
-		return nil, errors.NewProcessingError("cannot serialize, subtree is not set")
+		return nil, fmt.Errorf("cannot serialize, subtree is not set")
 	}
 
 	var txStartIndex int
@@ -137,7 +137,7 @@ func (s *SubtreeData) Serialize() ([]byte, error) {
 	subtreeLen := s.Subtree.Length()
 	for i := txStartIndex; i < subtreeLen; i++ {
 		if s.Txs[i] == nil && i != 0 {
-			return nil, errors.NewProcessingError("subtree length does not match tx data length")
+			return nil, fmt.Errorf("subtree length does not match tx data length")
 		}
 	}
 
@@ -149,7 +149,7 @@ func (s *SubtreeData) Serialize() ([]byte, error) {
 
 		_, err = buf.Write(b)
 		if err != nil {
-			return nil, errors.NewProcessingError("error writing tx data", err)
+			return nil, fmt.Errorf("error writing tx data: %s", err)
 		}
 	}
 

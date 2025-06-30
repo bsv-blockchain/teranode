@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	blockchain2 "github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/netsync"
 	"github.com/bitcoin-sv/teranode/services/validator"
@@ -208,7 +209,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 
 	parentTxs := make(map[string]struct{})
 
-	txMap := util.NewSyncedMap[chainhash.Hash, *netsync.TxMapWrapper]()
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *netsync.TxMapWrapper]()
 
 	t.Logf("Getting %d transactions from block %s", len(block.Tx), blockHex)
 	for idx, txID := range block.Tx {

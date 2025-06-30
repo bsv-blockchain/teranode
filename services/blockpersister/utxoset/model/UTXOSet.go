@@ -5,8 +5,8 @@ import (
 	"io"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -86,7 +86,7 @@ func (us *UTXOSet) Write(w io.Writer) error {
 
 	var lengthUint32 uint32
 
-	lengthUint32, err = util.SafeIntToUint32(us.Current.Length())
+	lengthUint32, err = safe.IntToUint32(us.Current.Length())
 	if err != nil {
 		return err
 	}

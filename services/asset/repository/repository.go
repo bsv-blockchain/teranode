@@ -13,13 +13,14 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -44,9 +45,9 @@ type Interface interface {
 	GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (*io.PipeReader, error)
-	GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error)
+	GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error)
 	GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
-	GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error)
+	GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, int, error)
 	GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error)
@@ -494,7 +495,7 @@ func (repo *Repository) GetSubtreeDataReaderFromBlockPersister(ctx context.Conte
 // Returns:
 //   - *util.Subtree: Deserialized subtree structure
 //   - error: Any error encountered during retrieval
-func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error) {
+func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error) {
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtree",
 		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
 	)
@@ -511,7 +512,7 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 		_ = subtreeReader.Close()
 	}()
 
-	subtree, err := util.NewSubtreeFromReader(subtreeReader)
+	subtree, err := subtree.NewSubtreeFromReader(subtreeReader)
 	if err != nil {
 		return nil, errors.NewProcessingError("error in NewSubtreeFromBytes", err)
 	}
@@ -548,7 +549,7 @@ func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Ha
 //   - *util.Subtree: Partial subtree containing head information
 //   - int: Number of nodes in the subtree
 //   - error: Any error encountered during retrieval
-func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error) {
+func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, int, error) {
 	repo.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
@@ -571,7 +572,7 @@ func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash
 		return nil, 0, errors.ErrNotFound
 	}
 
-	subtree := &util.Subtree{}
+	subtree := &subtree.Subtree{}
 	buf := bytes.NewBuffer(subtreeBytes[:])
 
 	// read root hash
@@ -589,7 +590,7 @@ func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash
 	// read number of leaves
 	numNodes := binary.LittleEndian.Uint64(buf.Next(8))
 
-	numNodesInt, err := util.SafeUint64ToInt(numNodes)
+	numNodesInt, err := safe.Uint64ToInt(numNodes)
 	if err != nil {
 		return nil, 0, err
 	}

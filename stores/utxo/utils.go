@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
@@ -84,7 +85,7 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 				fees -= output.Satoshis
 			}
 
-			iUint32, err := util.SafeIntToUint32(i)
+			iUint32, err := safe.IntToUint32(i)
 			if err != nil {
 				return 0, nil, errors.NewProcessingError("failed to convert i", err)
 			}
@@ -123,7 +124,7 @@ func GetUtxoHashes(tx *bt.Tx, txHash ...*chainhash.Hash) ([]*chainhash.Hash, err
 
 	for i, output := range tx.Outputs {
 		if output != nil {
-			iUint32, err := util.SafeIntToUint32(i)
+			iUint32, err := safe.IntToUint32(i)
 			if err != nil {
 				return nil, errors.NewProcessingError("failed to convert i", err)
 			}

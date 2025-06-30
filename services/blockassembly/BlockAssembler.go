@@ -13,13 +13,14 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/cleanup"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
@@ -34,7 +35,7 @@ type miningCandidateResponse struct {
 	miningCandidate *model.MiningCandidate
 
 	// subtrees contains all transaction subtrees included in the candidate
-	subtrees []*util.Subtree
+	subtrees []*subtree.Subtree
 
 	// err contains any error encountered during candidate creation
 	err error
@@ -346,7 +347,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				b.logger.Warnf("[BlockAssembler] setting wait count to %d for getMiningCandidate", b.settings.BlockAssembly.ResetWaitCount)
 				b.resetWaitCount.Store(b.settings.BlockAssembly.ResetWaitCount) // wait 2 blocks before starting to mine again
 
-				resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(b.settings.BlockAssembly.ResetWaitDuration).Unix())
+				resetWaitTimeInt32, err := safe.Int64ToInt32(time.Now().Add(b.settings.BlockAssembly.ResetWaitDuration).Unix())
 				if err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] error converting reset wait time: %v", err)
 				}
@@ -368,7 +369,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				// wait for the reset to complete before getting a new mining candidate
 				// 2 blocks && at least 20 minutes
 
-				timeNowInt32, err := util.SafeInt64ToInt32(time.Now().Unix())
+				timeNowInt32, err := safe.Int64ToInt32(time.Now().Unix())
 				if err != nil {
 					b.logger.Errorf("[BlockAssembler][MiningCandidate] error converting time now: %v", err)
 				}
@@ -686,7 +687,7 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 //
 // Parameters:
 //   - node: Transaction node to add
-func (b *BlockAssembler) AddTx(node util.SubtreeNode, txInpoints meta.TxInpoints) {
+func (b *BlockAssembler) AddTx(node subtree.SubtreeNode, txInpoints subtree.TxInpoints) {
 	b.subtreeProcessor.Add(node, txInpoints)
 }
 
@@ -724,7 +725,7 @@ func (b *BlockAssembler) Reset() {
 //   - *model.MiningCandidate: Mining candidate block
 //   - []*util.Subtree: Associated subtrees
 //   - error: Any error encountered during retrieval
-func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
+func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*subtree.Subtree, error) {
 	// make sure we call this on the select, so we don't get a candidate when we found a new block
 	responseCh := make(chan *miningCandidateResponse)
 
@@ -748,7 +749,7 @@ func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCan
 //   - *model.MiningCandidate: Created mining candidate
 //   - []*util.Subtree: Associated subtrees
 //   - error: Any error encountered during candidate creation
-func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.Subtree, error) {
+func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtree.Subtree, error) {
 	prometheusBlockAssemblerGetMiningCandidate.Inc()
 
 	if b.bestBlockHeader.Load() == nil {
@@ -760,7 +761,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// Get the list of completed containers for the current chaintip and height...
 	subtrees := b.subtreeProcessor.GetCompletedSubtreesForMiningCandidate()
 
-	blockMaxSizeUint64, err := util.SafeIntToUint64(b.settings.Policy.BlockMaxSize)
+	blockMaxSizeUint64, err := safe.IntToUint64(b.settings.Policy.BlockMaxSize)
 	if err != nil {
 		return nil, nil, errors.NewProcessingError("error converting block max size", err)
 	}
@@ -785,7 +786,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 
 	var sizeWithoutCoinbase uint64
 
-	var subtreesToInclude []*util.Subtree
+	var subtreesToInclude []*subtree.Subtree
 
 	var subtreeBytesToInclude [][]byte
 
@@ -805,7 +806,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		totalFees := uint64(0)
 		subtreeCount := 0
 
-		topTree, err := util.NewIncompleteTreeByLeafCount(len(subtrees))
+		topTree, err := subtree.NewIncompleteTreeByLeafCount(len(subtrees))
 		if err != nil {
 			return nil, nil, errors.NewProcessingError("error creating top tree", err)
 		}
@@ -824,7 +825,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 
 				b.logger.Debugf("Included subtree %d: fees=%d, size=%d, total_fees=%d", subtreeCount, subtree.Fees, subtree.SizeInBytes, totalFees)
 
-				lenSubtreeNodesUint32, err := util.SafeIntToUint32(len(subtree.Nodes))
+				lenSubtreeNodesUint32, err := safe.IntToUint32(len(subtree.Nodes))
 				if err != nil {
 					return nil, nil, errors.NewProcessingError("error converting subtree nodes length", err)
 				}
@@ -840,7 +841,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		b.logger.Infof("Fee accumulation complete: included %d subtrees, total_fees=%d satoshis (%.8f BSV)", subtreeCount, totalFees, float64(totalFees)/1e8)
 
 		if len(subtreesToInclude) > 0 {
-			coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtreesToInclude)
+			coinbaseMerkleProof, err := subtree.GetMerkleProofForCoinbase(subtreesToInclude)
 			if err != nil {
 				return nil, nil, errors.NewProcessingError("error getting merkle proof for coinbase", err)
 			}
@@ -881,7 +882,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		b.currentDifficulty.Store(nBits)
 	}
 
-	timeNowUint32, err := util.SafeInt64ToUint32(time.Now().Unix())
+	timeNowUint32, err := safe.Int64ToUint32(time.Now().Unix())
 	if err != nil {
 		return nil, nil, errors.NewProcessingError("error converting time now", err)
 	}
@@ -923,7 +924,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 
 	previousHash := b.bestBlockHeader.Load().Hash().CloneBytes()
 
-	lenSubtreesToIncludeUint32, err := util.SafeIntToUint32(len(subtreesToInclude))
+	lenSubtreesToIncludeUint32, err := safe.IntToUint32(len(subtreesToInclude))
 	if err != nil {
 		return nil, nil, errors.NewProcessingError("error converting subtree count", err)
 	}
@@ -1226,7 +1227,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) (err error
 	})
 
 	for _, unminedTransaction := range unminedTransactions {
-		subtreeNode := util.SubtreeNode{
+		subtreeNode := subtree.SubtreeNode{
 			Hash:        *unminedTransaction.Hash,
 			Fee:         unminedTransaction.Fee,
 			SizeInBytes: unminedTransaction.Size,

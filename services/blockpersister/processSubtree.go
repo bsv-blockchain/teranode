@@ -8,11 +8,11 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -68,14 +68,14 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 		}
 
 		if i == 0 {
-			txHashes[i] = util.CoinbasePlaceholderHashValue
+			txHashes[i] = subtreepkg.CoinbasePlaceholderHashValue
 		}
 	}
 
 	// txMetaSlice will be populated with the txMeta data for each txHash
 	txMetaSlice := make([]*meta.Data, len(txHashes))
 
-	if txHashes[0].Equal(util.CoinbasePlaceholderHashValue) {
+	if txHashes[0].Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 		txMetaSlice[0] = &meta.Data{Tx: coinbaseTx}
 	}
 
@@ -134,7 +134,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 //
 // Possible errors include storage access failures, file corruption, or deserialization
 // issues. All errors are wrapped with appropriate context for debugging.
-func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash) (*util.SubtreeData, error) {
+func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.SubtreeData, error) {
 	// 1. get the subtree from the subtree store
 	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree)
 	if err != nil {
@@ -142,7 +142,7 @@ func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash
 	}
 	defer subtreeReader.Close()
 
-	subtree := &util.Subtree{}
+	subtree := &subtreepkg.Subtree{}
 	if err := subtree.DeserializeFromReader(subtreeReader); err != nil {
 		return nil, errors.NewProcessingError("[BlockPersister] failed to deserialize subtree", err)
 	}
@@ -155,7 +155,7 @@ func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash
 
 	defer subtreeDataReader.Close()
 
-	subtreeData, err := util.NewSubtreeDataFromReader(subtree, subtreeDataReader)
+	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, subtreeDataReader)
 	if err != nil {
 		return nil, errors.NewProcessingError("[BlockPersister] error deserializing subtree data", err)
 	}

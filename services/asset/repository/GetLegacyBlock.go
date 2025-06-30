@@ -12,6 +12,8 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
@@ -111,12 +113,12 @@ func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, 
 		// write the block size
 		sizeInBytes := make([]byte, 4)
 
-		blockHeaderTransactionCountSizeUint64, err := util.SafeIntToUint64(model.BlockHeaderSize + txCountVarIntLen)
+		blockHeaderTransactionCountSizeUint64, err := safe.IntToUint64(model.BlockHeaderSize + txCountVarIntLen)
 		if err != nil {
 			return err
 		}
 
-		sizeUint32, err := util.SafeUint64ToUint32(block.SizeInBytes + blockHeaderTransactionCountSizeUint64)
+		sizeUint32, err := safe.Uint64ToUint32(block.SizeInBytes + blockHeaderTransactionCountSizeUint64)
 		if err != nil {
 			return err
 		}
@@ -189,7 +191,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 		_ = subtreeReader.Close()
 	}()
 
-	subtree := util.Subtree{}
+	subtree := subtreepkg.Subtree{}
 
 	err = subtree.DeserializeFromReader(subtreeReader)
 	if err != nil {
@@ -216,7 +218,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 
 	if missed > 0 {
 		for i := 0; i < len(txHashes); i++ {
-			if util.CoinbasePlaceholderHash.Equal(txHashes[i]) {
+			if subtreepkg.CoinbasePlaceholderHash.Equal(txHashes[i]) {
 				continue
 			}
 
@@ -227,7 +229,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 	}
 
 	for i := 0; i < len(txMetaSlice); i++ {
-		if util.CoinbasePlaceholderHash.Equal(txHashes[i]) {
+		if subtreepkg.CoinbasePlaceholderHash.Equal(txHashes[i]) {
 			if block != nil {
 				// The coinbase tx is not in the txmeta store, so we add in a special coinbase placeholder tx
 				if i != 0 {
@@ -281,17 +283,17 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 		i := i // capture range variable for goroutine
 
 		g.Go(func() error {
-			end := util.Min(i+batchSize, len(txHashes))
+			end := subtreepkg.Min(i+batchSize, len(txHashes))
 
 			missingTxHashesCompacted := make([]*utxo.UnresolvedMetaData, 0, end-i)
 
-			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
+			for j := 0; j < subtreepkg.Min(batchSize, len(txHashes)-i); j++ {
 				select {
 				case <-gCtx.Done(): // Listen for cancellation signal
 					return gCtx.Err() // Return the error that caused the cancellation
 
 				default:
-					if txHashes[i+j].Equal(*util.CoinbasePlaceholderHash) {
+					if txHashes[i+j].Equal(*subtreepkg.CoinbasePlaceholderHash) {
 						// coinbase placeholder is not in the store
 						continue
 					}

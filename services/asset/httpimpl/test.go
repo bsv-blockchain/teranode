@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/asset/repository"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libsv/go-bt/v2"
@@ -63,10 +63,10 @@ var (
 		ID:               666,
 	}
 	testBlockBytes, _ = testBlock.Bytes()
-	testSubtree, _    = util.NewTreeByLeafCount(4)
+	testSubtree, _    = subtree.NewTreeByLeafCount(4)
 	testTxMeta        = &meta.Data{
 		Tx:          testTx1,
-		TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*testTx1.Inputs[0].PreviousTxIDChainHash()}, Idxs: [][]uint32{{testTx1.Inputs[0].PreviousTxOutIndex}}},
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*testTx1.Inputs[0].PreviousTxIDChainHash()}, Idxs: [][]uint32{{testTx1.Inputs[0].PreviousTxOutIndex}}},
 		BlockIDs:    []uint32{100},
 		Fee:         123,
 		SizeInBytes: 321,

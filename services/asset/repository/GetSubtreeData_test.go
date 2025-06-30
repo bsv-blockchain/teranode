@@ -5,10 +5,10 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockpersister"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/require"
@@ -60,7 +60,7 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 	})
 }
 
-func setupSubtreeReaderTest(t *testing.T) (*testContext, *util.Subtree, []*meta.Data) {
+func setupSubtreeReaderTest(t *testing.T) (*testContext, *subtree.Subtree, []*meta.Data) {
 	ctx := setup(t)
 	ctx.logger.Debugf("test")
 

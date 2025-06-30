@@ -27,13 +27,13 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -69,9 +69,9 @@ func TestOneTransaction(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	subtrees := make([]*util.Subtree, 1)
+	subtrees := make([]*subtree.Subtree, 1)
 
-	subtrees[0], err = util.NewTree(1)
+	subtrees[0], err = subtree.NewTree(1)
 	require.NoError(t, err)
 
 	err = subtrees[0].AddCoinbaseNode()
@@ -132,9 +132,9 @@ func TestTwoTransactions(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	subtrees := make([]*util.Subtree, 1)
+	subtrees := make([]*subtree.Subtree, 1)
 
-	subtrees[0], err = util.NewTree(1)
+	subtrees[0], err = subtree.NewTree(1)
 	require.NoError(t, err)
 
 	empty := &chainhash.Hash{}
@@ -191,11 +191,11 @@ func TestMerkleRoot(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	subtrees := make([]*util.Subtree, 2)
+	subtrees := make([]*subtree.Subtree, 2)
 
-	subtrees[0], err = util.NewTreeByLeafCount(2) // height = 1
+	subtrees[0], err = subtree.NewTreeByLeafCount(2) // height = 1
 	require.NoError(t, err)
-	subtrees[1], err = util.NewTreeByLeafCount(2) // height = 1
+	subtrees[1], err = subtree.NewTreeByLeafCount(2) // height = 1
 	require.NoError(t, err)
 
 	err = subtrees[0].AddCoinbaseNode()

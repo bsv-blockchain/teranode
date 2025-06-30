@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	stv "github.com/bitcoin-sv/teranode/services/subtreevalidation"
 	"github.com/bitcoin-sv/teranode/services/validator"
@@ -20,7 +21,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka" //nolint:gci
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/jarcoal/httpmock"
@@ -68,7 +68,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 	numberOfItems := 1_024 * 1_024
 
-	subtree, err := util.NewTreeByLeafCount(numberOfItems)
+	subtree, err := subtree.NewTreeByLeafCount(numberOfItems)
 	require.NoError(t, err)
 
 	for i := 0; i < numberOfItems; i++ {

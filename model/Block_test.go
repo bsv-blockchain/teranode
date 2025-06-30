@@ -14,6 +14,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -292,12 +294,12 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 	}
 
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
-	oldBlockIDs := util.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, utxoStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
 
-	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncedMapToUint32Slice(oldBlockIDs)
+	_, hasTransactionsReferencingOldBlocks := txmap.ConvertSyncedMapToUint32Slice(oldBlockIDs)
 	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
@@ -327,7 +329,7 @@ func TestGetAndValidateSubtrees(t *testing.T) {
 
 func TestCheckDuplicateTransactions(t *testing.T) {
 	leafCount := 4
-	subtree, err := util.NewTreeByLeafCount(leafCount)
+	subtree, err := subtree.NewTreeByLeafCount(leafCount)
 	require.NoError(t, err)
 
 	// create a slice of random hashes

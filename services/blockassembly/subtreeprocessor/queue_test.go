@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -235,7 +235,7 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 			for i := 0; i < iter; i++ {
 				u := (n * iter) + i
 				q.enqueue(&TxIDAndFee{
-					node: util.SubtreeNode{
+					node: subtree.SubtreeNode{
 						Hash:        chainhash.Hash{},
 						Fee:         uint64(u),
 						SizeInBytes: 0,
@@ -259,7 +259,7 @@ func BenchmarkQueue(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		q.enqueue(&TxIDAndFee{
-			node: util.SubtreeNode{
+			node: subtree.SubtreeNode{
 				Hash:        chainhash.Hash{},
 				Fee:         uint64(i),
 				SizeInBytes: 0,
@@ -273,14 +273,14 @@ func BenchmarkAtomicPointer(b *testing.B) {
 	var v atomic.Pointer[TxIDAndFee]
 
 	t1 := &TxIDAndFee{
-		node: util.SubtreeNode{
+		node: subtree.SubtreeNode{
 			Hash:        chainhash.Hash{},
 			Fee:         1,
 			SizeInBytes: 0,
 		},
 	}
 	t2 := &TxIDAndFee{
-		node: util.SubtreeNode{
+		node: subtree.SubtreeNode{
 			Hash:        chainhash.Hash{},
 			Fee:         1,
 			SizeInBytes: 0,

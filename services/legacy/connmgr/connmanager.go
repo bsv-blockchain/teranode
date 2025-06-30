@@ -12,8 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 )
 
 // maxFailedAttempts is the maximum number of successive failed connection
@@ -206,10 +207,10 @@ type ConnManager struct {
 
 	// pending holds all registered conn requests that have yet to
 	// succeed.
-	pending *util.SyncedMap[uint64, *ConnReq]
+	pending *txmap.SyncedMap[uint64, *ConnReq]
 
 	// conns represents the set of all actively connected peers.
-	conns *util.SyncedMap[uint64, *ConnReq]
+	conns *txmap.SyncedMap[uint64, *ConnReq]
 
 	// teranode addition
 	logger ulogger.Logger
@@ -616,7 +617,7 @@ func (cm *ConnManager) Start() {
 				return
 			case <-ticker.C:
 				// try to connect to new address every minute, we might have disconnected or have new addresses
-				connsLengthUint32, err := util.SafeIntToUint32(cm.conns.Length())
+				connsLengthUint32, err := safe.IntToUint32(cm.conns.Length())
 				if err != nil {
 					cm.logger.Errorf("could not convert conns length to uint32: %v", err)
 					continue
@@ -678,8 +679,8 @@ func New(logger ulogger.Logger, cfg *Config) (*ConnManager, error) {
 		cfg:      *cfg, // Copy so caller can't mutate
 		requests: make(chan interface{}),
 		quit:     make(chan struct{}),
-		pending:  util.NewSyncedMap[uint64, *ConnReq](),
-		conns:    util.NewSyncedMap[uint64, *ConnReq](),
+		pending:  txmap.NewSyncedMap[uint64, *ConnReq](),
+		conns:    txmap.NewSyncedMap[uint64, *ConnReq](),
 	}
 
 	return &cm, nil

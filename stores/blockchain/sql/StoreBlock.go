@@ -16,6 +16,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/services/blockchain/work"
 	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bitcoin-sv/teranode/util"
@@ -114,12 +115,12 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		}
 	}
 
-	newBlockIDUint32, err := util.SafeUint64ToUint32(newBlockID)
+	newBlockIDUint32, err := safe.Uint64ToUint32(newBlockID)
 	if err != nil {
 		return 0, height, errors.NewProcessingError("failed to convert newBlockID", err)
 	}
 
-	timeUint32, err := util.SafeInt64ToUint32(time.Now().Unix())
+	timeUint32, err := safe.Int64ToUint32(time.Now().Unix())
 	if err != nil {
 		return 0, height, errors.NewProcessingError("failed to convert time", err)
 	}

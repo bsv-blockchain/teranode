@@ -14,13 +14,12 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	st "github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	blob_memory "github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -111,7 +110,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 		if i == 0 {
 			stp.GetCurrentSubtree().ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1}, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+			stp.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 		}
 	}
 
@@ -179,7 +178,7 @@ func Test_TxIDAndFeeBatch(t *testing.T) {
 			for j := 0; j < 1_000; j++ {
 				batch := batcher.Add(
 					st.NewTxIDAndFee(
-						util.SubtreeNode{
+						subtreepkg.SubtreeNode{
 							Hash:        chainhash.Hash{},
 							Fee:         1,
 							SizeInBytes: 2,
@@ -230,7 +229,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 		subtreeSize := uint64(1024 * 1024)
 		nrSubtrees := 10
 
-		subtrees := make([]*util.Subtree, nrSubtrees)
+		subtrees := make([]*subtreepkg.Subtree, nrSubtrees)
 
 		block := &model.Block{
 			Header:     prevBlockHeader,
@@ -281,7 +280,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 		for _, subtree := range subtrees {
 			wg.Add(1)
 
-			go func(subtree *util.Subtree) {
+			go func(subtree *subtreepkg.Subtree) {
 				defer wg.Done()
 				//nolint:gosec
 				for i := 0; i < int(subtreeSize); i++ {
@@ -307,9 +306,9 @@ func generateTxID() (string, error) {
 	return fmt.Sprintf("%x", b), nil
 }
 
-func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtree {
+func createSubtree(t *testing.T, length uint64, createCoinbase bool) *subtreepkg.Subtree {
 	//nolint:gosec
-	subtree, err := util.NewTreeByLeafCount(int(length))
+	subtree, err := subtreepkg.NewTreeByLeafCount(int(length))
 	require.NoError(t, err)
 
 	start := uint64(0)

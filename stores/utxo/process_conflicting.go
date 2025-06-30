@@ -7,8 +7,9 @@ import (
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -42,7 +43,7 @@ import (
  - 4: mark tx_double_spend as not conflicting
  - 5: mark tx_parent1 & tx_parent2 & tx_parent4 as spendable again
 */
-func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chainhash.Hash) (losingTxHashesMap util.TxMap, err error) {
+func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chainhash.Hash) (losingTxHashesMap txmap.TxMap, err error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "ProcessConflicting")
 
 	defer deferFn()
@@ -61,7 +62,7 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 		idx := idx
 		txHash := txHash
 
-		if txHash.Equal(util.CoinbasePlaceholderHashValue) {
+		if txHash.Equal(subtree.CoinbasePlaceholderHashValue) {
 			// the counter-conflicting tx is frozen, we should not process anything further
 			return nil, errors.NewProcessingError("[ProcessConflicting][%s] tx is frozen", txHash.String())
 		}
@@ -96,7 +97,7 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 	}
 
 	// create a unique list of all the losing tx hashes
-	losingTxHashesMap = util.NewSplitSwissMap(int(losingTxHashesPerConflictingTxCount.Load()))
+	losingTxHashesMap = txmap.NewSplitSwissMap(int(losingTxHashesPerConflictingTxCount.Load()))
 
 	for _, hashes := range losingTxHashesPerConflictingTx {
 		for _, hash := range hashes {
@@ -193,7 +194,7 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 
 	defer deferFn()
 
-	if hash.Equal(util.CoinbasePlaceholderHashValue) {
+	if hash.Equal(subtree.CoinbasePlaceholderHashValue) {
 		// skip the coinbase placeholder hash
 		return nil, nil
 	}
@@ -310,7 +311,7 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 				}
 
 				for _, childHash := range childHashes {
-					if childHash.Equal(util.FrozenBytesTxHash) {
+					if childHash.Equal(subtree.FrozenBytesTxHash) {
 						return nil, errors.NewProcessingError("[GetCounterConflictingTxHashes][%s] tx has frozen child", spendingTxID.String())
 					}
 

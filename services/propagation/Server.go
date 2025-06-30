@@ -67,11 +67,11 @@ const (
 	// processed in a single batch request. This limit prevents memory exhaustion and
 	// ensures reasonable processing times for batch operations.
 	maxTransactionsPerRequest = 1024
-	
+
 	// maxDataPerRequest defines the maximum total data size (in bytes) that can be
 	// processed in a single request. This limit prevents oversized requests from
 	// consuming excessive memory and network resources (32 MB limit).
-	maxDataPerRequest         = 32 * 1024 * 1024
+	maxDataPerRequest = 32 * 1024 * 1024
 )
 
 var (

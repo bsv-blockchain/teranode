@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -58,7 +59,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 		logger:                             u.logger,
 		batchSize:                          batchSize,
 		validateSubtreeInternalConcurrency: validateSubtreeInternalConcurrency,
-		missingTxThreshold:                 uint32(missingTxThreshold), //nolint: gosec // G601: Integer overflow (gosec)
+		missingTxThreshold:                 uint32(missingTxThreshold), // nolint: gosec // G601: Integer overflow (gosec)
 		cache:                              cache,
 		txHashes:                           txHashes,
 		txMetaSlice:                        txMetaSlice,
@@ -100,7 +101,7 @@ func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
 		err    error
 	)
 
-	for j := 0; j < util.Min(p.batchSize, len(p.txHashes)-i); j++ {
+	for j := 0; j < subtree.Min(p.batchSize, len(p.txHashes)-i); j++ {
 		if p.txMetaSlice[i+j] != nil {
 			continue
 		}
@@ -113,7 +114,7 @@ func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
 
 		txHash := p.txHashes[i+j]
 
-		if txHash.Equal(*util.CoinbasePlaceholderHash) {
+		if txHash.Equal(*subtree.CoinbasePlaceholderHash) {
 			continue
 		}
 

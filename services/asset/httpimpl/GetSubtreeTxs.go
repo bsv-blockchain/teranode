@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
@@ -23,7 +23,7 @@ type SubtreeTx struct {
 	Fee          int    `json:"fee"`
 }
 
-// GetSubtreeTxs creates an HTTP handler for retrieving transaction details from a subtree
+// GetSubtreeTxs creates an HTTP handler for retrieving transaction details from a subtreepkg
 // with pagination support. Only supports JSON output format.
 //
 // Parameters:
@@ -51,7 +51,7 @@ type SubtreeTx struct {
 //	  {
 //	    "data": [
 //	      {
-//	        "index": <int>,         // Position in subtree
+//	        "index": <int>,         // Position in subtreepkg
 //	        "txid": "<string>",     // Transaction ID
 //	        "inputsCount": <int>,   // Number of inputs
 //	        "outputsCount": <int>,  // Number of outputs
@@ -63,7 +63,7 @@ type SubtreeTx struct {
 //	    "pagination": {
 //	      "offset": <int>,          // Current offset
 //	      "limit": <int>,           // Current limit
-//	      "total_records": <int>    // Total number of transactions in subtree
+//	      "total_records": <int>    // Total number of transactions in subtreepkg
 //	    }
 //	  }
 //
@@ -81,7 +81,7 @@ type SubtreeTx struct {
 //
 //   - 500 Internal Server Error:
 //
-//   - Invalid subtree hash format
+//   - Invalid subtreepkg hash format
 //
 //   - Subtree retrieval errors
 //
@@ -102,11 +102,11 @@ type SubtreeTx struct {
 //
 // Example Usage:
 //
-//	# Get first 20 transactions from subtree
-//	GET /subtree/txs/<hash>
+//	# Get first 20 transactions from subtreepkg
+//	GET /subtreepkg/txs/<hash>
 //
 //	# Get 50 transactions starting at offset 100
-//	GET /subtree/txs/<hash>?offset=100&limit=50
+//	GET /subtreepkg/txs/<hash>?offset=100&limit=50
 func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashStr := c.Param("hash")
@@ -136,7 +136,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 		prometheusAssetHTTPGetSubtree.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
-			// get subtree is much less efficient than get subtree reader and then only deserializing the nodes
+			// get subtreepkg is much less efficient than get subtreepkg reader and then only deserializing the nodes
 			// this is only needed for the json response
 			subtree, err := h.repository.GetSubtree(ctx, hash)
 			if err != nil {
@@ -163,12 +163,12 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 					TxID:  node.Hash.String(),
 				}
 
-				if util.CoinbasePlaceholderHash.Equal(node.Hash) {
+				if subtreepkg.CoinbasePlaceholderHash.Equal(node.Hash) {
 					txMeta = &meta.Data{
 						Tx:         bt.NewTx(),
 						IsCoinbase: true,
 					}
-					txMeta.Tx.SetTxHash(util.CoinbasePlaceholderHash)
+					txMeta.Tx.SetTxHash(subtreepkg.CoinbasePlaceholderHash)
 				} else {
 					txMeta, err = h.repository.GetTransactionMeta(ctx, &node.Hash)
 					if err != nil {

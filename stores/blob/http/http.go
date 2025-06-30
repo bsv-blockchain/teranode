@@ -44,13 +44,13 @@ const (
 // and handles response parsing, error handling, and connection management.
 type HTTPStore struct {
 	// baseURL is the base URL of the remote blob server (e.g., "http://localhost:8080")
-	baseURL    string
+	baseURL string
 	// httpClient is the HTTP client used for making requests with configurable timeout
 	httpClient *http.Client
 	// logger provides structured logging for HTTP operations and errors
-	logger     ulogger.Logger
+	logger ulogger.Logger
 	// options contains configuration options for the HTTP blob store
-	options    *options.Options
+	options *options.Options
 }
 
 // New creates a new HTTP blob store client that connects to a remote blob server.

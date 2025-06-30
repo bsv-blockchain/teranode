@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -166,7 +166,7 @@ func (h *HTTP) Search(c echo.Context) error {
 			return sendError(c, http.StatusBadRequest, int32(errors.ERR_INVALID_ARGUMENT), errors.NewInvalidArgumentError("block height must be greater than or equal to 0"))
 		}
 
-		blockHeightUint32, err := util.SafeIntToUint32(blockHeight)
+		blockHeightUint32, err := safe.IntToUint32(blockHeight)
 		if err != nil {
 			return sendError(c, http.StatusBadRequest, int32(errors.ERR_INVALID_ARGUMENT), errors.NewInvalidArgumentError("invalid block height", err))
 		}

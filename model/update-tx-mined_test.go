@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -73,11 +73,11 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 		tx1.TxIDChainHash(),
 		tx2.TxIDChainHash(),
 	}
-	block.SubtreeSlices = []*util.Subtree{
+	block.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []util.SubtreeNode{
+			Nodes: []subtree.SubtreeNode{
 				{
-					Hash: *util.CoinbasePlaceholderHash,
+					Hash: *subtree.CoinbasePlaceholderHash,
 				},
 				{
 					Hash: *tx1.TxIDChainHash(),
@@ -91,7 +91,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 			},
 		},
 		{
-			Nodes: []util.SubtreeNode{
+			Nodes: []subtree.SubtreeNode{
 				{
 					Hash: *tx4.TxIDChainHash(),
 				},

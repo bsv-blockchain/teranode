@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -498,12 +499,12 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 
 	if addToBlockAssembly {
-		var txInpoints meta.TxInpoints
+		var txInpoints subtree.TxInpoints
 
 		if txMetaData.TxInpoints.ParentTxHashes != nil {
 			txInpoints = txMetaData.TxInpoints
 		} else {
-			txInpoints, err = meta.NewTxInpointsFromTx(tx)
+			txInpoints, err = subtree.NewTxInpointsFromTx(tx)
 			if err != nil {
 				return nil, errors.NewProcessingError("[Validate][%s] error getting tx inpoints: %v", txID, err)
 			}

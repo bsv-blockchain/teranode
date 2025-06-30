@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
-	"github.com/bitcoin-sv/teranode/util"
 )
 
 // SpendResponse contains the response from querying (GetSpend) a UTXO's spend status.
@@ -53,7 +53,7 @@ func (sr *SpendResponse) FromBytes(b []byte) (err error) {
 		return errors.NewInvalidArgumentError("invalid byte length")
 	}
 
-	intFirstEightBytes, err := util.SafeUint64ToInt(binary.LittleEndian.Uint64(b[:8]))
+	intFirstEightBytes, err := safe.Uint64ToInt(binary.LittleEndian.Uint64(b[:8]))
 	if err != nil {
 		return errors.NewProcessingError("failed to convert first eight bytes", err)
 	}

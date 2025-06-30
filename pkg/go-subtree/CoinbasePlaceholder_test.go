@@ -1,4 +1,4 @@
-package util
+package subtree
 
 import (
 	"testing"

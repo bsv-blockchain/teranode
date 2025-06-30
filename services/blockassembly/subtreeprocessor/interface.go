@@ -14,9 +14,9 @@ package subtreeprocessor
 
 import (
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -42,7 +42,7 @@ type Interface interface {
 	// Parameters:
 	//   - node: The transaction node to add to processing
 	//   - txInpoints: Transaction input points for dependency tracking
-	Add(node util.SubtreeNode, txInpoints meta.TxInpoints)
+	Add(node subtree.SubtreeNode, txInpoints subtree.TxInpoints)
 
 	// AddDirectly adds a transaction node directly to the processor without
 	// using the queue. This is typically used for block assembly startup.
@@ -57,7 +57,7 @@ type Interface interface {
 	//   - error: Any error encountered during the addition
 	//
 	// Note: This method bypasses the normal queue processing and should be used
-	AddDirectly(node util.SubtreeNode, txInpoints meta.TxInpoints) error
+	AddDirectly(node subtree.SubtreeNode, txInpoints subtree.TxInpoints) error
 
 	// GetCurrentRunningState returns the current operational state of the processor.
 	// This provides visibility into whether the processor is running, stopped,
@@ -132,7 +132,7 @@ type Interface interface {
 	//
 	// Returns:
 	//   - []*util.Subtree: Array of completed subtrees ready for mining
-	GetCompletedSubtreesForMiningCandidate() []*util.Subtree
+	GetCompletedSubtreesForMiningCandidate() []*subtree.Subtree
 
 	// GetCurrentBlockHeader returns the current block header the processor is working with.
 	// This represents the blockchain tip from the processor's perspective.
@@ -153,21 +153,21 @@ type Interface interface {
 	//
 	// Returns:
 	//   - *util.Subtree: Currently active subtree, nil if none
-	GetCurrentSubtree() *util.Subtree
+	GetCurrentSubtree() *subtree.Subtree
 
 	// GetCurrentTxMap returns the current transaction map with input points.
 	// This provides access to the processor's transaction tracking state.
 	//
 	// Returns:
 	//   - *util.SyncedMap[chainhash.Hash, meta.TxInpoints]: Current transaction map
-	GetCurrentTxMap() *util.SyncedMap[chainhash.Hash, meta.TxInpoints]
+	GetCurrentTxMap() *txmap.SyncedMap[chainhash.Hash, subtree.TxInpoints]
 
 	// GetChainedSubtrees returns subtrees that are chained together.
 	// These represent transaction dependencies and processing order.
 	//
 	// Returns:
 	//   - []*util.Subtree: Array of chained subtrees
-	GetChainedSubtrees() []*util.Subtree
+	GetChainedSubtrees() []*subtree.Subtree
 
 	// GetUtxoStore returns the UTXO store used by the processor.
 	// This provides access to the underlying UTXO validation system.

@@ -16,6 +16,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
@@ -312,7 +314,7 @@ func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHa
 	for idx, counterConflictingTxHash := range counterConflictingTxHashes {
 		g.Go(func() error {
 			// if a transaction is frozen, the counter-transaction will be the same as the coinbase placeholder
-			if counterConflictingTxHash.Equal(util.CoinbasePlaceholderHashValue) {
+			if counterConflictingTxHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] counter conflicting tx is frozen", txHash.String())
 			}
 
@@ -343,7 +345,7 @@ func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHa
 		}
 
 		for _, childTransactionHash := range childTransactionHashes {
-			if childTransactionHash.Equal(util.CoinbasePlaceholderHashValue) {
+			if childTransactionHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] child transaction is frozen", txHash.String())
 			}
 		}
@@ -480,12 +482,12 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// create the empty subtree
 	height := math.Ceil(math.Log2(float64(len(txHashes))))
 
-	subtree, err := util.NewTree(int(height))
+	subtree, err := subtreepkg.NewTree(int(height))
 	if err != nil {
 		return errors.NewProcessingError("failed to create new subtree", err)
 	}
 
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
 	failFastValidation := u.settings.Block.FailFastValidation
 	abandonTxThreshold := u.settings.BlockValidation.SubtreeValidationAbandonThreshold
@@ -496,7 +498,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// TODO document, what does this do?
 	subtreeWarmupCount := u.settings.BlockValidation.ValidationWarmupCount
 
-	subtreeWarmupCountInt32, err := util.SafeIntToInt32(subtreeWarmupCount)
+	subtreeWarmupCountInt32, err := safe.IntToInt32(subtreeWarmupCount)
 	if err != nil {
 		return err
 	}
@@ -577,7 +579,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			missingTxHashesCompacted := make([]utxo.UnresolvedMetaData, 0, missed)
 
 			for idx, txHash := range txHashes {
-				if txMetaSlice[idx] == nil && !txHash.IsEqual(util.CoinbasePlaceholderHash) {
+				if txMetaSlice[idx] == nil && !txHash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
 					missingTxHashesCompacted = append(missingTxHashesCompacted, utxo.UnresolvedMetaData{
 						Hash: txHash,
 						Idx:  idx,
@@ -619,7 +621,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	for idx, txHash := range txHashes {
 		// if placeholder just add it and continue
-		if idx == 0 && txHash.Equal(*util.CoinbasePlaceholderHash) {
+		if idx == 0 && txHash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
 			err = subtree.AddCoinbaseNode()
 			if err != nil {
 				return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add coinbase placeholder node to subtree", v.SubtreeHash.String(), err)
@@ -825,7 +827,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 //
 // Returns:
 //   - error: Any error encountered during retrieval or validation
-func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash chainhash.Hash, subtree *util.Subtree,
+func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree,
 	missingTxHashes []utxo.UnresolvedMetaData, allTxs []chainhash.Hash, baseURL string, txMetaSlice []*meta.Data, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "SubtreeValidation:processMissingTransactions",
@@ -941,7 +943,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 // Returns:
 //   - []missingTx: Slice of retrieved transactions paired with their indices
 //   - error: Any error encountered during the retrieval process
-func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash.Hash, subtree *util.Subtree,
+func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree,
 	missingTxHashes []utxo.UnresolvedMetaData, allTxs []chainhash.Hash, baseURL string) ([]missingTx, error) {
 	// first check whether we have the subtreeData file for this subtree and use that for the missing transactions
 	subtreeDataExists, err := u.subtreeStore.Exists(ctx,
@@ -1117,7 +1119,7 @@ func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingT
 //   - error: Any error encountered during retrieval
 func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData,
 	allTxs []chainhash.Hash) (missingTxs []missingTx, err error) {
-	var subtree *util.Subtree
+	var subtree *subtreepkg.Subtree
 
 	if len(allTxs) == 0 {
 		// load the subtree
@@ -1137,18 +1139,18 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 		}
 		defer subtreeReader.Close()
 
-		subtree = &util.Subtree{}
+		subtree = &subtreepkg.Subtree{}
 		if err = subtree.DeserializeFromReader(subtreeReader); err != nil {
 			return nil, err
 		}
 	} else {
-		subtree, err = util.NewIncompleteTreeByLeafCount(len(allTxs))
+		subtree, err = subtreepkg.NewIncompleteTreeByLeafCount(len(allTxs))
 		if err != nil {
 			return nil, errors.NewProcessingError("[getMissingTransactionsFromFile] failed to create new subtree from txs in memory", err)
 		}
 
 		for _, txHash := range allTxs {
-			if txHash.Equal(util.CoinbasePlaceholderHashValue) {
+			if txHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				if err = subtree.AddCoinbaseNode(); err != nil {
 					return nil, errors.NewProcessingError("[getMissingTransactionsFromFile] failed to add coinbase placeholder node to subtree", err)
 				}
@@ -1172,7 +1174,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	}
 	defer subtreeDataReader.Close()
 
-	subtreeData, err := util.NewSubtreeDataFromReader(subtree, subtreeDataReader)
+	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, subtreeDataReader)
 	if err != nil {
 		return nil, err
 	}
@@ -1217,7 +1219,7 @@ func (u *Server) getMissingTransactionsFromPeer(ctx context.Context, subtreeHash
 	batchSize := u.settings.SubtreeValidation.MissingTransactionsBatchSize
 
 	for i := 0; i < len(missingTxHashes); i += batchSize {
-		missingTxHashesBatch := missingTxHashes[i:util.Min(i+batchSize, len(missingTxHashes))]
+		missingTxHashesBatch := missingTxHashes[i:subtreepkg.Min(i+batchSize, len(missingTxHashes))]
 
 		g.Go(func() error {
 			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, subtreeHash, missingTxHashesBatch, baseURL)

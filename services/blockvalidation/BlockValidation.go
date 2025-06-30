@@ -28,6 +28,8 @@ import (
 	p2pconstants "github.com/bitcoin-sv/teranode/interfaces/p2p"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -91,7 +93,7 @@ type BlockValidation struct {
 	utxoStore utxo.Store
 
 	// recentBlocksBloomFilters maintains bloom filters for recent blocks
-	recentBlocksBloomFilters *util.SyncedMap[chainhash.Hash, *model.BlockBloomFilter]
+	recentBlocksBloomFilters *txmap.SyncedMap[chainhash.Hash, *model.BlockBloomFilter]
 
 	// bloomFilterRetentionSize defines bloom filter defines the number of blocks to keep the bloom filter for
 	bloomFilterRetentionSize uint32
@@ -118,10 +120,10 @@ type BlockValidation struct {
 	subtreeCount atomic.Int32
 
 	// blockHashesCurrentlyValidated tracks blocks in validation process
-	blockHashesCurrentlyValidated *util.SwissMap
+	blockHashesCurrentlyValidated *txmap.SwissMap
 
 	// blockBloomFiltersBeingCreated tracks bloom filters being generated
-	blockBloomFiltersBeingCreated *util.SwissMap
+	blockBloomFiltersBeingCreated *txmap.SwissMap
 
 	// bloomFilterStats collects statistics about bloom filter operations
 	bloomFilterStats *model.BloomStats
@@ -190,7 +192,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		subtreeBlockHeightRetention:   tSettings.GlobalBlockHeightRetention,
 		txStore:                       txStore,
 		utxoStore:                     utxoStore,
-		recentBlocksBloomFilters:      util.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 		bloomFilterRetentionSize:      tSettings.GlobalBlockHeightRetention + 2, // Needs to be larger than global value but not orders of magnitude larger
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(tSettings.GlobalBlockHeightRetention),
@@ -199,8 +201,8 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		invalidBlockKafkaProducer:     invalidBlockKafkaProducer,
 		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute), // we keep this for 10 minutes
 		subtreeCount:                  atomic.Int32{},
-		blockHashesCurrentlyValidated: util.NewSwissMap(0),
-		blockBloomFiltersBeingCreated: util.NewSwissMap(0),
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 		bloomFilterStats:              model.NewBloomStats(),
 		setMinedChan:                  make(chan *chainhash.Hash, 1000),
 		revalidateBlockChan:           make(chan revalidateBlockData, 2),
@@ -711,7 +713,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// check the size of the block
 	// 0 is unlimited so don't check the size
 	if u.settings.Policy.ExcessiveBlockSize > 0 {
-		excessiveBlockSizeUint64, err := util.SafeIntToUint64(u.settings.Policy.ExcessiveBlockSize)
+		excessiveBlockSizeUint64, err := safe.IntToUint64(u.settings.Policy.ExcessiveBlockSize)
 		if err != nil {
 			return err
 		}
@@ -773,7 +775,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	var optimisticMiningWg sync.WaitGroup
 
-	oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	if useOptimisticMining {
 		// make sure the proof of work is enough
@@ -1184,7 +1186,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees DONE", blockData.block.Hash().String(), len(blockData.block.Subtrees))
 
-	oldBlockIDsMap := util.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
@@ -1475,7 +1477,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 //   - block: Block to check IDs for
 //
 // Returns an error if block verification fails.
-func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *util.SyncedMap[chainhash.Hash, []uint32],
+func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
 	block *model.Block) (iterationError error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockValidation:checkOldBlockIDs",
 		tracing.WithDebugLogMessage(u.logger, "[checkOldBlockIDs][%s] checking %d old block IDs", oldBlockIDsMap.Length(), block.Hash().String()),

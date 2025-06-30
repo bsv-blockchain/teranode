@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/model"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
@@ -18,7 +20,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -127,7 +128,7 @@ func TestSyncManager_createTxMap(t *testing.T) {
 
 			sm := &SyncManager{}
 
-			txMap := util.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+			txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
 
 			err = sm.createTxMap(context.Background(), block, txMap)
 			require.NoError(t, err)
@@ -172,7 +173,7 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 			require.NoError(t, err)
 
 			sm := &SyncManager{}
-			txMap := util.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+			txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
 
 			err = sm.createTxMap(context.Background(), block, txMap)
 			require.NoError(t, err)
@@ -234,7 +235,7 @@ func BenchmarkCreateTxMap(b *testing.B) {
 
 	sm := &SyncManager{}
 
-	txMap := util.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
 
 	b.ResetTimer()
 
@@ -288,7 +289,7 @@ func Benchmark_createSubtree(b *testing.B) {
 
 	sm := &SyncManager{}
 
-	txMap := util.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
 
 	err = sm.createTxMap(b.Context(), block, txMap)
 	require.NoError(b, err)
@@ -296,11 +297,11 @@ func Benchmark_createSubtree(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		subtree, err := util.NewIncompleteTreeByLeafCount(len(block.Transactions()))
+		subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(len(block.Transactions()))
 		require.NoError(b, err)
 
-		subtreeData := util.NewSubtreeData(subtree)
-		subtreeMeta := util.NewSubtreeMeta(subtree)
+		subtreeData := subtreepkg.NewSubtreeData(subtree)
+		subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
 		_ = sm.createSubtree(b.Context(), block, txMap, subtree, subtreeData, subtreeMeta)
 	}

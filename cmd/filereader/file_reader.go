@@ -30,12 +30,12 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	blockmodel "github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -204,14 +204,14 @@ func handleSubtreeData(br *bufio.Reader, logger ulogger.Logger, settings *settin
 		return errors.NewProcessingError("reading subtreeData files depends on subtree file", err)
 	}
 
-	st := &util.Subtree{}
+	st := &subtree.Subtree{}
 	if err = st.DeserializeFromReader(stReader); err != nil {
 		return errors.NewProcessingError("error reading subtree", err)
 	}
 
-	var sd *util.SubtreeData
+	var sd *subtree.SubtreeData
 
-	sd, err = util.NewSubtreeDataFromReader(st, br)
+	sd, err = subtree.NewSubtreeDataFromReader(st, br)
 	if err != nil {
 		return errors.NewProcessingError("error reading subtree data", err)
 	}
@@ -228,7 +228,7 @@ func handleSubtreeData(br *bufio.Reader, logger ulogger.Logger, settings *settin
 			switch {
 			case tx == nil:
 				fmt.Printf("%10d: <nil>\n", i)
-			case util.IsCoinbasePlaceHolderTx(tx):
+			case subtree.IsCoinbasePlaceHolderTx(tx):
 				fmt.Printf(coinbasePlaceholderFormat, i)
 			default:
 				fmt.Printf(nodeFormat, i, tx.TxIDChainHash())
@@ -249,15 +249,15 @@ func handleSubtreeMeta(br *bufio.Reader, logger ulogger.Logger, settings *settin
 		return errors.NewProcessingError("reading subtreeData files depends on subtree file", err)
 	}
 
-	st := &util.Subtree{}
+	st := &subtree.Subtree{}
 
 	if err = st.DeserializeFromReader(stReader); err != nil {
 		return errors.NewProcessingError("error reading subtree", err)
 	}
 
-	var subtreeMeta *util.SubtreeMeta
+	var subtreeMeta *subtree.SubtreeMeta
 
-	subtreeMeta, err = util.NewSubtreeMetaFromReader(st, br)
+	subtreeMeta, err = subtree.NewSubtreeMetaFromReader(st, br)
 	if err != nil {
 		return errors.NewProcessingError("error reading subtree meta", err)
 	}
@@ -526,7 +526,7 @@ func handleUtxoDeletions(br *bufio.Reader) error {
 
 // handleSubtree processes FileTypeSubtree files.
 func handleSubtree(br *bufio.Reader) error {
-	st := &util.Subtree{}
+	st := &subtree.Subtree{}
 	if err := st.DeserializeFromReader(br); err != nil {
 		return errors.NewProcessingError("error reading subtree", err)
 	}
@@ -540,7 +540,7 @@ func handleSubtree(br *bufio.Reader) error {
 
 	if verbose {
 		for i, node := range st.Nodes {
-			if util.CoinbasePlaceholderHash.IsEqual(&node.Hash) {
+			if subtree.CoinbasePlaceholderHash.IsEqual(&node.Hash) {
 				fmt.Printf(coinbasePlaceholderFormat, i)
 			} else {
 				fmt.Printf(nodeFormat, i, node.Hash)
@@ -617,7 +617,7 @@ func readSubtree(r io.Reader, verbose bool) uint32 {
 				os.Exit(1)
 			}
 
-			if util.IsCoinbasePlaceHolderTx(&tx) {
+			if subtree.IsCoinbasePlaceHolderTx(&tx) {
 				fmt.Printf(coinbasePlaceholderFormat, i)
 			} else {
 				fmt.Printf(nodeFormat, i, tx.TxIDChainHash())

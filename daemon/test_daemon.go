@@ -24,6 +24,8 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -497,9 +499,9 @@ func (td *TestDaemon) VerifyConflictingInSubtrees(t *testing.T, subtreeHash *cha
 	latestSubtreeReader, err := td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	require.NoError(t, err, failedGettingSubtree)
 
-	var latestSubtree *util.Subtree
+	var latestSubtree *subtreepkg.Subtree
 
-	latestSubtree, err = util.NewSubtreeFromReader(latestSubtreeReader)
+	latestSubtree, err = subtreepkg.NewSubtreeFromReader(latestSubtreeReader)
 	_ = latestSubtreeReader.Close() // Ensure the reader is closed after use
 
 	require.NoError(t, err, failedParsingSubtreeBytes)
@@ -536,9 +538,9 @@ func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 		subtreeReader, err = td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash, fileformat.FileTypeSubtree)
 		require.NoError(t, err, failedGettingSubtree)
 
-		var subtree *util.Subtree
+		var subtree *subtreepkg.Subtree
 
-		subtree, err = util.NewSubtreeFromReader(subtreeReader)
+		subtree, err = subtreepkg.NewSubtreeFromReader(subtreeReader)
 
 		_ = subtreeReader.Close()
 
@@ -575,9 +577,9 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 		subtreeReader, err = td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash, fileformat.FileTypeSubtree)
 		require.NoError(t, err, failedGettingSubtree)
 
-		var subtree *util.Subtree
+		var subtree *subtreepkg.Subtree
 
-		subtree, err = util.NewSubtreeFromReader(subtreeReader)
+		subtree, err = subtreepkg.NewSubtreeFromReader(subtreeReader)
 		_ = subtreeReader.Close() // Ensure the reader is closed after use
 
 		require.NoError(t, err, failedParsingSubtreeBytes)
@@ -618,7 +620,7 @@ func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, useInput 
 	}
 
 	// convert to uint32
-	useParentOutputUint32, err := util.SafeUint64ToUint32(parentOutput)
+	useParentOutputUint32, err := safe.Uint64ToUint32(parentOutput)
 	require.NoError(t, err)
 
 	err = tx.FromUTXOs(&bt.UTXO{
@@ -743,7 +745,7 @@ func (td *TestDaemon) MineAndWait(t *testing.T, blockCount uint32) *model.Block 
 }
 
 // CreateTestBlock creates a test block with the given previous block, nonce, and transactions.
-func (td *TestDaemon) CreateTestBlock(t *testing.T, previousBlock *model.Block, nonce uint32, txs ...*bt.Tx) (*util.Subtree, *model.Block) {
+func (td *TestDaemon) CreateTestBlock(t *testing.T, previousBlock *model.Block, nonce uint32, txs ...*bt.Tx) (*subtreepkg.Subtree, *model.Block) {
 	// Create and save the subtree with the double spend tx
 	subtree, err := createAndSaveSubtrees(td.Ctx, td.SubtreeStore, txs)
 	require.NoError(t, err)
@@ -856,14 +858,14 @@ finished:
 }
 
 // createAndSaveSubtrees creates a new subtree with the given transactions and saves it to the subtree store.
-func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*bt.Tx) (*util.Subtree, error) {
-	subtree, err := util.NewIncompleteTreeByLeafCount(len(txs) + 1)
+func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*bt.Tx) (*subtreepkg.Subtree, error) {
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(len(txs) + 1)
 	if err != nil {
 		return nil, err
 	}
 
-	subtreeData := util.NewSubtreeData(subtree)
-	subtreeMeta := util.NewSubtreeMeta(subtree)
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
 	err = subtree.AddCoinbaseNode()
 	if err != nil {
@@ -902,7 +904,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 }
 
 // storeSubtreeFiles serializes and stores the subtree, subtree data, and subtree meta in the provided subtree store.
-func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *util.Subtree, subtreeData *util.SubtreeData, subtreeMeta *util.SubtreeMeta) error {
+func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.SubtreeData, subtreeMeta *subtreepkg.SubtreeMeta) error {
 	subtreeBytes, err := subtree.Serialize()
 	if err != nil {
 		return err

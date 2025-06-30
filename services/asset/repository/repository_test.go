@@ -7,13 +7,13 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/asset/repository"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -93,7 +93,7 @@ func TestSubtree(t *testing.T) {
 		subtreeNodes[i/32] = chainhash.Hash(b[i : i+32])
 	}
 
-	subtree2, err := util.NewTreeByLeafCount(len(b) / 32)
+	subtree2, err := subtree.NewTreeByLeafCount(len(b) / 32)
 	require.NoError(t, err)
 
 	for _, hash := range subtreeNodes {
@@ -112,7 +112,7 @@ func TestSubtreeReader(t *testing.T) {
 	reader, err := repo.GetSubtreeTxIDsReader(context.Background(), key)
 	require.NoError(t, err)
 
-	b, err := util.DeserializeNodesFromReader(reader)
+	b, err := subtree.DeserializeNodesFromReader(reader)
 	require.NoError(t, err)
 
 	subtreeNodes := make([]chainhash.Hash, len(b)/32)
@@ -120,7 +120,7 @@ func TestSubtreeReader(t *testing.T) {
 		subtreeNodes[i/32] = chainhash.Hash(b[i : i+32])
 	}
 
-	subtree2, err := util.NewTreeByLeafCount(len(b) / 32)
+	subtree2, err := subtree.NewTreeByLeafCount(len(b) / 32)
 	require.NoError(t, err)
 
 	for _, hash := range subtreeNodes {
@@ -135,7 +135,7 @@ func TestSubtreeReader(t *testing.T) {
 func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *repository.Repository) {
 	itemsPerSubtree := 2
 
-	subtree, err := util.NewTreeByLeafCount(itemsPerSubtree)
+	subtree, err := subtree.NewTreeByLeafCount(itemsPerSubtree)
 	require.NoError(t, err)
 
 	txns := make([]chainhash.Hash, itemsPerSubtree)

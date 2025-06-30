@@ -1,4 +1,4 @@
-package meta
+package subtree
 
 import (
 	"bytes"
@@ -8,7 +8,6 @@ import (
 	"math"
 	"slices"
 
-	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -106,7 +105,7 @@ func (p *TxInpoints) GetParentTxHashes() []chainhash.Hash {
 
 func (p *TxInpoints) GetParentTxHashAtIndex(index int) (chainhash.Hash, error) {
 	if index >= len(p.ParentTxHashes) {
-		return chainhash.Hash{}, errors.NewProcessingError("index out of range")
+		return chainhash.Hash{}, fmt.Errorf("index out of range")
 	}
 
 	return p.ParentTxHashes[index], nil
@@ -130,7 +129,7 @@ func (p *TxInpoints) GetTxInpoints() []Inpoint {
 
 func (p *TxInpoints) GetParentVoutsAtIndex(index int) ([]uint32, error) {
 	if index >= len(p.ParentTxHashes) {
-		return nil, errors.NewProcessingError("index out of range")
+		return nil, fmt.Errorf("index out of range")
 	}
 
 	return p.Idxs[index], nil
@@ -138,7 +137,7 @@ func (p *TxInpoints) GetParentVoutsAtIndex(index int) ([]uint32, error) {
 
 func (p *TxInpoints) Serialize() ([]byte, error) {
 	if len(p.ParentTxHashes) != len(p.Idxs) {
-		return nil, errors.NewProcessingError("parent tx hashes and indexes length mismatch")
+		return nil, fmt.Errorf("parent tx hashes and indexes length mismatch")
 	}
 
 	bufBytes := make([]byte, 0, 1024) // 1KB (arbitrary size, should be enough for most cases)
@@ -152,13 +151,13 @@ func (p *TxInpoints) Serialize() ([]byte, error) {
 	binary.LittleEndian.PutUint32(bytesUint32[:], len32(p.ParentTxHashes))
 
 	if _, err = buf.Write(bytesUint32[:]); err != nil {
-		return nil, errors.NewProcessingError("unable to write number of parent inpoints", err)
+		return nil, fmt.Errorf("unable to write number of parent inpoints: %s", err)
 	}
 
 	// write the parent tx hashes
 	for _, hash := range p.ParentTxHashes {
 		if _, err = buf.Write(hash[:]); err != nil {
-			return nil, errors.NewProcessingError("unable to write parent tx hash", err)
+			return nil, fmt.Errorf("unable to write parent tx hash: %s", err)
 		}
 	}
 
@@ -167,14 +166,14 @@ func (p *TxInpoints) Serialize() ([]byte, error) {
 		binary.LittleEndian.PutUint32(bytesUint32[:], len32(indexes))
 
 		if _, err = buf.Write(bytesUint32[:]); err != nil {
-			return nil, errors.NewProcessingError("unable to write number of parent indexes", err)
+			return nil, fmt.Errorf("unable to write number of parent indexes: %s", err)
 		}
 
 		for _, idx := range indexes {
 			binary.LittleEndian.PutUint32(bytesUint32[:], idx)
 
 			if _, err = buf.Write(bytesUint32[:]); err != nil {
-				return nil, errors.NewProcessingError("unable to write parent index", err)
+				return nil, fmt.Errorf("unable to write parent index: %s", err)
 			}
 		}
 	}
@@ -187,7 +186,7 @@ func (p *TxInpoints) deserializeFromReader(buf io.Reader) error {
 	var bytesUint32 [4]byte
 
 	if _, err := io.ReadFull(buf, bytesUint32[:]); err != nil {
-		return errors.NewProcessingError("unable to read number of parent inpoints", err)
+		return fmt.Errorf("unable to read number of parent inpoints: %s", err)
 	}
 
 	totalInpointsLen := binary.LittleEndian.Uint32(bytesUint32[:])
@@ -205,14 +204,14 @@ func (p *TxInpoints) deserializeFromReader(buf io.Reader) error {
 	// read the parent tx hash
 	for i := uint32(0); i < totalInpointsLen; i++ {
 		if _, err := io.ReadFull(buf, p.ParentTxHashes[i][:]); err != nil {
-			return errors.NewProcessingError("unable to read parent tx hash", err)
+			return fmt.Errorf("unable to read parent tx hash: %s", err)
 		}
 	}
 
 	// read the number of parent indexes
 	for i := uint32(0); i < totalInpointsLen; i++ {
 		if _, err := io.ReadFull(buf, bytesUint32[:]); err != nil {
-			return errors.NewProcessingError("unable to read number of parent indexes", err)
+			return fmt.Errorf("unable to read number of parent indexes: %s", err)
 		}
 
 		parentIndexesLen := binary.LittleEndian.Uint32(bytesUint32[:])
@@ -222,7 +221,7 @@ func (p *TxInpoints) deserializeFromReader(buf io.Reader) error {
 
 		for j := uint32(0); j < parentIndexesLen; j++ {
 			if _, err := io.ReadFull(buf, bytesUint32[:]); err != nil {
-				return errors.NewProcessingError("unable to read parent index", err)
+				return fmt.Errorf("unable to read parent index: %s", err)
 			}
 
 			p.Idxs[i][j] = binary.LittleEndian.Uint32(bytesUint32[:])

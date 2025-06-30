@@ -5,8 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
-	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 )
 
 // TxIDAndFee represents a transaction with its associated fee information and linking metadata.
@@ -14,8 +13,8 @@ import (
 // containing all necessary information for fee-based transaction prioritization and
 // queue management. It serves as both a data container and a node in the lock-free queue.
 type TxIDAndFee struct {
-	node       util.SubtreeNode           // The transaction node containing hash and fee information
-	txInpoints meta.TxInpoints            // Slice of parent transaction hashes and their indices
+	node       subtree.SubtreeNode        // The transaction node containing hash and fee information
+	txInpoints subtree.TxInpoints         // Slice of parent transaction hashes and their indices
 	time       int64                      // Timestamp of when the transaction was added
 	next       atomic.Pointer[TxIDAndFee] // Pointer to the next transaction in the queue
 }
@@ -37,7 +36,7 @@ type TxIDAndFeeBatch struct {
 //
 // Returns:
 //   - *TxIDAndFee: A new transaction wrapper
-func NewTxIDAndFee(n util.SubtreeNode) *TxIDAndFee {
+func NewTxIDAndFee(n subtree.SubtreeNode) *TxIDAndFee {
 	return &TxIDAndFee{
 		node: n,
 	}

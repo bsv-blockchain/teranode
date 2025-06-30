@@ -1,11 +1,11 @@
-package util
+package txmap
 
 import (
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
 
-	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/dolthub/swiss"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -135,7 +135,7 @@ func (s *SwissMapUint64) Put(hash chainhash.Hash, n uint64) error {
 
 	exists := s.m.Has(hash)
 	if exists {
-		return errors.NewTxExistsError("hash already exists in map: %v", hash)
+		return fmt.Errorf("hash already exists in map: %v", hash)
 	}
 
 	s.m.Put(hash, n)
@@ -202,7 +202,7 @@ func (s *SwissMapKVUint64) Exists(hash uint64) bool {
 func (s *SwissMapKVUint64) Put(hash uint64, n uint64) error {
 	exists := s.m.Has(hash)
 	if exists {
-		return errors.NewProcessingError("hash already exists in map")
+		return fmt.Errorf("hash already exists in map")
 	}
 
 	s.m.Put(hash, n)

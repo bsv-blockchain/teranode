@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 )
@@ -124,7 +124,7 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 
 	includeOrphans := c.QueryParam("includeOrphans") == "true"
 
-	fromHeightUint32, err := util.SafeUint64ToUint32(fromHeight)
+	fromHeightUint32, err := safe.Uint64ToUint32(fromHeight)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid 'fromHeight' parameter", err).Error())
 	}

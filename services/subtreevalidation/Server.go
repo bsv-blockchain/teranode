@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bitcoin-sv/teranode/services/validator"
@@ -598,7 +599,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 
 	u.logger.Infof("[CheckSubtree] Processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
-	var subtree *util.Subtree
+	var subtree *subtreepkg.Subtree
 
 	// Check if the base URL is "legacy", which indicates that the subtree is coming from a block from the legacy service.
 	if request.BaseUrl == "legacy" {
@@ -612,7 +613,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 			return false, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to get subtree from store", hash.String(), err)
 		}
 
-		subtree, err = util.NewSubtreeFromReader(subtreeReader)
+		subtree, err = subtreepkg.NewSubtreeFromReader(subtreeReader)
 		_ = subtreeReader.Close() // close the reader after use
 		if err != nil {
 			return false, errors.NewProcessingError("[CheckSubtree] Failed to create subtree from bytes", err)

@@ -14,8 +14,8 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	teranodeUtil "github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
-	teranodeUtil "github.com/bitcoin-sv/teranode/util"
 	"github.com/btcsuite/goleveldb/leveldb/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -29,8 +29,8 @@ const (
 	BlockValidScripts      = 5
 	BlockValidMask         = BlockValidReserved | BlockValidTree | BlockValidTransactions | BlockValidChain | BlockValidScripts
 
-	BlockHaveData = 8  //!< full block available in blk*.dat
-	BlockHaveUndo = 16 //!< undo data available in rev*.dat
+	BlockHaveData = 8  // !< full block available in blk*.dat
+	BlockHaveUndo = 16 // !< undo data available in rev*.dat
 )
 
 // DumpRecords prints the first `count` records from the index database.
@@ -325,14 +325,14 @@ func DeserializeBlockIndex(data []byte) (*utxopersister.BlockIndex, error) {
 
 	var txCountUint64 uint64
 
-	txCountUint64, err = teranodeUtil.SafeIntToUint64(txs)
+	txCountUint64, err = teranodeUtil.IntToUint64(txs)
 	if err != nil {
 		return nil, err
 	}
 
 	var heightUint32 uint32
 
-	heightUint32, err = teranodeUtil.SafeIntToUint32(height)
+	heightUint32, err = teranodeUtil.IntToUint32(height)
 	if err != nil {
 		return nil, err
 	}

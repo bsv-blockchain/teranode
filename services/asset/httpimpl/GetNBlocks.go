@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -149,7 +149,7 @@ func (h *HTTP) GetNBlocks(mode ReadMode) func(c echo.Context) error {
 
 		// get all the blocks from the repository
 
-		numberOfBlocksUint32, err := util.SafeIntToUint32(numberOfBlocks)
+		numberOfBlocksUint32, err := safe.IntToUint32(numberOfBlocks)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid number of blocks", err).Error())
 		}

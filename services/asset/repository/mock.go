@@ -5,9 +5,9 @@ import (
 	"io"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
 )
@@ -198,14 +198,14 @@ func (m *Mock) GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.
 	return args.Get(0).(*io.PipeReader), args.Error(1)
 }
 
-func (m *Mock) GetSubtree(_ context.Context, hash *chainhash.Hash) (*util.Subtree, error) {
+func (m *Mock) GetSubtree(_ context.Context, hash *chainhash.Hash) (*subtree.Subtree, error) {
 	args := m.Called(hash)
 
 	if args.Error(1) != nil {
 		return nil, args.Error(1)
 	}
 
-	return args.Get(0).(*util.Subtree), args.Error(1)
+	return args.Get(0).(*subtree.Subtree), args.Error(1)
 }
 
 func (m *Mock) GetSubtreeExists(_ context.Context, hash *chainhash.Hash) (bool, error) {
@@ -214,14 +214,14 @@ func (m *Mock) GetSubtreeExists(_ context.Context, hash *chainhash.Hash) (bool, 
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *Mock) GetSubtreeHead(_ context.Context, hash *chainhash.Hash) (*util.Subtree, int, error) {
+func (m *Mock) GetSubtreeHead(_ context.Context, hash *chainhash.Hash) (*subtree.Subtree, int, error) {
 	args := m.Called(hash)
 
 	if args.Error(2) != nil {
 		return nil, 0, args.Error(2)
 	}
 
-	return args.Get(0).(*util.Subtree), args.Int(1), args.Error(2)
+	return args.Get(0).(*subtree.Subtree), args.Int(1), args.Error(2)
 }
 
 func (m *Mock) GetUtxo(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {

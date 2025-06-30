@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -404,7 +404,7 @@ func GenerateVeryLargeTransaction(node *TeranodeTestClient) (*bt.Tx, error) {
 }
 
 // GenerateValidTransaction generates a valid transaction
-func GenerateValidTransactionAddToSubtree(hash chainhash.Hash, subtree *util.Subtree, fee uint64, sizeInBytes uint64) error {
+func GenerateValidTransactionAddToSubtree(hash chainhash.Hash, subtree *subtree.Subtree, fee uint64, sizeInBytes uint64) error {
 	if err := subtree.AddNode(hash, fee, sizeInBytes); err != nil {
 		return err
 	}
@@ -413,7 +413,7 @@ func GenerateValidTransactionAddToSubtree(hash chainhash.Hash, subtree *util.Sub
 }
 
 // GenerateDoubleSpendTransaction generates a double spend transaction by adding the same transaction twice
-func GenerateDoubleSpendTransactionAddToSubtree(hash chainhash.Hash, subtree *util.Subtree, fee uint64, sizeInBytes uint64) error {
+func GenerateDoubleSpendTransactionAddToSubtree(hash chainhash.Hash, subtree *subtree.Subtree, fee uint64, sizeInBytes uint64) error {
 	if err := subtree.AddNode(hash, fee, sizeInBytes); err != nil {
 		return err
 	}

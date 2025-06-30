@@ -1,11 +1,11 @@
-package util
+package subtree
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -281,7 +281,7 @@ func TestNewSubtreeDataFromReader(t *testing.T) {
 		assert.NotNil(t, newData)
 
 		// Create invalid reader that returns error other than EOF
-		reader = &mockReader{err: errors.NewStorageError("read error")}
+		reader = &mockReader{err: fmt.Errorf("read error")}
 
 		// Create new subtree data from invalid reader should fail
 		newData, err = NewSubtreeDataFromReader(subtree, reader)

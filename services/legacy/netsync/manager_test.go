@@ -13,6 +13,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	blockchain2 "github.com/bitcoin-sv/teranode/services/blockchain"
@@ -26,7 +27,6 @@ import (
 	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -399,7 +399,7 @@ func setupQueueInvTests() (chan interface{}, chan *kafka.Message, *SyncManager, 
 		msgChan:          msgChan,
 		legacyKafkaInvCh: legacyKafkaInvCh,
 		logger:           ulogger.TestLogger{},
-		peerStates:       util.NewSyncedMap[*peer.Peer, *peerSyncState](),
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
 	}
 
 	smPeer := &peer.Peer{}

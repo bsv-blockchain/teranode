@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -138,7 +139,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 
 			for idx := 0; idx < len(subtree.Nodes); idx++ {
-				if subtree.Nodes[idx].Hash.IsEqual(util.CoinbasePlaceholderHash) {
+				if subtree.Nodes[idx].Hash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
 					if subtreeIdx != 0 || idx != 0 {
 						logger.Warnf("[UpdateTxMinedStatus][%s] bad coinbase placeholder position within block - subtree #%d, node #%d - ignoring", block.Hash().String(), subtreeIdx, idx)
 					}
@@ -202,7 +203,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		})
 	}
 
-	if err := g.Wait(); err != nil {
+	if err = g.Wait(); err != nil {
 		return errors.NewProcessingError("[UpdateTxMinedStatus][%s] error updating tx mined status", block.Hash().String(), err)
 	}
 

@@ -64,9 +64,9 @@ import (
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/aerospike/aerospike-client-go/v8/types"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 )
 
@@ -76,7 +76,7 @@ var teranodeLUA []byte
 var LuaPackage = "teranode_v36" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
-var frozenUTXOBytes = util.FrozenBytes[:]
+var frozenUTXOBytes = subtree.FrozenBytes[:]
 
 // LuaReturnValue represents the status code returned from Lua scripts.
 type LuaReturnValue string

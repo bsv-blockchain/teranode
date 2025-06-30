@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -17,7 +18,7 @@ import (
 var (
 	transactionMeta = &meta.Data{
 		Tx:          nil,
-		TxInpoints:  meta.TxInpoints{ParentTxHashes: []chainhash.Hash{*testBlockHeader.Hash()}, Idxs: [][]uint32{{1}}},
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{*testBlockHeader.Hash()}, Idxs: [][]uint32{{1}}},
 		BlockIDs:    []uint32{1, 2, 3},
 		Fee:         123,
 		SizeInBytes: 321,

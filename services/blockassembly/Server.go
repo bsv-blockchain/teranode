@@ -23,6 +23,8 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/mining"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
@@ -31,7 +33,6 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
@@ -424,11 +425,11 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 
 	if subtreeRequest.ParentTxMap != nil {
 		// create and store the subtree meta
-		subtreeMeta := util.NewSubtreeMeta(subtreeRequest.Subtree)
+		subtreeMeta := subtreepkg.NewSubtreeMeta(subtreeRequest.Subtree)
 		subtreeMetaMissingTxs := false
 
 		for idx, node := range subtreeRequest.Subtree.Nodes {
-			if !node.Hash.Equal(util.CoinbasePlaceholderHashValue) {
+			if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				txInpoints, found := subtreeRequest.ParentTxMap.Get(node.Hash)
 				if !found {
 					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to find parent tx hashes for node %s", node.Hash.String(), err)
@@ -612,13 +613,13 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 			errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid)))
 	}
 
-	txInpoints, err := meta.NewTxInpointsFromBytes(req.TxInpoints)
+	txInpoints, err := subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
 	}
 
 	if !ba.settings.BlockAssembly.Disabled {
-		ba.blockAssembler.AddTx(util.SubtreeNode{
+		ba.blockAssembler.AddTx(subtreepkg.SubtreeNode{
 			Hash:        chainhash.Hash(req.Txid),
 			Fee:         req.Fee,
 			SizeInBytes: req.Size,
@@ -706,14 +707,14 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	for _, req := range requests {
 		startTxTime := time.Now()
 
-		txInpoints, err := meta.NewTxInpointsFromBytes(req.TxInpoints)
+		txInpoints, err := subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
 		if err != nil {
 			return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
 		}
 
 		// create the subtree node
 		if !ba.settings.BlockAssembly.Disabled {
-			ba.blockAssembler.AddTx(util.SubtreeNode{
+			ba.blockAssembler.AddTx(subtreepkg.SubtreeNode{
 				Hash:        chainhash.Hash(req.Txid),
 				Fee:         req.Fee,
 				SizeInBytes: req.Size,
@@ -929,7 +930,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	var sizeInBytes uint64
 
-	subtreesInJob := make([]*util.Subtree, len(job.Subtrees))
+	subtreesInJob := make([]*subtreepkg.Subtree, len(job.Subtrees))
 	subtreeHashes := make([]chainhash.Hash, len(job.Subtrees))
 	jobSubtreeHashes := make([]*chainhash.Hash, len(job.Subtrees))
 	transactionCount := uint64(0)
@@ -1078,31 +1079,30 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	}, nil
 }
 
-func (ba *BlockAssembly) createMerkleTreeFromSubtrees(jobID string, subtreesInJob []*util.Subtree, subtreeHashes []chainhash.Hash, coinbaseTxIDHash *chainhash.Hash) (*chainhash.Hash, error) {
+func (ba *BlockAssembly) createMerkleTreeFromSubtrees(jobID string, subtreesInJob []*subtreepkg.Subtree, subtreeHashes []chainhash.Hash, coinbaseTxIDHash *chainhash.Hash) (*chainhash.Hash, error) {
 	// Create a new subtree with the subtreeHashes of the subtrees
-	topTree, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtreesInJob)))
+	topTree, err := subtreepkg.NewTreeByLeafCount(subtreepkg.CeilPowerOfTwo(len(subtreesInJob)))
 	if err != nil {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to create topTree", jobID, err)
 	}
 
 	for _, hash := range subtreeHashes {
-		err = topTree.AddNode(hash, 1, 0)
-		if err != nil {
+		if err = topTree.AddNode(hash, 1, 0); err != nil {
 			return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to add node to topTree", jobID, err)
 		}
 	}
 
-	var hashMerkleRoot *chainhash.Hash
-
-	var coinbaseMerkleProof []*chainhash.Hash
+	var (
+		hashMerkleRoot      *chainhash.Hash
+		coinbaseMerkleProof []*chainhash.Hash
+	)
 
 	if len(subtreesInJob) == 0 {
 		hashMerkleRoot = coinbaseTxIDHash
 	} else {
 		ba.logger.Infof("[BlockAssembly] calculating merkle proof for job %s", jobID)
 
-		coinbaseMerkleProof, err = util.GetMerkleProofForCoinbase(subtreesInJob)
-		if err != nil {
+		if coinbaseMerkleProof, err = subtreepkg.GetMerkleProofForCoinbase(subtreesInJob); err != nil {
 			return nil, errors.NewProcessingError("[BlockAssembly][%s] error getting merkle proof for coinbase", jobID, err)
 		}
 
@@ -1117,8 +1117,7 @@ func (ba *BlockAssembly) createMerkleTreeFromSubtrees(jobID string, subtreesInJo
 
 		calculatedMerkleRoot := topTree.RootHash()
 
-		hashMerkleRoot, err = chainhash.NewHash(calculatedMerkleRoot[:])
-		if err != nil {
+		if hashMerkleRoot, err = chainhash.NewHash(calculatedMerkleRoot[:]); err != nil {
 			return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to convert hashMerkleRoot", jobID, err)
 		}
 	}
@@ -1264,17 +1263,17 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 	)
 	defer deferFn()
 
-	resetWaitCountUint32, err := util.SafeInt32ToUint32(ba.blockAssembler.resetWaitCount.Load())
+	resetWaitCountUint32, err := safe.Int32ToUint32(ba.blockAssembler.resetWaitCount.Load())
 	if err != nil {
 		return nil, errors.NewProcessingError("error converting reset wait count", err)
 	}
 
-	resetWaitTimeUint32, err := util.SafeInt32ToUint32(ba.blockAssembler.resetWaitDuration.Load())
+	resetWaitTimeUint32, err := safe.Int32ToUint32(ba.blockAssembler.resetWaitDuration.Load())
 	if err != nil {
 		return nil, errors.NewProcessingError("error converting reset wait time", err)
 	}
 
-	subtreeCountUint32, err := util.SafeIntToUint32(ba.blockAssembler.SubtreeCount())
+	subtreeCountUint32, err := safe.IntToUint32(ba.blockAssembler.SubtreeCount())
 	if err != nil {
 		return nil, errors.NewProcessingError("error converting subtree count", err)
 	}
@@ -1404,7 +1403,7 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 
 	coinbaseSize := coinbaseTx.Size()
 
-	coinbaseSizeUint64, err := util.SafeIntToUint64(coinbaseSize)
+	coinbaseSizeUint64, err := safe.IntToUint64(coinbaseSize)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockAssemblyBlockTemplate] error converting coinbase size", err))
 	}

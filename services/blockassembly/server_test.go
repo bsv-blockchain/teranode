@@ -8,14 +8,14 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
@@ -38,7 +38,7 @@ func Test_storeSubtree(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, subtreeBytes)
 
-		subtreeFromStore, err := util.NewSubtreeFromBytes(subtreeBytes)
+		subtreeFromStore, err := subtreepkg.NewSubtreeFromBytes(subtreeBytes)
 		require.NoError(t, err)
 
 		require.Equal(t, subtree.RootHash(), subtreeFromStore.RootHash())
@@ -51,7 +51,7 @@ func Test_storeSubtree(t *testing.T) {
 		subtreeMetaBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta)
 		require.NoError(t, err)
 
-		subtreeMeta, err := util.NewSubtreeMetaFromBytes(subtreeFromStore, subtreeMetaBytes)
+		subtreeMeta, err := subtreepkg.NewSubtreeMetaFromBytes(subtreeFromStore, subtreeMetaBytes)
 		require.NoError(t, err)
 		require.NotNil(t, subtreeMeta)
 
@@ -115,13 +115,13 @@ func TestCheckBlockAssembly(t *testing.T) {
 	})
 }
 
-func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *util.Subtree, *util.SyncedMap[chainhash.Hash, meta.TxInpoints]) {
+func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints]) {
 	s, subtreeStore := setupServer(t)
 
-	subtree, err := util.NewTreeByLeafCount(16)
+	subtree, err := subtreepkg.NewTreeByLeafCount(16)
 	require.NoError(t, err)
 
-	txMap := util.NewSyncedMap[chainhash.Hash, meta.TxInpoints]()
+	txMap := txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
 
 	previousHash := chainhash.HashH([]byte("previousHash"))
 
@@ -129,7 +129,7 @@ func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *util.Subtree, *util.S
 		txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
 		_ = subtree.AddNode(txHash, i, i)
 
-		txMap.Set(txHash, meta.TxInpoints{ParentTxHashes: []chainhash.Hash{previousHash}, Idxs: [][]uint32{{0, 1}}})
+		txMap.Set(txHash, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{previousHash}, Idxs: [][]uint32{{0, 1}}})
 		previousHash = txHash
 	}
 

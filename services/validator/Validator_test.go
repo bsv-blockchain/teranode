@@ -35,6 +35,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
@@ -648,7 +649,7 @@ type txFeeSize struct {
 	txHash     *chainhash.Hash
 	fee        uint64
 	size       uint64
-	txInpoints meta.TxInpoints
+	txInpoints subtree.TxInpoints
 }
 
 type MockBlockAssemblyStore struct {
@@ -657,7 +658,7 @@ type MockBlockAssemblyStore struct {
 	removedTxs  []chainhash.Hash
 }
 
-func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints meta.TxInpoints) (bool, error) {
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
 	if s.returnError != nil {
 		return false, s.returnError
 	}
