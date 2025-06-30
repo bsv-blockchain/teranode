@@ -32,6 +32,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/model/time"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2"
@@ -98,7 +99,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var insertedAt CustomTime
+	var insertedAt time.CustomTime
 
 	q := `
 		SELECT

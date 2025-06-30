@@ -5,6 +5,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/model/time"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -35,7 +36,7 @@ func (s *SQL) scanBlockRow(rows *sql.Rows) (*model.BlockInfo, error) {
 		hashMerkleRoot []byte
 		coinbaseBytes  []byte
 		nBits          []byte
-		seenAt         CustomTime
+		seenAt         time.CustomTime
 	)
 
 	header := &model.BlockHeader{}

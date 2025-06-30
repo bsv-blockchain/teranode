@@ -121,6 +121,12 @@ func TestBlockAssembly_Start(t *testing.T) {
 		tSettings.BlockAssembly.ResetWaitDuration = 20 * time.Minute
 		tSettings.ChainCfgParams.Net = wire.MainNet
 
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := utxostoresql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		stats := gocore.NewStat("test")
 
 		blockchainClient := &blockchain.Mock{}
@@ -129,19 +135,15 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 
-		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, nil, nil, blockchainClient, nil)
+		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
 		require.NotNil(t, blockAssembler)
 
 		err = blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
-		resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(tSettings.BlockAssembly.ResetWaitDuration).Unix())
-		require.NoError(t, err)
-
-		assert.Equal(t, int32(2), blockAssembler.resetWaitCount.Load())
-		assert.LessOrEqual(t, blockAssembler.resetWaitDuration.Load(), resetWaitTimeInt32)
-		assert.Greater(t, blockAssembler.resetWaitDuration.Load(), resetWaitTimeInt32/2)
+		assert.Equal(t, int32(0), blockAssembler.resetWaitCount.Load())
+		assert.Equal(t, int32(0), blockAssembler.resetWaitDuration.Load())
 	})
 
 	t.Run("Start on testnet, inherits same wait as mainnet", func(t *testing.T) {
@@ -152,6 +154,12 @@ func TestBlockAssembly_Start(t *testing.T) {
 		tSettings.BlockAssembly.ResetWaitDuration = 20 * time.Minute
 		tSettings.ChainCfgParams.Net = wire.TestNet
 
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := utxostoresql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
 		stats := gocore.NewStat("test")
 
 		blockchainClient := &blockchain.Mock{}
@@ -160,20 +168,15 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 
-		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, nil, nil, blockchainClient, nil)
+		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
 		require.NotNil(t, blockAssembler)
 
 		err = blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
-		// should have exactly the configured ResetWaitCount and a positive ResetWaitDuration
-		resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(tSettings.BlockAssembly.ResetWaitDuration).Unix())
-		require.NoError(t, err)
-
-		assert.Equal(t, int32(2), blockAssembler.resetWaitCount.Load(), "resetWaitCount should be set on TestNet as on MainNet")
-		assert.LessOrEqual(t, blockAssembler.resetWaitDuration.Load(), resetWaitTimeInt32, "resetWaitDuration must be no greater than now+configured duration")
-		assert.Greater(t, blockAssembler.resetWaitDuration.Load(), resetWaitTimeInt32/2, "resetWaitDuration must be at least halfway towards the target time")
+		assert.Equal(t, int32(0), blockAssembler.resetWaitCount.Load(), "resetWaitCount should be set on TestNet as on MainNet")
+		assert.Equal(t, int32(0), blockAssembler.resetWaitDuration.Load(), "resetWaitDuration must be no greater than now+configured duration")
 	})
 }
 

@@ -78,7 +78,7 @@ func TestUnminedTxIterator_Integration(t *testing.T) {
 		err = store.SetBlockHeight(currentBlockHeight)
 		require.NoError(t, err)
 
-		_, err = store.Create(store.ctx, tx1, currentBlockHeight)
+		tx1Meta, err := store.Create(store.ctx, tx1, currentBlockHeight)
 		require.NoError(t, err)
 
 		_, err = store.Create(store.ctx, tx2, currentBlockHeight, utxo.WithMinedBlockInfo(
@@ -104,6 +104,10 @@ func TestUnminedTxIterator_Integration(t *testing.T) {
 			}
 
 			assert.Equal(t, tx1.TxIDChainHash(), unminedTransaction.Hash)
+			assert.Equal(t, tx1Meta.Fee, unminedTransaction.Fee)
+			assert.Equal(t, tx1Meta.SizeInBytes, unminedTransaction.Size)
+			assert.Len(t, unminedTransaction.TxInpoints.ParentTxHashes, 1)
+			assert.Greater(t, unminedTransaction.CreatedAt, 0)
 
 			count++
 		}

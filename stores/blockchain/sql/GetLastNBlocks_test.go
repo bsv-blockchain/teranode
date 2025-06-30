@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	time2 "github.com/bitcoin-sv/teranode/model/time"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/stretchr/testify/assert"
@@ -179,7 +180,7 @@ func TestSQLGetLastNBlocks(t *testing.T) {
 func TestCustomTime(t *testing.T) {
 	t.Run("scan time.Time value", func(t *testing.T) {
 		now := time.Now()
-		ct := &CustomTime{}
+		ct := &time2.CustomTime{}
 		err := ct.Scan(now)
 		require.NoError(t, err)
 		assert.Equal(t, now, ct.Time)
@@ -187,8 +188,8 @@ func TestCustomTime(t *testing.T) {
 
 	t.Run("scan []byte value", func(t *testing.T) {
 		timeStr := "2023-01-02 15:04:05"
-		expected, _ := time.Parse(SQLiteTimestampFormat, timeStr)
-		ct := &CustomTime{}
+		expected, _ := time.Parse(time2.SQLiteTimestampFormat, timeStr)
+		ct := &time2.CustomTime{}
 		err := ct.Scan([]byte(timeStr))
 		require.NoError(t, err)
 		assert.Equal(t, expected, ct.Time)
@@ -196,27 +197,27 @@ func TestCustomTime(t *testing.T) {
 
 	t.Run("scan string value", func(t *testing.T) {
 		timeStr := "2023-01-02 15:04:05"
-		expected, _ := time.Parse(SQLiteTimestampFormat, timeStr)
-		ct := &CustomTime{}
+		expected, _ := time.Parse(time2.SQLiteTimestampFormat, timeStr)
+		ct := &time2.CustomTime{}
 		err := ct.Scan(timeStr)
 		require.NoError(t, err)
 		assert.Equal(t, expected, ct.Time)
 	})
 
 	t.Run("scan invalid []byte format", func(t *testing.T) {
-		ct := &CustomTime{}
+		ct := &time2.CustomTime{}
 		err := ct.Scan([]byte("invalid-time-format"))
 		require.Error(t, err)
 	})
 
 	t.Run("scan invalid string format", func(t *testing.T) {
-		ct := &CustomTime{}
+		ct := &time2.CustomTime{}
 		err := ct.Scan("invalid-time-format")
 		require.Error(t, err)
 	})
 
 	t.Run("scan unsupported type", func(t *testing.T) {
-		ct := &CustomTime{}
+		ct := &time2.CustomTime{}
 		err := ct.Scan(123) // integer is not supported
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported type")
@@ -224,7 +225,7 @@ func TestCustomTime(t *testing.T) {
 
 	t.Run("value method", func(t *testing.T) {
 		now := time.Now()
-		ct := CustomTime{Time: now}
+		ct := time2.CustomTime{Time: now}
 		val, err := ct.Value()
 		require.NoError(t, err)
 		assert.Equal(t, now, val)

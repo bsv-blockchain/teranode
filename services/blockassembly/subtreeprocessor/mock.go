@@ -77,6 +77,16 @@ func (m *MockSubtreeProcessor) Add(node util.SubtreeNode, txInpoints meta.TxInpo
 	m.Called(node, txInpoints)
 }
 
+func (m *MockSubtreeProcessor) AddDirectly(node util.SubtreeNode, txInpoints meta.TxInpoints) error {
+	args := m.Called(node, txInpoints)
+
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Error(0)
+}
+
 // CheckSubtreeProcessor implements Interface.CheckSubtreeProcessor
 func (m *MockSubtreeProcessor) CheckSubtreeProcessor() error {
 	args := m.Called()

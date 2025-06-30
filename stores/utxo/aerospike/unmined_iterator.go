@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"math"
 
 	as "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
@@ -39,9 +40,18 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 
 	stmt := as.NewStatement(store.namespace, store.setName)
 
-	err := stmt.SetFilter(as.NewRangeFilter(fields.UnminedSince.String(), 1, int64(4294967295))) // Max uint32
-	if err != nil {
+	if err := stmt.SetFilter(as.NewRangeFilter(fields.UnminedSince.String(), 1, int64(math.MaxUint32))); err != nil {
 		return nil, err
+	}
+
+	// Set the bins to retrieve only the necessary fields for unmined transactions
+	stmt.BinNames = []string{
+		fields.TxID.String(),
+		fields.Fee.String(),
+		fields.SizeInBytes.String(),
+		fields.External.String(),
+		fields.Inputs.String(),
+		fields.CreatedAt.String(),
 	}
 
 	policy := as.NewQueryPolicy()
@@ -204,11 +214,32 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 		}
 	}
 
+	var createdAt int
+
+	createdAtVal, ok := rec.Record.Bins[fields.CreatedAt.String()]
+	if ok && createdAtVal != nil {
+		createdAt, ok = createdAtVal.(int)
+		if !ok {
+			if err = it.Close(); err != nil {
+				it.store.logger.Warnf("failed to close iterator: %v", err)
+			}
+
+			return nil, errors.NewProcessingError("created_at not int64")
+		}
+	} else {
+		if err = it.Close(); err != nil {
+			it.store.logger.Warnf("failed to close iterator: %v", err)
+		}
+
+		return nil, errors.NewProcessingError("created_at not found")
+	}
+
 	return &utxo.UnminedTransaction{
 		Hash:       hash,
 		Fee:        fee,
 		Size:       size,
 		TxInpoints: txInpoints,
+		CreatedAt:  createdAt,
 	}, nil
 }
 

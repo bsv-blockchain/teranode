@@ -44,6 +44,21 @@ type Interface interface {
 	//   - txInpoints: Transaction input points for dependency tracking
 	Add(node util.SubtreeNode, txInpoints meta.TxInpoints)
 
+	// AddDirectly adds a transaction node directly to the processor without
+	// using the queue. This is typically used for block assembly startup.
+	// It allows immediate processing of transactions without waiting for
+	// the queue to process them.
+	//
+	// Parameters:
+	//   - node: The transaction node to add directly
+	//   - txInpoints: Transaction input points for dependency tracking
+	//
+	// Returns:
+	//   - error: Any error encountered during the addition
+	//
+	// Note: This method bypasses the normal queue processing and should be used
+	AddDirectly(node util.SubtreeNode, txInpoints meta.TxInpoints) error
+
 	// GetCurrentRunningState returns the current operational state of the processor.
 	// This provides visibility into whether the processor is running, stopped,
 	// resetting, or in another operational state.

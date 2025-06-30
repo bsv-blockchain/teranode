@@ -971,6 +971,25 @@ func (stp *SubtreeProcessor) Add(node util.SubtreeNode, txInpoints meta.TxInpoin
 	stp.queue.enqueue(&TxIDAndFee{node: node, txInpoints: txInpoints})
 }
 
+// AddDirectly adds a transaction node directly to the subtree processor without going through the queue.
+// This method is used to add a transaction directly to the subtree processor without going through the queue.
+// It is used for transactions that are already known to be valid and should be added immediately.
+// This is useful for transactions that are part of the current block being processed.
+//
+// Parameters:
+//   - node: Transaction node to add
+//   - txInpoints: Transaction inpoints for the node
+//
+// Returns:
+//   - error: Any error encountered during addition
+func (stp *SubtreeProcessor) AddDirectly(node util.SubtreeNode, txInpoints meta.TxInpoints) error {
+	if _, ok := stp.currentTxMap.Get(node.Hash); ok {
+		return errors.NewInvalidArgumentError("transaction already exists in currentTxMap")
+	}
+
+	return stp.addNode(node, &txInpoints, false)
+}
+
 // Remove prevents a transaction from being processed from the queue into a subtree, and removes it if already present.
 // This can only take place before the delay time in the queue has passed.
 //

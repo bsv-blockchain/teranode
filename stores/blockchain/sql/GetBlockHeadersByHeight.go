@@ -17,6 +17,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/model/time"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/exp/constraints"
@@ -100,7 +101,7 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 		hashPrevBlock  []byte
 		hashMerkleRoot []byte
 		nBits          []byte
-		insertedAt     CustomTime
+		insertedAt     time.CustomTime
 	)
 
 	for rows.Next() {

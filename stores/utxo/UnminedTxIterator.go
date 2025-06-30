@@ -13,6 +13,7 @@ type UnminedTransaction struct {
 	Fee        uint64
 	Size       uint64
 	TxInpoints meta.TxInpoints
+	CreatedAt  int
 }
 
 // UnminedTxIterator provides an interface to iterate over unmined transactions efficiently.

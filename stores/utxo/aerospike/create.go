@@ -713,9 +713,8 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 		batches[0] = append(batches[0], aerospike.NewBin(fields.UnminedSince.String(), aerospike.NewIntegerValue(int(blockHeight))))
 	}
 
-	if len(blockIDs) == 0 && len(blockHeights) == 0 && len(subtreeIdxs) == 0 {
-		batches[0] = append(batches[0], aerospike.NewBin(fields.CreatedAt.String(), aerospike.NewIntegerValue(int(time.Now().Unix()))))
-	}
+	// add the created at bin in milliseconds to the first record
+	batches[0] = append(batches[0], aerospike.NewBin(fields.CreatedAt.String(), aerospike.NewIntegerValue(int(time.Now().UnixMilli()))))
 
 	if len(batches) > 1 {
 		// if we have more than one batch, we opt to store the transaction externally

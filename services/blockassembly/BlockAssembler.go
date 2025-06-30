@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -582,22 +582,8 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 	}
 
 	// Load unmined transactions (this includes cleanup of old unmined transactions first)
-	if err := b.loadUnminedTransactions(ctx); err != nil {
-		b.logger.Errorf("[BlockAssembler] failed to load un-mined transactions", err)
-	}
-
-	// on mainnet and testnet, wait for 2 blocks before starting to mine, to make sure we are not mining invalid blocks
-	// this should not be needed after #2326 is merged and the block assembly can handle out-of-order txs
-	if b.settings.ChainCfgParams.Net == wire.MainNet || b.settings.ChainCfgParams.Net == wire.TestNet {
-		b.logger.Warnf("[BlockAssembler] setting wait count to %d for getMiningCandidate", b.settings.BlockAssembly.ResetWaitCount)
-		b.resetWaitCount.Store(b.settings.BlockAssembly.ResetWaitCount) // wait 2 blocks before starting to mine
-
-		resetWaitTimeInt32, err := util.SafeInt64ToInt32(time.Now().Add(b.settings.BlockAssembly.ResetWaitDuration).Unix())
-		if err != nil {
-			b.logger.Errorf("[BlockAssembler][Reset] error converting reset wait time: %v", err)
-		} else {
-			b.resetWaitDuration.Store(resetWaitTimeInt32)
-		}
+	if err = b.loadUnminedTransactions(ctx); err != nil {
+		return errors.NewProcessingError("[BlockAssembler] failed to load un-mined transactions", err)
 	}
 
 	currentDifficulty, err := b.blockchainClient.GetNextWorkRequired(ctx, b.bestBlockHeader.Load().Hash())
@@ -1183,14 +1169,17 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 //
 // Returns:
 //   - error: Any error encountered during transaction loading or processing
-func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) error {
+func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) (err error) {
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "loadUnminedTransactions",
+		tracing.WithParentStat(b.stats),
+		tracing.WithLogMessage(b.logger, "[loadUnminedTransactions] starting cleanup of old unmined transactions before loading"),
+	)
+	defer deferFn(err)
+
 	if b.utxoStore == nil {
-		b.logger.Warnf("[BlockAssembler] no utxostore, skipping load unmined transactions")
-		return nil
+		return errors.NewServiceError("[BlockAssembler] no utxostore")
 	}
 
-	// Clean up old unmined transactions before loading
-	b.logger.Infof("[BlockAssembler] starting cleanup of old unmined transactions before loading")
 	currentBlockHeight := b.bestBlockHeight.Load()
 
 	if currentBlockHeight > 0 {
@@ -1215,6 +1204,8 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) error {
 		return errors.NewProcessingError("error getting unmined tx iterator", err)
 	}
 
+	unminedTransactions := make([]*utxo.UnminedTransaction, 0, 1024*1024) // preallocate a large slice to avoid reallocations
+
 	for {
 		unminedTransaction, err := it.Next(ctx)
 		if err != nil {
@@ -1225,13 +1216,25 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) error {
 			break
 		}
 
+		unminedTransactions = append(unminedTransactions, unminedTransaction)
+	}
+
+	// order the transactions by createdAt
+	sort.Slice(unminedTransactions, func(i, j int) bool {
+		// sort by createdAt, oldest first
+		return unminedTransactions[i].CreatedAt < unminedTransactions[j].CreatedAt
+	})
+
+	for _, unminedTransaction := range unminedTransactions {
 		subtreeNode := util.SubtreeNode{
 			Hash:        *unminedTransaction.Hash,
 			Fee:         unminedTransaction.Fee,
 			SizeInBytes: unminedTransaction.Size,
 		}
 
-		b.subtreeProcessor.Add(subtreeNode, unminedTransaction.TxInpoints)
+		if err = b.subtreeProcessor.AddDirectly(subtreeNode, unminedTransaction.TxInpoints); err != nil {
+			return errors.NewProcessingError("error adding unmined transaction to subtree processor", err)
+		}
 	}
 
 	return nil

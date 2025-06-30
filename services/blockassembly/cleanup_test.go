@@ -6,12 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -131,7 +128,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 			logger:           logger,
 			settings:         settings,
 			bestBlockHeight:  atomic.Uint32{},
-			subtreeProcessor: &MockSubtreeProcessor{}, // Add a mock subtree processor
+			subtreeProcessor: &subtreeprocessor.MockSubtreeProcessor{}, // Add a mock subtree processor
 		}
 
 		// Set block height
@@ -171,116 +168,4 @@ func (m *MockUnminedTxIterator) Err() error {
 func (m *MockUnminedTxIterator) Close() error {
 	args := m.Called()
 	return args.Error(0)
-}
-
-type MockSubtreeProcessor struct {
-	mock.Mock
-}
-
-func (m *MockSubtreeProcessor) Add(node util.SubtreeNode, txInpoints meta.TxInpoints) {
-	m.Called(node, txInpoints)
-}
-
-func (m *MockSubtreeProcessor) CheckSubtreeProcessor() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-func (m *MockSubtreeProcessor) DeDuplicateTransactions() {
-	m.Called()
-}
-
-func (m *MockSubtreeProcessor) GetCurrentRunningState() subtreeprocessor.State {
-	args := m.Called()
-	return args.Get(0).(subtreeprocessor.State)
-}
-
-func (m *MockSubtreeProcessor) GetCurrentLength() int {
-	args := m.Called()
-	return args.Int(0)
-}
-
-func (m *MockSubtreeProcessor) MoveForwardBlock(block *model.Block) error {
-	args := m.Called(block)
-	return args.Error(0)
-}
-
-func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block) error {
-	args := m.Called(moveBackBlocks, moveForwardBlocks)
-	return args.Error(0)
-}
-
-func (m *MockSubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, isLegacySync bool) subtreeprocessor.ResetResponse {
-	args := m.Called(blockHeader, moveBackBlocks, moveForwardBlocks, isLegacySync)
-	return args.Get(0).(subtreeprocessor.ResetResponse)
-}
-
-func (m *MockSubtreeProcessor) Remove(hash chainhash.Hash) error {
-	args := m.Called(hash)
-	return args.Error(0)
-}
-
-func (m *MockSubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*util.Subtree {
-	args := m.Called()
-	return args.Get(0).([]*util.Subtree)
-}
-
-func (m *MockSubtreeProcessor) GetCurrentBlockHeader() *model.BlockHeader {
-	args := m.Called()
-	if args.Get(0) == nil {
-		return nil
-	}
-
-	return args.Get(0).(*model.BlockHeader)
-}
-
-func (m *MockSubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeader) {
-	m.Called(blockHeader)
-}
-
-func (m *MockSubtreeProcessor) GetCurrentSubtree() *util.Subtree {
-	args := m.Called()
-	if args.Get(0) == nil {
-		return nil
-	}
-
-	return args.Get(0).(*util.Subtree)
-}
-
-func (m *MockSubtreeProcessor) GetCurrentTxMap() *util.SyncedMap[chainhash.Hash, meta.TxInpoints] {
-	args := m.Called()
-	if args.Get(0) == nil {
-		return nil
-	}
-
-	return args.Get(0).(*util.SyncedMap[chainhash.Hash, meta.TxInpoints])
-}
-
-func (m *MockSubtreeProcessor) GetChainedSubtrees() []*util.Subtree {
-	args := m.Called()
-	return args.Get(0).([]*util.Subtree)
-}
-
-func (m *MockSubtreeProcessor) GetUtxoStore() utxo.Store {
-	args := m.Called()
-	return args.Get(0).(utxo.Store)
-}
-
-func (m *MockSubtreeProcessor) SetCurrentItemsPerFile(v int) {
-	m.Called(v)
-}
-
-func (m *MockSubtreeProcessor) TxCount() uint64 {
-	args := m.Called()
-	return args.Get(0).(uint64)
-}
-
-func (m *MockSubtreeProcessor) QueueLength() int64 {
-	args := m.Called()
-	return args.Get(0).(int64)
-}
-
-func (m *MockSubtreeProcessor) SubtreeCount() int {
-	args := m.Called()
-	return args.Int(0)
 }
