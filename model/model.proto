@@ -91,3 +91,11 @@ message DataPoint {
 message BlockDataPoints {
   repeated DataPoint data_points = 1;
 }
+
+// swagger:model ChainTip
+message ChainTip {
+  uint32 height = 1;      // Height of the chain tip
+  string hash = 2;        // Block hash of the tip
+  uint32 branchlen = 3;    // 0 for main chain, length of branch for forks
+  string status = 4;      // "active" for main chain, or "valid-fork", "valid-headers", "headers-only", "invalid"
+}

@@ -2218,3 +2218,46 @@ func isIPOrSubnet(ipOrSubnet string) bool {
 
 	return err == nil
 }
+
+// handleGetchaintips implements the getchaintips command.
+func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetchaintips",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGetchaintips),
+		tracing.WithLogMessage(s.logger, "[handleGetchaintips] called"),
+	)
+	defer deferFn()
+
+	if cached, found := rpcCallCache.Get("getchaintips"); found {
+		return cached, nil
+	}
+
+	_, ok := cmd.(*bsvjson.GetChainTipsCmd)
+	if !ok {
+		return nil, bsvjson.ErrRPCInternal
+	}
+
+	// Get chain tips from the blockchain client
+	chainTipsData, err := s.blockchainClient.GetChainTips(ctx)
+	if err != nil {
+		s.logger.Errorf("Failed to get chain tips: %v", err)
+		return nil, bsvjson.ErrRPCInternal
+	}
+
+	// Convert to the expected JSON-RPC response format
+	result := make([]map[string]interface{}, 0, len(chainTipsData))
+	for _, tipInfo := range chainTipsData {
+		result = append(result, map[string]interface{}{
+			"height":    int64(tipInfo.Height),
+			"hash":      tipInfo.Hash,
+			"branchlen": int(tipInfo.Branchlen),
+			"status":    tipInfo.Status,
+		})
+	}
+
+	if s.settings.RPC.CacheEnabled {
+		rpcCallCache.Set("getchaintips", result, 300*time.Second)
+	}
+
+	return result, nil
+}

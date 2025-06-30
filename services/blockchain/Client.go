@@ -543,6 +543,30 @@ func (c *Client) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint
 	return resp.GetIsPartOfCurrentChain(), nil
 }
 
+// GetChainTips retrieves information about all known tips in the block tree.
+func (c *Client) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
+	c.logger.Debugf("[Blockchain Client] Getting chain tips")
+
+	resp, err := c.client.GetChainTips(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	chainTips := make([]*model.ChainTip, 0, len(resp.Tips))
+
+	for _, tip := range resp.Tips {
+		chainTip := &model.ChainTip{
+			Height:    tip.Height,
+			Hash:      tip.Hash,
+			Branchlen: tip.Branchlen,
+			Status:    tip.Status,
+		}
+		chainTips = append(chainTips, chainTip)
+	}
+
+	return chainTips, nil
+}
+
 // GetBlockHeader retrieves the header of a specific block.
 func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeader(ctx, &blockchain_api.GetBlockHeaderRequest{

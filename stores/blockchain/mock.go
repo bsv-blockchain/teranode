@@ -387,6 +387,10 @@ func (m *MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []u
 	panic(implementMe)
 }
 
+func (m *MockStore) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
+	panic(implementMe)
+}
+
 func (m *MockStore) SetFSMState(ctx context.Context, fsmState string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

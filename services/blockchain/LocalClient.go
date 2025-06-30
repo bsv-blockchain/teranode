@@ -297,6 +297,11 @@ func (c LocalClient) LegacySync(ctx context.Context) error {
 func (c LocalClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 	return getBlockLocator(ctx, c.store, blockHeaderHash, blockHeaderHeight)
 }
+
+func (c LocalClient) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
+	return c.store.GetChainTips(ctx)
+}
+
 func (c LocalClient) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	return nil, nil
 }

@@ -582,6 +582,26 @@ type ClientI interface {
 	// - Error if the check operation fails
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
 
+	// GetChainTips retrieves information about all known tips in the block tree.
+	//
+	// This method returns a list of all chain tips, including the main chain tip and any
+	// orphaned branches. For each tip, it provides the height, hash, branch length from
+	// the main chain, and validation status. This is essential for fork detection and
+	// blockchain monitoring.
+	//
+	// The main chain tip will have branchlen=0 and status="active". Side chain tips
+	// will have branchlen>0 indicating how many blocks back the fork occurred, with
+	// status indicating their validation state ("valid-fork", "valid-headers",
+	// "headers-only", or "invalid").
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	//
+	// Returns:
+	// - Array of ChainTip structures containing information about each tip
+	// - Error if the retrieval fails
+	GetChainTips(ctx context.Context) ([]*model.ChainTip, error)
+
 	// FSM related endpoints
 	//
 	// GetFSMCurrentState retrieves the current state of the Finite State Machine.

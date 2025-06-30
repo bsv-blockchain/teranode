@@ -76,6 +76,9 @@ service BlockchainAPI {
   // CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
   rpc CheckBlockIsInCurrentChain(CheckBlockIsCurrentChainRequest) returns (CheckBlockIsCurrentChainResponse) {}
 
+  // GetChainTips retrieves information about all known tips in the block tree.
+  rpc GetChainTips(google.protobuf.Empty) returns (GetChainTipsResponse) {}
+
   // GetBlockHeader retrieves the header of a specific block.
   rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
 
@@ -453,7 +456,7 @@ message GetBlocksSubtreesNotSetResponse {
 message SetBlockProcessedAtRequest {
   // Block hash to set or clear the processed_at timestamp for
   bytes block_hash = 1;
-  
+
   // If true, the processed_at timestamp will be cleared (set to NULL)
   // If false, the processed_at timestamp will be set to the current time
   bool clear = 2;
@@ -517,4 +520,9 @@ message LocateBlockHeadersResponse {
 message GetBestHeightAndTimeResponse {
   uint32 height = 1;  // Best block height
   uint32 time = 2;    // Median time
+}
+
+// GetChainTipsResponse contains information about all known tips in the block tree.
+message GetChainTipsResponse {
+  repeated model.ChainTip tips = 1;  // List of chain tips
 }

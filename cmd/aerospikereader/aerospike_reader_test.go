@@ -209,6 +209,11 @@ func (m *mockBlockchainStore) CheckBlockIsInCurrentChain(_ context.Context, _ []
 	return false, nil
 }
 
+// GetChainTips returns nil for the mock store.
+func (m *mockBlockchainStore) GetChainTips(_ context.Context) ([]*model.ChainTip, error) {
+	return nil, nil
+}
+
 // GetFSMState returns an empty string for the mock store.
 func (m *mockBlockchainStore) GetFSMState(_ context.Context) (string, error) {
 	return "", nil

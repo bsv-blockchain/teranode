@@ -35,6 +35,7 @@ var (
 	prometheusBlockchainGetBlockExists             prometheus.Histogram
 	prometheusBlockchainGetBestBlockHeader         prometheus.Histogram
 	prometheusBlockchainCheckBlockIsInCurrentChain prometheus.Histogram
+	prometheusBlockchainGetChainTips               prometheus.Histogram
 	prometheusBlockchainGetBlockHeader             prometheus.Histogram
 	prometheusBlockchainGetBlockHeaders            prometheus.Histogram
 	prometheusBlockchainGetBlockHeadersFromHeight  prometheus.Histogram
@@ -184,6 +185,16 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockchain",
 			Name:      "check_block_is_in_current_chain",
 			Help:      "Histogram of CheckBlockIsInCurrentChain calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainGetChainTips = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "get_chain_tips",
+			Help:      "Histogram of GetChainTips calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

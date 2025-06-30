@@ -168,6 +168,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getblocktemplate":      handleUnimplemented,
 	"getcfilter":            handleUnimplemented,
 	"getcfilterheader":      handleUnimplemented,
+	"getchaintips":          handleGetchaintips,
 	"getconnectioncount":    handleUnimplemented,
 	"getcurrentnet":         handleUnimplemented,
 	"getdifficulty":         handleGetDifficulty,

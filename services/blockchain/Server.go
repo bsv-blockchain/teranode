@@ -1090,6 +1090,24 @@ func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockc
 	}, nil
 }
 
+// GetChainTips retrieves information about all known tips in the block tree.
+func (b *Blockchain) GetChainTips(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetChainTipsResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetChainTips",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetChainTips),
+	)
+	defer deferFn()
+
+	chainTips, err := b.store.GetChainTips(ctx)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetChainTipsResponse{
+		Tips: chainTips,
+	}, nil
+}
+
 // GetBlockHeader retrieves the header of a specific block.
 func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.GetBlockHeaderRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBestBlockHeader",

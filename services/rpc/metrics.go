@@ -72,6 +72,7 @@ var (
 	prometheusHandleFreeze               prometheus.Histogram
 	prometheusHandleUnfreeze             prometheus.Histogram
 	prometheusHandleReassign             prometheus.Histogram
+	prometheusHandleGetchaintips         prometheus.Histogram
 )
 
 var (
@@ -323,6 +324,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "rpc",
 			Name:      "reassign",
 			Help:      "Histogram of calls to handleReassign in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleGetchaintips = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "rpc",
+			Name:      "get_chaintips",
+			Help:      "Histogram of calls to handleGetchaintips in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

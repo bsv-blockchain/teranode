@@ -722,6 +722,75 @@ func (x *BlockDataPoints) GetDataPoints() []*DataPoint {
 	return nil
 }
 
+// swagger:model ChainTip
+type ChainTip struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Height        uint32                 `protobuf:"varint,1,opt,name=height,proto3" json:"height,omitempty"`       // Height of the chain tip
+	Hash          string                 `protobuf:"bytes,2,opt,name=hash,proto3" json:"hash,omitempty"`            // Block hash of the tip
+	Branchlen     uint32                 `protobuf:"varint,3,opt,name=branchlen,proto3" json:"branchlen,omitempty"` // 0 for main chain, length of branch for forks
+	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`        // "active" for main chain, or "valid-fork", "valid-headers", "headers-only", "invalid"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChainTip) Reset() {
+	*x = ChainTip{}
+	mi := &file_model_model_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChainTip) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChainTip) ProtoMessage() {}
+
+func (x *ChainTip) ProtoReflect() protoreflect.Message {
+	mi := &file_model_model_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChainTip.ProtoReflect.Descriptor instead.
+func (*ChainTip) Descriptor() ([]byte, []int) {
+	return file_model_model_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ChainTip) GetHeight() uint32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *ChainTip) GetHash() string {
+	if x != nil {
+		return x.Hash
+	}
+	return ""
+}
+
+func (x *ChainTip) GetBranchlen() uint32 {
+	if x != nil {
+		return x.Branchlen
+	}
+	return 0
+}
+
+func (x *ChainTip) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
 var File_model_model_proto protoreflect.FileDescriptor
 
 const file_model_model_proto_rawDesc = "" +
@@ -790,7 +859,12 @@ const file_model_model_proto_rawDesc = "" +
 	"\btx_count\x18\x02 \x01(\x04R\atxCount\"D\n" +
 	"\x0fBlockDataPoints\x121\n" +
 	"\vdata_points\x18\x01 \x03(\v2\x10.model.DataPointR\n" +
-	"dataPoints*f\n" +
+	"dataPoints\"l\n" +
+	"\bChainTip\x12\x16\n" +
+	"\x06height\x18\x01 \x01(\rR\x06height\x12\x12\n" +
+	"\x04hash\x18\x02 \x01(\tR\x04hash\x12\x1c\n" +
+	"\tbranchlen\x18\x03 \x01(\rR\tbranchlen\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status*f\n" +
 	"\x10NotificationType\x12\b\n" +
 	"\x04PING\x10\x00\x12\v\n" +
 	"\aSubtree\x10\x01\x12\t\n" +
@@ -812,7 +886,7 @@ func file_model_model_proto_rawDescGZIP() []byte {
 }
 
 var file_model_model_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_model_model_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_model_model_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_model_model_proto_goTypes = []any{
 	(NotificationType)(0),         // 0: model.NotificationType
 	(*MiningCandidate)(nil),       // 1: model.MiningCandidate
@@ -823,12 +897,13 @@ var file_model_model_proto_goTypes = []any{
 	(*BlockStats)(nil),            // 6: model.BlockStats
 	(*DataPoint)(nil),             // 7: model.DataPoint
 	(*BlockDataPoints)(nil),       // 8: model.BlockDataPoints
-	nil,                           // 9: model.NotificationMetadata.MetadataEntry
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*ChainTip)(nil),              // 9: model.ChainTip
+	nil,                           // 10: model.NotificationMetadata.MetadataEntry
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_model_model_proto_depIdxs = []int32{
-	9,  // 0: model.NotificationMetadata.metadata:type_name -> model.NotificationMetadata.MetadataEntry
-	10, // 1: model.BlockInfo.seen_at:type_name -> google.protobuf.Timestamp
+	10, // 0: model.NotificationMetadata.metadata:type_name -> model.NotificationMetadata.MetadataEntry
+	11, // 1: model.BlockInfo.seen_at:type_name -> google.protobuf.Timestamp
 	7,  // 2: model.BlockDataPoints.data_points:type_name -> model.DataPoint
 	3,  // [3:3] is the sub-list for method output_type
 	3,  // [3:3] is the sub-list for method input_type
@@ -849,7 +924,7 @@ func file_model_model_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_model_model_proto_rawDesc), len(file_model_model_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

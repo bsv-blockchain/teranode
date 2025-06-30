@@ -293,6 +293,14 @@ type Store interface {
 	// Returns: Boolean indicating if blocks are in current chain and any error encountered
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
 
+	// GetChainTips retrieves information about all known tips in the block tree.
+	// This method finds all blocks that have no children (tips) and determines their
+	// relationship to the main chain, including branch lengths and validation status.
+	// Parameters:
+	//   - ctx: Context for the operation
+	// Returns: Slice of ChainTip structures and any error encountered
+	GetChainTips(ctx context.Context) ([]*model.ChainTip, error)
+
 	// GetFSMState retrieves the current FSM state.
 	// Parameters:
 	//   - ctx: Context for the operation

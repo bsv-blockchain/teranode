@@ -45,6 +45,7 @@ const (
 	BlockchainAPI_GetBlockHeaderIDs_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
 	BlockchainAPI_GetBestBlockHeader_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
 	BlockchainAPI_CheckBlockIsInCurrentChain_FullMethodName          = "/blockchain_api.BlockchainAPI/CheckBlockIsInCurrentChain"
+	BlockchainAPI_GetChainTips_FullMethodName                        = "/blockchain_api.BlockchainAPI/GetChainTips"
 	BlockchainAPI_GetBlockHeader_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockHeader"
 	BlockchainAPI_InvalidateBlock_FullMethodName                     = "/blockchain_api.BlockchainAPI/InvalidateBlock"
 	BlockchainAPI_RevalidateBlock_FullMethodName                     = "/blockchain_api.BlockchainAPI/RevalidateBlock"
@@ -121,6 +122,8 @@ type BlockchainAPIClient interface {
 	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	// CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
 	CheckBlockIsInCurrentChain(ctx context.Context, in *CheckBlockIsCurrentChainRequest, opts ...grpc.CallOption) (*CheckBlockIsCurrentChainResponse, error)
+	// GetChainTips retrieves information about all known tips in the block tree.
+	GetChainTips(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetChainTipsResponse, error)
 	// GetBlockHeader retrieves the header of a specific block.
 	GetBlockHeader(ctx context.Context, in *GetBlockHeaderRequest, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	// InvalidateBlock marks a block as invalid in the blockchain.
@@ -393,6 +396,16 @@ func (c *blockchainAPIClient) CheckBlockIsInCurrentChain(ctx context.Context, in
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CheckBlockIsCurrentChainResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_CheckBlockIsInCurrentChain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetChainTips(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetChainTipsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetChainTipsResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetChainTips_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -698,6 +711,8 @@ type BlockchainAPIServer interface {
 	GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error)
 	// CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
 	CheckBlockIsInCurrentChain(context.Context, *CheckBlockIsCurrentChainRequest) (*CheckBlockIsCurrentChainResponse, error)
+	// GetChainTips retrieves information about all known tips in the block tree.
+	GetChainTips(context.Context, *emptypb.Empty) (*GetChainTipsResponse, error)
 	// GetBlockHeader retrieves the header of a specific block.
 	GetBlockHeader(context.Context, *GetBlockHeaderRequest) (*GetBlockHeaderResponse, error)
 	// InvalidateBlock marks a block as invalid in the blockchain.
@@ -821,6 +836,9 @@ func (UnimplementedBlockchainAPIServer) GetBestBlockHeader(context.Context, *emp
 }
 func (UnimplementedBlockchainAPIServer) CheckBlockIsInCurrentChain(context.Context, *CheckBlockIsCurrentChainRequest) (*CheckBlockIsCurrentChainResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CheckBlockIsInCurrentChain not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetChainTips(context.Context, *emptypb.Empty) (*GetChainTipsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetChainTips not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeader(context.Context, *GetBlockHeaderRequest) (*GetBlockHeaderResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeader not implemented")
@@ -1307,6 +1325,24 @@ func _BlockchainAPI_CheckBlockIsInCurrentChain_Handler(srv interface{}, ctx cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).CheckBlockIsInCurrentChain(ctx, req.(*CheckBlockIsCurrentChainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetChainTips_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetChainTips(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetChainTips_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetChainTips(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1830,6 +1866,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CheckBlockIsInCurrentChain",
 			Handler:    _BlockchainAPI_CheckBlockIsInCurrentChain_Handler,
+		},
+		{
+			MethodName: "GetChainTips",
+			Handler:    _BlockchainAPI_GetChainTips_Handler,
 		},
 		{
 			MethodName: "GetBlockHeader",
