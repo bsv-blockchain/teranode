@@ -188,6 +188,13 @@ func (s *SyncedSlice[V]) Length() int {
 	return len(s.items)
 }
 
+func (s *SyncedSlice[V]) Size() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return cap(s.items)
+}
+
 func (s *SyncedSlice[V]) Get(index int) (*V, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

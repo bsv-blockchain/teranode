@@ -534,7 +534,7 @@ type bucketTrimmed struct {
 
 	// m maps hash(k) to idx of (k, v) pair in chunks.
 	// m map[uint64]uint64
-	m *txmap.SplitSwissMapKVUint64
+	m *txmap.SplitSwissLockFreeMapUint64
 	// pass txId directly. How is memory?
 	// m map[[32]byte]uint64
 
@@ -566,7 +566,7 @@ func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 
 	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
 	b.chunks = make([][]byte, maxChunks)
-	b.m = txmap.NewSplitSwissMapKVUint64(1024)
+	b.m = txmap.NewSplitSwissLockFreeMapUint64(1024)
 	b.overWriting = false
 	b.Reset()
 
@@ -582,7 +582,7 @@ func (b *bucketTrimmed) Reset() {
 		chunks[i] = nil
 	}
 
-	b.m = txmap.NewSplitSwissMapKVUint64(1024)
+	b.m = txmap.NewSplitSwissLockFreeMapUint64(1024)
 	b.idx = 0
 	b.gen = 1
 	b.overWriting = false
@@ -613,7 +613,7 @@ func (b *bucketTrimmed) cleanLockedMap() {
 		// Re-create b.m with valid items, which weren't expired yet instead of deleting expired items from b.m.
 		// This should reduce memory fragmentation and the number Go objects behind b.m.
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5379
-		bmNew := txmap.NewSplitSwissMapKVUint64(1024)
+		bmNew := txmap.NewSplitSwissLockFreeMapUint64(1024)
 
 		for _, maps := range bm.Map() {
 			maps.Map().Iter(func(k uint64, v uint64) (stop bool) {

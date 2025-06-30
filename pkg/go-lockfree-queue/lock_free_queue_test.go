@@ -3,6 +3,8 @@ package lockfreequeue
 import (
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestEnqueueDequeue(t *testing.T) {
@@ -22,9 +24,8 @@ func TestEnqueueDequeue(t *testing.T) {
 	}
 
 	// Check if queue is empty
-	if !q.IsEmpty() {
-		t.Errorf("Expected queue to be empty")
-	}
+	assert.True(t, q.IsEmpty(), "Expected queue to be empty after dequeuing all elements")
+	assert.Nil(t, q.Dequeue())
 }
 
 func TestConcurrentEnqueue(t *testing.T) {
@@ -69,5 +70,19 @@ func TestConcurrentEnqueue(t *testing.T) {
 
 	if !q.IsEmpty() {
 		t.Errorf("Expected queue to be empty after all dequeues")
+	}
+}
+
+func BenchmarkLockFreeQueue(b *testing.B) {
+	q := NewLockFreeQ[int]()
+
+	for i := 0; i < b.N; i++ {
+		q.Enqueue(i)
+	}
+
+	for i := 0; i < b.N; i++ {
+		if val := q.Dequeue(); val == nil {
+			b.Errorf("Expected a value, got nil at iteration %d", i)
+		}
 	}
 }

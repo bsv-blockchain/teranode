@@ -60,6 +60,28 @@ func TestSyncedMapRange(t *testing.T) {
 	assert.Equal(t, 2, items["key2"])
 }
 
+func TestSyncedMapKeys(t *testing.T) {
+	m := NewSyncedMap[string, int]()
+	m.Set("key1", 1)
+	m.Set("key2", 2)
+	keys := m.Keys()
+	assert.Equal(t, 2, len(keys))
+	assert.Contains(t, keys, "key1")
+	assert.Contains(t, keys, "key2")
+}
+
+func TestSyncedMapSetIfNotExists(t *testing.T) {
+	m := NewSyncedMap[string, int]()
+
+	val, isSet := m.SetIfNotExists("key1", 1)
+	assert.Equal(t, 1, val)
+	assert.True(t, isSet) // should be set since it didn't exist before
+
+	val, isSet = m.SetIfNotExists("key1", 2)
+	assert.Equal(t, 1, val)
+	assert.False(t, isSet) // should not be set since it already exists
+}
+
 func TestSyncedMapIterate(t *testing.T) {
 	t.Run("continue iteration", func(t *testing.T) {
 		m := NewSyncedMap[string, int]()
@@ -113,10 +135,21 @@ func TestSyncedMapClear(t *testing.T) {
 }
 
 func TestSyncedSliceLength(t *testing.T) {
-	s := NewSyncedSlice[int]()
-	assert.Equal(t, 0, s.Length())
-	s.Append(new(int))
-	assert.Equal(t, 1, s.Length())
+	t.Run("length not set", func(t *testing.T) {
+		s := NewSyncedSlice[int]()
+		assert.Equal(t, 0, s.Length())
+		s.Append(new(int))
+		assert.Equal(t, 1, s.Length())
+		assert.Equal(t, 1, s.Size())
+	})
+
+	t.Run("length set", func(t *testing.T) {
+		s := NewSyncedSlice[int](5)
+		assert.Equal(t, 0, s.Length())
+		s.Append(new(int))
+		assert.Equal(t, 1, s.Length())
+		assert.Equal(t, 5, s.Size())
+	})
 }
 
 func TestSyncedSliceGet(t *testing.T) {

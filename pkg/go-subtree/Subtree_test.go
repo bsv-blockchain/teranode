@@ -28,6 +28,21 @@ func TestNewTree(t *testing.T) {
 	})
 }
 
+func TestNewIncompleteTreeByLeafCount(t *testing.T) {
+	t.Run("invalid size", func(t *testing.T) {
+		_, err := NewIncompleteTreeByLeafCount(0)
+		require.Error(t, err)
+	})
+
+	t.Run("valid size", func(t *testing.T) {
+		st, err := NewIncompleteTreeByLeafCount(20)
+		require.NoError(t, err)
+
+		// should be the next power of 2
+		assert.Equal(t, 32, st.Size())
+	})
+}
+
 func TestRootHash(t *testing.T) {
 	t.Run("root hash", func(t *testing.T) {
 		st, err := NewTree(2)
@@ -52,6 +67,50 @@ func TestRootHash(t *testing.T) {
 }
 
 func Test_RootHashWithReplaceRootNode(t *testing.T) {
+	t.Run("empty tree", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		rootHash := st.RootHash()
+		assert.Nil(t, rootHash)
+	})
+
+	t.Run("replace with 0 noded", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		hash1, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+
+		rootHash := st.RootHash()
+		assert.Nil(t, rootHash)
+
+		rootHash2, err := st.RootHashWithReplaceRootNode(hash1, 111, 0)
+		require.NoError(t, err)
+		assert.NotEqual(t, rootHash, rootHash2)
+		assert.Equal(t, "97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115", rootHash2.String())
+	})
+
+	t.Run("replace with only 1 node", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+
+		_ = st.AddCoinbaseNode()
+
+		hash1, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+
+		rootHash := st.RootHash()
+		assert.Equal(t, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", rootHash.String())
+
+		rootHash2, err := st.RootHashWithReplaceRootNode(hash1, 111, 0)
+		require.NoError(t, err)
+		assert.NotEqual(t, rootHash, rootHash2)
+		assert.Equal(t, "97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115", rootHash2.String())
+	})
+
 	t.Run("root hash with replace root node", func(t *testing.T) {
 		st, err := NewTree(2)
 		require.NoError(t, err)
@@ -77,6 +136,131 @@ func Test_RootHashWithReplaceRootNode(t *testing.T) {
 		assert.NotEqual(t, rootHash, rootHash2)
 		assert.Equal(t, "dfec71cf72403643187e9e02d7c436e87251fa098cffa54d182022153da3d09a", rootHash2.String())
 	})
+}
+
+func TestGetMap(t *testing.T) {
+	st, err := NewTree(2)
+	require.NoError(t, err)
+
+	if st.Size() != 4 {
+		t.Errorf("expected size to be 4, got %d", st.Size())
+	}
+
+	hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+	hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+	hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
+	hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
+	_ = st.AddNode(*hash1, 111, 101)
+	_ = st.AddNode(*hash2, 112, 102)
+	_ = st.AddNode(*hash3, 113, 103)
+	_ = st.AddNode(*hash4, 114, 104)
+
+	txMap, err := st.GetMap()
+	require.NoError(t, err)
+
+	assert.Equal(t, 4, txMap.Length())
+
+	for _, node := range st.Nodes {
+		txIdx, ok := txMap.Get(node.Hash)
+		require.True(t, ok, fmt.Sprintf("expected to find hash %s in map", node.Hash.String()))
+
+		// find node in original tree
+		originalIdx := st.NodeIndex(node.Hash)
+		assert.Equal(t, uint64(originalIdx), txIdx) // nolint:gosec
+	}
+}
+
+func TestHasNode(t *testing.T) {
+	t.Run("exists", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+
+		hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+		_ = st.AddNode(*hash1, 111, 0)
+
+		exists := st.HasNode(*hash1)
+		assert.True(t, exists)
+	})
+
+	t.Run("does not exist", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+
+		hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+		exists := st.HasNode(*hash1)
+		assert.False(t, exists)
+	})
+}
+
+func TestGetNode(t *testing.T) {
+	t.Run("exists", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+
+		hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+		_ = st.AddNode(*hash1, 111, 0)
+
+		node, err := st.GetNode(*hash1)
+		assert.NoError(t, err)
+		assert.Equal(t, *hash1, node.Hash)
+		assert.Equal(t, uint64(111), node.Fee)
+	})
+
+	t.Run("does not exist", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+
+		hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+		node, err := st.GetNode(*hash1)
+		assert.Error(t, err)
+		assert.Nil(t, node)
+	})
+}
+
+func TestDifference(t *testing.T) {
+	st1, err := NewTree(2)
+	require.NoError(t, err)
+
+	hash1, _ := chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
+	hash2, _ := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+	hash3, _ := chainhash.NewHashFromStr("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
+	hash4, _ := chainhash.NewHashFromStr("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d")
+	_ = st1.AddNode(*hash1, 111, 0)
+	_ = st1.AddNode(*hash2, 112, 0)
+	_ = st1.AddNode(*hash3, 113, 0)
+	_ = st1.AddNode(*hash4, 114, 0)
+
+	st2, err := NewTree(2)
+	require.NoError(t, err)
+
+	_ = st2.AddNode(*hash3, 113, 0)
+	_ = st2.AddNode(*hash4, 114, 0)
+
+	st2Map, err := st2.GetMap()
+	require.NoError(t, err)
+
+	diff, err := st1.Difference(st2Map)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, len(diff))
+	assert.Equal(t, *hash1, diff[0].Hash)
+	assert.Equal(t, *hash2, diff[1].Hash)
 }
 
 func TestRootHashSimon(t *testing.T) {
@@ -236,6 +420,17 @@ func Test_Serialize(t *testing.T) {
 		st, serializedBytes := getSubtreeBytes(t)
 
 		newSubtree, err := NewSubtreeFromBytes(serializedBytes)
+		require.NoError(t, err)
+
+		for i := 0; i < newSubtree.Size(); i += chainhash.HashSize {
+			assert.Equal(t, st.Nodes[i/chainhash.HashSize].Hash.String(), newSubtree.Nodes[i/chainhash.HashSize].Hash.String())
+		}
+	})
+
+	t.Run("New subtree from reader", func(t *testing.T) {
+		st, serializedBytes := getSubtreeBytes(t)
+
+		newSubtree, err := NewSubtreeFromReader(bytes.NewReader(serializedBytes))
 		require.NoError(t, err)
 
 		for i := 0; i < newSubtree.Size(); i += chainhash.HashSize {
@@ -691,6 +886,124 @@ func BenchmarkSubtree_SerializeNodes(b *testing.B) {
 	ser, err := st.SerializeNodes()
 	require.NoError(b, err)
 	assert.GreaterOrEqual(b, len(ser), 32*b.N)
+}
+
+func TestAddSubtreeNode(t *testing.T) {
+	t.Run("successfully add node to empty subtree", func(t *testing.T) {
+		st, err := NewTree(1) // Creates a subtree that can hold 2 nodes
+		require.NoError(t, err)
+
+		hash, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+		node := SubtreeNode{
+			Hash:        *hash,
+			Fee:         1000,
+			SizeInBytes: 250,
+		}
+
+		err = st.AddSubtreeNode(node)
+		require.NoError(t, err)
+
+		require.Equal(t, 1, len(st.Nodes))
+		require.Equal(t, *hash, st.Nodes[0].Hash)
+		require.Equal(t, uint64(1000), st.Fees)
+		require.Equal(t, uint64(250), st.SizeInBytes)
+		require.Nil(t, st.rootHash) // Should be reset
+	})
+
+	t.Run("successfully add multiple nodes", func(t *testing.T) {
+		st, err := NewTree(1) // Creates a subtree that can hold 2 nodes
+		require.NoError(t, err)
+
+		hash1, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+		node1 := SubtreeNode{
+			Hash:        *hash1,
+			Fee:         1000,
+			SizeInBytes: 250,
+		}
+
+		hash2, _ := chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
+		node2 := SubtreeNode{
+			Hash:        *hash2,
+			Fee:         2000,
+			SizeInBytes: 500,
+		}
+
+		err = st.AddSubtreeNode(node1)
+		require.NoError(t, err)
+		err = st.AddSubtreeNode(node2)
+		require.NoError(t, err)
+
+		require.Equal(t, 2, len(st.Nodes))
+		require.Equal(t, *hash1, st.Nodes[0].Hash)
+		require.Equal(t, *hash2, st.Nodes[1].Hash)
+		require.Equal(t, uint64(3000), st.Fees)
+		require.Equal(t, uint64(750), st.SizeInBytes)
+	})
+
+	t.Run("error when subtree is full", func(t *testing.T) {
+		st, err := NewTree(1) // Creates a subtree that can hold 2 nodes
+		require.NoError(t, err)
+
+		// Add two nodes to fill the subtree
+		hash1, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+		node1 := SubtreeNode{Hash: *hash1, Fee: 1000, SizeInBytes: 250}
+		hash2, _ := chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
+		node2 := SubtreeNode{Hash: *hash2, Fee: 2000, SizeInBytes: 500}
+
+		err = st.AddSubtreeNode(node1)
+		require.NoError(t, err)
+		err = st.AddSubtreeNode(node2)
+		require.NoError(t, err)
+
+		require.True(t, st.IsComplete())
+
+		// Try to add a third node
+		hash3, _ := chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
+		node3 := SubtreeNode{Hash: *hash3, Fee: 3000, SizeInBytes: 750}
+		err = st.AddSubtreeNode(node3)
+		require.Error(t, err)
+		require.Equal(t, "subtree is full", err.Error())
+		require.Equal(t, 2, len(st.Nodes))
+	})
+
+	t.Run("error when adding coinbase placeholder", func(t *testing.T) {
+		st, err := NewTree(1)
+		require.NoError(t, err)
+
+		node := SubtreeNode{
+			Hash:        CoinbasePlaceholder,
+			Fee:         0,
+			SizeInBytes: 0,
+		}
+
+		err = st.AddSubtreeNode(node)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "coinbase placeholder node should be added with AddCoinbaseNode")
+		require.Equal(t, 0, len(st.Nodes))
+	})
+
+	t.Run("node index is updated when it exists", func(t *testing.T) {
+		st, err := NewTree(1)
+		require.NoError(t, err)
+
+		// Initialize node index
+		st.nodeIndex = make(map[chainhash.Hash]int)
+
+		hash, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+		node := SubtreeNode{
+			Hash:        *hash,
+			Fee:         1000,
+			SizeInBytes: 250,
+		}
+
+		err = st.AddSubtreeNode(node)
+		require.NoError(t, err)
+
+		// Check that the node was added to the index
+		index, exists := st.nodeIndex[*hash]
+		require.True(t, exists)
+		require.Equal(t, 0, index)
+	})
 }
 
 func TestSubtree_ConflictingNodes(t *testing.T) {

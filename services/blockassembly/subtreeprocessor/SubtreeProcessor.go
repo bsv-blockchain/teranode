@@ -2247,7 +2247,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 				hashes := hashes
 				// put the hashes into the transaction map in parallel, it has already been split into the correct buckets
 				bucketG.Go(func() error {
-					_ = transactionMap.PutMulti(bucket, hashes)
+					_ = transactionMap.PutMultiBucket(bucket, hashes, 0)
 					return nil
 				})
 			}
