@@ -11,14 +11,13 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
 	// Error message templates for better consistency and maintainability
 	errFailedToGetTransaction = "failed to get transaction %s"
-	errNoTransactionData      = "transaction %s has no transaction data"
+	errNoTransactionData      = "transaction %s has no inpoints"
 )
 
 // PreserveParentsOfOldUnminedTransactions protects parent transactions of old unmined transactions from deletion.
@@ -89,17 +88,17 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 // It preserves parent transactions by setting PreserveUntil flag. The unmined transaction itself is NOT deleted.
 func preserveSingleUnminedTransactionParents(ctx context.Context, s Store, txHash *chainhash.Hash, blockHeight uint32, settings *settings.Settings, logger ulogger.Logger) error {
 	// Get the transaction data to identify parent UTXOs (similar to ProcessConflicting)
-	txMeta, err := s.Get(ctx, txHash, fields.Tx)
+	txMeta, err := s.Get(ctx, txHash, fields.TxInpoints)
 	if err != nil {
 		return errors.NewProcessingError(errFailedToGetTransaction, txHash.String(), err)
 	}
 
-	if txMeta.Tx == nil {
+	if len(txMeta.TxInpoints.ParentTxHashes) == 0 {
 		return errors.NewProcessingError(errNoTransactionData, txHash.String())
 	}
 
 	// Preserve parent transactions (best effort)
-	if err := preserveParentTransactions(ctx, s, txMeta.Tx, txHash, blockHeight, settings, logger); err != nil {
+	if err := preserveParentTransactions(ctx, s, txMeta.TxInpoints.ParentTxHashes, txHash, blockHeight, settings, logger); err != nil {
 		// Log error but continue - preservation is best effort
 		logger.Errorf("[PreserveParents] Failed to preserve parent transactions for unmined tx %s: %v",
 			txHash.String(), err)
@@ -112,41 +111,16 @@ func preserveSingleUnminedTransactionParents(ctx context.Context, s Store, txHas
 	return nil
 }
 
-// collectUniqueParentTxIDs extracts unique parent transaction IDs from transaction inputs.
-// This helper function reduces cognitive complexity and improves code reusability.
-func collectUniqueParentTxIDs(inputs []*bt.Input) []chainhash.Hash {
-	if len(inputs) == 0 {
-		return nil
-	}
-
-	parentTxIDs := make([]chainhash.Hash, 0, len(inputs))
-	uniqueParents := make(map[chainhash.Hash]struct{})
-
-	for _, input := range inputs {
-		parentTxID := *input.PreviousTxIDChainHash()
-		// Only add unique parent transaction IDs
-		if _, exists := uniqueParents[parentTxID]; !exists {
-			uniqueParents[parentTxID] = struct{}{}
-
-			parentTxIDs = append(parentTxIDs, parentTxID)
-		}
-	}
-
-	return parentTxIDs
-}
-
 // preserveParentTransactions sets the PreserveUntil flag on parent transactions.
 // This is separated to reduce cognitive complexity and improve testability.
-func preserveParentTransactions(ctx context.Context, s Store, tx *bt.Tx, txHash *chainhash.Hash, blockHeight uint32, settings *settings.Settings, logger ulogger.Logger) error {
-	parentTxIDs := collectUniqueParentTxIDs(tx.Inputs)
-
-	if len(parentTxIDs) == 0 {
+func preserveParentTransactions(ctx context.Context, s Store, parentTxHashes []chainhash.Hash, txHash *chainhash.Hash, blockHeight uint32, settings *settings.Settings, logger ulogger.Logger) error {
+	if len(parentTxHashes) == 0 {
 		return nil
 	}
 
 	preserveUntilHeight := blockHeight + settings.UtxoStore.ParentPreservationBlocks
 	logger.Debugf("[PreserveParents] Preserving %d parent transactions until height %d for unmined tx %s",
-		len(parentTxIDs), preserveUntilHeight, txHash.String())
+		len(parentTxHashes), preserveUntilHeight, txHash.String())
 
-	return s.PreserveTransactions(ctx, parentTxIDs, preserveUntilHeight)
+	return s.PreserveTransactions(ctx, parentTxHashes, preserveUntilHeight)
 }
