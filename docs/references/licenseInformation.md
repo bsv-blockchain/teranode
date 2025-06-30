@@ -1,48 +1,49 @@
 # License Information
 
-## Apache License 2.0
+## Open BSV License Version 5
 
-This software is licensed under the Apache License, Version 2.0 (the "License"). The complete text of the Apache License 2.0 can be found at http://www.apache.org/licenses/LICENSE-2.0
+This software is licensed under the Open BSV License Version 5. The complete text of the Open BSV License can be found in the [LICENSE](../../LICENSE) file in the repository root.
 
 ### What you can do with this software
 
 Under this license, you are free to:
 
-- Use the software for commercial purposes
+- Use the software for any purpose without restriction
+- Copy the software
 - Modify the software and create derivative works
-- Distribute copies of the original or modified software
+- Merge the software with other works
+- Publish and distribute copies of the software
 - Sublicense the software
-- Use patent claims of contributors to the code
+- Sell copies of the software
 - Use the software for private use
 
 ### Requirements
 
 When using or distributing the software, you must:
 
-1. **Include License and Copyright Notice**: Include a copy of the license and copyright notice with the software
-2. **State Changes**: Document and indicate any significant changes made to the software
-3. **Include Notice file**: If one exists, include any NOTICE file when distributing text form of the work
+1. **Include License and Copyright Notice**: The text " BSV Association," and this license shall be included in all copies or substantial portions of the Software
+2. **BSV Blockchain Restriction**: The Software, and any software that is derived from the Software or parts thereof, must only be used on the BSV Blockchains
 
-### Important Disclaimers
+### Important Information
 
-1. **Trademark use**: This license does not grant trademark rights
-2. **Warranty**: The software is provided without warranties or conditions of any kind
-3. **Liability**: The license includes a limitation of liability
-4. **Patent litigation**: If you file a patent lawsuit against anyone over patents that you think may apply to the code, your rights under this license end automatically
+1. **BSV Blockchain Only**: This software is specifically designed for and must only be used on BSV Blockchains as defined in the license
+2. **Warranty**: The software is provided "AS IS", without warranty of any kind, express or implied
+3. **Liability**: The license includes limitations of liability
+4. **Compliance**: The license is granted subject to and conditioned upon your compliance with the terms. Non-compliance results in license termination
 
 ### Attribution
 
 When you use this software in your own projects, please provide attribution:
 
 ```
-Copyright © 2025 BSV Blockchain org.
-Licensed under the Apache License, Version 2.0
+Copyright  BSV Association
+Licensed under the Open BSV License Version 5
 ```
 
 ### Contributing
 
-Contributions to this project are welcome. By contributing, you agree that your contributions will be licensed under the same Apache License 2.0 that covers the project.
+Contributions to this project are welcome. By contributing, you agree that your contributions will be licensed under the same Open BSV License Version 5 that covers the project.
 
 ### Questions
 
-If you have questions about the license or how you can use this software, please review the full license text at [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0)
+If you have questions about the license or how you can use this software, please review the full license text in the [LICENSE](../../LICENSE) file or visit the BSV Association website for more information about the Open BSV License.

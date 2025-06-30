@@ -204,13 +204,13 @@ We encourage you to explore the various sections of this documentation based on 
 
 ---
 
-**Copyright 2025 BSV Blockchain org.**
+**Copyright 2025 BSV Association.**
 
-Licensed under the Apache License, Version 2.0 (the "License");
+Licensed under the Open BSV License Version 5;
 you may not use this software except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+    https://github.com/bitcoin-sv/teranode/blob/main/LICENSE
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,

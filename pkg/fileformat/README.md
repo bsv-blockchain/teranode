@@ -45,4 +45,4 @@ go test
 ```
 
 ## License
-This package is part of Teranode and is released under the [MIT License](../../LICENSE).
+This package is part of Teranode and is released under the [Open BSV License](../../LICENSE).
