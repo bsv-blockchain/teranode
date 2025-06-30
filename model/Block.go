@@ -317,6 +317,29 @@ func (b *Block) SetSettings(tSettings *settings.Settings) {
 	b.settings = tSettings
 }
 
+// GetHash calculates the hash of the block header and caches it.
+// It returns the cached hash.
+//
+// Parameters:
+// - None
+//
+// Returns:
+// - *chainhash.Hash: The hash of the block header
+func (b *Block) GetHash() *chainhash.Hash {
+	calculatedHash := b.Header.Hash()
+
+	b.hash.Store(calculatedHash)
+
+	return calculatedHash
+}
+
+// Hash returns the cached hash of the block, or calculates it if not cached.
+//
+// Parameters:
+// - None
+//
+// Returns:
+// - *chainhash.Hash: The hash of the block header
 func (b *Block) Hash() *chainhash.Hash {
 	cachedHash := b.hash.Load()
 	if cachedHash != nil {

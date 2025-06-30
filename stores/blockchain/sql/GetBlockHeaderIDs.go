@@ -9,13 +9,14 @@
 // for performance optimization and falls back to a recursive SQL Common Table Expression
 // (CTE) query when cache misses occur. This method supports Teranode's high-throughput
 // transaction processing by providing efficient access to block header identifiers
-// without requiring the full header data to be loaded, which is particularly important
+// without requiring the full header data to be loaded. This is particularly important
 // for operations that only need to track or reference blocks by their internal database IDs.
 package sql
 
 import (
 	"context"
 	"database/sql"
+	"strconv"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util/tracing"
@@ -64,7 +65,10 @@ import (
 // This method is particularly important for mining-related operations where blocks need
 // to be efficiently marked as mined without loading their complete data.
 func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeaderIDs")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeaderIDs",
+		tracing.WithTag("blockHashFrom", blockHashFrom.String()),
+		tracing.WithTag("numberOfHeaders", strconv.FormatUint(numberOfHeaders, 10)),
+	)
 	defer deferFn()
 
 	_, metas := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
@@ -83,27 +87,18 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 	ids := make([]uint32, 0, numberOfHeaders)
 
 	q := `
-		SELECT
-			 b.id
-		FROM blocks b
-		WHERE id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE hash = $1
-					UNION ALL
-					SELECT bb.id, bb.parent_id, bb.height
-					FROM blocks bb
-					JOIN ChainBlocks cb ON bb.id = cb.parent_id
-					WHERE bb.id != cb.id
-				)
-				SELECT id FROM ChainBlocks
-				LIMIT $2
-			)
+		WITH RECURSIVE ChainBlocks AS (
+			SELECT id, parent_id
+			FROM blocks
+			WHERE hash = $1
+			UNION ALL
+			SELECT bb.id, bb.parent_id
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			WHERE bb.id != cb.id
 		)
-		ORDER BY height DESC
+		SELECT id FROM ChainBlocks
+		LIMIT $2
 	`
 	rows, err := s.db.QueryContext(ctx, q, blockHashFrom[:], numberOfHeaders)
 

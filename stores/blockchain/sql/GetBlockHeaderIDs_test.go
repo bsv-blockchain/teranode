@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -70,4 +71,67 @@ func TestSQLGetBlockHeaderIDs(t *testing.T) {
 		assert.Equal(t, 4, len(headerIDs))
 		require.Equal(t, headerIDs, []uint32{4, 2, 1, 0})
 	})
+}
+
+func BenchmarkSQLGetBlockHeaderIDs(b *testing.B) {
+	storeURL, err := url.Parse("sqlitememory:///")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	tSettings := test.CreateBaseTestSettings()
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	var (
+		ids           []uint32
+		lastBlockHash *chainhash.Hash
+	)
+
+	block := &model.Block{
+		Header: &model.BlockHeader{
+			Version:        1,
+			Timestamp:      1729259727,
+			Nonce:          0,
+			HashPrevBlock:  hashPrevBlock,
+			HashMerkleRoot: hashMerkleRoot,
+			Bits:           *bits,
+		},
+		Height:           1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+
+	for i := uint32(0); i < 100_000; i++ {
+		block.Height = i + 1
+		block.Header.Version = i + 1
+
+		if i == 0 {
+			block.Header.HashPrevBlock = tSettings.ChainCfgParams.GenesisHash
+		} else {
+			block.Header.HashPrevBlock = lastBlockHash
+		}
+
+		lastBlockHash = block.GetHash()
+
+		if _, _, err = s.StoreBlock(b.Context(), block, "test"); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if ids, err = s.GetBlockHeaderIDs(b.Context(), lastBlockHash, 10_000); err != nil {
+			b.Fatal(err)
+		}
+
+		if len(ids) != 10_000 {
+			b.Fatalf("expected 10,000 IDs, got %d", len(ids))
+		}
+	}
 }
