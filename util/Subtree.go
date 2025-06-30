@@ -354,6 +354,10 @@ func (st *Subtree) RemoveNodeAtIndex(index int) error {
 }
 
 func (st *Subtree) RootHash() *chainhash.Hash {
+	if st == nil {
+		return nil
+	}
+
 	if st.rootHash != nil {
 		return st.rootHash
 	}
@@ -374,6 +378,10 @@ func (st *Subtree) RootHash() *chainhash.Hash {
 }
 
 func (st *Subtree) RootHashWithReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) (*chainhash.Hash, error) {
+	if st == nil {
+		return nil, errors.NewProcessingError("subtree is nil")
+	}
+
 	// clone the subtree, so we do not overwrite anything in it
 	subtreeClone := st.Duplicate()
 	subtreeClone.ReplaceRootNode(node, fee, sizeInBytes)

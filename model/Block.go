@@ -1133,7 +1133,12 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 
 			hashes[sIdx] = *rootHash
 		} else {
-			hashes[sIdx] = *subtree.RootHash()
+			rootHash := subtree.RootHash()
+			if rootHash == nil {
+				return errors.NewProcessingError("[BLOCK][%s] subtree %d returned nil root hash", b.String(), sIdx)
+			}
+
+			hashes[sIdx] = *rootHash
 		}
 	}
 
