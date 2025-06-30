@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -51,7 +52,7 @@ func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
 		tx, _ := bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
 
 		// Create TxInpoints from the transaction
-		txInpoints, _ := meta.NewTxInpointsFromTx(tx)
+		txInpoints, _ := subtree.NewTxInpointsFromTx(tx)
 
 		mockStore.On("QueryOldUnminedTransactions", mock.Anything, uint32(5)).
 			Return([]chainhash.Hash{hash1}, nil)
@@ -94,7 +95,7 @@ func TestPreserveSingleUnminedTransactionParents_Coverage(t *testing.T) {
 
 		// Return empty TxInpoints (no parent hashes)
 		mockStore.On("Get", mock.Anything, &txHash, mock.Anything).
-			Return(&meta.Data{TxInpoints: meta.NewTxInpoints()}, nil)
+			Return(&meta.Data{TxInpoints: subtree.NewTxInpoints()}, nil)
 
 		err := preserveSingleUnminedTransactionParents(ctx, mockStore, &txHash, 1000, &settings.Settings{}, logger)
 
@@ -111,7 +112,7 @@ func TestPreserveSingleUnminedTransactionParents_Coverage(t *testing.T) {
 		tx, _ := bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
 
 		// Create TxInpoints from the transaction
-		txInpoints, _ := meta.NewTxInpointsFromTx(tx)
+		txInpoints, _ := subtree.NewTxInpointsFromTx(tx)
 
 		mockStore.On("Get", mock.Anything, &txHash, mock.Anything).
 			Return(&meta.Data{TxInpoints: txInpoints}, nil)
@@ -134,7 +135,7 @@ func TestPreserveSingleUnminedTransactionParents_Coverage(t *testing.T) {
 		// No inputs - should skip PreserveTransactions
 
 		// Create empty TxInpoints (no parent hashes)
-		txInpoints := meta.NewTxInpoints()
+		txInpoints := subtree.NewTxInpoints()
 
 		mockStore.On("Get", mock.Anything, &txHash, mock.Anything).
 			Return(&meta.Data{TxInpoints: txInpoints}, nil)
