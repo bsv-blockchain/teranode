@@ -14,9 +14,9 @@ package bsvutil
 import (
 	"strings"
 
+	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
-	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/base58"
 	"golang.org/x/crypto/ripemd160"
 )
 
@@ -83,7 +83,10 @@ func TstAddressPubKey(serializedPubKey []byte, pubKeyFormat PubKeyFormat,
 // TstLegacyAddressSAddr returns the expected script address bytes for
 // P2PKH and P2SH legacy addresses.
 func TstLegacyAddressSAddr(addr string) []byte {
-	decoded := base58.Decode(addr)
+	decoded, err := base58.Decode(addr)
+	if err != nil {
+		return nil
+	}
 	return decoded[1 : 1+ripemd160.Size]
 }
 

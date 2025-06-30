@@ -921,7 +921,7 @@ func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, paren
 		return nil, errors.NewStorageError("error getting parent transaction %s from txMetaStore", parentTxStruct.parentTxHash.String(), err)
 	}
 
-	if parentTxMeta.BlockIDs == nil || len(parentTxMeta.BlockIDs) == 0 {
+	if len(parentTxMeta.BlockIDs) == 0 {
 		return nil, errors.NewBlockInvalidError("parent transaction %s of tx %s has no block IDs", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
 	}
 

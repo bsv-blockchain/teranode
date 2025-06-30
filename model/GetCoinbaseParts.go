@@ -41,6 +41,7 @@ import (
 	"encoding/hex"
 	"log"
 
+	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util"
 )
@@ -86,7 +87,7 @@ func GetCoinbaseParts(height uint32, coinbaseValue uint64, coinbaseText string, 
 
 // AddressToScript comment
 func AddressToScript(address string) (script []byte, err error) {
-	decoded, err := DecodeString(address)
+	decoded, err := base58.Decode(address)
 	if err != nil {
 		return nil, err
 	}

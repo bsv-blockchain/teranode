@@ -8,9 +8,9 @@ import (
 	"bytes"
 	"errors"
 
+	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
-	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/base58"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -84,7 +84,10 @@ func (w *WIF) IsForNet(net *chaincfg.Params) bool {
 // does not equal the expected value of 0x01.  ErrChecksumMismatch is returned
 // if the expected WIF checksum does not match the calculated checksum.
 func DecodeWIF(wif string) (*WIF, error) {
-	decoded := base58.Decode(wif)
+	decoded, err := base58.Decode(wif)
+	if err != nil {
+		return nil, err
+	}
 	decodedLen := len(decoded)
 
 	var compress bool

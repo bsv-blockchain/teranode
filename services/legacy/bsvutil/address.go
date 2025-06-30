@@ -5,12 +5,13 @@
 package bsvutil
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 
+	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
-	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/base58"
 	"golang.org/x/crypto/ripemd160"
 )
 
@@ -117,12 +118,8 @@ func DecodeAddress(addr string, defaultNet *chaincfg.Params) (Address, error) {
 	}
 
 	// Switch on decoded length to determine the type.
-	decoded, netID, err := base58.CheckDecode(addr)
+	decoded, netID, err := checkDecode(addr)
 	if err != nil {
-		if err == base58.ErrChecksum {
-			return nil, ErrChecksumMismatch
-		}
-
 		return nil, errors.New("decoded address is of unknown format")
 	}
 
@@ -147,6 +144,55 @@ func DecodeAddress(addr string, defaultNet *chaincfg.Params) (Address, error) {
 	}
 }
 
+// checksum computes a 4-byte checksum from the input using double SHA256
+func checksum(input []byte) [4]byte {
+	var cksum [4]byte
+
+	h := sha256.Sum256(input)
+	h2 := sha256.Sum256(h[:])
+	copy(cksum[:], h2[:4])
+
+	return cksum
+}
+
+// checkEncode encodes input with version byte and checksum, then base58 encodes
+func checkEncode(input []byte, version byte) string {
+	b := make([]byte, 0, 1+len(input)+4)
+	b = append(b, version)
+	b = append(b, input...)
+	cksum := checksum(b)
+	b = append(b, cksum[:]...)
+
+	return base58.Encode(b)
+}
+
+// checkDecode decodes a base58check string and validates checksum
+func checkDecode(input string) (result []byte, version byte, err error) {
+	decoded, err := base58.Decode(input)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if len(decoded) < 5 {
+		return nil, 0, ErrInvalidFormat
+	}
+
+	version = decoded[0]
+
+	var cksum [4]byte
+
+	copy(cksum[:], decoded[len(decoded)-4:])
+
+	if checksum(decoded[:len(decoded)-4]) != cksum {
+		return nil, 0, ErrChecksumMismatch
+	}
+
+	payload := decoded[1 : len(decoded)-4]
+	result = append(result, payload...)
+
+	return
+}
+
 // encodeLegacyAddress returns a human-readable payment address given a ripemd160 hash
 // and netID which encodes the bitcoin network and address type.  It is used
 // in both legacy pay-to-pubkey-hash (P2PKH) and pay-to-script-hash (P2SH) address
@@ -154,7 +200,7 @@ func DecodeAddress(addr string, defaultNet *chaincfg.Params) (Address, error) {
 func encodeLegacyAddress(hash160 []byte, netID byte) string {
 	// Format is 1 byte for a network and address class (i.e. P2PKH vs
 	// P2SH), 20 bytes for a RIPEMD160 hash, and 4 bytes of checksum.
-	return base58.CheckEncode(hash160[:ripemd160.Size], netID)
+	return checkEncode(hash160[:ripemd160.Size], netID)
 }
 
 // encodeCashAddress returns a human-readable payment address given a ripemd160 hash

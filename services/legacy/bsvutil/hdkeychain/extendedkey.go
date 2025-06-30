@@ -18,10 +18,10 @@ import (
 	"fmt"
 	"math/big"
 
+	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/base58"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -517,7 +517,10 @@ func NewMaster(seed []byte, net *chaincfg.Params) (*ExtendedKey, error) {
 func NewKeyFromString(key string) (*ExtendedKey, error) {
 	// The base58-decoded extended key must consist of a serialized payload
 	// plus an additional 4 bytes for the checksum.
-	decoded := base58.Decode(key)
+	decoded, err := base58.Decode(key)
+	if err != nil {
+		return nil, err
+	}
 	if len(decoded) != serializedKeyLen+4 {
 		return nil, ErrInvalidKeyLen
 	}
