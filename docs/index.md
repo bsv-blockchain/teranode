@@ -30,7 +30,6 @@
 
 ### Development Tutorials
 - [Setting Up for Development](./tutorials/developers/developerSetup.md)
-- [Git Commit Signing Setup Guide](./tutorials/developers/gitCommitSigningSetupGuide.md)
 
 ### Miner Tutorials
 
@@ -186,6 +185,7 @@
 - [Teranode Daemon Reference](./references/teranodeDaemonReference.md)
 - [Prometheus Metrics](./references/prometheusMetrics.md)
 - [Network Consensus Rules](./references/networkConsensusRules.md)
+- [Git Commit Signing Setup Guide](./references/gitCommitSigningSetupGuide.md)
 
 ## Additional Resources
 1. [Glossary](./references/glossary.md)
