@@ -12,10 +12,15 @@ trap 'handle_signal' TERM INT QUIT HUP
 
 
 # Block generator script for chain integrity tests
-# Generates blocks on teranode-1 with random delays
+# Generates blocks on a specified teranode host with random delays
 
-HOST="teranode1"
+HOST="$1"
 PORT="9292"
+
+if [ -z "$HOST" ]; then
+  echo "Usage: $0 <host>"
+  exit 1
+fi
 
 echo "Waiting for service on ${HOST}:${PORT} to become available (max 30 retries)..."
 RETRY_COUNT=0

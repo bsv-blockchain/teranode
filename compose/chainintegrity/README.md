@@ -32,6 +32,25 @@ This tool is typically used to ensure the correctness of blockchain data after g
    docker compose -f compose/docker-compose-host.yml down
    ```
 
+## Usage with 3 block generators and 3 tx blasters
+```shell
+# remove the old data
+rm -rf data
+
+# run the node for least 110 blocks
+docker compose -f compose/docker-compose-host-3blasters.yml up -d
+
+# stop the node after mining 110+ blocks
+
+docker compose -f compose/docker-compose-host-3blasters.yml down teranode-1 teranode-2 teranode-3
+
+# run chainintegrity
+go run compose/cmd/chainintegrity/main.go --logfile=chainintegrity --debug
+
+# cleanup
+docker compose -f compose/docker-compose-host-3blasters.yml down
+```
+
 ## Features
 - Verify the integrity of a local blockchain.
 - Debugging and inspection of blockchain data.

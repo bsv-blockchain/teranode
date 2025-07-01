@@ -1,0 +1,495 @@
+x-teranode-base: &teranode-base
+  image: teranode:latest
+  networks:
+    - teranode-network
+  depends_on:
+    - postgres
+    - kafka-shared
+  volumes:
+    - ../data/test/${TEST_ID:-chainintegrity}:/app/data
+
+x-teranode-commands-base: &teranode-commands-base
+  image : 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-commands:latest
+  networks:
+    - teranode-network
+
+x-teranode-coinbase-base: &teranode-coinbase-base
+  image : 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-coinbase:latest
+  networks:
+    - teranode-network
+  depends_on:
+    - postgres
+    - kafka-shared
+
+
+x-aerospike-base: &aerospike-base
+  image: aerospike:ce-7.2.0.3_1
+  networks:
+    - teranode-network
+  command: --config-file /etc/aerospike.conf
+
+networks:
+  teranode-network:
+    name: teranode-network-chainintegrity-${TEST_ID:-default}
+
+services:
+  teranode-builder:
+    container_name: teranode-builder
+    image: teranode:latest
+    networks:
+      - teranode-network
+    build:
+      context: ..
+      dockerfile: local.Dockerfile
+      args:
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:build-latest
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:run-latest
+    entrypoint: [ "pwd" ]
+
+  jaeger:
+    container_name: jaeger
+    image: jaegertracing/all-in-one:1.59
+    networks:
+      - teranode-network
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+
+  postgres:
+    container_name: postgres
+    image: postgres:latest
+    networks:
+      - teranode-network
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: really_strong_password_change_me
+      POSTGRES_DB: postgres
+    ports:
+      - "15432:5432"
+    expose:
+      - "5432"
+    volumes:
+      # `- ./postgres/update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../data/postgres:/var/lib/postgresql/data
+    restart: on-failure
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kafka-shared:
+    container_name: kafka-shared
+    image: redpandadata/redpanda:latest
+    networks:
+      - teranode-network
+    mem_limit: 256m
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://kafka-shared:9092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:9093
+    expose:
+      - "8081"
+      - "9092"
+      - "9093"
+    volumes:
+      - ../data/test/${TEST_ID:-chainintegrity}/kafka:/var/lib/kafka
+  
+
+  teranode1:
+    <<: *teranode-base
+    container_name: teranode1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-shared:
+        condition: service_started
+      aerospike-1:
+        condition: service_started
+    entrypoint: [ "/app/wait.sh", "aerospike-1", "3100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode1.test"
+      JAEGER_SERVICE_NAME: teranode1
+      JAEGER_AGENT_HOST: localhost
+      JAEGER_AGENT_PORT: 6831
+      logLevel: "DEBUG"
+    volumes:
+      - ../settings.conf:/app/settings.conf
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/teranode1/txstore:/app/data/teranode1/txstore
+      - ../data/teranode1/subtreestore:/app/data/teranode1/subtreestore
+      - ../data/teranode1/blockstore:/app/data/teranode1/blockstore
+      - ../data/teranode1/subtree_quorum:/app/data/teranode1/subtree_quorum
+      - ../data/teranode1/external:/app/data/teranode1/external
+      - ./wait.sh:/app/wait.sh
+    ports:
+      - "18000:8000"
+      - "18081-18092:8081-8092"
+      - "18094-18097:8094-8097"
+      - "18099:8099"
+      - "19091:9091"
+      - "19905:9905"
+      - "19292:9292"
+    expose:
+      - "8000"
+      - "8081-8092"
+      - "8094-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
+
+  teranode2:
+    <<: *teranode-base
+    container_name: teranode2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-shared:
+        condition: service_started
+      aerospike-2:
+        condition: service_started
+    entrypoint: [ "/app/wait.sh", "aerospike-2", "3200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode2.test"
+      JAEGER_SERVICE_NAME: teranode2
+      JAEGER_AGENT_HOST: localhost
+      JAEGER_AGENT_PORT: 6831
+    volumes:
+      - ../settings.conf:/app/settings.conf
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/teranode2/txstore:/app/data/teranode2/txstore
+      - ../data/teranode2/subtreestore:/app/data/teranode2/subtreestore
+      - ../data/teranode2/blockstore:/app/data/teranode2/blockstore
+      - ../data/teranode2/subtree_quorum:/app/data/teranode2/subtree_quorum
+      - ../data/teranode2/external:/app/data/teranode2/external
+      - ./wait.sh:/app/wait.sh
+    ports:
+      - "28000:8000"
+      - "28081-28092:8081-8092"
+      - "28094-28097:8094-8097"
+      - "28099:8099"
+      - "29091:9091"
+      - "29905:9905"
+      - "29292:9292"
+    expose:
+      - "8000"
+      - "8081-8092"
+      - "8094-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
+
+  teranode3:
+    <<: *teranode-base
+    container_name: teranode3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-shared:
+        condition: service_started
+      aerospike-3:
+        condition: service_started
+    entrypoint: [ "/app/wait.sh", "aerospike-3", "3300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/teranode.run", "-localTestStartFromState=RUNNING" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode3.test"
+      JAEGER_SERVICE_NAME: teranode3
+      JAEGER_AGENT_HOST: localhost
+      JAEGER_AGENT_PORT: 6831
+    volumes:
+      - ../settings.conf:/app/settings.conf
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/teranode3/txstore:/app/data/teranode3/txstore
+      - ../data/teranode3/subtreestore:/app/data/teranode3/subtreestore
+      - ../data/teranode3/blockstore:/app/data/teranode3/blockstore
+      - ../data/teranode3/subtree_quorum:/app/data/teranode3/subtree_quorum
+      - ../data/teranode3/external:/app/data/teranode3/external
+      - ./wait.sh:/app/wait.sh
+    ports:
+      - "38000:8000"
+      - "38081-38092:8081-8092"
+      - "38094-38097:8094-8097"
+      - "38099:8099"
+      - "39091:9091"
+      - "39905:9905"
+      - "39292:9292"
+    expose:
+      - "8000"
+      - "8081-8092"
+      - "8094-8097"
+      - "8099"
+      - "9091"
+      - "9905"
+      - "9292"
+  
+  miner-1:
+    <<: *teranode-commands-base
+    profiles:
+      - default
+    container_name: miner-1
+    depends_on:
+      - teranode1
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode1.test"
+    command: [ "miner", "-coinbase-addr", "myL4TciLD59ESU9MmKH1rvfYb8QXhFHHN6", "-coinbase-sig", "/teranode1/", "-rpcport", "19292" ]
+    volumes:
+      - ../settings.conf:/app/settings.conf
+      - ../data/miner1:/app/data
+    restart: unless-stopped
+
+  miner-2:
+    <<: *teranode-commands-base
+    profiles:
+      - default
+    container_name: miner-2
+    depends_on:
+      - teranode2
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode2.test"
+    command: [ "miner", "-coinbase-addr", "1Hh6nxmJrk4jyiJRxodAK32A9EXM8dx6F3", "-coinbase-sig", "/teranode2/", "-rpcport", "29292" ]
+    volumes:
+      - ../settings.conf:/app/settings.conf
+      - ../data/miner2:/app/data
+    restart: unless-stopped
+
+  miner-3:
+    <<: *teranode-commands-base
+    profiles:
+      - default
+    container_name: miner-3
+    depends_on:
+      - teranode3
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode3.test"
+    command: [ "miner", "-coinbase-addr", "16Uy8VwEKAkEmH7RVtCjqyv6L6RfyvkJM2", "-coinbase-sig", "/teranode3/", "-rpcport", "39292" ]
+    volumes:
+      - ../settings.conf:/app/settings.conf
+      - ../data/miner3:/app/data
+    restart: unless-stopped
+
+  block-generator-1:
+    image: curlimages/curl:latest
+    container_name: block-generator-1
+    depends_on:
+      - teranode1
+    networks:
+      - teranode-network
+    volumes:
+      - ./scripts/generate-blocks.sh:/generate-blocks.sh
+    entrypoint: ["/generate-blocks.sh", "teranode1"]
+    restart: unless-stopped
+
+  coinbase1:
+    <<: *teranode-coinbase-base
+    # profiles:
+    #   - skip
+    container_name: coinbase1
+    depends_on:
+      - teranode1
+    entrypoint: [ "sh", "-c", "sleep 30 && ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
+      profilerAddr: "localhost:17092"
+    volumes:
+      - ../settings.conf:/app/settings.conf 
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/coinbase1:/app/data
+
+  block-generator-2:
+    image: curlimages/curl:latest
+    container_name: block-generator-2
+    depends_on:
+      - teranode2
+    networks:
+      - teranode-network
+    volumes:
+      - ./scripts/generate-blocks.sh:/generate-blocks.sh
+    entrypoint: ["/generate-blocks.sh", "teranode2"]
+    restart: unless-stopped
+
+  coinbase2:
+    <<: *teranode-coinbase-base
+    container_name: coinbase2
+    depends_on:
+      - teranode2
+    entrypoint: [ "sh", "-c", "sleep 30 && ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
+      profilerAddr: "localhost:27092"
+    volumes:
+      - ../settings.conf:/app/settings.conf 
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/coinbase2:/app/data
+
+  block-generator-3:
+    image: curlimages/curl:latest
+    container_name: block-generator-3
+    depends_on:
+      - teranode3
+    networks:
+      - teranode-network
+    volumes:
+      - ./scripts/generate-blocks.sh:/generate-blocks.sh
+    entrypoint: ["/generate-blocks.sh", "teranode3"]
+    restart: unless-stopped
+
+  coinbase3:
+    <<: *teranode-coinbase-base
+    container_name: coinbase3
+    depends_on:
+      - teranode3
+    entrypoint: [ "sh", "-c", "sleep 30 && ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
+      profilerAddr: "localhost:37092"
+    volumes:
+      - ../settings.conf:/app/settings.conf 
+      - ../settings_local.conf:/app/settings_local.conf
+      - ../data/coinbase3:/app/data
+
+  tx-blaster-1:
+    <<: *teranode-coinbase-base
+    # profiles:
+    #   - skip
+    container_name: tx-blaster-1
+    depends_on:
+      - coinbase1
+      - teranode1
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
+      startCoinbase: "false"
+      startFaucet: "false"
+    entrypoint: ["./blaster.run"]
+    command: ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=10"]
+    volumes:
+      - ../settings.conf:/app/settings_local.conf
+      # - ../settings_local.conf:/app/settings_local.conf
+      - ../data/txblaster1:/app/data
+      # - ../data/txblaster.log:/app/data/txblaster.log
+    
+  tx-blaster-2:
+    <<: *teranode-coinbase-base
+    container_name: tx-blaster-2
+    depends_on:
+      - coinbase2
+      - teranode2
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
+      startCoinbase: "false"
+      startFaucet: "false"
+    entrypoint: ["./blaster.run"]
+    command: ["-workers=1", "-profile=:7092", "-print=0", "-log=0", "-limit=10"]
+    volumes:
+      - ../settings.conf:/app/settings_local.conf
+      # - ../settings_local.conf:/app/settings_local.conf
+      - ../data/txblaster2:/app/data
+
+  tx-blaster-3:
+    <<: *teranode-coinbase-base
+    container_name: tx-blaster-3
+    depends_on:
+      - coinbase3
+      - teranode3
+    environment:
+      SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
+      startCoinbase: "false"
+      startFaucet: "false"
+    entrypoint: ["./blaster.run"]
+    command: ["-workers=1", "-profile=:7094", "-print=0", "-log=0", "-limit=10"]
+    volumes:
+      - ../settings.conf:/app/settings_local.conf
+      # - ../settings_local.conf:/app/settings_local.conf
+      - ../data/txblaster3:/app/data
+
+  prometheus-1:
+    container_name: prometheus-1
+    image: prom/prometheus:v2.44.0
+    networks:
+      - teranode-network
+    mem_limit: 64m
+    command:
+      - '--web.listen-address=:19090'
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    volumes:
+      - ./prometheus/prometheus-host-1.yml:/etc/prometheus/prometheus.yml
+
+  prometheus-2:
+    container_name: prometheus-2
+    image: prom/prometheus:v2.44.0
+    networks:
+      - teranode-network
+    mem_limit: 64m
+    command:
+      - '--web.listen-address=:29090'
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    volumes:
+      - ./prometheus/prometheus-host-2.yml:/etc/prometheus/prometheus.yml
+
+  prometheus-3:
+    container_name: prometheus-3
+    image: prom/prometheus:v2.44.0
+    networks:
+      - teranode-network
+    mem_limit: 64m
+    command:
+      - '--web.listen-address=:39090'
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    volumes:
+      - ./prometheus/prometheus-host-3.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:latest
+    networks:
+      - teranode-network
+    volumes:
+      - ./grafana/datasources/main-host.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./grafana/grafana.db:/var/lib/grafana
+    depends_on:
+      - prometheus-1
+      - prometheus-2
+      - prometheus-3
+
+  aerospike-1:
+    container_name: aerospike-1
+    <<: *aerospike-base
+    ports:
+      - "3100:3100"
+    expose:
+      - "3100"
+    volumes:
+      - ./aerospike/aerospike-1.conf:/etc/aerospike.conf
+      - ../data/aerospike1/logs:/var/log/aerospike
+      - ../data/aerospike1/data:/opt/aerospike/data
+
+  aerospike-2:
+    container_name: aerospike-2
+    <<: *aerospike-base
+    ports:
+      - "3200:3200"
+    expose:
+      - "3200"
+    volumes:
+      - ./aerospike/aerospike-2.conf:/etc/aerospike.conf
+      - ../data/aerospike2/logs:/var/log/aerospike
+      - ../data/aerospike2/data:/opt/aerospike/data
+
+  aerospike-3:
+    container_name: aerospike-3
+    <<: *aerospike-base
+    ports:
+      - "3300:3300"
+    expose:
+      - "3300"
+    volumes:
+      - ./aerospike/aerospike-3.conf:/etc/aerospike.conf
+      - ../data/aerospike3/logs:/var/log/aerospike
+      - ../data/aerospike3/data:/opt/aerospike/data

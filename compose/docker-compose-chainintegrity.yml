@@ -250,7 +250,7 @@ services:
       - teranode-network
     volumes:
       - ./scripts/generate-blocks.sh:/generate-blocks.sh
-    entrypoint: ["/generate-blocks.sh"]
+    entrypoint: ["/generate-blocks.sh", "teranode1"]
     restart: unless-stopped
 
   coinbase1:
@@ -275,8 +275,8 @@ services:
       - teranode1
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.test}.coinbase
-      BLASTER_ARGS: "-workers=2"
-      profilerAddr: "localhost:17093"
+      startCoinbase: "false"
+      startFaucet: "false"
     entrypoint: ["./blaster.run"]
     command: ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=100"]
     volumes:
