@@ -48,6 +48,12 @@ const (
 	// MaxTxSigopsCountPolicyAfterGenesis defines the maximum number of signature
 	// operations allowed in a transaction after the Genesis upgrade (UINT32_MAX).
 	MaxTxSigopsCountPolicyAfterGenesis = ^uint32(0)
+
+	// DustLimit defines the minimum output value in satoshis (1 satoshi)
+	// Outputs with less than this value are considered dust unless they are
+	// unspendable (OP_FALSE OP_RETURN).  This applies to outputs after the
+	// Genesis upgrade.
+	DustLimit = uint64(1)
 )
 
 // Validator implements Bitcoin SV transaction validation and manages the lifecycle

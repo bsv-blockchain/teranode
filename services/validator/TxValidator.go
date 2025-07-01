@@ -269,19 +269,35 @@ func (tv *TxValidator) ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32,
 	return nil
 }
 
+// isUnspendableOutput checks if an output script is unspendable (starts with OP_FALSE OP_RETURN)
+func isUnspendableOutput(script *bscript.Script) bool {
+	if script == nil {
+		return false
+	}
+	// Convert script to bytes
+	scriptBytes := *script
+	// Check if script starts with OP_FALSE (0x00) followed by OP_RETURN (0x6a)
+	if len(scriptBytes) >= 2 && scriptBytes[0] == 0x00 && scriptBytes[1] == 0x6a {
+		return true
+	}
+
+	return false
+}
+
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 	total := uint64(0)
-
-	// blockHeight is not used, but it is required by the interface
-	_ = blockHeight
-	// minOutput := uint64(0)
-	// if blockHeight >= tv.Params().GenesisActivationHeight {
-	//	minOutput = bt.DustLimit
-	// }
 
 	for index, output := range tx.Outputs {
 		if output.Satoshis > MaxSatoshis {
 			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
+		}
+
+		// Check dust limit after genesis activation
+		if blockHeight >= tv.settings.ChainCfgParams.GenesisActivationHeight {
+			// Only enforce dust limit for spendable outputs
+			if output.Satoshis < DustLimit && !isUnspendableOutput(output.LockingScript) {
+				return errors.NewTxInvalidError("zero-satoshi outputs require 'OP_FALSE OP_RETURN' prefix")
+			}
 		}
 
 		total += output.Satoshis
@@ -333,9 +349,13 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 			return errors.NewTxInvalidError("transaction input %d sequence number is invalid", index)
 		}
 		*/
-		// if input.PreviousTxSatoshis == 0 && !input.PreviousTxScript.IsData() {
-		// 	return errors.NewTxInvalidError("transaction input %d satoshis cannot be zero", index)
-		// }
+		// Check zero-sat inputs after genesis activation
+		if blockHeight >= tv.settings.ChainCfgParams.GenesisActivationHeight {
+			if input.PreviousTxSatoshis == 0 && !isUnspendableOutput(input.PreviousTxScript) {
+				return errors.NewTxInvalidError("transaction input %d satoshis cannot be zero unless from unspendable output", index)
+			}
+		}
+
 		if input.PreviousTxSatoshis > MaxSatoshis {
 			return errors.NewTxInvalidError("transaction input %d satoshis is too high", index)
 		}
