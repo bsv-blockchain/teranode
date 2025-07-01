@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	alertP2P "github.com/bitcoin-sv/alert-system/app/p2p"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -35,6 +36,7 @@ import (
 const (
 	errorCreatingDhtMessage = "[P2PNode] error creating DHT"
 	privateKeyKey           = "p2p.privateKey"
+	multiAddrIPTemplate     = "/ip4/%s/tcp/%d"
 )
 
 // P2PNodeI defines the interface for P2P node functionality.
@@ -205,6 +207,46 @@ func NewP2PNode(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 			opts = append(opts, libp2p.AddrsFactory(func(_ []multiaddr.Multiaddr) []multiaddr.Multiaddr {
 				return addrsToAdvertise
 			}))
+		} else {
+			// User has not specified any broadcast addresses in their config, and we are not using a private DHT
+			// define address factory to remove all private IPs from being advertised
+			opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+				var publicAddrs []multiaddr.Multiaddr
+
+				for _, addr := range addrs {
+					// if IP is not private add it to the list
+					if !isPrivateIP(addr) {
+						publicAddrs = append(publicAddrs, addr)
+					}
+				}
+
+				// If we still don't have any advertisable addresses then attempt to grab it from `https://ifconfig.me/ip`
+				if len(publicAddrs) > 0 {
+					return publicAddrs
+				}
+
+				// If no public addresses are set, let's attempt to grab it publicly
+				// Ignore errors because we don't care if we can't find it
+				ifconfig, err := alertP2P.GetPublicIP(context.Background())
+				if err != nil {
+					logger.Debugf("[P2PNode] error getting public IP: %v", err)
+				}
+
+				if len(ifconfig) == 0 {
+					return publicAddrs
+				}
+
+				addr, err := multiaddr.NewMultiaddr(fmt.Sprintf(multiAddrIPTemplate, ifconfig, config.Port))
+				if err != nil {
+					logger.Debugf("[P2PNode] error creating public multiaddr: %v", err)
+				}
+
+				if addr != nil {
+					publicAddrs = append(publicAddrs, addr)
+				}
+
+				return publicAddrs
+			}))
 		}
 
 		h, err = libp2p.New(opts...)
@@ -281,7 +323,7 @@ func setUpPrivateNetwork(config P2PConfig, pk *crypto.PrivKey) (host.Host, error
 
 	listenMultiAddresses := []string{}
 	for _, addr := range config.ListenAddresses {
-		listenMultiAddresses = append(listenMultiAddresses, fmt.Sprintf("/ip4/%s/tcp/%d", addr, config.Port))
+		listenMultiAddresses = append(listenMultiAddresses, fmt.Sprintf(multiAddrIPTemplate, addr, config.Port))
 	}
 
 	// Set up libp2p options
@@ -332,7 +374,7 @@ func buildAdvertiseMultiAddrs(addrs []string, defaultPort int) []multiaddr.Multi
 		var err error
 
 		if net.ParseIP(hostStr) != nil {
-			maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", hostStr, portNum))
+			maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf(multiAddrIPTemplate, hostStr, portNum))
 		} else {
 			maddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%d", hostStr, portNum))
 		}
@@ -1267,8 +1309,8 @@ func (s *P2PNode) SetPeerConnectedCallback(callback func(context.Context, peer.I
 	s.onPeerConnected = callback
 }
 
-func extractIPFromMultiaddr(maddr multiaddr.Multiaddr) string {
-	str := maddr.String()
+func extractIPFromMultiaddr(multiaddr multiaddr.Multiaddr) string {
+	str := multiaddr.String()
 
 	parts := strings.Split(str, "/")
 	for i, part := range parts {
@@ -1280,4 +1322,34 @@ func extractIPFromMultiaddr(maddr multiaddr.Multiaddr) string {
 	}
 
 	return ""
+}
+
+// Function to check if an IP address is private
+func isPrivateIP(addr multiaddr.Multiaddr) bool {
+	ipStr := extractIPFromMultiaddr(addr)
+	if ipStr == "" {
+		return false
+	}
+
+	ip := net.ParseIP(ipStr)
+	if ip == nil || ip.To4() == nil {
+		return false
+	}
+
+	// Define private IPv4 ranges
+	privateRanges := []*net.IPNet{
+		{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(8, 32)},
+		{IP: net.ParseIP("172.16.0.0"), Mask: net.CIDRMask(12, 32)},
+		{IP: net.ParseIP("192.168.0.0"), Mask: net.CIDRMask(16, 32)},
+		{IP: net.ParseIP("127.0.0.0"), Mask: net.CIDRMask(8, 32)},
+	}
+
+	// Check if the IP falls into any of the private ranges
+	for _, r := range privateRanges {
+		if r.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
 }

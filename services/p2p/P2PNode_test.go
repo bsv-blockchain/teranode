@@ -434,25 +434,29 @@ func TestSendBestBlockMessage(t *testing.T) {
 
 	// Create two P2PNode instances with dynamic ports
 	config1 := P2PConfig{
-		ProcessName:     "test1",
-		ListenAddresses: []string{"127.0.0.1"},
-		PrivateKey:      "",
-		SharedKey:       "",
-		UsePrivateDHT:   false,
-		OptimiseRetries: false,
-		Advertise:       false,
-		StaticPeers:     []string{},
+		ProcessName:        "test1",
+		ListenAddresses:    []string{"127.0.0.1"},
+		AdvertiseAddresses: []string{"127.0.0.1"},
+		Port:               12345,
+		PrivateKey:         "",
+		SharedKey:          "",
+		UsePrivateDHT:      false,
+		OptimiseRetries:    false,
+		Advertise:          true,
+		StaticPeers:        []string{},
 	}
 
 	config2 := P2PConfig{
-		ProcessName:     "test2",
-		ListenAddresses: []string{"127.0.0.1"},
-		PrivateKey:      "",
-		SharedKey:       "",
-		UsePrivateDHT:   false,
-		OptimiseRetries: false,
-		Advertise:       false,
-		StaticPeers:     []string{},
+		ProcessName:        "test2",
+		ListenAddresses:    []string{"127.0.0.1"},
+		AdvertiseAddresses: []string{"127.0.0.1"},
+		Port:               12346,
+		PrivateKey:         "",
+		SharedKey:          "",
+		UsePrivateDHT:      false,
+		OptimiseRetries:    false,
+		Advertise:          true,
+		StaticPeers:        []string{},
 	}
 
 	// Create nodes with retries in case of port conflicts
@@ -532,13 +536,11 @@ func TestSendBestBlockMessage(t *testing.T) {
 	var connectionString string
 
 	for _, addr := range addrs {
-		connectionString = fmt.Sprintf("%s/p2p/%s", addr.String(), node2.HostID())
+		connectionString = fmt.Sprintf("%s/p2p/%s", addr, node2.HostID())
 		t.Logf("Connecting to: %s", connectionString)
 
 		break // use the first address
 	}
-	// connectionString := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", node2.config.Port, node2.HostID())
-	// t.Logf("Connecting to: %s\n", connectionString)
 
 	// Attempt to connect
 	connected := node1.connectToStaticPeers(t.Context(), []string{connectionString})
@@ -974,11 +976,33 @@ func TestConnectedPeers(t *testing.T) {
 	// Use a unique DHT protocol ID to prevent interference with other tests
 	tSettings.P2P.DHTProtocolID = fmt.Sprintf("/teranode/test/dht/%d", time.Now().UnixNano())
 
+	// Get 2 ports to use
+	port1 := findAvailablePort(t)
+	port2 := findAvailablePort(t)
+
 	// Create first node
-	config1 := createNodeConfig(t, "test3", []string{"127.0.0.1"}, false, false, []string{})
+	config1 := P2PConfig{
+		ProcessName:        "test3",
+		ListenAddresses:    []string{"127.0.0.1"},
+		AdvertiseAddresses: []string{"127.0.0.1"},
+		Port:               port1,
+		PrivateKey:         generateTestPrivateKey(t),
+		UsePrivateDHT:      false,
+		Advertise:          false,
+		StaticPeers:        []string{},
+	}
 
 	// Create second node
-	config2 := createNodeConfig(t, "test4", []string{"127.0.0.1"}, false, false, []string{})
+	config2 := P2PConfig{
+		ProcessName:        "test4",
+		ListenAddresses:    []string{"127.0.0.1"},
+		AdvertiseAddresses: []string{"127.0.0.1"},
+		Port:               port2,
+		PrivateKey:         generateTestPrivateKey(t),
+		UsePrivateDHT:      false,
+		Advertise:          false,
+		StaticPeers:        []string{},
+	}
 
 	// Create nodes with retries in case of port conflicts
 	var (
