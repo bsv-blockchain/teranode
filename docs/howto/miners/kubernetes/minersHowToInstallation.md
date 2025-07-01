@@ -61,9 +61,9 @@ Teranode requires several backing services. While these services should be deplo
 kubectl create namespace teranode-operator
 
 # Deploy all dependencies in the teranode namespace
-kubectl apply -f kubernetes/aerospike/ -n teranode-operator
-kubectl apply -f kubernetes/postgres/ -n teranode-operator
-kubectl apply -f kubernetes/kafka/ -n teranode-operator
+kubectl apply -f deploy/kubernetes/aerospike/ -n teranode-operator
+kubectl apply -f deploy/kubernetes/postgres/ -n teranode-operator
+kubectl apply -f deploy/kubernetes/kafka/ -n teranode-operator
 ```
 
 To know more, please refer to the [Third Party Reference Documentation](../../../references/thirdPartySoftwareRequirements.md)
@@ -86,7 +86,7 @@ docker run -d \
 docker network connect minikube nfs-server
 
 # create the PersistentVolume
-kubectl apply -f kubernetes/nfs/
+kubectl apply -f deploy/kubernetes/nfs/
 ```
 
 Note, for arm based systems, you can use this variant:
@@ -112,7 +112,7 @@ docker run -d --name nfs-server --privileged \
 docker network connect minikube nfs-server
 
 # create the PersistentVolume
-kubectl apply -f kubernetes/nfs/
+kubectl apply -f deploy/kubernetes/nfs/
 ```
 
 
@@ -131,7 +131,7 @@ aws ecr list-images \
 
 # Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)
 export OPERATOR_VERSION=v0.5.0
-export TERANODE_VERSION=v0.9.11
+export TERANODE_VERSION=v0.9.16
 export ECR_REGISTRY=434394763103.dkr.ecr.eu-north-1.amazonaws.com
 
 # Login to ECR
@@ -156,13 +156,13 @@ aws ecr get-login-password --region eu-west-1 | helm registry login --username A
 
 helm upgrade --install teranode-operator oci://434394763103.dkr.ecr.eu-west-1.amazonaws.com/teranode-operator \
     -n teranode-operator \
-    -f kubernetes/teranode/teranode-operator.yaml
+    -f deploy/kubernetes/teranode/teranode-operator.yaml
 ```
 
 Apply the Teranode configuration and custom resources:
 ```bash
-kubectl apply -f kubernetes/teranode/teranode-configmap.yaml -n teranode-operator
-kubectl apply -f kubernetes/teranode/teranode-cr.yaml -n teranode-operator
+kubectl apply -f deploy/kubernetes/teranode/teranode-configmap.yaml -n teranode-operator
+kubectl apply -f deploy/kubernetes/teranode/teranode-cr.yaml -n teranode-operator
 ```
 
 A fresh Teranode starts up in IDLE state by default. To start syncing from the legacy network, you can run:

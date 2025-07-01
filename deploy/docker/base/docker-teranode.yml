@@ -1,6 +1,6 @@
 x-teranode-base:
   &teranode-base
-  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.9.11
+  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.9.16
   networks:
     - teranode-network
   volumes:
