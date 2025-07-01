@@ -1,60 +1,60 @@
 
-CREATE ROLE "coinbase-prod-teranet-1" LOGIN
-  PASSWORD 'coinbase-prod-teranet-1'
+CREATE ROLE "coinbase-prod-eks-1-teranet-1" LOGIN
+  PASSWORD 'coinbase-prod-eks-1-teranet-1'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "coinbase-prod-teranet-1" to postgresuser;
+grant "coinbase-prod-eks-1-teranet-1" to postgresuser;
 CREATE
-DATABASE "coinbase-prod-teranet-1"
-  WITH OWNER = "coinbase-prod-teranet-1"
+DATABASE "coinbase-prod-eks-1-teranet-1"
+  WITH OWNER = "coinbase-prod-eks-1-teranet-1"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE "coinbase-prod-teranet-2" LOGIN
-  PASSWORD 'coinbase-prod-teranet-2'
+CREATE ROLE "coinbase-prod-eks-1-teranet-2" LOGIN
+  PASSWORD 'coinbase-prod-eks-1-teranet-2'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "coinbase-prod-teranet-2" to postgresuser;
+grant "coinbase-prod-eks-1-teranet-2" to postgresuser;
 CREATE
-DATABASE "coinbase-prod-teranet-2"
-  WITH OWNER = "coinbase-prod-teranet-2"
+DATABASE "coinbase-prod-eks-1-teranet-2"
+  WITH OWNER = "coinbase-prod-eks-1-teranet-2"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE "coinbase-prod-teranet-3" LOGIN
-  PASSWORD 'coinbase-prod-teranet-3'
+CREATE ROLE "coinbase-prod-eks-1-teranet-3" LOGIN
+  PASSWORD 'coinbase-prod-eks-1-teranet-3'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "coinbase-prod-teranet-3" to postgresuser;
+grant "coinbase-prod-eks-1-teranet-3" to postgresuser;
 CREATE
-DATABASE "coinbase-prod-teranet-3"
-  WITH OWNER = "coinbase-prod-teranet-3"
+DATABASE "coinbase-prod-eks-1-teranet-3"
+  WITH OWNER = "coinbase-prod-eks-1-teranet-3"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE "prod-teranet-1" LOGIN
-  PASSWORD 'prod-teranet-1'
+CREATE ROLE "prod-eks-1-teranet-1" LOGIN
+  PASSWORD 'prod-eks-1-teranet-1'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "prod-teranet-1" to postgresuser;
+grant "prod-eks-1-teranet-1" to postgresuser;
 CREATE
-DATABASE "prod-teranet-1"
-  WITH OWNER = "prod-teranet-1"
+DATABASE "prod-eks-1-teranet-1"
+  WITH OWNER = "prod-eks-1-teranet-1"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE "prod-teranet-2" LOGIN
-  PASSWORD 'prod-teranet-2'
+CREATE ROLE "prod-eks-1-teranet-2" LOGIN
+  PASSWORD 'prod-eks-1-teranet-2'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "prod-teranet-2" to postgresuser;
+grant "prod-eks-1-teranet-2" to postgresuser;
 CREATE
-DATABASE "prod-teranet-2"
-  WITH OWNER = "prod-teranet-2"
+DATABASE "prod-eks-1-teranet-2"
+  WITH OWNER = "prod-eks-1-teranet-2"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE "prod-teranet-3" LOGIN
-  PASSWORD 'prod-teranet-3'
+CREATE ROLE "prod-eks-1-teranet-3" LOGIN
+  PASSWORD 'prod-eks-1-teranet-3'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant "prod-teranet-3" to postgresuser;
+grant "prod-eks-1-teranet-3" to postgresuser;
 CREATE
-DATABASE "prod-teranet-3"
-  WITH OWNER = "prod-teranet-3"
+DATABASE "prod-eks-1-teranet-3"
+  WITH OWNER = "prod-eks-1-teranet-3"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
