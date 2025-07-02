@@ -10,8 +10,8 @@ import (
 	"unsafe"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/cespare/xxhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"

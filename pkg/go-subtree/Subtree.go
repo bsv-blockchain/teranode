@@ -9,8 +9,8 @@ import (
 	"math"
 	"sync"
 
-	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

@@ -28,7 +28,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation/blockvalidation_api"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
@@ -43,6 +42,7 @@ import (
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"

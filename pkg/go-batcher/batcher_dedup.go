@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 )
 
 // TimePartitionedMap is a time-partitioned map for efficient expiration of old entries.

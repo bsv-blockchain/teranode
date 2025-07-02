@@ -8,7 +8,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
-	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
@@ -21,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-bitcoin"

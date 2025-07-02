@@ -26,7 +26,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
-	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -52,6 +51,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 )
 
 // maxFailedAttempts is the maximum number of successive failed connection

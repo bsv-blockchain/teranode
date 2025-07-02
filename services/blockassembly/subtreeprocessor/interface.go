@@ -15,8 +15,8 @@ package subtreeprocessor
 import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
-	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
