@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/asset/repository"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -19,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/labstack/echo/v4"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libsv/go-p2p/test"

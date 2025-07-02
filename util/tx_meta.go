@@ -1,9 +1,9 @@
 package util
 
 import (
-	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-subtree"
 )
 
 func TxMetaDataFromTx(tx *bt.Tx) (*meta.Data, error) {

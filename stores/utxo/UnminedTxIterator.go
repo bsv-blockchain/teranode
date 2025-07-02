@@ -3,8 +3,8 @@ package utxo
 import (
 	"context"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
 )
 
 // UnminedTransaction represents an unmined transaction in the UTXO store.

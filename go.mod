@@ -18,6 +18,7 @@ require (
 	github.com/bitcoin-sv/go-sdk v1.1.21
 	github.com/bitcoin-sv/testcontainers-aerospike-go v0.2.2
 	github.com/bsv-blockchain/go-bt/v2 v2.3.0
+	github.com/bsv-blockchain/go-subtree v1.0.1
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
 	github.com/centrifugal/centrifuge v0.33.2
@@ -62,7 +63,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.36.0
 	go.uber.org/atomic v1.11.0
 	golang.org/x/crypto v0.39.0
-	golang.org/x/exp v0.0.0-20250606033433-dcc06ee1d476
+	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b
 	golang.org/x/sync v0.15.0
 	golang.org/x/sys v0.33.0
 	golang.org/x/term v0.32.0

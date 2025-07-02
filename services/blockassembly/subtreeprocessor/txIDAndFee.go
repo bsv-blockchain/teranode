@@ -5,7 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	"github.com/bsv-blockchain/go-subtree"
 )
 
 // TxIDAndFee represents a transaction with its associated fee information and linking metadata.
