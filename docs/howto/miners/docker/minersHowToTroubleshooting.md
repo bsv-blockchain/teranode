@@ -191,7 +191,7 @@ Teranode is highly dependent on its third party dependencies. Postgres, Kafka an
 
 
 
-If a third party service fails, you must restore its functionality. Once it is back, please restart Teranode cleanly, as per the instructions in the Section 6 of this document.
+If a third party service fails, you must restore its functionality. Once it is back, please restart Teranode cleanly following the instructions in the [How to Start and Stop Teranode in Docker](minersHowToStopStartDockerTeranode.md) guide.
 
 
 

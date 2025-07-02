@@ -204,10 +204,12 @@ curl http://localhost:8090/api/v1/tx/<txid>
 ### Monitoring Your Node
 
 1. Access Grafana dashboards:
+
     - Open http://localhost:3005
     - Navigate to "TERANODE Service Overview"
 
 2. Key metrics to watch:
+
     - Block queue length (should be near 0)
     - Transaction processing rate
     - Memory and CPU usage

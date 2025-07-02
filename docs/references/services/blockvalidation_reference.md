@@ -149,6 +149,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.
 ```
 
 Creates a new instance of the `Server` with:
+
 - Initialization of Prometheus metrics
 - Setup of background processors
 - Configuration of validation components
@@ -159,8 +160,10 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 ```
 
 Performs comprehensive health checks:
+
 - Liveness checks when checkLiveness is true
 - Dependency checks including:
+
     - Kafka broker status
     - Blockchain client
     - FSM state
@@ -174,6 +177,7 @@ func (u *Server) Init(ctx context.Context) (err error)
 ```
 
 Initializes the Block Validation Service:
+
 - Creates subtree validation client
 - Configures UTXO store and expiration settings
 - Initializes the BlockValidation instance
@@ -186,6 +190,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
 Starts the Block Validation Service:
+
 - Waits for blockchain FSM to transition from IDLE state
 - Starts Kafka consumer for blocks
 - Initializes and starts the gRPC server
@@ -197,6 +202,7 @@ func (u *Server) Stop(_ context.Context) error
 ```
 
 Gracefully shuts down the Block Validation Service:
+
 - Stops the subtree notification cache
 - Closes the Kafka consumer
 
@@ -206,6 +212,7 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMes
 ```
 
 Performs a gRPC health check on the service, including:
+
 - Full dependency verification
 - Detailed status reporting
 - Timestamp information
@@ -216,6 +223,7 @@ func (u *Server) Init(ctx context.Context) (err error)
 ```
 
 Initializes the service:
+
 - Sets up subtree validation client
 - Configures background processors
 - Initializes Kafka consumer
@@ -227,6 +235,7 @@ func (u *Server) Start(ctx context.Context) error
 ```
 
 Starts all service components:
+
 - Kafka consumer
 - HTTP server (if configured)
 - gRPC server
@@ -238,6 +247,7 @@ func (u *Server) Stop(_ context.Context) error
 ```
 
 Gracefully stops the service:
+
 - Closes TTL cache
 - Shuts down Kafka consumer
 - Cleans up resources
@@ -248,6 +258,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 ```
 
 Handles notification of new blocks:
+
 - Verifies block doesn't already exist
 - Queues block for validation
 - Optionally waits for validation completion
@@ -258,6 +269,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 ```
 
 Processes complete blocks:
+
 - Validates block structure
 - Handles height calculation
 - Integrates with blockchain state
@@ -312,6 +324,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 ```
 
 Performs comprehensive block validation:
+
 - Size verification
 - Parent block validation
 - Subtree validation

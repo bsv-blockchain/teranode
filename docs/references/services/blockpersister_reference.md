@@ -78,6 +78,7 @@ Creates a new instance of the `Server` with the provided dependencies.
 This constructor initializes all components required for block persistence operations, including stores, state management, and client connections. It accepts optional configuration functions to customize the server instance after construction.
 
 Parameters:
+
 - ctx: Context for controlling the server lifecycle
 - logger: Logger for recording operational events and errors
 - tSettings: Configuration settings that control server behavior
@@ -97,6 +98,7 @@ func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server)
 WithSetInitialState is an optional configuration function that sets the initial state of the block persister server. This can be used during initialization to establish a known starting point for block persistence operations.
 
 Parameters:
+
 - height: The blockchain height to set as the initial state
 - hash: The block hash corresponding to the specified height
 
@@ -110,19 +112,23 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 Performs health checks on the server and its dependencies. This method implements the health.Check interface and is used by monitoring systems to determine the operational status of the service.
 
 The health check distinguishes between liveness (is the service running?) and readiness (is the service able to handle requests?) checks:
+
 - Liveness checks verify the service process is running and responsive
 - Readiness checks verify all dependencies are available and functioning
 
 Parameters:
+
 - ctx: Context for coordinating cancellation or timeouts
 - checkLiveness: When true, only liveness checks are performed; when false, both liveness and readiness checks are performed
 
 Returns:
+
 - int: HTTP status code (200 for healthy, 503 for unhealthy)
 - string: Human-readable status message
 - error: Any error encountered during health checking
 
 Dependency checks include:
+
 - Blockchain client and FSM status
 - Block store availability
 - Subtree store status
@@ -138,6 +144,7 @@ Initializes the server, setting up any required resources.
 This method is called after construction but before the server starts processing blocks. It performs one-time initialization tasks such as setting up Prometheus metrics.
 
 Parameters:
+
 - ctx: Context for coordinating initialization operations
 
 Returns an error if initialization fails, nil otherwise.
@@ -152,12 +159,14 @@ Initializes and begins the block persister service operations.
 This method starts the main processing loop and sets up HTTP services if configured. It waits for the blockchain FSM to transition from IDLE state before beginning block persistence operations to ensure the blockchain is ready.
 
 The method implements the following key operations:
+
 - Waits for blockchain service readiness
 - Sets up HTTP blob server if required by configuration
 - Starts the main processing loop in a background goroutine
 - Signals service readiness through the provided channel
 
 Parameters:
+
 - ctx: Context for controlling the service lifecycle and handling cancellation
 - readyCh: Channel used to signal when the service is ready to accept requests
 
@@ -177,6 +186,7 @@ This method is called when the service is being stopped and provides an opportun
 Currently, the Server doesn't need to perform any specific cleanup actions during shutdown as resource cleanup is handled by the context cancellation mechanism in the Start method.
 
 Parameters:
+
 - ctx: Context for controlling the shutdown operation (currently unused)
 
 Returns an error if shutdown fails, or nil on successful shutdown.
@@ -193,9 +203,11 @@ Retrieves the next block that needs to be processed based on the current state a
 This method determines the next block to persist by comparing the last persisted block height with the current blockchain tip. It ensures blocks are persisted in sequence without gaps and respects the configured persistence age policy to control how far behind persistence can lag.
 
 Parameters:
+
 - ctx: Context for coordinating the block retrieval operation
 
 Returns:
+
 - *model.Block: The next block to process, or nil if no block needs processing yet
 - error: Any error encountered during the operation
 
@@ -226,6 +238,7 @@ The process follows these key steps:
 Transaction metadata retrieval can use batching if configured, which optimizes performance for high transaction volumes by reducing the number of individual store requests.
 
 Parameters:
+
 - pCtx: Parent context for the operation, used for cancellation and tracing
 - subtreeHash: Hash identifier of the subtree to process
 - coinbaseTx: The coinbase transaction for the block containing this subtree
@@ -254,6 +267,7 @@ The function performs the following steps:
 The function includes safety checks to handle nil transaction metadata or transactions, logging errors but continuing processing when possible to maximize resilience.
 
 Parameters:
+
 - ctx: Context for the operation, enabling cancellation and tracing
 - logger: Logger for recording operations, errors, and warnings
 - writer: FileStorer destination for writing serialized transaction data
@@ -261,6 +275,7 @@ Parameters:
 - utxoDiff: UTXO set difference tracker (optional, can be nil if UTXO tracking not needed)
 
 Returns an error if writing fails at any point. Specific error conditions include:
+
 - Failure to write the transaction count header
 - Failure to write individual transaction data
 - Errors during UTXO processing for transactions
@@ -297,6 +312,7 @@ The BlockPersister service relies on interactions with several other components:
 ## State Management
 
 The service maintains persistence state through the `state.State` component:
+
 - Tracks last persisted block height
 - Manages block hash records
 - Provides atomic state updates
@@ -304,6 +320,7 @@ The service maintains persistence state through the `state.State` component:
 ## Error Handling
 
 The service implements comprehensive error handling:
+
 - Storage errors trigger retries after delay
 - Processing errors are logged with context
 - Configuration errors prevent service startup
@@ -312,6 +329,7 @@ The service implements comprehensive error handling:
 ## Metrics
 
 The service provides Prometheus metrics for monitoring:
+
 - Block persistence timing
 - Subtree validation metrics
 - Transaction processing stats
@@ -320,6 +338,7 @@ The service provides Prometheus metrics for monitoring:
 ## Dependencies
 
 Required components:
+
 - Block Store (blob.Store)
 - Subtree Store (blob.Store)
 - UTXO Store (utxo.Store)

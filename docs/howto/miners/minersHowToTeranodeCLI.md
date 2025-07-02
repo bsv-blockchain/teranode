@@ -84,6 +84,7 @@ Retrieves transaction data from an Aerospike database using the provided transac
 teranode-cli bitcointoutxoset --bitcoinDir=<bitcoin-data-path> --outputDir=<output-dir-path> [options]
 ```
 Options:
+
 - `--bitcoinDir`: Location of Bitcoin data (required)
 - `--outputDir`: Output directory for UTXO set (required)
 - `--skipHeaders`: Skip processing headers
@@ -98,6 +99,7 @@ Options:
 teranode-cli filereader [path] [options]
 ```
 Options:
+
 - `--verbose`: Enable verbose output
 - `--checkHeights`: Check heights in UTXO headers
 - `--useStore`: Use store
@@ -112,8 +114,9 @@ Gets the current FSM state of the system.
 teranode-cli setfsmstate --fsmstate=<state>
 ```
 Options:
+
 - `--fsmstate`: Target FSM state (required)
-  - Valid values: running, idle, catchingblocks, legacysyncing
+    - Valid values: running, idle, catchingblocks, legacysyncing
 
 ### Export Blocks
 ```bash
@@ -122,6 +125,7 @@ teranode-cli export-blocks --file=<path>
 Exports blockchain data to a CSV file.
 
 Options:
+
 - `--file`: CSV file path to export (required)
 
 ### Import Blocks
@@ -131,6 +135,7 @@ teranode-cli import-blocks --file=<path>
 Import blockchain data from a CSV file.
 
 Options:
+
 - `--file`: CSV file path to import (required)
 
 ### Check Block Template
@@ -144,6 +149,7 @@ Validates the current block template. Useful for miners to ensure block template
 teranode-cli seeder --inputDir=<input-dir> --hash=<hash> [options]
 ```
 Options:
+
 - `--inputDir`: Input directory for UTXO set and headers (required)
 - `--hash`: Hash of the UTXO set / headers to process (required)
 - `--skipHeaders`: Skip processing headers
@@ -152,6 +158,7 @@ Options:
 ## Error Handling
 
 The CLI will exit with status code 1 when:
+
 - Invalid commands are provided
 - Required arguments are missing
 - Command execution fails

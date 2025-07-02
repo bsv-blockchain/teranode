@@ -136,6 +136,7 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 Checks the health status of the service and its dependencies. This method implements the standard Teranode health check interface used across all services for consistent monitoring, alerting, and orchestration. It provides both readiness and liveness checking capabilities to support different operational scenarios.
 
 The method performs checks appropriate to the service's role, including:
+
 - Verifying store access for subtree, transaction, and UTXO data
 - Checking connections to dependent services (validator, blockchain)
 - Validating Kafka consumer health
@@ -166,6 +167,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
 Initializes and starts the server components including Kafka consumers and gRPC server. This method launches all the operational components of the subtree validation service, including:
+
 - Kafka consumers for subtree and transaction metadata messages
 - The gRPC server for API access
 - Any background workers or timers required for operation
@@ -197,6 +199,7 @@ func (u *Server) CheckSubtreeFromBlock(ctx context.Context, request *subtreevali
 Validates a subtree and its transactions based on the provided request. This method is the primary gRPC API endpoint for subtree validation, responsible for coordinating the validation process for an entire subtree of interdependent transactions. It ensures that all transactions in the subtree adhere to consensus rules and can be added to the blockchain.
 
 The method implements several important features:
+
 - Distributed locking to prevent duplicate validation of the same subtree
 - Retry logic for lock acquisition with exponential backoff
 - Support for both legacy and current validation paths for backward compatibility
@@ -204,6 +207,7 @@ The method implements several important features:
 - Structured error responses with appropriate gRPC status codes
 
 Validation includes checking that:
+
 - All transactions in the subtree are valid according to consensus rules
 - All transaction inputs refer to unspent outputs or other transactions in the subtree
 - No double-spending conflicts exist within the subtree or with existing chain state
@@ -300,6 +304,7 @@ The validation process includes several key steps:
 7. Handling any conflicts or validation failures
 
 The method employs several optimization techniques:
+
 - Batch processing of transaction validations where possible
 - Caching of transaction metadata to avoid redundant validation
 - Parallel processing of independent transaction validations
@@ -316,6 +321,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainh
 Validates a transaction and retrieves its metadata, performing the core consensus validation operations required for blockchain inclusion. This method applies full validation to a transaction, ensuring it adheres to all Bitcoin consensus rules and can be properly included in the blockchain.
 
 The validation includes:
+
 - Transaction format and structure validation
 - Input signature verification
 - Input UTXO availability and spending authorization
@@ -427,6 +433,7 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 Returns a function that processes Kafka messages for subtree validation. It handles both recoverable and unrecoverable errors appropriately. The handler includes sophisticated error categorization to determine whether errors should result in message reprocessing or rejection.
 
 Key features include:
+
 - Different handling for recoverable vs. non-recoverable errors
 - State-aware processing that considers the current blockchain state
 - Proper context cancellation handling

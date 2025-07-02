@@ -167,8 +167,10 @@ services:
 teranode-1:
 image: teranode
 environment:
+
 - SETTINGS_CONTEXT=${SETTINGS_CONTEXT_1}
 ports:
+
 - "10090:8090"  # Health check port
 - "10093:8093"  # Coinbase service
 - "10087:8087"  # Blockchain service

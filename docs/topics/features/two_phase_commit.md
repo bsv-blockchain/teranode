@@ -5,12 +5,12 @@
 1. [Overview](#1-overview)
 2. [Purpose and Benefits](#2-purpose-and-benefits)
 3. [Implementation Details](#3-implementation-details)
-   - [3.1. Phase 1: Initial Transaction Creation with Unspendable Flag](#31-phase-1-initial-transaction-creation-with-unspendable-flag)
-   - [3.2. Phase 2: Unsetting the Unspendable Flag](#32-phase-2-unsetting-the-unspendable-flag)
-   - [3.3. Special Case: Transactions from Blocks](#33-special-case-transactions-from-blocks)
+    - [3.1. Phase 1: Initial Transaction Creation with Unspendable Flag](#31-phase-1-initial-transaction-creation-with-unspendable-flag)
+    - [3.2. Phase 2: Unsetting the Unspendable Flag](#32-phase-2-unsetting-the-unspendable-flag)
+    - [3.3. Special Case: Transactions from Blocks](#33-special-case-transactions-from-blocks)
 4. [Service Interaction](#4-service-interaction)
-   - [4.1. Validator Service Role](#41-validator-service-role)
-   - [4.2. Block Validation Service Role](#42-block-validation-service-role)
+    - [4.1. Validator Service Role](#41-validator-service-role)
+    - [4.2. Block Validation Service Role](#42-block-validation-service-role)
 5. [Data Model Impact](#5-data-model-impact)
 6. [Configuration Options](#6-configuration-options)
 7. [Flow Diagrams](#7-flow-diagrams)
@@ -31,6 +31,7 @@ The Two-Phase Transaction Commit process addresses several critical concerns tha
 - **Atomicity in a Microservice Architecture**: The process ensures that a transaction is either fully processed across all components or effectively doesn't exist at all. This prevents serious inconsistencies between the UTXO store and Block Assembly.
 
 - **Prevention of Data Corruption Scenarios**:
+
    - **Scenario 1 - Block Assembly Without UTXO Storage**: Without two-phase commit, if a transaction were added to Block Assembly but failed to be stored in the UTXO store, when that block is mined, future transactions trying to spend its outputs would be rejected because the outputs don't exist in the UTXO store. This could cause a chain fork.
    - **Scenario 2 - UTXO Storage Without Block Assembly**: If a transaction is stored in the UTXO store but not added to Block Assembly, it creates "ghost money" that exists in the database but isn't in the blockchain.
 
@@ -51,19 +52,22 @@ The Two-Phase Transaction Commit process is built on a critical assumption that 
 This means that for any transaction being processed:
 
 1. **All input transactions (parent transactions) must be in one of these states**:
-   - Already mined in a confirmed block (transactions in blocks with multiple confirmations)
+
+    - Already mined in a confirmed block (transactions in blocks with multiple confirmations)
    - Currently in a block template (pending mining, not yet in a block)
    - In the immediately previous block (transactions in the most recently mined block)
 
    > **Note**: The distinction between "already mined in a confirmed block" and "in the immediately previous block" is important. The former refers to transactions with multiple confirmations that are considered stable, while the latter refers specifically to transactions in the most recently added block that have only one confirmation and may still be subject to reorganization.
 
 2. **Implications**:
-   - This assumption ensures that all parent transactions are either confirmed or in the process of being confirmed
+
+    - This assumption ensures that all parent transactions are either confirmed or in the process of being confirmed
    - It prevents the system from processing transactions that refer to parent transactions that are still in an intermediate state
    - It creates a clean dependency chain where transactions build upon others that are already securely in the system
 
 3. **Security Benefits**:
-   - Prevents transaction graph inconsistencies
+
+    - Prevents transaction graph inconsistencies
    - Eliminates scenarios where transaction outputs could be spent before their parent transactions are fully committed
    - Supports the effectiveness of the unspendable flag mechanism
 
@@ -183,6 +187,6 @@ type Options struct {
 
 ## 8. Related Documentation
 
-- [Validator Service Documentation](../services/validator.md#two-phase-transaction-commit)
-- [Block Validation Service Documentation](../services/blockValidation.md#marking-txs-as-mined)
+- [Validator Service Documentation](../services/validator.md#271-two-phase-transaction-commit-process)
+- [Block Validation Service Documentation](../services/blockValidation.md#23-marking-txs-as-mined)
 - [UTXO Data Model Documentation](../datamodel/utxo_data_model.md)

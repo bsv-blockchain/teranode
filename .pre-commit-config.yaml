@@ -18,3 +18,12 @@ repos:
     rev: v4.4.0
     hooks:
       - id: check-merge-conflict
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.37.0
+    hooks:
+      - id: markdownlint
+        name: Lint Markdown files
+        entry: markdownlint
+        language: node
+        files: \.md$
+        args: ["--config", ".markdownlint.yml"]

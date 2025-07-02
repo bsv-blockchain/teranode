@@ -8,12 +8,12 @@
     - [2.1. Starting the Validator as a service](#21-starting-the-validator-as-a-service)
     - [2.2. Receiving Transaction Validation Requests](#22-receiving-transaction-validation-requests)
     - [2.3. Validating the Transaction](#23-validating-the-transaction)
-        - [2.3.1. Consensus Rules vs Policy Checks](#231-consensus-rules-vs-policy-checks)
+    - [2.3.1. Consensus Rules vs Policy Checks](#231-consensus-rules-vs-policy-checks)
     - [2.4. Script Verification](#24-script-verification)
     - [2.5. Error Handling and Transaction Rejection](#25-error-handling-and-transaction-rejection)
     - [2.6. Concurrent Processing](#26-concurrent-processing)
     - [2.7. Post-validation: Updating stores and propagating the transaction](#27-post-validation-updating-stores-and-propagating-the-transaction)
-        - [2.7.1. Two-Phase Transaction Commit Process](#271-two-phase-transaction-commit-process)
+    - [2.7.1. Two-Phase Transaction Commit Process](#271-two-phase-transaction-commit-process)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -37,13 +37,15 @@ The `Validator` (also called `Transaction Validator` or `Tx Validator`) is a go 
 The Validator can be deployed in two distinct ways:
 
 1. **Local Validator (Recommended)**:
-   - The Validator is instantiated directly within other services (like the Propagation, Subtree Validation, and Legacy Services)
+
+    - The Validator is instantiated directly within other services (like the Propagation, Subtree Validation, and Legacy Services)
    - This is the recommended approach for production deployments due to better performance
    - No additional network calls are needed between services and validator
    - Configuration: Set `validator.useLocalValidator=true` in your settings
 
 2. **Remote Validator Service**:
-   - The Validator runs as an independent service with a gRPC interface
+
+    - The Validator runs as an independent service with a gRPC interface
    - Other services connect to it remotely via gRPC
    - This approach has higher latency due to additional network calls
    - Useful for development, testing, or specialized deployment scenarios
@@ -73,19 +75,22 @@ A node can start multiple parallel instances of the TX Validator. This translate
 The Validator uses Kafka for several critical messaging paths:
 
 1. **Transaction Metadata Publishing**:
-   - Successfully validated transactions have their metadata published to a Kafka topic
+
+    - Successfully validated transactions have their metadata published to a Kafka topic
    - Metadata includes transaction ID, size, fee, input and output information
    - The `txmetaKafkaProducerClient` handles this publishing process
    - Target topic is configured via `Kafka.TxMetaConfig` settings
 
 2. **Rejected Transaction Notifications**:
-   - When transactions fail validation, details are published to a rejection topic
+
+    - When transactions fail validation, details are published to a rejection topic
    - The `rejectedTxKafkaProducerClient` is responsible for these messages
    - Includes rejection reason, transaction ID, and error classification
    - Helps with network-wide tracking of invalid transactions
 
 3. **Transaction Validation Requests**:
-   - The Validator can also consume validation requests via Kafka
+
+    - The Validator can also consume validation requests via Kafka
    - This enables asynchronous transaction processing patterns
    - Useful for high-throughput scenarios where immediate responses aren't needed
 
@@ -125,16 +130,19 @@ The Propagation and Subtree Validation modules invoke the validator process in o
 BlockValidation and Propagation invoke the validator process with and without batching. Batching is settings controlled, and improves the processing performance.
 
 1. **Transaction Propagation**:
+
     - The Propagation module `ProcessTransaction()` function invokes `Validate()` on the Validator client.
     - The Validator validates the transaction.
 
 2. **Subtree Validation**:
+
     - The SubtreeValidation module `blessMissingTransaction()` function invokes `Validate()` on the Validator client.
     - The Validator validates the transaction.
 
 ### 2.3. Validating the Transaction
 
 For every transaction received, Teranode must validate:
+
  - All inputs against the existing UTXO-set, verifying if the input(s) can be spent,
     - Notice that if Teranode detects a double-spend, the transaction that was received first must be considered the valid transaction.
  - Bitcoin consensus rules,
@@ -146,19 +154,22 @@ Teranode will consider a transaction that passes consensus rules, local policies
 The validation process includes several stages:
 
 1. **Basic Transaction Structure Validation**:
-   - Verify inputs and outputs are present
-   - Check transaction size against policy limits
-   - Validate input and output value ranges
+
+    - Verify inputs and outputs are present
+    - Check transaction size against policy limits
+    - Validate input and output value ranges
 
 2. **Policy Validation**:
-   - Apply configurable policy rules that can be enabled/disabled
-   - Check transaction fees against minimum requirements
-   - Enforce limits on script operations (sigops)
+
+    - Apply configurable policy rules that can be enabled/disabled
+    - Check transaction fees against minimum requirements
+    - Enforce limits on script operations (sigops)
 
 3. **Input Validation**:
-   - Verify inputs exist in the UTXO set
-   - Ensure inputs are unspent (prevent double-spending)
-   - Validate input script format
+
+    - Verify inputs exist in the UTXO set
+    - Ensure inputs are unspent (prevent double-spending)
+    - Validate input script format
 
 New Txs are validated by the `ValidateTransaction()` function. To ensure the validity of the extended Tx, this is delegated to a BSV library: `github.com/TAAL-GmbH/arc/validator/default` (the default validator).
 
@@ -273,13 +284,15 @@ The above represents an implementation of the core Teranode validation rules:
 In Bitcoin transaction validation, there are two distinct types of rules:
 
 1. **Consensus Rules**: Mandatory rules that all nodes must enforce to maintain network consensus. Transactions violating consensus rules are always rejected. These include:
-   - Transaction structure and formatting
+
+    - Transaction structure and formatting
    - Double-spend prevention
    - Input and output value constraints
    - Script execution validity
 
 2. **Policy Rules**: Node-specific preferences that determine which valid transactions to accept, relay, or mine. Policy rules can differ between nodes without breaking consensus. These include:
-   - Minimum transaction fees
+
+    - Minimum transaction fees
    - Maximum transaction size
    - Script complexity limits
    - Dust output thresholds
@@ -296,6 +309,7 @@ The `SkipPolicyChecks` feature allows Teranode to validate transactions while by
 - Continue enforcing all consensus rules
 
 This feature is particularly important when validating transactions that:
+
 - Are part of blocks mined by other miners (which have already been validated through proof-of-work)
 - Need to be accepted regardless of local policy preferences
 - Have already been confirmed on the blockchain
@@ -314,6 +328,7 @@ When validating transactions from blocks mined by other nodes, policy checks sho
 ##### Skip Policy Checks - Usage
 
 To use this feature:
+
 - When directly calling the validator: Use the `WithSkipPolicyChecks(true)` option
 - When using the gRPC API endpoint: Set the `skip_policy_checks` field to `true` in the `ValidateTransactionRequest` message
 - In services like Subtree Validation: The option is applied automatically when validating block transactions
@@ -323,21 +338,24 @@ To use this feature:
 The Validator supports multiple script verification implementations through a flexible interpreter architecture. Three different script interpreters are supported:
 
 1. **GoBT Interpreter** (`TxInterpreterGoBT`):
-   - Based on the Go-BT library
-   - Default interpreter for basic script validation
+    - Based on the Go-BT library
+    - Default interpreter for basic script validation
 
 2. **GoSDK Interpreter** (`TxInterpreterGoSDK`):
-   - Based on the Go-SDK library
-   - Provides advanced script validation capabilities
+    - Based on the Go-SDK library
+    - Provides advanced script validation capabilities
 
 3. **GoBDK Interpreter** (`TxInterpreterGoBDK`):
-   - Based on the Go-BDK library
-   - Optimized for performance in high-throughput scenarios
-   - Includes specialized Bitcoin script validation features
+    - Based on the Go-BDK library
+    - Optimized for performance in high-throughput scenarios
+    - Includes specialized Bitcoin script validation features
 
 The script verification process:
+
 1. Each transaction input's unlocking script is validated against its corresponding output's locking script
+
 2. The interpreter evaluates if the combined script executes successfully and leaves 'true' on the stack
+
 3. The script verification is context-aware, considering current block height and network parameters
 
 Script verification can be configured using the `validator_scriptVerificationLibrary` setting, which defaults to "VerificatorGoBT".
@@ -347,19 +365,22 @@ Script verification can be configured using the `validator_scriptVerificationLib
 The Validator implements a structured error handling system to categorize and report different types of validation failures:
 
 1. **Error Types**:
-   - `TxInvalidError`: Generated when a transaction fails basic validation rules
+
+    - `TxInvalidError`: Generated when a transaction fails basic validation rules
    - `ProcessingError`: Occurs during transaction processing issues
    - `ConfigurationError`: Indicates validator configuration problems
    - `ServiceError`: Represents broader service-level issues
 
 2. **Rejection Flow**:
-   - When a transaction is rejected, detailed error information is captured
+
+    - When a transaction is rejected, detailed error information is captured
    - Rejection reasons are categorized (e.g., invalid inputs, script failure, insufficient fees)
    - Rejected transactions are published to a dedicated Kafka topic if configured
    - The P2P service receives notifications about rejected transactions
 
 3. **Error Propagation**:
-   - Errors are wrapped and propagated through the system with context information
+
+    - Errors are wrapped and propagated through the system with context information
    - GRPC error codes translate internal errors for API responses
    - Detailed error messages assist in diagnosing validation issues
 
@@ -368,20 +389,24 @@ The Validator implements a structured error handling system to categorize and re
 The Validator leverages concurrency to optimize transaction processing performance:
 
 1. **Parallel UTXO Saving**:
-   - The `saveInParallel` flag enables concurrent UTXO updates
+
+    - The `saveInParallel` flag enables concurrent UTXO updates
    - Improves throughput by processing multiple transactions simultaneously
 
 2. **Batching**:
-   - Transactions can be validated in batches for higher throughput
+
+    - Transactions can be validated in batches for higher throughput
    - Batch processing is configurable and used by both Propagation and Subtree Validation services
    - The `TriggerBatcher()` method initiates batch processing when sufficient transactions accumulate
 
 3. **Error Group Pattern**:
-   - Uses Go's `errgroup` package for coordinated concurrent execution
+
+    - Uses Go's `errgroup` package for coordinated concurrent execution
    - Maintains proper error propagation in concurrent processing flows
 
 4. **Two-Phase Commit Process**:
-   - The `twoPhaseCommitTransaction` method ensures atomic transaction processing
+
+    - The `twoPhaseCommitTransaction` method ensures atomic transaction processing
    - Prevents partial updates in case of failures during concurrent processing
 
 ### 2.7. Post-validation: Updating stores and propagating the transaction
@@ -393,6 +418,7 @@ Once a Tx is validated, the Validator will update the UTXO store with the new Tx
 
 - The Server receives a validation request and calls the `Validate` method on the Validator struct.
 - If the transaction is valid:
+
     - The Validator marks the transaction's input UTXOs as spent in the UTXO Store.
     - The Validator registers the new transaction in the UTXO Store.
     - The Validator sends transaction metadata to the Subtree Validation Service via Kafka topic (`txmeta`).
@@ -400,6 +426,7 @@ Once a Tx is validated, the Validator will update the UTXO store with the new Tx
     - The Validator stores the new UTXOs generated by the transaction in the UTXO Store.
 
 - If the transaction is invalid:
+
     - The Server sends invalid transaction notifications to all P2P Service subscribers.
     - The rejected Tx is not stored or tracked in any store, and it is simply discarded.
 
@@ -431,22 +458,28 @@ When the Transaction Validator Service identifies an invalid transaction, it emp
 ![tx_validation_p2p_subscribers.svg](img/plantuml/validator/tx_validation_p2p_subscribers.svg)
 
 1. **Transaction Validation**:
+
     - The Validator receives a transaction for validation via a gRPC call to the `ValidateTransaction` method.
     - The Validator performs its checks, including script verification, UTXO spending, and other validation rules.
 
 2. **Identification of Invalid Transactions**:
+
     - If the transaction fails any of the validation checks, it is deemed invalid (rejected).
 
 3. **Notification of Rejected Transactions**:
+
     - When a transaction is rejected, the Validator publishes information about the rejected transaction to a dedicated Kafka topic (`rejectedTx`).
     - This is done using the Rejected Tx Kafka Producer, which is configured via the `kafka_rejectedTxConfig` setting.
 
 4. **Kafka Message Content**:
+
     - The Kafka message for a rejected transaction typically includes:
+
         - The transaction ID (hash)
         - The reason for rejection (error message)
 
 5. **Consumption of Rejected Transaction Notifications**:
+
     - Other services in the system, such as the P2P Service, can subscribe to this Kafka topic.
     - By consuming messages from this topic, these services receive notifications about rejected transactions and can take appropriate action (e.g., banning peers that send invalid transactions).
 
@@ -455,22 +488,27 @@ When the Transaction Validator Service identifies an invalid transaction, it emp
 The Validator implements a two-phase commit process for transaction creation and addition to block assembly:
 
 1. **Phase 1 - Transaction Creation with Unspendable Flag**:
-   - When a transaction is created, it is initially stored in the UTXO store with an "unspendable" flag set to `true`.
+
+    - When a transaction is created, it is initially stored in the UTXO store with an "unspendable" flag set to `true`.
    - This flag prevents the transaction outputs from being spent while it's in the process of being validated and added to block assembly, protecting against potential double-spend attempts.
 
 2. **Phase 2 - Unsetting the Unspendable Flag**:
-   - The unspendable flag is unset in two key scenarios:
+
+    - The unspendable flag is unset in two key scenarios:
 
    a. **After Successful Addition to Block Assembly**:
+
       - When a transaction is successfully validated and added to the block assembly, the Validator service immediately unsets the "unspendable" flag (sets it to `false`).
       - This makes the transaction outputs available for spending in subsequent transactions, even before the transaction is mined in a block.
 
    b. **When Mined in a Block (Fallback Mechanism)**:
+
       - As a fallback mechanism, if the flag hasn't been unset already, it will be unset when the transaction is mined in a block.
       - When the transaction is mined in a block and that block is processed by the Block Validation service, the "unspendable" flag is unset (set to `false`) during the `SetMinedMulti` operation.
 
 3. **Ignoring Unspendable Flag for Block Transactions**:
-   - When processing transactions that are part of a block (as opposed to new transactions to include in an upcoming block), the validator can be configured to ignore the unspendable flag.
+
+    - When processing transactions that are part of a block (as opposed to new transactions to include in an upcoming block), the validator can be configured to ignore the unspendable flag.
    - This is necessary because transactions in a block have already been validated by miners and must be accepted regardless of their unspendable status.
    - The validator uses the `WithIgnoreUnspendable` option to control this behavior during transaction validation.
 
@@ -498,8 +536,8 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 2. **gRPC**: Google's Remote Procedure Call system, used here for server-client communication. It enables the server to expose specific methods that clients can call remotely. This is only used if the component is started as a service.
 
 3. **Kafka (by Apache)**: A distributed streaming platform (optionally) used here for message handling. Kafka is used for distributing transaction validation data to the block assembly.
-   - [Kafka in Teranode](../../topics/kafka/kafka.md#validator-component): Overview of Kafka integration with the Validator component
-   - [Kafka Message Format](../../references/kafkaMessageFormat.md): Details on message formats used in Kafka communication
+    - [Kafka in Teranode](../../topics/kafka/kafka.md#validator-component): Overview of Kafka integration with the Validator component
+    - [Kafka Message Format](../../references/kafkaMessageFormat.md): Details on message formats used in Kafka communication
 
 4. **Sarama**: A Go library for Apache Kafka.
 
@@ -508,6 +546,7 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 6. **LibSV**: Another Go library for Bitcoin SV, used for transaction-related operations.
 
 7. **Other Utilities and Libraries**:
+
     - `sync/atomic`, `strings`, `strconv`, `time`, `io`, `net/url`, `os`, `bytes`, and other standard Go packages for various utility functions.
     - `github.com/ordishs/gocore` and `github.com/ordishs/go-utils/batcher`: Utility libraries, used for handling core functionalities and batch processing.
     - `github.com/opentracing/opentracing-go`: Used for distributed tracing.
@@ -612,12 +651,14 @@ These settings control how the validator communicates over the network.
 The validator offers two API interfaces for transaction validation:
 
 **gRPC Interface**:
+
 - Primary interface for high-performance validation requests
 - Used by Propagation and Subtree Validation services
 - Always enabled when running in remote validator mode
 - Configured through `validator_grpcAddress` and `validator_grpcListenAddress`
 
 **HTTP Interface**:
+
 - Optional secondary interface for REST-based validation requests
 - Only enabled when `validator_httpListenAddress` is set
 - Provides a simpler interface for testing and third-party integrations

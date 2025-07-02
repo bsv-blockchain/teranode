@@ -8,7 +8,7 @@
 ## Table of Contents
 
 - [GRPC Documentation - ValidatorAPI](#grpc-documentation---validatorapi)
-  - [Table of Contents](#table-of-contents)
+    - [Table of Contents](#table-of-contents)
   - [validator\_api.proto](#validator_apiproto)
     - [EmptyMessage](#emptymessage)
     - [GetBlockHeightResponse](#getblockheightresponse)

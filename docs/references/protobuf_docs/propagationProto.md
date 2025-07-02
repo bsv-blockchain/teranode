@@ -4,7 +4,7 @@
 ## Table of Contents
 
 - [GRPC Documentation - PropagationAPI](#grpc-documentation---propagationapi)
-  - [Table of Contents](#table-of-contents)
+    - [Table of Contents](#table-of-contents)
   - [propagation\_api.proto](#propagation_apiproto)
     - [EmptyMessage](#emptymessage)
     - [GetRequest](#getrequest)

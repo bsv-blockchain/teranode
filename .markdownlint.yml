@@ -1,0 +1,36 @@
+# Markdownlint configuration for Teranode documentation
+# See: https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
+
+# Disable rules that conflict with Material MkDocs or are too strict
+MD013: false  # Line length (Material MkDocs handles this)
+MD033: false  # Allow inline HTML (needed for admonitions)
+MD041: false  # First line in file should be a top level header
+
+# Configure list formatting rules (these would have caught our issues!)
+MD004:
+  style: "dash"  # Use dashes for unordered lists
+
+MD007:
+  indent: 4  # 4 spaces for nested list items (exactly what we fixed!)
+
+MD030:
+  ul_single: 1  # 1 space after list marker for single-line items
+  ol_single: 1  # 1 space after list marker for single-line items
+  ul_multi: 1   # 1 space after list marker for multi-line items
+  ol_multi: 1   # 1 space after list marker for multi-line items
+
+# Ensure proper list spacing
+MD032: true   # Lists should be surrounded by blank lines
+
+# Enforce consistent heading styles
+MD003:
+  style: "atx"  # Use # for headers
+
+# Trailing whitespace
+MD009: true
+
+# Multiple consecutive blank lines
+MD012: true
+
+# Hard tabs
+MD010: true

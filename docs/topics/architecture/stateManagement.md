@@ -5,22 +5,22 @@ Last Modified: 3-February-2025
 1. [Introduction](#1-introduction)
 2. [State Machine in Teranode](#2-state-machine-in-teranode)
 3. [Functionality](#3-functionality)
-   - [3.1. State Machine Initialization](#31-state-machine-initialization)
-   - [3.2. Accessing the State Machine](#32-accessing-the-state-machine)
-      - [3.2.1. Access via Command-Line Interface](#321-access-via-command-line-interface-recommended)
-      - [3.2.2. Access via HTTP](#322-access-via-http-asset-server)
-      - [3.2.3. Access via gRPC](#323-access-via-grpc)
-   - [3.3. State Machine States](#33-state-machine-states)
-      - [3.3.1. FSM: Idle State](#331-fsm-idle-state)
-      - [3.3.2. FSM: Legacy Syncing State](#332-fsm-legacy-syncing-state)
-      - [3.3.3. FSM: Running State](#333-fsm-running-state)
-      - [3.3.4. FSM: Catching Blocks State](#334-fsm-catching-blocks-state)
-   - [3.4. State Machine Events](#34-state-machine-events)
-      - [3.4.1. FSM Event: Legacy Sync](#341-fsm-event-legacy-sync)
-      - [3.4.2. FSM Event: Run](#342-fsm-event-run)
-      - [3.4.3. FSM Event: Catch up Blocks](#343-fsm-event-catch-up-blocks)
-      - [3.4.4. FSM Event: Idle](#344-fsm-event-idle)
-   - [3.5. Waiting on State Machine Transitions](#35-waiting-on-state-machine-transitions)
+    - [3.1. State Machine Initialization](#31-state-machine-initialization)
+    - [3.2. Accessing the State Machine](#32-accessing-the-state-machine)
+    - [3.2.1. Access via Command-Line Interface](#321-access-via-command-line-interface-recommended)
+    - [3.2.2. Access via HTTP](#322-access-via-http-asset-server)
+    - [3.2.3. Access via gRPC](#323-access-via-grpc)
+    - [3.3. State Machine States](#33-state-machine-states)
+    - [3.3.1. FSM: Idle State](#331-fsm-idle-state)
+    - [3.3.2. FSM: Legacy Syncing State](#332-fsm-legacy-syncing-state)
+    - [3.3.3. FSM: Running State](#333-fsm-running-state)
+    - [3.3.4. FSM: Catching Blocks State](#334-fsm-catching-blocks-state)
+    - [3.4. State Machine Events](#34-state-machine-events)
+    - [3.4.1. FSM Event: Legacy Sync](#341-fsm-event-legacy-sync)
+    - [3.4.2. FSM Event: Run](#342-fsm-event-run)
+    - [3.4.3. FSM Event: Catch up Blocks](#343-fsm-event-catch-up-blocks)
+    - [3.4.4. FSM Event: Idle](#344-fsm-event-idle)
+    - [3.5. Waiting on State Machine Transitions](#35-waiting-on-state-machine-transitions)
 
 ## 1. Introduction
 
@@ -127,6 +127,7 @@ The Blockchain service always starts in an `Idle` state. In this state:
 - Must be manually triggered to transition to another state
 
 Allowed Operations in Idle State:
+
 - ❌ Process external transactions
 - ❌ Legacy relay transactions
 - ❌ Queue subtrees
@@ -147,6 +148,7 @@ The node can also return back to the `Idle` state from any other state, however 
 When a node is starting up, it may need to perform a legacy sync. This is a full block sync performed against legacy BSV nodes. In this state:
 
 Allowed Operations in Legacy Syncing State:
+
 - ❌ Process external transactions
 - ❌ Legacy relay transactions
 - ❌ Queue subtrees
@@ -163,6 +165,7 @@ Allowed Operations in Legacy Syncing State:
 The `Running` state represents the node actively participating in the network. In this state:
 
 Allowed Operations in Running State:
+
 - ✅ Process external transactions
 - ✅ Legacy relay transactions
 - ✅ Queue subtrees
@@ -185,6 +188,7 @@ If the node was previously in any other state, the Block Assembler would now sta
 The `CatchingBlocks` state represents the node catching up on blocks. This state is triggered by BlockValidation when the node needs to catch up with the network. In this state:
 
 Allowed Operations in Catching Blocks State:
+
 - ✅ Process external transactions
 - ✅ Legacy relay transactions
 - ✅ Queue subtrees

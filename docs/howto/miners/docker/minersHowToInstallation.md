@@ -179,6 +179,7 @@ Note: Only Docker Compose (testing) and Kubernetes Operator (production) are off
 - A Docker Compose file is provided to alpha testing miners.
 - This method sets up a single-node Teranode instance along with all required external dependencies.
 - Components included:
+
     - Teranode Docker image
     - Kafka
     - PostgreSQL
@@ -187,10 +188,12 @@ Note: Only Docker Compose (testing) and Kubernetes Operator (production) are off
     - Prometheus
     - Docker Shared Storage
 - Advantages:
+
     - Easiest method to get a full Teranode environment running quickly.
     - Automatically manages start order and networking between components.
     - Used by developers and QA for testing, ensuring reliability.
 - Considerations:
+
     - This setup uses predefined external dependencies, which may not be customizable.
     - While convenient for development and testing, it is not optimized, nor intended, for production usage.
 
@@ -331,9 +334,9 @@ Example output:
 **Step 8: Access Monitoring Tools**
 
 1. **Grafana**: Access the Grafana dashboard at `http://localhost:3005`
-- Default credentials are `admin/admin`
-- Navigate to the "Teranode - Service Overview" dashboard for key metrics
-- Explore other dashboards for detailed service metrics. For example, you can check the Legacy sync metrics in the "Teranode - Legacy Service" dashboard.
+    - Default credentials are `admin/admin`
+    - Navigate to the "Teranode - Service Overview" dashboard for key metrics
+    - Explore other dashboards for detailed service metrics. For example, you can check the Legacy sync metrics in the "Teranode - Legacy Service" dashboard.
 
 
 2. **Kafka Console**: Available internally on port 8080
@@ -353,6 +356,7 @@ Note: You must set the setting `dashboard_enabled` as true in order to see the v
 **Step 9: Interact with Teranode**
 
 - The various Teranode services expose different ports for interaction:
+
     - **Blockchain service**: Port 8082
     - **Asset service**: Ports 8090
     - **Miner service**: Ports 8089, 8092, 8099
@@ -411,4 +415,4 @@ If you have local access to SV Nodes, you can use them to speed up the initial b
 
 ## Settings Reference
 
-You can find the pre-configured settings file [here](../../../../settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

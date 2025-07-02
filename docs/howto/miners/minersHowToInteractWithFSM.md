@@ -6,6 +6,7 @@ This guide explains how to change and monitor Teranode's state using gRPC comman
 
 - Access to a running Teranode instance
 - One of the following:
+
     - `grpcurl` installed on your system (requires network access to the RPC Server on port 18087)
     - Access to the `teranode-cli` (recommended, requires direct access to RPC container)
 
@@ -55,6 +56,7 @@ kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o js
 ### Valid FSM States
 
 The following states are valid for all environments:
+
 - IDLE
 - RUNNING
 - LEGACYSYNCING
@@ -113,6 +115,7 @@ grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.Run
 #### Available Events
 
 The following events are available for both environments:
+
 - `Run` - Transitions to RUNNING state
 - `LegacySync` - Transitions to LEGACYSYNCING state
 - `CatchUpBlocks` - Transitions to CATCHINGBLOCKS state

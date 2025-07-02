@@ -91,6 +91,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 ```
 
 Performs comprehensive health checks on the Alert Service. If `checkLiveness` is true, only performs basic liveness checks. Otherwise, performs readiness checks on all dependencies:
+
 - BlockchainClient
 - FSM (Finite State Machine)
 - BlockassemblyClient
@@ -205,6 +206,7 @@ The Alert Service uses a configuration structure (`config.Config`) that includes
 ### Datastore Configuration
 - Auto-migration settings
 - Support for:
+
     - SQLite (including in-memory)
     - PostgreSQL
     - MySQL
@@ -221,6 +223,7 @@ The Alert Service uses a configuration structure (`config.Config`) that includes
 
 ### Error Types
 Common configuration errors include:
+
 - `ErrNoGenesisKeys`: No genesis keys provided
 - `ErrNoP2PIP`: Invalid P2P IP configuration
 - `ErrNoP2PPort`: Invalid P2P port configuration
@@ -228,13 +231,16 @@ Common configuration errors include:
 
 ### Health Checks
 The service implements comprehensive health checks:
+
 - Liveness check: Basic service health
 - Readiness check: Dependency health including:
+
     - Blockchain client
     - FSM status
     - Blockassembly client
     - UTXO store
 
 The health checks return appropriate HTTP status codes:
+
 - `200 OK`: Service is healthy
 - `503 Service Unavailable`: Service or dependencies are unhealthy

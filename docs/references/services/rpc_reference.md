@@ -35,7 +35,7 @@
     - [getpeerinfo](#getpeerinfo) - Returns data about each connected network node
     - [getrawtransaction](#getrawtransaction) - Returns raw transaction data
     - [getminingcandidate](#getminingcandidate) - Returns mining candidate information for generating a new block
-    - [help](#help) - Lists all available commands or gets help on a specific command
+    - help - Lists all available commands or gets help on a specific command
     - [invalidateblock](#invalidateblock) - Permanently marks a block as invalid
     - [isbanned](#isbanned) - Checks if an IP/subnet is banned
     - [listbanned](#listbanned) - Lists all banned IPs/subnets
@@ -111,6 +111,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, and UTXO store.
 
 This factory function creates a fully configured RPCServer instance, setting up:
+
 - Authentication credentials from settings
 - Connection limits and parameters
 - Command handlers and help text
@@ -177,6 +178,7 @@ This method implements the standard Teranode health checking interface used acro
 - Liveness: Indicates whether the service is functioning correctly (listeners are still working and not in a hung state)
 
 The method performs checks appropriate to the service's role, including:
+
 - Verifying network listeners are active
 - Checking connections to dependent services
 - Validating internal state consistency
@@ -196,12 +198,14 @@ The method implements a secure authentication flow that:
 4. Distinguishes between admin users (who can perform state-changing operations) and limited users (who can only perform read-only operations)
 
 Security considerations:
+
 - Uses SHA256 for credential hashing
 - Implements constant-time comparison to prevent timing attacks
 - Properly handles missing or malformed authentication headers
 - Can be configured to require or not require authentication based on settings
 
 Returns:
+
 - bool: Authentication success (true if successful)
 - bool: Authorization level (true for admin access, false for limited access). The value specifies whether the user can change the state of the node.
 - error: Authentication error if any occurred, nil on success
@@ -278,6 +282,7 @@ The server supports two levels of authentication:
 Authentication is performed using HTTP Basic Auth.
 
 Provide credentials using:
+
 - Username and password in the HTTP header
 - Cookie-based authentication
 - Configuration file settings
@@ -691,6 +696,7 @@ Returns information for creating a new block.
 
 **Parameters:**
 1. `parameters` (object, optional):
+
    - `coinbaseValue` (numeric, optional): Custom coinbase value in satoshis
 
 **Returns:**
@@ -1534,6 +1540,7 @@ The RPC service uses a standardized error handling system based on the Bitcoin C
 ```
 
 Standard error codes include:
+
 - -1: General error during command handling
 - -3: Wallet error (wallet functionality not implemented)
 - -5: Invalid address or key
@@ -1586,6 +1593,7 @@ Common error codes that may be returned:
 ## Rate Limiting
 
 The RPC interface implements rate limiting to prevent abuse. Default limits:
+
 - Maximum concurrent connections: 16
 - Maximum requests per minute: 60
 
@@ -1654,4 +1662,4 @@ The RPC Service implements several security features:
 
 # Related Documents
 
-- [RPC API Docs](https://bitcoin-sv.github.io/teranode/references/wallet-toolbox/open-rpc/)
+- [RPC API Docs](https://bsv-blockchain.github.io/teranode/references/open-rpc/)

@@ -422,138 +422,138 @@ Error responses include a JSON object with an error message:
 ### Health and Status Endpoints
 
 - **GET `/alive`**
-  - Purpose: Service liveness check
+    - Purpose: Service liveness check
   - Returns: Text message with uptime information
   - Status Code: 200 on success
 
 - **GET `/health`**
-  - Purpose: Service health check with dependency status
+    - Purpose: Service health check with dependency status
   - Returns: Status information and dependency health
   - Status Code: 200 on success, 503 on failure
 
 ### Transaction Endpoints
 
 - **GET `/api/v1/tx/:hash`**
-  - Purpose: Get transaction in binary format
+    - Purpose: Get transaction in binary format
   - Parameters: `hash` - Transaction ID hash (hex string)
   - Returns: Transaction data (binary)
 
 - **GET `/api/v1/tx/:hash/hex`**
-  - Purpose: Get transaction in hex format
+    - Purpose: Get transaction in hex format
   - Parameters: `hash` - Transaction ID hash (hex string)
   - Returns: Transaction data (hex string)
 
 - **GET `/api/v1/tx/:hash/json`**
-  - Purpose: Get transaction in JSON format
+    - Purpose: Get transaction in JSON format
   - Parameters: `hash` - Transaction ID hash (hex string)
   - Returns: Transaction data (JSON)
 
 - **POST `/api/v1/subtree/:hash/txs`**
-  - Purpose: Batch retrieve multiple transactions
+    - Purpose: Batch retrieve multiple transactions
   - Request Body: Concatenated 32-byte transaction hashes
   - Returns: Concatenated transactions (binary)
 
 - **GET `/api/v1/txmeta/:hash/json`**
-  - Purpose: Get transaction metadata
+    - Purpose: Get transaction metadata
   - Parameters: `hash` - Transaction ID hash (hex string)
   - Returns: Transaction metadata (JSON)
 
 - **GET `/api/v1/txmeta_raw/:hash`**
-  - Purpose: Get raw transaction metadata (binary)
+    - Purpose: Get raw transaction metadata (binary)
   - Parameters: `hash` - Transaction ID hash (hex string)
   - Returns: Raw transaction metadata
 
 - **GET `/api/v1/txmeta_raw/:hash/hex`**
-  - Purpose: Get raw transaction metadata (hex)
+    - Purpose: Get raw transaction metadata (hex)
   - Parameters: `hash` - Transaction ID hash (hex string)
   - Returns: Raw transaction metadata (hex string)
 
 - **GET `/api/v1/txmeta_raw/:hash/json`**
-  - Purpose: Get raw transaction metadata (JSON)
+    - Purpose: Get raw transaction metadata (JSON)
   - Parameters: `hash` - Transaction ID hash (hex string)
   - Returns: Raw transaction metadata (JSON)
 
 ### Block Endpoints
 
 - **GET `/api/v1/block/:hash`**
-  - Purpose: Get block by hash (binary)
+    - Purpose: Get block by hash (binary)
   - Parameters: `hash` - Block hash (hex string)
   - Returns: Block data (binary)
 
 - **GET `/api/v1/block/:hash/hex`**
-  - Purpose: Get block by hash (hex)
+    - Purpose: Get block by hash (hex)
   - Parameters: `hash` - Block hash (hex string)
   - Returns: Block data (hex string)
 
 - **GET `/api/v1/block/:hash/json`**
-  - Purpose: Get block by hash (JSON)
+    - Purpose: Get block by hash (JSON)
   - Parameters: `hash` - Block hash (hex string)
   - Returns: Block data (JSON)
 
 - **GET `/api/v1/block/:hash/forks`**
-  - Purpose: Get fork information for a block
+    - Purpose: Get fork information for a block
   - Parameters: `hash` - Block hash (hex string)
   - Returns: Fork data (JSON)
 
 - **GET `/api/v1/blocks`**
-  - Purpose: Get paginated blocks list
+    - Purpose: Get paginated blocks list
   - Parameters: `offset`, `limit` (optional)
   - Returns: Blocks list (JSON)
 
 - **GET `/api/v1/blocks/:hash`**
-  - Purpose: Get multiple blocks starting with specified hash (binary)
+    - Purpose: Get multiple blocks starting with specified hash (binary)
   - Parameters: `hash` - Starting block hash, `n` - Number of blocks (optional)
   - Returns: Block data (binary)
 
 - **GET `/api/v1/lastblocks`**
-  - Purpose: Get most recent blocks
+    - Purpose: Get most recent blocks
   - Parameters: `n` (optional) - Number of blocks, `includeorphans` (optional), `height` (optional)
   - Returns: Recent blocks data (JSON)
 
 - **GET `/api/v1/blockstats`**
-  - Purpose: Get block statistics
+    - Purpose: Get block statistics
   - Returns: Block statistics (JSON)
 
 - **GET `/api/v1/blockgraphdata/:period`**
-  - Purpose: Get time-series block data for graphing
+    - Purpose: Get time-series block data for graphing
   - Parameters: `period` - Time period in milliseconds
   - Returns: Time-series data (JSON)
 
 - **GET `/rest/block/:hash.bin`**
-  - Purpose: Legacy endpoint for block retrieval
+    - Purpose: Legacy endpoint for block retrieval
   - Parameters: `hash` - Block hash (hex string)
   - Returns: Block data (binary)
 
 - **GET `/api/v1/block_legacy/:hash`**
-  - Purpose: Alternative legacy block retrieval
+    - Purpose: Alternative legacy block retrieval
   - Parameters: `hash` - Block hash (hex string)
   - Returns: Block data (binary)
 
 ### Block Header Endpoints
 
 - **GET `/api/v1/header/:hash`**
-  - Purpose: Get single block header (binary)
+    - Purpose: Get single block header (binary)
   - Parameters: `hash` - Block hash (hex string)
   - Returns: Block header (binary)
 
 - **GET `/api/v1/headers/:hash`**
-  - Purpose: Get multiple headers starting from hash (binary)
+    - Purpose: Get multiple headers starting from hash (binary)
   - Parameters: `hash` - Starting block hash, `n` - Number of headers (optional)
   - Returns: Block headers (binary)
 
 - **GET `/api/v1/headers_to_common_ancestor/:hash`**
-  - Purpose: Get headers to common ancestor (binary)
+    - Purpose: Get headers to common ancestor (binary)
   - Parameters: `hash` - Target hash, `locator` - Comma-separated block hashes
   - Returns: Block headers (binary)
 
 - **GET `/api/v1/bestblockheader`**
-  - Purpose: Get best block header (binary)
+    - Purpose: Get best block header (binary)
   - Returns: Best block header (binary)
 
 ### Block Management Endpoints
 
 - **POST `/api/v1/block/invalidate`**
-  - Purpose: Mark a block as invalid, forcing a chain reorganization
+    - Purpose: Mark a block as invalid, forcing a chain reorganization
   - Parameters: JSON object in request body with block hash information
     ```json
     {
@@ -564,7 +564,7 @@ Error responses include a JSON object with an error message:
   - Security: This is an administrative operation that can affect blockchain consensus
 
 - **POST `/api/v1/block/revalidate`**
-  - Purpose: Reconsider a previously invalidated block
+    - Purpose: Reconsider a previously invalidated block
   - Parameters: JSON object in request body with block hash information
     ```json
     {
@@ -575,15 +575,16 @@ Error responses include a JSON object with an error message:
   - Security: This is an administrative operation that can affect blockchain consensus
 
 - **GET `/api/v1/blocks/invalid`**
-  - Purpose: Retrieve a list of currently invalidated blocks
+    - Purpose: Retrieve a list of currently invalidated blocks
   - Parameters:
+
     - `limit` (optional): Maximum number of blocks to retrieve
   - Returns: Array of invalid block information
 
 ### Finite State Machine (FSM) Endpoints
 
 - **GET `/api/v1/fsm/state`**
-  - Purpose: Get current blockchain FSM state
+    - Purpose: Get current blockchain FSM state
   - Returns: JSON object with current state information including state name, metadata, and allowed transitions
   - Example response:
     ```json
@@ -599,7 +600,7 @@ Error responses include a JSON object with an error message:
     ```
 
 - **POST `/api/v1/fsm/state`**
-  - Purpose: Send an event to the blockchain FSM to trigger a state transition
+    - Purpose: Send an event to the blockchain FSM to trigger a state transition
   - Parameters: JSON object in request body with event details
     ```json
     {
@@ -613,66 +614,66 @@ Error responses include a JSON object with an error message:
   - Security: This is an administrative operation that can affect blockchain operation
 
 - **GET `/api/v1/fsm/events`**
-  - Purpose: List all possible FSM events
+    - Purpose: List all possible FSM events
   - Returns: JSON array of available events with descriptions
 
 - **GET `/api/v1/fsm/states`**
-  - Purpose: List all possible FSM states
+    - Purpose: List all possible FSM states
   - Returns: JSON array of available states with descriptions
 
 ### UTXO Endpoints
 
 - **GET `/api/v1/utxo/:hash`**
-  - Purpose: Get UTXO information (binary)
+    - Purpose: Get UTXO information (binary)
   - Parameters: `hash` - Transaction hash, `vout` - Output index
   - Returns: UTXO data (binary)
 
 - **GET `/api/v1/utxos/:hash/json`**
-  - Purpose: Get all UTXOs for a transaction
+    - Purpose: Get all UTXOs for a transaction
   - Parameters: `hash` - Transaction hash
   - Returns: UTXO data array (JSON)
 
 ### Subtree Endpoints
 
 - **GET `/api/v1/subtree/:hash`**
-  - Purpose: Get subtree data (binary)
+    - Purpose: Get subtree data (binary)
   - Parameters: `hash` - Subtree hash
   - Returns: Subtree data (binary)
 
 - **GET `/api/v1/subtree/:hash/txs/json`**
-  - Purpose: Get transactions in a subtree
+    - Purpose: Get transactions in a subtree
   - Parameters: `hash` - Subtree hash
   - Returns: Transaction data array (JSON)
 
 - **GET `/api/v1/block/:hash/subtrees/json`**
-  - Purpose: Get all subtrees for a block
+    - Purpose: Get all subtrees for a block
   - Parameters: `hash` - Block hash
   - Returns: Subtree data array (JSON)
 
 ### Search Endpoints
 
 - **GET `/api/v1/search`**
-  - Purpose: Search for blockchain entities
+    - Purpose: Search for blockchain entities
   - Parameters: `query` - Search term (hash or height)
   - Returns: Search results (JSON)
 
 ### FSM (Finite State Machine) Endpoints
 
 - **GET `/api/v1/fsm/state`**
-  - Purpose: Get current blockchain FSM state
+    - Purpose: Get current blockchain FSM state
   - Returns: Current state information (JSON)
 
 - **POST `/api/v1/fsm/state`**
-  - Purpose: Send event to blockchain FSM
+    - Purpose: Send event to blockchain FSM
   - Request Body: Event details (JSON)
   - Returns: Updated state information (JSON)
 
 - **GET `/api/v1/fsm/events`**
-  - Purpose: List all possible FSM events
+    - Purpose: List all possible FSM events
   - Returns: Array of available events (JSON)
 
 - **GET `/api/v1/fsm/states`**
-  - Purpose: List all possible FSM states
+    - Purpose: List all possible FSM states
   - Returns: Array of available states (JSON)
 
 ### Authentication
@@ -973,6 +974,7 @@ GET /health
 
 #### Rate Limiting
 The service implements rate limiting with the following defaults:
+
 - Maximum concurrent connections: 16
 - Maximum requests per minute: 60
 
@@ -992,6 +994,7 @@ GET /block_legacy/{hash}
 ### Monitoring
 
 The service provides Prometheus metrics for monitoring:
+
 - Transaction processing counts
 - Block retrieval statistics
 - UTXO operations

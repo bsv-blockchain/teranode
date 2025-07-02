@@ -36,4 +36,4 @@ Additionally, it can be used as a backup for the UTXO store.
 
 ## Settings Reference
 
-You can find the pre-configured settings file [here](../../../../settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

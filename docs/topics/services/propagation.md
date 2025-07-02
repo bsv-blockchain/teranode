@@ -6,7 +6,7 @@
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
     - [2.1. Starting the Propagation Service](#21-starting-the-propagation-service)
-        - [2.1.1 Validator Integration](#211-validator-integration)
+    - [2.1.1 Validator Integration](#211-validator-integration)
     - [2.2. Propagating Transactions](#22-propagating-transactions)
     - [2.3. Transaction Processing Workflow](#23-transaction-processing-workflow)
     - [2.4. Error Handling](#24-error-handling)
@@ -58,13 +58,15 @@ Upon startup, the Propagation service starts the relevant communication channels
 The Propagation service can work with the Validator in two different configurations:
 
 1. **Local Validator**:
-   - When `useLocalValidator=true` (recommended for production)
+
+    - When `useLocalValidator=true` (recommended for production)
    - The Validator is instantiated directly within the Propagation service
    - Direct method calls are used without network overhead
    - This provides the best performance and lowest latency
 
 2. **Remote Validator Service**:
-   - When `useLocalValidator=false`
+
+    - When `useLocalValidator=false`
    - The Propagation service connects to a separate Validator service via gRPC
    - Useful for development, testing, or specialized deployment scenarios
    - Has higher latency due to additional network calls
@@ -93,7 +95,8 @@ The transaction processing involves several steps to ensure proper validation an
 1. **Initial Validation**: Each transaction is validated for correct format and to ensure it's not a coinbase transaction.
 2. **Storage**: Valid transactions are stored in the transaction store using the transaction hash as the key.
 3. **Validation Submission**: Transactions are submitted to the validator service through one of two channels:
-   - **Kafka**: Normal-sized transactions are sent to the validator through Kafka for asynchronous processing.
+
+    - **Kafka**: Normal-sized transactions are sent to the validator through Kafka for asynchronous processing.
    - **HTTP Fallback**: Large transactions exceeding Kafka message size limits are sent directly to the validator's HTTP endpoint.
 
 ### 2.4. Error Handling
@@ -122,18 +125,22 @@ The Propagation Service deals with the extended transaction format, as seen belo
 Main technologies involved:
 
 1. **Go Programming Language (Golang)**:
+
     - The entire service is written in Go.
 
 2. **Peer-to-Peer (P2P) Networking**:
+
     - The service is designed for a P2P network environment, where nodes (computers) in the network communicate directly with each other without central coordination.
     - `libsv/go-p2p/wire` is used for P2P transaction propagation in the Teranode BSV network.
 
 3. **Networking Protocols (HTTP)**
 
 4. **Cryptography**:
+
     - The use of `crypto` packages for RSA key generation and TLS (Transport Layer Security) configuration for secure communication.
 
 5. **gRPC and Protocol Buffers**:
+
     - gRPC, indicated by the use of `google.golang.org/grpc`, is a high-performance, open-source universal RPC framework. It uses Protocol Buffers as its interface definition language.
 
 
@@ -217,12 +224,14 @@ At least one ingestion path must be configured for the service to be functional.
 The Propagation service interacts with the Validator service using one of two architectural patterns:
 
 - **Local Validator Mode** (`useLocalValidator=true`):
-  - Validator runs in-process with the Propagation service
+
+    - Validator runs in-process with the Propagation service
   - Eliminates network overhead for validation operations
   - Recommended for production deployments to minimize latency
 
 - **Remote Validator Mode** (`useLocalValidator=false`):
-  - Propagation service communicates with a separate Validator service
+
+    - Propagation service communicates with a separate Validator service
   - Transactions are sent via Kafka or HTTP, controlled by `propagation_alwaysUseHTTP`
   - Large transactions exceeding Kafka limits are automatically sent via HTTP using `validator_httpAddress`
 

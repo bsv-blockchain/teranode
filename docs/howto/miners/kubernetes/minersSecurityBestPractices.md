@@ -11,6 +11,7 @@ Here are some firewall configuration recommendations:
 1. **Publicly Exposed Ports:**
 
 Review the ports exposed in the Kubernetes operator configuration file(s) and ensure your firewall is configured to handle these appropriately:
+
     - `9292`: RPC Server. Open to receive RPC API requests.
 
     - `8090`: Asset Server. Open for incoming HTTP asset requests. This should not be exposed directly, but via a reverse proxy or caching mechanism.
@@ -23,6 +24,7 @@ Review the ports exposed in the Kubernetes operator configuration file(s) and en
 2. **Restricted Ports:**
 
 Review the ports exposed in the Kubernetes operator configuration file(s) and ensure your firewall is configured to handle these appropriately:
+
     - `9292`: RPC Server. Open to receive RPC API requests. Not open to public access.
 
 3. **Host Firewall:**

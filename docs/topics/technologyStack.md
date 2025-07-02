@@ -63,17 +63,21 @@ Teranode employs various storage technologies, each selected for its specific st
 ### Specific Usage in Teranode:
 
 1. **Aerospike**:
+
     - Teranode uses **Aerospike** for its distributed, high-performance NoSQL database capabilities. Aerospike is particularly useful for handling large volumes of transactions that require fast, consistent reads and writes.
     - Example: Transaction metadata, such as UTXOs (Unspent Transaction Outputs), are stored in Aerospike for fast retrieval during validation.
 
 2. **Memory (In-Memory Store)**:
+
     - In-memory storage is used for caching frequently accessed data, providing the fastest access time but without persistence.
 
 3. **SQL**:
+
     - For services that require robust querying capabilities, Teranode uses SQL databases like PostgreSQL. SQL is ideal for storing large sets of structured data, such as blockchain metadata, that need complex querying capabilities.
     - Example: Block metadata is stored in SQL for easy querying and analysis.
 
 4. **Shared Storage**:
+
     - Teranode also uses shared filesystems, especially for services that need to share large datasets across multiple nodes. Lustre file systems, combined with S3-backed shared volumes, offer a high-throughput storage solution for services such as block and transaction persistence.
 
 ------

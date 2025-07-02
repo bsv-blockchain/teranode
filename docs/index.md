@@ -144,12 +144,12 @@
 - [Blockchain Server](./references/services/blockchain_reference.md)
 - [Block Persister](./references/services/blockpersister_reference.md)
 - [Block Validation](./references/services/blockvalidation_reference.md)
-- [Coinbase Service](../../teranode-coinbase/docs/references/services/coinbase_reference.md)
+
 - [Legacy Server](./references/services/legacy_reference.md)
 - [P2P Server](./references/services/p2p_reference.md)
 - [Propagation Server](./references/services/propagation_reference.md)
 - [RPC Service](./references/services/rpc_reference.md)
-- [RPC API Docs](https://bitcoin-sv.github.io/teranode/references/wallet-toolbox/open-rpc/)
+- [RPC API Docs](https://bsv-blockchain.github.io/teranode/references/open-rpc/)
 - [Subtree Validation](./references/services/subtreevalidation_reference.md)
 - [UTXO Persister](./references/services/utxopersister_reference.md)
 - [TX Validator](./references/services/validator_reference.md)
@@ -170,7 +170,7 @@
 - [Block Assembly gRPC API](./references/protobuf_docs/blockassemblyProto.md)
 - [Blockchain gRPC API](./references/protobuf_docs/blockchainProto.md)
 - [Block Validation gRPC API](./references/protobuf_docs/blockvalidationProto.md)
-- [Coinbase gRPC API](../../teranode-coinbase/docs/references/protobuf_docs/coinbaseProto.md)
+
 - [Propagation gRPC API](./references/protobuf_docs/propagationProto.md)
 - [Subtree Validation gRPC API](./references/protobuf_docs/subtreevalidationProto.md)
 - [Validator gRPC API](./references/protobuf_docs/validatorProto.md)

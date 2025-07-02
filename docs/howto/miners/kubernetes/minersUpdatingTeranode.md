@@ -9,6 +9,7 @@ This guide provides instructions for updating Teranode in a Kubernetes environme
 ## Prerequisites
 
 Ensure you have:
+
 - Access to the ECR registry
 - AWS CLI configured
 - Helm installed

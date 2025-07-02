@@ -131,10 +131,12 @@ type Output struct {
 Components of the `Output` struct:
 
 1. **Satoshis (`uint64`)**:
+
     - The amount of BSV cryptocurrency associated with this output.
     - The unit "Satoshis" refers to the smallest unit of Bitcoin (1 Bitcoin = 100 million Satoshis).
 
 2. **LockingScript (`*bscript.Script`)**:
+
     - This field represents the conditions that must be met to spend the Satoshis in this output.
     - The `LockingScript`, often referred to as the "scriptPubKey" in Bitcoin's technical documentation, is a script written in Bitcoin's scripting language.
     - This script contains cryptographic conditions to unlock the funds.
@@ -377,6 +379,7 @@ The primary language used for implementing the service's logic.
 The following datastores are supported (either in development / experimental or production mode):
 
 1. **Aerospike**:
+
     - A high-performance, NoSQL distributed database.
     - Suitable for environments requiring high throughput and low latency.
     - Handles large volumes of UTXO data with fast read/write capabilities.
@@ -387,16 +390,19 @@ The following datastores are supported (either in development / experimental or 
 
 
 2. **Memory (In-Memory Store)**:
+
     - Stores UTXOs directly in the application's memory.
     - Offers the fastest access times but lacks persistence; data is lost if the service restarts.
     - Useful for development or testing purposes.
 
 3. **Sql**:
+
     - A SQL database, currently Postgresql and SqlLite are in scope, can be used to store UTXOs.
     - Provides a balance of performance and persistence, suitable for medium to large-scale applications.
     - Offers the ability to query and analyze UTXO data using SQL.
 
 4. **Nullstore**:
+
     - A dummy or placeholder implementation, used for testing (when no actual storage is needed).
     - Can be used to mock UTXO store functionality in a development or test environment.
 
@@ -623,6 +629,7 @@ The UTXO Store uses batch processing to improve performance. The following setti
 Many of the settings can also be configured through environment variables. The variables follow the pattern of uppercasing the parameter name with underscores, prefixed with `TERANODE_`.
 
 For example:
+
 - `TERANODE_UTXO_STORE_BLOCK_HEIGHT_RETENTION` sets the `BlockHeightRetention` parameter
 - `TERANODE_UTXO_STORE_UTXO_BATCH_SIZE` sets the `UtxoBatchSize` parameter
 

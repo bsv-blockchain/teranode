@@ -3,7 +3,7 @@
 ## Index
 
 - [Teranode Microservices Overview](#teranode-microservices-overview)
-  - [Index](#index)
+    - [Index](#index)
   - [1. Introduction](#1-introduction)
   - [2. Core Services](#2-core-services)
     - [2.1 Asset Server](#21-asset-server)
@@ -405,7 +405,7 @@ The Legacy Service facilitates communication between Teranode and traditional Bi
 - Processing new blocks and converting them to Teranode format
 - Handling requests from Teranode components for legacy data
 
-You can read more about this service [here](../services/legacy).
+You can read more about this service [here](../services/legacy.md).
 
 
 ### 3.5 RPC Service
@@ -573,6 +573,7 @@ Miners are responsible for the computational work of finding valid blocks.
 - [Teranode Architecture Overview](teranode-overall-system-design.md)
 
 - Core Services:
+
     - [Asset Server](../services/assetServer.md)
     - [Propagation Service](../services/propagation.md)
     - [Validator Service](../services/validator.md)
@@ -583,16 +584,19 @@ Miners are responsible for the computational work of finding valid blocks.
     - [Alert Service](../services/alert.md)
 
 - Overlay Services:
+
     - [Block Persister Service](../services/blockPersister.md)
     - [UTXO Persister Service](../services/utxoPersister.md)
     - [P2P Service](../services/p2p.md)
 
-    - [Legacy Service](../services/legacy)
+    - [Legacy Service](../services/legacy.md)
     - [RPC Server](../services/rpc.md)
 
 - Stores:
+
     - [Blob Server](../stores/blob.md)
     - [UTXO Store](../stores/utxo.md)
 
 - Messaging:
+
     - [Kafka](../kafka/kafka.md)

@@ -12,21 +12,21 @@ This guide assists you in setting up the Teranode project on your machine. The b
     - [3.2 (Recommended) Use a Python Virtual Environment to install PyYAML](#32-recommended-use-a-python-virtual-environment-to-install-pyyaml)
     - [3.3 Install Dependencies Within the Virtual Environment](#33-install-dependencies-within-the-virtual-environment)
     - [3.4 Verify Installation](#34-verify-installation)
-    - [Alternative: Use `pipx` (for CLI tools)](#alternative-use-pipx-for-cli-tools)
+    - [Alternative: Use `pipx` (for CLI tools)](#alternative-use-pipx-for-cli-tools---not-recommended-for-teranode-development)
 4. [Clone the Project and Install Dependencies](#4-clone-the-project-and-install-dependencies)
-5. [Configure Your Node Dev Settings (Updated Example)](#5-configure-your-node-dev-settings-updated-example)
-    - [5.1 Open and Inspect `settings_local.conf`](#51-open-and-inspect-settings_localconf)
-    - [5.2 Duplicate and Customize the Template Lines](#52-duplicate-and-customize-the-template-lines)
-    - [5.3 Set Your Environment Variable](#53-set-your-environment-variable)
-    - [5.4 Verify](#54-verify)
-    - [5.5 Commit Your Changes (Optional)](#55-commit-your-changes-optional)
+5. [Configure Settings](#5-configure-settings)
+    - [5.1 Introducing developer-specific settings in `settings_local.conf`](#51-introducing-developer-specific-settings-in-settings_localconf)
+
+    - [5.3 Verify](#53-verify)
+
+
 6. [Prerequisites for Running the Node](#6-prerequisites-for-running-the-node)
     - [6.1 Install Docker for Mac](#61-install-docker-for-mac)
     - [6.2 Start Kafka and PostgreSQL](#62-start-kafka-and-postgresql)
 7. [Run the Node](#7-run-the-node)
 8. [Troubleshooting](#8-troubleshooting)
     - [8.1. Dependency errors and conflicts](#81-dependency-errors-and-conflicts)
-- [Next Steps](#next-steps)
+    - [Next Steps](#next-steps)
 
 
 ## 1. Install Go
@@ -157,6 +157,7 @@ make install
 ## 5. Configure Settings
 
 Teranode uses two configuration files:
+
 - `settings.conf` - Contains sensible defaults for all environments. You should NOT modify this file as part of the scope of this guide.
 - `settings_local.conf` - Contains developer-specific and deployment-specific settings
 
@@ -341,4 +342,4 @@ This will effectively reset your cache and re-download all dependencies.
 
 ## Next Steps
 
-- [Check our Git Commit Signing Setup Guide for Contributors](./gitCommitSigningSetupGuide.md)
+- [Check our Git Commit Signing Setup Guide for Contributors](../../references/gitCommitSigningSetupGuide.md)

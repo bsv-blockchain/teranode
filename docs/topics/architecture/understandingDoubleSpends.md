@@ -4,21 +4,21 @@
 ## Index
 
 1. [Introduction](#1-introduction)
-- [1.1 The Double Spend Problem](#11-the-double-spend-problem)
-- [1.2 Teranode's Approach to Double Spend Prevention](#12-teranodes-approach-to-double-spend-prevention)
-- [1.3 Key Concepts in Teranode's Implementation](#13-key-concepts-in-teranodes-implementation)
+    - [1.1 The Double Spend Problem](#11-the-double-spend-problem)
+    - [1.2 Teranode's Approach to Double Spend Prevention](#12-teranodes-approach-to-double-spend-prevention)
+    - [1.3 Key Concepts in Teranode's Implementation](#13-key-concepts-in-teranodes-implementation)
 2. [Core Concepts](#2-core-concepts)
-- [2.1 Double Spend Detection](#21-double-spend-detection)
+    - [2.1 Double Spend Detection](#21-double-spend-detection)
     - [2.1.1 First-Seen Rule Implementation](#211-first-seen-rule-implementation)
     - [2.1.2 Detection During Transaction Validation](#212-detection-during-transaction-validation)
     - [2.1.3 Detection During Block Validation](#213-detection-during-block-validation)
     - [2.1.4 Subtree Validation Handling](#214-subtree-validation-handling)
     - [2.1.5 Detection Outcomes](#215-detection-outcomes)
-- [2.2 Transaction States](#22-transaction-states)
+    - [2.2 Transaction States](#22-transaction-states)
     - [2.2.1 Non-conflicting Transactions](#221-non-conflicting-transactions)
     - [2.2.2 Conflicting Transactions](#222-conflicting-transactions)
     - [2.2.3 Child Transactions](#223-child-transactions)
-- [2.3 Conflict Storage and Tracking](#23-conflict-storage-and-tracking)
+    - [2.3 Conflict Storage and Tracking](#23-conflict-storage-and-tracking)
     - [2.3.1 UTXO Store](#231-utxo-store)
     - [2.3.2 Subtree Storage](#232-subtree-storage)
     - [2.3.3 Parent-Child Relationship](#233-parent-child-relationship)
@@ -55,12 +55,14 @@ Teranode implements a double spend prevention mechanism based on several key pri
 1. **First-Seen Rule**: The _first valid transaction_ seen by the network that spends a particular UTXO is considered the "original" transaction. Any subsequent transaction attempting to spend the same UTXO is marked as a "conflicting" transaction.
 
 2. **Proof of Work Override**: While double spends are outright rejected during normal transaction validation, if a double spend appears in a block with valid proof of work, it receives special handling. In this scenario, the "conflicting" transaction is saved, but marked as "conflicting" in the UTXO storage. This is necessary because:
+
     - The block represents network consensus
     - The block's chain might become the longest chain of work
     - The network must be able to handle reorganizations consistently
     - To be able to reorganize, we want to track all transactions in blocks with valid proof of work
 
 3. **Conflict Propagation**: When conflicts are detected, the information is:
+
     - Stored in the UTXO store (conflict status is tracked for the specific UTXO)
     - Marked in the subtree stored on disk (subtrees track conflicting transactions within it)
     - Propagated to child transactions (see next point)
@@ -72,20 +74,24 @@ Teranode implements a double spend prevention mechanism based on several key pri
 Teranode's double spend handling involves several important concepts:
 
 1. **Transaction States**:
+
     - Non-conflicting: Normal transactions following the first-seen rule
     - Conflicting: Transactions attempting to double spend UTXOs
     - Child conflicts: Transactions spending outputs from conflicting transactions
 
 2. **Storage Mechanisms**:
+
     - UTXO store maintains conflict status and relationships
     - Subtrees track conflicts for block validation
     - All conflicting states have associated TTL (Time To Live) - conflicting transactions are eventually removed (once clear a reorganization is not possible)
 
 3. **Processing Phases**:
+
     - Detection during transaction validation (double spends outright rejected)
     - Special handling during block processing (third party blocks with conflicting transactions are processed, and the conflicting transactions stored and marked as such)
     - Chain reorganization handling - should a reorganization occur, conflicting transactions are reprocessed, with the original ones now marked as "conflicting"
     - Five-phase commit process for resolving conflicts:
+
       - Mark original transaction and children as conflicting
       - Unspend original transaction and children, temporarily marking its parent txs as not spendable (to prevent re-spending)
       - Mark double-spend as non-conflicting
@@ -118,10 +124,12 @@ The first-seen rule is Teranode's primary mechanism for handling double spends d
 When transactions arrive through the Validator component (Propagation Service):
 
 1. **UTXO Check**:
+
     - The validator checks if the UTXOs being spent are available
     - If a UTXO is already spent, the transaction is identified as a potential double spend
 
 2. **Immediate Rejection**:
+
     - Double spends detected at this stage are **rejected**
     - They are NOT propagated further in the network
     - They are NOT added to subtrees or blocks being assembled in the node
@@ -134,17 +142,20 @@ Double spend detection behaves differently when the transactions are detected as
 In this scenario, Teranode understands that the conflicting transaction has been treated as valid by the network and included in a block. A remote node has invested work in creating the block, and it can become part of the longest honest chain. The conflicting transaction can no longer be ignored, and it must be processed - but flagged as "conflicting".
 
 1. **Block-Level Processing**:
+
     - Double spends in valid blocks must be processed.
     - They are stored in the UTXO store and marked as "conflicting" (`conflicting`)
     - The tx parent is modified to include a `conflictingChildren` field, which lists both the original and the conflicting "child" transactions
     - The transactions are also marked as conflicting in the subtree store (`ConflictingNodes` field)
 
 2. **Parent-Child Relationships**:
+
     - All transactions that spend outputs from a conflicting transaction are also marked as conflicting
     - This creates a chain of conflicts that must be tracked
     - The conflict status is stored in the first "common" parent (the first parent transaction that is not conflicting) using the `conflictingChildren` field
 
 3. **Conflict Tracking**:
+
     - For conflicting transactions, a UTXO Store TTL is set - conflicting transactions are removed from the store once the TTL expires (indicating that a reorganization is no longer possible and the data is no longer needed)
 
 ![double_spend_detection_block_validation.svg](img/plantuml/double_spend_detection_block_validation.svg)
@@ -155,12 +166,15 @@ In this scenario, Teranode understands that the conflicting transaction has been
 The SubtreeValidation service provides an additional layer of double spend detection:
 
 1. **Subtree Checks**:
+
     - Subtrees containing double spends are rejected during normal validation
     - They are NOT "blessed" (approved) for inclusion in blocks
     - Exception: When the subtree is part of a block with proof of work
 
 2. **Block Context**:
+
     - When validating subtrees that are part of a block with proof of work:
+
         - Double spends are allowed, but relevant txs are marked as "conflicting"
         - The subtree includes a `ConflictingNodes` field, indicating the txs under contention
 
@@ -171,15 +185,18 @@ The SubtreeValidation service provides an additional layer of double spend detec
 The outcome of double spend detection varies based on the context:
 
 1. **Transaction Validation**:
+
     - Double spends are rejected
     - Original transaction remains valid
 
 2. **Block-Included Transactions**:
+
     - Double spends are processed
     - Conflicts are marked and tracked
     - Chain reorganization logic determines final validity
 
 3. **Child Transactions**:
+
     - Automatically inherit conflict status
     - Cannot be processed by validator or subtree validation
     - Are tracked for potential chain reorganization
@@ -197,6 +214,7 @@ The outcome of double spend detection varies based on the context:
 - Transactions attempting to spend UTXOs that are already spent by another transaction
 - Only processed if seen in a block with valid proof of work
 - Marked as conflicting in:
+
     - The UTXO store
     - The subtree store
 - Have an associated TTL (Time To Live), after which they are removed from the store
@@ -205,6 +223,7 @@ The outcome of double spend detection varies based on the context:
 - Transactions that spend outputs from other transactions
 - Inherit conflict status from their parents
 - If a parent transaction is marked as conflicting:
+
     - All child transactions are automatically marked as conflicting
 
 
@@ -215,6 +234,7 @@ The outcome of double spend detection varies based on the context:
 
 - Primary storage for conflict information
 - Stores conflict status in two ways:
+
     - `conflicting` flag on transactions
     - `conflictingChildren` list for parent transactions
 
@@ -247,12 +267,15 @@ This is handled through a **five-phase commit process**:
 
 ```
 Technical changes:
+
 - UTXO Store:
+
     - Sets `conflicting = true` on tx_original
     - Sets TTL for cleanup
     - Updates `conflictingChildren[]` array in parent transactions
     - Recursively marks all child transactions
 - Subtree Store:
+
     - Adds transaction hashes to `ConflictingNodes[]` array
     - Persists updated subtree
 ```
@@ -266,7 +289,9 @@ Technical changes:
 
 ```
 Technical changes:
+
 - UTXO Store:
+
     - Clears `spendingTxID` from parent UTXOs
     - Sets `unspendable = true` on parent UTXOs
     - Removes spend markers from tx_original's outputs
@@ -280,7 +305,9 @@ Technical changes:
 
 ```
 Technical changes:
+
 - UTXO Store:
+
     - Sets `spendingTxID` to double spend transaction
     - Creates new UTXOs for double spend outputs
     - Ignores `unspendable` flag during spend
@@ -293,10 +320,13 @@ Technical changes:
 
 ```
 Technical changes:
+
 - UTXO Store:
+
     - Sets `conflicting = false` on double spend
     - Removes any TTL
 - Subtree Store:
+
     - Removes hash from `ConflictingNodes[]` if present
 ```
 
@@ -306,7 +336,9 @@ Technical changes:
 
 ```
 Technical changes:
+
 - UTXO Store:
+
     - Sets `unspendable = false` on parent UTXOs
 ```
 

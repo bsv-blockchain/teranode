@@ -6,7 +6,7 @@ Welcome to the **Teranode** repository.
 
 The official documentation is now available at:
 
-👉 **[Teranode Documentation (GitHub Pages)](https://bitcoin-sv.github.io/teranode/)**
+👉 **[Teranode Documentation (GitHub Pages)](https://bsv-blockchain.github.io/teranode/)**
 
 Alternatively, you can view the raw documentation inside this repository:
 

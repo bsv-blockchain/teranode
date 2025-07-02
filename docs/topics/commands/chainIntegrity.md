@@ -5,8 +5,8 @@
 1. [Introduction](#1-introduction)
 2. [Architecture](#2-architecture)
 3. [Functionality](#3-functionality)
-- [3.1. Chain Integrity Initialization and Configuration](#31-chain-integrity-initialization-and-configuration)
-- [3.2. Chain Integrity Verification](#32-chain-integrity-verification)
+    - [3.1. Chain Integrity Initialization and Configuration](#31-chain-integrity-initialization-and-configuration)
+    - [3.2. Chain Integrity Verification](#32-chain-integrity-verification)
 4. [Technology](#4-technology)
 5. [How to run](#5-how-to-run)
 

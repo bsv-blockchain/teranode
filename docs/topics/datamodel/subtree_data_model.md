@@ -11,7 +11,7 @@ The concept of subtrees is a distinct feature not found in the BTC design.
 
 2. Each subtree computes its own Merkle root, which is a single hash representing the entire set of transactions within that subtree.
 
-![TERANODE_SUBTREE_MERKLE_ROOT.png](../architecture/img/TERANODE_SUBTREE_MERKLE_ROOT.png)
+![TERANODE_SUBTREE_MERKLE_ROOT.svg](../architecture/img/TERANODE_SUBTREE_MERKLE_ROOT.svg)
 
 Here's a table documenting the structure of the `Subtree` type:
 
@@ -31,6 +31,7 @@ Note - For subtree files in the `subtree-store` S3 buckets, each subtree has a s
 ##### Subtree Composition
 
 Each subtree consists of:
+
 - root hash: 32 bytes
 - fees: 8 bytes (uint64)
 - sizeInBytes: 8 bytes (uint64)

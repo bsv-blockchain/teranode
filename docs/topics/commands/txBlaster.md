@@ -5,8 +5,8 @@
 1. [Introduction](#1-introduction)
 2. [Architecture](#2-architecture)
 3. [Functionality](#3-functionality)
-   - [3.1. TX Blaster init and workers management](#31-tx-blaster-init-and-workers-management)
-   - [3.2. Worker Logic](#32-worker-logic)
+    - [3.1. TX Blaster init and workers management](#31-tx-blaster-init-and-workers-management)
+    - [3.2. Worker Logic](#32-worker-logic)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
 6. [How to run](#6-how-to-run)
@@ -40,6 +40,7 @@ The TX Blaster (main) configures global settings, initializes logging, and parse
 * It integrates with Coinbase for initial fund acquisition for transactions and utilizes a custom distribution service for propagating transactions across the network.
 
 The workers are the core of the transaction processing logic:
+
 * Each worker is responsible for generating and sending transactions to the network.
 * They manage connections to blockchain services (like Coinbase and a P2P network for transaction propagation) and Kafka producers for messaging.
 

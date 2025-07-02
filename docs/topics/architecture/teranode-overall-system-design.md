@@ -49,22 +49,27 @@ Teranode is responsible for:
 While BTC relies on vertical scaling—increasing the power of individual nodes—Teranode embraces horizontal scalability through its microservices architecture. This fundamental difference allows Teranode to overcome BTC's inherent limitations:
 
 1. **Scalability Approach**:
+
     - BTC: Increases processing power of single nodes (vertical scaling).
     - Teranode: Distributes workload across multiple machines (horizontal scaling).
 
 2. **Transaction Processing**:
+
     - BTC: Limited to ~7 transactions per second due to 1MB block size and 10-minute block time.
     - Teranode: Capable of processing over 1 million transactions per second, with potential for further increase.
 
 3. **Resource Utilization**:
+
     - BTC: Requires increasingly powerful (and expensive) hardware for each node.
     - Teranode: Can add multiple commodity machines to increase capacity cost-effectively.
 
 4. **Flexibility**:
+
     - BTC: Monolithic architecture makes updates and improvements challenging.
     - Teranode: Microservices allow independent scaling and updating of specific functions (e.g., transaction validation, block assembly).
 
 5. **Network Resilience**:
+
     - BTC: Failure of a node can significantly impact network capacity.
     - Teranode: Distributed architecture ensures continued operation even if some nodes fail.
 
@@ -106,6 +111,7 @@ The Teranode architecture is designed as a collection of microservices that work
 Key components of the Teranode architecture include:
 
 1. Teranode Core Services:
+
     - Asset Server
     - Propagation Service
     - Validator Service
@@ -116,6 +122,7 @@ Key components of the Teranode architecture include:
     - Alert Service
 
 2. Overlay Services:
+
     - Block Persister Service
     - UTXO Persister Service
     - P2P Service
@@ -123,11 +130,14 @@ Key components of the Teranode architecture include:
     - Legacy Service
 
 3. Stores:
+
     - Stores:
+
         - TX and Subtree Store]
         - UTXO Store
 
 3. Other Components:
+
     - Kafka Message Broker
     - Miners
 

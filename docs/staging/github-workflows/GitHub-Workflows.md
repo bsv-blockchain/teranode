@@ -16,8 +16,10 @@ The `test-build-deploy` GitHub workflow is defined in the `gke.yaml` file, and i
 - **Purpose**: Determines the deployment tag based on the GitHub event (tag or SHA).
 - **Runner**: Ubuntu latest version.
 - **Steps**:
+
 - Check if the event is a tag and export it; otherwise, use the SHA.
 - **Outputs**:
+
 - `deployment_tag`: The determined tag or SHA.
 
 #### 2. `test_and_lint`
@@ -30,6 +32,7 @@ The `test-build-deploy` GitHub workflow is defined in the `gke.yaml` file, and i
 - **Dependencies**: Depends on the `get_tag` job to fetch the tag.
 - **Uses**: Reference to `.github/workflows/gke_build.yaml`.
 - **Parameters**:
+
 - Architecture, repository, tag, region.
 
 #### 4. `build_arm64`
@@ -42,6 +45,7 @@ The `test-build-deploy` GitHub workflow is defined in the `gke.yaml` file, and i
 - **Dependencies**: Depends on `test_and_lint`, `build_amd64`, `build_arm64`, and `get_tag`.
 - **Uses**: Reference to `.github/workflows/gke_manifest.yaml`.
 - **Parameters**:
+
 - Region, repository, tag.
 
 #### 6. `deploy`
@@ -49,6 +53,7 @@ The `test-build-deploy` GitHub workflow is defined in the `gke.yaml` file, and i
 - **Dependencies**: Depends on `create_manifest` and `get_tag`.
 - **Uses**: Reference to `.github/workflows/gke_deploy.yaml`.
 - **Parameters**:
+
 - Repository, tag.
 
 
@@ -62,8 +67,10 @@ The `gke_tests.yaml` GitHub workflow is designed to be invoked through a workflo
 - **Purpose**: Performs linting and testing of Go code.
 - **Runner**: Custom runner labeled `teranode-runner`.
 - **Strategy**:
+
     - `fail-fast`: True (If any job fails, the entire workflow will terminate).
 - **Steps**:
+
     - **Checkout**: Checks out the source code at the full depth to ensure better relevancy of reporting and to support tools that require complete git history.
     - **Set up Go**: Sets up Go environment with specified version `1.21.0` using the `actions/setup-go@v5` action.
     - **Run Go tests**: Executes long-running Go tests using `make longtests`. This includes integration and other extensive testing procedures.
@@ -72,9 +79,11 @@ The `gke_tests.yaml` GitHub workflow is designed to be invoked through a workflo
 - **Purpose**: Runs a SonarQube scan to analyze the code quality and detect bugs, vulnerabilities, and code smells.
 - **Runner**: Uses the same custom runner `teranode-runner`.
 - **Steps**:
+
     - **Checkout**: Performs a repository checkout similar to the lint and test job.
     - **Twingate Action**: Establishes a secure connection using Twingate, necessary for accessing internal resources during the CI process.
     - **SonarQube Scan**:
+
         - Utilizes the `sonarsource/sonarqube-scan-action@v2.0.1`.
         - Configured with the SonarQube server URL and a token for authentication, facilitating the scanning of the checked-out code.
 
@@ -88,6 +97,7 @@ The `gke_build.yaml` workflow is designed to build Docker images for specified a
 #### Trigger
 - **Event**: Triggered by a `workflow_call`.
 - **Inputs**:
+
     - `repo`: Repository name.
     - `tag`: Deployment tag.
     - `region`: AWS region where operations will be performed.
@@ -97,6 +107,7 @@ The `gke_build.yaml` workflow is designed to build Docker images for specified a
 - **Purpose**: Builds and pushes a Docker image to AWS ECR based on the input parameters.
 - **Runner**: Dynamically determined based on the architecture input; supports both 'ARM64' and 'X64' on self-hosted Linux runners.
 - **Strategy**:
+
     - `fail-fast`: True. If any step fails, the entire job will terminate.
 - **Steps**:
     1. **Checkout**: Clones the repository using `actions/checkout@v4`.
@@ -106,6 +117,7 @@ The `gke_build.yaml` workflow is designed to build Docker images for specified a
     5. **Get Cluster Base ID**: Retrieves the ID for the base image from a predefined file.
     6. **Get Cluster Run ID**: Retrieves the ID for the run image from a predefined file.
     7. **Build and Push Docker Image**:
+
         - Executes the Docker build and push using `docker/build-push-action@v5`.
         - Utilizes build arguments to include specific settings like SHA, debug flags, and references to the base and run images.
 
@@ -117,6 +129,7 @@ The `gke_deploy.yaml` GitHub workflow is designed for deploying Docker images to
 #### Trigger
 - **Event**: Triggered by a `workflow_call`.
 - **Inputs**:
+
     - `repo`: The repository name for which the deployment is being made.
     - `tag`: The specific deployment tag associated with the Docker image.
 
@@ -129,6 +142,7 @@ The `gke_deploy.yaml` GitHub workflow is designed for deploying Docker images to
 - **Purpose**: Logs the deployment details.
 - **Runner**: Ubuntu latest version.
 - **Steps**:
+
     - Logs the full repository and tag being deployed.
     - Logs the GitHub event reference.
 
@@ -136,10 +150,12 @@ The `gke_deploy.yaml` GitHub workflow is designed for deploying Docker images to
 These jobs deploy the Docker image to specific AWS EKS clusters based on the region and the type of deployment tag. The deployment is conditional on the tag reference starting with specific prefixes.
 
 - **Common Settings**:
+
     - **Runner**: Uses a reusable workflow located at `.github/workflows/deploy-to-region.yaml`.
     - **Secrets**: Inherits all secrets from the parent workflow.
     - **Conditions**: Each job has a conditional start based on the prefix of the GitHub event ref (e.g., 'refs/tags/v' for version releases, 'refs/tags/scaling-v' for scaling deployments).
     - **Parameters**:
+
         - `region`: Specifies the AWS region for deployment, such as `eu-west-1`, `us-east-1`, `ap-south-1`, etc.
         - `teranode_env`: Specifies the environment configuration, either `allinone` or `scaling`.
 
@@ -153,6 +169,7 @@ The `gke_manifest.yaml` GitHub workflow is designed to create Docker manifests f
 #### Trigger
 - **Event**: Triggered by a `workflow_call`.
 - **Inputs**:
+
     - `repo`: The repository name where the Docker images are stored.
     - `tag`: The specific tag associated with the Docker images.
     - `region`: The AWS region where the Amazon ECR resides.
@@ -161,8 +178,10 @@ The `gke_manifest.yaml` GitHub workflow is designed to create Docker manifests f
 - **Purpose**: To create a Docker manifest that represents an image available in multiple architectures.
 - **Runner**: Ubuntu latest version.
 - **Strategy**:
+
     - `fail-fast`: True. The workflow will terminate if any step fails.
 - **Outputs**:
+
     - `registry`: The Amazon ECR registry URL returned from the login step.
 - **Steps**:
     1. **Twingate VPN Setup**: Establishes a secure connection for actions that might require access to protected resources using Twingate's GitHub action.
@@ -170,5 +189,6 @@ The `gke_manifest.yaml` GitHub workflow is designed to create Docker manifests f
     3. **Amazon ECR Login**: Authenticates with Amazon ECR to allow subsequent operations such as pushing or pulling Docker images.
     4. **Deployment Message Logging**: Logs a deployment message indicating the creation of the Docker manifest for the given tag.
     5. **Create Docker Manifest**:
+
         - Utilizes `int128/docker-manifest-create-action@v1` to create a Docker manifest.
         - Configures the action to create a manifest that includes images with suffixes `-amd64` and `-arm64`, thus supporting these two architectures.

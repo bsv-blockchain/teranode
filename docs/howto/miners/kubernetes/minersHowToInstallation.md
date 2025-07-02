@@ -12,9 +12,9 @@ Last modified: 27-May-2025
   3. [Create persistent volume provider](#3-create-persistent-volume-provider)
   4. [Load Teranode Images](#4-load-teranode-images)
   5. [Deploy Teranode](#5-deploy-teranode)
-- [Verifying the Deployment](#verifying-the-deployment)
-- [Production Considerations](#production-considerations)
-- [Other Resources](#other-resources)
+    - [Verifying the Deployment](#verifying-the-deployment)
+    - [Production Considerations](#production-considerations)
+    - [Other Resources](#other-resources)
 
 ## Introduction
 
@@ -199,7 +199,7 @@ For production deployments, consider:
 - Configuring appropriate resource requests and limits
 - Setting up proper backup and disaster recovery procedures
 
-An example CR for a mainnet deployment is available in [kubernetes/teranode/teranode-cr-mainnet.yaml](../../../../deploy/kubernetes/teranode/teranode-cr-mainnet.yaml).
+An example CR for a mainnet deployment is available in [kubernetes/teranode/teranode-cr-mainnet.yaml](https://github.com/bitcoin-sv/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml).
 
 ## Other Resources
 

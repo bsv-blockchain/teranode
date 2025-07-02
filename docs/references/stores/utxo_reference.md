@@ -56,6 +56,7 @@ type SpendResponse struct {
 ```
 
 `SpendResponse` provides serialization methods:
+
 - `Bytes()`: Serializes the response to a byte slice
 - `FromBytes(b []byte)`: Deserializes from a byte slice
 

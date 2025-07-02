@@ -13,13 +13,16 @@ When you encounter issues, please follow these guidelines to report bugs to the 
 Before submitting a bug report, gather the following information:
 
 1. **Environment Details**:
+
     - Operating System and version
     - Docker version
     - Docker Compose version
 2. **Configuration Files**:
+
     - `settings_local.conf`
     - Docker Compose file
 3. **System Resources**:
+
     - CPU usage
     - Memory usage
     - Disk space and I/O statistics
@@ -27,11 +30,14 @@ Before submitting a bug report, gather the following information:
     - Firewall configuration
     - Any relevant network errors
 5. **Steps to Reproduce**:
+
     - Detailed, step-by-step description of how to reproduce the issue
 6. **Expected vs Actual Behavior**:
+
     - What you expected to happen
     - What actually happened
 7. **Screenshots or Error Messages**:
+
     - Include any relevant visual information
 
 ## Submitting the Bug Report

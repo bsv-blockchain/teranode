@@ -3,7 +3,7 @@
 ## Index
 
 - [🗂️ Blob Server](#️-blob-server)
-  - [Index](#index)
+    - [Index](#index)
   - [1. Description](#1-description)
   - [2. Architecture](#2-architecture)
   - [3. Technology](#3-technology)
@@ -137,6 +137,7 @@ func getSubtreeStore(logger ulogger.Logger) blob.Store {
 Key technologies involved:
 
 1. **Go Programming Language (Golang)**:
+
     - A statically typed, compiled language known for its simplicity and efficiency, especially in concurrent operations and networked services.
     - The primary language used for implementing the service's logic.
 
@@ -307,6 +308,7 @@ Blob store configurations use URLs that follow this general structure:
 ```
 
 Components:
+
 - **Scheme**: Determines the storage backend type (file, memory, s3, http, null)
 - **Path**: Specifies the storage location or identifier
 - **Parameters**: Optional query parameters that modify behavior

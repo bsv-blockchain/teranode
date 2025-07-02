@@ -500,7 +500,8 @@ message KafkaTxMetaTopicMessage {
 - Description: Specifies whether to add/update metadata (ADD) or delete metadata (DELETE)
 - Required: Yes
 - Values:
-  - ADD (0): Add or update transaction metadata
+
+    - ADD (0): Add or update transaction metadata
   - DELETE (1): Delete transaction metadata
 
 #### content
@@ -781,7 +782,8 @@ enum InvType {
 - Description: Type of inventory item
 - Required: Yes
 - Values:
-  - Error (0): Error or unknown type
+
+    - Error (0): Error or unknown type
   - Tx (1): Transaction
   - Block (2): Block
   - FilteredBlock (3): Filtered block

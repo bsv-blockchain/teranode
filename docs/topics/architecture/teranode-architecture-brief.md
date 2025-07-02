@@ -1,12 +1,7 @@
-![BSVBA-Logo_FC.svg](img%2FBSVBA-Logo_FC.svg)
+# Teranode - Architecture Brief
 
----
-
-![teranode.png](img%2Fteranode.png)
-
----
-
-# Teranode - Architecture Overview
+!!! info "Condensed Overview"
+    This is a condensed version of the Teranode architecture documentation. For comprehensive details, technical specifications, and in-depth explanations, we recommend reading the complete [Architecture Overview](teranode-overall-system-design.md).
 
 ## 1. Overview
 

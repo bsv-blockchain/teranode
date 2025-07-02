@@ -39,9 +39,8 @@
     - [3.27. Command: Version](#327-command-version)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
-6. [Settings](#6-settings)
-    - [Core Settings from `gocore` Configuration:](#core-settings-from-gocore-configuration)
-    - [Usage of Settings:](#usage-of-settings)
+6. [Configuration Settings](#6-configuration-settings)
+
 7. [How to run](#7-how-to-run)
 8. [Other Resources](#8-other-resources)
 
@@ -169,6 +168,7 @@ The CreateRawTransaction method constructs a transaction that spends a given set
 ![rpc-create-raw-transaction.svg](img/plantuml/rpc/rpc-create-raw-transaction.svg)
 
 #### Input Parameters:
+
 - **Inputs**: A list of transaction inputs including the transaction ID (`txid`), output index (`vout`), and a sequence number if applicable.
 - **Amounts**: A dictionary where each key is a Bitcoin address and the value is the amount of bitcoin to send to that address.
 - **LockTime** (optional): Specifies the earliest time or block number that this transaction can be included in the blockchain.
@@ -181,11 +181,13 @@ The CreateRawTransaction method constructs a transaction that spends a given set
 
 
 3. **Process Inputs**:
+
     - For each input, it validates the transaction ID and constructs the transaction input structure.
     - If a `LockTime` is set and not zero, it adjusts the sequence number to allow for the lock time to be effective.
 
 
 4. **Process Outputs**:
+
     - Validates the amount for each output to ensure it's within the valid monetary range.
     - Validates each output address, ensuring it's a supported type and appropriate for the network.
     - Creates a payment script for each address and constructs the transaction output.
@@ -197,6 +199,7 @@ The CreateRawTransaction method constructs a transaction that spends a given set
 6. **Serialize Transaction**: Converts the transaction to a hex-encoded string for output.
 
 #### Outputs:
+
 - **Success**: Returns a hex-encoded string representing the raw transaction.
 - **Error**: Returns an error if there are issues with the inputs, outputs, lock time, address decoding, or serialization.
 
@@ -206,10 +209,13 @@ The CreateRawTransaction method constructs a transaction that spends a given set
 The `freeze` command allows administrators to freeze a specific UTXO, preventing it from being spent in future transactions.
 
 #### Function Overview
+
 - **Purpose**: To mark a specific transaction output (UTXO) as frozen, making it unavailable for spending
+
 - **Parameters**:
     - `txid` (string, required): The transaction ID of the output to freeze
     - `vout` (numeric, required): The output index to freeze
+
 - **Return Value**:
     - On success: Returns `true` indicating the UTXO was successfully frozen
     - On failure: Returns an error if the UTXO cannot be found or frozen
@@ -219,26 +225,32 @@ The `freeze` command allows administrators to freeze a specific UTXO, preventing
 ![rpc-freeze.svg](img/plantuml/rpc/rpc-freeze.svg)
 
 1. **Request Processing**:
+
     - Receives request with transaction ID and output index
     - Validates input parameters
     - Initializes tracing and metrics
 
 2. **UTXO Validation**:
+
     - Checks if the specified UTXO exists
     - Validates that the UTXO is not already frozen
 
 3. **Freezing Operation**:
+
     - Marks the UTXO as frozen in the UTXO state database
     - Records the freezing action for auditing purposes
 
 4. **Response Construction**:
+
     - Returns `true` on successful freeze operation
     - Returns error if validation fails or database update fails
 
 #### (Success) Response Fields:
+
 - Returns boolean `true` on successful freeze operation
 
 #### Important Notes:
+
 - Freezing a UTXO is an administrative function that should be used with caution
 - This operation is reversible using the `unfreeze` command
 - Frozen UTXOs will be rejected if included in transaction inputs
@@ -276,6 +288,7 @@ if err != nil {
     - Ensure the miner service is secured and only accessible by the RPC server to prevent unauthorized block generation.
 
 #### (Success) Response Fields:
+
 - Returns nil on success
 
 
@@ -284,11 +297,14 @@ if err != nil {
 The `generatetoaddress` command mines blocks immediately to a specified address. This command is primarily used for testing purposes.
 
 #### Function Overview
+
 - **Purpose**: To generate a specified number of blocks with coinbase rewards sent to a designated address
+
 - **Parameters**:
     - `nblocks` (numeric, required): Number of blocks to generate
     - `address` (string, required): The address to send the newly generated bitcoin to
     - `maxtries` (numeric, optional): Maximum number of iterations to try
+
 - **Return Value**:
     - On success: Returns an array of block hashes that were generated
     - On failure: Returns an error describing what went wrong
@@ -298,33 +314,41 @@ The `generatetoaddress` command mines blocks immediately to a specified address.
 ![rpc-generate-to-address.svg](img/plantuml/rpc/rpc-generate-to-address.svg)
 
 1. **Request Processing**:
+
     - Receives request with number of blocks, destination address, and optional max tries
     - Validates input parameters
     - Initializes tracing and metrics
 
 2. **Address Validation**:
+
     - Validates the destination address format and network compatibility
     - Creates a payment script for the address
 
 3. **Block Generation Setup**:
+
     - Prepares the mining configuration with the specified address
     - Sets up the maximum number of hash attempts (tries)
 
 4. **Block Generation Loop**:
+
     - For each requested block:
+
         - Creates a new block template with the address script
         - Performs proof-of-work calculation
         - Processes and validates the new block
         - Adds the block to the blockchain
 
 5. **Response Construction**:
+
     - Collects the hashes of all successfully generated blocks
     - Returns the array of block hashes
 
 #### (Success) Response Fields:
+
 - Returns an array of strings, each containing the hex-encoded hash of a generated block
 
 #### Important Notes:
+
 - This command is for testing purposes only and should not be used in production environments
 - It bypasses normal mining difficulty by forcing block creation
 - Can be used to test blockchain functionality or advance the chain state rapidly for testing
@@ -337,6 +361,7 @@ The `getbestblockhash` command is used to retrieve the hash of the best (most re
 ![rpc-get-best-block-height.svg](img/plantuml/rpc/rpc-get-best-block-height.svg)
 
 #### (Success) Response Fields:
+
 - **hash**: The hex-encoded hash of the best block in the main chain
 
 ### 3.7. Command: Get Block
@@ -373,14 +398,18 @@ When verbosity=1 or 2:
 The `getblockbyheight` command returns information about a block at a specific height in the blockchain. The response format varies based on the verbosity parameter.
 
 #### Function Overview
+
 - **Purpose**: To retrieve block information using block height instead of block hash
+
 - **Parameters**:
     - `height`: The height of the block to retrieve
     - `verbosity`: Determines the format and detail level of the returned data
-        - 0: Returns serialized, hex-encoded block data
-        - 1: Returns JSON object with block information
-        - 2: Returns JSON object with block information including detailed transaction data
+    - 0: Returns serialized, hex-encoded block data
+    - 1: Returns JSON object with block information
+    - 2: Returns JSON object with block information including detailed transaction data
+
 - **Return Value**:
+
     - On success: Returns block data in the format specified by verbosity
     - On failure: Returns an error if the block cannot be found or retrieved
 
@@ -401,10 +430,13 @@ The `getblockbyheight` command returns information about a block at a specific h
 3. **Response Construction**:
 
     - For verbosity=0:
+
         - Returns hex-encoded serialized block data
     - For verbosity=1:
+
         - Returns JSON object with block header information and transaction IDs
     - For verbosity=2:
+
         - Returns JSON object with complete block information including full transaction data
 
 #### (Success) Response Fields:
@@ -437,9 +469,13 @@ The `getblockchaininfo` command returns information about the current blockchain
 
 
 #### Function Overview
+
 - **Purpose**: To retrieve comprehensive information about the current state of the blockchain.
+
 - **Parameters**: None
+
 - **Return Value**:
+
     - On success: Returns a JSON object containing blockchain state information
     - On failure: Returns an error describing what went wrong
 
@@ -449,15 +485,19 @@ The `getblockchaininfo` command returns information about the current blockchain
 
 
 1. **Request Processing**:
+
     - Receives request for blockchain information
     - No parameters to validate
 
 2. **Blockchain Query**:
+
     - Retrieves the best block header and metadata from the blockchain service
     - If retrieval fails, returns an error
 
 3. **Response Construction**:
+
     - Constructs response object containing:
+
         - Chain name (main, test, regtest)
         - Current block count
         - Header count
@@ -485,9 +525,12 @@ The `getblockchaininfo` command returns information about the current blockchain
 The `getblockhash` command returns the hash of a block at a specific height in the blockchain.
 
 #### Function Overview
+
 - **Purpose**: To retrieve the hash of a block at a given block height
+
 - **Parameters**:
     - `index`: The height of the block in the blockchain
+
 - **Return Value**:
     - On success: Returns the block hash as a string
     - On failure: Returns an error if the block cannot be found
@@ -520,13 +563,17 @@ The `getblockhash` command returns the hash of a block at a specific height in t
 The `getblockheader` command returns information about a block's header given its hash. The response format varies based on the verbose parameter.
 
 #### Function Overview
+
 - **Purpose**: To retrieve block header information using block hash
+
 - **Parameters**:
     - `hash`: The hash of the block
     - `verbose`: Boolean determining the format of the returned data
-        - false: Returns serialized, hex-encoded header data
-        - true: Returns JSON object with detailed header information
+    - false: Returns serialized, hex-encoded header data
+    - true: Returns JSON object with detailed header information
+
 - **Return Value**:
+
     - On success: Returns header data in the format specified by verbose parameter
     - On failure: Returns an error if the block cannot be found or hash is invalid
 
@@ -547,8 +594,10 @@ The `getblockheader` command returns information about a block's header given it
 3. **Response Construction**:
 
     - For verbose=false:
+
         - Returns hex-encoded serialized header data
     - For verbose=true:
+
         - Calculates difficulty from bits
         - Returns JSON object with detailed header information
 
@@ -576,9 +625,13 @@ When verbose=true:
 The `getdifficulty` command returns the proof-of-work difficulty as a multiple of the minimum difficulty.
 
 #### Function Overview
+
 - **Purpose**: To retrieve the current mining difficulty of the network
+
 - **Parameters**: None
+
 - **Return Value**:
+
     - On success: Returns the current difficulty as a floating-point number
     - On failure: Returns an error if the difficulty cannot be retrieved
 
@@ -606,9 +659,13 @@ The `getdifficulty` command returns the proof-of-work difficulty as a multiple o
 The `getinfo` command returns general information about the node's state, including version information, network status, and blockchain details.
 
 #### Function Overview
+
 - **Purpose**: To retrieve general information about the node's current state and configuration.
+
 - **Parameters**: None
+
 - **Return Value**:
+
     - On success: Returns a JSON object containing node state information
     - On failure: Returns an error if blockchain height cannot be retrieved
 
@@ -617,11 +674,14 @@ The `getinfo` command returns general information about the node's state, includ
 ![rpc-get-info.svg](img/plantuml/rpc/rpc-get-info.svg)
 
 1. **Height Retrieval**:
+
     - Queries blockchain service for current best height and time
     - If query fails, sets height to 0 and logs error
 
 2. **Response Construction**:
+
     - Builds response containing:
+
         - Server version
         - Protocol version
         - Current block height
@@ -649,9 +709,13 @@ The `getinfo` command returns general information about the node's state, includ
 The `getmininginfo` command returns various mining-related information including block chain state, current block statistics, and network mining parameters.
 
 #### Function Overview
+
 - **Purpose**: To retrieve comprehensive information about the current mining state
+
 - **Parameters**: None
+
 - **Return Value**:
+
     - On success: Returns a JSON object containing mining-related information
     - On failure: Returns an error if the mining information cannot be retrieved
 
@@ -693,9 +757,11 @@ The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candid
 #### Function Overview
 
 - **Purpose**: To request a mining candidate, which represents a potential new block template, from the node.
+
 - **Parameters**:
     - The function doesn't take any specific parameters from the RPC call.
     - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling (not directly used in this implementation).
+
 - **Return Value**:
     - On success: Returns a mining candidate object (`mc`) containing the necessary information for mining.
     - On failure: Returns an error detailing why the mining candidate could not be retrieved.
@@ -705,13 +771,16 @@ The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candid
 ![rpc-get-mining-candidate.svg](img/plantuml/rpc/rpc-get-mining-solution.svg)
 
 1. **Mining Candidate Retrieval**:
+
     - Calls the `GetMiningCandidate` method on the `blockAssemblyClient` to retrieve a mining candidate.
     - The Block Assembly generates the latest block template from the blockchain's current state.
 
 2. **Error Handling**:
+
     - If the retrieval fails, the function returns the error to the caller.
 
 3. **Response**:
+
     - If successful, the function returns the mining candidate object (`mc`).
 
 #### (Success) Response Fields:
@@ -736,6 +805,7 @@ The `getpeerinfo` command returns data about each connected network peer as an a
 - **Purpose**: To retrieve detailed information about all connected peers, both legacy and new P2P connections.
 - **Parameters**: None
 - **Return Value**:
+
     - On success: Returns an array of peer information objects
     - On failure: Returns partial information if at least one peer service responds
 
@@ -798,10 +868,13 @@ The command aggregates peer information from both the legacy P2P service and the
 The `getrawtransaction` command retrieves raw transaction data for a specific transaction, either as a serialized hex string or as a detailed JSON object.
 
 #### Function Overview
+
 - **Purpose**: To retrieve transaction data for a specific transaction identified by its transaction ID
+
 - **Parameters**:
     - `txid` (string, required): The transaction ID to look up
     - `verbose` (boolean, optional, default=false): If false, returns a hex-encoded string. If true, returns a JSON object with transaction details
+
 - **Return Value**:
     - If verbose=false: Returns a serialized, hex-encoded string of the transaction
     - If verbose=true: Returns a JSON object with detailed transaction information
@@ -812,31 +885,39 @@ The `getrawtransaction` command retrieves raw transaction data for a specific tr
 ![rpc-get-raw-transaction.svg](img/plantuml/rpc/rpc-get-raw-transaction.svg)
 
 1. **Request Processing**:
+
     - Receives request with transaction ID and verbosity flag
     - Validates transaction ID format
     - Initializes tracing and metrics
 
 2. **Transaction Retrieval**:
+
     - Queries blockchain service to locate the transaction
     - If transaction not found, returns appropriate error
 
 3. **Response Formatting**:
+
     - For non-verbose (false) response:
+
         - Returns hex-encoded serialized transaction data
     - For verbose (true) response:
+
         - Constructs detailed JSON object with transaction information
         - Includes metadata such as blockhash, confirmation count, and timestamp
         - Processes all inputs and outputs with script details
 
 4. **Response Construction**:
+
     - Returns the transaction data in the requested format
 
 #### (Success) Response Fields:
 
 When verbose=false:
+
 - Returns a string containing the hex-encoded serialized transaction
 
 When verbose=true:
+
 - **hex**: The serialized, hex-encoded transaction data
 - **txid**: The transaction ID (same as requested)
 - **hash**: The transaction hash (usually same as txid)
@@ -844,14 +925,14 @@ When verbose=true:
 - **version**: The transaction version number
 - **locktime**: The transaction's locktime
 - **vin**: Array of transaction inputs
-  - **txid**: Transaction ID of the input
+    - **txid**: Transaction ID of the input
   - **vout**: Output index of the input
   - **scriptSig**: Script signature
     - **asm**: Assembly representation of the script
     - **hex**: Hex-encoded script
   - **sequence**: Input sequence number
 - **vout**: Array of transaction outputs
-  - **value**: The output value in BTC
+    - **value**: The output value in BTC
   - **n**: The output index number
   - **scriptPubKey**: The output script
     - **asm**: Assembly representation of the script
@@ -869,9 +950,12 @@ When verbose=true:
 The `invalidateblock` command permanently marks a block as invalid, as if it violated a consensus rule.
 
 #### Function Overview
+
 - **Purpose**: To manually invalidate a block in the blockchain
+
 - **Parameters**:
     - `blockhash`: The hash of the block to invalidate
+
 - **Return Value**:
     - On success: Returns nil, indicating the block was successfully invalidated
     - On failure: Returns an error if the block cannot be found or hash is invalid
@@ -907,9 +991,12 @@ The `invalidateblock` command permanently marks a block as invalid, as if it vio
 The `isbanned` command checks if a specific network address is currently banned from connecting to the node.
 
 #### Function Overview
+
 - **Purpose**: To determine if a network address is banned from node connections
+
 - **Parameters**:
     - `address` (string, required): The network address to check, e.g. "192.168.0.1" or "192.168.0.0/24"
+
 - **Return Value**:
     - On success: Returns a boolean value - `true` if the address is banned, `false` if not
     - On failure: Returns an error if the address format is invalid
@@ -919,24 +1006,29 @@ The `isbanned` command checks if a specific network address is currently banned 
 ![rpc-isbanned.svg](img/plantuml/rpc/rpc-isbanned.svg)
 
 1. **Request Processing**:
+
     - Receives request with network address
     - Validates address format
     - Initializes tracing and metrics
 
 2. **Ban Status Check**:
+
     - Queries peer service to check if the address is in the banned list
     - Retrieves current ban status and expiration time if banned
 
 3. **Response Construction**:
+
     - Returns `true` if the address is currently banned
     - Returns `false` if the address is not banned
     - Returns error if address validation fails
 
 #### (Success) Response Fields:
+
 - Returns boolean `true` if the address is banned
 - Returns boolean `false` if the address is not banned
 
 #### Important Notes:
+
 - Can be used to check both individual IP addresses and subnets
 - Address bans may have an expiration time
 - Works in conjunction with the `setban` command which is used to add or remove bans
@@ -946,11 +1038,14 @@ The `isbanned` command checks if a specific network address is currently banned 
 The `reassign` command allows administrators to change the ownership of a specific UTXO by reassigning it to a new Bitcoin address.
 
 #### Function Overview
+
 - **Purpose**: To reassign ownership of a specific transaction output (UTXO) to a new Bitcoin address
+
 - **Parameters**:
     - `txid` (string, required): The transaction ID of the output to reassign
     - `vout` (numeric, required): The output index to reassign
     - `destination` (string, required): The Bitcoin address to reassign the UTXO to
+
 - **Return Value**:
     - On success: Returns `true` indicating the UTXO was successfully reassigned
     - On failure: Returns an error if the UTXO cannot be found or reassigned
@@ -960,27 +1055,33 @@ The `reassign` command allows administrators to change the ownership of a specif
 ![rpc-reassign.svg](img/plantuml/rpc/rpc-reassign.svg)
 
 1. **Request Processing**:
+
     - Receives request with transaction ID, output index, and destination address
     - Validates input parameters
     - Initializes tracing and metrics
 
 2. **UTXO and Address Validation**:
+
     - Checks if the specified UTXO exists
     - Validates the destination address format and network compatibility
 
 3. **Reassignment Operation**:
+
     - Creates a new scriptPubKey for the destination address
     - Updates the UTXO record with the new ownership information
     - Records the reassignment action for auditing purposes
 
 4. **Response Construction**:
+
     - Returns `true` on successful reassignment operation
     - Returns error if validation fails or database update fails
 
 #### (Success) Response Fields:
+
 - Returns boolean `true` on successful reassignment operation
 
 #### Important Notes:
+
 - Reassigning a UTXO changes its spending conditions without creating a new transaction
 - This is an administrative function that bypasses normal Bitcoin transaction rules
 - Should only be used in specific regulatory or recovery scenarios
@@ -991,9 +1092,12 @@ The `reassign` command allows administrators to change the ownership of a specif
 The `reconsiderblock` command removes the invalid status of a block and its descendants, allowing them to be reconsidered for inclusion in the blockchain. This command is typically used to undo the effects of `invalidateblock`.
 
 #### Function Overview
+
 - **Purpose**: To remove invalid status from a previously invalidated block
+
 - **Parameters**:
     - `blockhash`: The hash of the block to reconsider
+
 - **Return Value**:
     - On success: Returns nil, indicating the block was successfully reconsidered
     - On failure: Returns an error if the block cannot be found or hash is invalid
@@ -1033,9 +1137,11 @@ The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-sign
 #### Function Overview
 
 - **Purpose**: To submit a raw, serialized, and hex-encoded transaction to the blockchain network.
+
 - **Parameters**:
     - `cmd`: Contains the raw transaction data and any command-specific parameters.
     - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
+
 - **Return Value**:
     - On success: Returns a result (e.g., transaction ID or confirmation message) indicating that the transaction was successfully broadcast.
     - On failure: Returns an error detailing why the transaction could not be processed or broadcast.
@@ -1079,12 +1185,15 @@ The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-sign
 The `setban` command adds or removes an IP address or subnet from the banned list. This command is used for network management and peer control.
 
 #### Function Overview
+
 - **Purpose**: To manage banned IP addresses/subnets
+
 - **Parameters**:
     - `ipOrSubnet`: The IP/Subnet to ban/unban (e.g., "192.168.0.6" or "192.168.0.0/24")
     - `command`: "add" to add a ban, "remove" to remove a ban
     - `bantime`: Time in seconds for how long the IP is banned (optional)
     - `absolute`: If true, bantime is interpreted as an absolute timestamp (optional)
+
 - **Return Value**:
     - On success: Returns nil
     - On failure: Returns an error if parameters are invalid or operation fails
@@ -1094,22 +1203,26 @@ The `setban` command adds or removes an IP address or subnet from the banned lis
 ![rpc-set-ban.svg](img/plantuml/rpc/rpc-set-ban.svg)
 
 1. **Request Processing**:
+
     - Receives request with IP/subnet and command
     - Validates input parameters
     - Initializes tracing and metrics
 
 2. **Ban List Management**:
+
     - Retrieves current ban list
     - Processes add/remove command
     - Updates ban list accordingly
 
 3. **Response Construction**:
+
     - Returns nil on successful operation
     - Returns error if operation fails
 
 #### Important Notes:
 
 - For "add" command:
+
     - If bantime is 0, defaults to 24 hours
     - If absolute is true, bantime is treated as Unix timestamp
 - The IP/subnet format must be valid
@@ -1121,8 +1234,11 @@ The `setban` command adds or removes an IP address or subnet from the banned lis
 The `stop` command initiates a clean shutdown of the node, stopping all services in an orderly fashion.
 
 #### Function Overview
+
 - **Purpose**: To safely shut down the node and all its services
+
 - **Parameters**: None
+
 - **Return Value**:
     - On success: Returns a string message indicating the node is stopping
     - The actual shutdown process happens asynchronously after the response is sent
@@ -1132,29 +1248,35 @@ The `stop` command initiates a clean shutdown of the node, stopping all services
 ![rpc-stop.svg](img/plantuml/rpc/rpc-stop.svg)
 
 1. **Request Processing**:
+
     - Receives stop request
     - No parameters to validate
     - Initializes tracing and metrics
 
 2. **Shutdown Initiation**:
+
     - Logs shutdown request
     - Sets internal shutdown flag
     - Signals main process to initiate shutdown sequence
 
 3. **Response Construction**:
+
     - Returns confirmation message that shutdown has been initiated
     - Actual shutdown happens in the background after response is sent
 
 4. **Shutdown Sequence** (happens after response):
+
     - Services are stopped in reverse order of initialization
     - Connections are gracefully closed
     - Data is persisted where necessary
     - Process exits
 
 #### (Success) Response Fields:
+
 - Returns string message: "Bitcoin server stopping"
 
 #### Important Notes:
+
 - This is an administrative command that should be restricted to authorized users
 - The node will complete the shutdown process even after sending the RPC response
 - Any pending operations may be completed or aborted depending on their nature
@@ -1168,9 +1290,11 @@ The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining
 #### Function Overview
 
 - **Purpose**: To submit a mining solution, which represents a potential new block, for validation and inclusion in the blockchain.
+
 - **Parameters**:
     - `cmd`: Contains the JSON string of the mining solution and any command-specific parameters.
     - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
+
 - **Return Value**:
     - On success: Returns `nil`, indicating that the mining solution was successfully submitted.
     - On failure: Returns an error detailing why the mining solution could not be processed or submitted.
@@ -1181,13 +1305,16 @@ The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining
 
 
 1. **Command Parsing**:
+
     - The function receives a command (`bsvjson.SubmitMiningSolutionCmd`) which includes a JSON string representing the mining solution.
 
 2. **JSON Unmarshaling**:
+
     - Attempts to unmarshal the JSON string into a `model.MiningSolution` struct.
     - If unmarshaling fails, it returns an error, indicating that the JSON string was malformed or incompatible with the expected structure.
 
 3. **Solution Submission**:
+
     - Calls the `SubmitMiningSolution` method on the `blockAssemblyClient` to submit the mining solution to the Block Assembly.
     - The Block Assembly validates the solution and, if successful, propagates it to other nodes in the network.
     - If submission fails, it returns an error indicating why the solution was rejected (e.g., invalid solution, network errors).
@@ -1202,10 +1329,13 @@ The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining
 The `unfreeze` command removes the freeze status from a previously frozen UTXO, allowing it to be spent again in transactions.
 
 #### Function Overview
+
 - **Purpose**: To remove the frozen status from a specific transaction output (UTXO)
+
 - **Parameters**:
     - `txid` (string, required): The transaction ID of the frozen output
     - `vout` (numeric, required): The output index to unfreeze
+
 - **Return Value**:
     - On success: Returns `true` indicating the UTXO was successfully unfrozen
     - On failure: Returns an error if the UTXO cannot be found or unfrozen
@@ -1215,26 +1345,32 @@ The `unfreeze` command removes the freeze status from a previously frozen UTXO, 
 ![rpc-unfreeze.svg](img/plantuml/rpc/rpc-unfreeze.svg)
 
 1. **Request Processing**:
+
     - Receives request with transaction ID and output index
     - Validates input parameters
     - Initializes tracing and metrics
 
 2. **UTXO Validation**:
+
     - Checks if the specified UTXO exists
     - Validates that the UTXO is currently frozen
 
 3. **Unfreezing Operation**:
+
     - Removes the frozen status from the UTXO in the state database
     - Records the unfreezing action for auditing purposes
 
 4. **Response Construction**:
+
     - Returns `true` on successful unfreeze operation
     - Returns error if validation fails or database update fails
 
 #### (Success) Response Fields:
+
 - Returns boolean `true` on successful unfreeze operation
 
 #### Important Notes:
+
 - Only previously frozen UTXOs can be unfrozen
 - After unfreezing, the UTXO becomes available for spending in transactions
 - This operation is an administrative function that should be used with appropriate authorization
@@ -1246,6 +1382,7 @@ The `version` command is used to retrieve the version information of the RPC ser
 ![rpc-get-version.svg](img/plantuml/rpc/rpc-get-version.svg)
 
 #### (Success) Response Fields:
+
 - **btcdjsonrpcapi**: Object containing version information
     - **versionString**: Semantic version string
     - **major**: Major version number

@@ -13,9 +13,7 @@
 4. [Directory Structure and Main Files](#4-directory-structure-and-main-files)
 5. [How to run](#5-how-to-run)
 6. [Configuration options (settings flags)](#6-configuration-options-settings-flags)
-    - [Alert Service Configuration](#alert-service-configuration)
-    - [Network Configuration](#network-configuration)
-    - [P2P Configuration](#p2p-configuration)
+
 7. [Other Resources](#7-other-resources)
 
 
@@ -87,12 +85,14 @@ The Alert Service initializes the necessary components and services to start pro
 2. The Alert Service initializes the Prometheus metrics.
 
 3. The Main function calls the `Init` method on the Alert Service:
+
     - The service loads its configuration.
     - It initializes the datastore (database connection). This is a dependency for the alert library, which uses the datastore to store alert data.
     - It creates and stores a genesis alert in the database.
     - If enabled, it verifies the RPC connection to the Bitcoin node.
 
 4. After initialization, the Main function calls the `Start` method:
+
     - The Alert Service creates a new P2P Server instance.
     - It starts the P2P Server.
 
@@ -106,6 +106,7 @@ The Alert Service initializes the necessary components and services to start pro
 
 1. The P2P Alert library initiates the process by calling `AddToConsensusBlacklist` with a list of funds to freeze.
 2. The Alert Service iterates through each fund:
+
     - It retrieves the transaction data from the UTXO Store.
     - Calculates the UTXO hash.
     - Calls the UTXO Store to freeze the UTXO.
@@ -121,14 +122,17 @@ The Alert Service initializes the necessary components and services to start pro
 
 1. The P2P Alert library initiates the process by calling `AddToConsensusBlacklist` with a list of funds to potentially unfreeze.
 2. The Alert Service iterates through each fund:
+
     - It retrieves the transaction data from the UTXO Store.
     - Calculates the UTXO hash.
     - Checks if the fund is eligible for unfreezing by comparing the EnforceAtHeight.Stop with the current block height.
 3. If the fund is eligible for unfreezing:
+
     - The Alert Service calls the UTXO Store to unfreeze the UTXO.
     - The UTXO Store interacts with the database to mark the UTXO as unfrozen.
     - Depending on the success of the unfreeze operation, the Alert Service adds the result to either the processed or notProcessed list.
 4. If the fund is not eligible for unfreezing:
+
     - The Alert Service adds it to the notProcessed list with a reason.
 5. Finally, the Alert Service returns a BlacklistResponse to the P2P network.
 
@@ -140,16 +144,20 @@ The Alert Service initializes the necessary components and services to start pro
 
 1. The P2P Alert library initiates the process by calling `AddToConfiscationTransactionWhitelist` with a list of transactions.
 2. The Alert Service iterates through each transaction:
+
     - It parses the transaction from the provided hex string.
 3. For each input in the transaction:
+
     - The Alert Service retrieves the parent transaction data from the UTXO Store.
     - It calculates the old UTXO hash based on the parent transaction output.
     - It extracts the public key from the input's unlocking script.
     - It creates a new locking script using the extracted public key.
     - It calculates a new UTXO hash based on the new locking script.
 4. The Alert Service calls the UTXO Store to reassign the UTXO:
+
     - The UTXO Store updates the database to reflect the new UTXO assignment.
 5. Depending on the success of the reassignment operation:
+
     - The Alert Service adds the result to either the processed or notProcessed list.
 6. After processing all inputs of all transactions, the Alert Service returns an AddToConfiscationTransactionWhitelistResponse to the P2P network.
 
@@ -164,14 +172,17 @@ The Alert Service initializes the necessary components and services to start pro
 2. The Alert Service forwards this request to the Blockchain Client.
 
 3. The Blockchain Client interacts with the Blockchain Store to:
+
     - Mark the specified block as invalid.
     - Retrieve all transactions from the invalidated block.
 
 4. For each transaction in the invalidated block:
+
     - The Blockchain Client re-validates the transaction.
     - If the transaction is still valid, it's added back to the Block Assembly service, for re-inclusion in the next mined block.
 
 5. The Blockchain Client then:
+
     - Retrieves the block immediately preceding the invalidated block.
     - Sets the chain tip to this previous block, effectively removing the invalidated block from the main chain.
 
@@ -191,6 +202,7 @@ The Alert Service initializes the necessary components and services to start pro
 
 3. **Database Technologies:**
     - Supports both SQLite and PostgreSQL:
+
      - SQLite for development and lightweight deployments.
      - PostgreSQL for production environments.
     - GORM ORM is used for database operations, with a custom logger (`gorm_logger.go`).
@@ -267,38 +279,38 @@ The Alert Service can be configured using various settings that control its beha
 ### 6.1 Core Alert Service Configuration
 
 - **Alert Store URL (`alert_store`)**: The URL for connecting to the alert system's data store.
-  - Type: `string` (converted to `*url.URL` internally)
-  - Impact: Determines the database backend and connection parameters
-  - Example: `alert_store = sqlite:///alert` or `alert_store = postgres://user:pass@host:5432/database?sslmode=disable`
+    - Type: `string` (converted to `*url.URL` internally)
+    - Impact: Determines the database backend and connection parameters
+    - Example: `alert_store = sqlite:///alert` or `alert_store = postgres://user:pass@host:5432/database?sslmode=disable`
 
 - **Genesis Keys (`alert_genesis_keys`)**: A pipe-separated list of public keys used for genesis alerts.
-  - Type: `[]string`
-  - Impact: **Critical** - The service will not start without valid genesis keys
-  - Purpose: These keys determine which alerts are valid; only alerts signed by these keys will be processed
-  - Example: `alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768 | 03aec1d40f02ac7f6df701ef8f629515812f1bcd949b6aa6c7a8dd778b748b2433"`
+    - Type: `[]string`
+    - Impact: **Critical** - The service will not start without valid genesis keys
+    - Purpose: These keys determine which alerts are valid; only alerts signed by these keys will be processed
+    - Example: `alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768 | 03aec1d40f02ac7f6df701ef8f629515812f1bcd949b6aa6c7a8dd778b748b2433"`
 
 - **P2P Private Key (`alert_p2p_private_key`)**: Private key for P2P communication.
-  - Type: `string`
-  - Impact: Establishes node identity in the P2P network
-  - Note: If not provided, a default key will be created in the data directory
-  - Example: `alert_p2p_private_key = "08c7fec91e75046d0ac6a2b4edb2daaae34b1e4c3c25a48b1ebdffe5955e33bc"`
+    - Type: `string`
+    - Impact: Establishes node identity in the P2P network
+    - Note: If not provided, a default key will be created in the data directory
+    - Example: `alert_p2p_private_key = "08c7fec91e75046d0ac6a2b4edb2daaae34b1e4c3c25a48b1ebdffe5955e33bc"`
 
 - **Protocol ID (`alert_protocol_id`)**: Protocol identifier for the P2P alert network.
-  - Type: `string`
-  - Default: Internal default if not specified
-  - Impact: Determines which P2P protocol group the service will join
-  - Example: `alert_protocol_id = "/bsv/alert/1.0.0"`
+    - Type: `string`
+    - Default: Internal default if not specified
+    - Impact: Determines which P2P protocol group the service will join
+    - Example: `alert_protocol_id = "/bsv/alert/1.0.0"`
 
 - **Topic Name (`alert_topic_name`)**: P2P topic name for alert propagation.
-  - Type: `string`
-  - Default: Internal default if not specified
-  - Note: Automatically prefixed with network name if not on mainnet
-  - Example: `alert_topic_name = "bitcoin_alert_system"`
+    - Type: `string`
+    - Default: Internal default if not specified
+    - Note: Automatically prefixed with network name if not on mainnet
+    - Example: `alert_topic_name = "bitcoin_alert_system"`
 
 - **P2P Port (`alert_p2p_port`)**: Port number for P2P communication.
-  - Type: `int`
-  - Impact: **Required** - Service will not start without a valid port
-  - Example: `alert_p2p_port = 4001`
+    - Type: `int`
+    - Impact: **Required** - Service will not start without a valid port
+    - Example: `alert_p2p_port = 4001`
 
 ### 6.2 Data Storage Configuration
 
@@ -365,16 +377,16 @@ mysql://username:password@host:port/database?param1=value1&param2=value2
 The following settings are hardcoded in the service and cannot be configured externally:
 
 - **Alert Processing Interval**: 5 minutes
-  - Controls how frequently alerts are processed
+    - Controls how frequently alerts are processed
 
 - **Request Logging**: Enabled (true)
-  - Controls HTTP request logging
+    - Controls HTTP request logging
 
 - **Auto Migrate**: Enabled (true)
-  - Automatically migrates the database schema on startup
+    - Automatically migrates the database schema on startup
 
 - **Database Table Prefix**: "alert_system" for PostgreSQL/MySQL, database name for SQLite
-  - Prefix used for database tables
+    - Prefix used for database tables
 
 ### 6.4 Service Dependencies
 
@@ -399,6 +411,7 @@ TERANODE_ALERT_<SETTING_NAME>
 ```
 
 For example:
+
 - `TERANODE_ALERT_GENESIS_KEYS`
 - `TERANODE_ALERT_P2P_PORT`
 - `TERANODE_ALERT_PROTOCOL_ID`

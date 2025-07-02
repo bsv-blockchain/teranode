@@ -5,6 +5,7 @@ The `daemon` package provides core functionality for initializing and managing T
 ## Overview
 
 The daemon is responsible for:
+
 - Starting and stopping Teranode services
 - Managing service dependencies and initialization order
 - Handling configuration and settings

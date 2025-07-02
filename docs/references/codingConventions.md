@@ -3,7 +3,7 @@
 ## Index
 
 - [Naming Conventions](#naming-conventions)
-  - [Introduction](#introduction)
+    - [Introduction](#introduction)
   - [General Principles](#general-principles)
     - [Clarity and Readability Over Brevity](#clarity-and-readability-over-brevity)
     - [Consistency Within the Project](#consistency-within-the-project)
@@ -30,24 +30,24 @@
   - [Commenting](#commenting)
     - [Best Practices for Writing Clear and Helpful Comments](#best-practices-for-writing-clear-and-helpful-comments)
 - [Error Handling](#error-handling)
-  - [Effective Use of Go's Error Handling Paradigm](#effective-use-of-gos-error-handling-paradigm)
+    - [Effective Use of Go's Error Handling Paradigm](#effective-use-of-gos-error-handling-paradigm)
   - [Patterns for Error Creation, Propagation, and Checking](#patterns-for-error-creation-propagation-and-checking)
 - [Concurrency](#concurrency)
-  - [Best Practices for Using Goroutines and Channels](#best-practices-for-using-goroutines-and-channels)
+    - [Best Practices for Using Goroutines and Channels](#best-practices-for-using-goroutines-and-channels)
   - [Patterns for Avoiding Common Concurrency Pitfalls](#patterns-for-avoiding-common-concurrency-pitfalls)
 - [Testing](#testing)
-  - [Writing Effective Unit Tests Using the "testing" Package](#writing-effective-unit-tests-using-the-testing-package)
+    - [Writing Effective Unit Tests Using the "testing" Package](#writing-effective-unit-tests-using-the-testing-package)
   - [Use of Table-Driven Tests for Comprehensive Coverage](#use-of-table-driven-tests-for-comprehensive-coverage)
   - [Use of `testify` for Cleaner Assertions](#use-of-testify-for-cleaner-assertions)
   - [Best Practices](#best-practices)
 - [Code Formatting and Linting](#code-formatting-and-linting)
-  - [Formatting](#formatting)
+    - [Formatting](#formatting)
   - [Linting](#linting)
     - [Linting Rules](#linting-rules)
   - [Pull Requests](#pull-requests)
   - [Optional Tools](#optional-tools)
 - [Dependency Management](#dependency-management)
-  - [Use of Modules for Managing Dependencies](#use-of-modules-for-managing-dependencies)
+    - [Use of Modules for Managing Dependencies](#use-of-modules-for-managing-dependencies)
   - [Strategies for Keeping Dependencies Up to Date and Secure](#strategies-for-keeping-dependencies-up-to-date-and-secure)
 - [AI Ruleset](#ai-ruleset)
 
@@ -130,7 +130,7 @@ The naming conventions and best practices outlined in this document provide a su
 - `block_header_test.go`
 
 **Scripts:**
-- [Check Filenames](../../scripts/check_filenames.sh)
+- [Check Filenames](https://github.com/bitcoin-sv/teranode/blob/main/scripts/check_filenames.sh)
 
 ---
 
@@ -186,7 +186,7 @@ The naming conventions and best practices outlined in this document provide a su
 #### Use of Descriptive Names for More Complex Interfaces
 
 - For interfaces with multiple methods, choose descriptive names that capture the overall functionality or role of the interface, rather than following the "-er" suffix rule.
-  - For example, `FileSystem` for an interface that encapsulates various file system operations or `DatabaseConnector` for an interface managing database connections.
+    - For example, `FileSystem` for an interface that encapsulates various file system operations or `DatabaseConnector` for an interface managing database connections.
 
 ---
 
@@ -195,12 +195,12 @@ The naming conventions and best practices outlined in this document provide a su
 #### Avoidance of Redundant or Tautological Names
 
 - Avoid names that repeat the package name or provide no additional information about the type.
-  - For instance, instead of `http.HttpClient`, simply use `http.Client` to prevent redundancy.
+    - For instance, instead of `http.HttpClient`, simply use `http.Client` to prevent redundancy.
 
 #### Use of Clear and Specific Names for Custom Types
 
 - Choose names that clearly and specifically describe what the custom type represents or does, ensuring they are intuitive and meaningful.
-  - For example, `Block` for a type representing block information, or `SubtreeProcessor` for a type that processes subtrees.
+    - For example, `Block` for a type representing block information, or `SubtreeProcessor` for a type that processes subtrees.
 
 ---
 
@@ -365,11 +365,12 @@ golangci-lint run
 
 ##### Linting Rules
 
-The project uses `golangci-lint` for enforcing code quality. Key [configurations](../../.golangci.yml) include:
+The project uses `golangci-lint` for enforcing code quality. Key [configurations](https://github.com/bitcoin-sv/teranode/blob/main/.golangci.yml) include:
 
 - **Filename Conventions**: Checked via CI (separate script).
 - **Enabled Linters**:
-  - `depguard`: Prevents importing disallowed packages like `errors` (use standard `errors` instead).
+
+    - `depguard`: Prevents importing disallowed packages like `errors` (use standard `errors` instead).
   - `forbidigo`: Disallows use of `fmt.Errorf` (use `errors.New` instead).
   - `gocognit`: Flags functions exceeding complexity threshold (200).
   - Additional linters for style, security, imports, and error handling (`gosec`, `stylecheck`, `goimports`, `errcheck`, etc.).
@@ -377,7 +378,8 @@ The project uses `golangci-lint` for enforcing code quality. Key [configurations
 ###### Exceptions
 
 - Linting is **excluded** for:
-  - `services/legacy` (multiple linters ignored)
+
+    - `services/legacy` (multiple linters ignored)
   - `errors` package (for `depguard` and `forbidigo`)
   - All files in `vendor/`
 

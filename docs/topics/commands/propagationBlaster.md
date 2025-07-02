@@ -4,7 +4,7 @@
 
 
 - [🔊 Propagation Blaster](#-propagation-blaster)
-  - [Index](#index)
+    - [Index](#index)
   - [1. Introduction](#1-introduction)
   - [2. Architecture](#2-architecture)
   - [3. Functionality](#3-functionality)
@@ -41,16 +41,19 @@ The service includes a Go's built-in profiler accessible via an HTTP endpoint, a
 ![propagation_blaster_init.svg](img%2Fplantuml%2Fpropagation_blaster_init.svg)
 
 1. **Initialization Phase**:
+
     - The service starts by loading necessary configurations, such as the profiler address and Prometheus endpoint.
     - It initializes Prometheus metrics for tracking the number of workers and the number of processed transactions.
     - An HTTP server is set up for exposing Prometheus metrics and Go's built-in profiler (`pprof`).
 
 2. **Start Function**:
+
     - Parses command-line arguments to configure operational parameters like the number of workers, the broadcast protocol, and the buffer size for streaming clients.
     - Depending on the chosen broadcast protocol (`http` or `grpc`), it retrieves the corresponding service addresses from the configuration and initializes the appropriate client (HTTP or gRPC).
     - Launches a specified number of worker goroutines, each responsible for generating, signing, and broadcasting transactions.
 
 3. **Worker Routine**:
+
     - Each worker continuously generates new transactions, signs them, and broadcasts them to the Propagation service using the configured protocol.
 
 ### 3.2. Worker Operation
@@ -59,21 +62,27 @@ The service includes a Go's built-in profiler accessible via an HTTP endpoint, a
 
 
 - **Transaction Generation and Signing**:
+
     - Each worker starts a loop to continuously generate and process transactions. First, it generates a new, incomplete transaction. Then, it uses a transaction signer to sign the transaction, making it ready for broadcast.
 
 - **Decision on Broadcast Protocol**:
+
     - The worker checks the configured broadcast protocol. Depending on the protocol setting (`http` or `grpc`), it follows different paths for processing the transaction.
 
 - **HTTP Broadcast**:
+
     - If the broadcast protocol is set to HTTP, the worker uses an HTTP client to send the transaction to a specified endpoint. Upon receiving the HTTP response, it increments the Prometheus counter for processed transactions.
 
 - **gRPC Broadcast**:
+
     - For the gRPC broadcast protocol, the worker interacts with a gRPC client to broadcast the transaction. After receiving the gRPC response, it similarly increments the Prometheus metric for processed transactions.
 
 - **Streaming Broadcast**:
+
     - In this case, it uses a streaming client to send transactions.
 
 - **Metrics Recording**:
+
     - Regardless of the broadcast protocol, after each transaction is processed (broadcasted or skipped), the worker increments a Prometheus counter to track the number of transactions processed.
 
 
@@ -89,6 +98,7 @@ The `PropagationBlaster` service is designed to benchmark and test the performan
 - **Prometheus**: Monitoring and metrics collection are handled by Prometheus, an open-source monitoring solution that provides powerful query capabilities and real-time alerting. `PropagationBlaster` uses Prometheus to track metrics such as the number of transactions processed, allowing for detailed performance analysis.
 
 - **Bitcoin SV (BSV) Libraries**:
+
     - **`libsv/go-bt`**: A Go library for building and serializing Bitcoin SV transactions. It's utilized for creating the raw transactions that the service broadcasts.
     - **`libsv/go-bk/wif`**: Used for handling Wallet Import Format (WIF) keys, enabling the service to sign transactions before broadcasting them to ensure they are valid on the network.
 
@@ -112,5 +122,6 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -broadcast=grpc -workers=10 -buffer_
 ```
 
 where broadcast is a value in:
+
 * grpc
 * http

@@ -66,6 +66,7 @@ SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli setfsmstate --fsmstate <state
 ```
 
 Valid states you can issue are:
+
 - `running` - Normal operation mode (processes transactions and creates blocks)
 - `idle` - Idle mode (default startup state)
 
@@ -112,6 +113,7 @@ SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli filereader [path] [options]
 ```
 
 Options:
+
 - `--verbose` - Enable verbose output
 - `--checkHeights` - Check heights in UTXO headers
 - `--useStore` - Use store
@@ -125,6 +127,7 @@ SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli bitcointoutxoset --bitcoinDir
 ```
 
 Options:
+
 - `--bitcoinDir` - Location of Bitcoin data (required)
 - `--outputDir` - Output directory for UTXO set (required)
 - `--skipHeaders` - Skip processing headers
@@ -151,6 +154,7 @@ SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli seeder --inputDir=<input-dir>
 ```
 
 Options:
+
 - `--inputDir` - Input directory for UTXO set and headers (required)
 - `--hash` - Hash of the UTXO set / headers to process (required)
 - `--skipHeaders` - Skip processing headers

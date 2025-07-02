@@ -379,6 +379,7 @@ func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_
 Generates the given number of blocks by mining them. This method is primarily used for testing and development environments. The operation requires the GenerateSupported flag to be enabled in chain configuration.
 
 Parameters:
+
 - `req.Count`: Number of blocks to generate
 - `req.Address`: Optional mining address
 

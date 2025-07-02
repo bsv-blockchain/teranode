@@ -11,16 +11,9 @@
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
-    - [Key Changes and Additions:](#key-changes-and-additions)
+
 7. [How to Run](#7-how-to-run)
-8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
-    - [gRPC Settings](#grpc-settings)
-    - [Subtree Configuration](#subtree-configuration)
-    - [Kafka Configuration](#kafka-configuration)
-    - [Block Validation Settings](#block-validation-settings)
-    - [Tx Metadata Processing](#tx-metadata-processing)
-    - [UTXO Store Settings](#utxo-store-settings)
-    - [Miscellaneous](#miscellaneous)
+8. [Configuration Settings](#8-configuration-settings)
 9. [Other Resources](#9-other-resources)
 
 ## 1. Description
@@ -53,13 +46,15 @@ The P2P Service communicates with the Block Validation over either gRPC protocol
 The Subtree Validation service interacts with the Validator service to validate transactions that might be missing during subtree processing. This interaction can happen in two different configurations:
 
 1. **Local Validator**:
-   - When `validator.useLocalValidator=true` (recommended for production)
+
+    - When `validator.useLocalValidator=true` (recommended for production)
    - The Validator is instantiated directly within the Subtree Validation service
    - Direct method calls are used without network overhead
    - This provides the best performance and lowest latency
 
 2. **Remote Validator Service**:
-   - When `validator.useLocalValidator=false`
+
+    - When `validator.useLocalValidator=false`
    - The Subtree Validation service connects to a separate Validator service via gRPC
    - Useful for development, testing, or specialized deployment scenarios
    - Has higher latency due to additional network calls
@@ -133,6 +128,7 @@ The validation process is as follows:
 2. If the subtree is not found in the Subtree Store, the Validator will fetch the subtree from the remote asset server.
 3. The Validator will create a subtree metadata object.
 4. Next, the Validator will decorate all Txs. To do this, it will try the following approaches (in order):
+
     - First, it will try to fetch the UTXO metadata from the tx metadata cache (in-memory).
     - If the tx metadata is not found, it will try to fetch the tx metadata from the UTXO store.
     - If the tx metadata is not found in the UTXO store, the Validator will fetch the UTXO from the remote asset server.
@@ -167,21 +163,27 @@ The Subtree Validation Service uses gRPC for communication between nodes. The pr
 
 
 2. **gRPC (Google Remote Procedure Call)**:
+
     - Used for implementing server-client communication. gRPC is a high-performance, open-source framework that supports efficient communication between services.
 
 4. **Data Stores**:
+
     - Integration with various stores: blob store, and UTXO store.
 
 5. **Caching Mechanisms (ttlcache)**:
+
     - Uses `ttlcache`, a Go library for in-memory caching with time-to-live settings, to avoid redundant processing and improve performance.
 
 6. **Configuration Management (gocore)**:
+
     - Uses `gocore` for configuration management, allowing dynamic configuration of service parameters.
 
 7. **Networking and Protocol Buffers**:
+
     - Handles network communications and serializes structured data using Protocol Buffers, a language-neutral, platform-neutral, extensible mechanism for serializing structured data.
 
 8. **Synchronization Primitives (sync)**:
+
     - Utilizes Go's `sync` package for synchronization primitives like mutexes, aiding in managing concurrent access to shared resources.
 
 

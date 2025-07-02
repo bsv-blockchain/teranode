@@ -6,11 +6,11 @@
 2. [Functionality](#2-functionality)
     - [2.1. Receiving blocks for validation](#21-receiving-blocks-for-validation)
     - [2.2. Validating blocks](#22-validating-blocks)
-        - [2.2.1. Overview](#221-overview)
-        - [2.2.2. Catching up after a parent block is not found](#222-catching-up-after-a-parent-block-is-not-found)
-        - [2.2.3. Validating the Subtrees](#223-validating-the-subtrees)
-        - [2.2.4. Block Data Validation](#224-block-data-validation)
-        - [2.2.5. Transaction Re-presentation Detection](#225-transaction-re-presentation-detection)
+    - [2.2.1. Overview](#221-overview)
+    - [2.2.2. Catching up after a parent block is not found](#222-catching-up-after-a-parent-block-is-not-found)
+    - [2.2.3. Validating the Subtrees](#223-validating-the-subtrees)
+    - [2.2.4. Block Data Validation](#224-block-data-validation)
+    - [2.2.5. Transaction Re-presentation Detection](#225-transaction-re-presentation-detection)
     - [2.3. Marking Txs as mined](#23-marking-txs-as-mined)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
@@ -138,6 +138,7 @@ Effectively, the following validations are performed:
     - The block time specified in the header must not be larger than the adjusted current time plus two hours (“maximum future block time”).
 
 - The first transaction in a block must be Coinbase. The transaction is Coinbase if the following requirements are satisfied:
+
     - The Coinbase transaction has exactly one input.
     - The input is null, meaning that the input’s previous hash is 0000…0000 and the input’s previous index is 0xFFFFFFFF.
     - The Coinbase transaction must start with the serialized block height, to ensure block and transaction uniqueness.
@@ -158,7 +159,7 @@ Teranode maintains bloom filters for recent blocks to efficiently detect re-pres
 - **Storage**: Bloom filters are stored in both memory (for active validation) and in the subtree store (for persistence)
 - **Retention**: Filters are maintained for a configurable number of recent blocks (`blockvalidation_bloom_filter_retention_size`)
 - **TTL Ordering**: The system enforces a strict TTL (Time-To-Live) ordering: txmetacache < utxo store < bloom filter
-  - This ensures that even if a transaction is pruned from txmetacache, the bloom filter can still detect its re-presentation
+    - This ensures that even if a transaction is pruned from txmetacache, the bloom filter can still detect its re-presentation
   - The longer retention period for bloom filters provides an extended window for detecting re-presented transactions
 
 ##### The validOrderAndBlessed Mechanism
@@ -166,21 +167,25 @@ Teranode maintains bloom filters for recent blocks to efficiently detect re-pres
 The `validOrderAndBlessed` function performs several critical validations during block processing:
 
 1. **Transaction Ordering Validation**:
-   - Ensures child transactions appear after their parent transactions within the same block
-   - For each transaction, verifies that all of its parent transactions either appear earlier in the same block or exist in a previous block on the current chain
+
+    - Ensures child transactions appear after their parent transactions within the same block
+    - For each transaction, verifies that all of its parent transactions either appear earlier in the same block or exist in a previous block on the current chain
 
 2. **Re-presented Transaction Detection**:
-   - Efficiently checks if transactions have already been mined in the current chain using bloom filters
-   - For potential matches in the bloom filter (which may include false positives), performs definitive verification against the txMetaStore
-   - Rejects blocks containing transactions that have already been mined in the current chain
+
+    - Efficiently checks if transactions have already been mined in the current chain using bloom filters
+    - For potential matches in the bloom filter (which may include false positives), performs definitive verification against the txMetaStore
+    - Rejects blocks containing transactions that have already been mined in the current chain
 
 3. **Duplicate Input Prevention**:
-   - Tracks all inputs being spent within the block to detect duplicate spends
-   - Ensures no two transactions in the block spend the same input
+
+    - Tracks all inputs being spent within the block to detect duplicate spends
+    - Ensures no two transactions in the block spend the same input
 
 4. **Orphaned Transaction Prevention**:
-   - Verifies that parent transactions of each transaction either exist in the current block (before the child) or in a previous block on the current chain
-   - Prevents situations where transactions depend on parents that don't exist or aren't accessible
+
+    - Verifies that parent transactions of each transaction either exist in the current block (before the child) or in a previous block on the current chain
+    - Prevents situations where transactions depend on parents that don't exist or aren't accessible
 
 This comprehensive validation mechanism operates with high concurrency (configurable via `block_validOrderAndBlessedConcurrency`) to maintain performance while ensuring the integrity of the blockchain by preventing double-spends and transaction re-presentations.
 
@@ -227,21 +232,27 @@ The Block Validation Service uses gRPC for communication between nodes. The prot
 1. **Go Programming Language (Golang)**.
 
 2. **gRPC (Google Remote Procedure Call)**:
+
     - Used for implementing server-client communication. gRPC is a high-performance, open-source framework that supports efficient communication between services.
 
 3. **Blockchain Data Stores**:
+
     - Integration with various stores such as UTXO (Unspent Transaction Output) store, blob store, and transaction metadata store.
 
 4. **Caching Mechanisms (ttlcache)**:
+
     - Uses `ttlcache`, a Go library for in-memory caching with time-to-live settings, to avoid redundant processing and improve performance.
 
 5. **Configuration Management (gocore)**:
+
     - Uses `gocore` for configuration management, allowing dynamic configuration of service parameters.
 
 6. **Networking and Protocol Buffers**:
+
     - Handles network communications and serializes structured data using Protocol Buffers, a language-neutral, platform-neutral, extensible mechanism for serializing structured data.
 
 7. **Synchronization Primitives (sync)**:
+
     - Utilizes Go's `sync` package for synchronization primitives like mutexes, aiding in managing concurrent access to shared resources.
 
 
@@ -366,11 +377,13 @@ Many configuration settings interact with each other to affect overall system be
 The `blockvalidation_optimistic_mining` setting enables a performance optimization where blocks are conditionally accepted before full validation completes. This dramatically improves blockchain throughput but introduces a risk of temporary chain inconsistency if validation later fails.
 
 When enabled:
+
 - The system achieves higher throughput and lower latency
 - Validation continues asynchronously after block acceptance
 - If validation fails, a chain reorganization may be necessary
 
 Related settings that affect this behavior include:
+
 - `blockvalidation_validation_max_retries` - Controls resilience during validation
 - `blockvalidation_validation_retry_sleep` - Affects backoff behavior during retries
 
@@ -379,16 +392,19 @@ Related settings that affect this behavior include:
 Bloom filters are used to efficiently detect duplicate transactions and optimize validation performance. The Block Validation Service manages bloom filters with the following operational characteristics:
 
 **Creation and Storage**:
+
 - Bloom filters are created for each validated block containing transaction hashes
 - Filters are stored in the subtree store with automatic expiration based on `blockvalidation_bloom_filter_retention_size`
 - The retention size is automatically calculated as `GlobalBlockHeightRetention + 2` to ensure adequate coverage
 
 **Performance Impact**:
+
 - **Memory Usage**: Each bloom filter consumes memory proportional to the number of transactions in the block
 - **CPU Overhead**: Filter creation requires hashing all transaction IDs in the block
 - **Storage I/O**: Filters are persisted to disk and retrieved during validation operations
 
 **Operational Considerations**:
+
 - Bloom filters reduce false positive rates for duplicate transaction detection
 - Automatic pruning prevents unbounded storage growth
 - Filter retrieval from subtree store may introduce latency during validation

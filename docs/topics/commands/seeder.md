@@ -1,4 +1,4 @@
-# 🌱 Seeder Service
+# 🌱 Seeder Command
 
 ## Index
 
@@ -18,6 +18,7 @@
 The Seeder is a command-line tool designed to populate the UTXO store with data up to and including a specific block. It reads a UTXO set (as produced by the `UTXO Persister` service) and writes all the necessary records to the configured UTXO and Blockchain storage system (e.g., Aerospike and Postgres). This tool is crucial for initializing or updating the UTXO state of a Bitcoin node.
 
 Key features:
+
 1. Processes block headers and stores them in the blockchain store.
 2. Reads and processes UTXO data from a file.
 3. Populates the UTXO store with processed data.
@@ -28,13 +29,13 @@ Key features:
 
 ## 2. Functionality
 
-### 2.1 Service Initialization
+### 2.1 Command Initialization
 
 ![seeder_initialization.svg](img/plantuml/seeder/seeder_initialization2.svg)
 
-1. The service starts by parsing command-line flags to determine the input directory, target hash, and processing options.
+1. The command starts by parsing command-line flags to determine the input directory, target hash, and processing options.
 2. It verifies the existence of required input files (headers and UTXO set).
-3. The service sets up signal handling for graceful shutdown.
+3. The command sets up signal handling for graceful shutdown.
 4. An HTTP server is started for profiling purposes.
 
 ### 2.2 Processing Headers
@@ -43,12 +44,13 @@ Key features:
 
 If header processing is not skipped:
 
-1. The service opens the headers file and verifies its magic number.
+1. The command opens the headers file and verifies its magic number.
 2. It reads headers sequentially from the file.
 3. For each header:
+
     - A `model.Block` object is created.
     - The block is stored in the blockchain store.
-4. The service keeps track of the number of headers processed and total transaction count.
+4. The command keeps track of the number of headers processed and total transaction count.
 
 ### 2.3 Processing UTXOs
 
@@ -61,6 +63,7 @@ If UTXO processing is not skipped:
 3. The UTXO file is opened and its header is verified.
 4. UTXOs are read from the file and sent to the processing channel.
 5. Worker goroutines process UTXOs in parallel:
+
     - Each UTXO is converted to a Bitcoin transaction format.
     - The transaction is stored in the UTXO store.
 6. The service tracks the number of transactions and UTXOs processed.
@@ -71,12 +74,14 @@ The Seeder works with the following key data structures:
 
 1. **Block Header**:
    Represented by `utxopersister.UTXOHeader`, containing:
+
     - Block header information
     - Transaction count
     - Block height
 
 2. **UTXO Wrapper**:
    Represented by `utxopersister.UTXOWrapper`, containing:
+
     - Transaction ID
     - Block height
     - Coinbase flag
@@ -84,6 +89,7 @@ The Seeder works with the following key data structures:
 
 3. **UTXO**:
    Represented within the UTXO Wrapper, containing:
+
     - Output index
     - Value (in satoshis)
     - Locking script
@@ -93,12 +99,15 @@ The service reads these structures from input files and converts them to the for
 ## 4. Technology
 
 1. **Go (Golang)**: The primary programming language.
+
 2. **Bitcoin SV Libraries**:
     - `github.com/bsv-blockchain/go-bt/v2`: For handling Bitcoin transactions and scripts.
 3. **Custom TERANODE Libraries**:
     - `github.com/bitcoin-sv/teranode`: For blockchain and UTXO store operations, error handling, and logging.
+
 4. **Concurrent Processing**:
     - `golang.org/x/sync/errgroup`: For managing concurrent UTXO processing.
+
 5. **Configuration Management**:
     - `github.com/ordishs/gocore`: For reading configuration values.
 
@@ -128,6 +137,7 @@ seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs]
 ```
 
 Options:
+
 - `-inputDir`: Specifies the input directory containing UTXO set and headers files.
 - `-hash`: Hash of the UTXO set / headers to process.
 - `-skipHeaders`: (Optional) Skip processing of headers.

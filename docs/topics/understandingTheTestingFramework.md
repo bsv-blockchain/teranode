@@ -160,6 +160,6 @@ Cleanup
 
 ## Other Resources
 
-- [QA Guide & Instructions for Functional Requirement Tests](../../test/README.md)
+- [QA Guide & Instructions for Functional Requirement Tests](./functionalRequirementTests.md)
 - [Automated Testing How-To](../howto/automatedTestingHowTo.md)
 - [Testing Technical Reference](../references/testingTechnicalReference.md)

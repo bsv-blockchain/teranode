@@ -20,16 +20,18 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
 ### Mining-related Methods
 1. `getdifficulty`: Returns the current network difficulty
-   - Parameters: None
-   - Returns: Current difficulty as a floating point number
+    - Parameters: None
+    - Returns: Current difficulty as a floating point number
 
 2. `getmininginfo`: Returns mining-related information
-   - Parameters: None
-   - Returns: Object containing block height, current block size and weight, current difficulty, and network hashrate
+    - Parameters: None
+    - Returns: Object containing block height, current block size and weight, current difficulty, and network hashrate
 
 3. `getminingcandidate`: Obtain a mining candidate
-   - Parameters:
+    - Parameters:
+
      - Optional object containing:
+
        - `coinbaseValue` (numeric, optional): Custom coinbase value in satoshis
    - Returns: Object containing candidate ID, previous block hash, coinbase transaction, and merkle branches
    - Example Request:
@@ -75,7 +77,8 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
      ```
 
 4. `submitminingsolution`: Submits a new mining solution
-   - Parameters:
+    - Parameters:
+
      - `id` (string, required): Mining candidate ID
      - `nonce` (hexadecimal string, required): Nonce value found
      - `coinbase` (hexadecimal string, required): Complete coinbase transaction
@@ -99,13 +102,15 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
      ```
 
 5. `generate`: Generates new blocks (for testing only)
-   - Parameters:
+    - Parameters:
+
      - `nblocks` (numeric, required): Number of blocks to generate
      - `maxtries` (numeric, optional): Maximum iterations to try
    - Returns: Array of block hashes generated
 
 6. `generatetoaddress`: Generates new blocks with rewards going to a specified address (for testing only)
-   - Parameters:
+    - Parameters:
+
      - `nblocks` (numeric, required): Number of blocks to generate
      - `address` (string, required): Bitcoin address to receive the rewards
      - `maxtries` (numeric, optional): Maximum iterations to try
@@ -113,9 +118,11 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
 ### Transaction-related Methods
 1. `createrawtransaction`: Creates a raw transaction
-   - Parameters:
+    - Parameters:
+
      - `inputs` (array, required): Array of transaction inputs
        - Each input is an object with:
+
          - `txid` (string, required): The transaction id
          - `vout` (numeric, required): The output number
      - `outputs` (object, required): JSON object with outputs as key-value pairs
@@ -125,15 +132,18 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
    - Note: The transaction is not signed and cannot be submitted until signed
 
 2. `getrawtransaction`: Gets a raw transaction
-   - Parameters:
+    - Parameters:
+
      - `txid` (string, required): Transaction ID
      - `verbose` (boolean, optional): If true, returns detailed information
    - Returns:
+
      - If verbose=false: Hex-encoded transaction data
      - If verbose=true: Detailed transaction object with txid, hash, size, version, locktime, and transaction inputs/outputs
 
 3. `sendrawtransaction`: Sends a raw transaction
-   - Parameters:
+    - Parameters:
+
      - `hexstring` (string, required): Hex-encoded raw transaction
      - `allowhighfees` (boolean, optional): Allow high fees
      - `dontcheckfee` (boolean, optional): Skip fee checks
@@ -150,20 +160,23 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
      ```
 
 4. `freeze`: Freezes a specific UTXO, preventing it from being spent
-   - Parameters:
+    - Parameters:
+
      - `txid` (string, required): The transaction ID of the UTXO
      - `vout` (numeric, required): The output index
    - Returns: Boolean `true` if successful
    - Note: Frozen UTXOs remain frozen until explicitly unfrozen
 
 5. `unfreeze`: Unfreezes a previously frozen UTXO, allowing it to be spent
-   - Parameters:
+    - Parameters:
+
      - `txid` (string, required): The transaction ID of the frozen UTXO
      - `vout` (numeric, required): The output index
    - Returns: Boolean `true` if successful
 
 6. `reassign`: Reassigns ownership of a specific UTXO to a new Bitcoin address
-   - Parameters:
+    - Parameters:
+
      - `txid` (string, required): The transaction ID of the UTXO
      - `vout` (numeric, required): The output index
      - `destination` (string, required): The Bitcoin address to reassign to
@@ -172,8 +185,9 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
 ### Network-related Methods
 1. `getinfo`: Returns information about the node
-   - Parameters: None
-   - Returns: Object containing node information including:
+    - Parameters: None
+    - Returns: Object containing node information including:
+
      - `version`: Server version
      - `protocolversion`: Protocol version
      - `blocks`: Current block count
@@ -184,8 +198,9 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
      - `timeoffset`: Time offset in seconds
 
 2. `getpeerinfo`: Returns information about connected peers
-   - Parameters: None
-   - Returns: Array of objects with detailed information about each connected peer, including:
+    - Parameters: None
+    - Returns: Array of objects with detailed information about each connected peer, including:
+
      - `id`: Peer index
      - `addr`: IP address and port
      - `addrlocal`: Local address
@@ -203,7 +218,8 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
      - `banscore`: Ban score (for misbehavior)
 
 3. `setban`: Manages banned IP addresses/subnets
-   - Parameters:
+    - Parameters:
+
      - `subnet` (string, required): The IP/Subnet to ban (e.g. 192.168.0.0/24)
      - `command` (string, required): 'add' to add to banlist, 'remove' to remove from banlist
      - `bantime` (numeric, optional): Time in seconds how long to ban (0 = permanently)
@@ -212,30 +228,33 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
    - Note: Successfully executes across both P2P and legacy peer services
 
 4. `isbanned`: Checks if a network address is currently banned
-   - Parameters:
+    - Parameters:
+
      - `subnet` (string, required): The IP/Subnet to check
    - Returns: Boolean `true` if the address is banned, `false` otherwise
 
 5. `listbanned`: Returns list of all banned IP addresses/subnets
-   - Parameters: None
-   - Returns: Array of objects containing banned addresses with:
+    - Parameters: None
+    - Returns: Array of objects containing banned addresses with:
+
      - `address`: The banned IP/subnet
      - `banned_until`: The timestamp when the ban expires
      - `ban_created`: The timestamp when the ban was created
      - `ban_reason`: The reason for the ban (if provided)
 
 6. `clearbanned`: Removes all IP address bans
-   - Parameters: None
-   - Returns: Boolean `true` on success
+    - Parameters: None
+    - Returns: Boolean `true` on success
 
 ### Server Control Methods
 1. `stop`: Stops the Teranode server
-   - Parameters: None
-   - Returns: String 'Teranode server stopping' when successful
+    - Parameters: None
+    - Returns: String 'Teranode server stopping' when successful
 
 2. `version`: Returns version information about the node
-   - Parameters: None
-   - Returns: Object containing version information including:
+    - Parameters: None
+    - Returns: Object containing version information including:
+
      - `version`: The server version
      - `subversion`: The server subversion string
      - `protocolversion`: The protocol version
@@ -260,6 +279,7 @@ When an error occurs during RPC method execution, the server returns a standardi
 ```
 
 Common error codes include:
+
 - `-32600`: Invalid request
 - `-32601`: Method not found
 - `-32602`: Invalid parameters
@@ -273,6 +293,7 @@ Common error codes include:
 ### Unimplemented Methods
 
 The following methods are recognized but not currently implemented in Teranode:
+
 - `addnode`
 - `decoderawtransaction`
 - `decodescript`

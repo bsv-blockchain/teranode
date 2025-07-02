@@ -9,6 +9,7 @@ This guide provides instructions for starting and stopping Teranode in a Kuberne
 ## Prerequisites
 
 Before proceeding, ensure you have all components installed as described in the [Installation Guide](minersHowToInstallation.md):
+
 - Docker
 - Minikube
 - kubectl

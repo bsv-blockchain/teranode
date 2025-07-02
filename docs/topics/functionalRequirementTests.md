@@ -184,14 +184,16 @@ The naming convention for files in this folder is as follows:
 In addition to the functional test suite, there are two important test files in the `services/validator` directory that provide comprehensive testing of transaction validation:
 
 1. **TxValidator_test.go**: Tests transaction validation network policies:
-   - **MaxTxSizePolicy**: Tests that transactions exceeding the maximum size are rejected.
+
+    - **MaxTxSizePolicy**: Tests that transactions exceeding the maximum size are rejected.
    - **MaxOpsPerScriptPolicy**: Verifies enforcement of operation count limits in scripts.
    - **MaxScriptSizePolicy**: Ensures scripts exceeding the maximum size are rejected.
    - **MaxTxSigopsCountsPolicy**: Tests enforcement of signature operation count limits.
    - **MinFeePolicy**: Validates that transactions with insufficient fees are rejected based on their size and the presence of OP_RETURN data.
 
 2. **Validator_test.go**: Tests integration of the validator with other Teranode components:
-   - **TestValidate_CoinbaseTransaction**: Verifies correct handling of coinbase transactions.
+
+    - **TestValidate_CoinbaseTransaction**: Verifies correct handling of coinbase transactions.
    - **TestValidate_BlockAssemblyAndTxMetaChannels**: Tests the integration between transaction validation and block assembly.
    - **TestValidate_RejectedTransactionChannel**: Ensures rejected transactions are properly handled and reported.
    - **TestValidate_BlockAssemblyError**: Verifies proper error handling during the block assembly process.
@@ -446,6 +448,7 @@ go test -v -run "^TestTNFTestSuite$/TestInvalidateBlock$" -tags test_tnf
 As outlined in the Functional Requirements for Teranode reference document, the tests in the `/test/tnj` folder verify that Teranode correctly implements and enforces the standard consensus rules of the Bitcoin SV protocol.
 
 The naming convention for files in this folder follows either:
+
 - `tnj_<number>_test.go` corresponds to the TNJ-<number> test in the Functional Requirements for Teranode document.
 - Descriptive names like `locktime_test.go` that indicate the specific consensus rule being tested.
 

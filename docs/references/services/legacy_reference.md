@@ -31,6 +31,7 @@ type Server struct {
 ```
 
 Each component serves a specific purpose:
+
 - **logger**: Provides structured logging capabilities
 - **settings**: Contains configuration settings for the server and its components
 - **stats**: Tracks server statistics and performance metrics
@@ -79,11 +80,13 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 This method performs health checks at two levels:
 
 For liveness checks (when checkLiveness is true):
+
 - Verifies basic server operation
 - Returns quickly without checking dependencies
 - Used to determine if the service should be restarted
 
 For readiness checks (when checkLiveness is false):
+
 - Verifies BlockchainClient status and FSM state
 - Checks ValidationClient functionality
 - Confirms SubtreeStore availability
@@ -103,6 +106,7 @@ func (s *Server) Init(ctx context.Context) error
 ```
 
 The Init method performs essential setup:
+
 - Sets up message size limits for the wire protocol
 - Determines the server's public IP address for listening
 - Creates and configures the internal server implementation
@@ -115,6 +119,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
 The Start method initializes and starts all components of the legacy service:
+
 - Waits for the blockchain FSM to transition from IDLE state
 - Starts the internal peer server to handle P2P connections
 - Begins periodic peer statistics logging
@@ -123,6 +128,7 @@ The Start method initializes and starts all components of the legacy service:
 - Signals readiness by closing the readyCh channel
 
 Concurrency notes:
+
 - Start launches multiple goroutines for different server components
 - Each component runs independently but coordinates via the server state
 - The gRPC service runs in the current goroutine and blocks until completion
@@ -132,6 +138,7 @@ func (s *Server) Stop(_ context.Context) error
 ```
 
 The Stop method performs a clean shutdown of all server components:
+
 - Closes all peer connections
 - Stops all network listeners
 - Shuts down the internal server state
@@ -150,6 +157,7 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 ```
 
 This method provides detailed information about all connected peers including:
+
 - Peer identification and addressing information
 - Connection statistics (bytes sent/received, timing)
 - Protocol and version information
@@ -193,6 +201,7 @@ Removes a ban on a specific peer, allowing it to reconnect immediately. The requ
 ## Authentication
 
 The Legacy Service implements an authentication system for its gRPC API:
+
 - Uses the `GRPCAdminAPIKey` setting for protected methods
 - Automatically generates a secure API key if none is provided
 - Restricts access to sensitive methods (BanPeer, UnbanPeer) through API key authentication

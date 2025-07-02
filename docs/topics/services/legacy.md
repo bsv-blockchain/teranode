@@ -12,11 +12,11 @@
 3. [Data Model](#3-data-model)
 4. [Functionality](#4-functionality)
     - [4.1. BSV to Teranode Communication](#41-bsv-to-teranode-communication)
-        - [4.1.1. Receiving Inventory Notifications](#411-receiving-inventory-notifications)
-        - [4.1.2. Processing New Blocks](#412-processing-new-blocks)
+    - [4.1.1. Receiving Inventory Notifications](#411-receiving-inventory-notifications)
+
 5. [Technology](#5-technology)
 6. [How to run](#6-how-to-run)
-7. [Other Resources](#7-other-resources)
+7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
 
 
 ## 1. Introduction
@@ -75,13 +75,15 @@ Also, note how the Blockchain client is used in order to wait for the node State
 The Legacy service interacts with the Validator service to validate incoming transactions from the BSV network. This interaction can happen in two different configurations:
 
 1. **Local Validator**:
-   - When `useLocalValidator=true` (recommended for production)
+
+    - When `useLocalValidator=true` (recommended for production)
    - The Validator is instantiated directly within the Legacy service
    - Direct method calls are used without network overhead
    - This provides the best performance and lowest latency
 
 2. **Remote Validator Service**:
-   - When `useLocalValidator=false`
+
+    - When `useLocalValidator=false`
    - The Legacy service connects to a separate Validator service via gRPC
    - Useful for development, testing, or specialized deployment scenarios
    - Has higher latency due to additional network calls
@@ -91,6 +93,7 @@ This configuration is controlled by the settings passed to `GetValidatorClient()
 ## 3. Data Model
 
 When we announce a teranode block, the format is:
+
 * Blockheader
 * Block meta data (size, tx count etc etc)
 * Coinbase TX (the actual payload / bytes of the coinbase TX itself)
@@ -174,6 +177,7 @@ The sequence of steps involved in processing a new transaction is as follows:
 3. **Transaction Validation with Validator Client:**
     - The transaction is converted to a binary format and passed to the Teranode Validator client.
     - The Teranode Validator client performs comprehensive validation on the transaction, including:
+
         - Checking transaction syntax and structure
         - Verifying that inputs reference valid UTXOs
         - Validating transaction scripts
@@ -209,6 +213,7 @@ Process flow:
 3. **Subtree Creation and Transaction Processing:**
     - The concept of subtrees is unique to Teranode, so, when processing legacy blocks, we must make sure to convert to the internal Teranode format. A new, empty subtree is created, and a placeholder coinbase transaction is added to this subtree.
     - For each transaction in the block, the Legacy Service:
+
         - Converts the transaction into an Extended Transaction format.
         - Adds the Extended Transaction to the Subtree.
         - Caches the Extended Transaction in the "Tx Cache" (a short term Tx cache DB).
@@ -221,8 +226,8 @@ Process flow:
 
 5. **Block Validation:**
     - The Legacy Service notifies the Block Validator (part of Teranode) about the new block through Kafka using the `kafka_blocksConfig` topic, providing the block hash and a base URL for accessing the block and its components.
-      - It must be noted that this base URL would typically represent a native Teranode Asset server. However, in this case, the Legacy Service will handle the endpoints, providing responses in the same format as the Teranode Asset server, to allow Teranode to request data in the same way they would do it with a remote asset server.
-      - Notice how the local Teranode does not understand that the new blocks are being added by the Legacy Service. As far as the Teranode is concerned, a notification for a new block is received via Kafka as if it came from an internal Teranode service. And when requesting data from the provided baseURL, it receives information as if it was a remote asset server. In all senses, the Legacy Service impersonates a remote asset server for the Teranode.
+    - It must be noted that this base URL would typically represent a native Teranode Asset server. However, in this case, the Legacy Service will handle the endpoints, providing responses in the same format as the Teranode Asset server, to allow Teranode to request data in the same way they would do it with a remote asset server.
+    - Notice how the local Teranode does not understand that the new blocks are being added by the Legacy Service. As far as the Teranode is concerned, a notification for a new block is received via Kafka as if it came from an internal Teranode service. And when requesting data from the provided baseURL, it receives information as if it was a remote asset server. In all senses, the Legacy Service impersonates a remote asset server for the Teranode.
     - The Block Validator requests the block using the provided URL, and the Legacy Service responds with the block data.
 
 6. **Subtree Validation:**
@@ -239,27 +244,28 @@ Process flow:
 The Legacy Service converts standard BSV blocks (which don't have subtrees) into the Teranode format (which uses blocks + subtrees) through the following process:
 
 1. **Subtree Creation:**
-   - A new subtree structure is created based on the number of transactions in the block (depending on the number of transactions, one or more subtrees are required to fit the transactions)
-   - A coinbase placeholder node is added to the first subtree
-   - Each transaction from the block is processed and added to the subtree
+    - A new subtree structure is created based on the number of transactions in the block (depending on the number of transactions, one or more subtrees are required to fit the transactions)
+    - A coinbase placeholder node is added to the first subtree
+    - Each transaction from the block is processed and added to the subtree
 
 2. **Transaction Processing:**
-   - For each transaction, the service calculates:
+    - For each transaction, the service calculates:
+
      - Transaction fee
      - Transaction size
    - It then adds the transaction hash to the subtree(s) at the appropriate position
 
 3. **Data Organization:**
-   - **Subtree Data:** The service stores the full extended transaction data (inputs, outputs, scripts)
-   - **Subtree Metadata:** Parent transaction references are stored to maintain the transaction dependency structure
+    - **Subtree Data:** The service stores the full extended transaction data (inputs, outputs, scripts)
+    - **Subtree Metadata:** Parent transaction references are stored to maintain the transaction dependency structure
 
 4. **Validation:**
-   - In legacy sync mode, a quick validation is performed assuming blocks are valid
-   - In normal mode, more thorough validation is performed via the Teranode validation services
+    - In legacy sync mode, a quick validation is performed assuming blocks are valid
+    - In normal mode, more thorough validation is performed via the Teranode validation services
 
 5. **Storage:**
-   - The subtree, its data, and metadata are stored in the Subtree Store
-   - The subtree hash is then ready to be included in the Teranode block structure
+    - The subtree, its data, and metadata are stored in the Subtree Store
+    - The subtree hash is then ready to be included in the Teranode block structure
 
 
 ### 4.2. Teranode to BSV Communication
@@ -273,25 +279,27 @@ When new subtrees are created within the Teranode environment, the Legacy Servic
 ![legacy_p2p_teranode_to_bsv.svg](img/plantuml/legacyp2p/legacy_p2p_teranode_to_bsv.svg)
 
 1. **Subscription to Blockchain Events:**
-   - The Legacy Service's Sync Manager subscribes to blockchain events from Teranode using the `Subscribe` method.
-   - This subscription allows the Legacy Service to receive notifications about new blocks and subtrees created in the Teranode environment.
+    - The Legacy Service's Sync Manager subscribes to blockchain events from Teranode using the `Subscribe` method.
+    - This subscription allows the Legacy Service to receive notifications about new blocks and subtrees created in the Teranode environment.
 
 2. **Receiving Subtree Notifications:**
-   - When a new subtree is created in Teranode, a notification is sent to the subscribed Legacy Service.
-   - The notification includes the hash of the new subtree.
+    - When a new subtree is created in Teranode, a notification is sent to the subscribed Legacy Service.
+    - The notification includes the hash of the new subtree.
 
 3. **Retrieving Subtree Data:**
-   - Upon receiving a subtree notification, the Legacy Service retrieves the subtree data from the Subtree Store.
-   - The subtree data contains information about all transactions included in the subtree.
+    - Upon receiving a subtree notification, the Legacy Service retrieves the subtree data from the Subtree Store.
+    - The subtree data contains information about all transactions included in the subtree.
 
-    Note - subtrees are a unique feature of Teranode. We will discuss this Teranode - to BSV data abstraction conversion process later in this section.
+    !!! note
+        Subtrees are a unique feature of Teranode. We will discuss this Teranode-to-BSV data abstraction conversion process later in this section.
+
 4. **Transaction Announcement:**
-   - For each transaction in the subtree, the Legacy Service announces it to connected BSV peers.
-   - These announcements are managed by a transaction batcher that de-duplicates transactions that have been recently sent.
-   - BSV peers that receive these announcements can then request the full transaction data if needed.
+    - For each transaction in the subtree, the Legacy Service announces it to connected BSV peers.
+    - These announcements are managed by a transaction batcher that de-duplicates transactions that have been recently sent.
+    - BSV peers that receive these announcements can then request the full transaction data if needed.
 
 5. **Propagation to BSV Network:**
-   - The announced transactions are propagated throughout the BSV network, ensuring that blocks mined in Teranode are reflected in the BSV blockchain.
+    - The announced transactions are propagated throughout the BSV network, ensuring that blocks mined in Teranode are reflected in the BSV blockchain.
 
 This bidirectional communication ensures that both networks remain synchronized, with transactions and blocks being properly reflected in both environments. The Legacy Service acts as a critical bridge, enabling seamless interoperability between the legacy BSV protocol and the more scalable Teranode architecture.
 
@@ -301,25 +309,25 @@ This bidirectional communication ensures that both networks remain synchronized,
 The Legacy Service converts Teranode subtree container abstractions back to "flat" BSV transactions through the following process:
 
 1. **Notification Reception:**
-   - The Legacy Service subscribes to Kafka-based blockchain events from Teranode
-   - When a new subtree is created, a notification with the subtree hash is received
+    - The Legacy Service subscribes to Kafka-based blockchain events from Teranode
+    - When a new subtree is created, a notification with the subtree hash is received
 
 2. **Subtree Retrieval:**
-   - The service retrieves the subtree data from the Subtree Store using the hash in the notification
-   - The subtree is deserialized from its binary format into a structured subtree object
+    - The service retrieves the subtree data from the Subtree Store using the hash in the notification
+    - The subtree is deserialized from its binary format into a structured subtree object
 
 3. **Transaction Extraction:**
-   - The service extracts each transaction hash from the subtree nodes
-   - For each transaction, it also retrieves the associated fee and size information
+    - The service extracts each transaction hash from the subtree nodes
+    - For each transaction, it also retrieves the associated fee and size information
 
 4. **Transaction Announcement:**
-   - Each transaction hash is added to a transaction announcement batcher
-   - The batcher de-duplicates transactions that have been recently announced to prevent flooding
-   - Transactions are then announced to connected BSV peers
+    - Each transaction hash is added to a transaction announcement batcher
+    - The batcher de-duplicates transactions that have been recently announced to prevent flooding
+    - Transactions are then announced to connected BSV peers
 
 5. **Data Fulfillment:**
-   - When BSV peers request the full transaction data, the Legacy Service retrieves it from the Subtree Data store
-   - Transactions are served to the BSV network in their standard format, with no reference to the subtree structure
+    - When BSV peers request the full transaction data, the Legacy Service retrieves it from the Subtree Data store
+    - Transactions are served to the BSV network in their standard format, with no reference to the subtree structure
 
 This process effectively bridges the gap between Teranode's subtree-based architecture and the BSV network's traditional transaction model, ensuring that data originating in Teranode can be properly propagated to the BSV network.
 
@@ -446,18 +454,21 @@ Incoming Block → io.Pipe() → 4MB Buffer → Temporary Disk Storage → Valid
 ```
 
 **Benefits:**
+
 - **Memory Efficiency**: Prevents memory exhaustion during large-scale synchronization
 - **Scalability**: Handles high-volume block arrivals without resource constraints
 - **Reliability**: Reduces risk of out-of-memory errors during initial sync
 - **Performance**: Maintains processing throughput while using minimal memory
 
 **When to Enable:**
+
 - ✅ **Initial blockchain synchronization** - Essential for syncing from genesis
 - ✅ **Resource-constrained environments** - Servers with limited RAM
 - ✅ **High-throughput scenarios** - Networks with frequent block arrivals
 - ✅ **Production deployments** - Recommended for stability
 
 **Storage Requirements:**
+
 - Temporary disk space for concurrent blocks (typically < 1GB)
 - Fast storage (SSD recommended) for optimal I/O performance
 - Automatic cleanup prevents long-term storage accumulation

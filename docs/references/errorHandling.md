@@ -12,27 +12,27 @@
     - [2.1. Error Handling Strategy](#21-error-handling-strategy)
     - [2.2. Sentinel Errors in Teranode](#22-sentinel-errors-in-teranode)
     - [2.3. Error Wrapping in Teranode](#23-error-wrapping-in-teranode)
-      - [Error Creation and Wrapping](#error-creation-and-wrapping)
-      - [Unwrapping Errors](#unwrapping-errors)
-      - [Best Practices for Error Wrapping](#best-practices-for-error-wrapping)
+    - [Error Creation and Wrapping](#error-creation-and-wrapping)
+    - [Unwrapping Errors](#unwrapping-errors)
+    - [Best Practices for Error Wrapping](#best-practices-for-error-wrapping)
     - [2.4. gRPC Error Wrapping in Teranode](#24-grpc-error-wrapping-in-teranode)
-        - [Converting Teranode Errors to gRPC Errors](#converting-teranode-errors-to-grpc-errors)
-        - [Converting gRPC Errors back to Teranode Errors](#converting-grpc-errors-back-to-teranode-errors)
-        - [Practical Example](#practical-example)
-        - [Best Practices](#best-practices)
+    - [Converting Teranode Errors to gRPC Errors](#converting-teranode-errors-to-grpc-errors)
+    - [Converting gRPC Errors back to Teranode Errors](#converting-grpc-errors-back-to-teranode-errors)
+    - [Practical Example](#practical-example)
+    - [Best Practices](#best-practices)
     - [2.5. Extra Data in Error Handling](#25-extra-data-in-error-handling)
-        - [Error Structure](#error-structure)
-        - [Purpose and Usage](#purpose-and-usage)
-        - [Example Implementation](#example-implementation)
-        - [Type Assertions with Extra Data](#type-assertions-with-extra-data)
-        - [Usage Example](#usage-example)
-        - [Best Practices](#best-practices)
+    - [Error Structure](#error-structure)
+    - [Purpose and Usage](#purpose-and-usage)
+    - [Example Implementation](#example-implementation)
+    - [Type Assertions with Extra Data](#type-assertions-with-extra-data)
+    - [Usage Example](#usage-example)
+    - [Best Practices](#best-practices)
     - [2.6. Error Protobuf](#26-error-protobuf)
-        - [Error Protocol Definition](#error-protocol-definition)
-        - [Key Components](#key-components)
-        - [Purpose and Benefits](#purpose-and-benefits)
-        - [Integration with Teranode's Error Handling](#integration-with-teranodes-error-handling)
-        - [Best Practices](#best-practices)
+    - [Error Protocol Definition](#error-protocol-definition)
+    - [Key Components](#key-components)
+    - [Purpose and Benefits](#purpose-and-benefits)
+    - [Integration with Teranode's Error Handling](#integration-with-teranodes-error-handling)
+    - [Best Practices](#best-practices)
     - [2.7. Unit Tests](#27-unit-tests)
 
 ## 1. Introduction
@@ -726,6 +726,7 @@ enum ERR {
 #### Key Components
 
 1. **TError Message**: This defines the structure of a Teranode error, including:
+
     - `code`: An error code from the ERR enum.
     - `message`: A string describing the error.
     - `wrapped_error`: A string representation of any wrapped errors.

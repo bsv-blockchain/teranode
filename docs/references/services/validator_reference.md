@@ -152,6 +152,7 @@ type TxScriptInterpreter interface {
 ```
 
 The validator supports multiple script interpreters through a factory pattern:
+
 - **GoBT**: Pure Go implementation from the libsv/go-bt library
 - **GoSDK**: Bitcoin SV SDK implementation
 - **GoBDK**: Bitcoin Development Kit implementation

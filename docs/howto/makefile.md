@@ -2,8 +2,8 @@
 
 This Makefile facilitates a variety of development and build tasks for the Teranode project.
 
-- [🛠️ Makefile Documentation](#️-makefile-documentation)
-  - [Environment Configuration](#environment-configuration)
+- [🛠️ Makefile Documentation](#-makefile-documentation)
+    - [Environment Configuration](#environment-configuration)
   - [Key Commands:](#key-commands)
   - [All Commands:](#all-commands)
     - [General Configuration:](#general-configuration)
@@ -117,7 +117,8 @@ Other specific build tasks for components:
 ### Installation:
 
 - `install`: Comprehensive installation command that installs:
-  - Linting tools (golangci-lint and staticcheck)
+
+    - Linting tools (golangci-lint and staticcheck)
   - Protocol Buffers compiler and tools (protobuf, protoc-gen-go, protoc-gen-go-grpc)
   - Build tools (libtool, autoconf, automake)
   - Git hooks via pre-commit
@@ -125,6 +126,7 @@ Other specific build tasks for components:
   This is the preferred command for setting up a new development environment, as it installs all necessary dependencies.
 
 ## Notes:
+
 - The `PHONY` declarations before each command indicate that they do not produce or depend on any files, ensuring that the associated command is executed every time it's called.
 - The Makefile includes a combination of Go build commands, Node.js commands, and various tooling setups.
 - There's extensive use of conditional debug flags and platform-specific build tags.

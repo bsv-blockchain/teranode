@@ -32,6 +32,7 @@ This document describes the processes involved in configuring, deploying, and ma
 For each microservice, we maintain several YAML files that define its behavior within a Kubernetes cluster. These files include:
 
 - **Application YAML Configuration Files**: These files manage the deployment setup of containerized applications. For example, `txblaster.yaml` specifies the deployment details for the TXBlaster service. Key fields within these files include:
+
     - `name`: Serves as a base prefix for application naming within Kubernetes.
     - `REPO:IMAGE:TAG`: Specifies the Docker image to be used. This reference is updated with the actual image name during the CI build process.
     - `command`: Indicates the command to be executed within the Docker container. For instance, `txblaster.yaml` might specify `./txblaster.run` as the command, ensuring that the corresponding executable is available within the Docker image.
@@ -40,6 +41,7 @@ For each microservice, we maintain several YAML files that define its behavior w
     - `volumeMounts` (optional): Specifies volume configurations, such as for `lustre` volumes, enabling detailed storage setup. For example, in `blockassembly.yaml`, a volume mount might be defined as follows:
     ```
     volumes:
+
       - name: lustre-storage
         persistentVolumeClaim:
           claimName: subtree-pvc
@@ -65,7 +67,7 @@ Microservice configurations can be influenced by settings. There are 2 ways to p
 
 ### Kubernetes Resolver for gRPC
 
-* [Kubernetes Resolver for gRPC](../../../pkg/k8sresolver/README.md)
+* [Kubernetes Resolver for gRPC](https://github.com/bitcoin-sv/teranode/blob/main/pkg/k8sresolver/README.md)
 
 
 ## How to
@@ -81,15 +83,18 @@ Microservice configurations can be influenced by settings. There are 2 ways to p
 ### Kubernetes (k8s) Cluster Access
 
 1. **Kubectl Installation**:
+
     - Install kubectl via Homebrew: `brew install kubectl`.
 
 2. **Configure kubeconfig for EKS**:
+
     - Use the `aws eks update-kubeconfig` command to configure kubectl to interact with your Amazon EKS clusters.
     - Example: `aws eks update-kubeconfig --name aws-teranode-playground --region <region>`
      - For example, the staging environment supported regions include `ap-south-1`, `eu-west-1`, and `us-east-1`.
     - Verify the configuration with `kubectl config view`. Alternatively, you can verify the raw data in the `~/.kube/config` file.
 
 3. **Zsh Configuration**:
+
 - Download the `k8s_shortcuts.sh` shortcuts file from the shared repository and place it in the home directory.
 
 ```bash
@@ -147,10 +152,12 @@ As seen in the diagram above, the Block Validation, Block Assembly and Asset Ser
 #### Environment Switching and Namespace Management
 
 1. **Environment Shortcuts**:
+
 - Define aliases for switching between environments (e.g., `m1`, `m2`, `m3`) in `.zprofile`.
     - Please check with your DevOPS team for the specific environments available to you.
 
 2. **Namespace Configuration**:
+
 - Use `kcn` command to switch Kubernetes namespaces easily.
 - Example:
 
@@ -196,11 +203,13 @@ Examples:
 - **`kl {pod}`**:
 
 Example:
+
 - `kl tx-blaster1-234234`: Views the logs for a specific `tx-blaster1` pod.
 
 #### Resetting a Service
 
 - **To reset a Service**:
+
     - If you're experiencing issues with a service not functioning as expected, you might attempt to delete all pods associated with a namespace to force them to restart. An example can be seen here:
     ```sh
     kubectl delete pod -n [namespace] --all
@@ -208,6 +217,7 @@ Example:
     - This command deletes all pods in the specified namespace, which should cause them to be recreated based on their deployment or stateful set configurations.
 
 - **To reset a specific service in all namespaces**:
+
     - Example to reset the p2p service can be seen here:
     ```sh
     kubectl delete pod p2p1
@@ -274,6 +284,7 @@ k describe pvc subtree-lustre-pv
 #### Forwarding Ports
 
 - **To forward a pod port to localhost**:
+
     - Set the Kubernetes configuration file:
     ```sh
     export KUBECONFIG=~/.kube/config

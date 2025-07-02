@@ -16,7 +16,6 @@ nav:
   - Home: index.md
   - Tutorials:
       - Developer Setup: tutorials/developers/developerSetup.md
-      - Git Commit Signing Guide: tutorials/developers/gitCommitSigningSetupGuide.md
       - Miners Getting Started: tutorials/miners/minersGettingStarted.md
   - How-To Guides:
       - Running Services Locally: howto/locallyRunningServices.md
@@ -61,13 +60,17 @@ nav:
               - Managing Disk Space: howto/miners/minersManagingDiskSpace.md
               - Backup (Kubernetes): howto/miners/kubernetes/minersHowToBackup.md
   - Key Topics:
+      - Teranode Introduction: topics/teranodeIntro.md
       - Architecture Overview: topics/architecture/teranode-overall-system-design.md
+      - Architecture Brief: topics/architecture/teranode-architecture-brief.md
       - Microservices Overview: topics/architecture/teranode-microservices-overview.md
       - State Management: topics/architecture/stateManagement.md
       - Understanding Double Spends: topics/architecture/understandingDoubleSpends.md
       - Technology Stack: topics/technologyStack.md
-      - Teranode Introduction: topics/teranodeIntro.md
       - Understanding the Testing Framework: topics/understandingTheTestingFramework.md
+      - Functional Requirement Tests: topics/functionalRequirementTests.md
+      - Features:
+          - Two Phase Commit: topics/features/two_phase_commit.md
       - Core Services:
           - Alert Service: topics/services/alert.md
           - Asset Server: topics/services/assetServer.md
@@ -86,7 +89,6 @@ nav:
           - UTXO Persister: topics/services/utxoPersister.md
       - Stores:
           - Blob Store: topics/stores/blob.md
-          - TX Meta Store: topics/stores/txmeta.md
           - UTXO Store: topics/stores/utxo.md
       - Data Model:
           - Block Data Model: topics/datamodel/block_data_model.md
@@ -114,7 +116,6 @@ nav:
               - Block Assembly Proto: references/protobuf_docs/blockassemblyProto.md
               - Blockchain Proto: references/protobuf_docs/blockchainProto.md
               - Block Validation Proto: references/protobuf_docs/blockvalidationProto.md
-              - Coinbase Proto: references/protobuf_docs/coinbaseProto.md
               - Propagation Proto: references/protobuf_docs/propagationProto.md
               - Subtree Validation Proto: references/protobuf_docs/subtreevalidationProto.md
               - Validator Proto: references/protobuf_docs/validatorProto.md
@@ -137,6 +138,7 @@ nav:
           - Blob Store: references/stores/blob_reference.md
           - UTXO Store: references/stores/utxo_reference.md
       - Miscellaneous:
+          - Git Commit Signing Setup Guide: references/gitCommitSigningSetupGuide.md
           - Licensing: references/licenseInformation.md
           - Prometheus Metrics: references/prometheusMetrics.md
           - Settings: references/settings.md
@@ -149,6 +151,7 @@ markdown_extensions:
   - toc
   - tables
   - admonition
+  - attr_list  # Enables target="_blank" and other attributes in links
   - pymdownx.highlight
   - pymdownx.superfences  # Ensures correct nested list behavior
   - pymdownx.tasklist  # Enables checkbox-style lists
@@ -165,6 +168,12 @@ extra:
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/bitcoin-sv/teranode
+
+plugins:
+  - search
+  - privacy:
+      links_attr_map:
+        target: _blank
 
 extra_css:
   - overrides/custom.css

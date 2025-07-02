@@ -275,6 +275,7 @@ The UTXO Persister Service uses three types of files:
   * Height << 1 | coinbase_flag
 - Output Count (4 bytes)
 For each output:
+
     - Index (4 bytes)
     - Value (8 bytes)
     - Script Length (4 bytes)

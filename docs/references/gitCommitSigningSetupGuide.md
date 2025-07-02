@@ -29,9 +29,9 @@ echo "pinentry-program $(which pinentry-mac)" >> ~/.gnupg/gpg-agent.conf
 ```bash
 gpg --full-generate-key
 ```
-- Follow prompts to set name and email address
-- Choose DSA + ElGamal or ECC with ED 25519 for cipher
-- Set a strong passphrase and store it safely
+    - Follow prompts to set name and email address
+    - Choose DSA + ElGamal or ECC with ED 25519 for cipher
+    - Set a strong passphrase and store it safely
 
 4. Configure repository for signed commits
 ```bash
@@ -44,11 +44,11 @@ gpg --output $HOME/public-key.pgp --armor --export email@address.tld
 ```
 
 6. Import GPG key to GitHub
-- Navigate to GitHub Profile → Settings → SSH and GPG Keys
-- Click "New GPG Key"
-- Enter a title (e.g., your email address)
-- Paste the contents of `$HOME/public-key.pgp`
-- Click "Add GPG key"
+    - Navigate to GitHub Profile → Settings → SSH and GPG Keys
+    - Click "New GPG Key"
+    - Enter a title (e.g., your email address)
+    - Paste the contents of `$HOME/public-key.pgp`
+    - Click "Add GPG key"
 
 7. Sign a commit
 ```bash
@@ -100,12 +100,12 @@ git config user.signingkey ~/.ssh/id_ed25519
 ```
 
 5. Add SSH signing key to GitHub
-- Navigate to GitHub Profile → Settings → SSH and GPG Keys
-- Click "New SSH Key"
-- Enter a title
-- Select "Signing Key" for Key Type
+    - Navigate to GitHub Profile → Settings → SSH and GPG Keys
+    - Click "New SSH Key"
+    - Enter a title
+    - Select "Signing Key" for Key Type
 -
-![singingKey.png](../img/signingKey.png)
+![singingKey.png](img/signingKey.png)
 
 - Paste contents of `~/.ssh/id_ed25519.pub`
 - Click "Add SSH key"

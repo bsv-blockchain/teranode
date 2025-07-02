@@ -7,18 +7,18 @@
 3. [Data Model](#3-data-model)
 4. [Use Cases](#4-use-cases)
     - [4.1. HTTP](#41-http)
-        - [4.1.1. getTransaction() and getTransactions()](#411-gettransaction-and-gettransactions)
-        - [4.1.2. GetTransactionMeta()](#412-gettransactionmeta)
-        - [4.1.3. GetSubtree()](#413-getsubtree)
-        - [4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()](#414-getblockheaders-getblockheader-and-getbestblockheader)
-        - [4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()](#415-getblockbyhash-getblocks-and-getlastnblocks)
-        - [4.1.6. GetUTXO() and GetUTXOsByTXID()](#416-getutxo-and-getutxosbytxid)
-        - [4.1.7. Search()](#417-search)
-        - [4.1.8. GetBlockStats()](#418-getblockstats)
-        - [4.1.9. GetBlockGraphData()](#419-getblockgraphdata)
-        - [4.1.10. GetBlockForks()](#4110-getblockforks)
-        - [4.1.11. GetBlockSubtrees()](#4111-getblocksubtrees)
-        - [4.1.12. GetLegacyBlock()](#4112-getlegacyblock)
+    - [4.1.1. getTransaction() and getTransactions()](#411-gettransaction-and-gettransactions)
+    - [4.1.2. GetTransactionMeta()](#412-gettransactionmeta)
+    - [4.1.3. GetSubtree()](#413-getsubtree)
+    - [4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()](#414-getblockheaders-getblockheader-and-getbestblockheader)
+    - [4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()](#415-getblockbyhash-getblocks-and-getlastnblocks)
+    - [4.1.6. GetUTXO() and GetUTXOsByTXID()](#416-getutxo-and-getutxosbytxid)
+    - [4.1.7. Search()](#417-search)
+    - [4.1.8. GetBlockStats()](#418-getblockstats)
+    - [4.1.9. GetBlockGraphData()](#419-getblockgraphdata)
+    - [4.1.10. GetBlockForks()](#4110-getblockforks)
+    - [4.1.11. GetBlockSubtrees()](#4111-getblocksubtrees)
+    - [4.1.12. GetLegacyBlock()](#4112-getlegacyblock)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
@@ -202,19 +202,23 @@ The Asset Server offers endpoints for block validation control:
 Key technologies involved:
 
 1. **Go Programming Language (Golang)**:
+
     - A statically typed, compiled language known for its simplicity and efficiency, especially in concurrent operations and networked services.
     - The primary language used for implementing the service's logic.
 
 2. **HTTP/HTTPS Protocols**:
+
     - HTTP for transferring data over the web. HTTPS adds a layer of security with SSL/TLS encryption.
     - Used for communication between clients and the server, and for serving web pages or APIs.
 
 3. **Echo Web Framework**:
+
     - A high-performance, extensible, minimalist Go web framework.
     - Used for handling HTTP requests and routing, including upgrading HTTP connections to WebSocket connections.
     - Library: github.com/labstack/echo
 
 4. **JSON (JavaScript Object Notation)**:
+
     - A lightweight data-interchange format, easy for humans to read and write, and easy for machines to parse and generate.
     - Used for structuring data sent to and from clients, especially in contexts where HTTP is used.
 
@@ -349,6 +353,7 @@ asset_httpAddress=http://localhost:8090
 ```
 
 Centrifuge supports the following subscription channels:
+
 - `ping`: For connection health checks
 - `block`: For new block notifications
 - `subtree`: For Merkle tree updates
@@ -382,9 +387,9 @@ These settings control security features of the Asset Server:
    ```
 
 3. **Store private keys securely**
-   - Use environment variables for sensitive configuration
-   - Rotate private keys periodically
-   - Restrict access to configuration files
+    - Use environment variables for sensitive configuration
+    - Rotate private keys periodically
+    - Restrict access to configuration files
 
 #### 7.2.4 Dependency Configuration
 
@@ -421,16 +426,19 @@ export TERANODE_SERVER_CERT_FILE=/path/to/cert.pem
 
 **HTTP/HTTPS Mode:**
 The `securityLevelHTTP` setting determines whether the server runs in HTTP or HTTPS mode:
+
 - When set to `0`, the server runs in HTTP mode using `asset_httpListenAddress`
 - When set to a non-zero value, the server runs in HTTPS mode and requires valid certificate and key files
 
 **Centrifuge Dependencies:**
 When Centrifuge is enabled (`asset_centrifugeDisable=false`):
+
 - `asset_centrifugeListenAddress` must be set to specify the WebSocket listen address
 - `asset_httpAddress` must be set to serve as the base URL for client connections
 
 **Response Signing Dependencies:**
 When response signing is enabled (`asset_signHTTPResponses=true`):
+
 - `p2p_private_key` must be set with a valid Ed25519 private key in hexadecimal format
 
 #### 7.2.7 Debugging Configuration

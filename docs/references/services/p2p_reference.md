@@ -38,6 +38,7 @@ type Server struct {
 ```
 
 The server manages several key components, each serving a specific purpose in the P2P network:
+
 - The P2PNode handles direct peer connections and message routing through the P2PNodeI interface
 - The various Kafka clients manage message distribution across the network
 - The ban system maintains network security by managing peer access through BanListI and PeerBanManager
@@ -97,6 +98,7 @@ func NewServer(	ctx context.Context,
 ```
 
 This function establishes the server with required settings and dependencies, including:
+
 - P2P network configuration (IP, port, topics)
 - Topic name generation for various message types
 - Ban list initialization
@@ -116,6 +118,7 @@ This method performs two types of health verification:
 For liveness checks, it verifies basic server operation without dependency checks.
 
 For readiness checks, it verifies:
+
 - Kafka broker connectivity
 - Blockchain client functionality
 - FSM state verification
@@ -136,6 +139,7 @@ The Start method initiates server operations:
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 It begins:
+
 - Kafka message processing
 - Block validation client setup
 - HTTP/WebSocket server operation

@@ -8,15 +8,15 @@
     - [2.1. Starting the Block Assembly Service](#21-starting-the-block-assembly-service)
     - [2.2. Receiving Transactions from the TX Validator Service](#22-receiving-transactions-from-the-tx-validator-service)
     - [2.3. Grouping Transactions into Subtrees](#23-grouping-transactions-into-subtrees)
-        - [2.3.1 Dynamic Subtree Size Adjustment](#231-dynamic-subtree-size-adjustment)
+    - [2.3.1 Dynamic Subtree Size Adjustment](#231-dynamic-subtree-size-adjustment)
     - [2.4. Creating Mining Candidates](#24-creating-mining-candidates)
     - [2.5. Submit Mining Solution](#25-submit-mining-solution)
     - [2.6. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts](#26-processing-subtrees-and-blocks-from-other-nodes-and-handling-forks-and-conflicts)
-        - [2.6.1. The block received is the same as the current chaintip (i.e. the block we have already seen).](#261-the-block-received-is-the-same-as-the-current-chaintip-ie-the-block-we-have-already-seen)
-        - [2.6.2. The block received is a new block, and it is the new chaintip.](#262-the-block-received-is-a-new-block-and-it-is-the-new-chaintip)
-        - [2.6.3. The block received is a new block, but it represents a fork.](#263-the-block-received-is-a-new-block-but-it-represents-a-fork)
-            - [Fork Detection and Assessment](#fork-detection-and-assessment)
-            - [Chain Selection and Reorganization Process](#chain-selection-and-reorganization-process)
+    - [2.6.1. The block received is the same as the current chaintip (i.e. the block we have already seen).](#261-the-block-received-is-the-same-as-the-current-chaintip-ie-the-block-we-have-already-seen)
+    - [2.6.2. The block received is a new block, and it is the new chaintip.](#262-the-block-received-is-a-new-block-and-it-is-the-new-chaintip)
+    - [2.6.3. The block received is a new block, but it represents a fork.](#263-the-block-received-is-a-new-block-but-it-represents-a-fork)
+    - [Fork Detection and Assessment](#fork-detection-and-assessment)
+    - [Chain Selection and Reorganization Process](#chain-selection-and-reorganization-process)
     - [2.7. Resetting the Block Assembly](#27-resetting-the-block-assembly)
 3. [Data Model](#3-data-model)
 4. [gRPC Protobuf Definitions](#4-grpc-protobuf-definitions)
@@ -44,32 +44,40 @@
 The Block Assembly Service is responsible for assembling new blocks and adding them to the blockchain.  The block assembly process involves the following steps:
 
 1. **Receiving Transactions from the TX Validator Service**:
+
     - The block assembly module receives new transactions from the transaction validator service.
 
 2. **Grouping Transactions into Subtrees**:
+
     - The received transactions are grouped into subtrees.
     - Subtrees represent a hierarchical structure that organizes transactions for more efficient processing and inclusion in a block.
 
 3. **Broadcasting Subtrees to Other Nodes**:
+
     - Once subtrees are formed, they are broadcasted to other nodes in the network. This is initiated by the block assembly service, which sends a notification to the P2P service (via the Blockchain Service).
     - This step is crucial for maintaining network synchronization and ensuring all nodes have the latest set of subtrees, prior to receiving a block with those subtrees in them. The nodes can validate the subtrees and ensure that they are valid before they are included in a block.
 
 4. **Creating Mining Candidates**:
+
     - The block assembly continuously creates mining candidates.
     - A mining candidate is essentially a potential block that includes all the subtrees known up to that time, built on top of the longest honest chain.
     - This candidate block is then submitted to the mining module of the node.
 
 5. **Mining Process**:
+
     - The mining module attempts to find a solution to the cryptographic challenge (proof of work) associated with the mining candidate.
     - If the miner successfully solves the puzzle before other nodes in the network, the block is considered valid and ready to be added to the blockchain.
 
 6. **Adding the Block to the Blockchain**:
+
     - Once a mining solution is found, the new block is added to the blockchain.
 
 7. **Notifying Other Nodes of the New Block**:
+
     - After successfully adding the block, other nodes in the network are notified of the new block.
 
 8. **Handling Forks and Conflicts**:
+
     - The node also handles the resolution of forks in the blockchain and conflicting subtrees or blocks mined by other nodes.
     - This involves choosing between different versions of the blockchain (in case of forks) and resolving conflicts in transactions and subtrees included in other nodes' blocks.
 
@@ -227,20 +235,25 @@ The service needs to "move up" the block. By this, we mean the process to identi
 ![block_assembly_move_up.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_move_up.svg)
 
 1. **Checking for the Best Block Header**:
+
     - The `BlockAssembler` logs information indicating that the best block header (the header of the most recent block in the chain) is the same as the previous one. It then attempts to "move up" to this new block.
 
 2. **Getting the Block from Blockchain Client**:
+
     - `b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash())` fetches the block corresponding to the best blockchain block header.
 
 3. **Processing the Block in SubtreeProcessor**:
+
     - `b.subtreeProcessor.MoveForwardBlock(block)` is called, which initiates the process of updating the subtree processor with the new block.
 
 4. **SubtreeProcessor Handling**:
+
     - In `MoveForwardBlock`, a channel for error handling is set up and a `moveBlockRequest` is sent to `moveForwardBlockChan`.
     - This triggers the `case moveForwardReq := <-stp.moveForwardBlockChan` in `SubtreeProcessor`, which handles the request to move up a block.
     - `stp.moveForwardBlock(ctx, moveForwardReq.block, false)` is called, which is where the main logic of handling the new block is executed.
 
 5. **MoveForwardBlock Functionality**:
+
     - This function cleans out transactions from the current subtrees that are also in the new block (to avoid duplication and maintain chain integrity).
     - When `moveForwardBlock` is invoked, it receives a `block` object as a parameter. The function begins with basic validation checks to ensure that the provided block is valid and relevant for processing.
     - The function handles the coinbase transaction (the first transaction in a block, used to reward miners). It processes the unspent transaction outputs (UTXOs) associated with the coinbase transaction.
@@ -263,16 +276,19 @@ The Block Assembly service implements real-time fork detection through the follo
 - **Fork Detection Criteria**: The Block Assembly service uses three main criteria to detect and handle forks:
 
 1. **Chain Height Tracking**:
+
     - Maintains current blockchain height through `bestBlockHeight`
     - Compares incoming block heights with current chain tip
     - Used to determine if incoming blocks represent a longer chain
 
 2. **Block Hash Verification**:
+
     - Uses `HashPrevBlock` to verify block connectivity
     - Ensures each block properly references its predecessor
     - Helps identify where chains diverge
 
 3. **Reorganization Size Protection**:
+
     - Monitors the size of potential chain reorganizations
     - If a reorganization would require moving more than 5 blocks either backwards or forwards
     - AND the current chain height is greater than 1000 blocks
@@ -291,19 +307,23 @@ During a reorganization, the `BlockAssembler` performs two key operations:
 The service automatically manages chain selection through:
 
 1. **Best Chain Detection**:
+
     - Continuously monitors for new best block headers
     - Compares incoming blocks against current chain tip
     - Automatically triggers reorganization when a better chain is detected
 
 2. **Chain Selection Process**:
+
     - Accepts the chain with the most accumulated proof of work
     - Performs a safety check on reorganization depth:
+
         - If the reorganization involves more than 5 blocks in either direction
         - And the current chain height is greater than 1000
         - The block assembler will reset rather than attempt the reorganization
     - Block validation and transaction verification are handled by other services, not the Block Assembly
 
 3. **Chain Switching Process**:
+
     - Identifies common ancestor between competing chains
     - Rolls back the current chain to a common point with the competing (and stronger) chain
     - Applies new blocks from the competing chain
@@ -316,15 +336,20 @@ The service automatically manages chain selection through:
 The following diagram illustrates how the Block Assembly service handles a chain reorganization:
 
 - `err = b.handleReorg(ctx, bestBlockchainBlockHeader)`:
+
     - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
     - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
     - **Getting Reorg Blocks**:
+
         - `moveBackBlocks, moveForwardBlocks, err := b.getReorgBlocks(ctx, header)`:
+
             - Calls `getReorgBlocks` to determine the blocks to move down (to revert) and move up (to apply) for aligning with the network's consensus chain.
             - `header` is the new block header that triggered the reorg.
             - This step involves finding the common ancestor and getting the blocks from the current chain (move down) and the new chain (move up).
     - **Performing Reorg in Subtree Processor**:
+
         - `b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks)`:
+
             - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
             - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
             - This step involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
@@ -337,16 +362,20 @@ Note: If other nodes propose blocks containing a transaction that Teranode has i
 The Block Assembly service can be reset to the best block by calling the `ResetBlockAssembly` gRPC method.
 
 1. **State Storage and Retrieval**:
+
     - `bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)`: Retrieves the best block header from the blockchain along with its metadata.
 
 2. **Resetting Block Assembly**:
+
     - The block assembler resets to the new best block header with its height and details.
     - It then calculates which blocks need to be moved down or up to align with the new best block header (`getReorgBlocks`).
 
 3. **Processing the Reorganization**:
+
     - It attempts to reset the `subtreeProcessor` with the new block headers. If there's an error during this reset, it logs the error, and the block header is re-set to match the `subtreeProcessor`'s current block header.
 
 4. **Updating Assembly State**:
+
     - Updates internal state with the new best block header and adjusts the height of the best block based on how many blocks were moved up and down.
     - Attempts to set the new state and current blockchain chain.
 
@@ -472,54 +501,57 @@ The Block Assembly service uses the following configuration options:
 ### Network and Communication Settings
 
 1. **`blockassembly_grpcAddress`**: Specifies the gRPC address for the block assembly service.
+    - Type: string
+    - Default: "localhost:8085"
+    - Impact: Used by clients to connect to the Block Assembly service for gRPC operations.
 
 2. **`blockassembly_grpcListenAddress`**: The address for the gRPC server to listen on.
-   - Type: string
-   - Default: ""
-   - Impact: Controls which network interfaces the service binds to for accepting gRPC connections.
+    - Type: string
+    - Default: ""
+    - Impact: Controls which network interfaces the service binds to for accepting gRPC connections.
 
 ### gRPC Client Settings
 
 3. **`blockassembly_grpcMaxRetries`**: Maximum number of retry attempts for failed gRPC operations.
-   - Type: int
-   - Default: 3
-   - Impact: Affects resilience of gRPC client operations when facing temporary failures.
+    - Type: int
+    - Default: 3
+    - Impact: Affects resilience of gRPC client operations when facing temporary failures.
 
 4. **`blockassembly_grpcRetryBackoff`**: The duration to wait between gRPC retry attempts.
-   - Type: time.Duration
-   - Default: 1s
-   - Impact: Controls how quickly the service retries failed gRPC operations.
+    - Type: time.Duration
+    - Default: 1s
+    - Impact: Controls how quickly the service retries failed gRPC operations.
 
 ### Subtree Management
 
 Subtrees are a critical component in the Block Assembly process, organizing transactions hierarchically for efficient block construction. The following settings control how subtrees are created, sized, and managed.
 
 5. **`blockassembly_newSubtreeChanBuffer`**: Buffer size for the new subtree channel.
-   - Type: int
-   - Default: 100
-   - Impact: Controls how many new subtree requests can be queued before blocking.
+    - Type: int
+    - Default: 100
+    - Impact: Controls how many new subtree requests can be queued before blocking.
 
 6. **`blockassembly_subtreeRetryChanBuffer`**: Buffer size for the subtree retry channel.
-   - Type: int
-   - Default: 100
-   - Impact: Controls how many subtree retry operations can be queued before blocking.
+    - Type: int
+    - Default: 100
+    - Impact: Controls how many subtree retry operations can be queued before blocking.
 
 7. **`blockassembly_subtreeBlockHeightRetention`**: Number of blocks for which to retain subtrees.
-   - Type: uint32
-   - Default: 1000
-   - Impact: Controls data retention period for subtrees, affecting storage requirements and historical data availability.
+    - Type: uint32
+    - Default: 1000
+    - Impact: Controls data retention period for subtrees, affecting storage requirements and historical data availability.
 
 8. **`initial_merkle_items_per_subtree`**: Initial number of merkle items per subtree when the service starts.
-   - Type: int
-   - Default: 1024
-   - Impact: Sets the starting subtree size, affecting initial memory usage and subtree creation rate.
-   - Note: When `use_dynamic_subtree_size` is enabled, this is just the starting point.
+    - Type: int
+    - Default: 1024
+    - Impact: Sets the starting subtree size, affecting initial memory usage and subtree creation rate.
+    - Note: When `use_dynamic_subtree_size` is enabled, this is just the starting point.
 
 9. **`minimum_merkle_items_per_subtree`**: Minimum number of merkle items per subtree.
-   - Type: int
-   - Default: 1024
-   - Impact: Sets a lower bound on subtree size to ensure efficient tree structures and prevent excessive subtree creation.
-   - Note: In low transaction volume scenarios, subtrees will only be created once enough transactions have accumulated to meet this minimum size requirement.
+    - Type: int
+    - Default: 1024
+    - Impact: Sets a lower bound on subtree size to ensure efficient tree structures and prevent excessive subtree creation.
+    - Note: In low transaction volume scenarios, subtrees will only be created once enough transactions have accumulated to meet this minimum size requirement.
 
 10. **`use_dynamic_subtree_size`**: Whether to dynamically adjust subtree size based on processing throughput.
     - Type: bool

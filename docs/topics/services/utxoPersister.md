@@ -11,7 +11,7 @@
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
 6. [How to run](#6-how-to-run)
-7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
+7. [Configuration Settings](#7-configuration-settings)
 8. [Other Resources](#8-other-resources)
 
 ## 1. Description
@@ -23,29 +23,36 @@ To achieve its target, the UTXO Persister uses the output of the Block Persister
 The UTXO set file can be exported and used as an input for initializing the UTXO store in a new Teranode instance.
 
 1. Input Processing:
+
     - The UTXO Persister works with the output of the Block Persister, which includes:
+
         - `utxo-additions`: New UTXOs created in a block,
         - `utxo-deletions`: UTXOs spent in a block,
         - `.block`: The block data,
         - `.subtree`: Subtree information for the block.
 
 2. UTXO Set Generation:
+
     - For each new block fileset detected, the UTXO Persister creates a 'utxo-set' file.
     - This file represents the complete set of unspent transaction outputs up to and including the current block.
 
 3. File Monitoring and Processing:
+
     - The service continuously monitors the shared storage for new .block files and additional related files.
     - When new files are detected, it triggers the UTXO set creation process.
 
 4. Progress Tracking:
+
     - The service maintains a `lastProcessed.dat` file to keep track of the last block height processed.
     - This ensures continuity and allows the service to resume from the correct point after restarts or interruptions.
 
 5. Efficient Data Handling:
+
     - The service uses optimized data structures and file formats to handle large volumes of UTXO data efficiently.
     - It implements binary encoding for UTXOs and UTXO deletions to minimize storage requirements and improve processing speed.
 
 6. File Management:
+
     - The service interacts with the storage system to read and write necessary files.
 
 > **Note**: For information about how the UTXO Persister service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
@@ -84,39 +91,49 @@ The service interacts with the storage system to read and write necessary files 
 The UTXO Persister processes blocks and creates UTXO sets as follows:
 
 1) **Trigger and Block Height Check**:
+
     - The service is triggered to process the next block (via notification, timer, or startup).
     - It checks if the next block to process is at least 100 blocks behind the current best block height.
 
 2) **Block Headers Retrieval**:
+
     - If processing is needed, the service retrieves block headers from either the Blockchain Store or Blockchain Client.
     - It verifies the chain continuity using these headers.
 
 3) **Last Set Verification**:
+
     - The service verifies the last UTXO set using `verifyLastSet()` to ensure data integrity.
 
 4) **Block Range Consolidation**:
+
     - A new Consolidator is created to process a range of blocks efficiently.
     - The `ConsolidateBlockRange()` method is called to handle multiple blocks at once if needed.
 
 5) **UTXO Set Preparation**:
+
     - The service calls `GetUTXOSetWithDeletionsMap()` to prepare the UTXO set for the new block.
     - This retrieves the UTXO deletions from the Block Store and creates a deletions map.
 
 6) **UTXO Set Creation**:
+
     - The `CreateUTXOSet()` method is called on the UTXOSet object.
     - This method:
+
       - Retrieves the previous block's UTXO set from the Block Store.
       - Applies the deletions from the deletions map.
       - Incorporates new UTXOs from the block's transactions.
       - Writes the new UTXO set to the Block Store.
 
 7) **Cleanup**:
+
     - If not skipped (based on configuration), the service deletes the previous block's UTXO set to save space.
 
 8) **Update Last Processed Height**:
+
     - The service calls `writeLastHeight()` to update its record of the last processed block height.
 
 9) **Trigger Next Block Processing**:
+
     - The service initiates the processing of the next block, continuing the cycle.
 
 If the current height is less than 100 blocks behind the best block height, the service waits for more confirmations before processing.
@@ -162,6 +179,7 @@ If the current height is less than 100 blocks behind the best block height, the 
 
 3. **Binary Encoding:**
    The UTXO is encoded into a binary format for efficient storage and retrieval:
+
     - 32 bytes: TxID
     - 4 bytes: Index (little-endian)
     - 8 bytes: Value (little-endian)
@@ -176,17 +194,20 @@ If the current height is less than 100 blocks behind the best block height, the 
 
 5. **UTXO Diff**:
    The UTXO Persister uses a diff-based approach to update the UTXO set:
+
     - `utxo-additions`: New UTXOs created in a block
     - `utxo-deletions`: UTXOs spent in a block
 
 
 6. **UTXO Deletion Model**:
    When a UTXO is spent, it's recorded in the `utxo-deletions` file. The deletion record contains:
+
     - TxID (32 bytes)
     - Index (4 bytes)
 
 
 7. **Set Operations**:
+
     - Creating a new UTXO set involves:
       1. Starting with the previous block's UTXO set
       2. Removing UTXOs listed in the current block's `utxo-deletions`

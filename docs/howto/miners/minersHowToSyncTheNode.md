@@ -22,6 +22,7 @@ When a new Teranode instance is started, it begins the synchronization process a
 ## Default Synchronization Process
 
 1. **Peer Discovery**:
+
     - Upon startup, the Teranode peer service (typically running in the `peer` pod / container) begins in IDLE state. To begin syncing, you need to explicitly set the state to `legacysyncing`.
 
 ```bash
@@ -29,12 +30,14 @@ kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o js
 ```
 
 2. **Block Download**:
+
     - Once connected, Teranode requests blocks from its peers, typically starting with the first node it successfully connects to.
 
     - When in `legacysyncing` status, this peer represents a traditional BSV node (if in `run` state, Teranode can sync from another BSV Teranode).
 
 
 3. **Validation and Storage**:
+
     - As blocks are received, they are validated by the various Teranode services (e.g., `block-validator`, `subtree-validator`).
 
     - Valid blocks are then stored in the blockchain database, managed by the `blockchain` service.
@@ -141,6 +144,7 @@ Teranode is designed to be resilient and can recover from various types of downt
 
 
 1. **Automatic Restart**:
+
     - If a pod crashes or is terminated, Kubernetes will automatically restart it based on the deployment configuration.
 
     - This is handled by the ReplicaSet controller in Kubernetes.
@@ -148,11 +152,13 @@ Teranode is designed to be resilient and can recover from various types of downt
 
 
 2. **Reconnection**:
+
     - Upon restart, the `peer` service will re-establish connections with other nodes in the network.
 
 
 
 3. **Block Request**:
+
     - Teranode will determine the last block it has and request subsequent blocks from its peers.
 
     - This process is automatic and doesn't require manual intervention.
@@ -160,6 +166,7 @@ Teranode is designed to be resilient and can recover from various types of downt
 
 
 4. **Catch-up Synchronization**:
+
     - The node will download and process all blocks it missed during the downtime.
 
     - This process is typically faster than the initial sync as it involves fewer blocks.
@@ -188,6 +195,7 @@ kubectl describe pod -n teranode-operator -l app=blockchain
 If Teranode has been offline for an extended period, consider the following:
 
 1. **Database Integrity Check**:
+
     - After a long downtime, it's advisable to check the integrity of your blockchain and UTXO databases.
 
     - This can be done by examining the logs for any corruption warnings or errors.
@@ -195,6 +203,7 @@ If Teranode has been offline for an extended period, consider the following:
 
 
 2. **Manual Intervention**:
+
     - In rare cases of significant divergence or data corruption, you might need to manually intervene.
 
     - This could involve reseeding the node with a more recent blockchain snapshot or UTXO set.
@@ -202,6 +211,7 @@ If Teranode has been offline for an extended period, consider the following:
 
 
 3. **Monitoring Catch-up Time**:
+
     - The time required for catch-up synchronization depends on the duration of the downtime and the number of missed blocks.
     - Use monitoring tools (e.g., Prometheus and Grafana) to track the sync progress and estimate completion time.
 
