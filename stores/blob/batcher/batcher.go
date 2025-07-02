@@ -23,9 +23,9 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	lockfreequeue "github.com/bitcoin-sv/teranode/pkg/go-lockfree-queue"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	lockfreequeue "github.com/bsv-blockchain/go-lockfree-queue"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"

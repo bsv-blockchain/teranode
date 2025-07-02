@@ -138,6 +138,7 @@ require (
 )
 
 require (
+	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-safe-conversion v1.0.1
 	github.com/bsv-blockchain/go-tx-map v1.0.0
 	github.com/felixge/fgprof v0.9.5
