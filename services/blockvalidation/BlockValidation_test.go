@@ -2531,7 +2531,7 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
 	require.Error(t, err, "Block with duplicate transaction should be invalid")
 	// Optionally check for a specific error message if the implementation provides one
-	require.ErrorContains(t, err, "hash already exists in map")
+	require.ErrorContains(t, err, "duplicate transaction")
 }
 
 func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
