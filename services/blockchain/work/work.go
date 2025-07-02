@@ -14,8 +14,8 @@ import (
 	"math/big"
 
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // CalculateWork calculates the cumulative work for a block given the previous work and difficulty.

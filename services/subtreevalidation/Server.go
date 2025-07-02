@@ -26,7 +26,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/bitcoin-sv/teranode/util/tracing"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"

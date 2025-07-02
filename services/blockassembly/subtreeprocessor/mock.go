@@ -4,8 +4,8 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
 )
 

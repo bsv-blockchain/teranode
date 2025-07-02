@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type SubtreeMeta struct {

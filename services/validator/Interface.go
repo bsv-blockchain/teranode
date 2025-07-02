@@ -29,7 +29,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/libsv/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2"
 )
 
 // Interface defines the core validation functionality required for Bitcoin transaction validation.

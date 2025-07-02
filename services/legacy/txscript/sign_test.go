@@ -13,8 +13,8 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type addressToKey struct {

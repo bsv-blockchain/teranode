@@ -18,7 +18,7 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/libsv/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2"
 )
 
 // init registers the Go-SDK script verifier with the verification factory

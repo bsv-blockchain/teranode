@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/libsv/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 )
 

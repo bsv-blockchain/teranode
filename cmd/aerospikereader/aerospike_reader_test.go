@@ -18,8 +18,8 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/usql"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

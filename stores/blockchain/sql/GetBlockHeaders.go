@@ -25,8 +25,8 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/model/time"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // GetBlockHeaders retrieves a sequence of consecutive block headers starting from a specified block hash.

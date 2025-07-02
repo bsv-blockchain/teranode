@@ -6,8 +6,8 @@
 package merkleblock
 
 import (
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // MaxTxnCount defines the maximum number of transactions we will process before

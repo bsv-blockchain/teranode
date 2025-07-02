@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/greatroar/blobloom"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type BlockBloomFilter struct {

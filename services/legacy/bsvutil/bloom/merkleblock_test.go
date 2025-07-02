@@ -11,8 +11,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/bloom"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func TestMerkleBlock3(t *testing.T) {

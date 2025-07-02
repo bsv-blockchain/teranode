@@ -10,9 +10,9 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )
 

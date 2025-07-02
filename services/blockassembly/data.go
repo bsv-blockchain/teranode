@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 
 	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // Data represents transaction metadata used in block assembly.

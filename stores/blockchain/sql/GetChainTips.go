@@ -8,7 +8,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/util/tracing"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 const (

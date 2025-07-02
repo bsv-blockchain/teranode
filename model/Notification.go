@@ -1,6 +1,6 @@
 package model
 
-import "github.com/libsv/go-bt/v2/chainhash"
+import "github.com/bsv-blockchain/go-bt/v2/chainhash"
 
 type Notification struct {
 	Type     NotificationType

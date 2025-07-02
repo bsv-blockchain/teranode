@@ -19,8 +19,8 @@ import (
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
 

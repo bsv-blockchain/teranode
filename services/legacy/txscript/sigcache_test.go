@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // genRandomSig returns a random message, a signature of the message under the

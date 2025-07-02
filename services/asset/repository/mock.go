@@ -8,7 +8,7 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
 )
 

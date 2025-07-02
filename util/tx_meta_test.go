@@ -3,8 +3,8 @@ package util
 import (
 	"testing"
 
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

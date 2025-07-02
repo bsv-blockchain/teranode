@@ -12,7 +12,7 @@ import (
 	"github.com/bitcoin-sv/teranode/test/txregistry"
 	"github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/libsv/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // UtxoSpentErrData is the error data structure for UTXO spent errors.

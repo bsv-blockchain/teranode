@@ -1,7 +1,7 @@
 package util
 
 import (
-	"github.com/libsv/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2"
 )
 
 func GetFees(btTx *bt.Tx) (uint64, error) {

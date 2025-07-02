@@ -7,9 +7,9 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	peerpkg "github.com/bitcoin-sv/teranode/services/legacy/peer"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // invMsg packages a bitcoin inv message and the peer it came from together

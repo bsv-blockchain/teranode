@@ -5,12 +5,12 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/bscript"
-	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
 )
 

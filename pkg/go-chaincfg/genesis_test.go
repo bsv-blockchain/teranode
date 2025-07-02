@@ -9,8 +9,8 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/davecgh/go-spew/spew"
-	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 )
 

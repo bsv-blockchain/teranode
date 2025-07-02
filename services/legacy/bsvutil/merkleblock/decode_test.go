@@ -5,7 +5,7 @@
 package merkleblock_test
 
 import (
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // hashFromStr provides function to wrap the primary function without

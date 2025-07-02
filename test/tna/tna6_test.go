@@ -31,7 +31,7 @@ import (
 
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/tconfig"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )

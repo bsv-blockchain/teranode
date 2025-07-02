@@ -20,7 +20,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util/tracing"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // GetBlockHeaderIDs retrieves a sequence of block header database IDs starting from a specified block.

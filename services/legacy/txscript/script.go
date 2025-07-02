@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // Bip16Activation is the timestamp where BIP0016 is valid to use in the

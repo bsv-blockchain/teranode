@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/teranode/stores/blob/file"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 func (s *SQL) ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*file.File, error) {

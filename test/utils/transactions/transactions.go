@@ -3,8 +3,8 @@ package transactions
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bt/v2"
 )
 
 // CreateTestTransactionChainWithCount generates a sequence of valid Bitcoin

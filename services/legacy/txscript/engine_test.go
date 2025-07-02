@@ -7,8 +7,8 @@ package txscript
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // TestBadPC sets the pc to a deliberately bad result then confirms that Step()

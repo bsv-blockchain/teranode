@@ -16,8 +16,8 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )

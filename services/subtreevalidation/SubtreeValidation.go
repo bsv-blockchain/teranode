@@ -24,9 +24,9 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -177,7 +177,7 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash ch
 func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	defer func() {
 		// there is a bug in go-bt, that does not check input and throws a runtime error in
-		// github.com/libsv/go-bt/v2@v2.2.2/input.go:76 +0x16b
+		// github.com/bsv-blockchain/go-bt/v2@v2.2.2/input.go:76 +0x16b
 		if r := recover(); r != nil {
 			switch x := r.(type) {
 			case string:

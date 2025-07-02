@@ -7,8 +7,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // BlockHandler handles block-related operations API endpoints, providing administrative

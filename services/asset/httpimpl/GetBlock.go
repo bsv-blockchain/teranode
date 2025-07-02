@@ -12,9 +12,9 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // BlockExtended represents a block with additional information about the next block

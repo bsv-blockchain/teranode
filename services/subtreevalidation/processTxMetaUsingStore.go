@@ -14,8 +14,8 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )
 

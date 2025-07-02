@@ -3,7 +3,7 @@ package stubs
 import (
 	"context"
 
-	"github.com/libsv/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2"
 )
 
 // CoinbaseClient is a stub implementation of the coinbase client for testing

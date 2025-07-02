@@ -33,12 +33,12 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/bscript"
-	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/go-utils"
 )
 

@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/services/legacy/txscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (

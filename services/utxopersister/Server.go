@@ -38,8 +38,8 @@ import (
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/health"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 

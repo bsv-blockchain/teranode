@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // sigCacheEntry represents an entry in the SigCache. Entries within the

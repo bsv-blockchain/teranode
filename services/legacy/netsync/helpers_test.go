@@ -16,8 +16,8 @@ import (
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/txscript"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // solveBlock attempts to find a nonce which makes the passed block header hash

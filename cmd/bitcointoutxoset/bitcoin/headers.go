@@ -15,9 +15,9 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	teranodeUtil "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/btcsuite/goleveldb/leveldb/util"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // Block validation statuses

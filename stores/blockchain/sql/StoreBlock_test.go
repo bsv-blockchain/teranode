@@ -8,8 +8,8 @@ import (
 
 	teranodeErrors "github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/lib/pq"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	_ "modernc.org/sqlite" // Import for side-effect (driver registration)
 )

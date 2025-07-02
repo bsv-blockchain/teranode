@@ -53,8 +53,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // AddrManager provides a concurrency-safe address manager for caching and managing potential

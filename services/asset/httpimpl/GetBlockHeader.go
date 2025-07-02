@@ -9,8 +9,8 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // GetBlockHeader creates an HTTP handler for retrieving block header information

@@ -18,7 +18,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 

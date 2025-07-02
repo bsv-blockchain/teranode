@@ -9,8 +9,8 @@ import (
 	"math/rand/v2"
 
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/bloom"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // This example demonstrates how to create a new bloom filter, add a transaction

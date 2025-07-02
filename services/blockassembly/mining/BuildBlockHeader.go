@@ -17,7 +17,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/libsv/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2"
 )
 
 // BuildBlockHeader constructs a block header byte array from the mining candidate and solution.

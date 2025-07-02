@@ -57,8 +57,8 @@ The utility first action is to load configuration URLs for various data stores (
 Key Components and Libraries:
 
 - **`github.com/bitcoin-sv/teranode/*`**: Libraries and modules specific to the Bitcoin SV ecosystem, used for interacting with blockchain data and UTXO stores.
-- **`github.com/libsv/go-bt/v2`**: A library for constructing, parsing, and manipulating Bitcoin transactions.
-- **`github.com/libsv/go-bt/v2/chainhash`**: Provides utilities for hashing used within Bitcoin, enabling block and transaction hash computations.
+- **`github.com/bsv-blockchain/go-bt/v2`**: A library for constructing, parsing, and manipulating Bitcoin transactions.
+- **`github.com/bsv-blockchain/go-bt/v2/chainhash`**: Provides utilities for hashing used within Bitcoin, enabling block and transaction hash computations.
 - **`github.com/ordishs/gocore`**: A utility library providing core functionality, such as configuration management.
 - **`github.com/prometheus/client_golang/prometheus`**: Used for monitoring and metrics collection, allowing `ChainIntegrity` to report on its operation metrics.
 

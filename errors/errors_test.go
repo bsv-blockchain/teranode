@@ -15,7 +15,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors/grpctest/github.com/bitcoin-sv/ubsv/errors/grpctest"
 	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"

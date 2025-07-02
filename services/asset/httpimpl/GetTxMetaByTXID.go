@@ -7,9 +7,9 @@ import (
 	aero "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type aerospikeRecord struct {

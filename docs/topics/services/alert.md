@@ -209,7 +209,7 @@ The Alert Service initializes the necessary components and services to start pro
     - Used for monitoring the performance and health of the Alert service.
 
 7. **Bitcoin-specific Libraries:**
-    - Uses `github.com/libsv/go-bt/v2` for Bitcoin transaction handling.
+    - Uses `github.com/bsv-blockchain/go-bt/v2` for Bitcoin transaction handling.
     - Integrates with `github.com/bitcoin-sv/alert-system` for core alert functionality.
 
 ## 4. Directory Structure and Main Files

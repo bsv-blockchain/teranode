@@ -9,9 +9,9 @@ import (
 	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type SubtreeTx struct {

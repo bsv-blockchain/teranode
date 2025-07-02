@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

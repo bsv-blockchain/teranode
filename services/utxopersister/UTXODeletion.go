@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // UTXODeletion represents a deletion of an Unspent Transaction Output.

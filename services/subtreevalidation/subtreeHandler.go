@@ -13,7 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"google.golang.org/protobuf/proto"
 )
 

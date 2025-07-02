@@ -6,7 +6,7 @@ import (
 	"math/big"
 	"sync"
 
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // Multiset tracks the state of a multiset as used to calculate the ECMH

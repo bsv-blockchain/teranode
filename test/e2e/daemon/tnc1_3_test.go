@@ -16,7 +16,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
 

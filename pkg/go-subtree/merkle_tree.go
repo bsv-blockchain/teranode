@@ -6,7 +6,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 func GetMerkleProofForCoinbase(subtrees []*Subtree) ([]*chainhash.Hash, error) {

@@ -11,8 +11,8 @@ import (
 	"bytes"
 	"sort"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // InPlaceSort modifies the passed transaction inputs and outputs to be sorted

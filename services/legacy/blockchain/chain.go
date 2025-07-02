@@ -6,7 +6,7 @@
 package blockchain
 
 import (
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // BlockLocator is used to help locate a specific block.  The algorithm for

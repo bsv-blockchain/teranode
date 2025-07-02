@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/davecgh/go-spew/spew"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // TestBlock tests the API for Block.

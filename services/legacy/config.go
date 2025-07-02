@@ -21,8 +21,8 @@ import (
 	"github.com/bitcoin-sv/teranode/services/legacy/peer"
 	"github.com/bitcoin-sv/teranode/services/legacy/version"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/btcsuite/go-socks/socks"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (

@@ -37,10 +37,10 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/usql"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/jellydator/ttlcache/v3"
 	_ "github.com/lib/pq"
-	"github.com/libsv/go-bt/v2/chainhash"
 	_ "modernc.org/sqlite"
 )
 

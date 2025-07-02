@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // OutOfRangeError describes an error due to accessing an element that is out

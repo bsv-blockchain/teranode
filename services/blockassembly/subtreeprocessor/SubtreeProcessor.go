@@ -40,9 +40,9 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	txmap "github.com/bsv-blockchain/go-tx-map"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )

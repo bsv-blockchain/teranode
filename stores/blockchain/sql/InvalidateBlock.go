@@ -23,7 +23,7 @@ import (
 	"database/sql"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // InvalidateBlock marks a block and all its descendants as invalid in the blockchain.

@@ -8,8 +8,8 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // PeerNotifier exposes methods to notify peers of status changes to

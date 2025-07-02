@@ -16,11 +16,11 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
-	"github.com/libsv/go-bt/v2/chainhash"
 	ma "github.com/multiformats/go-multiaddr" // nolint:misspell
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

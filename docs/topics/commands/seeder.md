@@ -94,7 +94,7 @@ The service reads these structures from input files and converts them to the for
 
 1. **Go (Golang)**: The primary programming language.
 2. **Bitcoin SV Libraries**:
-    - `github.com/libsv/go-bt/v2`: For handling Bitcoin transactions and scripts.
+    - `github.com/bsv-blockchain/go-bt/v2`: For handling Bitcoin transactions and scripts.
 3. **Custom TERANODE Libraries**:
     - `github.com/bitcoin-sv/teranode`: For blockchain and UTXO store operations, error handling, and logging.
 4. **Concurrent Processing**:
