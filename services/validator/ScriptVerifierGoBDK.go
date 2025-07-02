@@ -17,9 +17,9 @@ import (
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2"
 )
 
@@ -42,7 +42,7 @@ func uint2int(arr []uint32) ([]int32, error) {
 	ret := make([]int32, len(arr))
 
 	for idx, val := range arr {
-		if valInt32, err := safe.Uint32ToInt32(val); err == nil {
+		if valInt32, err := safeconversion.Uint32ToInt32(val); err == nil {
 			ret[idx] = valInt32
 		} else {
 			return []int32{}, err
@@ -173,7 +173,7 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 		return errors.NewInvalidArgumentError("failed conversion for utxo heights", errConv)
 	}
 
-	intBlockHeight, errConv := safe.Uint32ToInt32(blockHeight)
+	intBlockHeight, errConv := safeconversion.Uint32ToInt32(blockHeight)
 	if errConv != nil {
 		return errors.NewInvalidArgumentError("failed conversion for block height heights", errConv)
 	}

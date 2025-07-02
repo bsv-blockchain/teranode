@@ -14,8 +14,8 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	teranodeUtil "github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
+	teranodeUtil "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/btcsuite/goleveldb/leveldb/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )

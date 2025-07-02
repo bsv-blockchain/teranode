@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -260,7 +260,7 @@ func (s *SubtreeMeta) serializeTxInpoints(buf *bytes.Buffer) error {
 		bytesUint32 [4]byte
 	)
 
-	parentTxHashesLen32, err := safe.IntToUint32(s.Subtree.Length())
+	parentTxHashesLen32, err := safeconversion.IntToUint32(s.Subtree.Length())
 	if err != nil {
 		return fmt.Errorf("cannot serialize, unable to get safe uint32: %s", err)
 	}

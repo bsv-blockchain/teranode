@@ -41,7 +41,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
@@ -51,6 +50,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -179,7 +179,7 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 
 	c := cmd.(*bsvjson.GetBlockHashCmd)
 
-	indexUint32, err := safe.Int64ToUint32(c.Index)
+	indexUint32, err := safeconversion.Int64ToUint32(c.Index)
 	if err != nil {
 		return nil, err
 	}
@@ -215,22 +215,22 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 	}
 
 	if *c.Verbose {
-		versionInt32, err := safe.Uint32ToInt32(b.Version)
+		versionInt32, err := safeconversion.Uint32ToInt32(b.Version)
 		if err != nil {
 			return nil, err
 		}
 
-		nonceUint64, err := safe.Uint32ToUint64(b.Nonce)
+		nonceUint64, err := safeconversion.Uint32ToUint64(b.Nonce)
 		if err != nil {
 			return nil, err
 		}
 
-		timeInt64, err := safe.Uint32ToInt64(b.Timestamp)
+		timeInt64, err := safeconversion.Uint32ToInt64(b.Timestamp)
 		if err != nil {
 			return nil, err
 		}
 
-		heightInt32, err := safe.Uint32ToInt32(meta.Height)
+		heightInt32, err := safeconversion.Uint32ToInt32(meta.Height)
 		if err != nil {
 			return nil, err
 		}
@@ -302,12 +302,12 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 
 	diff, _ := b.Header.Bits.CalculateDifficulty().Float64()
 
-	versionInt32, err := safe.Uint32ToInt32(b.Header.Version)
+	versionInt32, err := safeconversion.Uint32ToInt32(b.Header.Version)
 	if err != nil {
 		return nil, err
 	}
 
-	blkBytesInt32, err := safe.IntToInt32(len(blkBytes))
+	blkBytesInt32, err := safeconversion.IntToInt32(len(blkBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -663,7 +663,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 
 	// Set the Locktime, if given.
 	if c.LockTime != nil {
-		lockTimeUint32, err := safe.Int64ToUint32(*c.LockTime)
+		lockTimeUint32, err := safeconversion.Int64ToUint32(*c.LockTime)
 		if err != nil {
 			return nil, err
 		}
@@ -817,7 +817,7 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		}
 	}
 
-	numblocksInt32, err := safe.Uint32ToInt32(c.NumBlocks)
+	numblocksInt32, err := safeconversion.Uint32ToInt32(c.NumBlocks)
 	if err != nil {
 		return nil, err
 	}

@@ -22,7 +22,7 @@ type BlockHandler struct {
 	// blockchainClient provides access to the blockchain service for executing operations
 	blockchainClient blockchain.ClientI
 	// logger enables structured logging of handler operations and errors
-	logger           ulogger.Logger
+	logger ulogger.Logger
 }
 
 // blockOperation represents a function that performs an operation on a block.

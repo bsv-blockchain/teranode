@@ -486,7 +486,7 @@ func (s *Server) createPrivateKeyDirectory() error {
 //
 // Supported database schemes:
 // - sqlite:// and sqlitememory:// for SQLite databases
-// - postgres:// for PostgreSQL databases  
+// - postgres:// for PostgreSQL databases
 // - mysql:// for MySQL databases
 //
 // Parameters:

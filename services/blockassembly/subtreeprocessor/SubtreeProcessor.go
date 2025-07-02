@@ -30,7 +30,6 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -42,6 +41,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -1083,7 +1083,7 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 	// reset the chained subtrees and the current subtree
 	stp.chainedSubtrees = stp.chainedSubtrees[:fromIndex]
 
-	lenOriginalSubtreesInt32, err := safe.IntToInt32(len(originalSubtrees))
+	lenOriginalSubtreesInt32, err := safeconversion.IntToInt32(len(originalSubtrees))
 	if err != nil {
 		return errors.NewProcessingError("error converting original subtrees length", err)
 	}
@@ -1307,7 +1307,7 @@ func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 	)
 
 	for _, subtree := range stp.chainedSubtrees {
-		subtreeLen, err = safe.IntToUint64(subtree.Length())
+		subtreeLen, err = safeconversion.IntToUint64(subtree.Length())
 		if err != nil {
 			stp.logger.Errorf("error converting subtree length: %s", err)
 			continue
@@ -1316,13 +1316,13 @@ func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 		stp.txCount.Add(subtreeLen)
 	}
 
-	currSubtreeLenUint64, err := safe.IntToUint64(stp.currentSubtree.Length())
+	currSubtreeLenUint64, err := safeconversion.IntToUint64(stp.currentSubtree.Length())
 	if err != nil {
 		stp.logger.Errorf("error converting current subtree length: %s", err)
 		return
 	}
 
-	queueLenUint64, err := safe.Int64ToUint64(stp.queue.length())
+	queueLenUint64, err := safeconversion.Int64ToUint64(stp.queue.length())
 	if err != nil {
 		stp.logger.Errorf("error converting queue length: %s", err)
 		return
@@ -2003,7 +2003,7 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
 
-	txCountUint32, err := safe.Uint64ToUint32(stp.txCount.Load())
+	txCountUint32, err := safeconversion.Uint64ToUint32(stp.txCount.Load())
 	if err != nil {
 		stp.logger.Errorf("[DeDuplicateTransactions] error converting tx count: %s", err.Error())
 		return
@@ -2019,7 +2019,7 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 					stp.logger.Errorf("[DeDuplicateTransactions] error removing tx from remove map: %s", err.Error())
 				}
 			} else {
-				subtreeSizeUint64, err := safe.IntToUint64(subtreeIdx*subtree.Size() + nodeIdx)
+				subtreeSizeUint64, err := safeconversion.IntToUint64(subtreeIdx*subtree.Size() + nodeIdx)
 				if err != nil {
 					stp.logger.Errorf("[DeDuplicateTransactions] error converting subtree size: %s", err.Error())
 					return

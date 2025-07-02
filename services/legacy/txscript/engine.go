@@ -106,8 +106,8 @@ type Engine struct {
 	lastCodeSep     int
 	dstack          stack // data stack
 	astack          stack // alt stack
-	tx    wire.MsgTx
-	txIdx int
+	tx              wire.MsgTx
+	txIdx           int
 	condStack       []int
 	numOps          int
 	flags           ScriptFlags

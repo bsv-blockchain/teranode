@@ -245,7 +245,7 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		}()
 
 		// Allow the goroutine to enter the wait loop, but cancel BEFORE the lock becomes stale.
-		// longQuorumOpTimeout is 500ms, so sleeping 50ms is safe.
+		// longQuorumOpTimeout is 500ms, so sleeping 50ms is safeconversion.
 		time.Sleep(500 * time.Millisecond) // Reduced sleep time
 		cancel()                           // Cancel the context passed to the function (ctxTest derives from ctxCancelled)
 		wg.Wait()                          // Wait for the goroutine to finish

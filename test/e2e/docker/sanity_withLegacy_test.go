@@ -144,7 +144,6 @@ func (suite *SanitywithLegacyTestSuite) TestShouldAllowBanLegacyPeers() {
 
 	t.Logf("Legacy node: %s\n", svnode1.Name)
 
-
 	node1 := suite.TeranodeTestEnv.Nodes[0]
 
 	var p2pResp helper.P2PRPCResponse

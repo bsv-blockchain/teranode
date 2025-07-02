@@ -26,12 +26,12 @@ import (
 //
 // All operations are thread-safe for concurrent access from multiple goroutines.
 type PeerHeight struct {
-	logger                ulogger.Logger // Logger instance for peer height operations
+	logger                ulogger.Logger     // Logger instance for peer height operations
 	settings              *settings.Settings // Global Teranode configuration settings
-	P2PNode               P2PNode // P2P node instance for network communication
-	numberOfExpectedPeers int // Expected number of peers for synchronization operations
-	lastMsgByPeerID       sync.Map // Thread-safe map of last messages received from each peer
-	defaultTimeout        time.Duration // Default timeout for synchronization operations
+	P2PNode               P2PNode            // P2P node instance for network communication
+	numberOfExpectedPeers int                // Expected number of peers for synchronization operations
+	lastMsgByPeerID       sync.Map           // Thread-safe map of last messages received from each peer
+	defaultTimeout        time.Duration      // Default timeout for synchronization operations
 }
 
 // NewPeerHeight creates a new PeerHeight instance with the specified configuration.

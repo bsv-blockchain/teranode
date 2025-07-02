@@ -11,8 +11,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -147,7 +147,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid height parameter", err).Error())
 		}
 
-		heightUint32, err := safe.Uint64ToUint32(height)
+		heightUint32, err := safeconversion.Uint64ToUint32(height)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid height parameter", err).Error())
 		}
@@ -171,7 +171,7 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 			// get next hash to include in response
 			var nextBlockHash *chainhash.Hash
 
-			nextHeight, err := safe.Uint64ToUint32(height + 1)
+			nextHeight, err := safeconversion.Uint64ToUint32(height + 1)
 			if err != nil {
 				return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid height parameter", err).Error())
 			}

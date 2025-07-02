@@ -67,12 +67,12 @@ import (
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -331,7 +331,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	aeroKeyMap := make(map[string]*aerospike.Key)
 	batchesByKey := make(map[keyIgnoreUnspendable][]aerospike.MapValue, len(batch))
 
-	sUtxoBatchSizeUint32, err := safe.IntToUint32(s.utxoBatchSize)
+	sUtxoBatchSizeUint32, err := safeconversion.IntToUint32(s.utxoBatchSize)
 	if err != nil {
 		s.logger.Errorf("Could not convert utxoBatchSize (%d) to uint32", s.utxoBatchSize)
 	}

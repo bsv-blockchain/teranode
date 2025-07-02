@@ -9,8 +9,8 @@ import (
 	"math"
 	"sync"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -406,7 +406,7 @@ func (st *Subtree) RootHashWithReplaceRootNode(node *chainhash.Hash, fee uint64,
 }
 
 func (st *Subtree) GetMap() (TxMap, error) {
-	lengthUint32, err := safe.IntToUint32(len(st.Nodes))
+	lengthUint32, err := safeconversion.IntToUint32(len(st.Nodes))
 	if err != nil {
 		return nil, err
 	}
@@ -764,7 +764,7 @@ func DeserializeSubtreeConflictingFromReader(reader io.Reader) (conflictingNodes
 
 	numLeaves := binary.LittleEndian.Uint64(bytes8)
 
-	numLeavesInt, err := safe.Uint64ToInt(numLeaves)
+	numLeavesInt, err := safeconversion.Uint64ToInt(numLeaves)
 	if err != nil {
 		return nil, err
 	}

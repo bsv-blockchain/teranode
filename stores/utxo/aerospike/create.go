@@ -64,7 +64,6 @@ import (
 	"github.com/aerospike/aerospike-client-go/v8/types"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -73,6 +72,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -357,7 +357,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 						continue
 					}
 
-					iUint32, err := safe.IntToUint32(i)
+					iUint32, err := safeconversion.IntToUint32(i)
 					if err != nil {
 						s.logger.Errorf("Could not convert i (%d) to uint32", i)
 					}
@@ -669,7 +669,7 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 		}
 	}
 
-	feeInt, err := safe.Uint64ToInt(fee)
+	feeInt, err := safeconversion.Uint64ToInt(fee)
 	if err != nil {
 		return nil, hasUtxos, err
 	}
@@ -773,7 +773,7 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 	for binIdx := len(binsToStore) - 1; binIdx >= 0; binIdx-- {
 		bins := binsToStore[binIdx]
 
-		binIdxUint32, err := safe.IntToUint32(binIdx)
+		binIdxUint32, err := safeconversion.IntToUint32(binIdx)
 		if err != nil {
 			s.logger.Errorf("Could not convert binIdx (%d) to uint32", binIdx)
 		}
@@ -833,7 +833,7 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 			continue
 		}
 
-		iUint32, err := safe.IntToUint32(i)
+		iUint32, err := safeconversion.IntToUint32(i)
 		if err != nil {
 			s.logger.Errorf("Could not convert i (%d) to uint32", i)
 		}
@@ -879,7 +879,7 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 			wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
 		}
 
-		iUint32, err := safe.IntToUint32(i)
+		iUint32, err := safeconversion.IntToUint32(i)
 		if err != nil {
 			s.logger.Errorf("Could not convert i (%d) to uint32", i)
 		}

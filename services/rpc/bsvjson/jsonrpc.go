@@ -56,10 +56,10 @@ type RPCErrorCode int
 // command processing, providing clients with machine-readable error information.
 type RPCError struct {
 	// Code is a standardized error code that identifies the type of error
-	Code    RPCErrorCode `json:"code,omitempty"`
+	Code RPCErrorCode `json:"code,omitempty"`
 
 	// Message is a human-readable description of the error
-	Message string       `json:"message,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // Guarantee RPCError satisifies the builtin error interface.
@@ -122,17 +122,17 @@ func IsValidIDType(id interface{}) bool {
 // command type is known.
 type Request struct {
 	// Jsonrpc optionally identifies the JSON-RPC protocol version
-	Jsonrpc string            `json:"jsonrpc"`
+	Jsonrpc string `json:"jsonrpc"`
 
 	// Method identifies the remote procedure (command) to be called
-	Method  string            `json:"method"`
+	Method string `json:"method"`
 
 	// Params contains the parameters for the command as an array of raw JSON messages
-	Params  []json.RawMessage `json:"params"`
+	Params []json.RawMessage `json:"params"`
 
 	// ID is a client-generated identifier to match responses with requests
 	// It can be a string, number, or null according to the JSON-RPC spec
-	ID      interface{}       `json:"id"`
+	ID interface{} `json:"id"`
 }
 
 // NewRequest constructs a new JSON-RPC request object with the specified identifier,
@@ -209,11 +209,11 @@ type Response struct {
 	Result json.RawMessage `json:"result"`
 
 	// Error contains structured error information when a command fails (nil on success)
-	Error  *RPCError       `json:"error"`
+	Error *RPCError `json:"error"`
 
 	// ID matches the ID from the request to correlate responses with requests
 	// It's a pointer to allow null values in the JSON representation
-	ID     *interface{}    `json:"id"`
+	ID *interface{} `json:"id"`
 }
 
 // NewResponse constructs a new JSON-RPC response object with the specified identifier,

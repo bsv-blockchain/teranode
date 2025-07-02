@@ -11,11 +11,11 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/google/uuid"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -458,7 +458,7 @@ func (c *Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash
 
 // GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specific depth.
 func (c *Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
-	depthUint32, err := safe.IntToUint32(depth)
+	depthUint32, err := safeconversion.IntToUint32(depth)
 	if err != nil {
 		return nil, err
 	}

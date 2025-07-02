@@ -52,7 +52,6 @@ import (
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -63,6 +62,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bitcoin-sv/teranode/util/usql"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	pq "github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -354,7 +354,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	for i, output := range tx.Outputs {
 		if output != nil {
-			iUint32, err := safe.IntToUint32(i)
+			iUint32, err := safeconversion.IntToUint32(i)
 			if err != nil {
 				return nil, err
 			}
@@ -1420,7 +1420,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		}
 
 		for vOut, output := range txMeta.Tx.Outputs {
-			vOutUint32, err := safe.IntToUint32(vOut)
+			vOutUint32, err := safeconversion.IntToUint32(vOut)
 			if err != nil {
 				return nil, nil, err
 			}

@@ -24,8 +24,8 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/model/time"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -171,7 +171,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			return nil, nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 		}
 
-		insertedAtUint32, err := safe.Int64ToUint32(insertedAt.Unix())
+		insertedAtUint32, err := safeconversion.Int64ToUint32(insertedAt.Unix())
 		if err != nil {
 			return nil, nil, errors.NewProcessingError("failed to convert insertedAt", err)
 		}

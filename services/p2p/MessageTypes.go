@@ -91,9 +91,9 @@ const (
 // initial version announcements and acknowledgment responses.
 //
 // The handshake process works as follows:
-//   1. Connecting peer sends a "version" message with their current state
-//   2. Receiving peer responds with a "verack" message to acknowledge
-//   3. Both peers now have each other's capabilities and can begin normal communication
+//  1. Connecting peer sends a "version" message with their current state
+//  2. Receiving peer responds with a "verack" message to acknowledge
+//  3. Both peers now have each other's capabilities and can begin normal communication
 //
 // Fields are JSON-tagged to support serialization for network transmission.
 type HandshakeMessage struct {

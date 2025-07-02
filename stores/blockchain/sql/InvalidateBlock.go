@@ -36,13 +36,13 @@ import (
 // across the network.
 //
 // The implementation follows these key steps:
-// 1. Resets the blocks cache to ensure fresh block existence checks
-// 2. Verifies the target block exists in the database
-// 3. Uses a recursive Common Table Expression (CTE) in SQL to efficiently identify and
-//    invalidate the entire subtree of blocks that descend from the target block
-// 4. Updates the 'invalid' flag for all affected blocks in a single atomic database operation
-// 5. Resets both the blocks cache and response cache to ensure consistency between
-//    cached data and the new database state
+//  1. Resets the blocks cache to ensure fresh block existence checks
+//  2. Verifies the target block exists in the database
+//  3. Uses a recursive Common Table Expression (CTE) in SQL to efficiently identify and
+//     invalidate the entire subtree of blocks that descend from the target block
+//  4. Updates the 'invalid' flag for all affected blocks in a single atomic database operation
+//  5. Resets both the blocks cache and response cache to ensure consistency between
+//     cached data and the new database state
 //
 // This approach ensures that once a block is invalidated, all blocks that build on top
 // of it are also invalidated, maintaining the integrity of the blockchain's consensus
@@ -55,9 +55,9 @@ import (
 //
 // Returns:
 //   - error: Any error encountered during the invalidation process, specifically:
-//     - BlockNotFoundError if the specified block doesn't exist in the database
-//     - StorageError for database errors, transaction failures, or if no rows were affected
-//     - ProcessingError for internal processing failures
+//   - BlockNotFoundError if the specified block doesn't exist in the database
+//   - StorageError for database errors, transaction failures, or if no rows were affected
+//   - ProcessingError for internal processing failures
 func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	s.logger.Infof("InvalidateBlock %s", blockHash.String())
 

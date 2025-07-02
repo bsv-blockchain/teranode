@@ -8,13 +8,13 @@ import (
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )
@@ -93,7 +93,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					// Return the error that caused the cancellation
 					return errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
 				default:
-					missingTxThresholdInt32, err := safe.IntToInt32(missingTxThreshold)
+					missingTxThresholdInt32, err := safeconversion.IntToInt32(missingTxThreshold)
 					if err != nil {
 						return err
 					}
@@ -143,7 +143,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					default:
 						txHash := txHashes[i+j]
 
-						missingTxThresholdInt32, err := safe.IntToInt32(missingTxThreshold)
+						missingTxThresholdInt32, err := safeconversion.IntToInt32(missingTxThreshold)
 						if err != nil {
 							return err
 						}

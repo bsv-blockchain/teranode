@@ -66,7 +66,6 @@ import (
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/utxopersister"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -76,6 +75,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -135,7 +135,7 @@ type batchOutpoint struct {
 func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	prometheusUtxoMapGet.Inc()
 
-	sUtxoBatchSizeUint32, err := safe.IntToUint32(s.utxoBatchSize)
+	sUtxoBatchSizeUint32, err := safeconversion.IntToUint32(s.utxoBatchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -360,12 +360,12 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []fields.Field
 //   - Missing required transaction data
 //   - Malformed binary transaction data
 func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
-	versionUint32, err := safe.IntToUint32(bins[fields.Version.String()].(int))
+	versionUint32, err := safeconversion.IntToUint32(bins[fields.Version.String()].(int))
 	if err != nil {
 		return nil, err
 	}
 
-	locktimeUint32, err := safe.IntToUint32(bins[fields.LockTime.String()].(int))
+	locktimeUint32, err := safeconversion.IntToUint32(bins[fields.LockTime.String()].(int))
 	if err != nil {
 		return nil, err
 	}
@@ -732,7 +732,7 @@ NEXT_BATCH_RECORD:
 			case fields.UnminedSince:
 				unminedSince, ok := bins[key.String()].(int)
 				if ok {
-					unminedSinceUint32, err := safe.IntToUint32(unminedSince)
+					unminedSinceUint32, err := safeconversion.IntToUint32(unminedSince)
 					if err != nil {
 						items[idx].Err = errors.NewTxInvalidError("invalid unmined since", err)
 
@@ -831,7 +831,7 @@ func processBlockIDs(bins aerospike.BinMap) ([]uint32, error) {
 			return nil, errors.NewStorageError("failed to get block ID")
 		}
 
-		blockIDUint32, err := safe.IntToUint32(blockIDInt)
+		blockIDUint32, err := safeconversion.IntToUint32(blockIDInt)
 		if err != nil {
 			return nil, errors.NewTxInvalidError("invalid block ID")
 		}
@@ -877,7 +877,7 @@ func processBlockHeights(bins aerospike.BinMap) ([]uint32, error) {
 			return nil, errors.NewStorageError("failed to get block height")
 		}
 
-		blockHeightUint32, err := safe.IntToUint32(blockHeightInt)
+		blockHeightUint32, err := safeconversion.IntToUint32(blockHeightInt)
 		if err != nil {
 			return nil, errors.NewTxInvalidError("invalid block height")
 		}

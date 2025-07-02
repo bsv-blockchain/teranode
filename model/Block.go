@@ -16,7 +16,6 @@ import (
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
@@ -30,6 +29,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/greatroar/blobloom"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -109,12 +109,12 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Se
 		return nil, errors.NewBlockInvalidError("failed to create NBit from Bits", err)
 	}
 
-	versionUint32, err := safe.Int32ToUint32(msgBlock.Header.Version)
+	versionUint32, err := safeconversion.Int32ToUint32(msgBlock.Header.Version)
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("failed to convert version to uint32", err)
 	}
 
-	timestampUint32, err := safe.Int64ToUint32(msgBlock.Header.Timestamp.Unix())
+	timestampUint32, err := safeconversion.Int64ToUint32(msgBlock.Header.Timestamp.Unix())
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("failed to convert timestamp to uint32", err)
 	}
@@ -144,7 +144,7 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Se
 
 	txCount := uint64(len(msgBlock.Transactions))
 
-	sizeInBytes, err := safe.IntToUint64(msgBlock.SerializeSize())
+	sizeInBytes, err := safeconversion.IntToUint64(msgBlock.SerializeSize())
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("failed to convert msgBlock size to uint64", err)
 	}
@@ -308,7 +308,7 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 		return nil, errors.NewBlockInvalidError("error reading block height", err)
 	}
 
-	block.Height, err = safe.Uint64ToUint32(blockHeight64)
+	block.Height, err = safeconversion.Uint64ToUint32(blockHeight64)
 	if err != nil {
 		return nil, errors.NewBlockInvalidError("error converting block height to uint32", err)
 	}
@@ -396,7 +396,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	}
 
 	// 2. Check that the block timestamp is not more than two hours in the future.
-	twoHoursToTheFutureTimestampUint32, err := safe.Int64ToUint32(time.Now().Add(2 * time.Hour).Unix())
+	twoHoursToTheFutureTimestampUint32, err := safeconversion.Int64ToUint32(time.Now().Add(2 * time.Hour).Unix())
 	if err != nil {
 		return false, errors.NewProcessingError("[BLOCK][%s] failed to convert two hours to the future timestamp to uint32", b.String(), err)
 	}
@@ -429,7 +429,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 			return false, err
 		}
 
-		b.medianTimestamp, err = safe.Int64ToUint32(medianTimestamp.Unix())
+		b.medianTimestamp, err = safeconversion.Int64ToUint32(medianTimestamp.Unix())
 		if err != nil {
 			return false, err
 		}
@@ -580,7 +580,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	g := new(errgroup.Group)
 	util.SafeSetLimit(g, concurrency)
 
-	transactionCountUint32, err := safe.Uint64ToUint32(b.TransactionCount)
+	transactionCountUint32, err := safeconversion.Uint64ToUint32(b.TransactionCount)
 	if err != nil {
 		return errors.NewProcessingError("[checkDuplicateTransactions][%s] failed to convert transaction count to int", b.String(), err)
 	}
@@ -623,7 +623,7 @@ func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree,
 
 		subtreeNode := subtree.Nodes[txIdx]
 
-		idx64, err = safe.IntToUint64((subIdx * len(subtree.Nodes)) + txIdx)
+		idx64, err = safeconversion.IntToUint64((subIdx * len(subtree.Nodes)) + txIdx)
 		if err != nil {
 			return errors.NewProcessingError("[BLOCK][%s] failed to convert index to uint64", b.String(), err)
 		}

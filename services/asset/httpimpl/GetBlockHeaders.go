@@ -10,8 +10,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -151,7 +151,7 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 			headerMetas []*model.BlockHeaderMeta
 		)
 
-		numberOfHeadersUint64, err := safe.IntToUint64(numberOfHeaders)
+		numberOfHeadersUint64, err := safeconversion.IntToUint64(numberOfHeaders)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid number of headers", err).Error())
 		}

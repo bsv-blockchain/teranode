@@ -12,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
@@ -26,6 +25,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -107,7 +107,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		// block height was not set in the msgBlock, set it from our lookup
 		blockHeight = previousBlockHeaderMeta.Height + 1
 
-		blockHeightInt32, err := safe.Uint32ToInt32(blockHeight)
+		blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeight)
 		if err != nil {
 			return errors.NewProcessingError("failed to convert block height to int32", err)
 		}
@@ -115,7 +115,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		block.SetHeight(blockHeightInt32)
 	} else {
 		// check whether the block height being reported is the correct block height
-		previousBlockHeightInt32, err := safe.Uint32ToInt32(previousBlockHeaderMeta.Height + 1)
+		previousBlockHeightInt32, err := safeconversion.Uint32ToInt32(previousBlockHeaderMeta.Height + 1)
 		if err != nil {
 			return errors.NewProcessingError("failed to convert block height to int32", err)
 		}
@@ -124,7 +124,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 			return errors.NewBlockInvalidError("block height %d is not the correct height for block %s, expected %d", block.Height(), blockHash, previousBlockHeaderMeta.Height+1)
 		}
 
-		blockHeight, err = safe.Int32ToUint32(block.Height())
+		blockHeight, err = safeconversion.Int32ToUint32(block.Height())
 		if err != nil {
 			return errors.NewProcessingError("failed to convert block height to uint32", err)
 		}
@@ -209,7 +209,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// create valid teranode block, with the subtree hash
 	blockSize := block.MsgBlock().SerializeSize()
 
-	blockSizeUint64, err := safe.IntToUint64(blockSize)
+	blockSizeUint64, err := safeconversion.IntToUint64(blockSize)
 	if err != nil {
 		return err
 	}
@@ -383,7 +383,7 @@ func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, block *bsvutil
 
 	defer deferFn()
 
-	blockHeightUint32, err := safe.Int32ToUint32(block.Height())
+	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
 	if err != nil {
 		return err
 	}
@@ -548,7 +548,7 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 
 	sm.logger.Infof("[validateTransactionsLegacyMode] created utxos with %d items", txMap.Length())
 
-	blockHeightUint32, err := safe.Int32ToUint32(block.Height())
+	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
 	if err != nil {
 		// already wrapped in a processing error
 		return err
@@ -584,7 +584,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 	g, gCtx := errgroup.WithContext(context.Background())          // we don't want the tracing to be linked to these calls
 	util.SafeSetLimit(g, storeBatcherSize*storeBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
-	blockHeightUint32, err := safe.Int32ToUint32(block.Height())
+	blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
 	if err != nil {
 		return errors.NewProcessingError("failed to convert block height to uint32", err)
 	}
@@ -705,7 +705,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 		if len(blockTxsPerLevel[i]) < 10 {
 			// if we have less than 10 transactions on a certain level, we can process them immediately by triggering the batcher
 			for txIdx := range blockTxsPerLevel[i] {
-				blockHeightUint32, err := safe.Int32ToUint32(block.Height())
+				blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
 				if err != nil {
 					return err
 				}
@@ -732,7 +732,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 						prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 					}()
 
-					blockHeightUint32, err := safe.Int32ToUint32(block.Height())
+					blockHeightUint32, err := safeconversion.Int32ToUint32(block.Height())
 					if err != nil {
 						return err
 					}
@@ -828,7 +828,7 @@ func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, 
 		if txWrapper, found := txMap.Get(txHash); found {
 			tx := txWrapper.Tx
 
-			txSize, err := safe.IntToUint64(tx.Size())
+			txSize, err := safeconversion.IntToUint64(tx.Size())
 			if err != nil {
 				return err
 			}

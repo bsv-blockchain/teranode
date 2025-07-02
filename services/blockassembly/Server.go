@@ -23,7 +23,6 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/mining"
@@ -38,6 +37,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -1263,17 +1263,17 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 	)
 	defer deferFn()
 
-	resetWaitCountUint32, err := safe.Int32ToUint32(ba.blockAssembler.resetWaitCount.Load())
+	resetWaitCountUint32, err := safeconversion.Int32ToUint32(ba.blockAssembler.resetWaitCount.Load())
 	if err != nil {
 		return nil, errors.NewProcessingError("error converting reset wait count", err)
 	}
 
-	resetWaitTimeUint32, err := safe.Int32ToUint32(ba.blockAssembler.resetWaitDuration.Load())
+	resetWaitTimeUint32, err := safeconversion.Int32ToUint32(ba.blockAssembler.resetWaitDuration.Load())
 	if err != nil {
 		return nil, errors.NewProcessingError("error converting reset wait time", err)
 	}
 
-	subtreeCountUint32, err := safe.IntToUint32(ba.blockAssembler.SubtreeCount())
+	subtreeCountUint32, err := safeconversion.IntToUint32(ba.blockAssembler.SubtreeCount())
 	if err != nil {
 		return nil, errors.NewProcessingError("error converting subtree count", err)
 	}
@@ -1403,7 +1403,7 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 
 	coinbaseSize := coinbaseTx.Size()
 
-	coinbaseSizeUint64, err := safe.IntToUint64(coinbaseSize)
+	coinbaseSizeUint64, err := safeconversion.IntToUint64(coinbaseSize)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockAssemblyBlockTemplate] error converting coinbase size", err))
 	}

@@ -9,10 +9,10 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/settings"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 )
@@ -289,7 +289,7 @@ func BigToCompact(n *big.Int) (uint32, error) {
 
 	exponent := uint(len(n.Bytes()))
 	if exponent <= 3 {
-		mantissa, err = safe.BigWordToUint32(n.Bits()[0])
+		mantissa, err = safeconversion.BigWordToUint32(n.Bits()[0])
 		if err != nil {
 			return 0, err
 		}
@@ -302,7 +302,7 @@ func BigToCompact(n *big.Int) (uint32, error) {
 		shiftedBits := tn.Rsh(tn, 8*(exponent-3)).Bits()
 		// if shiftedBits is not empty, convert the first bit to uint32
 		if len(shiftedBits) > 0 {
-			mantissa, err = safe.BigWordToUint32(shiftedBits[0])
+			mantissa, err = safeconversion.BigWordToUint32(shiftedBits[0])
 			if err != nil {
 				return 0, err
 			}
@@ -324,7 +324,7 @@ func BigToCompact(n *big.Int) (uint32, error) {
 
 	var exponentUint32 uint32
 
-	exponentUint32, err = safe.UintToUint32(exponent << 24)
+	exponentUint32, err = safeconversion.UintToUint32(exponent << 24)
 	if err != nil {
 		return 0, err
 	}

@@ -1,5 +1,5 @@
 // Package blockpersister provides comprehensive functionality for persisting blockchain blocks and their associated data.
-// 
+//
 // The blockpersister service is responsible for taking blocks from the blockchain service and ensuring they are
 // properly stored in persistent storage along with all related data (transactions, UTXOs, etc.). It plays a
 // critical role in the overall blockchain data persistence strategy by:
@@ -144,14 +144,14 @@ func New(
 // This method implements the health.Check interface and is used by monitoring systems
 // to determine the operational status of the service.
 //
-// The health check distinguishes between liveness (is the service running?) and 
+// The health check distinguishes between liveness (is the service running?) and
 // readiness (is the service able to handle requests?) checks:
-//  - Liveness checks verify the service process is running and responsive
-//  - Readiness checks verify all dependencies are available and functioning
+//   - Liveness checks verify the service process is running and responsive
+//   - Readiness checks verify all dependencies are available and functioning
 //
 // Parameters:
 //   - ctx: Context for coordinating cancellation or timeouts
-//   - checkLiveness: When true, only liveness checks are performed; when false, both liveness 
+//   - checkLiveness: When true, only liveness checks are performed; when false, both liveness
 //     and readiness checks are performed
 //
 // Returns:
@@ -223,10 +223,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 //   - error: Any error encountered during the operation
 //
 // The method follows these steps:
-//   1. Get the last persisted block height from the state
-//   2. Get the current best block from the blockchain
-//   3. If the difference between them exceeds BlockPersisterPersistAge, return the next block
-//   4. Otherwise, return nil to indicate no blocks need processing yet
+//  1. Get the last persisted block height from the state
+//  2. Get the current best block from the blockchain
+//  3. If the difference between them exceeds BlockPersisterPersistAge, return the next block
+//  4. Otherwise, return nil to indicate no blocks need processing yet
 func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error) {
 	lastPersistedHeight, err := u.state.GetLastPersistedBlockHeight()
 	if err != nil {

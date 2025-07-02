@@ -12,12 +12,12 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
@@ -113,12 +113,12 @@ func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, 
 		// write the block size
 		sizeInBytes := make([]byte, 4)
 
-		blockHeaderTransactionCountSizeUint64, err := safe.IntToUint64(model.BlockHeaderSize + txCountVarIntLen)
+		blockHeaderTransactionCountSizeUint64, err := safeconversion.IntToUint64(model.BlockHeaderSize + txCountVarIntLen)
 		if err != nil {
 			return err
 		}
 
-		sizeUint32, err := safe.Uint64ToUint32(block.SizeInBytes + blockHeaderTransactionCountSizeUint64)
+		sizeUint32, err := safeconversion.Uint64ToUint32(block.SizeInBytes + blockHeaderTransactionCountSizeUint64)
 		if err != nil {
 			return err
 		}

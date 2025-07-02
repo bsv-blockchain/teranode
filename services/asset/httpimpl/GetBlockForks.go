@@ -8,8 +8,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -176,7 +176,7 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	limitUint32, err := safe.IntToUint32(limit)
+	limitUint32, err := safeconversion.IntToUint32(limit)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid limit parameter", err).Error())
 	}
@@ -197,12 +197,12 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 		metasMap[*blockHeader.Hash()] = metas[idx]
 	}
 
-	txCountUint32, err := safe.Uint64ToUint32(metasMap[*blockHash].TxCount)
+	txCountUint32, err := safeconversion.Uint64ToUint32(metasMap[*blockHash].TxCount)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid tx count parameter", err).Error())
 	}
 
-	sizeUint32, err := safe.Uint64ToUint32(metasMap[*blockHash].SizeInBytes)
+	sizeUint32, err := safeconversion.Uint64ToUint32(metasMap[*blockHash].SizeInBytes)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid size parameter", err).Error())
 	}

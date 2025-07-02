@@ -10,8 +10,8 @@ import (
 	"unsafe"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/cespare/xxhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -192,7 +192,7 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 
 	var c ImprovedCache
 
-	maxBucketBytes, err := safe.IntToUint64(maxBytes / BucketsCount)
+	maxBucketBytes, err := safeconversion.IntToUint64(maxBytes / BucketsCount)
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to convert maxBytes", err)
 	}

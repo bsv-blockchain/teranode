@@ -23,7 +23,6 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-batcher"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
@@ -45,6 +44,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
@@ -386,7 +386,7 @@ func (sm *SyncManager) startSync() {
 		// Add any peers on the same block to okPeers. These should
 		// only be used as a last resort.
 
-		bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
+		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
 			sm.logger.Errorf("[startSync] failed to convert block height to int32: %v", err)
 
@@ -437,7 +437,7 @@ func (sm *SyncManager) startSync() {
 
 	sm.logger.Debugf("[startSync] best peer selected: %s", bestPeer.String())
 
-	bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
+	bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
 		sm.logger.Errorf("[startSync] failed to convert block height to int32: %v", err)
 
@@ -669,7 +669,7 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
-	bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
+	bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
 		sm.logger.Errorf("failed to convert block height to int32: %v", err)
 	}
@@ -778,7 +778,7 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 		return
 	}
 
-	bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
+	bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
 		sm.logger.Errorf("failed to convert block height to int32: %v", err)
 		return // add return to prevent continuing with invalid height
@@ -970,7 +970,7 @@ func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) boo
 	// Not current if the latest main (best) chain height is before the
 	// latest known good checkpoint (when checkpoints are enabled).
 	if len(sm.chainParams.Checkpoints) > 0 {
-		bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
+		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
 			sm.logger.Errorf("failed to convert block height to int32: %v", err)
 		}
@@ -1010,7 +1010,7 @@ func (sm *SyncManager) current() bool {
 		return true
 	}
 
-	bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
+	bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
 		sm.logger.Errorf("failed to convert block height to int32: %v", err)
 	}
@@ -1188,7 +1188,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		if err != nil {
 			sm.logger.Errorf("Failed to get block header for block %v: %v", bmsg.blockHash, err)
 		} else {
-			blockHeightInt32, err := safe.Uint32ToInt32(blockHeaderMeta.Height)
+			blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeaderMeta.Height)
 			if err != nil {
 				sm.logger.Errorf("failed to convert block height to int32: %v", err)
 			}
@@ -1385,7 +1385,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 			return
 		}
 
-		bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
+		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
 			peer.DisconnectWithWarning(fmt.Sprintf("Failed to convert block height: %v", err))
 			return
@@ -1557,7 +1557,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	if lastBlock != -1 {
 		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(sm.ctx, &invVects[lastBlock].Hash)
 		if err == nil {
-			blockHeightInt32, err := safe.Uint32ToInt32(blockHeaderMeta.Height)
+			blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeaderMeta.Height)
 			if err != nil {
 				sm.logger.Errorf("failed to convert block height to int32: %v", err)
 			}
@@ -2149,7 +2149,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	if !config.DisableCheckpoints {
-		bestBlockHeightInt32, err := safe.Uint32ToInt32(bestBlockHeaderMeta.Height)
+		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
 			sm.logger.Errorf("failed to convert block height to int32: %v", err)
 		}

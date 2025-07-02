@@ -26,7 +26,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
@@ -52,6 +51,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -1788,11 +1788,11 @@ func (s *server) handleRelayTxMsg(sp serverPeerQueueInventory, msg relayMsg, fee
 
 		txHashAndFee, ok := msg.data.(*netsync.TxHashAndFee)
 		if ok {
-			fee, err = safe.Uint64ToInt64(txHashAndFee.Fee)
+			fee, err = safeconversion.Uint64ToInt64(txHashAndFee.Fee)
 			if err != nil {
 				s.logger.Errorf("Failed to convert tx fee %v to int64: %v", txHashAndFee.Fee, err)
 			} else {
-				size, err = safe.Uint64ToInt64(txHashAndFee.Size)
+				size, err = safeconversion.Uint64ToInt64(txHashAndFee.Size)
 				if err != nil {
 					s.logger.Errorf("Failed to convert tx size %v to int64: %v", txHashAndFee.Size, err)
 				} else if size > 0 {

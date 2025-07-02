@@ -24,12 +24,13 @@ import (
 //   - Provides full interface compatibility with P2PNodeI
 //
 // Usage in tests:
-//   mockNode := &MockServerP2PNode{}
-//   mockNode.On("Start", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-//   // Use mockNode in place of real P2PNodeI implementation
+//
+//	mockNode := &MockServerP2PNode{}
+//	mockNode.On("Start", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+//	// Use mockNode in place of real P2PNodeI implementation
 type MockServerP2PNode struct {
-	mock.Mock        // Embedded mock for method call recording and expectations
-	peerID peer.ID   // Configurable peer ID for testing scenarios
+	mock.Mock         // Embedded mock for method call recording and expectations
+	peerID    peer.ID // Configurable peer ID for testing scenarios
 }
 
 func (m *MockServerP2PNode) Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error {
@@ -154,9 +155,10 @@ func (m *MockServerP2PNode) SetPeerConnectedCallback(callback func(context.Conte
 //   - Provides full interface compatibility with BanListI
 //
 // Usage in tests:
-//   mockBanList := &MockBanList{}
-//   mockBanList.On("IsBanned", "192.168.1.1").Return(true)
-//   // Use mockBanList in place of real BanListI implementation
+//
+//	mockBanList := &MockBanList{}
+//	mockBanList.On("IsBanned", "192.168.1.1").Return(true)
+//	// Use mockBanList in place of real BanListI implementation
 type MockBanList struct {
 	mock.Mock // Embedded mock for method call recording and expectations
 }
@@ -212,9 +214,10 @@ func (m *MockBanList) Clear() {
 //   - Provides full interface compatibility with Kafka producer interface
 //
 // Usage in tests:
-//   mockProducer := &MockKafkaProducer{}
-//   mockProducer.On("Publish", mock.Anything).Return()
-//   // Use mockProducer in place of real Kafka producer implementation
+//
+//	mockProducer := &MockKafkaProducer{}
+//	mockProducer.On("Publish", mock.Anything).Return()
+//	// Use mockProducer in place of real Kafka producer implementation
 type MockKafkaProducer struct {
 	mock.Mock // Embedded mock for method call recording and expectations
 }

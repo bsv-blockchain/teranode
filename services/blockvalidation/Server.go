@@ -28,7 +28,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation/blockvalidation_api"
@@ -43,6 +42,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -1192,7 +1192,7 @@ func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) 
 
 		lastHash := useBlockHeaders[len(useBlockHeaders)-1].Hash()
 
-		useBlockHeadersSizeUint32, err := safe.IntToUint32(len(useBlockHeaders))
+		useBlockHeadersSizeUint32, err := safeconversion.IntToUint32(len(useBlockHeaders))
 		if err != nil {
 			return nil
 		}

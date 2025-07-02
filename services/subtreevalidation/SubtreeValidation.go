@@ -16,7 +16,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -25,6 +24,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -498,7 +498,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// TODO document, what does this do?
 	subtreeWarmupCount := u.settings.BlockValidation.ValidationWarmupCount
 
-	subtreeWarmupCountInt32, err := safe.IntToInt32(subtreeWarmupCount)
+	subtreeWarmupCountInt32, err := safeconversion.IntToInt32(subtreeWarmupCount)
 	if err != nil {
 		return err
 	}

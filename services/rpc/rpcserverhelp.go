@@ -824,7 +824,7 @@ type helpCacher struct {
 	sync.Mutex
 
 	// usage contains the cached one-line usage for all commands
-	usage      string
+	usage string
 
 	// methodHelp maps command names to their complete help text
 	methodHelp map[string]string

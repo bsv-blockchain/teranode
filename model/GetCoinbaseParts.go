@@ -43,7 +43,7 @@ import (
 
 	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 )
 
 // BuildCoinbase recombines the different parts of the coinbase transaction.
@@ -223,7 +223,7 @@ func VarInt(i uint64) []byte {
 	}
 
 	if i < 0x10000 {
-		iUint16, err := safe.Uint64ToUint16(i)
+		iUint16, err := safeconversion.Uint64ToUint16(i)
 		if err != nil {
 			log.Printf("failed to convert uint64 to uint16: %s", err)
 			return nil
@@ -236,7 +236,7 @@ func VarInt(i uint64) []byte {
 	}
 
 	if i < 0x100000000 {
-		iUint32, err := safe.Uint64ToUint32(i)
+		iUint32, err := safeconversion.Uint64ToUint32(i)
 		if err != nil {
 			log.Printf("failed to convert uint64 to uint16: %s", err)
 			return nil

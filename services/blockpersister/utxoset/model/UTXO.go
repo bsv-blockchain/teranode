@@ -5,12 +5,12 @@
 // can be used as inputs in future transactions, forming the basis of Bitcoin's accounting model.
 //
 // The package includes:
-//  - UTXO: Core structure representing an unspent transaction output
-//  - UTXOKey: Unique identifier for UTXOs combining transaction hash and output index
-//  - UTXOValue: Value and script data associated with a UTXO
-//  - UTXOSet: Collection of UTXOs with efficient lookup and modification operations
-//  - UTXODiff: Difference sets for tracking UTXO changes during block processing
-//  - UTXOMap: High-performance map implementation optimized for UTXO operations
+//   - UTXO: Core structure representing an unspent transaction output
+//   - UTXOKey: Unique identifier for UTXOs combining transaction hash and output index
+//   - UTXOValue: Value and script data associated with a UTXO
+//   - UTXOSet: Collection of UTXOs with efficient lookup and modification operations
+//   - UTXODiff: Difference sets for tracking UTXO changes during block processing
+//   - UTXOMap: High-performance map implementation optimized for UTXO operations
 //
 // These types are designed for high-performance operations on large UTXO sets, supporting
 // the efficient processing of Bitcoin blocks with potentially millions of transactions.

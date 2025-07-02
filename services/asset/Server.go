@@ -110,7 +110,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 
 // Health performs health checks on the server and its dependencies.
 // It supports both liveness and readiness checks based on the checkLiveness parameter.
-// 
+//
 // The health check implementation follows the standard Kubernetes health check pattern,
 // providing both liveness (is the service running?) and readiness (is the service ready
 // to accept requests?) information. It performs comprehensive verification of all critical
@@ -123,7 +123,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 // Parameters:
 //   - ctx: Context for the health check operation, allowing for timeouts and cancellation
 //   - checkLiveness: If true, performs liveness check; if false, performs readiness check
-// 
+//
 // Returns:
 //   - int: HTTP status code indicating health status (200 for healthy, 503 for unhealthy)
 //   - string: Description of the health status with details about any detected issues
@@ -164,7 +164,7 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 
 // Init initializes the server by setting up HTTP and Centrifuge endpoints.
 // It configures the necessary components based on the provided configuration.
-// 
+//
 // This method performs the following initialization steps:
 // - Sets up HTTP server with all required routes and handlers
 // - Configures Centrifuge real-time communication server if enabled
@@ -174,10 +174,10 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // The initialization follows a fail-fast approach, where any configuration or
 // dependency initialization failure will abort the entire process and return an error.
 // This ensures the service is either fully operational or not running at all.
-// 
+//
 // Parameters:
 //   - ctx: Context for initialization, allowing for timeouts and cancellation during setup
-// 
+//
 // Returns:
 //   - error: Any error encountered during initialization, with details about the specific failure point
 func (v *Server) Init(ctx context.Context) (err error) {
@@ -281,7 +281,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 }
 
 // Stop gracefully shuts down the server and its components.
-// 
+//
 // This method implements a coordinated shutdown sequence for all server components:
 // - Stops the HTTP server with a graceful shutdown period for in-flight requests
 // - Terminates the Centrifuge server and closes all client connections
@@ -291,10 +291,10 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // The shutdown process respects the provided context deadline to ensure timely
 // termination even if some components are slow to shut down. It prioritizes
 // graceful shutdown while still enforcing overall timeout constraints.
-// 
+//
 // Parameters:
 //   - ctx: Context for shutdown operation, controlling the maximum time allowed for shutdown
-// 
+//
 // Returns:
 //   - error: Any error encountered during shutdown, with information about which components failed to stop properly
 func (v *Server) Stop(ctx context.Context) error {

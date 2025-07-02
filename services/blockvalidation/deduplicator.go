@@ -28,13 +28,13 @@ import (
 type entry struct {
 	// err holds any error that occurred during the validation operation
 	err error
-	
+
 	// cond is a condition variable for signaling when the entry is ready
 	cond *sync.Cond
-	
+
 	// ready indicates whether the validation operation has completed
 	ready bool
-	
+
 	// deleteAt specifies the block height at which this entry should be removed from the cache
 	deleteAt uint32
 }
@@ -45,10 +45,10 @@ type entry struct {
 type DeDuplicator struct {
 	// mu protects concurrent access to the cache
 	mu sync.Mutex
-	
+
 	// blockHeightRetention defines how many blocks to retain entries for before cleanup
 	blockHeightRetention uint32
-	
+
 	// cache maps block hashes to their validation entries
 	cache map[chainhash.Hash]*entry
 }

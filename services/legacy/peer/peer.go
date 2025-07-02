@@ -21,11 +21,11 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -322,7 +322,7 @@ func newNetAddress(addr net.Addr, services wire.ServiceFlag) (*wire.NetAddress, 
 			ip = net.ParseIP("0.0.0.0")
 		}
 
-		port, err := safe.IntToUint16(proxiedAddr.Port)
+		port, err := safeconversion.IntToUint16(proxiedAddr.Port)
 		if err != nil {
 			return nil, err
 		}
@@ -347,7 +347,7 @@ func newNetAddress(addr net.Addr, services wire.ServiceFlag) (*wire.NetAddress, 
 		return nil, err
 	}
 
-	portUint16, err := safe.Uint64ToUint16(port)
+	portUint16, err := safeconversion.Uint64ToUint16(port)
 	if err != nil {
 		return nil, err
 	}
@@ -2184,7 +2184,7 @@ func (p *Peer) localVersionMsg() (*wire.MsgVersion, error) {
 	// Advertise local services.
 	msg.Services = p.cfg.Services
 
-	protocolVersionInt32, err := safe.Uint32ToInt32(p.cfg.ProtocolVersion)
+	protocolVersionInt32, err := safeconversion.Uint32ToInt32(p.cfg.ProtocolVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -2420,7 +2420,7 @@ func NewOutboundPeer(logger ulogger.Logger, tSettings *settings.Settings, cfg *C
 		return nil, err
 	}
 
-	portUint16, err := safe.Uint64ToUint16(port)
+	portUint16, err := safeconversion.Uint64ToUint16(port)
 	if err != nil {
 		return nil, err
 	}

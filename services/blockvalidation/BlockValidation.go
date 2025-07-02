@@ -28,7 +28,6 @@ import (
 	p2pconstants "github.com/bitcoin-sv/teranode/interfaces/p2p"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	txmap "github.com/bitcoin-sv/teranode/pkg/go-tx-map"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
@@ -42,6 +41,7 @@ import (
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
@@ -713,7 +713,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// check the size of the block
 	// 0 is unlimited so don't check the size
 	if u.settings.Policy.ExcessiveBlockSize > 0 {
-		excessiveBlockSizeUint64, err := safe.IntToUint64(u.settings.Policy.ExcessiveBlockSize)
+		excessiveBlockSizeUint64, err := safeconversion.IntToUint64(u.settings.Policy.ExcessiveBlockSize)
 		if err != nil {
 			return err
 		}

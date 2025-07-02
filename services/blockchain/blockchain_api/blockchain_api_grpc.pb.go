@@ -10,6 +10,7 @@ package blockchain_api
 
 import (
 	context "context"
+
 	model "github.com/bitcoin-sv/teranode/model"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"

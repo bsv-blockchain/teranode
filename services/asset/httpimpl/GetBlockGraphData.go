@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/labstack/echo/v4"
 )
 
@@ -95,7 +95,7 @@ func (h *HTTP) GetBlockGraphData(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("a valid period is required").Error())
 	}
 
-	periodMillisUint64, err := safe.Int64ToUint64(periodMillis)
+	periodMillisUint64, err := safeconversion.Int64ToUint64(periodMillis)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid period parameter", err).Error())
 	}

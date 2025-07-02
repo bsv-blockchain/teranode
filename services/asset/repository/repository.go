@@ -13,7 +13,6 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -23,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -590,7 +590,7 @@ func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash
 	// read number of leaves
 	numNodes := binary.LittleEndian.Uint64(buf.Next(8))
 
-	numNodesInt, err := safe.Uint64ToInt(numNodes)
+	numNodesInt, err := safeconversion.Uint64ToInt(numNodes)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -16,7 +16,7 @@ package options
 // It controls metadata flags that affect how blocks are processed and stored.
 type StoreBlockOptions struct {
 	// MinedSet indicates whether the mined status flag is explicitly set for the block
-	MinedSet    bool
+	MinedSet bool
 	// SubtreesSet indicates whether the subtrees data is explicitly set for the block
 	SubtreesSet bool
 }

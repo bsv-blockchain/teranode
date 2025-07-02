@@ -24,7 +24,6 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	subtreepkg "github.com/bitcoin-sv/teranode/pkg/go-subtree"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
@@ -40,6 +39,7 @@ import (
 	"github.com/bitcoin-sv/teranode/test/utils/wait"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -620,7 +620,7 @@ func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, useInput 
 	}
 
 	// convert to uint32
-	useParentOutputUint32, err := safe.Uint64ToUint32(parentOutput)
+	useParentOutputUint32, err := safeconversion.Uint64ToUint32(parentOutput)
 	require.NoError(t, err)
 
 	err = tx.FromUTXOs(&bt.UTXO{

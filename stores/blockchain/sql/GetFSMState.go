@@ -38,7 +38,7 @@ import (
 // Returns:
 //   - string: The serialized FSM state as a string, or an empty string if no state is found
 //   - error: Any error encountered during retrieval, specifically:
-//     - StorageError for database errors or processing failures
+//   - StorageError for database errors or processing failures
 func (s *SQL) GetFSMState(ctx context.Context) (string, error) {
 	const query = `SELECT data FROM state WHERE key = $1;`
 

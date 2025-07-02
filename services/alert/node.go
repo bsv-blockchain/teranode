@@ -13,7 +13,6 @@ import (
 	"github.com/bitcoin-sv/alert-system/app/config"
 	"github.com/bitcoin-sv/go-sdk/script"
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/legacy/peer"
@@ -26,6 +25,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bn/models"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -293,7 +293,7 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			continue
 		}
 
-		vout, err := safe.IntToUint32(fund.TxOut.Vout)
+		vout, err := safeconversion.IntToUint32(fund.TxOut.Vout)
 		if err != nil {
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
 			continue

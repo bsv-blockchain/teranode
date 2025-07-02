@@ -24,9 +24,9 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	lockfreequeue "github.com/bitcoin-sv/teranode/pkg/go-lockfree-queue"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"golang.org/x/exp/rand"
@@ -188,12 +188,12 @@ func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 
 		copy(key[:hashLength], batchItem.hash[:])
 
-		currentPosUint32, err := safe.IntToUint32(currentPos)
+		currentPosUint32, err := safeconversion.IntToUint32(currentPos)
 		if err != nil {
 			return err
 		}
 
-		dataSizeUint32, err := safe.IntToUint32(dataSize)
+		dataSizeUint32, err := safeconversion.IntToUint32(dataSize)
 		if err != nil {
 			return err
 		}
@@ -226,7 +226,7 @@ func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 	batchKey := make([]byte, 4)
 
-	timeUint32, err := safe.IntToUint32(int(time.Now().Unix()))
+	timeUint32, err := safeconversion.IntToUint32(int(time.Now().Unix()))
 	if err != nil {
 		return err
 	}

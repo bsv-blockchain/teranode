@@ -30,9 +30,9 @@ const (
 // It handles both block height-based and timestamp-based locktimes.
 //
 // The function differentiates between three locktime scenarios:
-//   1. lockTime == 0: Simple locktime error with no time constraints
-//   2. lockTime < 500,000,000: Timestamp-based locktime (Unix timestamp in seconds)
-//   3. lockTime >= 500,000,000: Block height-based locktime
+//  1. lockTime == 0: Simple locktime error with no time constraints
+//  2. lockTime < 500,000,000: Timestamp-based locktime (Unix timestamp in seconds)
+//  3. lockTime >= 500,000,000: Block height-based locktime
 //
 // The threshold of 500,000,000 is the standard Bitcoin protocol distinction between
 // timestamp-based and block height-based locktimes.

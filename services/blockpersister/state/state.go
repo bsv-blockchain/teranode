@@ -33,8 +33,8 @@ import (
 	"syscall"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/pkg/go-safe-conversion"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 )
 
 const maxInt = int(^uint(0) >> 1)
@@ -154,7 +154,7 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 
 	// Safe conversion since ParseUint with bitSize=32 ensures the value fits in uint32
 
-	heightUint32, err := safe.Uint64ToUint32(height)
+	heightUint32, err := safeconversion.Uint64ToUint32(height)
 	if err != nil {
 		return 0, err
 	}
@@ -224,7 +224,7 @@ func (s *State) lockFile(file *os.File, lockType int) (func(), error) {
 		return nil, errors.NewProcessingError("file descriptor too large", nil)
 	}
 
-	fdi, err := safe.UintptrToInt(fd)
+	fdi, err := safeconversion.UintptrToInt(fd)
 	if err != nil {
 		return nil, err
 	}
