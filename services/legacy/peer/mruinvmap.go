@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-wire"
+	"github.com/bsv-blockchain/go-wire"
 )
 
 // mruInventoryMap provides a concurrency safe map that is limited to a maximum

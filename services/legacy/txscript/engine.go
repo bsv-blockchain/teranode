@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
+	"github.com/bsv-blockchain/go-wire"
 )
 
 // ScriptFlags is a bitmask defining additional operations or tests that will be

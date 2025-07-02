@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-wire"
+	"github.com/bsv-blockchain/go-wire"
 )
 
 var (

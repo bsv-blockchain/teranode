@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
-	"github.com/bitcoin-sv/teranode/pkg/go-wire"
+	"github.com/bsv-blockchain/go-wire"
 )
 
 const (

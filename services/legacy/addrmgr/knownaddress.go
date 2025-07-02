@@ -7,7 +7,7 @@ package addrmgr
 import (
 	"time"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-wire"
+	"github.com/bsv-blockchain/go-wire"
 )
 
 // KnownAddress tracks information about a known network address that is used

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"math/rand/v2"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil/bloom"
+	"github.com/bsv-blockchain/go-wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

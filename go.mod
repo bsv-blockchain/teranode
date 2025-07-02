@@ -141,6 +141,7 @@ require (
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-safe-conversion v1.0.1
 	github.com/bsv-blockchain/go-tx-map v1.0.0
+	github.com/bsv-blockchain/go-wire v1.0.2
 	github.com/felixge/fgprof v0.9.5
 	github.com/gocarina/gocsv v0.0.0-20240520201108-78e41c74b4b1
 	github.com/ordishs/go-bitcoin v1.0.88

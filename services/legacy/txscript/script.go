@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-wire"
+	"github.com/bsv-blockchain/go-wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

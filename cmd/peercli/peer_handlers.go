@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bsv-blockchain/go-wire"
 )
 
 // OnVersion handles the "version" message received from a peer.

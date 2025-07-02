@@ -9,9 +9,9 @@ import (
 	"math"
 	"sync"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/teranode/services/legacy/txscript"
+	"github.com/bsv-blockchain/go-wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/pkg/go-wire"
 	"github.com/bitcoin-sv/teranode/services/legacy/peer"
+	"github.com/bsv-blockchain/go-wire"
 	"github.com/stretchr/testify/assert"
 )
 
