@@ -242,6 +242,11 @@ func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Me
 		for subtreeRequest := range newSubtreeChan {
 			subtrees = append(subtrees, subtreeRequest.Subtree)
 
+			// Send success response to prevent deadlock
+			if subtreeRequest.ErrChan != nil {
+				subtreeRequest.ErrChan <- nil
+			}
+
 			if len(subtrees) == 7 {
 				gotAllSubtrees <- true
 			}
@@ -352,12 +357,14 @@ func generateLargeSubtreeBytes(t *testing.T, size int) []byte {
 	st, err := subtreepkg.NewIncompleteTreeByLeafCount(size)
 	require.NoError(t, err)
 
-	var bb [32]byte
-	for i := 0; i < size; i++ {
-		// int to bytes
-		//nolint:gosec
-		binary.LittleEndian.PutUint32(bb[:], uint32(i))
-		_ = st.AddNode(bb, uint64(i), uint64(i)) //nolint:gosec
+	var (
+		bb [32]byte
+		i  uint64
+	)
+
+	for i = 0; i < uint64(size); i++ { //nolint:gosec
+		binary.LittleEndian.PutUint32(bb[:], uint32(i)) //nolint:gosec
+		_ = st.AddNode(bb, i, i)
 	}
 
 	ser, err := st.Serialize()

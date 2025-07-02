@@ -84,7 +84,7 @@ func TestOneTransaction(t *testing.T) {
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
 
-	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size())) // nolint:gosec
+	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size())) //nolint:gosec
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
 
@@ -232,7 +232,7 @@ func TestMerkleRoot(t *testing.T) {
 	// which is used in the CheckMerkleRoot function
 	coinbaseHash := coinbaseTx.TxIDChainHash()
 
-	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size())) // nolint:gosec
+	subtrees[0].ReplaceRootNode(coinbaseHash, 0, uint64(coinbaseTx.Size())) //nolint:gosec
 
 	ctx := context.Background()
 	subtreeStore := memory.New()

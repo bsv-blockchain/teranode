@@ -81,6 +81,159 @@ var (
 	}
 )
 
+func TestMoveBackBlockProcessBlock(t *testing.T) {
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(t.Context(), ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+	require.NoError(t, err)
+
+	blobStore := blob_memory.New()
+	settings := test.CreateBaseTestSettings()
+	settings.BlockAssembly.MoveBackBlockConcurrency = 1
+
+	newSubtreeChan := make(chan NewSubtreeRequest, 10)
+	stp, err := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, blobStore, nil, utxoStore, newSubtreeChan)
+	require.NoError(t, err)
+
+	// Add the coinbase UTXO
+	_, err = utxoStore.Create(context.Background(), coinbaseTx, 0)
+	require.NoError(t, err)
+
+	// Create test scenario
+	subtree1Hash := chainhash.Hash{1}
+	subtree2Hash := chainhash.Hash{2}
+
+	// Create subtree2 with 2 nodes
+	subtree2, err := subtreepkg.NewTree(2)
+	require.NoError(t, err)
+
+	node1Hash := chainhash.Hash{0x11}
+	node2Hash := chainhash.Hash{0x22}
+
+	err = subtree2.AddNode(node1Hash, 100, 250)
+	require.NoError(t, err)
+	err = subtree2.AddNode(node2Hash, 200, 300)
+	require.NoError(t, err)
+
+	// Store subtree2
+	subtree2Data, err := subtree2.Serialize()
+	require.NoError(t, err)
+	err = blobStore.Set(context.Background(), subtree2Hash[:], fileformat.FileTypeSubtree, subtree2Data)
+	require.NoError(t, err)
+
+	// Create metadata with 2 entries
+	metaInpoints := []subtreepkg.TxInpoints{
+		{ParentTxHashes: []chainhash.Hash{{0x01}}, Idxs: [][]uint32{{0}}},
+		{ParentTxHashes: []chainhash.Hash{{0x02}}, Idxs: [][]uint32{{1}}},
+	}
+
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree2)
+	subtreeMeta.TxInpoints = metaInpoints
+	metaData, err := subtreeMeta.Serialize()
+	require.NoError(t, err)
+	err = blobStore.Set(context.Background(), subtree2Hash[:], fileformat.FileTypeSubtreeMeta, metaData)
+	require.NoError(t, err)
+
+	// Create simple subtree1
+	subtree1, err := subtreepkg.NewTree(1)
+	require.NoError(t, err)
+	err = subtree1.AddCoinbaseNode()
+	require.NoError(t, err)
+
+	subtree1Data, err := subtree1.Serialize()
+	require.NoError(t, err)
+	err = blobStore.Set(context.Background(), subtree1Hash[:], fileformat.FileTypeSubtree, subtree1Data)
+	require.NoError(t, err)
+
+	meta1Inpoints := []subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{{0x00}}, Idxs: [][]uint32{{0}}}}
+	subtree1Meta := subtreepkg.NewSubtreeMeta(subtree1)
+	subtree1Meta.TxInpoints = meta1Inpoints
+	meta1Data, err := subtree1Meta.Serialize()
+	require.NoError(t, err)
+	err = blobStore.Set(context.Background(), subtree1Hash[:], fileformat.FileTypeSubtreeMeta, meta1Data)
+	require.NoError(t, err)
+
+	// Create block
+	block := &model.Block{
+		Header:     blockHeader,
+		CoinbaseTx: coinbaseTx,
+		Subtrees:   []*chainhash.Hash{&subtree1Hash, &subtree2Hash},
+	}
+
+	// Call function with i=2 - this should now work with the fix
+	err = stp.moveBackBlockProcessBlock(context.Background(), block, 2, time.Now(), nil)
+	require.NoError(t, err)
+
+	// Verify subtree content after moveBackBlock operation
+	t.Log("Verifying subtree content after moveBackBlock...")
+
+	// Check subtree1 content
+	subtree1DataAfter, err := blobStore.Get(context.Background(), subtree1Hash[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err, "Failed to retrieve subtree1 after moveBackBlock")
+
+	subtree1After, err := subtreepkg.NewSubtreeFromBytes(subtree1DataAfter)
+	require.NoError(t, err, "Failed to deserialize subtree1 after moveBackBlock")
+
+	// Verify subtree1 still has 1 node (coinbase)
+	require.Equal(t, 1, subtree1After.Size(), "Subtree1 should still have 1 node after moveBackBlock")
+	t.Logf("✅ Subtree1 verification passed: %d nodes", subtree1After.Size())
+
+	// Check subtree2 content
+	subtree2DataAfter, err := blobStore.Get(context.Background(), subtree2Hash[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err, "Failed to retrieve subtree2 after moveBackBlock")
+
+	subtree2After, err := subtreepkg.NewSubtreeFromBytes(subtree2DataAfter)
+	require.NoError(t, err, "Failed to deserialize subtree2 after moveBackBlock")
+
+	// Verify subtree2 still has 2 nodes
+	require.Equal(t, 2, subtree2After.Size(), "Subtree2 should still have 2 nodes after moveBackBlock")
+	t.Logf("✅ Subtree2 verification passed: %d nodes", subtree2After.Size())
+
+	// Verify the nodes in subtree2 are still present with correct values
+	nodes := subtree2After.Nodes
+	require.Equal(t, 2, len(nodes), "Subtree2 should have exactly 2 nodes")
+
+	// Check if our test nodes are present
+	foundNode1 := false
+	foundNode2 := false
+
+	for _, node := range nodes {
+		if node.Hash.IsEqual(&node1Hash) {
+			foundNode1 = true
+
+			t.Logf("✅ Found node1: hash=%v, fee=%d, size=%d", node.Hash, node.Fee, node.SizeInBytes)
+		}
+
+		if node.Hash.IsEqual(&node2Hash) {
+			foundNode2 = true
+
+			t.Logf("✅ Found node2: hash=%v, fee=%d, size=%d", node.Hash, node.Fee, node.SizeInBytes)
+		}
+	}
+
+	require.True(t, foundNode1, "Node1 with expected values should be present in subtree2")
+	require.True(t, foundNode2, "Node2 with expected values should be present in subtree2")
+
+	// Verify metadata is still intact
+	meta1DataAfter, err := blobStore.Get(context.Background(), subtree1Hash[:], fileformat.FileTypeSubtreeMeta)
+	require.NoError(t, err, "Failed to retrieve subtree1 metadata after moveBackBlock")
+
+	meta2DataAfter, err := blobStore.Get(context.Background(), subtree2Hash[:], fileformat.FileTypeSubtreeMeta)
+	require.NoError(t, err, "Failed to retrieve subtree2 metadata after moveBackBlock")
+
+	// Deserialize and verify metadata content
+	subtree1MetaAfter, err := subtreepkg.NewSubtreeMetaFromBytes(subtree1After, meta1DataAfter)
+	require.NoError(t, err, "Failed to deserialize subtree1 metadata")
+	require.Equal(t, 1, len(subtree1MetaAfter.TxInpoints), "Subtree1 metadata should have 1 inpoint")
+
+	subtree2MetaAfter, err := subtreepkg.NewSubtreeMetaFromBytes(subtree2After, meta2DataAfter)
+	require.NoError(t, err, "Failed to deserialize subtree2 metadata")
+	require.Equal(t, 2, len(subtree2MetaAfter.TxInpoints), "Subtree2 metadata should have 2 inpoints")
+
+	t.Log("✅ All subtree content verification passed after moveBackBlock operation")
+}
+
 func TestRotate(t *testing.T) {
 	newSubtreeChan := make(chan NewSubtreeRequest)
 	endTestChan := make(chan bool)
@@ -1167,9 +1320,6 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		// check that the nodes from subtree1 and subtree2 are the first nodes
 		for i := 0; i < 4; i++ {
 			assert.Equal(t, subtree1.Nodes[i], stp.chainedSubtrees[0].Nodes[i])
-		}
-
-		for i := 0; i < 4; i++ {
 			assert.Equal(t, subtree2.Nodes[i], stp.chainedSubtrees[1].Nodes[i])
 		}
 
@@ -1528,7 +1678,7 @@ func BenchmarkAddNode(b *testing.B) {
 	err := g.Wait()
 	require.NoError(b, err)
 
-	fmt.Printf("Time taken: %s\n", time.Since(startTime))
+	b.Logf("Time taken: %s\n", time.Since(startTime))
 }
 
 func BenchmarkAddNodeWithMap(b *testing.B) {
@@ -1557,7 +1707,7 @@ func BenchmarkAddNodeWithMap(b *testing.B) {
 	err := g.Wait()
 	require.NoError(b, err)
 
-	fmt.Printf("Time taken: %s\n", time.Since(startTime))
+	b.Logf("Time taken: %s\n", time.Since(startTime))
 }
 
 // initTestAddNodeBenchmark initializes benchmark environment for AddNode testing.
@@ -1644,10 +1794,10 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set initial block header to start timing
-		fmt.Printf("DEBUG: Setting initial block header\n")
+		t.Logf("DEBUG: Setting initial block header\n")
 		stp.SetCurrentBlockHeader(blockHeader)
 		initialSize := stp.currentItemsPerFile
-		fmt.Printf("DEBUG: Initial size: %d\n", initialSize)
+		t.Logf("DEBUG: Initial size: %d\n", initialSize)
 
 		// Create multiple blocks to establish a pattern of fast subtree creation
 		startTime := time.Now()
@@ -1660,7 +1810,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 
 			// Set block start time
 			blockStartTime := startTime.Add(time.Duration(i) * 2 * time.Second)
-			fmt.Printf("DEBUG: Block %d start time: %v\n", i, blockStartTime)
+			t.Logf("DEBUG: Block %d start time: %v\n", i, blockStartTime)
 			stp.blockStartTime = blockStartTime
 
 			// Create subtrees in this block
@@ -1680,7 +1830,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 			stp.subtreesInBlock = 5
 			interval := time.Duration(2) * time.Second / time.Duration(5) // 2s/5 subtrees = 400ms per subtree
 			stp.blockIntervals = append(stp.blockIntervals, interval)
-			fmt.Printf("DEBUG: Block %d end, subtrees=%d, duration=%v, interval=%v, intervals=%v\n",
+			t.Logf("DEBUG: Block %d end, subtrees=%d, duration=%v, interval=%v, intervals=%v\n",
 				i, stp.subtreesInBlock, time.Duration(2)*time.Second, interval, stp.blockIntervals)
 
 			// Move to next block with simulated time passage
@@ -1697,13 +1847,14 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 			// Set the new header after recording intervals
 			stp.SetCurrentBlockHeader(newHeader)
 			stp.adjustSubtreeSize()
+
 			blockHeader = newHeader
 		}
 
 		// Since we're creating subtrees 2.5x faster than target (2.5/sec vs 1/sec),
 		// expect size to increase
 		newSize := stp.currentItemsPerFile
-		fmt.Printf("DEBUG: Final size: initial=%d, final=%d\n", initialSize, newSize)
+		t.Logf("DEBUG: Final size: initial=%d, final=%d\n", initialSize, newSize)
 		assert.Greater(t, newSize, initialSize, "subtree size should increase when creating too quickly")
 		assert.Equal(t, 0, newSize&(newSize-1), "new size should be power of 2")
 		assert.GreaterOrEqual(t, newSize, 1024, "new size should not be smaller than 1024")
@@ -1744,10 +1895,10 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set initial block header to start timing
-		fmt.Printf("DEBUG: Setting initial block header\n")
+		t.Logf("DEBUG: Setting initial block header\n")
 		stp.SetCurrentBlockHeader(blockHeader)
 		initialSize := stp.currentItemsPerFile
-		fmt.Printf("DEBUG: Initial size: %d\n", initialSize)
+		t.Logf("DEBUG: Initial size: %d\n", initialSize)
 
 		// Create multiple blocks to establish a pattern of fast subtree creation
 		startTime := time.Now()
@@ -1760,7 +1911,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 
 			// Set block start time
 			blockStartTime := startTime.Add(time.Duration(i) * 2 * time.Second)
-			fmt.Printf("DEBUG: Block %d start time: %v\n", i, blockStartTime)
+			t.Logf("DEBUG: Block %d start time: %v\n", i, blockStartTime)
 			stp.blockStartTime = blockStartTime
 
 			// Create subtrees in this block
@@ -1787,22 +1938,22 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 				Nonce:          1234,
 			}
 
-			fmt.Printf("DEBUG: Block %d end, subtrees=%d, duration=%v\n", i, stp.subtreesInBlock, time.Duration(2)*time.Second)
+			t.Logf("DEBUG: Block %d end, subtrees=%d, duration=%v\n", i, stp.subtreesInBlock, time.Duration(2)*time.Second)
 			stp.subtreesInBlock = 5                                                                        // We created 5 subtrees in this block
 			stp.blockIntervals = append(stp.blockIntervals, time.Duration(2)*time.Second/time.Duration(5)) // 2s/5 subtrees = 400ms per subtree
-			fmt.Printf("DEBUG: Block intervals after block %d: %v\n", i, stp.blockIntervals)
+			t.Logf("DEBUG: Block intervals after block %d: %v\n", i, stp.blockIntervals)
 			stp.SetCurrentBlockHeader(newHeader)
 			stp.adjustSubtreeSize()
+
 			blockHeader = newHeader
 		}
 
 		// Since we're creating subtrees 2.5x faster than target (2.5/sec vs 1/sec),
 		// expect size to increase
 		newSize := stp.currentItemsPerFile
-		fmt.Printf("DEBUG: Final size: initial=%d, final=%d\n", initialSize, newSize)
+		t.Logf("DEBUG: Final size: initial=%d, final=%d\n", initialSize, newSize)
 		assert.Greater(t, newSize, initialSize, "subtree size should increase when creating too quickly")
 		assert.Equal(t, 0, newSize&(newSize-1), "new size should be power of 2")
 		assert.GreaterOrEqual(t, newSize, 1024, "new size should not be smaller than 1024")
-		fmt.Printf("DEBUG: Final size: initial=%d, final=%d\n", initialSize, newSize)
 	})
 }

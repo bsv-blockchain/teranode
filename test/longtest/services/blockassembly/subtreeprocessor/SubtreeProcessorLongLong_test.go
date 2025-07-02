@@ -71,7 +71,13 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 	go func() {
 		for {
 			// just read the subtrees of the processor
-			<-newSubtreeChan
+			subtreeRequest := <-newSubtreeChan
+
+			// Send success response to prevent deadlock
+			if subtreeRequest.ErrChan != nil {
+				subtreeRequest.ErrChan <- nil
+			}
+
 			wg.Done()
 		}
 	}()
