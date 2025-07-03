@@ -203,5 +203,28 @@ func TestUnmined(t *testing.T) {
 		}
 
 		assert.Equal(t, 1, count)
+
+		// set the tx as mined
+		err = store.SetMinedMulti(store.ctx, []*chainhash.Hash{txUnMined.TxIDChainHash()}, utxo.MinedBlockInfo{
+			BlockID:     1,
+			BlockHeight: currentBlockHeight,
+			SubtreeIdx:  1,
+		})
+		require.NoError(t, err)
+
+		recordset, err = client.Query(nil, stmt)
+		require.NoError(t, err)
+
+		count = 0
+
+		for rec := range recordset.Records() {
+			assert.NotNil(t, rec.Bins[fields.UnminedSince.String()])
+			assert.Equal(t, int(currentBlockHeight), rec.Bins[fields.UnminedSince.String()])
+			assert.Equal(t, txUnMined.TxIDChainHash().CloneBytes(), rec.Bins[fields.TxID.String()])
+
+			count++
+		}
+
+		assert.Equal(t, 0, count)
 	})
 }

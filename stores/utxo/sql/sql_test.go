@@ -297,6 +297,16 @@ func TestSetMinedMulti(t *testing.T) {
 		_, err := utxoStore.Create(ctx, tx, 0)
 		require.NoError(t, err)
 
+		// check that the tx is marked as unmined
+		it, err := utxoStore.GetUnminedTxIterator()
+		require.NoError(t, err)
+
+		rec, err := it.Next(ctx)
+		require.NoError(t, err)
+		assert.NotNil(t, rec)
+
+		_ = it.Close()
+
 		err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
 			BlockID:     1,
 			BlockHeight: 1,
@@ -309,6 +319,16 @@ func TestSetMinedMulti(t *testing.T) {
 
 		assert.Len(t, meta.BlockIDs, 1)
 		assert.Equal(t, uint32(1), meta.BlockIDs[0])
+
+		// check that the tx is marked as unmined
+		it, err = utxoStore.GetUnminedTxIterator()
+		require.NoError(t, err)
+
+		rec, err = it.Next(ctx)
+		require.NoError(t, err)
+		assert.Nil(t, rec)
+
+		_ = it.Close()
 	})
 
 	t.Run("single block - with tx set to unspendable", func(t *testing.T) {

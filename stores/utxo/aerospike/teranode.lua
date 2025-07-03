@@ -340,7 +340,7 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     subtreeIdxs[#subtreeIdxs + 1] = subtreeIdx
     rec['subtreeIdxs'] = subtreeIdxs
 
-    rec['notMined'] = nil
+    rec['unminedSince'] = nil
     
     -- set the record to be spendable again, if it was unspendable, since if was just mined into a block
     if rec['unspendable'] then
