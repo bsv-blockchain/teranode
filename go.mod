@@ -17,7 +17,7 @@ require (
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0-beta9
 	github.com/bitcoin-sv/go-sdk v1.1.21
 	github.com/bitcoin-sv/testcontainers-aerospike-go v0.2.2
-	github.com/bsv-blockchain/go-bt/v2 v2.3.0
+	github.com/bsv-blockchain/go-bt/v2 v2.3.2
 	github.com/bsv-blockchain/go-chaincfg v1.1.1
 	github.com/bsv-blockchain/go-subtree v1.0.1
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
