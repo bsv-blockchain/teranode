@@ -331,6 +331,8 @@ The SQLite database will be stored in the `DataFolder` directory specified in th
 - Max Idle Connections: 1
 - Max Open Connections: 1
 
+**Table Prefix:** Uses the database name as prefix
+
 #### 6.2.2 In-Memory SQLite
 
 ```
@@ -343,6 +345,8 @@ sqlitememory:///database_name
 **Connection Pool Settings (hardcoded):**
 - Max Idle Connections: 1
 - Max Open Connections: 1
+
+**Table Prefix:** Uses the database name as prefix
 
 #### 6.2.3 PostgreSQL
 
@@ -360,6 +364,8 @@ postgres://username:password@host:port/database?param1=value1&param2=value2
 - Max Connection Time: 20 seconds
 - Transaction Timeout: 20 seconds
 
+**Table Prefix:** "alert_system"
+
 #### 6.2.4 MySQL
 
 ```
@@ -372,10 +378,13 @@ mysql://username:password@host:port/database?param1=value1&param2=value2
 **Connection Pool Settings (hardcoded):**
 - Same as PostgreSQL
 
+**Table Prefix:** "alert_system"
+
 ### 6.3 Internal Settings and Behaviors
 
 The following settings are hardcoded in the service and cannot be configured externally:
 
+**Core Processing Settings:**
 - **Alert Processing Interval**: 5 minutes
     - Controls how frequently alerts are processed
 
@@ -388,19 +397,33 @@ The following settings are hardcoded in the service and cannot be configured ext
 - **Database Table Prefix**: "alert_system" for PostgreSQL/MySQL, database name for SQLite
     - Prefix used for database tables
 
+- **DHT Mode**: "client"
+  - Sets the node as a DHT client for peer discovery
+
+- **Peer Discovery Interval**: Uses system default
+  - Controls how frequently peers are discovered
+
+**Database Settings:**
+- **Table Prefix**: "alert_system" for PostgreSQL/MySQL, database name for SQLite
+  - Prefix used for database tables
+
 ### 6.4 Service Dependencies
 
 The Alert Service depends on several other Teranode services:
 
-- **Blockchain Client**: Required for blockchain operations like retrieving block headers and invalidating blocks
+#### Required Dependencies
+| Dependency | Purpose | Configuration Impact | Failure Impact |
+|------------|---------|---------------------|----------------|
+| **Blockchain Client** | Block invalidation, chain state queries | Requires blockchain service to be properly configured and running | `InvalidateBlock` functionality unavailable |
+| **UTXO Store** | UTXO freezing, unfreezing, reassignment operations | Requires UTXO store to be initialized and accessible | Core alert functionality (fund management) unavailable |
+| **Block Assembly Client** | Mining coordination when alerts affect blocks | Requires block assembly service configuration | Mining-related alert functions unavailable |
+| **Peer Client (Legacy)** | Legacy peer management (ban/unban operations) | Requires legacy peer service configuration | Legacy peer banning functionality unavailable |
+| **P2P Client** | Modern P2P alert distribution and peer management | Requires P2P service configuration | Alert distribution and modern peer management unavailable |
 
-- **UTXO Store**: Required for UTXO operations, particularly freezing, unfreezing, and reassignment
-
-- **Block Assembly Client**: Used for block assembly coordination when alerts affect mining
-
-- **Peer Client**: Used for peer management (banning/unbanning)
-
-- **P2P Client**: Required for P2P alert distribution
+#### Configuration Interdependencies
+1. **Network Configuration**: The Alert service inherits network configuration from global Teranode settings, affecting topic naming and protocol selection
+2. **Logging Integration**: Uses the global Teranode logging configuration for consistent log formatting and output
+3. **Metrics Integration**: Integrates with Teranode's Prometheus metrics system using global metrics configuration
 
 ### 6.5 Environment Variables
 
@@ -410,11 +433,16 @@ All settings can also be configured through environment variables using the foll
 TERANODE_ALERT_<SETTING_NAME>
 ```
 
-For example:
+**Standard Environment Variables:**
+- `TERANODE_ALERT_GENESIS_KEYS` - Pipe-separated list of genesis keys
+- `TERANODE_ALERT_P2P_PRIVATE_KEY` - P2P private key
+- `TERANODE_ALERT_PROTOCOL_ID` - P2P protocol identifier
+- `TERANODE_ALERT_STORE` - Database connection URL
+- `TERANODE_ALERT_TOPIC_NAME` - P2P topic name
 
-- `TERANODE_ALERT_GENESIS_KEYS`
-- `TERANODE_ALERT_P2P_PORT`
-- `TERANODE_ALERT_PROTOCOL_ID`
+**Special Environment Variables:**
+- `ALERT_P2P_PORT` - P2P port (note: different naming pattern)
+
 
 ### 6.6 Security Considerations
 
@@ -434,7 +462,6 @@ When using PostgreSQL or MySQL:
 - Enable SSL for database connections (`sslmode=require` or stronger)
 - Restrict database access to authorized users only
 - Consider using a dedicated database user with limited permissions
-
 
 ### 6.7 Configuration Examples
 
@@ -458,6 +485,31 @@ alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a
 alert_p2p_port = 4001
 ```
 
+### 6.8 Error Handling and Troubleshooting
+
+#### Common Configuration Errors
+
+**Genesis Keys Errors:**
+```
+Error: ErrNoGenesisKeys
+Cause: No genesis keys provided in configuration
+```
+
+**P2P Configuration Errors:**
+```
+Error: ErrNoP2PIP
+Cause: P2P IP address validation failed (less than 5 characters)
+
+Error: ErrNoP2PPort
+Cause: P2P port validation failed (less than 2 characters when converted to string)
+```
+
+**Database Connection Errors:**
+```
+Error: ErrDatastoreUnsupported
+Cause: Unsupported database scheme in alert_store URL
+Supported schemes: sqlite://, sqlitememory://, postgres://, mysql://
+```
 
 ## 7. Other Resources
 

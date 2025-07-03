@@ -7,23 +7,31 @@
 3. [Data Model](#3-data-model)
 4. [Use Cases](#4-use-cases)
     - [4.1. HTTP](#41-http)
-    - [4.1.1. getTransaction() and getTransactions()](#411-gettransaction-and-gettransactions)
-    - [4.1.2. GetTransactionMeta()](#412-gettransactionmeta)
-    - [4.1.3. GetSubtree()](#413-getsubtree)
-    - [4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()](#414-getblockheaders-getblockheader-and-getbestblockheader)
-    - [4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()](#415-getblockbyhash-getblocks-and-getlastnblocks)
-    - [4.1.6. GetUTXO() and GetUTXOsByTXID()](#416-getutxo-and-getutxosbytxid)
-    - [4.1.7. Search()](#417-search)
-    - [4.1.8. GetBlockStats()](#418-getblockstats)
-    - [4.1.9. GetBlockGraphData()](#419-getblockgraphdata)
-    - [4.1.10. GetBlockForks()](#4110-getblockforks)
-    - [4.1.11. GetBlockSubtrees()](#4111-getblocksubtrees)
-    - [4.1.12. GetLegacyBlock()](#4112-getlegacyblock)
+        - [4.1.1. getTransaction() and getTransactions()](#411-gettransaction-and-gettransactions)
+        - [4.1.2. GetTransactionMeta()](#412-gettransactionmeta)
+        - [4.1.3. GetSubtree()](#413-getsubtree)
+        - [4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()](#414-getblockheaders-getblockheader-and-getbestblockheader)
+        - [4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()](#415-getblockbyhash-getblocks-and-getlastnblocks)
+        - [4.1.6. GetUTXO() and GetUTXOsByTXID()](#416-getutxo-and-getutxosbytxid)
+        - [4.1.7. Search()](#417-search)
+        - [4.1.8. GetBlockStats()](#418-getblockstats)
+        - [4.1.9. GetBlockGraphData()](#419-getblockgraphdata)
+        - [4.1.10. GetBlockForks()](#4110-getblockforks)
+        - [4.1.11. GetBlockSubtrees()](#4111-getblocksubtrees)
+        - [4.1.12. GetLegacyBlock()](#4112-getlegacyblock)
+        - [4.1.13. GetBlockHeadersToCommonAncestor()](#4113-getblockheaderstocommonancestor)
+        - [4.1.14. FSM State Management](#4114-fsm-state-management)
+        - [4.1.15. Block Validation Management](#4115-block-validation-management)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
     - [7.1. How to run](#71-how-to-run)
-    - [7.2 Configuration options (settings flags)](#72-configuration-options-settings-flags)
+    - [7.2 Configuration Options (Settings Flags)](#72-configuration-options-settings-flags)
+    - [7.3 Configuration Examples](#73-configuration-examples)
+    - [7.4 FSM Configuration](#74-fsm-configuration)
+    - [7.5 Coinbase Configuration](#75-coinbase-configuration)
+    - [7.6 Dashboard Configuration](#76-dashboard-configuration)
+    - [7.7 Block Validation](#77-block-validation)
 8. [Other Resources](#8-other-resources)
 
 
@@ -295,62 +303,129 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 The Asset Server can be configured using various settings that control its behavior, network connectivity, security features, and performance characteristics. This section provides a comprehensive reference of all configuration options and their interactions.
 
-#### 7.2.1 HTTP Server Configuration
+#### 7.2.1 Core Asset Server Configuration
 
-| Setting | Type | Description | Default | Required |
-|---------|------|-------------|---------|----------|
-| `asset_httpListenAddress` | string | Address for the Asset Service to listen for HTTP requests | - | Yes |
-| `asset_httpAddress` | string | URL of the Asset Service HTTP server (used as base URL for client connections) | - | Yes* |
-| `asset_httpPublicAddress` | string | Public-facing URL for client communication | - | No |
-| `asset_apiPrefix` | string | Specifies the API prefix for HTTP routes (e.g., "/api/v1") | - | No |
-| `securityLevelHTTP` | int | Determines the security level for HTTP communication. 0 for HTTP, non-zero for HTTPS | 0 | No |
-| `server_certFile` | string | Path to the SSL certificate file for HTTPS | - | Yes** |
-| `server_keyFile` | string | Path to the SSL key file for HTTPS | - | Yes** |
-| `asset_signHTTPResponses` | bool | Enables cryptographic signing of HTTP responses | false | No |
-| `ECHO_DEBUG` | bool | Enables Echo framework debug mode for detailed HTTP request logging | false | No |
+**HTTP Server Settings:**
 
-*Required when Centrifuge is enabled<br>
-**Required when securityLevelHTTP is non-zero
+- **Asset HTTP Listen Address (`asset_httpListenAddress`)**: Address for the Asset Service HTTP server to listen for requests.
+  - Type: `string`
+  - Default: `":8090"`
+  - Environment Variable: `TERANODE_ASSET_HTTPLISTENADDRESS`
+  - Impact: **Critical** - Service will not start without this setting (`"no asset_httpListenAddress setting found"`)
+  - Code Usage: Required for HTTP server initialization (Server.go line 184-187)
 
-**HTTP Configuration Examples:**
+- **Asset HTTP Address (`asset_httpAddress`)**: Base URL of the Asset Service HTTP server.
+  - Type: `string`
+  - Default: `"http://localhost:8090/api/v1"`
+  - Environment Variable: `TERANODE_ASSET_HTTPADDRESS`
+  - Impact: **Critical for Centrifuge** - Required when Centrifuge is enabled; URL validation performed
+  - Code Usage: Used for Centrifuge server initialization; validates URL format
 
-**Basic HTTP Server:**
-```
-asset_httpListenAddress=:8090
-asset_apiPrefix=/api/v1
-```
+- **Asset HTTP Public Address (`asset_httpPublicAddress`)**: Public-facing URL configuration.
+  - Type: `string`
+  - Default: `""` (empty string)
+  - Environment Variable: `TERANODE_ASSET_HTTPPUBLICADDRESS`
+  - Impact: Configuration placeholder - not actively used in traced Asset Server code paths
 
-**HTTPS Server:**
-```
-asset_httpListenAddress=:8443
-securityLevelHTTP=1
-server_certFile=/path/to/cert.pem
-server_keyFile=/path/to/key.pem
-```
+- **Asset API Prefix (`asset_apiPrefix`)**: URL prefix for API routes.
+  - Type: `string`
+  - Default: `"/api/v1"`
+  - Environment Variable: `TERANODE_ASSET_APIPREFIX`
+  - Impact: Determines URL structure for all API endpoints
+  - Code Usage: Applied to API route groups in HTTP server initialization
 
-**Signed Responses:**
-```
-asset_signHTTPResponses=true
-p2p_private_key=ed25519_private_key_in_hex_format
-```
+- **Asset HTTP Port (`ASSET_HTTP_PORT`)**: HTTP port configuration.
+  - Type: `int`
+  - Default: `8090`
+  - Environment Variable: `ASSET_HTTP_PORT`
+  - Impact: Configuration placeholder - not actively used in traced Asset Server code paths
+
+**Response Signing Settings:**
+
+- **Asset Sign HTTP Responses (`asset_sign_http_responses`)**: Enables cryptographic signing of HTTP responses.
+  - Type: `bool`
+  - Default: `false`
+  - Environment Variable: `TERANODE_ASSET_SIGN_HTTP_RESPONSES`
+  - Impact: When enabled, requires valid P2P private key; logs errors if key is invalid
+  - Code Usage: Controls response signing initialization using P2P private key
+
+**Debug Settings:**
+
+- **Echo Debug (`ECHO_DEBUG`)**: Enables Echo framework debug mode.
+  - Type: `bool`
+  - Default: `false`
+  - Environment Variable: `ECHO_DEBUG`
+  - Impact: Enables debug logging and custom logging middleware for HTTP requests
+  - Code Usage: Controls Echo debug mode and custom request logging
 
 #### 7.2.2 Centrifuge Real-time Updates Configuration
 
-The Asset Server includes a Centrifuge implementation for real-time updates via WebSockets. These settings control its behavior:
+- **Asset Centrifuge Disable (`asset_centrifuge_disable`)**: Controls Centrifuge server initialization.
+  - Type: `bool`
+  - Default: `false`
+  - Environment Variable: `TERANODE_ASSET_CENTRIFUGE_DISABLE`
+  - Impact: When `true`, disables real-time WebSocket functionality entirely
+  - Code Usage: Controls conditional Centrifuge server creation (Server.go line 204)
 
-| Setting | Type | Description | Default | Required |
-|---------|------|-------------|---------|----------|
-| `asset_centrifugeDisable` | bool | Disables the Centrifuge service when set to true | false | No |
-| `asset_centrifugeListenAddress` | string | Listen address for the Centrifuge WebSocket server | - | Yes* |
+- **Asset Centrifuge Listen Address (`asset_centrifugeListenAddress`)**: WebSocket server listen address.
+  - Type: `string`
+  - Default: `":8892"`
+  - Environment Variable: `TERANODE_ASSET_CENTRIFUGELISTENADDRESS`
+  - Impact: Determines Centrifuge WebSocket server listening address when enabled
+  - Code Usage: Used for Centrifuge server address configuration
 
-*Required only when Centrifuge is enabled (asset_centrifugeDisable=false)
+**Centrifuge Subscription Channels:**
+Centrifuge supports the following subscription channels:
+- `ping`: For connection health checks
+- `block`: For new block notifications
+- `subtree`: For Merkle tree updates
+- `mining_on`: For mining status updates
 
-**Centrifuge Configuration Example:**
-```
-asset_centrifugeDisable=false
-asset_centrifugeListenAddress=:8101
-asset_httpAddress=http://localhost:8090
-```
+#### 7.2.3 Security Configuration (Global Settings)
+
+**HTTPS Settings:**
+
+- **Security Level HTTP (`securityLevelHTTP`)**: Determines HTTP vs HTTPS mode.
+  - Type: `int`
+  - Default: `0`
+  - Environment Variable: `TERANODE_SECURITYLEVELHTTP`
+  - Impact: `0` = HTTP mode, non-zero = HTTPS mode
+  - Code Usage: Controls server startup mode selection (HTTP vs HTTPS)
+
+- **Server Certificate File (`server_certFile`)**: TLS certificate file path.
+  - Type: `string`
+  - Default: `""` (empty string)
+  - Environment Variable: `TERANODE_SERVER_CERTFILE`
+  - Impact: **Required for HTTPS** - Service returns configuration error if missing when HTTPS enabled
+  - Code Usage: Used for HTTPS server startup; validated when securityLevelHTTP is non-zero
+
+- **Server Key File (`server_keyFile`)**: TLS private key file path.
+  - Type: `string`
+  - Default: `""` (empty string)
+  - Environment Variable: `TERANODE_SERVER_KEYFILE`
+  - Impact: **Required for HTTPS** - Service returns configuration error if missing when HTTPS enabled
+  - Code Usage: Used for HTTPS server startup; validated when securityLevelHTTP is non-zero
+
+**P2P Settings for Response Signing:**
+
+- **P2P Private Key (`p2p_private_key`)**: Private key for HTTP response signing.
+  - Type: `string`
+  - Default: `""` (empty string)
+  - Environment Variable: `TERANODE_P2P_PRIVATE_KEY`
+  - Impact: Used for HTTP response signing when `asset_sign_http_responses` is enabled
+  - Code Usage: Decoded and used for cryptographic signing; errors logged if invalid
+
+#### 7.2.4 Configuration Dependencies and Interactions
+
+**HTTP Server Operation:**
+- Primary Setting: `asset_httpListenAddress` (required)
+- HTTPS Dependencies: `securityLevelHTTP`, `server_certFile`, `server_keyFile`
+- Interaction: HTTPS mode requires both certificate and key files; missing files cause configuration errors
+
+**Centrifuge Real-time Updates:**
+- Primary Setting: `asset_centrifuge_disable` (controls feature)
+- Dependencies: `asset_centrifugeListenAddress`, `asset_httpAddress`
+- Interaction: When enabled, requires valid HTTP address and listen address; URL validation performed
 
 Centrifuge supports the following subscription channels:
 
@@ -359,39 +434,61 @@ Centrifuge supports the following subscription channels:
 - `subtree`: For Merkle tree updates
 - `mining_on`: For mining status updates
 
-#### 7.2.3 Security Configuration
+**HTTP Response Signing:**
+- Primary Setting: `asset_sign_http_responses` (enables feature)
+- Dependency: `p2p_private_key`
+- Interaction: Requires valid P2P private key; invalid keys logged as errors but don't prevent startup
 
-These settings control security features of the Asset Server:
+#### 7.2.5 Error Conditions and Validation
 
-| Setting | Type | Description | Default | Required |
-|---------|------|-------------|---------|----------|
-| `securityLevelHTTP` | int | Controls HTTP vs HTTPS mode (0 = HTTP, non-zero = HTTPS) | 0 | No |
-| `asset_signHTTPResponses` | bool | Enables cryptographic signing of HTTP responses | false | No |
-| `p2p_private_key` | string | Ed25519 private key in hexadecimal format for signing responses | - | Yes* |
+**Configuration Errors from Code:**
 
-*Required only when asset_signHTTPResponses=true
+```
+Error: "no asset_httpListenAddress setting found"
+Cause: Missing or empty asset_httpListenAddress setting
+```
 
-**Security Best Practices:**
+```
+Error: "asset_httpAddress not found in config"
+Cause: Missing asset_httpAddress when Centrifuge is enabled
+```
 
-1. **Use HTTPS in production environments**
-   ```
-   securityLevelHTTP=1
-   server_certFile=/path/to/cert.pem
-   server_keyFile=/path/to/key.pem
-   ```
+```
+Error: "asset_httpAddress is not a valid URL"
+Cause: Invalid URL format in asset_httpAddress setting
+```
 
-2. **Enable response signing for sensitive APIs**
-   ```
-   asset_signHTTPResponses=true
-   p2p_private_key=secure_private_key
-   ```
+```
+Error: "server_certFile is required for HTTPS"
+Cause: Missing server_certFile when securityLevelHTTP is non-zero
+```
 
-3. **Store private keys securely**
-    - Use environment variables for sensitive configuration
-    - Rotate private keys periodically
-    - Restrict access to configuration files
+```
+Error: "server_keyFile is required for HTTPS"
+Cause: Missing server_keyFile when securityLevelHTTP is non-zero
+```
 
-#### 7.2.4 Dependency Configuration
+#### 7.2.6 Environment Variables
+
+**Standard Environment Variables:**
+- `TERANODE_ASSET_HTTPLISTENADDRESS` - HTTP server listen address
+- `TERANODE_ASSET_HTTPADDRESS` - Base HTTP server URL
+- `TERANODE_ASSET_HTTPPUBLICADDRESS` - Public-facing URL
+- `TERANODE_ASSET_APIPREFIX` - API URL prefix
+- `TERANODE_ASSET_CENTRIFUGE_DISABLE` - Disable Centrifuge service
+- `TERANODE_ASSET_CENTRIFUGELISTENADDRESS` - Centrifuge listen address
+- `TERANODE_ASSET_SIGN_HTTP_RESPONSES` - Enable response signing
+- `TERANODE_SECURITYLEVELHTTP` - HTTP security level
+- `TERANODE_SERVER_CERTFILE` - TLS certificate file
+- `TERANODE_SERVER_KEYFILE` - TLS private key file
+- `TERANODE_P2P_PRIVATE_KEY` - P2P private key for signing
+
+**Special Environment Variables:**
+    - `ECHO_DEBUG` - Echo framework debug mode
+    - `ASSET_HTTP_PORT` - HTTP port (configuration placeholder)
+
+
+#### 7.2.7 Dependency Configuration
 
 The Asset Server depends on several services for data access. These must be properly configured for the Asset Server to function:
 
@@ -403,7 +500,7 @@ The Asset Server depends on several services for data access. These must be prop
 | Block Persister Store | `block_persisterStore` | Connection URL for persisted block data | Yes |
 | Blockchain Client | `blockchain_grpcAddress` | gRPC connection for blockchain service | Yes |
 
-**Example Configuration:**
+**Example Dependency Configuration:**
 ```
 utxostore=aerospike://localhost:3000/test?set=utxo
 txstore=blob://localhost:8080/tx
@@ -412,7 +509,7 @@ block_persisterStore=blob://localhost:8080/blocks
 blockchain_grpcAddress=localhost:8082
 ```
 
-#### 7.2.5 Environment Variables
+#### 7.2.8 Environment Variable Examples
 
 All configuration options can be set using environment variables with the prefix `TERANODE_`. For example:
 
@@ -422,7 +519,8 @@ export TERANODE_SECURITY_LEVEL_HTTP=1
 export TERANODE_SERVER_CERT_FILE=/path/to/cert.pem
 ```
 
-#### 7.2.6 Configuration Interactions and Dependencies
+### 7.3 Configuration Examples
+
 
 **HTTP/HTTPS Mode:**
 The `securityLevelHTTP` setting determines whether the server runs in HTTP or HTTPS mode:
@@ -441,30 +539,37 @@ When response signing is enabled (`asset_signHTTPResponses=true`):
 
 - `p2p_private_key` must be set with a valid Ed25519 private key in hexadecimal format
 
-#### 7.2.7 Debugging Configuration
+```
+asset_httpListenAddress=:8443
+securityLevelHTTP=1
+server_certFile=/path/to/cert.pem
+server_keyFile=/path/to/key.pem
+```
 
-| Setting | Type | Description | Default |
-|---------|------|-------------|--------|
-| `ECHO_DEBUG` | bool | Enables detailed HTTP request logging | false |
+#### Centrifuge Configuration Example
 
-When `ECHO_DEBUG` is enabled, the server logs detailed information about each HTTP request and response, useful for development and troubleshooting.
+```
+asset_centrifugeDisable=false
+asset_centrifugeListenAddress=:8101
+asset_httpAddress=http://localhost:8090
+```
 
-7. **FSM Configuration**
-    - fsm_state_restore: Enables or disables the restore state for the Finite State Machine.
-      Example: fsm_state_restore=false
-    - The FSM provides state management for the blockchain system with endpoints for querying and manipulating states.
+### 7.4 FSM Configuration
+- fsm_state_restore: Enables or disables the restore state for the Finite State Machine.
+  Example: fsm_state_restore=false
+- The FSM provides state management for the blockchain system with endpoints for querying and manipulating states.
 
-8. **Coinbase Configuration**
-    - coinbase_grpcAddress: gRPC address for coinbase-related operations.
-      Example: coinbase_grpcAddress=localhost:50051
+### 7.5 Coinbase Configuration
+- coinbase_grpcAddress: gRPC address for coinbase-related operations.
+  Example: coinbase_grpcAddress=localhost:50051
 
-9. **Dashboard Configuration**
-    - dashboard_enabled: Enables or disables the Teranode dashboard UI.
-      Example: dashboard_enabled=true
-    - dashboard-related settings control authentication and user interface features.
+### 7.6 Dashboard Configuration
+- dashboard_enabled: Enables or disables the Teranode dashboard UI.
+  Example: dashboard_enabled=true
+- dashboard-related settings control authentication and user interface features.
 
-10. **Block Validation**
-    - The Asset Server provides endpoints to invalidate and revalidate blocks, which is useful for managing forks and recovering from errors.
+### 7.7 Block Validation
+- The Asset Server provides endpoints to invalidate and revalidate blocks, which is useful for managing forks and recovering from errors.
 
 
 
