@@ -31,10 +31,13 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
+	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -647,5 +650,44 @@ func TestSubErrorTxInvalid(t *testing.T) {
 		assert.True(t, errors.Is(combinedError, errors.ErrTxPolicy))
 		assert.True(t, errors.Is(combinedError, errors.ErrTxInvalid))
 		assert.False(t, errors.Is(combinedError, errors.ErrTxConsensus))
+	})
+}
+
+func TestZeroSatoshiOutputRequiresOpFalseOpReturn(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings()
+
+	privKey, err := bec.NewPrivateKey(bec.S256())
+	require.NoError(t, err)
+
+	pubKey := privKey.PubKey()
+
+	parentTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
+	)
+
+	// Create a child transaction that spends the parent and creates a zero-satoshi output with OP_RETURN (not OP_FALSE OP_RETURN)
+	// Standard OP_RETURN script: 0x6a <data>
+	customOpReturn := []byte{0x6a, 0x04, 0xde, 0xad, 0xbe, 0xef}
+	childTx := transactions.Create(t,
+		transactions.WithPrivateKey(privKey),
+		transactions.WithInput(parentTx, 0, privKey),
+		transactions.WithOutput(0, bscript.NewFromBytes(customOpReturn)),
+		transactions.WithP2PKHOutputs(1, 900, pubKey),
+	)
+
+	t.Run("zero-satoshi output with OP_RETURN (not OP_FALSE OP_RETURN) is not rejected when genesis activation height is not reached", func(t *testing.T) {
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+		err := txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight-1, &Options{})
+		assert.NoError(t, err)
+	})
+
+	t.Run("zero-satoshi output with OP_RETURN (not OP_FALSE OP_RETURN) is rejected when genesis activation height is reached", func(t *testing.T) {
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+
+		err := txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight, &Options{})
+		if assert.Error(t, err) {
+			assert.Contains(t, err.Error(), "zero-satoshi outputs require 'OP_FALSE OP_RETURN' prefix")
+		}
 	})
 }
