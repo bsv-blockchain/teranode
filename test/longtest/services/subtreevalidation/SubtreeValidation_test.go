@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	stv "github.com/bitcoin-sv/teranode/services/subtreevalidation"
 	"github.com/bitcoin-sv/teranode/services/validator"
@@ -23,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/kafka" //nolint:gci
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/require"

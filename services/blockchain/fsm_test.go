@@ -6,10 +6,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/util/test/mocklogger"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/stretchr/testify/require"
 )
 

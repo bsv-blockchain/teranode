@@ -3,7 +3,7 @@ package util
 import (
 	"log"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bsv-blockchain/go-chaincfg"
 )
 
 // GetBlockSubsidyForHeight func

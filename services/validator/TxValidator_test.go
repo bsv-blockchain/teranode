@@ -29,7 +29,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -37,6 +36,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/stretchr/testify/assert"
@@ -47,6 +47,7 @@ type args struct {
 	tx          *bt.Tx
 	blockHeight uint32
 	utxoHeights []uint32
+	network     string
 }
 
 // 7be4fa421844154ec4105894def768a8bcd80da25792947d585274ce38c07105
@@ -72,6 +73,7 @@ var txTests = []struct {
 			tx:          aTx,
 			blockHeight: 110300,
 			utxoHeights: []uint32{631924, 631924},
+			network:     "mainnet",
 		},
 		wantErr: assert.NoError,
 	},
@@ -80,7 +82,10 @@ var txTests = []struct {
 func TestScriptVerifierGoBt(t *testing.T) {
 	for _, tt := range txTests {
 		t.Run(tt.name, func(t *testing.T) {
-			scriptInterpreter := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
+			params, err := chaincfg.GetChainParams(tt.args.network)
+			require.NoError(t, err)
+
+			scriptInterpreter := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
 			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true, tt.args.utxoHeights), fmt.Sprintf("scriptVerifierGoBt(%v, %v)", tt.args.tx, tt.args.blockHeight))
 		})
 	}
@@ -89,7 +94,10 @@ func TestScriptVerifierGoBt(t *testing.T) {
 func TestScriptVerifierGoSDK(t *testing.T) {
 	for _, tt := range txTests {
 		t.Run(tt.name, func(t *testing.T) {
-			scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
+			params, err := chaincfg.GetChainParams(tt.args.network)
+			require.NoError(t, err)
+
+			scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
 			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true, tt.args.utxoHeights), fmt.Sprintf("scriptVerifierGoSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
 		})
 	}
@@ -98,7 +106,10 @@ func TestScriptVerifierGoSDK(t *testing.T) {
 func TestScriptVerifierGoBDK(t *testing.T) {
 	for _, tt := range txTests {
 		t.Run(tt.name, func(t *testing.T) {
-			scriptInterpreter := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
+			params, err := chaincfg.GetChainParams(tt.args.network)
+			require.NoError(t, err)
+
+			scriptInterpreter := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
 			tt.wantErr(t, scriptInterpreter.VerifyScript(tt.args.tx, tt.args.blockHeight, true, tt.args.utxoHeights), fmt.Sprintf("scriptVerifierGoBDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
 		})
 	}
@@ -124,7 +135,10 @@ func Test_Tx(t *testing.T) {
 	assert.Equal(t, "65cbf31895f6cab997e6c3688b2263808508adc69bcc9054eef5efac6f7895d3", tx.TxID())
 	assert.Equal(t, tx.TxID(), txE.TxID())
 
-	scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
+	params, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(t, err)
+
+	scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
 
 	err = scriptInterpreter.VerifyScript(&tx, 720899, true, []uint32{720899})
 	require.Error(t, err)
@@ -151,7 +165,10 @@ func TestGoBt2GoSDKTransaction(t *testing.T) {
 }
 
 func BenchmarkVerifyTransactionGoBt(b *testing.B) {
-	scriptInterpreter := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
+	params, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(b, err)
+
+	scriptInterpreter := newScriptVerifierGoBt(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
 	txHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9")
 	require.NoError(b, err)
 	tx, err := bt.NewTxFromBytes(txHex)
@@ -165,7 +182,10 @@ func BenchmarkVerifyTransactionGoBt(b *testing.B) {
 }
 
 func BenchmarkVerifyTransactionGoSDK(b *testing.B) {
-	scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
+	params, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(b, err)
+
+	scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
 	txHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9.bin")
 	require.NoError(b, err)
 	tx, err := bt.NewTxFromBytes(txHex)
@@ -179,7 +199,10 @@ func BenchmarkVerifyTransactionGoSDK(b *testing.B) {
 }
 
 func BenchmarkVerifyTransactionGoSDK2(b *testing.B) {
-	scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), chaincfg.GetChainParamsFromConfig())
+	params, err := chaincfg.GetChainParams("mainnet")
+	require.NoError(b, err)
+
+	scriptInterpreter := newScriptVerifierGoSDK(ulogger.TestLogger{}, settings.NewPolicySettings(), params)
 	txHex, err := os.ReadFile("./testdata/f568c66631de7b5842ebae84594cee00f7864132828997d09441fc2a937e9fab.hex")
 	require.NoError(b, err)
 	tx, err := bt.NewTxFromString(string(txHex))

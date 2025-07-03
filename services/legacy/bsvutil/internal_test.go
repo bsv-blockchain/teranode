@@ -15,8 +15,8 @@ import (
 	"strings"
 
 	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
-	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"golang.org/x/crypto/ripemd160"
 )
 

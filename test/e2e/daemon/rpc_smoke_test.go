@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -1209,6 +1210,22 @@ func TestGetMiningCandidate(t *testing.T) {
 	require.NotNil(t, getMiningCandidateVerboseResp.Result, "Result should not be nil")
 }
 
+// generateRandomAddress generates a random Bitcoin address for the given network.
+// network: "mainnet", "testnet", or "regtest"
+func generateRandomAddress(network string) (string, error) {
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	if err != nil {
+		return "", err
+	}
+
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), network == "mainnet")
+	if err != nil {
+		return "", err
+	}
+
+	return address.AddressString, nil
+}
+
 func TestGenerateToAddress(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
@@ -1220,9 +1237,13 @@ func TestGenerateToAddress(t *testing.T) {
 
 	defer td.Stop(t)
 
+	// generate a random address for the current network
+	network := strings.ToLower(td.Settings.ChainCfgParams.Net.String())
+	testAddress, err := generateRandomAddress(network)
+	require.NoError(t, err, "Failed to generate random address for network %s", network)
+
 	// Test generatetoaddress command
 	// Generate 2 blocks to a specific address
-	testAddress := "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa" // Genesis address
 	numBlocks := 2
 
 	resp, err := td.CallRPC(td.Ctx, "generatetoaddress", []any{numBlocks, testAddress})

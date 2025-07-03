@@ -10,8 +10,8 @@ import (
 	"errors"
 
 	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
-	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"golang.org/x/crypto/ripemd160"
 )
 
@@ -125,8 +125,8 @@ func DecodeAddress(addr string, defaultNet *chaincfg.Params) (Address, error) {
 
 	switch len(decoded) {
 	case ripemd160.Size: // P2PKH or P2SH
-		isP2PKH := chaincfg.IsPubKeyHashAddrID(netID)
-		isP2SH := chaincfg.IsScriptHashAddrID(netID)
+		isP2PKH := chaincfg.IsPubKeyHashAddrID(defaultNet.Net, netID)
+		isP2SH := chaincfg.IsScriptHashAddrID(defaultNet.Net, netID)
 
 		switch hash160 := decoded; {
 		case isP2PKH && isP2SH:

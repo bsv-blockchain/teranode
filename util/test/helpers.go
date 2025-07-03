@@ -1,8 +1,8 @@
 package test
 
 import (
-	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bsv-blockchain/go-chaincfg"
 )
 
 func CreateBaseTestSettings() *settings.Settings {

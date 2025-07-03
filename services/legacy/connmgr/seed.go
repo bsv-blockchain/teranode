@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-wire"
 )
 

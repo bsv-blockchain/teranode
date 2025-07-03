@@ -11,7 +11,7 @@
 package legacy
 
 import (
-	"github.com/bitcoin-sv/teranode/pkg/go-chaincfg"
+	"github.com/bsv-blockchain/go-chaincfg"
 )
 
 // activeNetParams is a pointer to the parameters specific to the
