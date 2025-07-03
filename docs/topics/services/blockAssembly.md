@@ -500,191 +500,212 @@ The Block Assembly service uses the following configuration options:
 
 ### Network and Communication Settings
 
-1. **`blockassembly_grpcAddress`**: Specifies the gRPC address for the block assembly service.
+1. **`blockassembly_grpcAddress`**: Address for gRPC client connections.
     - Type: string
     - Default: "localhost:8085"
-    - Impact: Used by clients to connect to the Block Assembly service for gRPC operations.
+    - Code Usage: `Client.NewClient()`, `Client.NewClientWithAddress()`
+    - Impact: Determines where clients connect to the Block Assembly service.
 
-2. **`blockassembly_grpcListenAddress`**: The address for the gRPC server to listen on.
+2. **`blockassembly_grpcListenAddress`**: Address for gRPC server to bind to.
     - Type: string
-    - Default: ""
-    - Impact: Controls which network interfaces the service binds to for accepting gRPC connections.
+    - Default: ":8085"
+    - Code Usage: `Server.Start()` method (line 556)
+    - Impact: Controls which interface and port the gRPC server binds to.
 
 ### gRPC Client Settings
 
-3. **`blockassembly_grpcMaxRetries`**: Maximum number of retry attempts for failed gRPC operations.
+3. **`blockassembly_grpcMaxRetries`**: Maximum number of retry attempts for gRPC calls.
     - Type: int
     - Default: 3
-    - Impact: Affects resilience of gRPC client operations when facing temporary failures.
+    - Code Usage: Client retry configuration
+    - Impact: Controls resilience of client connections during network issues.
 
-4. **`blockassembly_grpcRetryBackoff`**: The duration to wait between gRPC retry attempts.
+4. **`blockassembly_grpcRetryBackoff`**: Backoff duration between gRPC retry attempts.
     - Type: time.Duration
-    - Default: 1s
-    - Impact: Controls how quickly the service retries failed gRPC operations.
+    - Default: 2s
+    - Code Usage: Client retry timing
+    - Impact: Controls the delay between retry attempts to avoid overwhelming the server.
 
-### Subtree Management
+
+### Buffer Management and Memory Settings
 
 Subtrees are a critical component in the Block Assembly process, organizing transactions hierarchically for efficient block construction. The following settings control how subtrees are created, sized, and managed.
 
 5. **`blockassembly_newSubtreeChanBuffer`**: Buffer size for the new subtree channel.
     - Type: int
-    - Default: 100
+    - Default: 1000
+    - Code Usage: `Server.Init()` method (line 232)
     - Impact: Controls how many new subtree requests can be queued before blocking.
 
 6. **`blockassembly_subtreeRetryChanBuffer`**: Buffer size for the subtree retry channel.
     - Type: int
-    - Default: 100
+    - Default: 1000
+    - Code Usage: `Server.Init()` method (line 235)
     - Impact: Controls how many subtree retry operations can be queued before blocking.
 
 7. **`blockassembly_subtreeBlockHeightRetention`**: Number of blocks for which to retain subtrees.
     - Type: uint32
     - Default: 1000
+    - Code Usage: Subtree data retention management
     - Impact: Controls data retention period for subtrees, affecting storage requirements and historical data availability.
+
+
+### Subtree Size Management
+
+> **Dynamic Sizing**: When `blockassembly_useDynamicSubtreeSize` is enabled, subtree sizes automatically adjust between min/max bounds to target ~1 subtree/second.
 
 8. **`initial_merkle_items_per_subtree`**: Initial number of merkle items per subtree when the service starts.
     - Type: int
-    - Default: 1024
+    - Default: 1048576 (1M)
+    - Code Usage: SubtreeProcessor initialization
     - Impact: Sets the starting subtree size, affecting initial memory usage and subtree creation rate.
-    - Note: When `use_dynamic_subtree_size` is enabled, this is just the starting point.
+    - Note: When `blockassembly_useDynamicSubtreeSize` is enabled, this is just the starting point.
 
-9. **`minimum_merkle_items_per_subtree`**: Minimum number of merkle items per subtree.
+9. **`minimum_merkle_items_per_subtree`**: Minimum allowed size for subtrees.
     - Type: int
     - Default: 1024
-    - Impact: Sets a lower bound on subtree size to ensure efficient tree structures and prevent excessive subtree creation.
-    - Note: In low transaction volume scenarios, subtrees will only be created once enough transactions have accumulated to meet this minimum size requirement.
+    - Code Usage: `SubtreeProcessor.go` (line 855)
+    - Impact: Sets a lower bound on subtree size to ensure efficient tree structures.
 
-10. **`use_dynamic_subtree_size`**: Whether to dynamically adjust subtree size based on processing throughput.
+10. **`maximum_merkle_items_per_subtree`**: Maximum allowed size for subtrees.
+    - Type: int
+    - Default: 1048576 (1M)
+    - Code Usage: `SubtreeProcessor.go` (line 848)
+    - Impact: Sets an upper bound on subtree size, preventing excessive memory usage.
+
+11. **`blockassembly_useDynamicSubtreeSize`**: Whether to dynamically adjust subtree size based on processing throughput.
     - Type: bool
     - Default: false
-    - Impact: When enabled, the system will automatically optimize subtree sizes to target approximately one subtree per second under high throughput conditions.
-    - Note: When true, subtree sizes will automatically adjust between minimum and maximum values, always maintaining a power of 2 size (1024, 2048, 4096, etc.).
+    - Code Usage: `SubtreeProcessor.go` (line 793)
+    - Impact: When enabled, automatically optimizes subtree sizes to target ~1 subtree/second.
+    - Note: Sizes adjust between min/max values, maintaining power of 2 sizes (1024, 2048, 4096, etc.).
 
-11. **`maximum_merkle_items_per_subtree`**: Maximum allowed size for subtrees.
-    - Type: int
-    - Default: 65536 (64K)
-    - Impact: Sets an upper bound on subtree size, preventing excessive memory usage and ensuring subtrees don't become too large for efficient processing.
-
-### Block and Transaction Processing
+### Concurrency and Performance Settings
 
 12. **`blockassembly_sendBatchSize`**: Size of batches when sending transaction data.
     - Type: int
     - Default: 100
+    - Code Usage: Transaction batch processing
     - Impact: Affects throughput and memory usage during transaction processing.
 
 13. **`blockassembly_sendBatchTimeout`**: Maximum time in milliseconds to wait before sending a batch of transactions.
     - Type: int
     - Default: 100
+    - Code Usage: Transaction batch timeout control
     - Impact: Balances latency against batch efficiency in transaction processing.
 
 14. **`blockassembly_subtreeProcessorBatcherSize`**: Batch size for the subtree processor.
     - Type: int
     - Default: 1000
+    - Code Usage: `SubtreeProcessor.go` (line 519)
     - Impact: Controls memory usage and processing efficiency of transaction batches.
 
-15. **`double_spend_window`**: Time window in milliseconds for tracking and detecting double-spend attempts.
-    - Type: time.Duration
-    - Default: 10s
-    - Impact: Affects how double-spend detection works and for how long transactions are monitored.
-    - Note: Critical for maintaining blockchain integrity by preventing the same coins from being spent multiple times.
-
-16. **`blockassembly_maxGetReorgHashes`**: Maximum number of transaction hashes to retrieve during reorganization.
+15. **`tx_chan_buffer_size`**: Buffer size for transaction channel.
     - Type: int
     - Default: 1000
+    - Code Usage: Transaction channel buffering
+    - Impact: Controls how many transactions can be queued before backpressure is applied.
+
+16. **`blockassembly_subtreeProcessorConcurrentReads`**: Number of concurrent read operations in the subtree processor.
+    - Type: int
+    - Default: 375
+    - Code Usage: `Server.removeSubtreesDAH()` (line 1177)
+    - Impact: Controls parallelism for reading subtree data, affecting throughput.
+
+17. **`blockassembly_moveBackBlockConcurrency`**: Number of concurrent goroutines for block rollback during reorganization.
+    - Type: int
+    - Default: 375
+    - Code Usage: `SubtreeProcessor.go` (lines 1383, 1597)
+    - Impact: Controls parallelism during blockchain reorganizations.
+
+18. **`blockassembly_processRemainderTxHashesConcurrency`**: Number of concurrent goroutines for processing remaining transaction hashes.
+    - Type: int
+    - Default: 375
+    - Code Usage: Transaction hash processing during reorganizations
+    - Impact: Controls parallelism for transaction processing performance during reorgs.
+
+### Double-Spend Detection and Security
+
+19. **`double_spend_window_millis`**: Time window in milliseconds for tracking and detecting double-spend attempts.
+    - Type: int (converted to time.Duration)
+    - Default: 0 (disabled)
+    - Code Usage: `SubtreeProcessor.go` (lines 474, 1956)
+    - Impact: Controls how long transactions are monitored for conflicts.
+    - Security Note: Critical for maintaining blockchain integrity.
+
+20. **`global_blockHeightRetention`**: Number of blocks to retain for global operations.
+    - Type: uint32
+    - Default: 288 (2 days worth of blocks)
+    - Code Usage: `Server.go` DAH calculation (lines 253, 424)
+    - Impact: Controls data retention for double-spend detection and cleanup operations.
+
+### Block Assembly Reset and Recovery
+
+21. **`blockassembly_resetWaitCount`**: Number of blocks to wait before resuming mining after reset.
+    - Type: int32
+    - Default: 3
+    - Code Usage: `BlockAssembler.go` (lines 347-348)
+    - Impact: Controls recovery behavior after service reset.
+
+22. **`blockassembly_resetWaitDuration`**: Maximum duration to wait before resuming operations.
+    - Type: time.Duration
+    - Default: 20m
+    - Code Usage: `BlockAssembler.go` (line 350)
+    - Impact: Controls timeout for reset recovery operations.
+
+### Blockchain Reorganization Settings
+
+23. **`blockassembly_maxGetReorgHashes`**: Maximum number of transaction hashes to retrieve during reorganization.
+    - Type: int
+    - Default: 10000
+    - Code Usage: `BlockAssembler.go` (line 1130)
     - Impact: Limits memory usage during blockchain reorganizations.
 
-### Blockchain Reorganization
+### Mining Configuration
 
-Blockchain reorganization occurs when the node discovers a competing chain with more accumulated proof of work. The following settings control how the Block Assembly service handles reorganization scenarios.
-
-17. **`blockassembly_maxBlockReorgRollback`**: Maximum number of blocks the service can roll back during a blockchain reorganization.
-    - Type: int
-    - Default: 5
-    - Impact: Limits the size of backward reorganizations to protect against malicious chain splits.
-    - Note: If a reorganization would require rolling back more than this number of blocks, a full reset is triggered instead.
-
-18. **`blockassembly_maxBlockReorgCatchup`**: Maximum number of blocks to catch up during a blockchain reorganization.
-    - Type: int
-    - Default: 5
-    - Impact: Limits the size of forward reorganizations to protect against malicious chain splits.
-    - Note: Works in conjunction with `maxBlockReorgRollback` to define reorganization boundaries.
-
-19. **`blockassembly_moveBackBlockConcurrency`**: Number of concurrent goroutines used when rolling back blocks during reorganization.
-    - Type: int
-    - Default: 5
-    - Impact: Controls parallelism for performance during blockchain reorganizations.
-    - Note: Higher values may improve performance on systems with more CPU cores but consume more resources.
-
-20. **`blockassembly_processRemainderTxHashesConcurrency`**: Number of concurrent goroutines used when processing remaining transaction hashes.
-    - Type: int
-    - Default: 5
-    - Impact: Controls parallelism for transaction processing performance during reorganizations.
-
-21. **`blockassembly_resetWaitCount`**: Number of reset attempts to wait before forcing a reset.
-    - Type: int32
-    - Default: 10
-    - Impact: Controls how aggressively the service resets when facing issues during reorganizations or other operations.
-
-22. **`blockassembly_resetWaitDuration`**: Duration to wait between reset attempts.
-    - Type: time.Duration
-    - Default: 1s
-    - Impact: Controls the pace of reset attempts when service recovery is needed.
-
-### Mining and Difficulty
-
-23. **`blockassembly_SubmitMiningSolution_waitForResponse`**: Whether to wait for a response when submitting mining solutions.
-    - Type: bool
-    - Default: false
-    - Impact: Controls synchronous vs. asynchronous behavior of mining solution submissions.
-    - Note: When true, the mining client will wait for confirmation that the solution was accepted before proceeding.
-
-24. **`blockassembly_difficultyCache`**: Whether to cache difficulty calculations.
+24. **`blockassembly_SubmitMiningSolutionWaitForResponse`**: Whether to wait for a response when submitting mining solutions.
     - Type: bool
     - Default: true
-    - Impact: Affects performance of difficulty calculations during block assembly by reducing redundant calculations.
+    - Code Usage: `Server.SubmitMiningSolution()` (lines 836, 852)
+    - Impact: Controls synchronous vs. asynchronous behavior of mining solution submissions.
 
-25. **`blockassembly_minerWalletPrivateKeys`**: Private keys used for mining rewards.
+25. **`blockassembly_difficultyCache`**: Whether to cache difficulty calculations.
+    - Type: bool
+    - Default: true
+    - Code Usage: Difficulty calculation optimization
+    - Impact: Reduces redundant calculations, improves performance.
+
+26. **`miner_wallet_private_keys`**: Private keys used for mining rewards (pipe-separated).
     - Type: []string
     - Default: [] (empty array)
-    - Impact: Determines which wallets receive mining rewards when blocks are mined.
-    - Note: Never share these private keys; they should be securely managed and kept confidential.
-
-### Performance Tuning
-
-These settings affect the performance characteristics of the Block Assembly service and can be adjusted based on your hardware capabilities and network conditions.
-
-26. **`blockassembly_subtreeProcessorConcurrentReads`**: Number of concurrent read operations in the subtree processor.
-    - Type: int
-    - Default: 5
-    - Impact: Controls parallelism for reading subtree data, affecting throughput.
-    - Note: Higher values may improve throughput on systems with many CPU cores but consume more resources.
-
-27. **`tx_chan_buffer_size`**: Buffer size for transaction channel.
-    - Type: int
-    - Default: 1000
-    - Impact: Controls how many transactions can be queued before backpressure is applied.
-    - Note: Larger values allow for more transactions to be queued during burst periods but consume more memory.
-
-### Security Settings
-
-28. **`blockassembly_localDAHCache`**: Local cache for Delete-At-Height (DAH) information.
-    - Type: string
-    - Default: ""
-    - Impact: Affects performance of DAH operations by providing local caching.
-    - Note: This setting is important for security as it helps manage the lifecycle of sensitive transaction data.
+    - Code Usage: Mining reward distribution
+    - Security: Store securely, never expose in logs or configuration files.
 
 ### Service Control
 
-29. **`blockassembly_disabled`**: A toggle to enable or disable the block assembly functionality altogether.
+27. **`blockassembly_disabled`**: Toggle to enable or disable the block assembly functionality.
     - Type: bool
     - Default: false
-    - Impact: When true, prevents the service from starting and processing transactions.
+    - Code Usage: `Server.AddTx()`, `RemoveTx()`, `AddTxBatch()` (lines 621, 671, 716)
+    - Impact: When true, disables all transaction processing operations.
 
-30. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration.
+28. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration.
     - Type: bool
     - Default: false
+    - Code Usage: Service state restoration on startup
     - Impact: Controls whether the service attempts to restore its previous state on startup.
 
+29. **`blockmaxsize`**: Maximum block size in bytes.
+    - Type: int
+    - Default: 0 (unlimited)
+    - Code Usage: `BlockAssembler.go` block size validation (lines 764, 769, 817)
+    - Impact: Controls maximum block size for mining candidates.
 
+30. **Chain Configuration Parameters**: Network-specific parameters from `ChainCfgParams`.
+    - **`PowLimitBits`**: Mining difficulty target (lines 181, 872)
+    - **`MaxCoinbaseScriptSigSize`**: Coinbase script size limit (line 905)
+    - **`GenerateSupported`**: Block generation capability (line 1344)
+    - Impact: These are network-specific and should not be modified unless creating a custom network.
 
 ## 10. Other Resources
 
