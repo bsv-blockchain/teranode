@@ -73,7 +73,7 @@ import (
 //go:embed teranode.lua
 var teranodeLUA []byte
 
-var LuaPackage = "teranode_v36" // N.B. Do not have any "." in this string
+var LuaPackage = "teranode_v37" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = subtree.FrozenBytes[:]
@@ -189,6 +189,9 @@ const (
 
 	// LuaCoinbaseImmature indicates coinbase is not spendable yet
 	LuaCoinbaseImmature LuaReturnValue = "COINBASE_IMMATURE"
+
+	// LuaPreserve indicates external files need preservation
+	LuaPreserve LuaReturnValue = "PRESERVE"
 )
 
 // registerLuaIfNecessary ensures required Lua scripts are registered with Aerospike.

@@ -39,6 +39,8 @@ type Options struct {
 	HashPrefix int
 	// AllowOverwrite determines if existing blobs can be overwritten
 	AllowOverwrite bool
+	// SkipHeader determines if the file header should be skipped for easier CLI readability
+	SkipHeader bool
 	// PersistSubDir is a subdirectory for persistent storage in tiered storage models
 	PersistSubDir string
 	// LongtermStoreURL is the URL for a longterm storage backend in tiered storage models
@@ -150,6 +152,13 @@ func WithAllowOverwrite(allowOverwrite bool) FileOption {
 	}
 }
 
+// WithSkipHeader configures whether to skip writing the file header for easier CLI readability.
+func WithSkipHeader(skipHeader bool) FileOption {
+	return func(s *Options) {
+		s.SkipHeader = skipHeader
+	}
+}
+
 // WithLongtermStorage configures longterm storage options for the store.
 // This enables the three-layer storage functionality (primary local, persistent local, and longterm store, like S3).
 // Parameters:
@@ -193,6 +202,7 @@ func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 		options.BlockHeightRetention = storeOpts.BlockHeightRetention
 		options.SubDirectory = storeOpts.SubDirectory
 		options.HashPrefix = storeOpts.HashPrefix
+		options.SkipHeader = storeOpts.SkipHeader
 		options.PersistSubDir = storeOpts.PersistSubDir
 		options.LongtermStoreURL = storeOpts.LongtermStoreURL
 	}

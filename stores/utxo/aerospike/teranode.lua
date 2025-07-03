@@ -19,6 +19,7 @@ local SIGNAL_ALL_SPENT = ":ALLSPENT"
 local SIGNAL_NOT_ALL_SPENT = ":NOTALLSPENT"
 local SIGNAL_DELETE_AT_HEIGHT_SET = ":DAHSET:"
 local SIGNAL_DELETE_AT_HEIGHT_UNSET = ":DAHUNSET:"
+local SIGNAL_PRESERVE = ":PRESERVE"
 
 -- Error message constants
 local ERR_TX_NOT_FOUND = "ERROR:TX not found"
@@ -533,6 +534,10 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
     if blockHeightRetention == 0 then
         return ""
     end
+
+    if rec['preserveUntil'] then
+       return ""
+    end
     
     -- Check if all the UTXOs are spent and set the deleteAtHeight, but only for transactions that have been in at least one block
     local blockIDs = rec['blockIDs']
@@ -616,6 +621,40 @@ function setConflicting(rec, setValue, currentBlockHeight, blockHeightRetention)
     aerospike:update(rec)
 
     return MSG_OK .. signal
+end
+
+-- Function to preserve a transaction until a specific block height
+-- This removes any existing deleteAtHeight and sets preserveUntil
+-- Parameters:
+--   rec: table - The record to update
+--   blockHeight: number - The block height to preserve until
+-- Returns:
+--   string - A signal indicating the action taken
+--                                         _   _ _   _ 
+--  _ __  _ __ ___  ___  ___ _ __ __   _____| | | | |_(_)| 
+-- | '_ \| '__/ _ \/ __|/ _ \ '__\ \ / / _ \ | | | | __| |
+-- | |_) | | |  __/\__ \  __/ |   \ V /  __/ |_| | |_| |
+-- | .__/|_|  \___||___/\___|_|    \_/ \___|\___/ \__|_|
+-- |_|                                                  
+--
+function preserveUntil(rec, blockHeight)
+    if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
+
+    -- Remove deleteAtHeight if it exists
+    rec['deleteAtHeight'] = nil
+    
+    -- Set preserveUntil
+    rec['preserveUntil'] = blockHeight
+    
+    -- Update the record
+    aerospike:update(rec)
+    
+    -- Check if we need to signal external file handling
+    if rec['external'] then
+        return MSG_OK .. SIGNAL_PRESERVE
+    end
+    
+    return MSG_OK
 end
 
 -- Function to set the 'conflicting' field of a record

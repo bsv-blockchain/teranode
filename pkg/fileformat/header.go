@@ -27,6 +27,7 @@ const (
 	FileTypeTesting        FileType = "testing"
 	FileTypeBatchData      FileType = "batch-data"
 	FileTypeBatchKeys      FileType = "batch-keys"
+	FileTypePreserveUntil  FileType = "preserveUntil"
 	FileTypeUnknown        FileType = ""
 )
 
@@ -57,6 +58,7 @@ var (
 	magicTesting        = [8]byte{'T', 'E', 'S', 'T', 'I', 'N', 'G', ' '} // TESTING
 	magicBatchData      = [8]byte{'B', 'D', '-', '1', '.', '0', ' ', ' '} // BD-1.0
 	magicBatchKeys      = [8]byte{'B', 'K', '-', '1', '.', '0', ' ', ' '} // BK-1.0
+	magicPreserveUntil  = [8]byte{'P', 'U', '-', '1', '.', '0', ' ', ' '} // PU-1.0
 )
 
 var fileTypeToMagic = map[FileType][8]byte{
@@ -77,6 +79,7 @@ var fileTypeToMagic = map[FileType][8]byte{
 	FileTypeTesting:        magicTesting,
 	FileTypeBatchData:      magicBatchData,
 	FileTypeBatchKeys:      magicBatchKeys,
+	FileTypePreserveUntil:  magicPreserveUntil,
 }
 
 var magicToFileType = map[[8]byte]FileType{
@@ -97,6 +100,7 @@ var magicToFileType = map[[8]byte]FileType{
 	magicTesting:        FileTypeTesting,
 	magicBatchData:      FileTypeBatchData,
 	magicBatchKeys:      FileTypeBatchKeys,
+	magicPreserveUntil:  FileTypePreserveUntil,
 }
 
 type Header struct {

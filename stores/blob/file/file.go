@@ -567,10 +567,13 @@ func (s *File) SetFromReader(_ context.Context, key []byte, fileType fileformat.
 	// Set up the writer and hasher
 	writer, hasher := s.createWriter(file)
 
-	header := fileformat.NewHeader(fileType)
+	// Write header unless SkipHeader option is set
+	if !merged.SkipHeader {
+		header := fileformat.NewHeader(fileType)
 
-	if err := header.Write(writer); err != nil {
-		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write header to file", filename, err)
+		if err := header.Write(writer); err != nil {
+			return errors.NewStorageError("[File][SetFromReader] [%s] failed to write header to file", filename, err)
+		}
 	}
 
 	if _, err = io.Copy(writer, reader); err != nil {
