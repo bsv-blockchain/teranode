@@ -4,6 +4,25 @@ local SPENDING_DATA_SIZE = 36
 local FULL_UTXO_SIZE = UTXO_HASH_SIZE + SPENDING_DATA_SIZE
 local FROZEN_BYTE = 255
 
+-- Bin name constants
+local BIN_BLOCK_HEIGHTS = "blockHeights"
+local BIN_BLOCK_IDS = "blockIDs"
+local BIN_CONFLICTING = "conflicting"
+local BIN_DELETE_AT_HEIGHT = "deleteAtHeight"
+local BIN_EXTERNAL = "external"
+local BIN_UNMINED_SINCE = "unminedSince"
+local BIN_PRESERVE_UNTIL = "preserveUntil"
+local BIN_REASSIGNMENTS = "reassignments"
+local BIN_RECORD_UTXOS = "recordUtxos"
+local BIN_SPENDING_HEIGHT = "spendingHeight"
+local BIN_SPENT_EXTRA_RECS = "spentExtraRecs"
+local BIN_SPENT_UTXOS = "spentUtxos"
+local BIN_SUBTREE_IDXS = "subtreeIdxs"
+local BIN_TOTAL_EXTRA_RECS = "totalExtraRecs"
+local BIN_UNSPENDABLE = "unspendable"
+local BIN_UTXOS = "utxos"
+local BIN_UTXO_SPENDABLE_IN = "utxoSpendableIn"
+
 -- Message constants
 local MSG_OK = "OK"
 local MSG_CONFLICTING = "CONFLICTING:TX is conflicting"
@@ -184,30 +203,30 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBl
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
     
     if not ignoreConflicting then
-        if rec['conflicting'] then
+        if rec[BIN_CONFLICTING] then
             return MSG_CONFLICTING
         end
     end
     
     if not ignoreUnspendable then
-        if rec['unspendable'] then
+        if rec[BIN_UNSPENDABLE] then
             return MSG_UNSPENDABLE
         end
     end
 
-    local coinbaseSpendingHeight = rec['spendingHeight']
+    local coinbaseSpendingHeight = rec[BIN_SPENDING_HEIGHT]
     if coinbaseSpendingHeight and coinbaseSpendingHeight > 0 and coinbaseSpendingHeight > currentBlockHeight then
         return MSG_COINBASE_IMMATURE1 .. coinbaseSpendingHeight .. MSG_COINBASE_IMMATURE2 .. currentBlockHeight
     end
 
-    local utxos = rec['utxos']
+    local utxos = rec[BIN_UTXOS]
     if utxos == nil then
         return ERR_UTXOS_NOT_FOUND
     end
 
     local blockIDString = ""
-    if rec['blockIDs'] then
-        blockIDString = table.concat(rec['blockIDs'], ",")
+    if rec[BIN_BLOCK_IDS] then
+        blockIDString = table.concat(rec[BIN_BLOCK_IDS], ",")
     end
 
     -- loop through the spends
@@ -220,9 +239,9 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBl
         local utxo, existingSpendingData, err = getUTXOAndSpendingData(utxos, offset, utxoHash)
         if err then return err end
 
-        if rec['utxoSpendableIn'] then
-            if rec['utxoSpendableIn'][offset] and rec['utxoSpendableIn'][offset] >= currentBlockHeight then
-                return MSG_FROZEN_UNTIL .. rec['utxoSpendableIn'][offset]
+        if rec[BIN_UTXO_SPENDABLE_IN] then
+            if rec[BIN_UTXO_SPENDABLE_IN][offset] and rec[BIN_UTXO_SPENDABLE_IN][offset] >= currentBlockHeight then
+                return MSG_FROZEN_UNTIL .. rec[BIN_UTXO_SPENDABLE_IN][offset]
             end
         end
 
@@ -230,9 +249,9 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBl
         local utxo, existingSpendingData, err = getUTXOAndSpendingData(utxos, offset, utxoHash)
         if err then return err end
 
-        if rec['utxoSpendableIn'] then
-            if rec['utxoSpendableIn'][offset] and rec['utxoSpendableIn'][offset] >= currentBlockHeight then
-                return MSG_FROZEN_UNTIL .. rec['utxoSpendableIn'][offset]
+        if rec[BIN_UTXO_SPENDABLE_IN] then
+            if rec[BIN_UTXO_SPENDABLE_IN][offset] and rec[BIN_UTXO_SPENDABLE_IN][offset] >= currentBlockHeight then
+                return MSG_FROZEN_UNTIL .. rec[BIN_UTXO_SPENDABLE_IN][offset]
             end
         end
 
@@ -252,11 +271,11 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBl
         
         -- Update the record
         utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
-        rec['spentUtxos'] = rec['spentUtxos'] + 1
+        rec[BIN_SPENT_UTXOS] = rec[BIN_SPENT_UTXOS] + 1
     end
 
     -- Update the record with the new utxos
-    rec['utxos'] = utxos
+    rec[BIN_UTXOS] = utxos
 
     local signal = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
@@ -278,7 +297,7 @@ end
 function unspend(rec, offset, utxoHash, currentBlockHeight, blockHeightRetention)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
-    local utxos = rec['utxos']
+    local utxos = rec[BIN_UTXOS]
     if utxos == nil then
         return ERR_UTXOS_NOT_FOUND
     end
@@ -299,10 +318,10 @@ function unspend(rec, offset, utxoHash, currentBlockHeight, blockHeightRetention
         
         -- Update the record
         utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
-        rec['utxos'] = utxos
+        rec[BIN_UTXOS] = utxos
         
-        local spentUtxos = rec['spentUtxos']
-        rec['spentUtxos'] = spentUtxos - 1
+        local spentUtxos = rec[BIN_SPENT_UTXOS]
+        rec[BIN_SPENT_UTXOS] = spentUtxos - 1
     end
 
     local signal = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
@@ -317,34 +336,34 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
     -- Check if the bin exists; if not, initialize it as an empty list
-    if rec['blockIDs'] == nil then
-        rec['blockIDs'] = list()
+    if rec[BIN_BLOCK_IDS] == nil then
+        rec[BIN_BLOCK_IDS] = list()
     end
-    if rec['blockHeights'] == nil then
-        rec['blockHeights'] = list()
+    if rec[BIN_BLOCK_HEIGHTS] == nil then
+        rec[BIN_BLOCK_HEIGHTS] = list()
     end
-    if rec['subtreeIdxs'] == nil then
-        rec['subtreeIdxs'] = list()
+    if rec[BIN_SUBTREE_IDXS] == nil then
+        rec[BIN_SUBTREE_IDXS] = list()
     end
 
     -- Append the value to the list in the specified bin
-    local blocks = rec['blockIDs']
+    local blocks = rec[BIN_BLOCK_IDS]
     blocks[#blocks + 1] = blockID
-    rec['blockIDs'] = blocks
+    rec[BIN_BLOCK_IDS] = blocks
 
-    local heights = rec['blockHeights']
+    local heights = rec[BIN_BLOCK_HEIGHTS]
     heights[#heights + 1] = blockHeight
-    rec['blockHeights'] = heights
+    rec[BIN_BLOCK_HEIGHTS] = heights
 
-    local subtreeIdxs = rec['subtreeIdxs']
+    local subtreeIdxs = rec[BIN_SUBTREE_IDXS]
     subtreeIdxs[#subtreeIdxs + 1] = subtreeIdx
-    rec['subtreeIdxs'] = subtreeIdxs
+    rec[BIN_SUBTREE_IDXS] = subtreeIdxs
 
-    rec['unminedSince'] = nil
+    rec[BIN_UNMINED_SINCE] = nil
     
     -- set the record to be spendable again, if it was unspendable, since if was just mined into a block
-    if rec['unspendable'] then
-        rec['unspendable'] = false
+    if rec[BIN_UNSPENDABLE] then
+        rec[BIN_UNSPENDABLE] = false
     end
 
     local signal = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
@@ -366,7 +385,7 @@ end
 function freeze(rec, offset, utxoHash)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
-    local utxos = rec['utxos']
+    local utxos = rec[BIN_UTXOS]
     if utxos == nil then
         return ERR_UTXOS_NOT_FOUND
     end
@@ -398,7 +417,7 @@ function freeze(rec, offset, utxoHash)
     
     -- Update record
     utxos[offset + 1] = newUtxo
-    rec['utxos'] = utxos
+    rec[BIN_UTXOS] = utxos
 
     aerospike:update(rec)
 
@@ -416,7 +435,7 @@ end
 function unfreeze(rec, offset, utxoHash)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
-    local utxos = rec['utxos']
+    local utxos = rec[BIN_UTXOS]
     if utxos == nil then
         return ERR_UTXOS_NOT_FOUND
     end
@@ -442,7 +461,7 @@ function unfreeze(rec, offset, utxoHash)
     -- Update the record
     utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
 
-    rec['utxos'] = utxos
+    rec[BIN_UTXOS] = utxos
 
     aerospike:update(rec)
 
@@ -462,7 +481,7 @@ end
 function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfter)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
-    local utxos = rec['utxos']
+    local utxos = rec[BIN_UTXOS]
     if utxos == nil then
         return ERR_UTXOS_NOT_FOUND
     end
@@ -487,29 +506,29 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
 
     -- Update record
     utxos[offset + 1] = newUtxo
-    rec['utxos'] = utxos
+    rec[BIN_UTXOS] = utxos
 
     -- Initialize reassignment tracking if needed
-    if rec['reassignments'] == nil then
-        rec['reassignments'] = list()
+    if rec[BIN_REASSIGNMENTS] == nil then
+        rec[BIN_REASSIGNMENTS] = list()
     end
 
-    if rec['utxoSpendableIn'] == nil then
-        rec['utxoSpendableIn'] = map()
+    if rec[BIN_UTXO_SPENDABLE_IN] == nil then
+        rec[BIN_UTXO_SPENDABLE_IN] = map()
     end
 
     -- Record reassignment details
-    rec['reassignments'][#rec['reassignments'] + 1] = map {
+    rec[BIN_REASSIGNMENTS][#rec[BIN_REASSIGNMENTS] + 1] = map {
         offset = offset,
         utxoHash = utxoHash,
         newUtxoHash = newUtxoHash,
         blockHeight = blockHeight
     }
 
-    rec['utxoSpendableIn'][offset] = blockHeight + spendableAfter
+    rec[BIN_UTXO_SPENDABLE_IN][offset] = blockHeight + spendableAfter
 
     -- Ensure record is not DAH'd when all UTXOs are spent
-    rec['recordUtxos'] = rec['recordUtxos'] + 1
+    rec[BIN_RECORD_UTXOS] = rec[BIN_RECORD_UTXOS] + 1
 
     aerospike:update(rec)
 
@@ -535,23 +554,23 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
         return ""
     end
 
-    if rec['preserveUntil'] then
+    if rec[BIN_PRESERVE_UNTIL] then
        return ""
     end
     
     -- Check if all the UTXOs are spent and set the deleteAtHeight, but only for transactions that have been in at least one block
-    local blockIDs = rec['blockIDs']
-    local totalExtraRecs = rec['totalExtraRecs']
-    local spentExtraRecs = rec['spentExtraRecs'] or 0  -- Default to 0 if nil
-    local existingDeleteAtHeight = rec['deleteAtHeight']
+    local blockIDs = rec[BIN_BLOCK_IDS]
+    local totalExtraRecs = rec[BIN_TOTAL_EXTRA_RECS]
+    local spentExtraRecs = rec[BIN_SPENT_EXTRA_RECS] or 0  -- Default to 0 if nil
+    local existingDeleteAtHeight = rec[BIN_DELETE_AT_HEIGHT]
     local newDeleteHeight = currentBlockHeight + blockHeightRetention
             
     -- Handle conflicting transactions first
-    if rec["conflicting"] then
+    if rec[BIN_CONFLICTING] then
         if not existingDeleteAtHeight then
             -- Set the deleteAtHeight for the record
-            rec['deleteAtHeight'] = newDeleteHeight
-            if rec['external'] then
+            rec[BIN_DELETE_AT_HEIGHT] = newDeleteHeight
+            if rec[BIN_EXTERNAL] then
                 return SIGNAL_DELETE_AT_HEIGHT_SET .. totalExtraRecs
             end
         end
@@ -562,7 +581,7 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
     -- Handle pagination records
     if totalExtraRecs == nil then
         -- This is a pagination record: check if all the UTXOs are spent
-        if rec['spentUtxos'] == rec['recordUtxos'] then
+        if rec[BIN_SPENT_UTXOS] == rec[BIN_RECORD_UTXOS] then
             return SIGNAL_ALL_SPENT
         else
             return SIGNAL_NOT_ALL_SPENT
@@ -574,21 +593,21 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
     end
     
     -- This is a master record: only set deleteAtHeight if all UTXOs are spent and transaction is in at least one block
-    local allSpent = (totalExtraRecs == spentExtraRecs) and (rec['spentUtxos'] == rec['recordUtxos'])
+    local allSpent = (totalExtraRecs == spentExtraRecs) and (rec[BIN_SPENT_UTXOS] == rec[BIN_RECORD_UTXOS])
     local hasBlockIDs = blockIDs and list.size(blockIDs) > 0
 
     -- Set or update deleteAtHeight if all UTXOs are spent and transaction is in at least one block
     if allSpent and hasBlockIDs then
         if not existingDeleteAtHeight or existingDeleteAtHeight < newDeleteHeight then
-            rec['deleteAtHeight'] = newDeleteHeight
-            if rec['external'] then
+            rec[BIN_DELETE_AT_HEIGHT] = newDeleteHeight
+            if rec[BIN_EXTERNAL] then
                 return SIGNAL_DELETE_AT_HEIGHT_SET .. totalExtraRecs
             end
         end
     -- Clear deleteAtHeight if conditions are no longer met
     elseif existingDeleteAtHeight then
-        rec['deleteAtHeight'] = nil
-        if rec['external'] then
+        rec[BIN_DELETE_AT_HEIGHT] = nil
+        if rec[BIN_EXTERNAL] then
             return SIGNAL_DELETE_AT_HEIGHT_UNSET .. totalExtraRecs
         end
     end
@@ -614,7 +633,7 @@ end
 function setConflicting(rec, setValue, currentBlockHeight, blockHeightRetention)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
-    rec['conflicting'] = setValue
+    rec[BIN_CONFLICTING] = setValue
 
     local signal = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
@@ -641,16 +660,16 @@ function preserveUntil(rec, blockHeight)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
     -- Remove deleteAtHeight if it exists
-    rec['deleteAtHeight'] = nil
+    rec[BIN_DELETE_AT_HEIGHT] = nil
     
     -- Set preserveUntil
-    rec['preserveUntil'] = blockHeight
+    rec[BIN_PRESERVE_UNTIL] = blockHeight
     
     -- Update the record
     aerospike:update(rec)
     
     -- Check if we need to signal external file handling
-    if rec['external'] then
+    if rec[BIN_EXTERNAL] then
         return MSG_OK .. SIGNAL_PRESERVE
     end
     
@@ -673,9 +692,9 @@ end
 function setUnspendable(rec, setValue)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
-    local oldUnspendable = rec['unspendable']
-    local existingDeleteAtHeight = rec['deleteAtHeight']
-    local totalExtraRecs = rec['totalExtraRecs']
+    local oldUnspendable = rec[BIN_UNSPENDABLE]
+    local existingDeleteAtHeight = rec[BIN_DELETE_AT_HEIGHT]
+    local totalExtraRecs = rec[BIN_TOTAL_EXTRA_RECS]
 
     if totalExtraRecs == nil then
         totalExtraRecs = 0
@@ -685,12 +704,12 @@ function setUnspendable(rec, setValue)
         return "OK:" .. totalExtraRecs
     end
 
-    rec['unspendable'] = setValue
+    rec[BIN_UNSPENDABLE] = setValue
 
-    if rec['unspendable'] then
+    if rec[BIN_UNSPENDABLE] then
         -- Remove any existing deleteAtHeight
         if existingDeleteAtHeight then
-            rec['deleteAtHeight'] = nil
+            rec[BIN_DELETE_AT_HEIGHT] = nil
         end
     end
 
@@ -710,12 +729,12 @@ end
 function incrementSpentExtraRecs(rec, inc, currentBlockHeight, blockHeightRetention)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
-    local totalExtraRecs = rec['totalExtraRecs']
+    local totalExtraRecs = rec[BIN_TOTAL_EXTRA_RECS]
     if totalExtraRecs == nil then
         return ERR_TOTAL_EXTRA_RECS
     end
 
-    local spentExtraRecs = rec['spentExtraRecs']
+    local spentExtraRecs = rec[BIN_SPENT_EXTRA_RECS]
     if spentExtraRecs == nil then
         spentExtraRecs = 0
     end
@@ -730,7 +749,7 @@ function incrementSpentExtraRecs(rec, inc, currentBlockHeight, blockHeightRetent
         return ERR_SPENT_EXTRA_RECS_EXCEED
     end
 
-    rec['spentExtraRecs'] = spentExtraRecs
+    rec[BIN_SPENT_EXTRA_RECS] = spentExtraRecs
 
     local signal = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
@@ -789,7 +808,7 @@ end
 --                                               
 function deleteScan(stream, currentBlockHeight)
     return stream : filter(function(rec)
-        local deleteAtHeight = rec['deleteAtHeight']
+        local deleteAtHeight = rec[BIN_DELETE_AT_HEIGHT]
         return deleteAtHeight and deleteAtHeight <= currentBlockHeight
     end) : map(deleteExpired)
 end
