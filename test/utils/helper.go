@@ -1029,7 +1029,10 @@ func TestTxInBlock(ctx context.Context, logger ulogger.Logger, storeBlock blob.S
 func TestTxInSubtree(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, subtree []byte, tx chainhash.Hash) (bool, error) {
 	subtreeReader, err := subtreeStore.GetIoReader(ctx, subtree, fileformat.FileTypeSubtree)
 	if err != nil {
-		return false, errors.NewProcessingError("error getting subtree reader", err)
+		subtreeReader, err = subtreeStore.GetIoReader(ctx, subtree, fileformat.FileTypeSubtreeToCheck)
+		if err != nil {
+			return false, errors.NewProcessingError("error getting subtree reader", err)
+		}
 	}
 
 	return isTxInSubtree(logger, subtreeReader, tx)

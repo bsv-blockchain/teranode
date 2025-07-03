@@ -290,7 +290,15 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 			return nil, errors.NewBlockInvalidError("error creating subtree hash", err)
 		}
 
+		if subtreeHash.Equal(chainhash.Hash{}) {
+			return nil, errors.NewBlockInvalidError("unexpected empty subtree hash %d of %d", i, block.subtreeLength)
+		}
+
 		block.Subtrees = append(block.Subtrees, subtreeHash)
+	}
+
+	if uint64(len(block.Subtrees)) != block.subtreeLength {
+		return nil, errors.NewBlockInvalidError("block subtree length mismatch, expected %d, actual %d", block.subtreeLength, block.Subtrees)
 	}
 
 	var coinbaseTx bt.Tx
@@ -1107,8 +1115,19 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	}()
 
 	if len(b.Subtrees) == len(b.SubtreeSlices) {
-		// already loaded
-		return nil
+		missing := false
+
+		for i := range b.Subtrees {
+			if b.SubtreeSlices[i] == nil {
+				missing = true
+				break
+			}
+		}
+
+		if !missing {
+			// already loaded
+			return nil
+		}
 	}
 
 	b.SubtreeSlices = make([]*subtreepkg.Subtree, len(b.Subtrees))
@@ -1250,8 +1269,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
 		if subtree == nil {
-			// panic(fmt.Sprintf("[BLOCK][%s] missing subtree %d", b.String(), sIdx))
-			return errors.NewStorageError("[BLOCK][%s] missing subtree %d", b.String(), sIdx)
+			return errors.NewProcessingError("[BLOCK][%s] missing subtree %d of %d", b.String(), sIdx, len(b.Subtrees))
 		}
 
 		if sIdx == 0 {
@@ -1366,10 +1384,18 @@ func (b *Block) SubTreesFromBytes(subtreesBytes []byte) error {
 			return errors.NewProcessingError("[BLOCK][%s] error creating subtree hash", b.String(), err)
 		}
 
+		if subtreeHash.Equal(chainhash.Hash{}) {
+			return errors.NewProcessingError("[BLOCK][%s] unexpected empty subtree hash %d of %d", b.String(), i, subTreeCount)
+		}
+
 		b.Subtrees = append(b.Subtrees, subtreeHash)
 	}
 
 	b.subtreeLength = subTreeCount
+
+	if b.subtreeLength != uint64(len(b.Subtrees)) {
+		return errors.NewProcessingError("[BLOCK][%s] subtree size mismatch, expected %d, actual %d", b.String(), b.subtreeLength, len(b.Subtrees), err)
+	}
 
 	return nil
 }

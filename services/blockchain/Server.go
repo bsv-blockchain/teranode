@@ -646,6 +646,10 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		if err != nil {
 			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][AddBlock] unable to create subtree hash", err))
 		}
+
+		if subtreeHashes[i].Equal(chainhash.Hash{}) {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][AddBlock] unexpected empty subtree hash %d of %d", i, len(request.SubtreeHashes)))
+		}
 	}
 
 	block := &model.Block{

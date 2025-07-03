@@ -504,7 +504,7 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 	if err != nil {
 		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
 		if err != nil {
-			return nil, err
+			return nil, errors.NewServiceError("error in GetSubtree Get method", err)
 		}
 	}
 
@@ -536,7 +536,11 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 //   - bool: True if the subtree exists in the store, false otherwise
 //   - error: Any error encountered during the existence check
 func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+	if exists, err := repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree); err == nil {
+		return exists, nil
+	}
+
+	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
 }
 
 // GetSubtreeHead retrieves only the head portion of a subtree, containing fees and size information.
@@ -554,7 +558,10 @@ func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash
 
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
 	if err != nil {
-		return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method", err)
+		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
+		if err != nil {
+			return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method", err)
+		}
 	}
 
 	defer func() {

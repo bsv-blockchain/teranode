@@ -16,7 +16,6 @@ package blockvalidation
 
 import (
 	"context"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -544,7 +543,10 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 
 	exists, err := u.subtreeStore.Exists(ctx, hash[:], fileformat.FileTypeSubtree)
 	if err != nil {
-		return false, err
+		exists, err = u.subtreeStore.Exists(ctx, hash[:], fileformat.FileTypeSubtreeToCheck)
+		if err != nil {
+			return false, err
+		}
 	}
 
 	if exists {
@@ -1016,11 +1018,11 @@ func (u *BlockValidation) collectNecessaryBloomFilters(ctx context.Context, bloc
 				// we need to create the bloom filter, get the block
 				blockToCreateBloomFilter, err := u.blockchainClient.GetBlock(ctx, h.Hash())
 				if err != nil {
-					return nil, errors.NewProcessingError("[collectNecessaryBloomFilters][%s] failed to get block %s from store: %s", block.String(), h.Hash().String(), err)
+					return nil, errors.NewProcessingError("[collectNecessaryBloomFilters][%s] failed to get block %s from store", block.String(), h.Hash().String(), err)
 				}
 
 				if err = u.createAppendBloomFilter(ctx, blockToCreateBloomFilter); err != nil {
-					return nil, errors.NewProcessingError("[collectNecessaryBloomFilters][%s] failed to create bloom filter %s from store: %s", block.String(), h.Hash().String(), err)
+					return nil, errors.NewProcessingError("[collectNecessaryBloomFilters][%s] failed to create bloom filter %s from store", block.String(), h.Hash().String(), err)
 				}
 			}
 		}
@@ -1062,11 +1064,11 @@ func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context
 			// we need to create the bloom filter
 			blockToCreateBloomFilter, err := u.blockchainClient.GetBlock(ctx, hash)
 			if err != nil {
-				return errors.NewProcessingError("[waitForPreviousBlocksToBeProcessed][%s] failed to get block %s from store: %s", block.String(), hash.String(), err)
+				return errors.NewProcessingError("[waitForPreviousBlocksToBeProcessed][%s] failed to get block %s from store", block.String(), hash.String(), err)
 			}
 
 			if err = u.createAppendBloomFilter(ctx, blockToCreateBloomFilter); err != nil {
-				return errors.NewProcessingError("[waitForPreviousBlocksToBeProcessed][%s] failed to create bloom filter %s: %s", block.String(), hash.String(), err)
+				return errors.NewProcessingError("[waitForPreviousBlocksToBeProcessed][%s] failed to create bloom filter %s", block.String(), hash.String(), err)
 			}
 		}
 	}
@@ -1241,19 +1243,19 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 
 	bbf.Filter, err = block.NewOptimizedBloomFilter(ctx, u.logger, u.subtreeStore)
 	if err != nil {
-		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to create bloom filter: %s", block.Hash().String(), err)
+		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to create bloom filter", block.Hash().String(), err)
 	}
 
 	// Serialize the filter
 	filterBytes, err := bbf.Serialize()
 	if err != nil {
-		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to serialize bloom filter: %s", block.Hash().String(), err)
+		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to serialize bloom filter", block.Hash().String(), err)
 	}
 
 	// record the bloom filter in the subtreestore
 	err = u.subtreeStore.Set(ctx, block.Hash()[:], fileformat.FileTypeBloomFilter, filterBytes, options.WithDeleteAt(block.Height+u.bloomFilterRetentionSize))
 	if err != nil {
-		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to record bloom filter in subtree store: %s", block.Hash().String(), err)
+		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to record bloom filter in subtree store", block.Hash().String(), err)
 	}
 
 	u.pruneBloomFilters(ctx, block, bbf)
@@ -1265,7 +1267,7 @@ func (u *BlockValidation) pruneBloomFilters(ctx context.Context, block *model.Bl
 	// get best block height
 	_, bestBlockHeaderMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		u.logger.Errorf("[createAppendBloomFilter][%s] failed to get best block height: %s", block.Hash().String(), err)
+		u.logger.Errorf("[createAppendBloomFilter][%s] failed to get best block height", block.Hash().String(), err)
 		return
 	}
 
@@ -1285,6 +1287,8 @@ func (u *BlockValidation) pruneBloomFilters(ctx context.Context, block *model.Bl
 		}
 	}
 
+	// NOTE: the subtree store will handle pruning of the bloom filter files
+
 	// Add the new bloom filter
 	u.recentBlocksBloomFilters.Set(*block.Hash(), bbf)
 
@@ -1292,24 +1296,6 @@ func (u *BlockValidation) pruneBloomFilters(ctx context.Context, block *model.Bl
 
 	u.logger.Debugf("[pruneBloomFilters][%s] pruned %d filters, %d remaining",
 		block.Hash().String(), len(filtersToPrune), remainingCount)
-
-	if len(filtersToPrune) > 0 {
-		// background pruning of disk storage
-		go func(pruneList []chainhash.Hash) {
-			for _, hash := range pruneList {
-				if err := u.subtreeStore.Del(ctx, hash[:], fileformat.FileTypeBloomFilter); err != nil {
-					if errors.Is(err, os.ErrNotExist) {
-						// log as warning so that tests and chainintegrity steps don't flag build as failing
-						u.logger.Warnf("[pruneBloomFilters][%s] failed to prune filter %s from store: %s",
-							block.Hash().String(), hash.String(), err)
-					} else {
-						u.logger.Errorf("[pruneBloomFilters][%s] failed to prune filter %s from store: %s",
-							block.Hash().String(), hash.String(), err)
-					}
-				}
-			}
-		}(filtersToPrune)
-	}
 }
 
 // updateSubtreesDAH manages retention periods for block subtrees.

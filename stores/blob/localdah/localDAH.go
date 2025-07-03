@@ -142,9 +142,15 @@ func (l *LocalDAH) GetDAH(ctx context.Context, key []byte, fileType fileformat.F
 func (l *LocalDAH) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	ioReader, err := l.dahStore.GetIoReader(ctx, key, fileType, opts...)
 	if err != nil {
-		// couldn't find it in the DAH store, try the blob store
-		l.logger.Errorf("LocalDAH.GetIoReader miss for %s", utils.ReverseAndHexEncodeSlice(key))
-		return l.blobStore.GetIoReader(ctx, key, fileType, opts...)
+		if errors.Is(err, errors.ErrNotFound) && fileType == fileformat.FileTypeSubtree {
+			ioReader, err = l.dahStore.GetIoReader(ctx, key, fileformat.FileTypeSubtreeToCheck, opts...)
+		}
+
+		if err != nil {
+			// couldn't find it in the DAH store, try the blob store
+			l.logger.Errorf("LocalDAH.GetIoReader miss for %s", utils.ReverseAndHexEncodeSlice(key))
+			return l.blobStore.GetIoReader(ctx, key, fileType, opts...)
+		}
 	}
 
 	return ioReader, nil
@@ -170,10 +176,16 @@ func (l *LocalDAH) Get(ctx context.Context, key []byte, fileType fileformat.File
 func (l *LocalDAH) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
 	found, err := l.dahStore.Exists(ctx, key, fileType, opts...)
 	if err != nil || !found {
-		// couldn't find it in the DAH store, try the blob store
-		// hash, _ := chainhash.NewHash(key)
-		// l.logger.Warnf("LocalDAH.Exists miss for %s", hash.String())
-		return l.blobStore.Exists(ctx, key, fileType, opts...)
+		if errors.Is(err, errors.ErrNotFound) && fileType == fileformat.FileTypeSubtree {
+			found, err = l.dahStore.Exists(ctx, key, fileformat.FileTypeSubtreeToCheck, opts...)
+		}
+
+		if err != nil {
+			// couldn't find it in the DAH store, try the blob store
+			// hash, _ := chainhash.NewHash(key)
+			// l.logger.Warnf("LocalDAH.Exists miss for %s", hash.String())
+			return l.blobStore.Exists(ctx, key, fileType, opts...)
+		}
 	}
 
 	return found, nil

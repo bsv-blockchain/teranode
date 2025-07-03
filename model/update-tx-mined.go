@@ -129,6 +129,10 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		subtreeIdx := subtreeIdx
 		subtree := subtree
 
+		if subtree == nil {
+			return errors.NewProcessingError("[UpdateTxMinedStatus][%s] missing subtree %d of %d", block.String(), subtreeIdx, len(block.Subtrees))
+		}
+
 		minedBlockInfo := utxo.MinedBlockInfo{
 			BlockID:     blockID,
 			BlockHeight: block.Height,
