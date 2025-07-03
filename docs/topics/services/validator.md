@@ -2,7 +2,6 @@
 
 ## Index
 
-
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
     - [2.1. Starting the Validator as a service](#21-starting-the-validator-as-a-service)
@@ -22,7 +21,6 @@
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
 9. [Other Resources](#9-other-resources)
 
-
 ## 1. Description
 
 The `Validator` (also called `Transaction Validator` or `Tx Validator`) is a go component responsible for:
@@ -39,17 +37,17 @@ The Validator can be deployed in two distinct ways:
 1. **Local Validator (Recommended)**:
 
     - The Validator is instantiated directly within other services (like the Propagation, Subtree Validation, and Legacy Services)
-   - This is the recommended approach for production deployments due to better performance
-   - No additional network calls are needed between services and validator
-   - Configuration: Set `validator.useLocalValidator=true` in your settings
+    - This is the recommended approach for production deployments due to better performance
+    - No additional network calls are needed between services and validator
+    - Configuration: Set `validator.useLocalValidator=true` in your settings
 
 2. **Remote Validator Service**:
 
     - The Validator runs as an independent service with a gRPC interface
-   - Other services connect to it remotely via gRPC
-   - This approach has higher latency due to additional network calls
-   - Useful for development, testing, or specialized deployment scenarios
-   - Configuration: Set `validator.useLocalValidator=false` and configure validator gRPC endpoint
+    - Other services connect to it remotely via gRPC
+    - This approach has higher latency due to additional network calls
+    - Useful for development, testing, or specialized deployment scenarios
+    - Configuration: Set `validator.useLocalValidator=false` and configure validator gRPC endpoint
 
 The performance difference between these approaches can be significant, as the local validator approach eliminates network overhead between services.
 
@@ -77,22 +75,22 @@ The Validator uses Kafka for several critical messaging paths:
 1. **Transaction Metadata Publishing**:
 
     - Successfully validated transactions have their metadata published to a Kafka topic
-   - Metadata includes transaction ID, size, fee, input and output information
-   - The `txmetaKafkaProducerClient` handles this publishing process
-   - Target topic is configured via `Kafka.TxMetaConfig` settings
+    - Metadata includes transaction ID, size, fee, input and output information
+    - The `txmetaKafkaProducerClient` handles this publishing process
+    - Target topic is configured via `Kafka.TxMetaConfig` settings
 
 2. **Rejected Transaction Notifications**:
 
     - When transactions fail validation, details are published to a rejection topic
-   - The `rejectedTxKafkaProducerClient` is responsible for these messages
-   - Includes rejection reason, transaction ID, and error classification
-   - Helps with network-wide tracking of invalid transactions
+    - The `rejectedTxKafkaProducerClient` is responsible for these messages
+    - Includes rejection reason, transaction ID, and error classification
+    - Helps with network-wide tracking of invalid transactions
 
 3. **Transaction Validation Requests**:
 
     - The Validator can also consume validation requests via Kafka
-   - This enables asynchronous transaction processing patterns
-   - Useful for high-throughput scenarios where immediate responses aren't needed
+    - This enables asynchronous transaction processing patterns
+    - Useful for high-throughput scenarios where immediate responses aren't needed
 
 The Kafka integration provides resilience, allowing the system to handle temporary outages or service unavailability by buffering messages.
 
@@ -104,7 +102,7 @@ Should the node require to start the validator as an independent service, the `s
 
 ![tx_validator_init.svg](img/plantuml/validator/tx_validator_init.svg)
 
-* **`NewServer` Function**:
+- **`NewServer` Function**:
 
     1. Initialize a new `Server` instance.
     2. Create channels for new and dead subscriptions.
@@ -112,12 +110,12 @@ Should the node require to start the validator as an independent service, the `s
     4. Create a context for subscriptions and a corresponding cancellation function.
     5. Return the newly created `Server` instance.
 
-* **`Init` Function**:
+- **`Init` Function**:
     1. Create a new validator instance within the server.
     2. Handle any errors during the creation of the validator.
     3. Return the outcome (success or error).
 
-* **`Start` Function**:
+- **`Start` Function**:
     1. Start a goroutine to manage new and dead subscriptions.
     2. Start the gRPC server and handle any errors.
 
@@ -143,11 +141,11 @@ BlockValidation and Propagation invoke the validator process with and without ba
 
 For every transaction received, Teranode must validate:
 
- - All inputs against the existing UTXO-set, verifying if the input(s) can be spent,
+- All inputs against the existing UTXO-set, verifying if the input(s) can be spent,
     - Notice that if Teranode detects a double-spend, the transaction that was received first must be considered the valid transaction.
- - Bitcoin consensus rules,
- - Local policies (if any),
- - Whether the script execution returns `true`.
+- Bitcoin consensus rules,
+- Local policies (if any),
+- Whether the script execution returns `true`.
 
 Teranode will consider a transaction that passes consensus rules, local policies and script validation as fully validated and fit to be included in the next possible block.
 
@@ -173,64 +171,63 @@ The validation process includes several stages:
 
 New Txs are validated by the `ValidateTransaction()` function. To ensure the validity of the extended Tx, this is delegated to a BSV library: `github.com/TAAL-GmbH/arc/validator/default` (the default validator).
 
-
 We can see the exact steps being executed as part of the validation process below:
 
 ```go
 func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
-	//
-	// Each node will verify every transaction against a long checklist of criteria:
-	//
-	txSize := tx.Size()
+ //
+ // Each node will verify every transaction against a long checklist of criteria:
+ //
+ txSize := tx.Size()
 
-	// 1) Neither lists of inputs nor outputs are empty
-	if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
-		return errors.NewTxInvalidError("transaction has no inputs or outputs")
-	}
+ // 1) Neither lists of inputs nor outputs are empty
+ if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
+  return errors.NewTxInvalidError("transaction has no inputs or outputs")
+ }
 
-	// 2) The transaction size in bytes is less than maxtxsizepolicy.
-	if !validationOptions.SkipPolicyChecks {
-		if err := tv.checkTxSize(txSize); err != nil {
-			return err
-		}
-	}
+ // 2) The transaction size in bytes is less than maxtxsizepolicy.
+ if !validationOptions.SkipPolicyChecks {
+  if err := tv.checkTxSize(txSize); err != nil {
+   return err
+  }
+ }
 
-	// 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
-	// 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)
-	if err := tv.checkInputs(tx, blockHeight); err != nil {
-		return err
-	}
+ // 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
+ // 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)
+ if err := tv.checkInputs(tx, blockHeight); err != nil {
+  return err
+ }
 
-	// 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,
-	//    more than the dust threshold if 1 unless it's OP_RETURN, which is allowed to be 0)
-	if err := tv.checkOutputs(tx, blockHeight); err != nil {
-		return err
-	}
+ // 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,
+ //    more than the dust threshold if 1 unless it's OP_RETURN, which is allowed to be 0)
+ if err := tv.checkOutputs(tx, blockHeight); err != nil {
+  return err
+ }
 
-	// The transaction size in bytes is greater than or equal to 100 (BCH only check, not applicable to BSV)
+ // The transaction size in bytes is greater than or equal to 100 (BCH only check, not applicable to BSV)
 
-	// The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
-	// Note: This may be disabled for unlimited operation counts
+ // The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
+ // Note: This may be disabled for unlimited operation counts
 
-	// The unlocking script (scriptSig) can only push numbers on the stack
-	if tv.interpreter.Interpreter() != TxInterpreterGoBDK && blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
-		if err := tv.pushDataCheck(tx); err != nil {
-			return err
-		}
-	}
+ // The unlocking script (scriptSig) can only push numbers on the stack
+ if tv.interpreter.Interpreter() != TxInterpreterGoBDK && blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
+  if err := tv.pushDataCheck(tx); err != nil {
+   return err
+  }
+ }
 
-	// 10) Reject if the sum of input values is less than sum of output values
-	// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
-	if !validationOptions.SkipPolicyChecks {
-		if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
-			return err
-		}
-	}
+ // 10) Reject if the sum of input values is less than sum of output values
+ // 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
+ if !validationOptions.SkipPolicyChecks {
+  if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
+   return err
+  }
+ }
 
-	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
-	// (Script verification is handled separately with multiple interpreter options)
+ // 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
+ // (Script verification is handled separately with multiple interpreter options)
 
-	return nil
+ return nil
 }
 ```
 
@@ -278,7 +275,6 @@ The above represents an implementation of the core Teranode validation rules:
 
     - A node must not be able to spend a confiscated (re-assigned) transaction until 1,000 blocks after the transaction was re-assigned (confiscation maturity). The difference between block height and height at which the transaction was re-assigned must not be less than one thousand.
 
-
 #### 2.3.1. Consensus Rules vs Policy Checks
 
 In Bitcoin transaction validation, there are two distinct types of rules:
@@ -286,16 +282,16 @@ In Bitcoin transaction validation, there are two distinct types of rules:
 1. **Consensus Rules**: Mandatory rules that all nodes must enforce to maintain network consensus. Transactions violating consensus rules are always rejected. These include:
 
     - Transaction structure and formatting
-   - Double-spend prevention
-   - Input and output value constraints
-   - Script execution validity
+    - Double-spend prevention
+    - Input and output value constraints
+    - Script execution validity
 
 2. **Policy Rules**: Node-specific preferences that determine which valid transactions to accept, relay, or mine. Policy rules can differ between nodes without breaking consensus. These include:
 
     - Minimum transaction fees
-   - Maximum transaction size
-   - Script complexity limits
-   - Dust output thresholds
+    - Maximum transaction size
+    - Script complexity limits
+    - Dust output thresholds
 
 The TX Validator implements both types of rules, but provides the ability to skip policy checks when appropriate through the `SkipPolicyChecks` option.
 
@@ -338,14 +334,17 @@ To use this feature:
 The Validator supports multiple script verification implementations through a flexible interpreter architecture. Three different script interpreters are supported:
 
 1. **GoBT Interpreter** (`TxInterpreterGoBT`):
+
     - Based on the Go-BT library
     - Default interpreter for basic script validation
 
 2. **GoSDK Interpreter** (`TxInterpreterGoSDK`):
+
     - Based on the Go-SDK library
     - Provides advanced script validation capabilities
 
 3. **GoBDK Interpreter** (`TxInterpreterGoBDK`):
+
     - Based on the Go-BDK library
     - Optimized for performance in high-throughput scenarios
     - Includes specialized Bitcoin script validation features
@@ -367,22 +366,22 @@ The Validator implements a structured error handling system to categorize and re
 1. **Error Types**:
 
     - `TxInvalidError`: Generated when a transaction fails basic validation rules
-   - `ProcessingError`: Occurs during transaction processing issues
-   - `ConfigurationError`: Indicates validator configuration problems
-   - `ServiceError`: Represents broader service-level issues
+    - `ProcessingError`: Occurs during transaction processing issues
+    - `ConfigurationError`: Indicates validator configuration problems
+    - `ServiceError`: Represents broader service-level issues
 
 2. **Rejection Flow**:
 
     - When a transaction is rejected, detailed error information is captured
-   - Rejection reasons are categorized (e.g., invalid inputs, script failure, insufficient fees)
-   - Rejected transactions are published to a dedicated Kafka topic if configured
-   - The P2P service receives notifications about rejected transactions
+    - Rejection reasons are categorized (e.g., invalid inputs, script failure, insufficient fees)
+    - Rejected transactions are published to a dedicated Kafka topic if configured
+    - The P2P service receives notifications about rejected transactions
 
 3. **Error Propagation**:
 
     - Errors are wrapped and propagated through the system with context information
-   - GRPC error codes translate internal errors for API responses
-   - Detailed error messages assist in diagnosing validation issues
+    - GRPC error codes translate internal errors for API responses
+    - Detailed error messages assist in diagnosing validation issues
 
 ### 2.6. Concurrent Processing
 
@@ -391,30 +390,29 @@ The Validator leverages concurrency to optimize transaction processing performan
 1. **Parallel UTXO Saving**:
 
     - The `saveInParallel` flag enables concurrent UTXO updates
-   - Improves throughput by processing multiple transactions simultaneously
+    - Improves throughput by processing multiple transactions simultaneously
 
 2. **Batching**:
 
     - Transactions can be validated in batches for higher throughput
-   - Batch processing is configurable and used by both Propagation and Subtree Validation services
-   - The `TriggerBatcher()` method initiates batch processing when sufficient transactions accumulate
+    - Batch processing is configurable and used by both Propagation and Subtree Validation services
+    - The `TriggerBatcher()` method initiates batch processing when sufficient transactions accumulate
 
 3. **Error Group Pattern**:
 
     - Uses Go's `errgroup` package for coordinated concurrent execution
-   - Maintains proper error propagation in concurrent processing flows
+    - Maintains proper error propagation in concurrent processing flows
 
 4. **Two-Phase Commit Process**:
 
     - The `twoPhaseCommitTransaction` method ensures atomic transaction processing
-   - Prevents partial updates in case of failures during concurrent processing
+    - Prevents partial updates in case of failures during concurrent processing
 
 ### 2.7. Post-validation: Updating stores and propagating the transaction
 
 Once a Tx is validated, the Validator will update the UTXO store with the new Tx data. Then, it will notify the Block Assembly service and any P2P subscribers about the new Tx.
 
 ![tx_validation_post_process.svg](img/plantuml/validator/tx_validation_post_process.svg)
-
 
 - The Server receives a validation request and calls the `Validate` method on the Validator struct.
 - If the transaction is valid:
@@ -429,7 +427,6 @@ Once a Tx is validated, the Validator will update the UTXO store with the new Tx
 
     - The Server sends invalid transaction notifications to all P2P Service subscribers.
     - The rejected Tx is not stored or tracked in any store, and it is simply discarded.
-
 
 We can see the submission to the Subtree Validation Service here:
 
@@ -490,36 +487,39 @@ The Validator implements a two-phase commit process for transaction creation and
 1. **Phase 1 - Transaction Creation with Unspendable Flag**:
 
     - When a transaction is created, it is initially stored in the UTXO store with an "unspendable" flag set to `true`.
-   - This flag prevents the transaction outputs from being spent while it's in the process of being validated and added to block assembly, protecting against potential double-spend attempts.
+    - This flag prevents the transaction outputs from being spent while it's in the process of being validated and added to block assembly, protecting against potential double-spend attempts.
 
 2. **Phase 2 - Unsetting the Unspendable Flag**:
 
     - The unspendable flag is unset in two key scenarios:
 
-   a. **After Successful Addition to Block Assembly**:
+    a. **After Successful Addition to Block Assembly**:
 
-      - When a transaction is successfully validated and added to the block assembly, the Validator service immediately unsets the "unspendable" flag (sets it to `false`).
-      - This makes the transaction outputs available for spending in subsequent transactions, even before the transaction is mined in a block.
+    ```text
+    - When a transaction is successfully validated and added to the block assembly, the Validator service immediately unsets the "unspendable" flag (sets it to `false`).
+    - This makes the transaction outputs available for spending in subsequent transactions, even before the transaction is mined in a block.
+    ```
 
-   b. **When Mined in a Block (Fallback Mechanism)**:
+    b. **When Mined in a Block (Fallback Mechanism)**:
 
-      - As a fallback mechanism, if the flag hasn't been unset already, it will be unset when the transaction is mined in a block.
-      - When the transaction is mined in a block and that block is processed by the Block Validation service, the "unspendable" flag is unset (set to `false`) during the `SetMinedMulti` operation.
+    ```text
+    - As a fallback mechanism, if the flag hasn't been unset already, it will be unset when the transaction is mined in a block.
+    - When the transaction is mined in a block and that block is processed by the Block Validation service, the "unspendable" flag is unset (set to `false`) during the `SetMinedMulti` operation.
+    ```
 
 3. **Ignoring Unspendable Flag for Block Transactions**:
 
     - When processing transactions that are part of a block (as opposed to new transactions to include in an upcoming block), the validator can be configured to ignore the unspendable flag.
-   - This is necessary because transactions in a block have already been validated by miners and must be accepted regardless of their unspendable status.
-   - The validator uses the `WithIgnoreUnspendable` option to control this behavior during transaction validation.
+    - This is necessary because transactions in a block have already been validated by miners and must be accepted regardless of their unspendable status.
+    - The validator uses the `WithIgnoreUnspendable` option to control this behavior during transaction validation.
 
 This two-phase commit approach ensures that transactions are only made spendable after they've been successfully added to block assembly, reducing the risk of race conditions and double-spend attempts during the transaction processing lifecycle.
 
 > **For a comprehensive explanation of the two-phase commit process across the entire system, see the [Two-Phase Transaction Commit Process](../features/two_phase_commit.md) documentation.**
 
-
 ## 3. gRPC Protobuf Definitions
 
-The Validator, when run as a service, uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/validatorProto.md).
+The Validator, when run as a service, uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be found in the protobuf documentation.
 
 ## 4. Data Model
 
@@ -551,10 +551,9 @@ The code snippet you've provided utilizes a variety of technologies and librarie
     - `github.com/ordishs/gocore` and `github.com/ordishs/go-utils/batcher`: Utility libraries, used for handling core functionalities and batch processing.
     - `github.com/opentracing/opentracing-go`: Used for distributed tracing.
 
-
 ## 6. Directory Structure and Main Files
 
-```
+```text
 ./services/validator
 ├── Client.go                    # Contains client-side logic for interacting with the Validator
 ├── Interface.go                 # Defines interfaces for the Validator
@@ -574,9 +573,7 @@ The code snippet you've provided utilizes a variety of technologies and librarie
     └── validator_api_grpc.pb.go     # Auto-generated gRPC specific code from validator_api.proto
 ```
 
-
 ## 7. How to run
-
 
 To run the Validator locally, you can execute the following command:
 
@@ -585,7 +582,6 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Validator=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Validator locally.
-
 
 ## 8. Configuration options (settings flags)
 
@@ -620,6 +616,7 @@ The `useLocalValidator` setting has profound implications for system architectur
 This choice creates two distinct deployment architectures:
 
 **Local Validator Architecture:**
+
 - Services contain embedded validator instances
 - No network calls between services and validator
 - Lower latency and higher throughput
@@ -627,6 +624,7 @@ This choice creates two distinct deployment architectures:
 - Limited deployment flexibility
 
 **Remote Validator Architecture:**
+
 - Validator runs as a standalone service
 - Network calls between services and validator
 - Higher latency but more flexible deployment

@@ -4,7 +4,7 @@
 
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-    - [2.1 Service Initialization](#21-service-initialization)
+    - [2.1 Command Initialization](#21-command-initialization)
     - [2.2 Processing Headers](#22-processing-headers)
     - [2.3 Processing UTXOs](#23-processing-utxos)
 3. [Data Model](#3-data-model)
@@ -101,19 +101,23 @@ The service reads these structures from input files and converts them to the for
 1. **Go (Golang)**: The primary programming language.
 
 2. **Bitcoin SV Libraries**:
+
     - `github.com/bsv-blockchain/go-bt/v2`: For handling Bitcoin transactions and scripts.
 3. **Custom TERANODE Libraries**:
+
     - `github.com/bitcoin-sv/teranode`: For blockchain and UTXO store operations, error handling, and logging.
 
 4. **Concurrent Processing**:
+
     - `golang.org/x/sync/errgroup`: For managing concurrent UTXO processing.
 
 5. **Configuration Management**:
+
     - `github.com/ordishs/gocore`: For reading configuration values.
 
 ## 5. Directory Structure and Main Files
 
-```
+```text
 ./cmd/seeder/
 │
 ├── main.go

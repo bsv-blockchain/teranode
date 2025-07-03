@@ -51,8 +51,6 @@ After initial sanity check tests, the propagation service endorses transactions 
 
 - **kafka_validatortxsConfig**: This Kafka topic is used to transmit new transaction notifications from the Propagation component to the Validator.
 
-
-
 ### Validator Component
 
 ![kafka_validator_to_other_services.svg](img/plantuml/kafka_validator_to_other_services2.svg)
@@ -61,15 +59,11 @@ This diagram illustrates the central role of the Validator in processing new tra
 
 1. The Validator receives new transactions from the Propagation component via the `kafka_validatortxsConfig` topic.
 
-
 2. Valid transactions are forwarded to the Block Assembly component using **direct gRPC calls** (not Kafka). The Validator uses the `blockAssembler.Store()` method for synchronous transaction processing required for mining candidate generation.
-
 
 3. The Validator sends new UTXO (Unspent Transaction Output) metadata to the Subtree Validation component through the `kafka_txmetaConfig` topic for inclusion in new subtrees. Should a reversal be required, the same topic is  used to notify a deletion ("delete" command).
 
-
 4. If a transaction is rejected, the Validator notifies the P2P component via the `kafka_rejectedTxConfig` topic, allowing the network (other peers) to be informed about invalid transactions.
-
 
 ### P2P Service
 
@@ -79,12 +73,9 @@ The P2P (Peer-to-Peer) service is responsible from peer-to-peer communication, r
 
 1. It receives notifications about rejected transactions from the Validator through the `kafka_rejectedTxConfig` topic, allowing it to inform other nodes in the network.
 
-
 2. The P2P component propagates new blocks (as received from other peers in the network) to the Block Validation component via the `kafka_blocksConfig` topic, initiating the block validation process.
 
-
 3. New subtrees (as received from other peers in the network) are sent from the P2P component to the Subtree Validation component using the `kafka_subtreesConfig` topic, enabling efficient validation of large transaction sets.
-
 
 ### Blockchain
 
@@ -110,7 +101,7 @@ To maintain system integrity, Teranode is designed to pause operations when Kafk
 
 Kafka configuration in Teranode is primarily specified through URLs. Each Kafka topic has its own URL with parameters that control its behavior. The URL format is:
 
-```
+```text
 kafka://host1,host2,.../topic?param1=value1&param2=value2&...
 ```
 
@@ -122,7 +113,8 @@ Components of the URL:
 - **Parameters**: Query parameters that configure specific behavior
 
 Example:
-```
+
+```text
 kafka://localhost:9092/blocks?partitions=4&replication=3&flush_frequency=5s
 ```
 
@@ -230,6 +222,7 @@ These settings define the Kafka endpoints used across the Teranode system:
 ### Service-Specific Settings
 
 #### Block Assembly
+
 - **`blockassembly_kafkaWorkers`**
     - **Type**: Integer
     - **Default**: 100
@@ -237,6 +230,7 @@ These settings define the Kafka endpoints used across the Teranode system:
     - **Impact**: Higher values increase throughput but consume more resources
 
 #### Block Validation
+
 - **`blockvalidation_kafkaBlockConcurrency`**
     - **Type**: Integer
     - **Default**: max(4, runtime.NumCPU()-16)
@@ -244,6 +238,7 @@ These settings define the Kafka endpoints used across the Teranode system:
     - **Impact**: Higher values increase throughput but may cause resource contention
 
 #### Subtree Validation
+
 - **`subtreevalidation_kafkaSubtreeConcurrency`**
     - **Type**: Integer
     - **Default**: max(4, runtime.NumCPU()-16)
@@ -251,6 +246,7 @@ These settings define the Kafka endpoints used across the Teranode system:
     - **Impact**: Higher values increase throughput but may cause resource contention
 
 #### Validator
+
 - **`validator_kafkaWorkers`**: Number of concurrent Kafka processing workers
     - **Purpose**: Controls parallel transaction processing capacity
     - **Tuning**: Should match CPU cores and expected transaction volume
@@ -269,11 +265,13 @@ Kafka consumers in Teranode are organized into consumer groups, which determine 
 - **Consumer Group ID**: Each service uses a unique consumer group ID to ensure proper message distribution. This is typically passed as a parameter when creating a consumer group.
 
 - **Auto-Commit**:
+
     - **Type**: Boolean
     - **Description**: Controls whether Kafka offsets are automatically committed
     - **Default**: Varies by service
     - **Impact**: Critical for message processing guarantees
     - **Service-Specific Settings**:
+
         - **TxMeta Cache**: true (can tolerate missed messages)
         - **Rejected Transactions**: true (can tolerate missed messages)
         - **Subtree Validation**: false (requires exactly-once processing)
@@ -303,7 +301,6 @@ Many Kafka settings interact with each other and with system resources. Here are
     - **Primary Settings**: `autoCommit`, consumer logic
     - **Interaction**: False requires manual commit after successful processing
     - **Recommendation**: Use false for critical data paths
-
 
 ## 5. Operational Guidelines
 
@@ -360,7 +357,6 @@ Key metrics to monitor:
     - Retry rate
     - Queue size
 
-
 ## 6. Kafka URL Configuration Parameters
 
 ### Consumer Configuration Parameters
@@ -375,7 +371,8 @@ When configuring Kafka consumers via URL, the following query parameters are sup
 | `group_id` | string | - | Consumer group identifier for coordination |
 
 **Example Consumer URL:**
-```
+
+```text
 kafka://localhost:9092/transactions?partitions=4&consumer_ratio=2&replay=0&group_id=validator-group
 ```
 
@@ -394,7 +391,8 @@ When configuring Kafka producers via URL, the following query parameters are sup
 | `flush_frequency` | string | "10s" | Time-based flush frequency |
 
 **Example Producer URL:**
-```
+
+```text
 kafka://localhost:9092/blocks?partitions=2&replication=3&retention=3600000&flush_frequency=5s
 ```
 
@@ -407,6 +405,7 @@ Auto-commit in Kafka is a consumer configuration that determines when and how me
 Kafka consumer auto-commit behavior varies by service based on processing criticality:
 
 #### Auto-Commit Enabled Services
+
 These services can tolerate potential message loss for performance:
 
 - **TxMeta Cache (Subtree Validation)**: `autoCommit=true`
@@ -418,6 +417,7 @@ These services can tolerate potential message loss for performance:
     - Network efficiency prioritized
 
 #### Auto-Commit Disabled Services
+
 These services require exactly-once processing guarantees:
 
 - **Subtree Validation**: `autoCommit=false`
@@ -457,20 +457,23 @@ These services require exactly-once processing guarantees:
 ### Configuration Examples by Service
 
 #### High-Throughput Service (Propagation)
-```
+
+```text
 kafka_validatortxsConfig=kafka://localhost:9092/validator-txs?partitions=8&consumer_ratio=2&flush_frequency=1s
 validator_kafka_maxMessageBytes=1048576  # 1MB threshold
 ```
 
 #### Critical Processing Service (Block Validation)
-```
+
+```text
 kafka_blocksConfig=kafka://localhost:9092/blocks?partitions=4&consumer_ratio=1&replay=0
 blockvalidation_kafkaWorkers=4
 autoCommit=false  # Manual commit for reliability
 ```
 
 #### Metadata Service (Subtree Validation)
-```
+
+```text
 kafka_txmetaConfig=kafka://localhost:9092/txmeta?partitions=2&consumer_ratio=1&replay=1
 autoCommit=true   # Performance over strict guarantees
 ```

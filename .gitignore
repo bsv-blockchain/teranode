@@ -86,3 +86,5 @@ site/
 mainnet_14207txs_b886413_WUH.csv
 mainnet_large_txs.csv
 .sonarlint/
+
+CLAUDE.md

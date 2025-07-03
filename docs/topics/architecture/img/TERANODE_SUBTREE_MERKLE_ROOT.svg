@@ -1,76 +1,76 @@
 <svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
   <!-- Background -->
   <rect width="800" height="600" fill="#f8f9fa"/>
-  
+
   <!-- Styles -->
   <defs>
     <style>
-      .node-rect { 
-        fill: white; 
-        stroke: #333; 
-        stroke-width: 2; 
-        rx: 4; 
+      .node-rect {
+        fill: white;
+        stroke: #333;
+        stroke-width: 2;
+        rx: 4;
       }
-      .node-rect-highlighted { 
-        fill: #20b2aa; 
-        stroke: #333; 
-        stroke-width: 2; 
-        rx: 4; 
+      .node-rect-highlighted {
+        fill: #20b2aa;
+        stroke: #333;
+        stroke-width: 2;
+        rx: 4;
       }
-      .node-text { 
-        font-family: Arial, sans-serif; 
-        font-size: 12px; 
-        text-anchor: middle; 
-        dominant-baseline: central; 
-        fill: #333; 
+      .node-text {
+        font-family: Arial, sans-serif;
+        font-size: 12px;
+        text-anchor: middle;
+        dominant-baseline: central;
+        fill: #333;
       }
-      .node-text-highlighted { 
-        font-family: Arial, sans-serif; 
-        font-size: 12px; 
-        text-anchor: middle; 
-        dominant-baseline: central; 
-        fill: white; 
+      .node-text-highlighted {
+        font-family: Arial, sans-serif;
+        font-size: 12px;
+        text-anchor: middle;
+        dominant-baseline: central;
+        fill: white;
         font-weight: bold;
       }
-      .root-rect { 
-        fill: white; 
-        stroke: #20b2aa; 
-        stroke-width: 2; 
-        stroke-dasharray: 5,5; 
-        rx: 4; 
+      .root-rect {
+        fill: white;
+        stroke: #20b2aa;
+        stroke-width: 2;
+        stroke-dasharray: 5,5;
+        rx: 4;
       }
-      .connection-line { 
-        stroke: #666; 
-        stroke-width: 2; 
-        fill: none; 
+      .connection-line {
+        stroke: #666;
+        stroke-width: 2;
+        fill: none;
       }
-      .data-rect { 
-        fill: white; 
-        stroke: #666; 
-        stroke-width: 1; 
-        stroke-dasharray: 3,3; 
-        rx: 2; 
+      .data-rect {
+        fill: white;
+        stroke: #666;
+        stroke-width: 1;
+        stroke-dasharray: 3,3;
+        rx: 2;
       }
-      .data-text { 
-        font-family: Arial, sans-serif; 
-        font-size: 14px; 
-        text-anchor: middle; 
-        dominant-baseline: central; 
-        fill: #333; 
+      .data-text {
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        text-anchor: middle;
+        dominant-baseline: central;
+        fill: #333;
         font-weight: bold;
       }
-      .dataset-bg { 
-        fill: #e6f3ff; 
-        stroke: #20b2aa; 
-        stroke-width: 2; 
-        rx: 8; 
+      .dataset-bg {
+        fill: #e6f3ff;
+        stroke: #20b2aa;
+        stroke-width: 2;
+        rx: 8;
       }
-      .dataset-text { 
-        font-family: Arial, sans-serif; 
-        font-size: 14px; 
-        text-anchor: middle; 
-        dominant-baseline: central; 
-        fill: #333; 
+      .dataset-text {
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        text-anchor: middle;
+        dominant-baseline: central;
+        fill: #333;
         font-weight: bold;
       }
     </style>
@@ -84,146 +84,146 @@
   <!-- Level 1 -->
   <rect x="150" y="110" width="120" height="30" class="node-rect-highlighted"/>
   <text x="210" y="125" class="node-text-highlighted">HABCDEFGH</text>
-  
+
   <rect x="530" y="110" width="120" height="30" class="node-rect"/>
   <text x="590" y="125" class="node-text">HIJKLMNOP</text>
 
   <!-- Level 2 -->
   <rect x="80" y="180" width="80" height="30" class="node-rect"/>
   <text x="120" y="195" class="node-text">HABCD</text>
-  
+
   <rect x="220" y="180" width="80" height="30" class="node-rect"/>
   <text x="260" y="195" class="node-text">HEFGH</text>
-  
+
   <rect x="460" y="180" width="80" height="30" class="node-rect"/>
   <text x="500" y="195" class="node-text">HIJKL</text>
-  
+
   <rect x="580" y="180" width="80" height="30" class="node-rect-highlighted"/>
   <text x="620" y="195" class="node-text-highlighted">HMNOP</text>
 
   <!-- Level 3 -->
   <rect x="40" y="250" width="60" height="25" class="node-rect"/>
   <text x="70" y="262.5" class="node-text">HAB</text>
-  
+
   <rect x="120" y="250" width="60" height="25" class="node-rect"/>
   <text x="150" y="262.5" class="node-text">HCD</text>
-  
+
   <rect x="200" y="250" width="60" height="25" class="node-rect"/>
   <text x="230" y="262.5" class="node-text">HEF</text>
-  
+
   <rect x="280" y="250" width="60" height="25" class="node-rect"/>
   <text x="310" y="262.5" class="node-text">HGH</text>
-  
+
   <rect x="420" y="250" width="60" height="25" class="node-rect-highlighted"/>
   <text x="450" y="262.5" class="node-text-highlighted">HIJ</text>
-  
+
   <rect x="500" y="250" width="60" height="25" class="node-rect"/>
   <text x="530" y="262.5" class="node-text">HKL</text>
-  
+
   <rect x="580" y="250" width="60" height="25" class="node-rect"/>
   <text x="610" y="262.5" class="node-text">HMN</text>
-  
+
   <rect x="660" y="250" width="60" height="25" class="node-rect"/>
   <text x="690" y="262.5" class="node-text">HOP</text>
 
   <!-- Level 4 (Leaf nodes) -->
   <rect x="25" y="320" width="30" height="25" class="node-rect"/>
   <text x="40" y="332.5" class="node-text">HA</text>
-  
+
   <rect x="70" y="320" width="30" height="25" class="node-rect"/>
   <text x="85" y="332.5" class="node-text">HB</text>
-  
+
   <rect x="115" y="320" width="30" height="25" class="node-rect"/>
   <text x="130" y="332.5" class="node-text">HC</text>
-  
+
   <rect x="160" y="320" width="30" height="25" class="node-rect"/>
   <text x="175" y="332.5" class="node-text">HD</text>
-  
+
   <rect x="205" y="320" width="30" height="25" class="node-rect"/>
   <text x="220" y="332.5" class="node-text">HE</text>
-  
+
   <rect x="250" y="320" width="30" height="25" class="node-rect"/>
   <text x="265" y="332.5" class="node-text">HF</text>
-  
+
   <rect x="295" y="320" width="30" height="25" class="node-rect"/>
   <text x="310" y="332.5" class="node-text">HG</text>
-  
+
   <rect x="340" y="320" width="30" height="25" class="node-rect"/>
   <text x="355" y="332.5" class="node-text">HH</text>
-  
+
   <rect x="385" y="320" width="30" height="25" class="node-rect"/>
   <text x="400" y="332.5" class="node-text">HI</text>
-  
+
   <rect x="430" y="320" width="30" height="25" class="node-rect"/>
   <text x="445" y="332.5" class="node-text">HJ</text>
-  
+
   <rect x="475" y="320" width="30" height="25" class="node-rect-highlighted"/>
   <text x="490" y="332.5" class="node-text-highlighted">HK</text>
-  
+
   <rect x="520" y="320" width="30" height="25" class="node-rect-highlighted"/>
   <text x="535" y="332.5" class="node-text-highlighted">HL</text>
-  
+
   <rect x="565" y="320" width="30" height="25" class="node-rect"/>
   <text x="580" y="332.5" class="node-text">HM</text>
-  
+
   <rect x="610" y="320" width="30" height="25" class="node-rect"/>
   <text x="625" y="332.5" class="node-text">HN</text>
-  
+
   <rect x="655" y="320" width="30" height="25" class="node-rect"/>
   <text x="670" y="332.5" class="node-text">HO</text>
-  
+
   <rect x="700" y="320" width="30" height="25" class="node-rect"/>
   <text x="715" y="332.5" class="node-text">HP</text>
 
   <!-- Data Set -->
   <rect x="50" y="400" width="680" height="120" class="dataset-bg"/>
-  
+
   <!-- Data elements -->
   <rect x="70" y="420" width="30" height="25" class="data-rect"/>
   <text x="85" y="432.5" class="data-text">A</text>
-  
+
   <rect x="110" y="420" width="30" height="25" class="data-rect"/>
   <text x="125" y="432.5" class="data-text">B</text>
-  
+
   <rect x="150" y="420" width="30" height="25" class="data-rect"/>
   <text x="165" y="432.5" class="data-text">C</text>
-  
+
   <rect x="190" y="420" width="30" height="25" class="data-rect"/>
   <text x="205" y="432.5" class="data-text">D</text>
-  
+
   <rect x="230" y="420" width="30" height="25" class="data-rect"/>
   <text x="245" y="432.5" class="data-text">E</text>
-  
+
   <rect x="270" y="420" width="30" height="25" class="data-rect"/>
   <text x="285" y="432.5" class="data-text">F</text>
-  
+
   <rect x="310" y="420" width="30" height="25" class="data-rect"/>
   <text x="325" y="432.5" class="data-text">G</text>
-  
+
   <rect x="350" y="420" width="30" height="25" class="data-rect"/>
   <text x="365" y="432.5" class="data-text">H</text>
-  
+
   <rect x="390" y="420" width="30" height="25" class="data-rect"/>
   <text x="405" y="432.5" class="data-text">I</text>
-  
+
   <rect x="430" y="420" width="30" height="25" class="data-rect"/>
   <text x="445" y="432.5" class="data-text">J</text>
-  
+
   <rect x="470" y="420" width="30" height="25" class="data-rect"/>
   <text x="485" y="432.5" class="data-text">K</text>
-  
+
   <rect x="510" y="420" width="30" height="25" class="data-rect"/>
   <text x="525" y="432.5" class="data-text">L</text>
-  
+
   <rect x="550" y="420" width="30" height="25" class="data-rect"/>
   <text x="565" y="432.5" class="data-text">M</text>
-  
+
   <rect x="590" y="420" width="30" height="25" class="data-rect"/>
   <text x="605" y="432.5" class="data-text">N</text>
-  
+
   <rect x="630" y="420" width="30" height="25" class="data-rect"/>
   <text x="645" y="432.5" class="data-text">O</text>
-  
+
   <rect x="670" y="420" width="30" height="25" class="data-rect"/>
   <text x="685" y="432.5" class="data-text">P</text>
 
@@ -234,13 +234,13 @@
   <!-- Root to Level 1 -->
   <line x1="370" y1="70" x2="210" y2="110" class="connection-line"/>
   <line x1="430" y1="70" x2="590" y2="110" class="connection-line"/>
-  
+
   <!-- Level 1 to Level 2 -->
   <line x1="180" y1="140" x2="120" y2="180" class="connection-line"/>
   <line x1="240" y1="140" x2="260" y2="180" class="connection-line"/>
   <line x1="560" y1="140" x2="500" y2="180" class="connection-line"/>
   <line x1="620" y1="140" x2="620" y2="180" class="connection-line"/>
-  
+
   <!-- Level 2 to Level 3 -->
   <line x1="100" y1="210" x2="70" y2="250" class="connection-line"/>
   <line x1="140" y1="210" x2="150" y2="250" class="connection-line"/>
@@ -250,7 +250,7 @@
   <line x1="520" y1="210" x2="530" y2="250" class="connection-line"/>
   <line x1="600" y1="210" x2="610" y2="250" class="connection-line"/>
   <line x1="640" y1="210" x2="690" y2="250" class="connection-line"/>
-  
+
   <!-- Level 3 to Level 4 -->
   <line x1="55" y1="275" x2="40" y2="320" class="connection-line"/>
   <line x1="85" y1="275" x2="85" y2="320" class="connection-line"/>

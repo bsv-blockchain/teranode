@@ -1,9 +1,13 @@
 
 ## 📜 Network Consensus Rules
 
-Bitcoin Nodes must adhere to the following network consensus rules. These rules are protocol level rules that are set in stone:
+Bitcoin Nodes must adhere to the following network consensus rules. These rules are **protocol level rules** that are **set in stone**:
 
-### Block Size Rule:
+---
+
+---
+
+### 📦 Block Size Rule
 
 When a block is found, there is an economic limit applied to the block size which is imposed by nodes on the network.
 
@@ -11,41 +15,53 @@ This allows nodes to reach consensus on behavioural limits of the network. This 
 
 The Teranode Node system will be unbounded, so the block size limit will be purely economic, and the system will be capable of adding blocks of any size to the blockchain.
 
-### Block Subsidy Rule:
+---
+
+### 💰 Block Subsidy Rule
 
 Nodes receive a reward each time they add a new block to the blockchain. The reward consists of a Block Subsidy and transaction fees.
 
-The Block Subsidy also acts to brings satoshis into circulation. The first Block Subsidies for the first 210,000 blocks added to the Bitcoin blockchain consisted of 5,000,000,000 or 50BSV per block.
+The Block Subsidy also acts to brings satoshis into circulation. The first Block Subsidies for the first **210,000 blocks** added to the Bitcoin blockchain consisted of **5,000,000,000 satoshis** or **50 BSV** per block.
 
-Every 210,000, the value of the block subsidy is halved. The last halving took place in April 2024 at block height 840'000. As of April 2024, the  value of a Block Subsidy is 312,500,000 satoshis or 3.125BSV.
+Every **210,000 blocks**, the value of the block subsidy is halved. The last halving took place in **April 2024** at block height **840,000**. As of April 2024, the value of a Block Subsidy is **312,500,000 satoshis** or **3.125 BSV**.
 
-### Proof-of-Work Target Adjustment Rule:
+---
 
-The Target value to find a Proof-of-Work is adjusted to maintain a block discovery rate of approximately 10 minutes.
+### ⚖️ Proof-of-Work Target Adjustment Rule
 
-As of 2017, the Target value is adjusted every block. However, in the original release of Bitcoin, the Target value was adjusted every 14 days.
+The Target value to find a Proof-of-Work is adjusted to maintain a block discovery rate of approximately **10 minutes**.
+
+As of **2017**, the Target value is adjusted **every block**. However, in the original release of Bitcoin, the Target value was adjusted every **14 days**.
 
 The Teranode Node system will maintain the current Target Adjustment schedule of every block, but the system may be updated in the future to return to the original Target Adjustment schedule (as part of Protocol restoration).
 
-### Genesis Block Rule:
+---
+
+### 🏗️ Genesis Block Rule
 
 All new blocks must be added to the unbroken chain of Proof-of-Work leading back to the Genesis block or the initial block in the chain.
 
-Since blocks are connected via new blocks including the hash of its previous block, and Merkle trees are used to keep track of transactions within a block, this rule can be satisfied using the chain of block headers. Each block header is only 80 bytes.
+Since blocks are connected via new blocks including the hash of its previous block, and Merkle trees are used to keep track of transactions within a block, this rule can be satisfied using the chain of block headers. Each block header is only **80 bytes**.
 
 Given the chain of block headers can be used to adhere to the Genesis Block rules, the Initial Block Download or IBD where a new node joining the network downloads all block data including transaction data all the way back to the Genesis block used by current node implementations is not needed and will not be included in the Teranode Node system.
 
-### Coinbase Maturity Rule:
+---
 
-Nodes cannot spend the output of a Coinbase Transaction unless 99 blocks have been added to the chain after it. In other words, for a node to spend its block reward, 99 more blocks must be added to the chain.
+### ⏰ Coinbase Maturity Rule
 
-### Maximum Transaction Size Rule:
+Nodes cannot spend the output of a Coinbase Transaction unless **99 blocks** have been added to the chain after it. In other words, for a node to spend its block reward, **99 more blocks** must be added to the chain.
+
+---
+
+### 📏 Maximum Transaction Size Rule
 
 Bitcoin Nodes collectively set a practical limit for the size of transactions they are willing to timestamp into a block.
 
 The Teranode Node project will ensure this limit is entirely economic by allowing unbounded scaling.
 
-### nLockTime and nSequence Rules:
+---
+
+### 🔒 nLockTime and nSequence Rules
 
 The nSequence fields of every transaction input and the nLockTime field of every transaction collectively determine the finality of a transaction.
 
@@ -81,12 +97,14 @@ If the value of the inputs is greater than the value of the outputs, the differe
 
 If the value of the inputs is equal to the value of the outputs, the transaction has no fee, and is considered a “free” transaction.
 
-The Teranode Node system will support free transactions up to a cumulative maximum size: initially, 2GB, then 5GB per block.
+The Teranode Node system will support free transactions up to a cumulative maximum size: initially, **2GB**, then **5GB per block**.
 
 Free transactions must follow a standard transaction template that has been given the status of standard by the Technical Standards Committee.
 
 For example, a standard transaction template type could be transactions that only have Pay-to-Public-Key-Hash scripts in their inputs and outputs.
 
-### Transaction Format Rule:
+---
+
+### 📝 Transaction Format Rule
 
 Transactions must conform to the data formatting rules of the Bitcoin protocol.

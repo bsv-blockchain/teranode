@@ -1,0 +1,12 @@
+# Markdown linting configuration for teranode documentation
+
+# Allow duplicate headings in RPC documentation for consistent structure
+MD024:
+  # Allow duplicate headings in certain files where they provide consistent structure
+  siblings_only: true
+
+# Allow HTML in markdown (often needed for complex formatting)
+MD033: false
+
+# Allow long lines (some documentation may have long URLs or code examples)
+MD013: false
