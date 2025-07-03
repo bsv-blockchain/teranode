@@ -320,16 +320,22 @@ Components:
 | Parameter | Type | Default | Description | Impact |
 |-----------|------|---------|-------------|--------|
 | `batch` | Boolean | false | Enables batch operations | Improves performance by batching operations |
+| `sizeInBytes` | Integer | 4194304 | Maximum batch size in bytes (4MB default) | Controls batch size; larger values increase throughput but use more memory |
+| `writeKeys` | Boolean | false | Whether to write keys along with blob data | Enables key storage alongside blob content |
 | `batch_size` | Integer | 1000 | Maximum items in a batch | Controls batch size; larger values increase throughput but use more memory |
 | `batch_duration` | Integer (ms) | 50 | Maximum time before processing a batch | Balances throughput vs. latency |
-| `localDAHStore` | Boolean | false | Enables Delete-At-Height functionality | Enables automatic expiry of data based on blockchain height |
-| `localDAHStorePath` | String | "/tmp/localDAH" | Path for local DAH store metadata | Only used when localDAHStore=true |
+| `localDAHStore` | String | "" | Path to local DAH store for Delete-At-Height functionality | Enables automatic expiry of data based on blockchain height |
+| `localDAHStorePath` | String | "./" | Path for local DAH store metadata | Directory for DAH metadata storage |
+| `logger` | Boolean | false | Enables debug logging for all blob operations | Adds detailed logging for troubleshooting |
 
 #### 8.2.2. File Backend Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | Path component | String | None (required) | Base directory for file storage |
+| `dahCleanerInterval` | Duration | "1m" | Frequency of expired blob cleanup operations |
+| `header` | String | "" | Custom header prepended to all stored blobs |
+| `eofmarker` | String | "" | Custom footer appended to all stored blobs |
 
 #### 8.2.3. S3 Backend Parameters
 
@@ -339,6 +345,12 @@ Components:
 | `region` | String | "us-east-1" | AWS region for S3 bucket |
 | `endpoint` | String | AWS S3 endpoint | Custom endpoint for S3-compatible storage |
 | `forcePathStyle` | Boolean | false | Force path-style addressing |
+| `subDirectory` | String | "" | S3 object key prefix for organization |
+| `MaxIdleConns` | Integer | 100 | Maximum number of idle HTTP connections |
+| `MaxIdleConnsPerHost` | Integer | 100 | Maximum idle connections per host |
+| `IdleConnTimeoutSeconds` | Integer | 100 | Idle connection timeout in seconds |
+| `TimeoutSeconds` | Integer | 30 | Request timeout for S3 operations |
+| `KeepAliveSeconds` | Integer | 300 | Connection keep-alive duration |
 
 #### 8.2.4. HTTP Backend Parameters
 

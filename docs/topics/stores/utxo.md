@@ -437,7 +437,7 @@ UTXO Store Package Structure (stores/utxo)
 │   │       ├── storeBatcher        # Batcher for store operations
 │   │       ├── getBatcher          # Batcher for get operations
 │   │       ├── spendBatcher        # Batcher for spend operations
-│   │       └── lastSpendBatcher    # Batcher for last spend operations
+│   │       ├── lastSpendBatcher    # Batcher for last spend operations
 │   │       ├── New                 # Initializes a new Aerospike UTXO Store
 │   │       ├── sendStoreBatch      # Processes and stores a batch of transactions
 │   │       ├── sendGetBatch        # Retrieves a batch of UTXO data
@@ -585,9 +585,9 @@ The UTXO Store can be configured through the `UtxoStoreSettings` struct which co
 |-----------|------|-------------|--------|
 | `UtxoStore` | *url.URL | Connection URL for the UTXO store | - |
 | `BlockHeightRetention` | uint32 | Number of blocks to retain data for | - |
-| `UtxoBatchSize` | int | Batch size for UTXOs (critical - do not change after initial setup) | 1024 |
+| `UtxoBatchSize` | int | Batch size for UTXOs (critical - do not change after initial setup) | 128 |
 | `DBTimeout` | time.Duration | Timeout for database operations | 5s |
-| `UseExternalTxCache` | bool | Whether to use external transaction cache | false |
+| `UseExternalTxCache` | bool | Whether to use external transaction cache | true |
 | `ExternalizeAllTransactions` | bool | Whether to externalize all transactions | false |
 | `VerboseDebug` | bool | Enable verbose debugging | false |
 | `UpdateTxMinedStatus` | bool | Whether to update transaction mined status | true |
@@ -607,22 +607,23 @@ The UTXO Store uses batch processing to improve performance. The following setti
 |-----------|------|-------------|--------|
 | `StoreBatcherSize` | int | Batch size for store operations | 256 |
 | `StoreBatcherDurationMillis` | int | Maximum duration in milliseconds for store batching | 10 |
-| `StoreBatcherConcurrency` | int | Concurrency level for store batchers | 4 |
-| `GetBatcherSize` | int | Batch size for get operations | 1024 |
-| `GetBatcherDurationMillis` | int | Maximum duration in milliseconds for get batching | 10 |
-| `SpendBatcherSize` | int | Batch size for spend operations | 256 |
-| `SpendBatcherDurationMillis` | int | Maximum duration in milliseconds for spend batching | 10 |
-| `SpendBatcherConcurrency` | int | Concurrency level for spend batchers | 4 |
-| `OutpointBatcherSize` | int | Batch size for outpoint operations | 256 |
+| `StoreBatcherConcurrency` | int | Number of concurrent store batcher goroutines | 32 |
+| `SpendBatcherSize` | int | Batch size for spend operations | 100 |
+| `SpendBatcherDurationMillis` | int | Maximum duration in milliseconds for spend batching | 100 |
+| `SpendBatcherConcurrency` | int | Number of concurrent spend batcher goroutines | 32 |
+| `OutpointBatcherSize` | int | Batch size for outpoint operations | 100 |
 | `OutpointBatcherDurationMillis` | int | Maximum duration in milliseconds for outpoint batching | 10 |
 | `IncrementBatcherSize` | int | Batch size for increment operations | 256 |
 | `IncrementBatcherDurationMillis` | int | Maximum duration in milliseconds for increment batching | 10 |
-| `SetDAHBatcherSize` | int | Batch size for Delete-At-Height (DAH) operations | 256 |
+| `SetDAHBatcherSize` | int | Batch size for Delete-At-Height operations | 256 |
 | `SetDAHBatcherDurationMillis` | int | Maximum duration in milliseconds for DAH batching | 10 |
 | `UnspendableBatcherSize` | int | Batch size for unspendable operations | 256 |
 | `UnspendableBatcherDurationMillis` | int | Maximum duration in milliseconds for unspendable batching | 10 |
-| `MaxMinedRoutines` | int | Maximum number of routines for mined transactions | 4 |
-| `MaxMinedBatchSize` | int | Maximum batch size for mined transactions | 1000 |
+| `GetBatcherSize` | int | Batch size for get operations | 1 |
+| `GetBatcherDurationMillis` | int | Maximum duration in milliseconds for get batching | 10 |
+| `MaxMinedRoutines` | int | Maximum number of concurrent goroutines for processing mined transactions | 128 |
+| `MaxMinedBatchSize` | int | Maximum number of mined transactions processed in a batch | 1024 |
+
 
 ### 8.3 Environment Variables
 
@@ -657,8 +658,8 @@ The `ExternalizeAllTransactions` setting controls whether all transactions are s
 
 For SQL backends (PostgreSQL), the `PostgresMaxIdleConns` and `PostgresMaxOpenConns` settings control the connection pool behavior:
 
-- `PostgresMaxIdleConns`: Controls how many idle connections are maintained in the pool
 - `PostgresMaxOpenConns`: Limits the maximum number of concurrent connections to the database
+- `PostgresMaxIdleConns`: Controls how many idle connections are maintained in the pool
 
 **Recommendations:**
 - Set `PostgresMaxOpenConns` based on your database server capacity and expected load
