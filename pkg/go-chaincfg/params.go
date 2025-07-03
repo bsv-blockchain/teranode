@@ -132,9 +132,10 @@ type Params struct {
 
 	// The following are the heights at which the Bitcoin-specific forks
 	// became active.
-	UahfForkHeight          uint32 // August 1, 2017, hard fork
-	DaaForkHeight           uint32 // November 13, 2017 hard fork
-	GenesisActivationHeight uint32 // Genesis activation height
+	UahfForkHeight            uint32 // August 1, 2017, hard fork
+	DaaForkHeight             uint32 // November 13, 2017 hard fork
+	GenesisActivationHeight   uint32 // Genesis activation height
+	ChronicleActivationHeight uint32 // Chronicle activation height
 
 	// CoinbaseMaturity is the number of blocks required before newly mined
 	// coins (coinbase transactions) can be spent.
@@ -247,16 +248,17 @@ var MainNetParams = Params{
 	// November 13, 2017, hard fork
 	DaaForkHeight: 504031, // 0000000000000000011ebf65b60d0a3de80b8175be709d653b4c1a1beeb6ab9c
 
-	GenesisActivationHeight:  620538,
-	MaxCoinbaseScriptSigSize: 100,
-	CoinbaseMaturity:         100,
-	SubsidyReductionInterval: 210000,
-	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
-	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
-	ReduceMinDifficulty:      false,
-	NoDifficultyAdjustment:   false,
-	MinDiffReductionTime:     0,
-	GenerateSupported:        false,
+	GenesisActivationHeight:   620538,
+	ChronicleActivationHeight: 921788, // temporary and subject to change
+	MaxCoinbaseScriptSigSize:  100,
+	CoinbaseMaturity:          100,
+	SubsidyReductionInterval:  210000,
+	TargetTimePerBlock:        time.Minute * 10, // 10 minutes
+	RetargetAdjustmentFactor:  4,                // 25% less, 400% more
+	ReduceMinDifficulty:       false,
+	NoDifficultyAdjustment:    false,
+	MinDiffReductionTime:      0,
+	GenerateSupported:         false,
 
 	// Checkpoints ordered from oldest to newest.
 	Checkpoints: []Checkpoint{
@@ -359,15 +361,15 @@ var StnParams = Params{
 	// November 13, 2017, hard fork
 	DaaForkHeight: 2200, // must be > 2016
 
-	GenesisActivationHeight: 100,
-
-	SubsidyReductionInterval: 210000,
-	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
-	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
-	ReduceMinDifficulty:      false,
-	NoDifficultyAdjustment:   false,
-	MinDiffReductionTime:     time.Minute * 20, // TargetTimePerBlock * 2
-	GenerateSupported:        false,
+	GenesisActivationHeight:   100,
+	ChronicleActivationHeight: 250, // temporary and subject to change
+	SubsidyReductionInterval:  210000,
+	TargetTimePerBlock:        time.Minute * 10, // 10 minutes
+	RetargetAdjustmentFactor:  4,                // 25% less, 400% more
+	ReduceMinDifficulty:       false,
+	NoDifficultyAdjustment:    false,
+	MinDiffReductionTime:      time.Minute * 20, // TargetTimePerBlock * 2
+	GenerateSupported:         false,
 
 	// Checkpoints ordered from oldest to newest.
 	Checkpoints: nil,
@@ -439,15 +441,15 @@ var RegressionNetParams = Params{
 	// November 13, 2017, hard fork is always on regtest.
 	DaaForkHeight: 0,
 
-	GenesisActivationHeight: 10000,
-
-	SubsidyReductionInterval: 150,
-	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
-	RetargetAdjustmentFactor: 4,                // 25% less, 400% more
-	ReduceMinDifficulty:      true,
-	NoDifficultyAdjustment:   true,
-	MinDiffReductionTime:     time.Minute * 20, // TargetTimePerBlock * 2
-	GenerateSupported:        true,
+	GenesisActivationHeight:   10000,
+	ChronicleActivationHeight: 15000, // temporary and subject to change
+	SubsidyReductionInterval:  150,
+	TargetTimePerBlock:        time.Minute * 10, // 10 minutes
+	RetargetAdjustmentFactor:  4,                // 25% less, 400% more
+	ReduceMinDifficulty:       true,
+	NoDifficultyAdjustment:    true,
+	MinDiffReductionTime:      time.Minute * 20, // TargetTimePerBlock * 2
+	GenerateSupported:         true,
 
 	// Checkpoints ordered from oldest to newest.
 	Checkpoints: nil,
@@ -519,9 +521,10 @@ var TestNetParams = Params{
 	// November 13, 2017, hard fork
 	DaaForkHeight: 1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
 
-	GenesisActivationHeight:  1344302,
-	MaxCoinbaseScriptSigSize: 100,
-	CoinbaseMaturity:         100,
+	GenesisActivationHeight:   1344302,
+	ChronicleActivationHeight: 1686611, // temporary and subject to change
+	MaxCoinbaseScriptSigSize:  100,
+	CoinbaseMaturity:          100,
 
 	SubsidyReductionInterval: 210000,
 	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
@@ -611,10 +614,11 @@ var TeraTestNetParams = Params{
 
 	UahfForkHeight: 0, // always enabled
 
-	DaaForkHeight:            0, // always enabled
-	GenesisActivationHeight:  1,
-	MaxCoinbaseScriptSigSize: 100,
-	CoinbaseMaturity:         10, // coinbase matures after 10 confirmations
+	DaaForkHeight:             0, // always enabled
+	GenesisActivationHeight:   1,
+	ChronicleActivationHeight: 2, // temporary and subject to change
+	MaxCoinbaseScriptSigSize:  100,
+	CoinbaseMaturity:          10, // coinbase matures after 10 confirmations
 
 	SubsidyReductionInterval: 210000,
 	TargetTimePerBlock:       time.Minute * 10, // 10 minutes
@@ -683,10 +687,11 @@ var TeraScalingTestNetParams = Params{
 
 	UahfForkHeight: 0, // always enabled
 
-	DaaForkHeight:            0, // always enabled
-	GenesisActivationHeight:  1,
-	MaxCoinbaseScriptSigSize: 100,
-	CoinbaseMaturity:         10, // coinbase matures after 10 confirmations
+	DaaForkHeight:             0, // always enabled
+	GenesisActivationHeight:   1,
+	ChronicleActivationHeight: 2, // temporary and subject to change
+	MaxCoinbaseScriptSigSize:  100,
+	CoinbaseMaturity:          10, // coinbase matures after 10 confirmations
 
 	SubsidyReductionInterval: 210000,
 	TargetTimePerBlock:       time.Minute * 10, // 10 minutes

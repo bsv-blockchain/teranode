@@ -105,9 +105,7 @@ func newScriptVerifierGoBDK(l ulogger.Logger, po *settings.PolicySettings, pa *c
 	}
 
 	// #nosec G115 -- blockHeight won't overflow
-	// For now as our chain params don't have chronicle height, we set that to just genesis+1
-	// We are not sure if that's used yet, but we set it for safety as bdk might depend to this (bsv 1.2.0)
-	if err := se.SetChronicleActivationHeight(int32(pa.GenesisActivationHeight + 1)); err != nil {
+	if err := se.SetChronicleActivationHeight(int32(pa.ChronicleActivationHeight)); err != nil {
 		panic(err)
 	}
 
