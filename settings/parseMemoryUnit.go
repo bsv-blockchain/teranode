@@ -1,12 +1,13 @@
 package settings
 
 import (
-	"errors"
+	"errors" //nolint:depguard // refactor needed to use the internal errors package
 	"regexp"
 	"strconv"
 	"strings"
 )
 
+// ParseMemoryUnit takes a string representing a memory size (e.g., "1GB", "512MB", "2.5KiB")
 func ParseMemoryUnit(sizeStr string) (uint64, error) {
 	// remove leading/trailing whitespace
 	sizeStr = strings.TrimSpace(sizeStr)

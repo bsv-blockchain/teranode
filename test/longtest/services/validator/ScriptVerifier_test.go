@@ -55,7 +55,7 @@ func BenchmarkScriptVerification(b *testing.B) {
 	for _, siType := range scriptInterpreterTypes {
 		createTxScriptInterpreter, ok := validator.TxScriptInterpreterFactory[validator.TxInterpreter(siType)]
 		if !ok {
-			panic(fmt.Errorf("unable to find script interpreter %v", siType))
+			panic(errors.NewUnknownError("unable to find script interpreter " + fmt.Sprint(siType)))
 		}
 
 		scriptInterpreter := createTxScriptInterpreter(tLogger, tSettings.Policy, &chaincfg.MainNetParams)
@@ -67,7 +67,7 @@ func BenchmarkScriptVerification(b *testing.B) {
 		b.Run(testNameMultiRoutine, func(b *testing.B) {
 			defer func() {
 				if r := recover(); r != nil {
-					err = fmt.Errorf("recovered from panic: %v", r)
+					err = errors.NewUnknownError("recovered from panic: " + fmt.Sprint(r))
 				}
 			}()
 
@@ -79,7 +79,7 @@ func BenchmarkScriptVerification(b *testing.B) {
 		b.Run(testNameSequential, func(b *testing.B) {
 			defer func() {
 				if r := recover(); r != nil {
-					err = fmt.Errorf("recovered from panic: %v", r)
+					err = errors.NewUnknownError("recovered from panic: " + fmt.Sprint(r))
 				}
 			}()
 
@@ -110,7 +110,7 @@ func Test_ScriptVerificationBDKLargeTx(t *testing.T) {
 
 			createTxScriptInterpreter, ok := validator.TxScriptInterpreterFactory[validator.TxInterpreter("GoBDK")]
 			if !ok {
-				panic(fmt.Errorf("unable to find script interpreter %v", "GoBDK"))
+				panic(errors.NewUnknownError("unable to find script interpreter GoBDK"))
 			}
 
 			bdkScriptInterpreter := createTxScriptInterpreter(tLogger, tSettings.Policy, &chaincfg.MainNetParams)
@@ -174,12 +174,12 @@ func getTxsData(csvDataFile string) ([]CsvDataRecord, error) {
 
 	file, err := os.OpenFile(csvDataFile, os.O_RDONLY, os.ModePerm)
 	if err != nil {
-		return ret, fmt.Errorf("error opening file : %v. error : %v", csvDataFile, err)
+		return ret, errors.NewUnknownError("error opening file : " + csvDataFile + ". error : " + err.Error())
 	}
 	defer file.Close()
 
 	if err := gocsv.UnmarshalFile(file, &ret); err != nil {
-		return ret, fmt.Errorf("error parsing file : %v. error : %v", csvDataFile, err)
+		return ret, errors.NewUnknownError("error parsing file : " + csvDataFile + ". error : " + err.Error())
 	}
 
 	// Post process, trim all leading and trailing whitespace
@@ -192,7 +192,7 @@ func getTxsData(csvDataFile string) ([]CsvDataRecord, error) {
 		// Preparse binary tx
 		tx, err := bt.NewTxFromString(ret[i].TxHexExtended)
 		if err != nil {
-			return ret, fmt.Errorf("failed to parse tx for line %v, TxID %v, error %v", i, ret[i].TXID, err)
+			return ret, errors.NewUnknownError("failed to parse tx for line " + strconv.Itoa(i) + ", TxID " + ret[i].TXID + ", error " + err.Error())
 		}
 		ret[i].Tx = tx
 
@@ -204,7 +204,7 @@ func getTxsData(csvDataFile string) ([]CsvDataRecord, error) {
 			for k, p := range parts {
 				h, err := strconv.ParseUint(p, 10, 32)
 				if err != nil {
-					return ret, fmt.Errorf("error parsing utxo height at line %v, error :%v", i, err)
+					return ret, errors.NewUnknownError("error parsing utxo height at line " + strconv.Itoa(i) + ", error :" + err.Error())
 				}
 				ret[i].DataUTXOHeights[k] = uint32(h)
 			}

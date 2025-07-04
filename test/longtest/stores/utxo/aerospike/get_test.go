@@ -160,7 +160,7 @@ func TestGetExternalFromLargeBlock(t *testing.T) {
 }
 
 func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight uint32) {
-	ctx := context.Background()
+	// ctx := context.Background()
 
 	logger := ulogger.NewErrorTestLogger(t)
 

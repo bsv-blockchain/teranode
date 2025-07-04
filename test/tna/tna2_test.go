@@ -57,7 +57,7 @@ func (suite *TNA2TestSuite) TestSingleTransactionPropagation() {
 	block1, err := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
 	require.NoError(t, err)
 	parenTx := block1.CoinbaseTx
-	sentTx, err := node1.CreateAndSendTx(t, ctx, parenTx)
+	sentTx, err := node1.CreateAndSendTx(t, ctx, parenTx) //nolint:ineffassign // requires testing the error
 
 	// Check if the tx is into the UTXOStore
 	txRes, errTxRes := node1.UtxoStore.Get(ctx, sentTx.TxIDChainHash())

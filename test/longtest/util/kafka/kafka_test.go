@@ -758,7 +758,7 @@ func waitForPortRelease(port int, retryDelay, maxWait time.Duration) error {
 		conn.Close()
 		time.Sleep(retryDelay)
 	}
-	return fmt.Errorf("port %d not released within %v", port, maxWait)
+	return errors.NewUnknownError(fmt.Sprintf("port %d not released within %v", port, maxWait))
 }
 
 func GetFreePort() (int, error) {
@@ -808,7 +808,7 @@ func GetFreePort() (int, error) {
 		return port, nil
 	}
 
-	return 0, fmt.Errorf("failed to find a free port after 3 attempts")
+	return 0, errors.NewUnknownError("failed to find a free port after 3 attempts")
 }
 
 func RunContainer(ctx context.Context) (*TestContainerWrapper, error) {

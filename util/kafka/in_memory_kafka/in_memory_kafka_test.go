@@ -19,21 +19,27 @@ func TestInMemoryBroker_ProduceConsume(t *testing.T) {
 
 	// Create Producer
 	producer := NewInMemorySyncProducer(broker)
-	defer producer.Close()
+	defer func() {
+		_ = producer.Close()
+	}()
 
 	// Create Consumer
 	consumer, err := broker.NewInMemoryConsumer(topic)
 	if err != nil {
 		t.Fatalf("Failed to create consumer: %v", err)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close()
+	}()
 
 	// Consume Partition (only partition 0 is supported in this mock)
 	partitionConsumer, err := consumer.ConsumePartition(topic, 0, sarama.OffsetNewest) // Start from newest for this test
 	if err != nil {
 		t.Fatalf("Failed to consume partition: %v", err)
 	}
-	defer partitionConsumer.Close()
+	defer func() {
+		_ = partitionConsumer.Close()
+	}()
 
 	// Use a channel to signal message reception
 	messageReceived := make(chan *sarama.ConsumerMessage, 1)
@@ -91,7 +97,9 @@ func TestInMemoryBroker_ProduceToNewTopic(t *testing.T) {
 	messageValue := []byte("message for new topic")
 
 	producer := NewInMemorySyncProducer(broker)
-	defer producer.Close()
+	defer func() {
+		_ = producer.Close()
+	}()
 
 	msg := &sarama.ProducerMessage{
 		Topic: topic,
@@ -121,7 +129,9 @@ func TestInMemoryBroker_ConsumeFromNewTopic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create consumer for new topic: %v", err)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close()
+	}()
 
 	// Verify topic was created
 	broker.mu.RLock()
@@ -137,7 +147,7 @@ func TestInMemoryConsumer_ConsumePartitionError(t *testing.T) {
 	broker := NewInMemoryBroker()
 	topic := "test-topic-partition"
 
-	// Produce a dummy message to ensure topic exists
+	// Produce a fake message to ensure a topic exists
 	producer := NewInMemorySyncProducer(broker)
 	msg := &sarama.ProducerMessage{Topic: topic, Value: sarama.StringEncoder("dummy")}
 
@@ -146,13 +156,15 @@ func TestInMemoryConsumer_ConsumePartitionError(t *testing.T) {
 		t.Fatalf("Failed to produce setup message: %v", err)
 	}
 
-	producer.Close()
+	_ = producer.Close()
 
 	consumer, err := broker.NewInMemoryConsumer(topic)
 	if err != nil {
 		t.Fatalf("Failed to create consumer: %v", err)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close()
+	}()
 
 	// Try consuming unsupported partition 1
 	_, err = consumer.ConsumePartition(topic, 1, sarama.OffsetOldest)
@@ -167,7 +179,9 @@ func TestInMemorySyncProducer_UnimplementedMethods(t *testing.T) {
 	broker := NewInMemoryBroker()
 	producer := NewInMemorySyncProducer(broker)
 
-	defer producer.Close()
+	defer func() {
+		_ = producer.Close()
+	}()
 
 	if err := producer.SendMessages(nil); err == nil {
 		t.Error("Expected error for unimplemented SendMessages, got nil")
@@ -197,15 +211,22 @@ func TestInMemoryAsyncProducer_ProduceSuccess(t *testing.T) {
 		t.Fatalf("Failed to create consumer: %v", err)
 	}
 
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close()
+	}()
+
 	pConsumer, err := consumer.ConsumePartition(topic, 0, sarama.OffsetOldest) // Read from start
 	require.NoError(t, err)
 
-	defer pConsumer.Close()
+	defer func() {
+		_ = pConsumer.Close()
+	}()
 
 	// 2. Create Producer
 	producer := NewInMemoryAsyncProducer(broker, 1) // Buffer size 1
-	defer producer.Close()
+	defer func() {
+		_ = producer.Close()
+	}()
 
 	// Use WaitGroups to coordinate producer success and consumer reception
 	var (
@@ -219,6 +240,7 @@ func TestInMemoryAsyncProducer_ProduceSuccess(t *testing.T) {
 	// Goroutine to wait for producer success
 	go func() {
 		defer wgProducer.Done()
+
 		select {
 		case successMsg := <-producer.Successes():
 			assert.Equal(t, msgToSend, successMsg, "Success message should match sent message")
@@ -230,9 +252,10 @@ func TestInMemoryAsyncProducer_ProduceSuccess(t *testing.T) {
 		}
 	}()
 
-	// Goroutine to wait for consumer message
+	// Goroutine to wait for a consumer message
 	go func() {
 		defer wgConsumer.Done()
+
 		select {
 		case msg := <-pConsumer.Messages():
 			assert.Equal(t, messageValue, string(msg.Value), "Consumed message value mismatch")
@@ -253,7 +276,9 @@ func TestInMemoryAsyncProducer_ProduceError(t *testing.T) {
 	broker := NewInMemoryBroker()
 	producer := NewInMemoryAsyncProducer(broker, 1)
 
-	defer producer.Close()
+	defer func() {
+		_ = producer.Close()
+	}()
 
 	topic := "async-test-error"
 	msgToSend := &sarama.ProducerMessage{
@@ -267,6 +292,7 @@ func TestInMemoryAsyncProducer_ProduceError(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
+
 		select {
 		case <-producer.Successes():
 			t.Error("Expected error, but got success")
@@ -292,6 +318,7 @@ func TestInMemoryAsyncProducer_Close(t *testing.T) {
 	msg2 := &sarama.ProducerMessage{Topic: topic, Value: sarama.StringEncoder("msg2")}
 
 	producer.Input() <- msg1
+
 	producer.Input() <- msg2
 
 	// Give some time for messages to potentially be processed, although Close should handle it

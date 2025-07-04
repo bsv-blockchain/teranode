@@ -17,7 +17,7 @@ import (
 	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
 	"github.com/bsv-blockchain/go-chaincfg"
-	"golang.org/x/crypto/ripemd160"
+	"golang.org/x/crypto/ripemd160" //nolint:gosec // this is a known safe use of ripemd160
 )
 
 // SetBlockBytes sets the internal serialized block byte buffer to the passed
@@ -75,7 +75,7 @@ func TstAddressPubKey(serializedPubKey []byte, pubKeyFormat PubKeyFormat,
 
 	return &AddressPubKey{
 		pubKeyFormat: pubKeyFormat,
-		pubKey:       (*bsvec.PublicKey)(pubKey),
+		pubKey:       pubKey,
 		pubKeyHashID: netID,
 	}
 }

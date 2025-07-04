@@ -16,7 +16,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
-	"golang.org/x/crypto/ripemd160"
+	"golang.org/x/crypto/ripemd160" //nolint:gosec // this is a known safe use of ripemd160
 )
 
 // An opcode defines the information related to a txscript opcode.  opfunc, if
@@ -2296,7 +2296,7 @@ func opcodeRipemd160(op *parsedOpcode, vm *Engine) error {
 		return err
 	}
 
-	vm.dstack.PushByteArray(calcHash(buf, ripemd160.New()))
+	vm.dstack.PushByteArray(calcHash(buf, ripemd160.New())) //nolint:gosec // this is not a security sensitive operation
 
 	return nil
 }
@@ -2345,7 +2345,7 @@ func opcodeHash160(op *parsedOpcode, vm *Engine) error {
 	}
 
 	hash := sha256.Sum256(buf)
-	vm.dstack.PushByteArray(calcHash(hash[:], ripemd160.New()))
+	vm.dstack.PushByteArray(calcHash(hash[:], ripemd160.New())) //nolint:gosec // this is not a security sensitive operation
 
 	return nil
 }

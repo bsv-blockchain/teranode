@@ -28,11 +28,13 @@ func init() {
 	defaultConnectionQueueSize = policy.ConnectionQueueSize
 }
 
+// Client is a wrapper around aerospike.Client that provides a semaphore to limit concurrent connections.
 type Client struct {
 	*aerospike.Client
 	connSemaphore chan struct{} // Simple channel-based semaphore
 }
 
+// NewClient creates a new Aerospike client with the specified hostname and port.
 func NewClient(hostname string, port int) (*Client, error) {
 	client, err := aerospike.NewClient(hostname, port)
 	if err != nil {
@@ -45,6 +47,7 @@ func NewClient(hostname string, port int) (*Client, error) {
 	}, nil
 }
 
+// NewClientWithPolicyAndHost creates a new Aerospike client with the specified policy and hosts.
 func NewClientWithPolicyAndHost(policy *aerospike.ClientPolicy, hosts ...*aerospike.Host) (*Client, aerospike.Error) {
 	var (
 		client *aerospike.Client
@@ -101,6 +104,7 @@ func NewClientWithPolicyAndHost(policy *aerospike.ClientPolicy, hosts ...*aerosp
 	}, nil
 }
 
+// Put is a wrapper around aerospike.Client.Put that uses semaphore to limit concurrent connections.
 func (c *Client) Put(policy *aerospike.WritePolicy, key *aerospike.Key, binMap aerospike.BinMap) aerospike.Error {
 	c.connSemaphore <- struct{}{}        // Acquire
 	defer func() { <-c.connSemaphore }() // Release
@@ -139,6 +143,7 @@ func (c *Client) Put(policy *aerospike.WritePolicy, key *aerospike.Key, binMap a
 	return c.Client.Put(policy, key, binMap)
 }
 
+// PutBins is a wrapper around aerospike.Client.PutBins that uses semaphore to limit concurrent connections.
 func (c *Client) PutBins(policy *aerospike.WritePolicy, key *aerospike.Key, bins ...*aerospike.Bin) aerospike.Error {
 	c.connSemaphore <- struct{}{}        // Acquire
 	defer func() { <-c.connSemaphore }() // Release
@@ -170,6 +175,7 @@ func (c *Client) PutBins(policy *aerospike.WritePolicy, key *aerospike.Key, bins
 	return c.Client.PutBins(policy, key, bins...)
 }
 
+// Delete is a wrapper around aerospike.Client.Delete that uses semaphore to limit concurrent connections.
 func (c *Client) Delete(policy *aerospike.WritePolicy, key *aerospike.Key) (bool, aerospike.Error) {
 	c.connSemaphore <- struct{}{}        // Acquire
 	defer func() { <-c.connSemaphore }() // Release
@@ -182,8 +188,10 @@ func (c *Client) Delete(policy *aerospike.WritePolicy, key *aerospike.Key) (bool
 	return c.Client.Delete(policy, key)
 }
 
+// Get is a wrapper around aerospike.Client.Get that uses semaphore to limit concurrent connections.
 func (c *Client) Get(policy *aerospike.BasePolicy, key *aerospike.Key, binNames ...string) (*aerospike.Record, aerospike.Error) {
-	c.connSemaphore <- struct{}{}        // Acquire
+	c.connSemaphore <- struct{}{} // Acquire
+
 	defer func() { <-c.connSemaphore }() // Release
 
 	start := gocore.CurrentTime()
@@ -208,8 +216,10 @@ func (c *Client) Get(policy *aerospike.BasePolicy, key *aerospike.Key, binNames 
 	return c.Client.Get(policy, key, binNames...)
 }
 
+// Operate is a wrapper around aerospike.Client.Operate that uses semaphore to limit concurrent connections.
 func (c *Client) Operate(policy *aerospike.WritePolicy, key *aerospike.Key, operations ...*aerospike.Operation) (*aerospike.Record, aerospike.Error) {
-	c.connSemaphore <- struct{}{}        // Acquire
+	c.connSemaphore <- struct{}{} // Acquire
+
 	defer func() { <-c.connSemaphore }() // Release
 
 	start := gocore.CurrentTime()
@@ -220,6 +230,7 @@ func (c *Client) Operate(policy *aerospike.WritePolicy, key *aerospike.Key, oper
 	return c.Client.Operate(policy, key, operations...)
 }
 
+// BatchOperate is a wrapper around aerospike.Client.BatchOperate that uses semaphore to limit concurrent connections.
 func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
 	c.connSemaphore <- struct{}{}        // Acquire
 	defer func() { <-c.connSemaphore }() // Release
@@ -232,6 +243,7 @@ func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike
 	return c.Client.BatchOperate(policy, records)
 }
 
+// CalculateKeySource generates a key source based on the transaction hash and an optional offset.
 func CalculateKeySource(hash *chainhash.Hash, num uint32) []byte {
 	// The key is normally the hash of the transaction
 	keySource := hash.CloneBytes()

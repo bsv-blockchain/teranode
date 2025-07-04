@@ -75,7 +75,7 @@ func NewSplitSwissMap[K comparableAndHashable, V any](length int) genericMap[K, 
 
 	splitLength := int(math.Ceil(float64(length) / float64(ssm.nrOfBuckets)))
 
-	for i := uint16(0); i <= uint16(ssm.nrOfBuckets); i++ {
+	for i := uint16(0); i <= ssm.nrOfBuckets; i++ {
 		ssm.m[i] = newSwissMap[K, V](splitLength)
 	}
 
@@ -105,7 +105,7 @@ func NewSplitGoMap[K comparableAndHashable, V any](length int) genericMap[K, V] 
 		nrOfBuckets: 1024,
 	}
 
-	for i := uint16(0); i <= uint16(ssm.nrOfBuckets); i++ {
+	for i := uint16(0); i <= ssm.nrOfBuckets; i++ {
 		ssm.m[i] = NewGoMap[K, V]()
 	}
 

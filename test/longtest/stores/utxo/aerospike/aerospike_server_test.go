@@ -109,7 +109,7 @@ func TestAerospike(t *testing.T) {
 		assert.False(t, value.Bins[fields.IsCoinbase.String()].(bool))
 		assert.Len(t, value.Bins[fields.BlockIDs.String()].([]interface{}), 2)
 		assert.Equal(t, []interface{}{int(blockID), int(blockID2)}, value.Bins[fields.BlockIDs.String()].([]interface{}))
-		assert.Equal(t, []interface{}{int(101), int(102)}, value.Bins[fields.BlockHeights.String()].([]interface{}))
+		assert.Equal(t, []interface{}{101, 102}, value.Bins[fields.BlockHeights.String()].([]interface{}))
 		assert.Equal(t, []interface{}{3, 4}, value.Bins[fields.SubtreeIdxs.String()].([]interface{}))
 	})
 
@@ -228,12 +228,15 @@ func TestAerospike(t *testing.T) {
 	t.Run("aerospike_store", func(t *testing.T) {
 		cleanDB(t, client)
 
-		txMeta, err := store.Create(ctx, tx, 0)
+		var txMeta *meta.Data
+		txMeta, err = store.Create(ctx, tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
+		var value *aerospike.Record
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
+
 		// assert.Equal(t, value.Bins["tx"], tx.ExtendedBytes())
 		assert.Len(t, value.Bins["inputs"], 1)
 		assert.Equal(t, value.Bins["inputs"].([]interface{})[0], tx.Inputs[0].ExtendedBytes(false))
@@ -265,7 +268,9 @@ func TestAerospike(t *testing.T) {
 
 		spendTxClone := spendTx.Clone()
 
-		spendTxClone.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		err = spendTxClone.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
+		require.NoError(t, err)
+
 		_, err = store.Spend(ctx, spendTxClone)
 		require.NoError(t, err)
 
@@ -277,7 +282,8 @@ func TestAerospike(t *testing.T) {
 	t.Run("aerospike_spend", func(t *testing.T) {
 		cleanDB(t, client)
 
-		txMeta, err := store.Create(ctx, tx, 0)
+		var txMeta *meta.Data
+		txMeta, err = store.Create(ctx, tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -287,7 +293,8 @@ func TestAerospike(t *testing.T) {
 		_, err = store.Spend(ctx, spendTx)
 		require.NoError(t, err)
 
-		value, err := client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
+		var value *aerospike.Record
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
 		utxos, ok := value.Bins["utxos"].([]interface{})
@@ -298,7 +305,8 @@ func TestAerospike(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, spendTx.TxIDChainHash()[:], spendingData[32:64])
 
-		spendingTxHash, err := chainhash.NewHash(spendingData[32:64])
+		var spendingTxHash *chainhash.Hash
+		spendingTxHash, err = chainhash.NewHash(spendingData[32:64])
 		require.NoError(t, err)
 
 		// try to spend with different txid
@@ -618,21 +626,23 @@ func TestAerospike(t *testing.T) {
 	t.Run("LUAScripts", func(t *testing.T) {
 		cleanDB(t, client)
 
-		txMeta, err := store.Create(ctx, tx, 0)
+		var txMeta *meta.Data
+		txMeta, err = store.Create(ctx, tx, 0)
 		require.NoError(t, err)
 		assert.NotNil(t, txMeta)
 
-		resp, err := client.Get(nil, txKey, "utxos")
+		var resp *aerospike.Record
+		resp, err = client.Get(nil, txKey, "utxos")
 		require.NoError(t, err)
 
 		utxos, ok := resp.Bins["utxos"].([]interface{})
 		require.True(t, ok)
 		assert.Len(t, utxos, 5)
 
-		utxo, ok := utxos[0].([]byte)
+		utxoVal, ok := utxos[0].([]byte)
 		require.True(t, ok)
-		require.Len(t, utxo, 32)
-		assert.Equal(t, utxo, utxoHash0[:])
+		require.Len(t, utxoVal, 32)
+		assert.Equal(t, utxoVal, utxoHash0[:])
 
 		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
 		_, err = store.Spend(ctx, spendTx)
@@ -1841,7 +1851,8 @@ func putBins(t *testing.T, client *uaerospike.Client, wp *aerospike.WritePolicy,
 
 type mockIndexWaiter struct{}
 
-func (m *mockIndexWaiter) WaitForIndexReady(ctx context.Context, indexName string) error {
+// WaitForIndexReady is a mock implementation of the IndexWaiter interface.
+func (m *mockIndexWaiter) WaitForIndexReady(_ context.Context, _ string) error {
 	return nil
 }
 

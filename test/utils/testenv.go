@@ -558,7 +558,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 		blockchainStoreURL.Host = fmt.Sprintf("localhost:%s", mappedPort.Port())
 	} else {
 		// In container mode, use the mounted volume paths
-		nodePath := fmt.Sprintf("/app/data/%s", node.Name)
+		// nodePath := fmt.Sprintf("/app/data/%s", node.Name) (this was ineffectual in the original code)
 
 		// For UTXO store, we use the node's settings but modify the external store path
 		utxoStoreURL = node.Settings.UtxoStore.UtxoStore
@@ -567,7 +567,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 		values := utxoStoreURL.Query()
 
 		// Update the externalStore path to point to our test container's path
-		nodePath = fmt.Sprintf("/app/data/%s", node.Name)
+		nodePath := fmt.Sprintf("/app/data/%s", node.Name)
 		values.Set("externalStore", fmt.Sprintf("file://%s/external", nodePath))
 
 		blockchainStoreURL = node.Settings.BlockChain.StoreURL

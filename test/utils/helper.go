@@ -21,7 +21,7 @@ import (
 	"github.com/bitcoin-sv/go-sdk/script"
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/errors"
-	block_model "github.com/bitcoin-sv/teranode/model"
+	blockmodel "github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	ba "github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/mining"
@@ -42,6 +42,7 @@ import (
 	"github.com/ordishs/go-utils"
 )
 
+// Transaction represents a simple transaction structure
 type Transaction struct {
 	Tx string `json:"tx"`
 }
@@ -52,6 +53,7 @@ var allowedHosts = []string{
 	"localhost:16092",
 }
 
+// CallRPC calls the RPC endpoint with the specified method and parameters, retrying up to 10 times if it encounters a specific error condition.
 func CallRPC(url string, method string, params []interface{}) (body string, err error) {
 	for i := 0; i < 10; i++ {
 		body, err = callRPC(url, method, params)
@@ -99,7 +101,9 @@ func callRPC(url string, method string, params []interface{}) (string, error) {
 		return "", errors.NewProcessingError("failed to perform request", err)
 	}
 
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	// // Check the status code
 	// if resp.StatusCode != http.StatusOK {
@@ -139,6 +143,7 @@ func callRPC(url string, method string, params []interface{}) (string, error) {
 	return string(body), nil
 }
 
+// GetBlockHeight retrieves the block height from the Teranode API.
 func GetBlockHeight(url string) (uint32, error) {
 	resp, err := http.Get(url + "/api/v1/lastblocks?n=1")
 	if err != nil {
@@ -146,7 +151,9 @@ func GetBlockHeight(url string) (uint32, error) {
 		return 0, err
 	}
 
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return 0, errors.NewProcessingError("unexpected status code: %d", resp.StatusCode)
@@ -156,7 +163,7 @@ func GetBlockHeight(url string) (uint32, error) {
 		Height uint32 `json:"height"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&blocks); err != nil {
+	if err = json.NewDecoder(resp.Body).Decode(&blocks); err != nil {
 		return 0, err
 	}
 
@@ -167,8 +174,9 @@ func GetBlockHeight(url string) (uint32, error) {
 	return blocks[0].Height, nil
 }
 
-func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store, blockReader io.Reader, queryTxId chainhash.Hash) (bool, error) { //nolint:stylecheck
-	block, err := block_model.NewBlockFromReader(blockReader, nil)
+// isTxInBlock checks if a transaction with the specified txid exists in the block represented by the provided reader.
+func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store, blockReader io.Reader, queryTxId chainhash.Hash) (bool, error) {
+	block, err := blockmodel.NewBlockFromReader(blockReader, nil)
 	if err != nil {
 		return false, errors.NewProcessingError("error reading block", err)
 	}
@@ -177,8 +185,8 @@ func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store,
 	l.Infof("%s", block.Header.StringDump())
 	l.Infof("Number of transactions: %d\n", block.TransactionCount)
 
-	for _, subtree := range block.Subtrees {
-		filename := fmt.Sprintf("%s.subtree", subtree.String())
+	for _, subtreeVal := range block.Subtrees {
+		filename := fmt.Sprintf("%s.subtree", subtreeVal.String())
 		l.Infof("Reading subtree from %s\n", filename)
 
 		ext := filepath.Ext(filename)
@@ -189,13 +197,15 @@ func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store,
 		}
 
 		stHash, _ := chainhash.NewHashFromStr(fileWithoutExtension)
-		stReader, err := storeSubtree.GetIoReader(ctx, stHash[:], fileformat.FileType(ext))
+		var stReader io.Reader
+		stReader, err = storeSubtree.GetIoReader(ctx, stHash[:], fileformat.FileType(ext))
 
 		if err != nil {
 			return false, errors.NewProcessingError("error getting subtree reader from store", err)
 		}
 
-		ok, err := isTxInSubtree(l, stReader, queryTxId)
+		var ok bool
+		ok, err = isTxInSubtree(l, stReader, queryTxId)
 
 		if err != nil {
 			return false, errors.NewProcessingError("error getting subtree reader from store", err)
@@ -211,7 +221,7 @@ func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store,
 }
 
 // isTxInSubtree read the subtree binary and check if a tx with specified txid exist
-func isTxInSubtree(l ulogger.Logger, stReader io.Reader, queryTxId chainhash.Hash) (bool, error) { //nolint:stylecheck
+func isTxInSubtree(_ ulogger.Logger, stReader io.Reader, queryTxId chainhash.Hash) (bool, error) {
 	st := subtree.Subtree{}
 	err := st.DeserializeFromReader(stReader)
 
@@ -233,13 +243,14 @@ func isTxInSubtree(l ulogger.Logger, stReader io.Reader, queryTxId chainhash.Has
 	return false, nil
 }
 
-func GetBlockSubtreeHashes(ctx context.Context, l ulogger.Logger, blockHash []byte, storeBlock blob.Store) ([]*chainhash.Hash, error) {
+// GetBlockSubtreeHashes retrieves the subtree hashes from a block given its hash.
+func GetBlockSubtreeHashes(ctx context.Context, _ ulogger.Logger, blockHash []byte, storeBlock blob.Store) ([]*chainhash.Hash, error) {
 	blockReader, err := storeBlock.GetIoReader(ctx, blockHash, fileformat.FileTypeBlock)
 	if err != nil {
 		return nil, errors.NewProcessingError("error getting block reader", err)
 	}
 
-	block, err := block_model.NewBlockFromReader(blockReader, nil)
+	block, err := blockmodel.NewBlockFromReader(blockReader, nil)
 	if err != nil {
 		return nil, errors.NewProcessingError("error reading block", err)
 	}
@@ -247,6 +258,7 @@ func GetBlockSubtreeHashes(ctx context.Context, l ulogger.Logger, blockHash []by
 	return block.Subtrees, nil
 }
 
+// GetSubtreeTxHashes retrieves the transaction hashes from a subtree given its hash and base URL.
 func GetSubtreeTxHashes(ctx context.Context, logger ulogger.Logger, subtreeHash *chainhash.Hash, baseURL string, tSettings *settings.Settings) ([]chainhash.Hash, error) {
 	if baseURL == "" {
 		return nil, errors.NewInvalidArgumentError("[getSubtreeTxHashes][%s] baseUrl for subtree is empty", subtreeHash.String())
@@ -254,13 +266,15 @@ func GetSubtreeTxHashes(ctx context.Context, logger ulogger.Logger, subtreeHash 
 
 	// do http request to baseUrl + subtreeHash.String()
 	logger.Infof("[getSubtreeTxHashes][%s] getting subtree from %s", subtreeHash.String(), baseURL)
-	url := fmt.Sprintf("%s/api/v1/subtree/%s", baseURL, subtreeHash.String())
+	urlVal := fmt.Sprintf("%s/api/v1/subtree/%s", baseURL, subtreeHash.String())
 
-	body, err := util.DoHTTPRequestBodyReader(ctx, url)
+	body, err := util.DoHTTPRequestBodyReader(ctx, urlVal)
 	if err != nil {
 		return nil, errors.NewExternalError("[getSubtreeTxHashes][%s] failed to do http request", subtreeHash.String(), err)
 	}
-	defer body.Close()
+	defer func() {
+		_ = body.Close()
+	}()
 
 	logger.Infof("[getSubtreeTxHashes][%s] processing subtree response into tx hashes", subtreeHash.String())
 
@@ -294,7 +308,8 @@ func GetSubtreeTxHashes(ctx context.Context, logger ulogger.Logger, subtreeHash 
 	return txHashes, nil
 }
 
-func GetMiningCandidate(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (*block_model.MiningCandidate, error) {
+// GetMiningCandidate retrieves the mining candidate from the block assembly client.
+func GetMiningCandidate(ctx context.Context, baClient ba.Client, _ ulogger.Logger) (*blockmodel.MiningCandidate, error) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	if err != nil {
 		return nil, errors.NewProcessingError("error getting mining candidate", err)
@@ -303,14 +318,16 @@ func GetMiningCandidate(ctx context.Context, baClient ba.Client, logger ulogger.
 	return miningCandidate, nil
 }
 
-func GetMiningCandidate_rpc(url string) (string, error) { //nolint:stylecheck
+// GetMiningCandidateRPC retrieves the mining candidate using an RPC call.
+func GetMiningCandidateRPC(url string) (string, error) {
 	method := "getminingcandidate"
-	params := []interface{}{}
+	var params []interface{}
 
 	return CallRPC(url, method, params)
 }
 
-func MineBlock(ctx context.Context, tSettings *settings.Settings, baClient ba.Client, logger ulogger.Logger) ([]byte, error) {
+// MineBlock mines a block using the provided mining candidate and returns the block hash.
+func MineBlock(ctx context.Context, tSettings *settings.Settings, baClient ba.Client, _ ulogger.Logger) ([]byte, error) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	if err != nil {
 		return nil, errors.NewProcessingError("error getting mining candidate", err)
@@ -335,7 +352,8 @@ func MineBlock(ctx context.Context, tSettings *settings.Settings, baClient ba.Cl
 	return blockHash, nil
 }
 
-func MineBlockWithRPC(ctx context.Context, node TeranodeTestClient, logger ulogger.Logger) (string, error) {
+// MineBlockWithRPC mines a block using the Teranode RPC endpoint and returns the block hash.
+func MineBlockWithRPC(_ context.Context, node TeranodeTestClient, _ ulogger.Logger) (string, error) {
 	teranode1RPCEndpoint := node.RPCURL
 	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
 
@@ -347,7 +365,9 @@ func MineBlockWithRPC(ctx context.Context, node TeranodeTestClient, logger ulogg
 	return resp, nil
 }
 
-func MineBlockWithCandidate(ctx context.Context, tSettings *settings.Settings, baClient ba.Client, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) {
+// MineBlockWithCandidate mines a block using the provided mining candidate and returns the block hash.
+func MineBlockWithCandidate(ctx context.Context, tSettings *settings.Settings, baClient ba.Client,
+	miningCandidate *blockmodel.MiningCandidate, _ ulogger.Logger) ([]byte, error) {
 	solution, err := mining.Mine(ctx, tSettings, miningCandidate, nil)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
@@ -367,7 +387,8 @@ func MineBlockWithCandidate(ctx context.Context, tSettings *settings.Settings, b
 	return blockHash, nil
 }
 
-func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, tSettings *settings.Settings, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) { //nolint:stylecheck
+// MineBlockWithCandidateRPC mines a block using the provided mining candidate and submits the solution via RPC, returning the block hash.
+func MineBlockWithCandidateRPC(ctx context.Context, rpcUrl string, tSettings *settings.Settings, miningCandidate *blockmodel.MiningCandidate, logger ulogger.Logger) ([]byte, error) {
 	solution, err := mining.Mine(ctx, tSettings, miningCandidate, nil)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
@@ -409,6 +430,7 @@ func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, tSettings *s
 	return blockHash, nil
 }
 
+// CreateAndSendTx creates a new transaction using the TeranodeTestClient, requests funds from the coinbase client, and sends the transaction to the distributor client.
 func CreateAndSendTx(ctx context.Context, node TeranodeTestClient) (chainhash.Hash, error) {
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 
@@ -449,7 +471,7 @@ loop:
 	}
 
 	output := faucetTx.Outputs[0]
-	utxo := &bt.UTXO{
+	utxoVal := &bt.UTXO{
 		TxIDHash:      faucetTx.TxIDChainHash(),
 		Vout:          uint32(0),
 		LockingScript: output.LockingScript,
@@ -458,7 +480,7 @@ loop:
 
 	newTx := bt.NewTx()
 
-	err = newTx.FromUTXOs(utxo)
+	err = newTx.FromUTXOs(utxoVal)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction", err)
 	}
@@ -483,6 +505,7 @@ loop:
 	return *newTx.TxIDChainHash(), nil
 }
 
+// CreateAndSendTxToSliceOfNodes creates a new transaction using the first node in the slice, requests funds from the coinbase client, and sends the transaction to all nodes in the slice.
 func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []TeranodeTestClient) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
@@ -504,7 +527,7 @@ func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []TeranodeTestClie
 	}
 
 	output := faucetTx.Outputs[0]
-	utxo := &bt.UTXO{
+	utxoVal := &bt.UTXO{
 		TxIDHash:      faucetTx.TxIDChainHash(),
 		Vout:          uint32(0),
 		LockingScript: output.LockingScript,
@@ -512,7 +535,7 @@ func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []TeranodeTestClie
 	}
 
 	newTx := bt.NewTx()
-	err = newTx.FromUTXOs(utxo)
+	err = newTx.FromUTXOs(utxoVal)
 
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction", err)
@@ -538,6 +561,7 @@ func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []TeranodeTestClie
 	return *newTx.TxIDChainHash(), nil
 }
 
+// CreateAndSendDoubleSpendTx creates two transactions that double spend the same UTXO, with different lock times, and sends them to two different nodes.
 func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []TeranodeTestClient) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 
@@ -558,7 +582,7 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []TeranodeTestClient)
 	}
 
 	output := faucetTx.Outputs[0]
-	utxo := &bt.UTXO{
+	utxoVal := &bt.UTXO{
 		TxIDHash:      faucetTx.TxIDChainHash(),
 		Vout:          uint32(0),
 		LockingScript: output.LockingScript,
@@ -567,7 +591,7 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []TeranodeTestClient)
 
 	newTx := bt.NewTx()
 
-	err = newTx.FromUTXOs(utxo)
+	err = newTx.FromUTXOs(utxoVal)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction", err)
 	}
@@ -576,7 +600,7 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []TeranodeTestClient)
 
 	newTxDouble := bt.NewTx()
 
-	err = newTxDouble.FromUTXOs(utxo)
+	err = newTxDouble.FromUTXOs(utxoVal)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction", err)
 	}
@@ -616,6 +640,7 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []TeranodeTestClient)
 	return *newTx.TxIDChainHash(), nil
 }
 
+// CreateAndSendTxs creates and sends a specified number of transactions using the provided TeranodeTestClient.
 func CreateAndSendTxs(ctx context.Context, node TeranodeTestClient, count int) ([]chainhash.Hash, error) {
 	var txHashes []chainhash.Hash
 
@@ -636,6 +661,7 @@ func CreateAndSendTxs(ctx context.Context, node TeranodeTestClient, count int) (
 	return txHashes, nil
 }
 
+// CreateAndSendTxsToASliceOfNodes creates and sends a specified number of transactions to a slice of TeranodeTestClient nodes.
 func CreateAndSendTxsToASliceOfNodes(ctx context.Context, nodes []TeranodeTestClient, count int) ([]chainhash.Hash, error) {
 	var txHashes []chainhash.Hash
 
@@ -656,6 +682,7 @@ func CreateAndSendTxsToASliceOfNodes(ctx context.Context, nodes []TeranodeTestCl
 	return txHashes, nil
 }
 
+// CreateAndSendTxsConcurrently creates and sends a specified number of transactions concurrently using the provided TeranodeTestClient.
 func CreateAndSendTxsConcurrently(ctx context.Context, node TeranodeTestClient, count int) ([]chainhash.Hash, error) {
 	var wg sync.WaitGroup
 
@@ -709,12 +736,13 @@ func CreateAndSendTxsConcurrently(ctx context.Context, node TeranodeTestClient, 
 	return txHashes, nil
 }
 
+// UseCoinbaseUtxo uses a coinbase transaction's UTXO to create a new transaction, adds an output, fills inputs, and sends the transaction.
 func UseCoinbaseUtxo(ctx context.Context, node TeranodeTestClient, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
 
 	output := coinbaseTx.Outputs[0]
-	utxo := &bt.UTXO{
+	utxoVal := &bt.UTXO{
 		TxIDHash:      coinbaseTx.TxIDChainHash(),
 		Vout:          uint32(0),
 		LockingScript: output.LockingScript,
@@ -723,7 +751,7 @@ func UseCoinbaseUtxo(ctx context.Context, node TeranodeTestClient, coinbaseTx *b
 
 	newTx := bt.NewTx()
 
-	err := newTx.FromUTXOs(utxo)
+	err := newTx.FromUTXOs(utxoVal)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction", err)
 	}
@@ -746,12 +774,13 @@ func UseCoinbaseUtxo(ctx context.Context, node TeranodeTestClient, coinbaseTx *b
 	return *newTx.TxIDChainHash(), nil
 }
 
+// UseCoinbaseUtxoV2 uses a coinbase transaction's UTXO to create a new transaction, adds an output, fills inputs, and sends the transaction.
 func UseCoinbaseUtxoV2(ctx context.Context, node TeranodeTestClient, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
 
 	output := coinbaseTx.Outputs[0]
-	utxo := &bt.UTXO{
+	utxoVal := &bt.UTXO{
 		TxIDHash:      coinbaseTx.TxIDChainHash(),
 		Vout:          uint32(0),
 		LockingScript: output.LockingScript,
@@ -759,7 +788,7 @@ func UseCoinbaseUtxoV2(ctx context.Context, node TeranodeTestClient, coinbaseTx 
 	}
 
 	newTx := bt.NewTx()
-	err := newTx.FromUTXOs(utxo)
+	err := newTx.FromUTXOs(utxoVal)
 
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction", err)
@@ -783,6 +812,7 @@ func UseCoinbaseUtxoV2(ctx context.Context, node TeranodeTestClient, coinbaseTx 
 	return *newTx.TxIDChainHash(), nil
 }
 
+// SendTXsWithDistributorV2 sends transactions using the TeranodeTestClient's distributor client, requesting funds from the coinbase client and sending a new transaction with specified fees.
 func SendTXsWithDistributorV2(ctx context.Context, node TeranodeTestClient, logger ulogger.Logger, tSettings *settings.Settings, fees uint64) (bool, error) {
 	var defaultSathosis uint64 = 10000
 
@@ -846,7 +876,7 @@ loop:
 	fmt.Printf("Transaction sent: %s %v\n", tx.TxIDChainHash(), len(tx.Outputs))
 	fmt.Printf("TxOut: %v\n", tx.Outputs[0].Satoshis)
 
-	utxo := &bt.UTXO{
+	utxoVal := &bt.UTXO{
 		TxIDHash:      tx.TxIDChainHash(),
 		Vout:          uint32(0),
 		LockingScript: tx.Outputs[0].LockingScript,
@@ -854,7 +884,7 @@ loop:
 	}
 
 	newTx := bt.NewTx()
-	err = newTx.FromUTXOs(utxo)
+	err = newTx.FromUTXOs(utxoVal)
 
 	if err != nil {
 		return false, errors.NewProcessingError("Error adding UTXO to transaction: %s\n", err)
@@ -885,7 +915,8 @@ loop:
 	return true, nil
 }
 
-func GetBestBlockV2(ctx context.Context, node TeranodeTestClient) (*block_model.Block, error) {
+// GetBestBlockV2 retrieves the best block from the TeranodeTestClient's blockchain client.
+func GetBestBlockV2(ctx context.Context, node TeranodeTestClient) (*blockmodel.Block, error) {
 	bbheader, _, errbb := node.BlockchainClient.GetBestBlockHeader(ctx)
 	if errbb != nil {
 		return nil, errors.NewProcessingError("Error getting best block header: %s\n", errbb)
@@ -899,6 +930,7 @@ func GetBestBlockV2(ctx context.Context, node TeranodeTestClient) (*block_model.
 	return block, nil
 }
 
+// QueryPrometheusMetric queries a Prometheus metric from the specified server URL and returns its value.
 func QueryPrometheusMetric(serverURL, metricName string) (float64, error) {
 	parsedURL, err := url.Parse(serverURL)
 	if err != nil {
@@ -921,7 +953,9 @@ func QueryPrometheusMetric(serverURL, metricName string) (float64, error) {
 		return 0, errors.New(errors.ERR_ERROR, "error sending HTTP request", err)
 	}
 
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -976,6 +1010,7 @@ func isAllowedHost(host string) bool {
 	return false
 }
 
+// WaitForBlockHeight waits for the blockchain to reach a specific block height.
 func WaitForBlockHeight(url string, targetHeight uint32, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Second)
 	defer cancel()
@@ -1001,7 +1036,8 @@ func WaitForBlockHeight(url string, targetHeight uint32, timeout time.Duration) 
 	}
 }
 
-func GenerateBlocks(ctx context.Context, node TeranodeTestClient, numBlocks int, logger ulogger.Logger) (string, error) {
+// GenerateBlocks generates a specified number of blocks using the TeranodeTestClient's RPC endpoint.
+func GenerateBlocks(_ context.Context, node TeranodeTestClient, numBlocks int, _ ulogger.Logger) (string, error) {
 	teranode1RPCEndpoint := node.RPCURL
 	teranode1RPCEndpoint = "http://" + teranode1RPCEndpoint
 	// Generate blocks
@@ -1013,6 +1049,7 @@ func GenerateBlocks(ctx context.Context, node TeranodeTestClient, numBlocks int,
 	return resp, nil
 }
 
+// TestTxInBlock checks if a transaction is present in a block by reading the block from the store and checking for the transaction.
 func TestTxInBlock(ctx context.Context, logger ulogger.Logger, storeBlock blob.Store, storeSubtree blob.Store, blockHash []byte, tx chainhash.Hash) (bool, error) {
 	blockReader, err := storeBlock.GetIoReader(ctx, blockHash, fileformat.FileTypeBlock)
 	if err != nil {
@@ -1026,6 +1063,7 @@ func TestTxInBlock(ctx context.Context, logger ulogger.Logger, storeBlock blob.S
 	}
 }
 
+// TestTxInSubtree checks if a transaction is present in a subtree by reading the subtree from the store and checking for the transaction.
 func TestTxInSubtree(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, subtree []byte, tx chainhash.Hash) (bool, error) {
 	subtreeReader, err := subtreeStore.GetIoReader(ctx, subtree, fileformat.FileTypeSubtree)
 	if err != nil {
@@ -1038,6 +1076,7 @@ func TestTxInSubtree(ctx context.Context, logger ulogger.Logger, subtreeStore bl
 	return isTxInSubtree(logger, subtreeReader, tx)
 }
 
+// Unzip extracts the contents of a zip file to a specified destination directory.
 func Unzip(src, dest string) error {
 	cmd := exec.Command("unzip", "-f", src, "-d", dest)
 	err := cmd.Run()
@@ -1046,18 +1085,24 @@ func Unzip(src, dest string) error {
 }
 
 // TODO TO delete
+
+// CopyFile copies a file from source to destination.
 func CopyFile(src, dst string) error {
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer srcFile.Close()
+	defer func() {
+		_ = srcFile.Close()
+	}()
 
 	dstFile, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
+	defer func() {
+		_ = dstFile.Close()
+	}()
 
 	_, err = io.Copy(dstFile, srcFile)
 	if err != nil {
@@ -1072,11 +1117,13 @@ func CopyFile(src, dst string) error {
 	return nil
 }
 
+// GetUtxoBalance retrieves the UTXO balance from the TeranodeTestClient's coinbase client.
 func GetUtxoBalance(ctx context.Context, node TeranodeTestClient) uint64 {
 	utxoBalance, _, _ := node.CoinbaseClient.GetBalance(ctx)
 	return utxoBalance
 }
 
+// GeneratePrivateKeyAndAddress generates a new private key and address pair.
 func GeneratePrivateKeyAndAddress() (*bec.PrivateKey, *bscript.Address, error) {
 	privateKey, err := bec.NewPrivateKey(bec.S256())
 	if err != nil {
@@ -1091,6 +1138,7 @@ func GeneratePrivateKeyAndAddress() (*bec.PrivateKey, *bscript.Address, error) {
 	return privateKey, address, nil
 }
 
+// RequestFunds requests funds from the TeranodeTestClient's coinbase client for a specified address and returns the transaction.
 func RequestFunds(ctx context.Context, node TeranodeTestClient, address string) (*bt.Tx, error) {
 	faucetTx, err := node.CoinbaseClient.RequestFunds(ctx, address, true)
 	if err != nil {
@@ -1100,6 +1148,7 @@ func RequestFunds(ctx context.Context, node TeranodeTestClient, address string) 
 	return faucetTx, nil
 }
 
+// SendTransaction sends a transaction using the TeranodeTestClient's distributor client and returns a boolean indicating success or failure.
 func SendTransaction(ctx context.Context, node TeranodeTestClient, tx *bt.Tx) (bool, error) {
 	_, err := node.DistributorClient.SendTransaction(ctx, tx)
 	if err != nil {
@@ -1109,6 +1158,7 @@ func SendTransaction(ctx context.Context, node TeranodeTestClient, tx *bt.Tx) (b
 	return true, nil
 }
 
+// CreateUtxoFromTransaction creates a UTXO from a transaction and a specific output index (vout).
 func CreateUtxoFromTransaction(tx *bt.Tx, vout uint32) *bt.UTXO {
 	output := tx.Outputs[vout]
 
@@ -1120,6 +1170,7 @@ func CreateUtxoFromTransaction(tx *bt.Tx, vout uint32) *bt.UTXO {
 	}
 }
 
+// CreateTransaction creates a new transaction from a UTXO, adds an output to a specified address with a given amount, fills the inputs using the provided private key, and returns the transaction.
 func CreateTransaction(utxo *bt.UTXO, address string, satoshis uint64, privateKey *bec.PrivateKey) (*bt.Tx, error) {
 	tx := bt.NewTx()
 
@@ -1166,6 +1217,7 @@ func CreateTransactionObject(ctx context.Context, node TeranodeTestClient, addre
 	return CreateTransaction(u, address, amount, privateKey)
 }
 
+//nolint:govet // this needs to be refactored to pass
 func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
 	utxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	spend := &utxo.Spend{
@@ -1184,6 +1236,7 @@ func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger
 	return nil
 }
 
+//nolint:govet // this needs to be refactored to pass
 func ReassignUtxo(ctx context.Context, testenv TeranodeTestEnv, firstTx, reassignTx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
 	publicKey, err := extractPublicKey(reassignTx.Inputs[0].UnlockingScript.Bytes())
 	if err != nil {
@@ -1233,6 +1286,7 @@ func ReassignUtxo(ctx context.Context, testenv TeranodeTestEnv, firstTx, reassig
 	return nil
 }
 
+// extractPublicKey extracts the public key from a P2PKH scriptSig.
 func extractPublicKey(scriptSig []byte) ([]byte, error) {
 	// Parse the scriptSig into an array of elements (OpCodes or Data pushes)
 	parsedScript := script.NewFromBytes(scriptSig)
@@ -1252,6 +1306,7 @@ func extractPublicKey(scriptSig []byte) ([]byte, error) {
 	return publicKey, nil
 }
 
+// RemoveDataDirectory removes a specified data directory using either sudo or non-sudo command.
 func RemoveDataDirectory(dir string, useSudo bool) error {
 	var cmd *exec.Cmd
 
@@ -1276,6 +1331,7 @@ func RemoveDataDirectory(dir string, useSudo bool) error {
 	return nil
 }
 
+// WaitForHealthLiveness checks the health readiness endpoint of a service running on the specified port until it becomes healthy or the timeout is reached.
 func WaitForHealthLiveness(port int, timeout time.Duration) error {
 	healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
 	timeoutElapsed := time.After(timeout)
@@ -1299,7 +1355,8 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 	}
 }
 
-func SendEventRun(ctx context.Context, blockchainClient blockchain.ClientI, logger ulogger.Logger) error {
+// SendEventRun sends a RUN event to the blockchain client and waits for it to be ready.
+func SendEventRun(ctx context.Context, blockchainClient blockchain.ClientI, _ ulogger.Logger) error {
 	var (
 		err error
 	)
@@ -1352,6 +1409,7 @@ func VerifyUTXOFileExists(ctx context.Context, store blob.Store, blockHash chain
 	return nil
 }
 
+// WaitForBlockAccepted waits for a block with the specified hash to be accepted by the blockchain client.
 func WaitForBlockAccepted(ctx context.Context, node TeranodeTestClient, expectedHash []byte, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
@@ -1372,6 +1430,7 @@ func WaitForBlockAccepted(ctx context.Context, node TeranodeTestClient, expected
 	}
 }
 
+// WaitForNodesToSync waits for all nodes in the provided slice to have the same best block header.
 func WaitForNodesToSync(ctx context.Context, nodes []blockchain.ClientI, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
@@ -1406,6 +1465,7 @@ func WaitForNodesToSync(ctx context.Context, nodes []blockchain.ClientI, timeout
 	}
 }
 
+// WaitForNodeBlockHeight waits for a node to reach a specific block height within a timeout period.
 func WaitForNodeBlockHeight(ctx context.Context, blockchainClient blockchain.ClientI, height uint32, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	bestHeight := uint32(0)

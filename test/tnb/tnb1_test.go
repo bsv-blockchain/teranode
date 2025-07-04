@@ -90,7 +90,7 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 					testEnv.Logger.Infof("subtreeHash: %v", subtreeHash)
 					require.NoError(t, err)
 
-					txHashesFromSubtree, err := helper.GetSubtreeTxHashes(ctx, logger, subtreeHash, url, node1.Settings)
+					txHashesFromSubtree, err := helper.GetSubtreeTxHashes(ctx, logger, subtreeHash, url, node1.Settings) //nolint:ineffassign // requires testing the error
 
 					subtreeReady <- txHashesFromSubtree
 

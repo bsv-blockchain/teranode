@@ -43,7 +43,10 @@ func TestOptionsConstructFilename(t *testing.T) {
 	// Get a temporary directory
 	tempDir, err := os.MkdirTemp("", "test")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+
+	defer func() {
+		_ = os.RemoveAll(tempDir)
+	}()
 
 	tests := []struct {
 		name         string

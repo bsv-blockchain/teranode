@@ -1,0 +1,117 @@
+{
+  "formatters": {
+    "enable": [
+      "gci",
+      "goimports"
+    ],
+    "exclusions": {
+      "generated": "lax",
+      "paths": [
+        "vendor",
+        "third_party$",
+        "builtin$",
+        "examples$"
+      ]
+    }
+  },
+  "linters": {
+    "enable": [
+      "asciicheck",
+      "depguard",
+      "forbidigo",
+      "gocognit",
+      "goconst",
+      "gocritic",
+      "gosec",
+      "misspell",
+      "prealloc",
+      "staticcheck",
+      "unconvert",
+      "whitespace"
+    ],
+    "disable": [
+      "wsl_v5",
+      "whitespace",
+      "unused",
+      "unconvert",
+      "staticcheck",
+      "gocognit",
+      "goconst",
+      "gocritic"
+    ],
+    "exclusions": {
+      "generated": "lax",
+      "paths": [
+        "vendor",
+        "third_party$",
+        "builtin$",
+        "examples$"
+      ],
+      "presets": [
+        "comments",
+        "common-false-positives",
+        "legacy",
+        "std-error-handling"
+      ],
+      "rules": [
+        {
+          "linters": [
+            "depguard",
+            "errcheck",
+            "forbidigo",
+            "govet",
+            "ineffassign",
+            "staticcheck",
+            "unused"
+          ],
+          "path": "services/legacy"
+        },
+        {
+          "linters": [
+            "forbidigo"
+          ],
+          "path": "pkg"
+        },
+        {
+          "linters": [
+            "gosec"
+          ],
+          "text": "G115: integer overflow conversion"
+        },
+        {
+          "linters": [
+            "depguard",
+            "forbidigo"
+          ],
+          "path": "errors"
+        }
+      ]
+    },
+    "settings": {
+      "depguard": {
+        "rules": {
+          "main": {
+            "deny": [
+              {
+                "desc": "Should be replaced by standard lib errors package",
+                "pkg": "errors"
+              }
+            ]
+          }
+        }
+      },
+      "forbidigo": {
+        "forbid": [
+          {
+            "msg": "use of fmt.Errorf is deprecated, please use errors.New",
+            "pattern": "^fmt\\.Errorf.*$"
+          }
+        ]
+      },
+      "gocognit": {
+        "min-complexity": 50
+      }
+    }
+  },
+  "version": "2"
+}

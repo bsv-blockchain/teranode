@@ -263,7 +263,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		assert.Equal(t, 5, rec.Bins[fields.TotalUtxos.String()])
 		assert.Equal(t, 2, rec.Bins[fields.SpentUtxos.String()])
 		assert.Equal(t, 2, rec.Bins[fields.TotalExtraRecs.String()])
-		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins[fields.BlockIDs.String()])
+		assert.Equal(t, []interface{}{101}, rec.Bins[fields.BlockIDs.String()])
 
 		// Increment spentExtraRecs by 1
 		res, err := store.IncrementSpentRecords(txID, 1)
@@ -285,7 +285,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		assert.Equal(t, 2, rec.Bins[fields.SpentUtxos.String()])
 		assert.Equal(t, 2, rec.Bins[fields.TotalExtraRecs.String()])
 		assert.Equal(t, 1, rec.Bins[fields.SpentExtraRecs.String()])
-		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins[fields.BlockIDs.String()])
+		assert.Equal(t, []interface{}{101}, rec.Bins[fields.BlockIDs.String()])
 
 		res, err = store.IncrementSpentRecords(txID, 1)
 		require.NoError(t, err)
@@ -298,7 +298,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		assert.Equal(t, 2, rec.Bins[fields.SpentUtxos.String()])
 		assert.Equal(t, 2, rec.Bins[fields.TotalExtraRecs.String()])
 		assert.Equal(t, 2, rec.Bins[fields.SpentExtraRecs.String()])
-		assert.Equal(t, []interface{}([]interface{}{101}), rec.Bins[fields.BlockIDs.String()])
+		assert.Equal(t, []interface{}{101}, rec.Bins[fields.BlockIDs.String()])
 
 		r, ok = res.(string)
 		require.True(t, ok)

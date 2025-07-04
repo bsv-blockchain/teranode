@@ -25,7 +25,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: false
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
           version: latest
           only-new-issues: true
@@ -138,10 +138,10 @@ jobs:
 
       # Re-run golangci-lint separately without exiting on errors and generating a report for use in Sonar
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
           version: latest
-          args: --timeout=5m --issues-exit-code=0 --out-format=checkstyle:golangci-lint-report.xml
+          args: --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
 
       - uses: twingate/github-action@4493ffc3806241aa98194a3fa679f874bce013b5
         with:

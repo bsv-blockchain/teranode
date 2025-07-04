@@ -58,7 +58,7 @@ func TestUtxoStore(t *testing.T) {
 	delay := td.Settings.BlockAssembly.DoubleSpendWindow
 	if delay != 0 {
 		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(time.Duration(delay) * time.Millisecond)
+		time.Sleep(delay * time.Millisecond)
 	}
 
 	utxoMeta, err := td.UtxoStore.Get(td.Ctx, newTx.TxIDChainHash())

@@ -236,11 +236,11 @@ func TestPubKeys(t *testing.T) {
 
 		switch test.format {
 		case pubkeyUncompressed:
-			pkStr = (*PublicKey)(pk).SerializeUncompressed()
+			pkStr = pk.SerializeUncompressed()
 		case pubkeyCompressed:
-			pkStr = (*PublicKey)(pk).SerializeCompressed()
+			pkStr = pk.SerializeCompressed()
 		case pubkeyHybrid:
-			pkStr = (*PublicKey)(pk).SerializeHybrid()
+			pkStr = pk.SerializeHybrid()
 		}
 
 		if !bytes.Equal(test.key, pkStr) {
@@ -291,7 +291,7 @@ func TestPublicKeyIsEqual(t *testing.T) {
 func TestIsCompressed(t *testing.T) {
 	for _, test := range pubKeyTests {
 		isCompressed := IsCompressedPubKey(test.key)
-		wantCompressed := (test.format == pubkeyCompressed)
+		wantCompressed := test.format == pubkeyCompressed
 
 		if isCompressed != wantCompressed {
 			t.Fatalf("%s (%x) pubkey: unexpected compressed result, "+

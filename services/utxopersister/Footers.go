@@ -29,8 +29,8 @@ func GetFooter(r io.Reader) (uint64, uint64, error) {
 		return 0, 0, errors.NewProcessingError("error reading EOF marker", err)
 	}
 
-	txCount := binary.LittleEndian.Uint64(b[32:40])
-	utxoCount := binary.LittleEndian.Uint64(b[40:48])
+	txCount := binary.LittleEndian.Uint64(b[0:8])
+	utxoCount := binary.LittleEndian.Uint64(b[8:16])
 
 	return txCount, utxoCount, nil
 }

@@ -232,8 +232,8 @@ func GenerateDoubleSpendTransactions(node *TeranodeTestClient) (*[]bt.Tx, error)
 		return nil, errors.NewProcessingError("Error filling transaction inputs: %v", err)
 	}
 
-	transactions[0] = *tx
-	transactions[1] = *txDoubleSpend
+	transactions[0] = *tx            //nolint:govet // this needs to be refactored to avoid this
+	transactions[1] = *txDoubleSpend //nolint:govet // this needs to be refactored to avoid this
 
 	return &transactions, nil
 }

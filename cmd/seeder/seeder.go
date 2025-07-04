@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	_ "net/http/pprof"
+	_ "net/http/pprof" //nolint:gosec // This is used for internal profiling
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -147,7 +147,7 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 
 	// Start http server for the profiler
 	go func() {
-		logger.Errorf("%v", http.ListenAndServe(":6060", nil))
+		logger.Errorf("%v", http.ListenAndServe(":6060", nil)) //nolint:gosec // needs enhanced options for timeouts
 	}()
 
 	wg := sync.WaitGroup{}

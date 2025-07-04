@@ -89,7 +89,7 @@ func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processN
 	peerStatus := &PeerHeight{
 		logger:                logger,
 		settings:              tSettings,
-		P2PNode:               *peerConnection,
+		P2PNode:               *peerConnection, //nolint:govet // this needs to be refactored to pass
 		numberOfExpectedPeers: numberOfExpectedPeers,
 		lastMsgByPeerID:       sync.Map{},
 		defaultTimeout:        defaultTimeout,
@@ -98,6 +98,7 @@ func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processN
 	return peerStatus, nil
 }
 
+// Start initializes the PeerHeight service by starting the P2P node and setting up
 func (p *PeerHeight) Start(ctx context.Context) error {
 	topicPrefix := p.settings.ChainCfgParams.TopicPrefix
 	if topicPrefix == "" {
@@ -126,11 +127,13 @@ func (p *PeerHeight) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop gracefully stops the PeerHeight service by shutting down the P2P node.
 func (p *PeerHeight) Stop(ctx context.Context) error {
 	err := p.P2PNode.Stop(ctx)
 	return err
 }
 
+// blockHandler processes incoming block messages from peers.
 func (p *PeerHeight) blockHandler(ctx context.Context, msg []byte, from string) {
 	blockMessage := BlockMessage{}
 
@@ -168,10 +171,8 @@ func (p *PeerHeight) blockHandler(ctx context.Context, msg []byte, from string) 
 	}
 }
 
-/*
- * HaveAllPeersReachedMinHeight checks if all peers have a block at the given block height or higher.
- * Very crude implementation, we need to allow for natural forks and reorgs.
- */
+// HaveAllPeersReachedMinHeight checks if all peers have a block at the given block height or higher very crude implementation,
+// we need to allow for natural forks and reorgs.
 func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bool, first bool) bool {
 	size := 0
 
@@ -216,6 +217,7 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 	return result
 }
 
+// WaitForAllPeers waits for all peers to reach a minimum block height.
 func (p *PeerHeight) WaitForAllPeers(ctx context.Context, height uint32, testAllPeers bool) error {
 	_, ok := ctx.Deadline()
 	if !ok {

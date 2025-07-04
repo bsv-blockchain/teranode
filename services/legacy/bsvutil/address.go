@@ -12,7 +12,7 @@ import (
 	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvec"
 	"github.com/bsv-blockchain/go-chaincfg"
-	"golang.org/x/crypto/ripemd160"
+	"golang.org/x/crypto/ripemd160" //nolint:gosec // this is a known safe use of ripemd160
 )
 
 var (
@@ -102,7 +102,7 @@ func DecodeAddress(addr string, defaultNet *chaincfg.Params) (Address, error) {
 		default:
 			return nil, errors.New("decoded address is of unknown size")
 		}
-	} else if err == ErrChecksumMismatch {
+	} else if errors.Is(err, ErrChecksumMismatch) {
 		return nil, ErrChecksumMismatch
 	}
 
@@ -931,7 +931,7 @@ func DecodeCashAddress(str string) (string, []byte, error) {
 // MIT License
 func convertBits(data []byte, fromBits uint, tobits uint, pad bool) ([]byte, error) {
 	// General power-of-2 base conversion.
-	var uintArr []uint
+	var uintArr []uint //nolint:prealloc // Consider pre-allocatin
 	for _, i := range data {
 		uintArr = append(uintArr, uint(i))
 	}
@@ -962,7 +962,7 @@ func convertBits(data []byte, fromBits uint, tobits uint, pad bool) ([]byte, err
 		return []byte{}, errors.New("encoding padding error")
 	}
 
-	var dataArr []byte
+	var dataArr []byte //nolint:prealloc // Consider pre-allocatin
 	for _, i := range ret {
 		dataArr = append(dataArr, byte(i))
 	}

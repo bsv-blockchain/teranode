@@ -2,7 +2,7 @@ package aerospike
 
 import (
 	"context"
-	"math/rand"
+	"crypto/rand"
 	"os"
 	"testing"
 	"time"
@@ -12,7 +12,7 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-batcher"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
+	teranodeaerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -25,7 +25,7 @@ import (
 // go test -v -tags test_aerospike ./test/...
 
 func TestStore_GetBinsToStore(t *testing.T) {
-	s := teranode_aerospike.Store{}
+	s := teranodeaerospike.Store{}
 	s.SetUtxoBatchSize(100)
 	s.SetSettings(test.CreateBaseTestSettings())
 
@@ -38,9 +38,9 @@ func TestStore_GetBinsToStore(t *testing.T) {
 	})
 
 	t.Run("TestStore_GetBinsToStore", func(t *testing.T) {
-		teranode_aerospike.InitPrometheusMetrics()
+		teranodeaerospike.InitPrometheusMetrics()
 
-		// read hex file from os
+		// read a hex file from os
 		txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		require.NoError(t, err)
 
@@ -104,7 +104,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 	t.Run("TestStore_GetBinsToStore very large", func(t *testing.T) {
 		t.Skip("Skipping test with missing tx.")
 
-		// read hex file from os
+		// read a hex file from os
 		txHex, err := os.ReadFile("testdata/337e211af7bcf90470ead4f92910b2990b635dcab8414bf5849f3b1e25800b0c_extended.hex")
 		require.NoError(t, err)
 
@@ -112,7 +112,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		require.NoError(t, err)
 
 		// external should be set by the aerospike create function for huge txs
-		external := len(tx.ExtendedBytes()) > teranode_aerospike.MaxTxSizeInStoreInBytes
+		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
 		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false)
 		require.NoError(t, err)
@@ -121,9 +121,9 @@ func TestStore_GetBinsToStore(t *testing.T) {
 	})
 
 	t.Run("coinbase tx with conflicting and unspendable", func(t *testing.T) {
-		teranode_aerospike.InitPrometheusMetrics()
+		teranodeaerospike.InitPrometheusMetrics()
 
-		// read hex file from os
+		// read a hex file from os
 		txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		require.NoError(t, err)
 
@@ -131,7 +131,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		require.NoError(t, err)
 
 		// external should be set by the aerospike create function for huge txs
-		external := len(tx.ExtendedBytes()) > teranode_aerospike.MaxTxSizeInStoreInBytes
+		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
 		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true)
 		require.NoError(t, err)
@@ -183,7 +183,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings()
 		s.SetSettings(tSettings)
 
-		teranode_aerospike.InitPrometheusMetrics()
+		teranodeaerospike.InitPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
@@ -217,7 +217,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 	t.Run("TestStore_StoreTransactionExternally - no utxos", func(t *testing.T) {
 		s := setupStore(t, client)
 
-		teranode_aerospike.InitPrometheusMetrics()
+		teranodeaerospike.InitPrometheusMetrics()
 
 		tSettings := test.CreateBaseTestSettings()
 		s.SetSettings(tSettings)
@@ -270,7 +270,7 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings()
 		s.SetSettings(tSettings)
 
-		teranode_aerospike.InitPrometheusMetrics()
+		teranodeaerospike.InitPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
@@ -298,19 +298,19 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 }
 
 func BenchmarkStore_Create(b *testing.B) {
-	teranode_aerospike.InitPrometheusMetrics()
+	teranodeaerospike.InitPrometheusMetrics()
 
-	// read hex file from os
+	// read a hex file from os
 	txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 	require.NoError(b, err)
 
 	tx, err := bt.NewTxFromString(string(txHex))
 	require.NoError(b, err)
 
-	s := &teranode_aerospike.Store{}
+	s := &teranodeaerospike.Store{}
 	s.SetUtxoBatchSize(100)
 
-	sendStoreBatch := func(batch []*teranode_aerospike.BatchStoreItem) {
+	sendStoreBatch := func(batch []*teranodeaerospike.BatchStoreItem) {
 		// do nothing
 		for _, item := range batch {
 			item.SendDone(nil)
@@ -332,9 +332,14 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 
 	// Retry up to 3 times with random delays to reduce port conflicts
 	for attempt := 0; attempt < 3; attempt++ {
-		// Add random delay to reduce chance of simultaneous port allocation
+		// Add random delay to reduce the chance of simultaneous port allocation
 		if attempt > 0 {
-			delay := time.Duration(100+rand.Intn(500)) * time.Millisecond
+			cryptoRand := make([]byte, 2)
+			_, err := rand.Read(cryptoRand)
+			if err != nil {
+				t.Fatalf("failed to generate random delay: %v", err)
+			}
+			delay := time.Duration(100+int(cryptoRand[0])%500) * time.Millisecond
 			t.Logf("Retrying test setup after delay of %v (attempt %d)", delay, attempt+1)
 			time.Sleep(delay)
 		}

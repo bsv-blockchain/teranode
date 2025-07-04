@@ -1,4 +1,3 @@
-//nolint:stylecheck
 package blockchain_api
 
 func (s FSMStateType) Is(compareState FSMStateType) bool {
