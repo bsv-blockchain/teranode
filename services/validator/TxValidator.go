@@ -349,12 +349,6 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 			return errors.NewTxInvalidError("transaction input %d sequence number is invalid", index)
 		}
 		*/
-		// Check zero-sat inputs after genesis activation
-		if blockHeight >= tv.settings.ChainCfgParams.GenesisActivationHeight {
-			if input.PreviousTxSatoshis == 0 && !isUnspendableOutput(input.PreviousTxScript) {
-				return errors.NewTxInvalidError("transaction input %d satoshis cannot be zero unless from unspendable output", index)
-			}
-		}
 
 		if input.PreviousTxSatoshis > MaxSatoshis {
 			return errors.NewTxInvalidError("transaction input %d satoshis is too high", index)
