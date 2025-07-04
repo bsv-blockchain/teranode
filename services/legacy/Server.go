@@ -301,7 +301,7 @@ func (s *Server) Init(ctx context.Context) error {
 		return err
 	}
 
-	defaultListenAddresses := []string{ip.String() + ":8333"}
+	defaultListenAddresses := []string{ip.String() + ":" + activeNetParams.DefaultPort}
 	// TODO not setting any listen addresses triggers upnp, which does not seem to work yet
 	listenAddresses := s.settings.Legacy.ListenAddresses
 	if len(listenAddresses) == 0 {

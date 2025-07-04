@@ -116,6 +116,7 @@ type config struct {
 	ConnectPeers            []string      `long:"connect" description:"Connect only to the specified peers at startup"`
 	DisableListen           bool          `long:"nolisten" description:"Disable listening for incoming connections -- NOTE: Listening is automatically disabled if the --connect or --proxy options are used without also specifying listen interfaces via --listen"`
 	Listeners               []string      `long:"listen" description:"Add an interface/port to listen for connections (default all interfaces port: 8333, testnet: 18333)"`
+	Port                    string        `long:"port" description:"Port for peer connections (overrides network default)"`
 	MaxPeers                int           `long:"maxpeers" description:"Max number of inbound and outbound peers"`
 	MaxPeersPerIP           int           `long:"maxpeersperip" description:"Max number of inbound and outbound peers per IP"`
 	MinSyncPeerNetworkSpeed uint64        `long:"minsyncpeernetworkspeed" description:"Disconnect sync peers slower than this threshold in bytes/sec"`

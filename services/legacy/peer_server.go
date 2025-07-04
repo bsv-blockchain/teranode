@@ -2650,6 +2650,11 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	// overwrite any config options from settings, if applicable
 	setConfigValuesFromSettings(logger, config.GetAll(), cfg)
 
+	// If Port was set via settings, update activeNetParams
+	if cfg.Port != "" {
+		activeNetParams.DefaultPort = cfg.Port
+	}
+
 	workingDir, _ := config.Get("legacy_workingDir", "../../data")
 
 	// get the full path to the data directory
