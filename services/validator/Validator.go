@@ -843,7 +843,7 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 
 	if err := v.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
 		if errors.Is(err, errors.ErrTxNotFound) {
-			err = errors.NewTxMissingParentError("error extending transaction, parent tx not found")
+			err = errors.NewTxMissingParentError("error extending transaction, parent tx not found", err)
 			span.RecordError(err)
 
 			return err
