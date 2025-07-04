@@ -24,12 +24,14 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -101,6 +103,9 @@ type Server struct {
 	// txmetaConsumerClient consumes transaction metadata Kafka messages
 	// Processes transaction metadata updates from other services
 	txmetaConsumerClient kafka.KafkaConsumerGroupI
+
+	// invalidSubtreeKafkaProducer publishes invalid subtree events to Kafka
+	invalidSubtreeKafkaProducer kafka.KafkaAsyncProducerI
 }
 
 var (
@@ -198,6 +203,23 @@ func New(
 		}
 	} else {
 		u.utxoStore = utxoStore
+	}
+
+	// Initialize Kafka producer for invalid subtrees if configured
+	if tSettings.Kafka.InvalidSubtrees != "" {
+		logger.Infof("Initializing Kafka producer for invalid subtrees topic: %s", tSettings.Kafka.InvalidSubtrees)
+
+		var err error
+
+		u.invalidSubtreeKafkaProducer, err = initialiseInvalidSubtreeKafkaProducer(ctx, logger, tSettings)
+		if err != nil {
+			logger.Errorf("Failed to create Kafka producer for invalid subtrees: %v", err)
+		} else {
+			// Start the producer with a message channel
+			go u.invalidSubtreeKafkaProducer.Start(ctx, make(chan *kafka.Message, 100))
+		}
+	} else {
+		logger.Infof("No Kafka topic configured for invalid subtrees")
 	}
 
 	if u.blockchainClient != nil {
@@ -675,5 +697,45 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 	return true, nil
+}
 
+// initialiseInvalidSubtreeKafkaProducer creates a Kafka producer for invalid subtree events
+func initialiseInvalidSubtreeKafkaProducer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (*kafka.KafkaAsyncProducer, error) {
+	logger.Infof("Initializing Kafka producer for invalid subtrees topic: %s", tSettings.Kafka.InvalidSubtrees)
+	logger.Infof("InvalidBlocksConfig: %s", tSettings.Kafka.InvalidBlocksConfig)
+	logger.Infof("InvalidSubtreesConfig: %s", tSettings.Kafka.InvalidSubtreesConfig)
+
+	invalidSubtreeKafkaProducer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, tSettings.Kafka.InvalidSubtreesConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return invalidSubtreeKafkaProducer, nil
+}
+
+// publishInvalidSubtree publishes an invalid subtree event to Kafka
+func (u *Server) publishInvalidSubtree(subtreeHash, peerURL, reason string) {
+	if u.invalidSubtreeKafkaProducer == nil {
+		return
+	}
+
+	u.logger.Infof("[publishInvalidSubtree] publishing invalid subtree %s from peer %s to Kafka: %s", subtreeHash, peerURL, reason)
+
+	msg := &kafkamessage.KafkaInvalidSubtreeTopicMessage{
+		SubtreeHash: subtreeHash,
+		PeerUrl:     peerURL,
+		Reason:      reason,
+	}
+
+	msgBytes, err := proto.Marshal(msg)
+	if err != nil {
+		u.logger.Errorf("[publishInvalidSubtree] failed to marshal invalid subtree message: %v", err)
+		return
+	}
+
+	kafkaMsg := &kafka.Message{
+		Key:   []byte(subtreeHash),
+		Value: msgBytes,
+	}
+	u.invalidSubtreeKafkaProducer.Publish(kafkaMsg)
 }

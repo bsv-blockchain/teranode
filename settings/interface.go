@@ -70,27 +70,29 @@ type DashboardSettings struct {
 }
 
 type KafkaSettings struct {
-	Blocks              string
-	BlocksFinal         string
-	BlocksValidate      string
-	Hosts               string
-	InvalidBlocks       string
-	LegacyInv           string
-	Partitions          int
-	Port                int
-	RejectedTx          string
-	ReplicationFactor   int
-	Subtrees            string
-	TxMeta              string
-	UnitTest            string
-	ValidatorTxsConfig  *url.URL
-	TxMetaConfig        *url.URL
-	LegacyInvConfig     *url.URL
-	BlocksFinalConfig   *url.URL
-	RejectedTxConfig    *url.URL
-	InvalidBlocksConfig *url.URL
-	SubtreesConfig      *url.URL
-	BlocksConfig        *url.URL
+	Blocks                string
+	BlocksFinal           string
+	BlocksValidate        string
+	Hosts                 string
+	InvalidBlocks         string
+	InvalidSubtrees       string
+	LegacyInv             string
+	Partitions            int
+	Port                  int
+	RejectedTx            string
+	ReplicationFactor     int
+	Subtrees              string
+	TxMeta                string
+	UnitTest              string
+	ValidatorTxsConfig    *url.URL
+	TxMetaConfig          *url.URL
+	LegacyInvConfig       *url.URL
+	BlocksFinalConfig     *url.URL
+	RejectedTxConfig      *url.URL
+	InvalidBlocksConfig   *url.URL
+	InvalidSubtreesConfig *url.URL
+	SubtreesConfig        *url.URL
+	BlocksConfig          *url.URL
 }
 
 type AerospikeSettings struct {

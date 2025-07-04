@@ -72,30 +72,33 @@ const (
 // - Ban management is thread-safe across connections
 type Server struct {
 	p2p_api.UnimplementedPeerServiceServer
-	P2PNode                          P2PNodeI           // The P2P network node instance - using interface instead of concrete type
-	logger                           ulogger.Logger     // Logger instance for the server
-	settings                         *settings.Settings // Configuration settings
-	bitcoinProtocolID                string             // Bitcoin protocol identifier
-	blockchainClient                 blockchain.ClientI // Client for blockchain interactions
-	blockValidationClient            blockvalidation.Interface
-	AssetHTTPAddressURL              string                    // HTTP address URL for assets
-	e                                *echo.Echo                // Echo server instance
-	notificationCh                   chan *notificationMsg     // Channel for notifications
-	rejectedTxKafkaConsumerClient    kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
-	invalidBlocksKafkaConsumerClient kafka.KafkaConsumerGroupI // Kafka consumer for invalid blocks
-	subtreeKafkaProducerClient       kafka.KafkaAsyncProducerI // Kafka producer for subtrees
-	blocksKafkaProducerClient        kafka.KafkaAsyncProducerI // Kafka producer for blocks
-	banList                          BanListI                  // List of banned peers
-	banChan                          chan BanEvent             // Channel for ban events
-	banManager                       *PeerBanManager           // Manager for peer banning
-	gCtx                             context.Context
-	blockTopicName                   string
-	subtreeTopicName                 string
-	miningOnTopicName                string
-	rejectedTxTopicName              string
-	invalidBlocksTopicName           string   // Kafka topic for invalid blocks
-	handshakeTopicName               string   // pubsub topic for version/verack
-	blockPeerMap                     sync.Map // Map to track which peer sent each block (hash -> peerID)
+	P2PNode                           P2PNodeI           // The P2P network node instance - using interface instead of concrete type
+	logger                            ulogger.Logger     // Logger instance for the server
+	settings                          *settings.Settings // Configuration settings
+	bitcoinProtocolID                 string             // Bitcoin protocol identifier
+	blockchainClient                  blockchain.ClientI // Client for blockchain interactions
+	blockValidationClient             blockvalidation.Interface
+	AssetHTTPAddressURL               string                    // HTTP address URL for assets
+	e                                 *echo.Echo                // Echo server instance
+	notificationCh                    chan *notificationMsg     // Channel for notifications
+	rejectedTxKafkaConsumerClient     kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
+	invalidBlocksKafkaConsumerClient  kafka.KafkaConsumerGroupI // Kafka consumer for invalid blocks
+	invalidSubtreeKafkaConsumerClient kafka.KafkaConsumerGroupI // Kafka consumer for invalid subtrees
+	subtreeKafkaProducerClient        kafka.KafkaAsyncProducerI // Kafka producer for subtrees
+	blocksKafkaProducerClient         kafka.KafkaAsyncProducerI // Kafka producer for blocks
+	banList                           BanListI                  // List of banned peers
+	banChan                           chan BanEvent             // Channel for ban events
+	banManager                        *PeerBanManager           // Manager for peer banning
+	gCtx                              context.Context
+	blockTopicName                    string
+	subtreeTopicName                  string
+	miningOnTopicName                 string
+	rejectedTxTopicName               string
+	invalidBlocksTopicName            string   // Kafka topic for invalid blocks
+	invalidSubtreeTopicName           string   // Kafka topic for invalid subtrees
+	handshakeTopicName                string   // pubsub topic for version/verack
+	blockPeerMap                      sync.Map // Map to track which peer sent each block (hash -> peerID)
+	subtreePeerMap                    sync.Map // Map to track which peer sent each subtree (hash -> peerID)
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -109,6 +112,7 @@ type Server struct {
 // - blockchainClient: Client for retrieving and querying blockchain data
 // - rejectedTxKafkaConsumerClient: Kafka consumer client for receiving rejected transaction notifications
 // - invalidBlocksKafkaConsumerClient: Kafka consumer client for receiving invalid block notifications
+// - invalidSubtreeKafkaConsumerClient: Kafka consumer client for receiving invalid subtree notifications
 // - subtreeKafkaProducerClient: Kafka producer client for publishing subtree data
 // - blocksKafkaProducerClient: Kafka producer client for publishing block data
 //
@@ -121,6 +125,7 @@ func NewServer(
 	blockchainClient blockchain.ClientI,
 	rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI,
 	invalidBlocksKafkaConsumerClient kafka.KafkaConsumerGroupI,
+	invalidSubtreeKafkaConsumerClient kafka.KafkaConsumerGroupI,
 	subtreeKafkaProducerClient kafka.KafkaAsyncProducerI,
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
 ) (*Server, error) {
@@ -210,17 +215,19 @@ func NewServer(
 		banList:           banlist,
 		banChan:           banChan,
 
-		rejectedTxKafkaConsumerClient:    rejectedTxKafkaConsumerClient,
-		invalidBlocksKafkaConsumerClient: invalidBlocksKafkaConsumerClient,
-		subtreeKafkaProducerClient:       subtreeKafkaProducerClient,
-		blocksKafkaProducerClient:        blocksKafkaProducerClient,
-		gCtx:                             ctx,
-		blockTopicName:                   fmt.Sprintf("%s-%s", topicPrefix, btn),
-		subtreeTopicName:                 fmt.Sprintf("%s-%s", topicPrefix, stn),
-		miningOnTopicName:                fmt.Sprintf("%s-%s", topicPrefix, miningOntn),
-		rejectedTxTopicName:              fmt.Sprintf("%s-%s", topicPrefix, rtn),
-		invalidBlocksTopicName:           "invalid-blocks", // Fixed topic name for invalid blocks
-		handshakeTopicName:               fmt.Sprintf("%s-%s", topicPrefix, htn),
+		rejectedTxKafkaConsumerClient:     rejectedTxKafkaConsumerClient,
+		invalidBlocksKafkaConsumerClient:  invalidBlocksKafkaConsumerClient,
+		invalidSubtreeKafkaConsumerClient: invalidSubtreeKafkaConsumerClient,
+		subtreeKafkaProducerClient:        subtreeKafkaProducerClient,
+		blocksKafkaProducerClient:         blocksKafkaProducerClient,
+		gCtx:                              ctx,
+		blockTopicName:                    fmt.Sprintf("%s-%s", topicPrefix, btn),
+		subtreeTopicName:                  fmt.Sprintf("%s-%s", topicPrefix, stn),
+		miningOnTopicName:                 fmt.Sprintf("%s-%s", topicPrefix, miningOntn),
+		rejectedTxTopicName:               fmt.Sprintf("%s-%s", topicPrefix, rtn),
+		invalidBlocksTopicName:            tSettings.Kafka.InvalidBlocks,
+		invalidSubtreeTopicName:           tSettings.Kafka.InvalidSubtrees,
+		handshakeTopicName:                fmt.Sprintf("%s-%s", topicPrefix, htn),
 	}
 
 	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
@@ -410,6 +417,31 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 		s.logger.Infof("[Start] Starting invalid blocks Kafka consumer on topic: %s", s.invalidBlocksTopicName)
 		s.invalidBlocksKafkaConsumerClient.Start(ctx, invalidBlocksHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
+	}
+
+	// Handler for invalid subtrees Kafka messages
+	if s.invalidSubtreeKafkaConsumerClient != nil {
+		invalidSubtreeHandler := func(msg *kafka.KafkaMessage) error {
+			var m kafkamessage.KafkaInvalidSubtreeTopicMessage
+			if err := proto.Unmarshal(msg.Value, &m); err != nil {
+				s.logger.Errorf("[Start] error unmarshalling invalidSubtreeMessage: %v", err)
+				return err
+			}
+
+			s.logger.Infof("[Start] Received invalid subtree notification via Kafka: %s, reason: %s", m.SubtreeHash, m.Reason)
+
+			// Use the existing ReportInvalidSubtree method to handle the invalid subtree
+			err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.Reason)
+			if err != nil {
+				// Don't return error here, as we want to continue processing messages
+				s.logger.Errorf("[Start] Failed to report invalid subtree from Kafka: %v", err)
+			}
+
+			return nil
+		}
+
+		s.logger.Infof("[Start] Starting invalid subtrees Kafka consumer on topic: %s", s.invalidSubtreeTopicName)
+		s.invalidSubtreeKafkaConsumerClient.Start(ctx, invalidSubtreeHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
 	}
 
 	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
@@ -1111,6 +1143,10 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		return
 	}
 
+	// Store the peer ID that sent this subtree in the subtreePeerMap
+	s.subtreePeerMap.Store(subtreeMessage.Hash, from)
+	s.logger.Debugf("[handleSubtreeTopic] storing peer %s for subtree %s", from, subtreeMessage.Hash)
+
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
 		msg := &kafkamessage.KafkaSubtreeTopicMessage{
 			Hash: hash.String(),
@@ -1494,6 +1530,42 @@ func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reaso
 
 	// Remove the block from the map to avoid memory leaks
 	s.blockPeerMap.Delete(blockHash)
+
+	return nil
+}
+
+func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, reason string) error {
+	// Look up the peer ID that sent this subtree
+	peerIDVal, ok := s.subtreePeerMap.Load(subtreeHash)
+	if !ok {
+		s.logger.Warnf("[ReportInvalidSubtree] no peer found for invalid subtree %s", subtreeHash)
+		return errors.NewNotFoundError("no peer found for invalid subtree %s", subtreeHash)
+	}
+
+	peerID, ok := peerIDVal.(string)
+	if !ok {
+		s.logger.Errorf("[ReportInvalidSubtree] peer ID for subtree %s is not a string: %v", subtreeHash, peerIDVal)
+		return errors.NewInvalidArgumentError("peer ID for subtree %s is not a string", subtreeHash)
+	}
+
+	// Add ban score to the peer
+	s.logger.Infof("[ReportInvalidSubtree] adding ban score to peer %s for invalid subtree %s: %s", peerID, subtreeHash, reason)
+
+	// Create the request to add ban score
+	req := &p2p_api.AddBanScoreRequest{
+		PeerId: peerID,
+		Reason: "invalid_subtree",
+	}
+
+	// Call the AddBanScore method
+	_, err := s.AddBanScore(ctx, req)
+	if err != nil {
+		s.logger.Errorf("[ReportInvalidSubtree] error adding ban score to peer %s: %v", peerID, err)
+		return errors.NewServiceError("error adding ban score to peer %s", peerID, err)
+	}
+
+	// Remove the subtree from the map to avoid memory leaks
+	s.subtreePeerMap.Delete(subtreeHash)
 
 	return nil
 }

@@ -179,3 +179,12 @@ func getKafkaInvalidBlocksConsumerGroup(logger ulogger.Logger, settings *setting
 
 	return getKafkaConsumerGroup(logger, kafkaInvalidBlocksConfig, consumerGroupID, true)
 }
+
+func getKafkaInvalidSubtreeConsumerGroup(logger ulogger.Logger, settings *settings.Settings, consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {
+	kafkaInvalidSubtreeConfig := settings.Kafka.InvalidSubtreesConfig
+	if kafkaInvalidSubtreeConfig == nil {
+		return nil, nil // Optional, return nil if not configured
+	}
+
+	return getKafkaConsumerGroup(logger, kafkaInvalidSubtreeConfig, consumerGroupID, true)
+}

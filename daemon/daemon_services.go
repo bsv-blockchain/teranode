@@ -259,6 +259,11 @@ func startP2PService(ctx context.Context, daemon *Daemon, appSettings *settings.
 		return err
 	}
 
+	invalidSubtreeKafkaConsumerClient, err := getKafkaInvalidSubtreeConsumerGroup(createLogger("kpis"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
+	if err != nil {
+		return err
+	}
+
 	// Create Kafka producers for subtrees and blocks
 	var subtreeKafkaProducerClient *kafka.KafkaAsyncProducer
 
@@ -289,6 +294,7 @@ func startP2PService(ctx context.Context, daemon *Daemon, appSettings *settings.
 		ctx, p2pLogger, appSettings, blockchainClient,
 		rejectedTxKafkaConsumerClient,
 		invalidBlocksKafkaConsumerClient,
+		invalidSubtreeKafkaConsumerClient,
 		subtreeKafkaProducerClient,
 		blocksKafkaProducerClient,
 	)
