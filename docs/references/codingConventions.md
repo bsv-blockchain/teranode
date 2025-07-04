@@ -124,6 +124,7 @@ The naming conventions and best practices outlined in this document provide a su
 - **No uppercase or special characters**: Avoid uppercase letters, spaces, or special characters in file names.
 
 **Examples:**
+
 - `block_header.go`
 - `transaction_pool.go`
 - `network_manager.go`

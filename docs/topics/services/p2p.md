@@ -115,7 +115,6 @@ In more detail:
 
 ![p2p_create_init_start.svg](img/plantuml/p2p/p2p_create_init_start.svg)
 
-#Based on the updated code and the provided description, the revised and adjusted documentation for the P2P server sections would be as follows:
 
 ### 2.1.1. Creating a New P2P Server
 The startup process of the node involves the `main.go` file calling the `p2p.NewServer` function from the P2P package (`services/p2p/Server.go`). This function is tasked with creating a new P2P server instance.
@@ -325,13 +324,12 @@ All notifications collected from the Block and Validator listeners are sent over
 
 
 
-* The server listens for various types of events in a concurrent process:
-
-  * The server tracks all active client channels (`clientChannels`).
-  * When a new client connects, it is added to the `clientChannels`.
-  * If a client disconnects, it is removed from `clientChannels`.
-  * Periodically, we ping all connected clients. Any error would have the client removed from the list of clients.
-  * When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
+- The server listens for various types of events in a concurrent process:
+    - The server tracks all active client channels (`clientChannels`).
+    - When a new client connects, it is added to the `clientChannels`.
+    - If a client disconnects, it is removed from `clientChannels`.
+    - Periodically, we ping all connected clients. Any error would have the client removed from the list of clients.
+    - When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
 
 As a sequence:
 
@@ -596,8 +594,8 @@ The P2P service's network presence is controlled by several interrelated setting
 - `p2p_listen_addresses` determines which interfaces/ports the service listens on
 - `p2p_advertise_addresses` controls what addresses are advertised to peers
     - Each address can be specified with or without a port (e.g., `192.168.1.1` or `example.com:9906`)
-  - For addresses without a port, the system automatically uses the value from `p2p_port`
-  - Both IP addresses and domain names are supported with proper multiaddress formatting
+    - For addresses without a port, the system automatically uses the value from `p2p_port`
+    - Both IP addresses and domain names are supported with proper multiaddress formatting
 - `p2p_port` provides a default when addresses don't specify ports
 - If no `p2p_listen_addresses` are specified, the service may not be reachable
 - The gRPC and HTTP listen addresses control how other services can interact with the P2P service

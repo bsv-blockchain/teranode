@@ -16,43 +16,36 @@
 
 7. [Other Resources](#7-other-resources)
 
-
 ## 1. Description
-
 
 The Teranode Alert Service reintroduces the alert system functionality that was removed from Bitcoin in 2016. This service is designed to enhance control by allowing specific actions on UTXOs and peer management.
 
 The Service features are:
 
+### UTXO Freezing
 
-**UTXO Freezing**
+- Ability to freeze a set of UTXOs at a specific block height + 1.
+- Frozen UTXOs are classified as such and attempts to spend them are rejected.
 
-* Ability to freeze a set of UTXOs at a specific block height + 1.
-* Frozen UTXOs are classified as such and attempts to spend them are rejected.
+### UTXO Unfreezing
 
+- Capability to unfreeze a set of UTXOs at a specified block height.
 
-**UTXO Unfreezing**
+### UTXO Reassignment
 
-* Capability to unfreeze a set of UTXOs at a specified block height.
+- Ability to reassign UTXOs to another specified address at a given block height.
 
+### Peer Management
 
-**UTXO Reassignment**
+- Ban a peer based on IP address (with optional netmask), cutting off communications.
+- Unban a previously banned peer, re-enabling communications.
 
-* Ability to reassign UTXOs to another specified address at a given block height.
+### Block Invalidation
 
-
-**Peer Management**
-
-* Ban a peer based on IP address (with optional netmask), cutting off communications.
-* Unban a previously banned peer, re-enabling communications.
-
-
-**Block Invalidation**
-
-* Manually invalidate a block based on its hash.
-* Retrieve and re-validate all valid transactions from the invalidated block and subsequent blocks.
-* Include valid transactions in the next block(s) to be built.
-* Start building the new longest honest chain from the block height -1 of the invalidated block.
+- Manually invalidate a block based on its hash.
+- Retrieve and re-validate all valid transactions from the invalidated block and subsequent blocks.
+- Include valid transactions in the next block(s) to be built.
+- Start building the new longest honest chain from the block height -1 of the invalidated block.
 
 > **Note**: For information about how the Alert service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
@@ -63,9 +56,9 @@ Based on the received messages, the Alert Service handles the UTXO freezing, unf
 
 The Alert Service interacts with several core components of Teranode:
 
-**Blockchain Service**: For block invalidation and chain management.
-**UTXO Store**: For freezing, unfreezing, and reassigning UTXOs.
-**Block Assembly**: For including re-validated transactions after block invalidation.
+- **Blockchain Service**: For block invalidation and chain management
+- **UTXO Store**: For freezing, unfreezing, and reassigning UTXOs
+- **Block Assembly**: For including re-validated transactions after block invalidation
 
 ![Alert_Service_Component_Diagram.png](img/Alert_Service_Component_Diagram.png)
 
@@ -78,7 +71,6 @@ Additionally, a P2P private network is used for peer management, allowing the Al
 The Alert Service initializes the necessary components and services to start processing alerts.
 
 ![alert_init.svg](img/plantuml/alert/alert_init.svg)
-
 
 1. The Teranode Main function creates a new Alert Service instance, passing necessary dependencies (logger, blockchain client, UTXO store, and block assembly client).
 
@@ -98,11 +90,9 @@ The Alert Service initializes the necessary components and services to start pro
 
 5. The Alert Service is now fully initialized and running.
 
-
 ### 2.2. UTXO Freezing
 
 ![alert_freeze_utxo.svg](img/plantuml/alert/alert_freeze_utxo.svg)
-
 
 1. The P2P Alert library initiates the process by calling `AddToConsensusBlacklist` with a list of funds to freeze.
 2. The Alert Service iterates through each fund:
@@ -114,11 +104,9 @@ The Alert Service initializes the necessary components and services to start pro
 4. Depending on the success of the freeze operation, the Alert Service adds the result to either the processed or notProcessed list.
 5. Finally, the Alert Service returns a BlacklistResponse to the P2P network.
 
-
 ### 2.3. UTXO Unfreezing
 
 ![alert_unfreeze_utxo.svg](img/plantuml/alert/alert_unfreeze_utxo.svg)
-
 
 1. The P2P Alert library initiates the process by calling `AddToConsensusBlacklist` with a list of funds to potentially unfreeze.
 2. The Alert Service iterates through each fund:
@@ -136,11 +124,9 @@ The Alert Service initializes the necessary components and services to start pro
     - The Alert Service adds it to the notProcessed list with a reason.
 5. Finally, the Alert Service returns a BlacklistResponse to the P2P network.
 
-
 ### 2.4. UTXO Reassignment
 
 ![alert_reassign_utxo.svg](img/plantuml/alert/alert_reassign_utxo.svg)
-
 
 1. The P2P Alert library initiates the process by calling `AddToConfiscationTransactionWhitelist` with a list of transactions.
 2. The Alert Service iterates through each transaction:
@@ -161,11 +147,9 @@ The Alert Service initializes the necessary components and services to start pro
     - The Alert Service adds the result to either the processed or notProcessed list.
 6. After processing all inputs of all transactions, the Alert Service returns an AddToConfiscationTransactionWhitelistResponse to the P2P network.
 
-
 ### 2.5. Block Invalidation
 
 ![alert_block_invalidation.svg](img/plantuml/alert/alert_block_invalidation.svg)
-
 
 1. The P2P Alert library initiates the process by calling `InvalidateBlock` with the hash of the block to be invalidated.
 
@@ -190,7 +174,6 @@ The Alert Service initializes the necessary components and services to start pro
 
 7. Finally, the Alert Service returns the invalidation result to the P2P network.
 
-
 ## 3. Technology
 
 1. **Go Programming Language:**
@@ -202,9 +185,8 @@ The Alert Service initializes the necessary components and services to start pro
 
 3. **Database Technologies:**
     - Supports both SQLite and PostgreSQL:
-
-     - SQLite for development and lightweight deployments.
-     - PostgreSQL for production environments.
+        - SQLite for development and lightweight deployments.
+        - PostgreSQL for production environments.
     - GORM ORM is used for database operations, with a custom logger (`gorm_logger.go`).
 
 4. **gocore Library:**
@@ -226,7 +208,7 @@ The Alert Service initializes the necessary components and services to start pro
 
 ## 4. Directory Structure and Main Files
 
-```
+```text
 /services/alert/
 ├── alert_api/
 │   ├── alert_api.pb.go
@@ -260,7 +242,6 @@ The Alert Service initializes the necessary components and services to start pro
 └── server.go
 ```
 
-
 ## 5. How to run
 
 To run the Alert Service locally, you can execute the following command:
@@ -270,7 +251,6 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Alert=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Alert Service locally.
-
 
 ## 6. Configuration options (settings flags)
 
@@ -318,67 +298,56 @@ The Alert Service supports multiple database backends through the `alert_store` 
 
 #### 6.2.1 SQLite
 
-```
+```text
 sqlite:///database_name
 ```
 
 The SQLite database will be stored in the `DataFolder` directory specified in the main Teranode configuration.
 
-**Parameters:**
-- None
-
-**Connection Pool Settings (hardcoded):**
-- Max Idle Connections: 1
-- Max Open Connections: 1
-
-**Table Prefix:** Uses the database name as prefix
+- **Parameters**: None
+- **Connection Pool Settings (hardcoded)**:
+    - Max Idle Connections: 1
+    - Max Open Connections: 1
+- **Table Prefix**: Uses the database name as prefix
 
 #### 6.2.2 In-Memory SQLite
 
-```
+```text
 sqlitememory:///database_name
 ```
 
-**Parameters:**
-- None
-
-**Connection Pool Settings (hardcoded):**
-- Max Idle Connections: 1
-- Max Open Connections: 1
-
-**Table Prefix:** Uses the database name as prefix
+- **Parameters**: None
+- **Connection Pool Settings (hardcoded)**:
+    - Max Idle Connections: 1
+    - Max Open Connections: 1
+- **Table Prefix**: Uses the database name as prefix
 
 #### 6.2.3 PostgreSQL
 
-```
+```text
 postgres://username:password@host:port/database?param1=value1&param2=value2
 ```
 
-**Parameters:**
-- `sslmode`: SSL mode for the connection (default: `disable`)
-
-**Connection Pool Settings (hardcoded):**
-- Max Idle Connections: 2
-- Max Open Connections: 5
-- Max Connection Idle Time: 20 seconds
-- Max Connection Time: 20 seconds
-- Transaction Timeout: 20 seconds
-
-**Table Prefix:** "alert_system"
+- **Parameters**:
+    - `sslmode`: SSL mode for the connection (default: `disable`)
+- **Connection Pool Settings (hardcoded)**:
+    - Max Idle Connections: 2
+    - Max Open Connections: 5
+    - Max Connection Idle Time: 20 seconds
+    - Max Connection Time: 20 seconds
+    - Transaction Timeout: 20 seconds
+- **Table Prefix**: "alert_system"
 
 #### 6.2.4 MySQL
 
-```
+```text
 mysql://username:password@host:port/database?param1=value1&param2=value2
 ```
 
-**Parameters:**
-- `sslmode`: SSL mode for the connection (default: `disable`)
-
-**Connection Pool Settings (hardcoded):**
-- Same as PostgreSQL
-
-**Table Prefix:** "alert_system"
+- **Parameters**:
+    - `sslmode`: SSL mode for the connection (default: `disable`)
+- **Connection Pool Settings (hardcoded)**: Same as PostgreSQL
+- **Table Prefix**: "alert_system"
 
 ### 6.3 Internal Settings and Behaviors
 
@@ -398,14 +367,14 @@ The following settings are hardcoded in the service and cannot be configured ext
     - Prefix used for database tables
 
 - **DHT Mode**: "client"
-  - Sets the node as a DHT client for peer discovery
+    - Sets the node as a DHT client for peer discovery
 
 - **Peer Discovery Interval**: Uses system default
-  - Controls how frequently peers are discovered
+    - Controls how frequently peers are discovered
 
 **Database Settings:**
 - **Table Prefix**: "alert_system" for PostgreSQL/MySQL, database name for SQLite
-  - Prefix used for database tables
+    - Prefix used for database tables
 
 ### 6.4 Service Dependencies
 
@@ -429,20 +398,25 @@ The Alert Service depends on several other Teranode services:
 
 All settings can also be configured through environment variables using the following pattern:
 
-```
+```text
 TERANODE_ALERT_<SETTING_NAME>
 ```
 
-**Standard Environment Variables:**
-- `TERANODE_ALERT_GENESIS_KEYS` - Pipe-separated list of genesis keys
-- `TERANODE_ALERT_P2P_PRIVATE_KEY` - P2P private key
-- `TERANODE_ALERT_PROTOCOL_ID` - P2P protocol identifier
-- `TERANODE_ALERT_STORE` - Database connection URL
-- `TERANODE_ALERT_TOPIC_NAME` - P2P topic name
+#### Standard Environment Variables
 
-**Special Environment Variables:**
-- `ALERT_P2P_PORT` - P2P port (note: different naming pattern)
+The following environment variables are used to configure the Alert Service:
 
+- `TERANODE_ALERT_GENESIS_KEYS`: A pipe-separated list of genesis keys.
+- `TERANODE_ALERT_P2P_PRIVATE_KEY`: The P2P private key.
+- `TERANODE_ALERT_PROTOCOL_ID`: The P2P protocol identifier.
+- `TERANODE_ALERT_STORE`: The database connection URL.
+- `TERANODE_ALERT_TOPIC_NAME`: The P2P topic name.
+
+#### Special Environment Variables
+
+The following environment variable is used to configure the P2P port:
+
+- `ALERT_P2P_PORT`: The P2P port (note: different naming pattern).
 
 ### 6.6 Security Considerations
 
@@ -467,7 +441,7 @@ When using PostgreSQL or MySQL:
 
 #### Complete Configuration Example
 
-```
+```text
 # Alert Service Core Configuration
 alert_store = postgres://alert_user:secure_password@db-server:5432/alert_db?sslmode=require
 alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768 | 03aec1d40f02ac7f6df701ef8f629515812f1bcd949b6aa6c7a8dd778b748b2433"
@@ -479,7 +453,7 @@ alert_p2p_port = 4001
 
 #### Development Configuration Example
 
-```
+```text
 alert_store = sqlite:///alert
 alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768"
 alert_p2p_port = 4001
@@ -490,13 +464,13 @@ alert_p2p_port = 4001
 #### Common Configuration Errors
 
 **Genesis Keys Errors:**
-```
+```text
 Error: ErrNoGenesisKeys
 Cause: No genesis keys provided in configuration
 ```
 
 **P2P Configuration Errors:**
-```
+```text
 Error: ErrNoP2PIP
 Cause: P2P IP address validation failed (less than 5 characters)
 
@@ -505,7 +479,7 @@ Cause: P2P port validation failed (less than 2 characters when converted to stri
 ```
 
 **Database Connection Errors:**
-```
+```text
 Error: ErrDatastoreUnsupported
 Cause: Unsupported database scheme in alert_store URL
 Supported schemes: sqlite://, sqlitememory://, postgres://, mysql://

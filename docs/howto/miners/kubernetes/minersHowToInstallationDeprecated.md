@@ -231,77 +231,66 @@ In the following sections, we will focus on the `Kubernetes operator` installati
 
 
 
-**Step 1: Prepare the Environment**
+### Step 1: Prepare the Environment
 
-1. Ensure you have kubectl installed and configured to access your Kubernetes cluster.
+1. **Ensure you have kubectl installed and configured to access your Kubernetes cluster.**
 
-2. Verify access to your Kubernetes cluster:
-
-```
-kubectl cluster-info
-```
-
-
-
-**Step 2: Install Operator Lifecycle Manager (OLM)**
-
-1. If OLM is not already installed, install it using the following command:
-
-```
-operator-sdk olm install
-```
+2. **Verify access to your Kubernetes cluster:**
+   ```
+   kubectl cluster-info
+   ```
 
 
 
-**Step 3: Create BSVA CatalogSource**
+### Step 2: Install Operator Lifecycle Manager (OLM)
 
-1. Clone the Teranode repository:
-
-```bash
-cd $YOUR_WORKING_DIR
-git clone git@github.com:bitcoin-sv/teranode-operator.git
-cd teranode-operator
-```
-
-
-2. Authenticate with AWS ECR (**only required during the private beta phase**)
-
-```bash
-# authenticate with AWS ECR
-aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
-```
-
-Make sure the credentials are stored in your Kubernetes cluster (specific steps will depend on your Kubernetes implementation of choice).
-
-3. Create the BSVA CatalogSource in the OLM namespace:
-
-```
-kubectl create -f olm/catalog-source.yaml
-```
+1. **If OLM is not already installed, install it using the following command:**
+   ```
+   operator-sdk olm install
+   ```
 
 
 
-**Step 4: Create Target Namespace**
+### Step 3: Create BSVA CatalogSource
 
-1. Create the namespace where you want to install the Teranode operator (this example uses 'teranode-operator'):
+1. **Clone the Teranode repository:**
+   ```bash
+   cd $YOUR_WORKING_DIR
+   git clone git@github.com:bitcoin-sv/teranode-operator.git
+   cd teranode-operator
+   ```
 
-```
-kubectl create namespace teranode-operator
-```
+2. **Authenticate with AWS ECR** (only required during the private beta phase):
+   ```bash
+   # authenticate with AWS ECR
+   docker login ghcr.io
+   ```
+   Make sure the credentials are stored in your Kubernetes cluster (specific steps will depend on your Kubernetes implementation of choice).
+
+3. **Create the BSVA CatalogSource in the OLM namespace:**
+   ```
+   kubectl create -f olm/catalog-source.yaml
+   ```
 
 
 
-**Step 5: Create OperatorGroup and Subscription**
+### Step 4: Create Target Namespace
+
+1. **Create the namespace where you want to install the Teranode operator** (this example uses 'teranode-operator'):
+   ```
+   kubectl create namespace teranode-operator
+   ```
 
 
-1. (Optional) If you're deploying to a namespace other than 'teranode-operator', modify the OperatorGroup to specify your installation namespace:
 
+### Step 5: Create OperatorGroup and Subscription
+
+1. **(Optional) If you're deploying to a namespace other than 'teranode-operator', modify the OperatorGroup to specify your installation namespace:**
    ```
    echo "  - <your-namespace>" >> olm/og.yaml
    ```
-
-2. Create the OperatorGroup and Subscription resources:
-
+   
+2. **Create the OperatorGroup and Subscription resources:**
    ```
    kubectl create -f olm/og.yaml -n teranode-operator
    kubectl create -f olm/subscription.yaml -n teranode-operator
@@ -309,9 +298,9 @@ kubectl create namespace teranode-operator
 
 
 
-**Step 6: Verify Deployment**
+### Step 6: Verify Deployment
 
-1. Check if all pods are running (your output should be similar to the below):
+1. **Check if all pods are running** (your output should be similar to the below):
 
 ```
 # Check catalog source pod
@@ -349,55 +338,54 @@ subtree-validator-7879f559d5-9gg9c                                1/1     Runnin
 subtree-validator-7879f559d5-x2dd4                                1/1     Running     0          3d11h
 teranode-operator-controller-manager-768f498c4d-mk49k             2/2     Running     0          3d11h
 ```
+2. **Ensure all services show a status of "Running" or "Completed".**
 
-2. Ensure all services show a status of "Running" or "Completed".
+### Step 7: Configure Ingress (if applicable)
 
-**Step 7: Configure Ingress (if applicable)**
-
-1. Verify that ingress resources are created for Asset, Peer, and Propagation services:
+1. **Verify that ingress resources are created for Asset, Peer, and Propagation services:**
    ```
    kubectl get ingress
    ```
 
-2. Configure your ingress controller or external load balancer as needed.
+2. **Configure your ingress controller or external load balancer as needed.**
 
-
-
-**Step 8: Access Teranode Services**
+### Step 8: Access Teranode Services
 
 - The various Teranode services will be accessible through the configured ingress or service endpoints.
 - Refer to your specific ingress or network configuration for exact URLs and ports.
 
-**Step 9: Change the node status to Run or LegacySync**
+### Step 9: Change the node status to Run or LegacySync
 
-Force the node to transition to Run mode:
-```
-grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.Run
-```
+1. **Force the node to transition to Run mode:**
+   ```
+   grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.Run
+   ```
 
-or LegacySync mode:
-```
-grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.LegacySync
-```
+2. **Or LegacySync mode:**
+   ```
+   grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.LegacySync
+   ```
 
+### Step 10: Access Monitoring Tools
 
-**Step 10: Access Monitoring Tools**
+**Teranode Blockchain Viewer**: A basic blockchain viewer is available and can be accessed via the asset container. It provides an interface to browse blockchain data.
 
-_Teranode Blockchain Viewer_: A basic blockchain viewer is available and can be accessed via the asset container. It provides an interface to browse blockchain data.
 - **Port**: Exposed on port **8090** of the asset container.
 - **Access URL**: http://localhost:8090/viewer
 
-Note: You must set the setting `dashboard_enabled` as true in order to see the viewer.
+!!! note
+    You must set the setting `dashboard_enabled` as true in order to see the viewer.
 
-**Step 11: Monitoring and Logging**
+### Step 11: Monitoring and Logging
 
-- Set up your preferred monitoring stack (e.g., Prometheus, Grafana) to monitor the Teranode cluster.
-- Use standard Kubernetes logging practices to access logs:
-  ```
-  kubectl logs <pod-name>
-  ```
+1. **Set up your preferred monitoring stack** (e.g., Prometheus, Grafana) to monitor the Teranode cluster.
 
-**Step 12: Troubleshooting**
+2. **Use standard Kubernetes logging practices to access logs:**
+   ```
+   kubectl logs <pod-name>
+   ```
+
+### Step 12: Troubleshooting
 
 1. Check pod status:
    ```

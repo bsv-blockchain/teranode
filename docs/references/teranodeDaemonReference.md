@@ -351,9 +351,8 @@ will initialise settings with generic defaults, ideal for tests.
 ## Configuration
 
 The daemon uses a combination of (in this priority order):
+
 1. Command line arguments
 2. Environment variables
 3. Configuration files
 4. Default settings
-
-Notice that the service does not use the

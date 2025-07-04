@@ -1,6 +1,5 @@
 # 📘 Error Handling
 
-
 ## Index
 
 1. [Introduction](#1-introduction)
@@ -38,6 +37,7 @@
 ## 1. Introduction
 
 ### 1.1. Go Errors
+
 In Go (Golang), error handling is managed through an interface called `error`. This interface is defined in the built-in `errors` package.
 
 The `error` interface in Go is defined as follows:
@@ -77,7 +77,6 @@ if err != nil {
 
 This pattern encourages handling errors at the place they occur, rather than propagating them up the stack implicitly via exceptions.
 
-
 ### 1.2. Go Errors: Best Practices
 
 - Always check for errors where they might occur. Do not ignore returned error values or propagate them up.
@@ -91,7 +90,6 @@ Sentinel errors in Go are predefined error variables that represent specific err
 
 Since sentinel errors are variables, they can easily be compared using `errors.Is()` to check if a particular error has occurred.
 Using sentinel errors keeps error handling simple and explicit, requiring only basic checks against predefined values.
-
 
 Here's a basic example of defining and using sentinel errors in a Go program:
 
@@ -131,7 +129,6 @@ func main() {
 }
 ```
 
-
 While useful, sentinel errors have limitations, especially as applications scale. Code that uses sentinel errors is tightly coupled to these errors, making changes to error definitions potentially disruptive.
 
 ### 1.4 Wrapping Errors
@@ -167,7 +164,6 @@ func main() {
         fmt.Println("An error occurred:", err)
     }
 }
-
 ```
 
 On the other hand, unwrapping is the process of retrieving the original error from a wrapped error. You can unwrap errors manually using the `Unwrap` method provided by the `errors` package, or you can use higher-level utilities like `errors.Is` and `errors.As` to check for specific errors or extract errors of specific types.
@@ -180,9 +176,8 @@ In this context, `errors.Is` and `errors.As` are used to check errors in an erro
 Benefits of Wrapping Errors:
 
 1. Wrapping errors helps in preserving the context where an error occurred, without losing information about the original error.
-2.  Maintaining an error chain aids in diagnosing issues by providing a traceable path of what went wrong and where.
+2. Maintaining an error chain aids in diagnosing issues by providing a traceable path of what went wrong and where.
 3. Allows developers to decide how much error information to expose to different parts of the application or to the end user, enhancing security and usability.
-
 
 ## 2. Error Handling in Teranode
 
@@ -191,7 +186,6 @@ Benefits of Wrapping Errors:
 Teranode follows a structured error handling strategy that combines the use of predefined error types, error wrapping, and consistent error creation patterns. This approach ensures clear, consistent, and traceable error handling throughout the application.
 
 ![error_handling_flow.svg](img/plantuml/error_handling_flow.svg)
-
 
 The `errors/Error.go` file contains the core error type definition and functions for creating, wrapping, and unwrapping errors. The `errors/Error_types.go` file defines specific error types and provides functions for creating these errors.
 
@@ -274,64 +268,64 @@ When a function encounters an error, it can use the new error creation functions
 package main
 
 import (
-	"fmt"
-	"errors"
-	"github.com/your-project/errors" // Import your custom errors package
+    "fmt"
+    "errors"
+    "github.com/your-project/errors" // Import your custom errors package
 )
 
 // Data represents a simple data structure
 type Data struct {
-	ID string
+    ID string
 }
 
 // fetchData simulates fetching data and returning different types of errors
 func fetchData(id string) (*Data, error) {
-	if id == "" {
-		return nil, errors.NewInvalidArgumentError("empty ID provided")
-	}
-	if id == "notfound" {
-		return nil, errors.NewNotFoundError("data not found for ID: %s", id)
-	}
-	// Simulate a wrapped error
-	if id == "dberror" {
-		dbErr := fmt.Errorf("database connection failed")
-		return nil, errors.NewStorageError("failed to fetch data", dbErr)
-	}
-	return &Data{ID: id}, nil
+    if id == "" {
+        return nil, errors.NewInvalidArgumentError("empty ID provided")
+    }
+    if id == "notfound" {
+        return nil, errors.NewNotFoundError("data not found for ID: %s", id)
+    }
+    // Simulate a wrapped error
+    if id == "dberror" {
+        dbErr := fmt.Errorf("database connection failed")
+        return nil, errors.NewStorageError("failed to fetch data", dbErr)
+    }
+    return &Data{ID: id}, nil
 }
 
 func main() {
-	// Example usage
-	ids := []string{"", "notfound", "dberror", "validid"}
+    // Example usage
+    ids := []string{"", "notfound", "dberror", "validid"}
 
-	for _, id := range ids {
-		data, err := fetchData(id)
-		if err != nil {
-			// Use errors.Is to check for specific error types
-			if errors.Is(err, errors.ErrInvalidArgument) {
-				fmt.Printf("Invalid argument error: %v\n", err)
-			} else if errors.Is(err, errors.ErrNotFound) {
-				fmt.Printf("Not found error: %v\n", err)
-			} else if errors.Is(err, errors.ErrStorageError) {
-				fmt.Printf("Storage error: %v\n", err)
+    for _, id := range ids {
+        data, err := fetchData(id)
+        if err != nil {
+            // Use errors.Is to check for specific error types
+            if errors.Is(err, errors.ErrInvalidArgument) {
+                fmt.Printf("Invalid argument error: %v\n", err)
+            } else if errors.Is(err, errors.ErrNotFound) {
+                fmt.Printf("Not found error: %v\n", err)
+            } else if errors.Is(err, errors.ErrStorageError) {
+                fmt.Printf("Storage error: %v\n", err)
 
-				// Use errors.As to get more details about the error
-				var storageErr *errors.Error
-				if errors.As(err, &storageErr) {
-					fmt.Printf("Storage error details - Code: %v, Message: %s\n",
-						storageErr.Code, storageErr.Message)
-					if storageErr.WrappedErr != nil {
-						fmt.Printf("Wrapped error: %v\n", storageErr.WrappedErr)
-					}
-				}
-			} else {
-				fmt.Printf("Unknown error: %v\n", err)
-			}
-		} else {
-			fmt.Printf("Data fetched successfully: %v\n", data)
-		}
-		fmt.Println()
-	}
+                // Use errors.As to get more details about the error
+                var storageErr *errors.Error
+                if errors.As(err, &storageErr) {
+                    fmt.Printf("Storage error details - Code: %v, Message: %s\n",
+                        storageErr.Code, storageErr.Message)
+                    if storageErr.WrappedErr != nil {
+                        fmt.Printf("Wrapped error: %v\n", storageErr.WrappedErr)
+                    }
+                }
+            } else {
+                fmt.Printf("Unknown error: %v\n", err)
+            }
+        } else {
+            fmt.Printf("Data fetched successfully: %v\n", data)
+        }
+        fmt.Println()
+    }
 }
 ```
 
@@ -477,6 +471,7 @@ func WrapGRPC(err error) error {
 ```
 
 The `WrapGRPC` function performs the following steps:
+
 1. If the input error is nil, it returns nil.
 2. It attempts to cast the error to Teranode's custom `Error` type.
 3. If successful, it creates a new `TError` with the error's code and message.
@@ -521,6 +516,7 @@ func UnwrapGRPC(err error) error {
 ```
 
 The `UnwrapGRPC` function:
+
 1. Checks if the input is a gRPC status error.
 2. If it is, it iterates through the error details.
 3. It attempts to unmarshal each detail into a `TError`.
@@ -542,7 +538,7 @@ if err != nil {
 }
 ```
 
-2. In the Blockchain Client, when handling the response:
+1. In the Blockchain Client, when handling the response:
 
 ```go
 resp, err := c.client.GetBlock(ctx, &blockchain_api.GetBlockRequest{
@@ -632,6 +628,7 @@ func NewUtxoSpentErr(txID chainhash.Hash, spendingTxID chainhash.Hash, t time.Ti
 ```
 
 In this example:
+
 1. `UtxoSpentErrData` is a custom struct that implements the `ErrData` interface.
 2. `NewUtxoSpentErr` creates a new `Error` with a sentinel code `ERR_TX_ALREADY_EXISTS`.
 3. It then creates a `UtxoSpentErrData` struct with specific transaction details.
@@ -766,7 +763,6 @@ Here, `TError` is the generated struct from the protobuf definition, used to cre
 2. Ensure that all services use the latest version of the compiled protobuf definitions.
 3. When adding new fields to the `TError` message, use new field numbers to maintain backward compatibility.
 4. Document the meaning and appropriate use of each error code in the `ERR` enum.
-
 
 ### 2.7. Unit Tests
 

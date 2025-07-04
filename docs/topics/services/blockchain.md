@@ -31,8 +31,6 @@
     - [9.3. Kafka Integration Details](#93-kafka-integration-details)
     - [9.4. Error Handling Strategies](#94-error-handling-strategies)
 10. [Other Resources](#10-other-resources)
-
-
 ## 1. Description
 
 This service implements a local Bitcoin SV (BSV) Blockchain service, maintaining the blockchain as understood by the node.
@@ -75,8 +73,6 @@ Explanation of the sequence:
     - The service enters a loop handling notifications and subscriptions.
 
 ### 2.2. Adding a new block to the blockchain
-
-
 There are 2 clients invoking this endpoint:
 
 1. **The `Block Assembly` service:**
@@ -85,16 +81,12 @@ There are 2 clients invoking this endpoint:
 The sequence diagram for the Block Assembly to add a new block to the blockchain is as follows:
 
 ![blockchain_add_block.svg](img/plantuml/blockchain/blockchain_add_block.svg)
-
-
 2. **The `Block Validation` service:**
     - The `Block Validation` service calls the `AddBlock` method on the `Blockchain Service` to add a new block (received from another node) to the blockchain.
 
 The sequence diagram for the Block Validation to add a new block to the blockchain is as follows:
 
 ![block_validation_p2p_block_validation.svg](img/plantuml/blockvalidation/block_validation_p2p_block_validation.svg)
-
-
 Explanation of the sequences:
 
 1. **Client Request:**
@@ -265,8 +257,6 @@ Each of these methods serves a specific need:
 - `GetBlockHeaderIDs` provides a lighter way to retrieve just the IDs of a range of block headers without the additional metadata.
 
 Multiple services make use of these endpoints, including the `Block Assembly`, `Block Validation`, and `Asset Server` services.
-
-
 ### 2.9. Invalidating a Block
 
 ![blockchain_invalidate_block.svg](img/plantuml/blockchain/blockchain_invalidate_block.svg)
@@ -319,8 +309,6 @@ For further detail, we show here the sequence for the `SetBlockSubtreesSet` call
 ## 3. gRPC Protobuf Definitions
 
 The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/blockchainProto.md).
-
-
 ## 4. Data Model
 
 The Blockchain works with the [Block Data Model](../datamodel/block_data_model.md).
@@ -350,11 +338,7 @@ The blockchain database stores the block header, coinbase TX, and block merkle r
 | inserted_at    | TIMESTAMPTZ       | NOT NULL DEFAULT CURRENT_TIMESTAMP   | Timestamp of when the block was inserted in the database. |
 
 The table structure is designed to store comprehensive information about each block in the blockchain, including its relationships with other blocks, its contents, and metadata.
-
-
 ## 5. Technology
-
-
 1. **PostgreSQL Database:**
     - The primary store technology for the blockchain service.
     - Used for persisting blockchain data such as blocks, block headers, and state information.
@@ -377,8 +361,6 @@ The table structure is designed to store comprehensive information about each bl
 6. **Prometheus for Metrics:**
     - Client in `metrics.go`.
     - Used for monitoring the performance and health of the service.
-
-
 ## 6. Directory Structure and Main Files
 
 The Blockchain service is located in the `./services/blockchain` directory. The following is the directory structure of the service:
@@ -413,8 +395,6 @@ services/blockchain
 ```
 
 Further to this, the store part of the service is kept under `stores/blockchain`. The following is the directory structure of the store:
-
-
 ```
 stores/blockchain
 ├── Interface.go
@@ -478,8 +458,6 @@ stores/blockchain
     └── sql_test.go
 ```
 
-
-
 ## 7. How to run
 
 To run the Blockchain Service locally, you can execute the following command:
@@ -489,8 +467,6 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Blockchain=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Blockchain Service locally.
-
-
 ## 8. Configuration options (settings flags)
 
 The Blockchain service configuration is organized into several categories to manage different aspects of the service's operation. All settings can be provided via environment variables or configuration files.
@@ -499,19 +475,19 @@ The Blockchain service configuration is organized into several categories to man
 
 - **GRPC Address (`blockchain_grpcAddress`)**: Specifies the address for other services to connect to the Blockchain service's gRPC API. This is how other services will address the blockchain service.
     - Type: string
-  - Default Value: `localhost:8087`
+    - Default Value: `localhost:8087`
     - Impact: Critical for service discovery and inter-service communication
     - Security Impact: In production environments, should be configured securely based on network architecture
 
 - **GRPC Listen Address (`blockchain_grpcListenAddress`)**: Specifies the network interface and port the Blockchain service's gRPC server binds to for accepting connections.
     - Type: string
-  - Default Value: `:8087`
+    - Default Value: `:8087`
     - Impact: Controls network interface binding for accepting gRPC connections
     - Security Impact: Binding to `0.0.0.0` or empty address (`:8087`) exposes the port on all network interfaces
 
 - **HTTP Listen Address (`blockchain_httpListenAddress`)**: Specifies the network interface and port for the HTTP server that exposes REST endpoints (primarily for block invalidation/revalidation).
     - Type: string
-  - Default Value: `:8082`
+    - Default Value: `:8082`
     - Impact: Controls network interface binding for HTTP API access
     - Security Impact: Should be configured based on who needs access to these endpoints
 
@@ -519,64 +495,64 @@ The Blockchain service configuration is organized into several categories to man
 
 - **Store URL (`blockchain_store`)**: URL connection string for the blockchain database that stores block data and service state.
     - Type: URL
-  - Default Value: `sqlite:///blockchain`
-  - Supported Formats:
+    - Default Value: `sqlite:///blockchain`
+    - Supported Formats:
 
-    - SQLite: `sqlite:///path/to/db`
-    - PostgreSQL: `postgres://user:password@host:port/dbname`
+        - SQLite: `sqlite:///path/to/db`
+        - PostgreSQL: `postgres://user:password@host:port/dbname`
     - Impact: Determines where all blockchain data is persisted
     - Performance Impact: Choice of database affects scalability and performance
 
 - **DB Timeout (`blockchain_store_dbTimeoutMillis`)**: The timeout in milliseconds for database operations.
     - Type: integer
-  - Default Value: `5000` (5 seconds)
+    - Default Value: `5000` (5 seconds)
     - Impact: Affects error handling for database operations and resilience during DB latency
-  - Tuning Advice: Increase for slower database connections or when operating at high scale
+    - Tuning Advice: Increase for slower database connections or when operating at high scale
 
 ### State Machine Configuration
 
 - **Initialize Node In State (`blockchain_initializeNodeInState`)**: Specifies the initial state for the blockchain service's finite state machine (FSM).
     - Type: string
-  - Default Value: `""` (empty, uses default FSM state)
-  - Possible Values:
+    - Default Value: `""` (empty, uses default FSM state)
+    - Possible Values:
 
-    - `"IDLE"`: Initial inactive state
-    - `"RUNNING"`: Normal operating state
-    - `"LEGACY_SYNC"`: Legacy synchronization mode
-    - `"CATCHUP_BLOCKS"`: Block catch-up mode
+        - `"IDLE"`: Initial inactive state
+        - `"RUNNING"`: Normal operating state
+        - `"LEGACY_SYNC"`: Legacy synchronization mode
+        - `"CATCHUP_BLOCKS"`: Block catch-up mode
     - Impact: Controls the service's startup behavior and initial operational mode
 
 - **FSM State Restore (`FSMStateRestore`)**: Controls whether the service restores its previous FSM state from storage on startup.
     - Type: boolean
-  - Default Value: `false`
+    - Default Value: `false`
     - Impact: When enabled, the service will attempt to resume from its last known state instead of starting fresh
-  - Use Cases: Enable for production systems where state continuity across restarts is important
+    - Use Cases: Enable for production systems where state continuity across restarts is important
 
 - **FSM State Change Delay (`FSMStateChangeDelay`)**: FOR TESTING ONLY - introduces an artificial delay when changing FSM states.
     - Type: duration
-  - Default Value: Not set
+    - Default Value: Not set
     - Impact: Testing only - allows test code to observe state transitions
-  - Warning: Should not be used in production environments
+    - Warning: Should not be used in production environments
 
 ### Operational Settings
 
 - **Maximum Retries (`blockchain_maxRetries`)**: Maximum number of retry attempts for blockchain operations that encounter transient errors.
     - Type: integer
-  - Default Value: `3`
+    - Default Value: `3`
     - Impact: Affects resilience and error handling for blockchain operations
-  - Tuning Advice: Increase in unstable environments, decrease for faster failure reporting
+    - Tuning Advice: Increase in unstable environments, decrease for faster failure reporting
 
 - **Retry Sleep Duration (`blockchain_retrySleep`)**: The wait time in milliseconds between retry attempts, implementing a back-off mechanism.
     - Type: integer
-  - Default Value: `1000` (1 second)
+    - Default Value: `1000` (1 second)
     - Impact: Controls the pace of retries, affecting both system load during retries and recovery time
-  - Tuning Advice: Adjust based on the nature of expected failures (shorter for quick-recovery scenarios)
+    - Tuning Advice: Adjust based on the nature of expected failures (shorter for quick-recovery scenarios)
 
 ### Mining and Difficulty Settings
 
 - **Difficulty Adjustment Flag (`difficulty_adjustment`)**: Enables or disables dynamic difficulty adjustments based on network conditions.
     - Type: boolean
-  - Default Value: `false`
+    - Default Value: `false`
     - Impact: Controls whether the blockchain will adjust mining difficulty dynamically
     - Usage: Enable for production networks where difficulty should adjust automatically
 

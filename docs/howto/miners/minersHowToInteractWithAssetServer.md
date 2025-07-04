@@ -41,6 +41,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Transaction hash (hex string)
+
     - Returns: Transaction data in binary format
 
 - GET `/api/v1/tx/:hash/hex`
@@ -48,6 +49,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Transaction hash (hex string)
+
     - Returns: Transaction data as hex string
 
 - GET `/api/v1/tx/:hash/json`
@@ -55,12 +57,16 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Transaction hash (hex string)
+
     - Returns: Transaction data in structured JSON format
 
 - POST `/api/v1/subtree/:hash/txs`
     - Description: Batch retrieves multiple transactions
-    - Request Body: Concatenated series of 32-byte transaction hashes without separators
+    - Request Body:
+
+        Concatenated series of 32-byte transaction hashes without separators
         - Format: `[32-byte hash][32-byte hash][32-byte hash]...`
+
     - Returns: Concatenated transactions in binary format
 
 - GET `/api/v1/txmeta/:hash/json`
@@ -68,6 +74,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Transaction hash (hex string)
+
     - Returns: Transaction metadata in JSON format
 
 - GET `/api/v1/txmeta_raw/:hash`
@@ -75,6 +82,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Transaction hash (hex string)
+
     - Returns: Raw transaction metadata (binary)
 
 - GET `/api/v1/txmeta_raw/:hash/hex`
@@ -82,6 +90,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Transaction hash (hex string)
+
     - Returns: Raw transaction metadata as hex string
 
 - GET `/api/v1/txmeta_raw/:hash/json`
@@ -89,6 +98,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Transaction hash (hex string)
+
     - Returns: Raw transaction metadata in JSON format
 
 ### Block Endpoints
@@ -98,6 +108,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Block hash (hex string)
+
     - Returns: Block data in binary format
 
 - GET `/api/v1/block/:hash/hex`
@@ -105,6 +116,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Block hash (hex string)
+
     - Returns: Block data as hex string
 
 - GET `/api/v1/block/:hash/json`
@@ -112,6 +124,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Block hash (hex string)
+
     - Returns: Block data in structured JSON format
 
 - GET `/api/v1/block/:hash/forks`
@@ -119,6 +132,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Block hash (hex string)
+
     - Returns: JSON object with fork data
 
 - GET `/api/v1/blocks`
@@ -127,6 +141,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
         - `offset` (optional): Page offset
         - `limit` (optional): Page size limit
+
     - Returns: JSON array of block data
 
 - GET `/api/v1/blocks/:hash`
@@ -135,6 +150,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
         - `hash`: Starting block hash (hex string)
         - `n` (optional): Number of blocks to retrieve
+
     - Returns: Block data in binary format
 
 - GET `/api/v1/blocks/:hash/hex`
@@ -151,19 +167,26 @@ Many endpoints support multiple response formats, indicated by the URL path or a
         - `includeorphans` (optional): Whether to include orphaned blocks (default: false)
         - `height` (optional): Start retrieval from this specific height instead of the latest height
         - `offset` (optional): Skip this many blocks before starting to return blocks
-    - Response Format: JSON array of block objects including:
 
+    - Response Format:
+
+        JSON array of recent block information including:
+        
         - `hash`: Block hash
         - `height`: Block height
         - `time`: Block timestamp
         - `txCount`: Number of transactions in the block
         - `size`: Block size in bytes
         - `orphan`: Boolean indicating if the block is an orphan
+
     - Returns: JSON array of recent block information
 
 - GET `/api/v1/blockstats`
     - Description: Retrieves statistical information about the blockchain
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: JSON object with block statistics
 
 - GET `/api/v1/blockgraphdata/:period`
@@ -171,6 +194,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `period`: Period in milliseconds for data aggregation
+
     - Returns: JSON object with time-series block data
 
 - GET `/rest/block/:hash.bin`
@@ -178,6 +202,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Block hash (hex string)
+
     - Returns: Block data in binary format
 
 - GET `/api/v1/block_legacy/:hash`
@@ -185,6 +210,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Block hash (hex string)
+
     - Returns: Block data in binary format
 
 ### Block Header Endpoints
@@ -194,6 +220,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Block hash (hex string)
+
     - Returns: Block header in binary format
 
 - GET `/api/v1/header/:hash/hex`
@@ -201,6 +228,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Block hash (hex string)
+
     - Returns: Block header as hex string
 
 - GET `/api/v1/header/:hash/json`
@@ -208,6 +236,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Block hash (hex string)
+
     - Returns: Block header in structured JSON format
 
 - GET `/api/v1/headers/:hash`
@@ -216,6 +245,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
         - `hash`: Starting block hash (hex string)
         - `n` (optional): Number of headers to retrieve
+
     - Returns: Headers in binary format
 
 - GET `/api/v1/headers/:hash/hex`
@@ -230,6 +260,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
         - `hash`: Target block hash (hex string)
         - `locator` (required): Comma-separated list of block hashes for locator
+
     - Returns: Headers in binary format
 
 - GET `/api/v1/headers_to_common_ancestor/:hash/hex`
@@ -240,7 +271,10 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
 - GET `/api/v1/bestblockheader`
     - Description: Retrieves the current best block header
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: Best block header in binary format
 
 - GET `/api/v1/bestblockheader/hex`
@@ -257,6 +291,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
         - `hash`: UTXO transaction hash (hex string)
         - `vout` (required): Output index
+
     - Returns: UTXO data in binary format
 
 - GET `/api/v1/utxo/:hash/hex`
@@ -265,6 +300,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
         - `hash`: UTXO transaction hash (hex string)
         - `vout` (required): Output index
+
     - Returns: UTXO data as hex string
 
 - GET `/api/v1/utxo/:hash/json`
@@ -273,6 +309,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
         - `hash`: UTXO transaction hash (hex string)
         - `vout` (required): Output index
+
     - Returns: UTXO data in structured JSON format
 
 - GET `/api/v1/utxos/:hash/json`
@@ -280,6 +317,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Transaction hash (hex string)
+
     - Returns: Array of UTXO data in JSON format
 
 ### Subtree Endpoints
@@ -289,6 +327,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Subtree hash (hex string)
+
     - Returns: Subtree data in binary format
 
 - GET `/api/v1/subtree/:hash/hex`
@@ -296,6 +335,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Subtree hash (hex string)
+
     - Returns: Subtree data as hex string
 
 - GET `/api/v1/subtree/:hash/json`
@@ -303,6 +343,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Subtree hash (hex string)
+
     - Returns: Subtree data in structured JSON format
 
 - GET `/api/v1/subtree/:hash/txs/json`
@@ -310,6 +351,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Subtree hash (hex string)
+
     - Returns: Array of transaction data in JSON format
 
 - GET `/api/v1/block/:hash/subtrees/json`
@@ -317,6 +359,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: Block hash (hex string)
+
     - Returns: Array of subtree data in JSON format
 
 ### Search Endpoints
@@ -326,6 +369,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `query` (required): Search query (hash or block height)
+
     - Returns: JSON object with search results and entity type
 
 ### Block Management Endpoints
@@ -363,19 +407,24 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `limit` (optional): Maximum number of blocks to retrieve
+
     - Returns: Array of invalid block information
 
 ### Finite State Machine (FSM) Endpoints
 
 - GET `/api/v1/fsm/state`
     - Description: Returns current blockchain FSM state
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: JSON object with current state information including:
 
         - `state`: Current state name
         - `metadata`: Additional state information
         - `allowedTransitions`: Events that can be triggered from this state
-        - Example response:
+
+    - Example response:
 
           ```json
           {
@@ -391,10 +440,13 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
 - POST `/api/v1/fsm/state`
     - Description: Sends an event to the blockchain FSM to trigger a state transition
-    - Parameters: JSON object with event details
+    - Parameters:
+
+        JSON object with event details
         - `event` (string, required): The event name to trigger
         - `data` (object, optional): Additional data for the event
-        - Example request:
+
+    - Example request:
 
           ```json
           {
@@ -409,9 +461,13 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
 - GET `/api/v1/fsm/events`
     - Description: Lists all possible FSM events
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: JSON array of available events with descriptions
-        - Example response:
+
+    - Example response:
 
           ```json
           [
@@ -432,9 +488,13 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
 - GET `/api/v1/fsm/states`
     - Description: Lists all possible FSM states
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: JSON array of available states with descriptions
-        - Example response:
+
+    - Example response:
 
           ```json
           [

@@ -1,54 +1,53 @@
 # RPC Service Reference Documentation
 
-
 ## Index
 
 - [Overview](#overview)
 - [Types](#types)
-    - [RPCServer](#rpcserver)
+  - [RPCServer](#rpcserver)
 - [Functions](#functions)
-    - [NewServer](#newserver)
+  - [NewServer](#newserver)
 - [Methods](#methods)
-    - [Start](#start)
-    - [Stop](#stop)
-    - [Init](#init)
-    - [Health](#health)
-    - [checkAuth](#checkauth)
-    - [jsonRPCRead](#jsonrpcread)
+  - [Start](#start)
+  - [Stop](#stop)
+  - [Init](#init)
+  - [Health](#health)
+  - [checkAuth](#checkauth)
+  - [jsonRPCRead](#jsonrpcread)
 - [RPC Handlers](#rpc-handlers)
 - [Configuration](#configuration)
 - [Authentication](#authentication)
 - [General Format](#general-format)
 - [Supported RPC Commands](#supported-rpc-commands)
-    - [createrawtransaction](#createrawtransaction) - Creates a raw transaction without signing it
-    - [generate](#generate) - Mine blocks (for regression testing)
-    - [generatetoaddress](#generatetoaddress) - Mine blocks to a specified address
-    - [getbestblockhash](#getbestblockhash) - Returns the hash of the best (most recent) block in the longest blockchain
-    - [getblock](#getblock) - Returns information about a block
-    - [getblockbyheight](#getblockbyheight) - Returns information about a block at the specified height
-    - [getblockhash](#getblockhash) - Returns the hash of a block at the specified height
-    - [getblockheader](#getblockheader) - Returns information about a block header
-    - [getblockchaininfo](#getblockchaininfo) - Returns blockchain state information
-    - [getdifficulty](#getdifficulty) - Returns the proof-of-work difficulty
-    - [getinfo](#getinfo) - Returns general information about the node
-    - [getmininginfo](#getmininginfo) - Returns mining-related information
-    - [getpeerinfo](#getpeerinfo) - Returns data about each connected network node
-    - [getrawtransaction](#getrawtransaction) - Returns raw transaction data
-    - [getminingcandidate](#getminingcandidate) - Returns mining candidate information for generating a new block
-    - help - Lists all available commands or gets help on a specific command
-    - [invalidateblock](#invalidateblock) - Permanently marks a block as invalid
-    - [isbanned](#isbanned) - Checks if an IP/subnet is banned
-    - [listbanned](#listbanned) - Lists all banned IPs/subnets
-    - [clearbanned](#clearbanned) - Clears all banned IPs
-    - [reconsiderblock](#reconsiderblock) - Removes invalidity status from a block
-    - [sendrawtransaction](#sendrawtransaction) - Submits a raw transaction to the network
-    - [setban](#setban) - Attempts to add or remove an IP/subnet from the banned list
-    - [stop](#stop) - Stops the server
-    - [submitminingsolution](#submitminingsolution) - Submits a mining solution to the network
-    - [version](#version) - Returns the server version information
-    - [freeze](#freeze) - Freezes specified UTXOs or OUTPUTs
-    - [unfreeze](#unfreeze) - Unfreezes specified UTXOs or OUTPUTs
-    - [reassign](#reassign) - Reassigns specified frozen UTXOs to a new address
+  - [createrawtransaction](#createrawtransaction) - Creates a raw transaction without signing it
+  - [generate](#generate) - Mine blocks (for regression testing)
+  - [generatetoaddress](#generatetoaddress) - Mine blocks to a specified address
+  - [getbestblockhash](#getbestblockhash) - Returns the hash of the best (most recent) block in the longest blockchain
+  - [getblock](#getblock) - Returns information about a block
+  - [getblockbyheight](#getblockbyheight) - Returns information about a block at the specified height
+  - [getblockhash](#getblockhash) - Returns the hash of a block at the specified height
+  - [getblockheader](#getblockheader) - Returns information about a block header
+  - [getblockchaininfo](#getblockchaininfo) - Returns blockchain state information
+  - [getdifficulty](#getdifficulty) - Returns the proof-of-work difficulty
+  - [getinfo](#getinfo) - Returns general information about the node
+  - [getmininginfo](#getmininginfo) - Returns mining-related information
+  - [getpeerinfo](#getpeerinfo) - Returns data about each connected network node
+  - [getrawtransaction](#getrawtransaction) - Returns raw transaction data
+  - [getminingcandidate](#getminingcandidate) - Returns mining candidate information for generating a new block
+  - help - Lists all available commands or gets help on a specific command
+  - [invalidateblock](#invalidateblock) - Permanently marks a block as invalid
+  - [isbanned](#isbanned) - Checks if an IP/subnet is banned
+  - [listbanned](#listbanned) - Lists all banned IPs/subnets
+  - [clearbanned](#clearbanned) - Clears all banned IPs
+  - [reconsiderblock](#reconsiderblock) - Removes invalidity status from a block
+  - [sendrawtransaction](#sendrawtransaction) - Submits a raw transaction to the network
+  - [setban](#setban) - Attempts to add or remove an IP/subnet from the banned list
+  - [stop](#stop) - Stops the server
+  - [submitminingsolution](#submitminingsolution) - Submits a mining solution to the network
+  - [version](#version) - Returns the server version information
+  - [freeze](#freeze) - Freezes specified UTXOs or OUTPUTs
+  - [unfreeze](#unfreeze) - Unfreezes specified UTXOs or OUTPUTs
+  - [reassign](#reassign) - Reassigns specified frozen UTXOs to a new address
 - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
 - [Error Handling](#error-handling)
 - [Rate Limiting](#rate-limiting)
@@ -57,7 +56,6 @@
 - [Extensibility](#extensibility)
 - [Limitations](#limitations)
 - [Security](#security)
-
 
 ## Overview
 
@@ -127,14 +125,16 @@ The RPC server requires connections to several other Teranode services to functi
 func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
-Starts the RPC server, begins listening for client connections, and signals readiness by closing the readyCh channel once initialization is complete.
+!!! info "Initialization Tasks"
+    Starts the RPC server, begins listening for client connections, and signals readiness by closing the readyCh channel once initialization is complete.
 
-This method performs several critical initialization tasks:
-1. Validates the server has not already been started (using atomic operations)
-2. Initializes network listeners on all configured interfaces and ports
-3. Launches goroutines to accept and process incoming connections
-4. Sets up proper signal handling for clean shutdown
-5. Signals readiness through the provided channel
+    This method performs several critical initialization tasks:
+
+    1. **Validates the server** has not already been started (using atomic operations)
+    2. **Initializes network listeners** on all configured interfaces and ports
+    3. **Launches goroutines** to accept and process incoming connections
+    4. **Sets up proper handling** for clean shutdown
+    5. **Signals readiness** through the provided channel
 
 The server supports binding to multiple addresses simultaneously, allowing both IPv4 and IPv6 connections, as well as restricting access to localhost-only if configured for development or testing environments.
 
@@ -156,11 +156,13 @@ func (s *RPCServer) Init(ctx context.Context) (err error)
 
 Performs second-stage initialization of the RPC server by establishing connections to dependent services that weren't available during initial construction.
 
-This method completes the RPC server initialization by:
-1. Connecting to the Block Assembly service for mining-related operations
-2. Connecting to the P2P service for network peer management
-3. Connecting to the Legacy service for compatibility with older protocols
-4. Refreshing the help cache with complete command information
+!!! note "Initialization Steps"
+    This method completes the RPC server initialization by:
+
+    1. **Connecting to the Block Assembly service** for mining-related operations
+    2. **Connecting to the P2P service** for network peer management
+    3. **Connecting to the Legacy service** for compatibility with older protocols
+    4. **Refreshing the help cache** with complete command information
 
 The initialization is designed to be idempotent and can be safely called multiple times, though typically it's only called once after NewServer and before Start.
 
@@ -172,16 +174,19 @@ func (s *RPCServer) Health(ctx context.Context, checkLiveness bool) (int, string
 
 Reports the operational status of the RPC service for monitoring and health checking.
 
-This method implements the standard Teranode health checking interface used across all services for consistent monitoring, alerting, and orchestration. It provides both readiness and liveness checking capabilities to support different operational scenarios:
+This method implements the standard Teranode health checking interface used across all services for consistent monitoring, alerting, and orchestration.
 
-- Readiness: Indicates whether the service is ready to accept requests (listeners are bound and core dependencies are available)
-- Liveness: Indicates whether the service is functioning correctly (listeners are still working and not in a hung state)
+!!! success "Health Check Types"
+    It provides both readiness and liveness checking capabilities to support different operational scenarios:
 
-The method performs checks appropriate to the service's role, including:
+  - **Readiness**: Indicates whether the service is ready to accept requests (listeners are bound and core dependencies are available)
+  - **Liveness**: Indicates whether the service is functioning correctly (listeners are still working and not in a hung state)
 
-- Verifying network listeners are active
-- Checking connections to dependent services
-- Validating internal state consistency
+**Health Check Components:**
+
+- **Verifying network listeners** are active
+- **Checking connections** to dependent services
+- **Validating internal state** consistency
 
 ### checkAuth
 
@@ -191,24 +196,25 @@ func (s *RPCServer) checkAuth(r *http.Request, require bool) (bool, bool, error)
 
 Implements the two-tier HTTP Basic authentication system for RPC clients. It validates credentials supplied in the HTTP request against configured admin and limited-access username/password combinations.
 
-The method implements a secure authentication flow that:
-1. Extracts the Authorization header from the HTTP request
-2. Validates the credentials against both admin and limited-user authentication strings
-3. Uses time-constant comparison operations to prevent timing attacks
-4. Distinguishes between admin users (who can perform state-changing operations) and limited users (who can only perform read-only operations)
+!!! abstract "Authentication Flow"
+    The method implements a secure authentication flow that:
 
-Security considerations:
+    1. **Extracts the Authorization header** from the HTTP request
+    2. **Validates the credentials** against both admin and limited-user authentication strings
+    3. **Uses time-constant comparison** operations to prevent timing attacks
+    4. **Distinguishes between admin users** (who can perform state-changing operations) and limited users (who can only perform read-only operations)
 
-- Uses SHA256 for credential hashing
-- Implements constant-time comparison to prevent timing attacks
-- Properly handles missing or malformed authentication headers
-- Can be configured to require or not require authentication based on settings
+!!! warning "Security Considerations"
+  - **Uses SHA256** for credential hashing
+  - **Implements constant-time comparison** to prevent timing attacks
+  - **Properly handles missing** or malformed authentication headers
+  - **Can be configured** to require or not require authentication based on settings
 
-Returns:
+**Returns:**
 
-- bool: Authentication success (true if successful)
-- bool: Authorization level (true for admin access, false for limited access). The value specifies whether the user can change the state of the node.
-- error: Authentication error if any occurred, nil on success
+- `bool`: Authentication success (true if successful)
+- `bool`: Authorization level (true for admin access, false for limited access). The value specifies whether the user can change the state of the node.
+- `error`: Authentication error if any occurred, nil on success
 
 ### jsonRPCRead
 
@@ -216,14 +222,15 @@ Returns:
 func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin bool)
 ```
 
-Handles reading and responding to RPC messages. This method is the core request processing function that:
+Handles reading and responding to RPC messages. This method is the core request processing function.
 
-1. Parses incoming JSON-RPC requests from HTTP request bodies
-2. Validates request format and structure
-3. Routes requests to appropriate command handlers
-4. Formats and sends responses back to clients
-5. Implements proper error handling and serialization
-6. Ensures thread-safety for concurrent request handling
+!!! gear "Request Processing Steps"
+    1. **Parses incoming JSON-RPC requests** from HTTP request bodies
+    2. **Validates request format** and structure
+    3. **Routes requests** to appropriate command handlers
+    4. **Formats and sends responses** back to clients
+    5. **Implements proper error handling** and serialization
+    6. **Ensures thread-safety** for concurrent request handling
 
 The method supports batch requests, proper HTTP status codes, and includes safeguards against oversized or malformed requests. It also handles authorization checking to ensure admin-only commands cannot be executed by limited-access users.
 
@@ -255,44 +262,56 @@ Some key handlers include:
 
 ## Configuration
 
-The RPC Service uses various configuration values, including:
+!!! settings "RPC Configuration Settings"
+    The RPC Service uses various configuration values:
 
-- `rpc_user` and `rpc_pass`: Credentials for RPC authentication with full admin privileges
-- `rpc_limit_user` and `rpc_limit_pass`: Credentials for limited RPC access (read-only operations)
-- `rpc_max_clients`: Maximum number of concurrent RPC clients (default: 1000)
-- `rpc_quirks`: Enables compatibility quirks for legacy clients (default: false)
-- `rpc_listener_url`: URL for the RPC listener (default: "http://localhost:8332")
-- `rpc_listeners`: List of URLs for multiple RPC listeners (overrides rpc_listener_url if set)
-- `rpc_tls_enabled`: Enables TLS for secure RPC connections (default: false)
-- `rpc_tls_cert_file`: Path to TLS certificate file
-- `rpc_tls_key_file`: Path to TLS private key file
-- `rpc_auth_timeouts_seconds`: Timeout for authentication in seconds (default: 10)
-- `rpc_disable_auth`: Disables authentication (NOT recommended for production)
-- `rpc_cross_origin`: Allows cross-origin requests (NOT recommended for production)
+    **Authentication Settings:**
+  - **`rpc_user` and `rpc_pass`**: Credentials for RPC authentication with full admin privileges
+  - **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only operations)
+
+    **Connection Settings:**
+  - **`rpc_max_clients`**: Maximum number of concurrent RPC clients (default: 1000)
+  - **`rpc_listener_url`**: URL for the RPC listener (default: "http://localhost:8332")
+  - **`rpc_listeners`**: List of URLs for multiple RPC listeners (overrides rpc_listener_url if set)
+
+    **Security Settings:**
+  - **`rpc_tls_enabled`**: Enables TLS for secure RPC connections (default: false)
+  - **`rpc_tls_cert_file`**: Path to TLS certificate file
+  - **`rpc_tls_key_file`**: Path to TLS private key file
+  - **`rpc_auth_timeouts_seconds`**: Timeout for authentication in seconds (default: 10)
+
+    **Compatibility Settings:**
+  - **`rpc_quirks`**: Enables compatibility quirks for legacy clients (default: false)
+
+    !!! warning "Production Warnings"
+        - **`rpc_disable_auth`**: Disables authentication (NOT recommended for production)
+        - **`rpc_cross_origin`**: Allows cross-origin requests (NOT recommended for production)
 
 Configuration values can be provided through the configuration file, environment variables, or command-line flags, with precedence in that order.
 
 ## Authentication
 
-The server supports two levels of authentication:
+!!! key "Authentication Levels"
+    The server supports two levels of authentication:
 
-1. Admin-level access with full permissions
-2. Limited access with restricted permissions
+    1. **Admin-level access** with full permissions
+    2. **Limited access** with restricted permissions
 
 Authentication is performed using HTTP Basic Auth.
 
-Provide credentials using:
+**Credential Provision Methods:**
 
-- Username and password in the HTTP header
-- Cookie-based authentication
-- Configuration file settings
-
+- **Username and password** in the HTTP header
+- **Cookie-based authentication**
+- **Configuration file settings**
 
 ## General Format
 
-All requests should be POST requests with Content-Type: application/json.
+!!! info "Request Requirements"
+    All requests should be POST requests with Content-Type: application/json.
 
-Request format:
+**Request format:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -329,9 +348,11 @@ Creates a raw Bitcoin transaction without signing it.
    ```
 
 **Returns:**
+
 - `string` - hex-encoded raw transaction
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -345,6 +366,7 @@ Creates a raw Bitcoin transaction without signing it.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": "0200000001abcd1234...00000000",
@@ -358,13 +380,16 @@ Creates a raw Bitcoin transaction without signing it.
 Mines blocks immediately (for testing only).
 
 **Parameters:**
+
 1. `nblocks` (numeric, required) - Number of blocks to generate
 2. `maxtries` (numeric, optional) - Maximum number of iterations to try
 
 **Returns:**
+
 - `array` - hashes of blocks generated
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -375,6 +400,7 @@ Mines blocks immediately (for testing only).
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": [
@@ -392,9 +418,11 @@ Returns the hash of the best (tip) block in the longest blockchain.
 **Parameters:** none
 
 **Returns:**
+
 - `string` - The block hash
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -405,6 +433,7 @@ Returns the hash of the best (tip) block in the longest blockchain.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": "000000000000000004a1b6d6fdfa0d0a0e52a7a2c8a35ee5b5a7518a846387bc",
@@ -418,14 +447,17 @@ Returns the hash of the best (tip) block in the longest blockchain.
 Returns information about a block.
 
 **Parameters:**
+
 1. `blockhash` (string, required) - The block hash
 2. `verbosity` (numeric, optional, default=1) - 0 for hex-encoded data, 1 for a json object, 2 for json object with transaction data
 
 **Returns:**
+
 - If verbosity is 0: `string` - hex-encoded block data
 - If verbosity is 1 or 2: `object` - JSON object with block information
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -439,6 +471,7 @@ Returns information about a block.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": {
@@ -463,20 +496,22 @@ Returns information about a block.
 }
 ```
 
-
 ### getblockbyheight
 
 Returns information about a block at the specified height in the blockchain. This is similar to `getblock` but uses a height parameter instead of a hash.
 
 **Parameters:**
+
 1. `height` (numeric, required) - The height of the block
 2. `verbosity` (numeric, optional, default=1) - 0 for hex-encoded data, 1 for a json object, 2 for json object with transaction data
 
 **Returns:**
+
 - If verbosity is 0: `string` - hex-encoded block data
 - If verbosity is 1 or 2: `object` - JSON object with block information
 
 **Example Request:**
+
 ```json
 {
    "jsonrpc": "1.0",
@@ -487,6 +522,7 @@ Returns information about a block at the specified height in the blockchain. Thi
 ```
 
 **Example Response:**
+
 ```json
 {
    "result":
@@ -515,12 +551,15 @@ Returns information about a block at the specified height in the blockchain. Thi
 Returns the hash of block at the specified height in the blockchain.
 
 **Parameters:**
+
 1. `height` (numeric, required) - The height of the block
 
 **Returns:**
+
 - `string` - The block hash
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -531,6 +570,7 @@ Returns the hash of block at the specified height in the blockchain.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": "000000000000000004a1b6d6fdfa0d0a0e52a7a2c8a35ee5b5a7518a846387bc",
@@ -544,14 +584,17 @@ Returns the hash of block at the specified height in the blockchain.
 Returns information about a block header.
 
 **Parameters:**
+
 1. `hash` (string, required) - The block hash
 2. `verbose` (boolean, optional, default=true) - true for a json object, false for the hex-encoded data
 
 **Returns:**
+
 - If verbose=false: `string` - hex-encoded block header
 - If verbose=true: `object` - JSON object with header information
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -565,6 +608,7 @@ Returns information about a block header.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": {
@@ -591,9 +635,11 @@ Returns the proof-of-work difficulty as a multiple of the minimum difficulty.
 **Parameters:** none
 
 **Returns:**
+
 - `number` - The current difficulty
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -604,6 +650,7 @@ Returns the proof-of-work difficulty as a multiple of the minimum difficulty.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": 21448277761059.71,
@@ -619,6 +666,7 @@ Returns a json object containing mining-related information.
 **Parameters:** none
 
 **Returns:**
+
 ```json
 {
     "blocks": number,           // The current block count
@@ -632,6 +680,7 @@ Returns a json object containing mining-related information.
 ```
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -642,6 +691,7 @@ Returns a json object containing mining-related information.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": {
@@ -658,20 +708,21 @@ Returns a json object containing mining-related information.
 }
 ```
 
-
-
 ### sendrawtransaction
 
 Submits a raw transaction to the network.
 
 **Parameters:**
+
 1. `hexstring` (string, required) - The hex string of the raw transaction
 2. `allowhighfees` (boolean, optional, default=false) - Allow high fees
 
 **Returns:**
+
 - `string` - The transaction hash in hex
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -682,6 +733,7 @@ Submits a raw transaction to the network.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": "a1b2c3d4e5f6...",
@@ -695,11 +747,13 @@ Submits a raw transaction to the network.
 Returns information for creating a new block.
 
 **Parameters:**
+
 1. `parameters` (object, optional):
 
    - `coinbaseValue` (numeric, optional): Custom coinbase value in satoshis
 
 **Returns:**
+
 ```json
 {
     "id": "string",         // Mining candidate ID
@@ -717,6 +771,7 @@ Returns information for creating a new block.
 ```
 
 **Example Request (standard):**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -727,6 +782,7 @@ Returns information for creating a new block.
 ```
 
 **Example Request (with custom coinbase value):**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -741,6 +797,7 @@ Returns information for creating a new block.
 Submits a solved block to the network.
 
 **Parameters:**
+
 1. `solution` (object, required):
    ```json
    {
@@ -756,6 +813,7 @@ Submits a solved block to the network.
 - `boolean` - True if accepted, false if rejected
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -778,6 +836,7 @@ Returns state information about blockchain processing.
 **Parameters:** none
 
 **Returns:**
+
 ```json
 {
     "chain": "string",              // Current network name (main, test, regtest)
@@ -811,6 +870,7 @@ Returns state information about blockchain processing.
 ```
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -821,6 +881,7 @@ Returns state information about blockchain processing.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": {
@@ -847,6 +908,7 @@ Returns general information about the node and blockchain.
 **Parameters:** none
 
 **Returns:**
+
 ```json
 {
     "version": number,          // Server version
@@ -863,6 +925,7 @@ Returns general information about the node and blockchain.
 ```
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -873,6 +936,7 @@ Returns general information about the node and blockchain.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": {
@@ -899,7 +963,9 @@ Returns data about each connected network node.
 **Parameters:** none
 
 **Returns:**
+
 - Array of Objects, one per peer:
+
 ```json
 [
     {
@@ -925,6 +991,7 @@ Returns data about each connected network node.
 ```
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -935,6 +1002,7 @@ Returns data about each connected network node.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": [
@@ -963,18 +1031,20 @@ Returns data about each connected network node.
 }
 ```
 
-
 ### invalidateblock
 
 Permanently marks a block as invalid, as if it violated a consensus rule.
 
 **Parameters:**
+
 1. `blockhash` (string, required) - The hash of the block to mark as invalid
 
 **Returns:**
+
 - `null` on success
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -985,6 +1055,7 @@ Permanently marks a block as invalid, as if it violated a consensus rule.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": null,
@@ -998,12 +1069,15 @@ Permanently marks a block as invalid, as if it violated a consensus rule.
 Removes invalidity status of a block and its descendants, reconsidering them for activation.
 
 **Parameters:**
+
 1. `blockhash` (string, required) - The hash of the block to reconsider
 
 **Returns:**
+
 - `null` on success
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1014,6 +1088,7 @@ Removes invalidity status of a block and its descendants, reconsidering them for
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": null,
@@ -1027,6 +1102,7 @@ Removes invalidity status of a block and its descendants, reconsidering them for
 Attempts to add or remove an IP/Subnet from the banned list.
 
 **Parameters:**
+
 1. `subnet` (string, required) - The IP/Subnet with an optional netmask (default is /32 = single IP)
 2. `command` (string, required) - 'add' to add a ban, 'remove' to remove a ban
 3. `bantime` (numeric, optional) - Time in seconds how long the ban is in effect, 0 or empty means using the default time of 24h
@@ -1036,6 +1112,7 @@ Attempts to add or remove an IP/Subnet from the banned list.
 - `null` on success
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1046,6 +1123,7 @@ Attempts to add or remove an IP/Subnet from the banned list.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": null,
@@ -1064,6 +1142,7 @@ Returns list of all banned IP addresses/subnets.
 - Array of objects with banned addresses and details
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1074,6 +1153,7 @@ Returns list of all banned IP addresses/subnets.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": [
@@ -1099,6 +1179,7 @@ Removes all IP address bans.
 - `null` on success
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1109,6 +1190,7 @@ Removes all IP address bans.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": null,
@@ -1124,9 +1206,11 @@ Safely shuts down the node.
 **Parameters:** none
 
 **Returns:**
+
 - `string` - A message indicating the node is stopping
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1137,6 +1221,7 @@ Safely shuts down the node.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": "Bitcoin server stopping",
@@ -1152,6 +1237,7 @@ Returns the server version information.
 **Parameters:** none
 
 **Returns:**
+
 ```json
 {
     "version": "string",      // Server version string
@@ -1161,6 +1247,7 @@ Returns the server version information.
 ```
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1171,6 +1258,7 @@ Returns the server version information.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": {
@@ -1188,12 +1276,15 @@ Returns the server version information.
 Checks if a network address is currently banned.
 
 **Parameters:**
+
 1. `address` (string, required) - The network address to check, e.g. "192.168.0.1/24"
 
 **Returns:**
+
 - `boolean` - True if the address is banned, false otherwise
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1204,6 +1295,7 @@ Checks if a network address is currently banned.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": false,
@@ -1217,13 +1309,16 @@ Checks if a network address is currently banned.
 Freezes a specific UTXO, preventing it from being spent.
 
 **Parameters:**
+
 1. `txid` (string, required) - Transaction ID of the output to freeze
 2. `vout` (numeric, required) - Output index to freeze
 
 **Returns:**
+
 - `boolean` - True if the UTXO was successfully frozen
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1237,6 +1332,7 @@ Freezes a specific UTXO, preventing it from being spent.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": true,
@@ -1250,13 +1346,16 @@ Freezes a specific UTXO, preventing it from being spent.
 Unfreezes a previously frozen UTXO, allowing it to be spent.
 
 **Parameters:**
+
 1. `txid` (string, required) - Transaction ID of the frozen output
 2. `vout` (numeric, required) - Output index to unfreeze
 
 **Returns:**
+
 - `boolean` - True if the UTXO was successfully unfrozen
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1270,6 +1369,7 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": true,
@@ -1283,14 +1383,17 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
 Reassigns ownership of a specific UTXO to a new Bitcoin address.
 
 **Parameters:**
+
 1. `txid` (string, required) - Transaction ID of the output to reassign
 2. `vout` (numeric, required) - Output index to reassign
 3. `destination` (string, required) - Bitcoin address to reassign the UTXO to
 
 **Returns:**
+
 - `boolean` - True if the UTXO was successfully reassigned
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1305,6 +1408,7 @@ Reassigns ownership of a specific UTXO to a new Bitcoin address.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": true,
@@ -1318,14 +1422,17 @@ Reassigns ownership of a specific UTXO to a new Bitcoin address.
 Mines blocks immediately to a specified address (for testing only).
 
 **Parameters:**
+
 1. `nblocks` (numeric, required) - Number of blocks to generate
 2. `address` (string, required) - The address to send the newly generated bitcoin to
 3. `maxtries` (numeric, optional) - Maximum number of iterations to try
 
 **Returns:**
+
 - `array` - hashes of blocks generated
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1336,6 +1443,7 @@ Mines blocks immediately to a specified address (for testing only).
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": [
@@ -1359,6 +1467,7 @@ Returns raw transaction data for a specific transaction.
 - If verbose=true: `object` - A JSON object with transaction information
 
 **Example Request:**
+
 ```json
 {
     "jsonrpc": "1.0",
@@ -1372,6 +1481,7 @@ Returns raw transaction data for a specific transaction.
 ```
 
 **Example Response:**
+
 ```json
 {
     "result": {
@@ -1573,7 +1683,6 @@ RPC calls return errors in the following format:
 }
 ```
 
-
 Common error codes that may be returned:
 
 | Code    | Message                  | Meaning                                          |
@@ -1587,8 +1696,6 @@ Common error codes that may be returned:
 | -32602  | RPC_INVALID_PARAMS      | Invalid method parameters                        |
 | -32603  | RPC_INTERNAL_ERROR      | Internal RPC error                              |
 | -32700  | RPC_PARSE_ERROR         | Error parsing JSON request                       |
-
-
 
 ## Rate Limiting
 
@@ -1644,21 +1751,7 @@ The RPC Service implements several security features:
 - Ban management capabilities for malicious IP addresses
 - Context timeouts to prevent resource exhaustion
 - Secure credential handling to prevent information leakage
-
-The RPC Service implements several security features:
-
-- HTTP Basic authentication with SHA256 credential validation
-- Two-tier authentication system separating admin from limited-access operations
-- Connection limiting to prevent denial-of-service attacks
-- Configurable binding to specific network interfaces
-- Proper HTTP request/response handling with appropriate headers
-- Input validation on all parameters
-- Authorization checking for privileged operations
-- Ban management capabilities for malicious IP addresses
-- Context timeouts to prevent resource exhaustion
-- Secure credential handling to prevent information leakage
 - TLS support for encrypted communications (when configured)
-
 
 # Related Documents
 

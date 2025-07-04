@@ -1,8 +1,6 @@
 # 📦 Block Assembly Service
 
 ## Index
-
-
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
     - [2.1. Starting the Block Assembly Service](#21-starting-the-block-assembly-service)
@@ -39,8 +37,6 @@
 10. [Other Resources](#10-other-resources)
 
 ## 1. Description
-
-
 The Block Assembly Service is responsible for assembling new blocks and adding them to the blockchain.  The block assembly process involves the following steps:
 
 1. **Receiving Transactions from the TX Validator Service**:
@@ -86,12 +82,10 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
 A high level diagram:
 
 ![Block_Assembly_Service_Container_Diagram.png](img%2FBlock_Assembly_Service_Container_Diagram.png)
-
-
 Based on its settings, the Block Assembly receives TX notifications from the validator service via 3 different paths:
 
-* A Kafka topic.
-* A gRPC client.
+- A Kafka topic.
+- A gRPC client.
 
 The Block Assembly service also subscribes to the Blockchain service, and receives notifications when a new subtree or block is received from another node.
 
@@ -104,8 +98,6 @@ Specifically for Teranode, these volumes are meant to be temporary holding locat
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
 ![lustre_fs.svg](img/plantuml/lustre_fs.svg)
-
-
 ## 2. Functionality
 
 ### 2.1. Starting the Block Assembly Service
@@ -123,33 +115,17 @@ The Job Store is a temporary in-memory map that tracks information about the can
 ![block_assembly_add_tx.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_add_tx.svg)
 
 - The TX Validator interacts with the Block Assembly Client. Based on configuration, we send either transactions in batches or individually. This communication can be done over gRPC or through Kafka.
-
-
 - The Block Assembly client then delegates to the Server, which adds the transactions to the Subtree Processor.
-
-
 - At a later stage, the Subtree Processor will group the transactions into subtrees, which will be used to create mining candidates.
-
-
 ### 2.3. Grouping Transactions into Subtrees
 
 ![block_assembly_add_tx_to_subtree.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_add_tx_to_subtree.svg)
 
 - The Subtree Processor dequeues any transaction request (txReq) received in the previous section, and adds it to the latest (current) subtree.
-
-
 - If the current subtree is complete (i.e. if it has reached the target length, say 1M transactions), it sends the subtree to the server through an internal Go channel (newSubtreeChan).
-
-
 - The server then checks if the subtree already exists in the Subtree Store. Otherwise, the server persists the new subtree in the store with a specified (and settings-driven) TTL (Time-To-Live).
-
-
 - Finally, the server sends a notification to the BlockchainClient to announce the new subtree. This will be propagated to other nodes via the P2P service.
-
-
 ### 2.3.1 Dynamic Subtree Size Adjustment
-
-
 The Block Assembly service can dynamically adjust the subtree size based on real-time performance metrics when enabled via configuration:
 
 - The system targets a rate of approximately one subtree per second under high throughput conditions
@@ -163,30 +139,16 @@ Importantly, the system maintains a minimum subtree size threshold, configured v
 ![block_assembly_dynamic_subtree.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_dynamic_subtree.svg)
 
 This self-tuning mechanism helps maintain consistent processing rates and optimal resource utilization during block assembly, automatically adapting to the node's current processing capabilities and transaction volumes.
-
-
 ### 2.4. Creating Mining Candidates
 
 ![block_assembly_get_mining_candidate.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_get_mining_candidate.svg)
 
 - The "Miner" initiates the process by requesting a mining candidate (a block to mine) from the Block Assembly.
-
-
 - The "Block Assembler" sub-component interacts with the Subtree Processor to obtain completed subtrees that can be included in the mining candidate. It must be noted that there is no subtree limit, Teranode has no restrictions on the maximum block size (hence, neither on the number of subtrees).
-
-
 - The Block Assembler then calculates the coinbase value and merkle proof for the candidate block.
-
-
 - The mining candidate, inclusive of the list of subtrees, a coinbase TX, a merkle proof, and associated fees, is returned back to the miner.
-
-
 - The Block Assembly Server makes status announcements, using the Status Client, about the mining candidate's height and previous hash.
-
-
 - Finally, the Server tracks the current candidate in the JobStore within a new "job" and its TTL. This information will be retrieved at a later stage, if and when the miner submits a solution to the mining challenge for this specific mining candidate.
-
-
 ### 2.5. Submit Mining Solution
 
 Once a miner solves the mining challenge, it submits a solution to the Block Assembly Service. The solution includes the nonce required to solve the mining challenge.
@@ -194,27 +156,15 @@ Once a miner solves the mining challenge, it submits a solution to the Block Ass
 ![block_assembly_submit_mining_solution.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_submit_mining_solution.svg)
 
 - The "Mining" service submits a mining solution (based on a previously provided "mining candidate") to the Block Assembly Service.
-
-
 - The Block Assembly server adds the submission to a channel (blockSubmissionCh) and processes the submission (submitMiningSolution).
-
-
 - The job item details are retrieved from the JobStore, and a new block is created with the miner's proof of work.
-
-
 - The block is validated, and if valid, the coinbase transaction is persisted in the Tx Store.
 
 - The block is added to the blockchain via the Blockchain Client. This will be propagated to other nodes via the P2P service.
 
 - Subtree TTLs are removed, effectively setting the subtrees for removal from the Subtree Store.
-
-
 - All jobs in the Job Store are deleted.
-
-
 - In case of an error at any point in the process, the block is invalidated through the Blockchain Client.
-
-
 
 ### 2.6. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts
 
@@ -260,8 +210,6 @@ The service needs to "move up" the block. By this, we mean the process to identi
     - The function then compares the list of transactions that are pending to be mined, as maintained by the Block Assembly, with the transactions included in the newly received block. It identifies transactions from the pending list that were not included in the new block.
     - A list of these remaining transactions is then created. These are the transactions that still require mining.
     - The Subtree Processor assigns these remaining transactions to the current subtree. This subtree represents the first set of transactions that will be included in the next block to be assembled on top of the newly received block. This ensures that pending transactions are carried over for inclusion in future blocks mined by this node.
-
-
 ### 2.6.3. The block received is a new block, but it represents a fork.
 
 In this scenario, the function needs to handle a reorganization. A blockchain reorganization occurs when a node discovers a longer or more difficult chain different from the current local chain. This can happen due to network delays or forks in the blockchain network.
@@ -297,46 +245,36 @@ The Block Assembly service implements real-time fork detection through the follo
 The `BlockAssembler` keeps the node synchronized with the network by identifying and switching to the strongest chain (the one with the most accumulated proof of work), ensuring all nodes in the network converge on the same transaction history.
 
 #### Chain Selection and Reorganization Process
-
-
 During a reorganization, the `BlockAssembler` performs two key operations:
+
 1. Removes (rolls back) transactions from blocks in the current chain, starting from where the fork occurred
 2. Applies transactions from the new chain's blocks, ensuring the node switches to the stronger chain
-
-
 The service automatically manages chain selection through:
 
 1. **Best Chain Detection**:
-
     - Continuously monitors for new best block headers
     - Compares incoming blocks against current chain tip
     - Automatically triggers reorganization when a better chain is detected
 
 2. **Chain Selection Process**:
-
     - Accepts the chain with the most accumulated proof of work
     - Performs a safety check on reorganization depth:
-
         - If the reorganization involves more than 5 blocks in either direction
         - And the current chain height is greater than 1000
         - The block assembler will reset rather than attempt the reorganization
     - Block validation and transaction verification are handled by other services, not the Block Assembly
 
 3. **Chain Switching Process**:
-
     - Identifies common ancestor between competing chains
     - Rolls back the current chain to a common point with the competing (and stronger) chain
     - Applies new blocks from the competing chain
     - Updates UTXO set and transaction pools accordingly
-
-
 
 ![block_assembly_reorg.svg](img/plantuml/blockassembly/block_assembly_reorg.svg)
 
 The following diagram illustrates how the Block Assembly service handles a chain reorganization:
 
 - `err = b.handleReorg(ctx, bestBlockchainBlockHeader)`:
-
     - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
     - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
     - **Getting Reorg Blocks**:
@@ -346,6 +284,7 @@ The following diagram illustrates how the Block Assembly service handles a chain
             - Calls `getReorgBlocks` to determine the blocks to move down (to revert) and move up (to apply) for aligning with the network's consensus chain.
             - `header` is the new block header that triggered the reorg.
             - This step involves finding the common ancestor and getting the blocks from the current chain (move down) and the new chain (move up).
+
     - **Performing Reorg in Subtree Processor**:
 
         - `b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks)`:
@@ -357,8 +296,6 @@ The following diagram illustrates how the Block Assembly service handles a chain
 Note: If other nodes propose blocks containing a transaction that Teranode has identified as a double-spend (based on the First-Seen rule), Teranode will only build on top of such blocks when the network has reached consensus on which transaction to accept, even if it differs from Teranode's initial first-seen assessment. For more information, please review the [Double Spend Detection documentation](../architecture/understandingDoubleSpends.md).
 
 ### 2.7. Resetting the Block Assembly
-
-
 The Block Assembly service can be reset to the best block by calling the `ResetBlockAssembly` gRPC method.
 
 1. **State Storage and Retrieval**:
@@ -379,11 +316,7 @@ The Block Assembly service can be reset to the best block by calling the `ResetB
     - Updates internal state with the new best block header and adjusts the height of the best block based on how many blocks were moved up and down.
     - Attempts to set the new state and current blockchain chain.
 
-
-
 ![block_assembly_reset.svg](img/plantuml/blockassembly/block_assembly_reset.svg)
-
-
 ## 3. Data Model
 
 - [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.
@@ -492,8 +425,6 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -BlockAssembly=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Block Assembly Service locally.
-
-
 ## 9. Configuration options (settings flags)
 
 The Block Assembly service uses the following configuration options:
@@ -525,8 +456,6 @@ The Block Assembly service uses the following configuration options:
     - Default: 2s
     - Code Usage: Client retry timing
     - Impact: Controls the delay between retry attempts to avoid overwhelming the server.
-
-
 ### Buffer Management and Memory Settings
 
 Subtrees are a critical component in the Block Assembly process, organizing transactions hierarchically for efficient block construction. The following settings control how subtrees are created, sized, and managed.
@@ -548,8 +477,6 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
     - Default: 1000
     - Code Usage: Subtree data retention management
     - Impact: Controls data retention period for subtrees, affecting storage requirements and historical data availability.
-
-
 ### Subtree Size Management
 
 > **Dynamic Sizing**: When `blockassembly_useDynamicSubtreeSize` is enabled, subtree sizes automatically adjust between min/max bounds to target ~1 subtree/second.

@@ -132,10 +132,10 @@ aws ecr list-images \
 # Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)
 export OPERATOR_VERSION=v0.5.0
 export TERANODE_VERSION=v0.9.16
-export ECR_REGISTRY=434394763103.dkr.ecr.eu-north-1.amazonaws.com
+export ECR_REGISTRY=ghcr.io/bsv-blockchain/teranode
 
 # Login to ECR
-aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
+docker login $ECR_REGISTRY
 
 # Load Teranode Operator
 docker pull $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
@@ -152,9 +152,9 @@ The Teranode Operator manages the lifecycle of Teranode instances:
 
 ```bash
 # Login to Helm registry and install operator
-aws ecr get-login-password --region eu-west-1 | helm registry login --username AWS --password-stdin 434394763103.dkr.ecr.eu-west-1.amazonaws.com
+helm registry login ghcr.io
 
-helm upgrade --install teranode-operator oci://434394763103.dkr.ecr.eu-west-1.amazonaws.com/teranode-operator \
+helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/teranode/teranode-operator \
     -n teranode-operator \
     -f deploy/kubernetes/teranode/teranode-operator.yaml
 ```

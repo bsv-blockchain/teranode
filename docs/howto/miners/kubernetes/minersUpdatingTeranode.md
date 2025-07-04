@@ -25,14 +25,14 @@ Ensure you have:
 # Set new versions
 export OPERATOR_VERSION=<new-version>
 export TERANODE_VERSION=<new-version>
-export ECR_REGISTRY=434394763103.dkr.ecr.eu-north-1.amazonaws.com
+export ECR_REGISTRY=ghcr.io/bsv-blockchain/teranode
 ```
 
 ### 2. Update Images
 
 ```bash
 # Login to ECR
-aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
+docker login $ECR_REGISTRY
 
 # Pull new images
 docker pull $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
@@ -47,10 +47,10 @@ minikube image load $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
 
 ```bash
 # Login to Helm registry
-aws ecr get-login-password --region eu-west-1 | helm registry login --username AWS --password-stdin 434394763103.dkr.ecr.eu-west-1.amazonaws.com
+helm registry login ghcr.io
 
 # Update operator
-helm upgrade teranode-operator oci://434394763103.dkr.ecr.eu-west-1.amazonaws.com/teranode-operator \
+helm upgrade teranode-operator oci://ghcr.io/bsv-blockchain/teranode/teranode-operator \
     -n teranode-operator \
     -f kubernetes/teranode/teranode-operator.yaml
 ```

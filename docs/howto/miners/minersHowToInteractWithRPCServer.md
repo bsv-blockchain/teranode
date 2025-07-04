@@ -22,11 +22,17 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 ### Mining-related Methods
 
 1. `getdifficulty`: Returns the current network difficulty
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: Current difficulty as a floating point number
 
 2. `getmininginfo`: Returns mining-related information
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: Object containing block height, current block size and weight, current difficulty, and network hashrate
 
 3. `getminingcandidate`: Obtain a mining candidate
@@ -35,6 +41,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - Optional object containing:
 
             - `coinbaseValue` (numeric, optional): Custom coinbase value in satoshis
+
     - Returns: Object containing candidate ID, previous block hash, coinbase transaction, and merkle branches
     - Example Request:
 
@@ -91,6 +98,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `coinbase` (hexadecimal string, required): Complete coinbase transaction
         - `time` (numeric, required): Block time
         - `version` (numeric, optional): Block version
+
     - Returns: Boolean `true` if block accepted, error if rejected
     - Validation process: The solution is validated for proof-of-work correctness, block structure, and consensus rules before being accepted and propagated to the network
     - Example Request:
@@ -114,6 +122,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
         - `nblocks` (numeric, required): Number of blocks to generate
         - `maxtries` (numeric, optional): Maximum iterations to try
+
     - Returns: Array of block hashes generated
 
 6. `generatetoaddress`: Generates new blocks with rewards going to a specified address (for testing only)
@@ -122,6 +131,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `nblocks` (numeric, required): Number of blocks to generate
         - `address` (string, required): Bitcoin address to receive the rewards
         - `maxtries` (numeric, optional): Maximum iterations to try
+
     - Returns: Array of block hashes generated
 
 ### Transaction-related Methods
@@ -137,6 +147,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `outputs` (object, required): JSON object with outputs as key-value pairs
             - Key is the Bitcoin address
             - Value is the amount in BTC
+
     - Returns: Hex-encoded raw transaction
     - Note: The transaction is not signed and cannot be submitted until signed
 
@@ -145,6 +156,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
         - `txid` (string, required): Transaction ID
         - `verbose` (boolean, optional): If true, returns detailed information
+
     - Returns:
 
         - If verbose=false: Hex-encoded transaction data
@@ -156,6 +168,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `hexstring` (string, required): Hex-encoded raw transaction
         - `allowhighfees` (boolean, optional): Allow high fees
         - `dontcheckfee` (boolean, optional): Skip fee checks
+
     - Returns: Transaction hash (txid) if successful
     - Validation process: Transaction is validated for correct format, script correctness, and fee policy before being accepted into the mempool and propagated to the network
     - Example Request:
@@ -174,6 +187,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
         - `txid` (string, required): The transaction ID of the UTXO
         - `vout` (numeric, required): The output index
+
     - Returns: Boolean `true` if successful
     - Note: Frozen UTXOs remain frozen until explicitly unfrozen
 
@@ -182,6 +196,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
         - `txid` (string, required): The transaction ID of the frozen UTXO
         - `vout` (numeric, required): The output index
+
     - Returns: Boolean `true` if successful
 
 6. `reassign`: Reassigns ownership of a specific UTXO to a new Bitcoin address
@@ -190,13 +205,17 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `txid` (string, required): The transaction ID of the UTXO
         - `vout` (numeric, required): The output index
         - `destination` (string, required): The Bitcoin address to reassign to
+
     - Returns: Boolean `true` if successful
     - Note: The UTXO must be frozen before it can be reassigned
 
 ### Network-related Methods
 
 1. `getinfo`: Returns information about the node
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: Object containing node information including:
 
         - `version`: Server version
@@ -209,7 +228,10 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `timeoffset`: Time offset in seconds
 
 2. `getpeerinfo`: Returns information about connected peers
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: Array of objects with detailed information about each connected peer, including:
 
         - `id`: Peer index
@@ -235,6 +257,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `command` (string, required): 'add' to add to banlist, 'remove' to remove from banlist
         - `bantime` (numeric, optional): Time in seconds how long to ban (0 = permanently)
         - `absolute` (boolean, optional): If set to true, the bantime is interpreted as an absolute timestamp
+
     - Returns: null on success
     - Note: Successfully executes across both P2P and legacy peer services
 
@@ -242,10 +265,14 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Parameters:
 
         - `subnet` (string, required): The IP/Subnet to check
+
     - Returns: Boolean `true` if the address is banned, `false` otherwise
 
 5. `listbanned`: Returns list of all banned IP addresses/subnets
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: Array of objects containing banned addresses with:
 
         - `address`: The banned IP/subnet
@@ -254,17 +281,26 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `ban_reason`: The reason for the ban (if provided)
 
 6. `clearbanned`: Removes all IP address bans
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: Boolean `true` on success
 
 ### Server Control Methods
 
 1. `stop`: Stops the Teranode server
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: String 'Teranode server stopping' when successful
 
 2. `version`: Returns version information about the node
-    - Parameters: None
+    - Parameters:
+
+        None
+
     - Returns: Object containing version information including:
 
         - `version`: The server version

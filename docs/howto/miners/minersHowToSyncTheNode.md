@@ -21,36 +21,30 @@ When a new Teranode instance is started, it begins the synchronization process a
 
 ## Default Synchronization Process
 
-1. **Peer Discovery**:
+### 1. Peer Discovery
 
-    - Upon startup, the Teranode peer service (typically running in the `peer` pod / container) begins in IDLE state. To begin syncing, you need to explicitly set the state to `legacysyncing`.
+Upon startup, the Teranode peer service (typically running in the `peer` pod / container) begins in IDLE state. To begin syncing, you need to explicitly set the state to `legacysyncing`.
 
 ```bash
 kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
 ```
 
-2. **Block Download**:
+### 2. Block Download
 
-    - Once connected, Teranode requests blocks from its peers, typically starting with the first node it successfully connects to.
+- Once connected, Teranode requests blocks from its peers, typically starting with the first node it successfully connects to.
+- When in `legacysyncing` status, this peer represents a traditional BSV node (if in `run` state, Teranode can sync from another BSV Teranode).
 
-    - When in `legacysyncing` status, this peer represents a traditional BSV node (if in `run` state, Teranode can sync from another BSV Teranode).
+### 3. Validation and Storage
 
+- As blocks are received, they are validated by the various Teranode services (e.g., `block-validator`, `subtree-validator`).
+- Valid blocks are then stored in the blockchain database, managed by the `blockchain` service.
+- The UTXO (Unspent Transaction Output) set is updated accordingly, typically managed by the `asset` service.
 
-3. **Validation and Storage**:
+### 4. Progress Monitoring
 
-    - As blocks are received, they are validated by the various Teranode services (e.g., `block-validator`, `subtree-validator`).
+You can monitor the synchronization progress by checking the logs of relevant pods:
 
-    - Valid blocks are then stored in the blockchain database, managed by the `blockchain` service.
-
-    - The UTXO (Unspent Transaction Output) set is updated accordingly, typically managed by the `asset` service.
-
-
-
-4. **Progress Monitoring**:
-
-    - You can monitor the synchronization progress by checking the logs of relevant pods:
-
-```
+```bash
 # View Teranode logs
 kubectl logs -n teranode-operator -l app=blockchain -f
 
@@ -61,11 +55,9 @@ kubectl get pods -n teranode-operator | grep -E 'aerospike|postgres|kafka|terano
 kubectl wait --for=condition=ready pod -l app=blockchain -n teranode-operator --timeout=300s
 ```
 
+The `getblockchaininfo` command can provide detailed sync status:
 
-   - The `getblockchaininfo` command can provide detailed sync status:
-
-
-```
+```bash
 kubectl exec <blockchain-pod-name> -- /app/teranode.run -blockchain=1 getblockchaininfo
 ```
 
@@ -101,7 +93,7 @@ First, you need to generate the UTXO set from the SV Node. You can do this by ru
 docker run -it \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
     --entrypoint="" \
-  434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.9.16 \
+  ghcr.io/bsv-blockchain/teranode:v0.9.16 \
   /app/teranode-cli bitcointoutxoset -bitcoinDir=/home/ubuntu/bitcoin-data -outputDir=/mnt/teranode/seed/export
 ```
 
@@ -125,7 +117,7 @@ docker run -it \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
     --network my-teranode-network \
     --entrypoint="" \
-  434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.9.16 \
+  ghcr.io/bsv-blockchain/teranode:v0.9.16 \
   /app/teranode-cli seeder -inputDir /mnt/teranode/seed -hash 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
 ```
 

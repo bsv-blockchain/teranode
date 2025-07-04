@@ -1,6 +1,6 @@
 # Teranode Introduction
 
-The Bitcoin (BTC) scalability issue refers to the challenge faced by the original Bitcoin network in processing a high volume of transactions efficiently. Initially, Bitcoin had a block size limit of 1 megabyte, which constrained the network’s throughput to around 3.3 to 7 transactions per second. As Bitcoin gained popularity, this limitation led to slower transaction times and increased fees.
+The Bitcoin (BTC) scalability issue refers to the challenge faced by the original Bitcoin network in processing a high volume of transactions efficiently. In the early stages of Bitcoin's development, a block size limit of 1 megabyte per block was introduced as a temporary measure. This limit effectively restricts the network's capacity to approximately 3.3 to 7 transactions per second. As Bitcoin gained popularity, this limitation led to slower transaction times and increased fees.
 
 With Bitcoin SV (BSV), the block size limit was significantly increased to 4 gigabytes, improving the network's performance. However, the current BSV node software (SV Node) still has scalability and performance limits, capping the network’s capacity at several thousand transactions per second.
 

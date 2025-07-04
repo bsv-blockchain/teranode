@@ -123,7 +123,8 @@ func New(
 
 Creates a new `Server` instance with the provided dependencies. This factory function constructs and initializes a fully configured subtree validation service, injecting all required dependencies. It follows the dependency injection pattern to ensure testability and proper separation of concerns.
 
-The method ensures that the service is configured with proper stores, clients, and settings before it's made available for use. It also initializes internal tracking structures and statistics for monitoring.
+!!! info "Initialization Process"
+    The method ensures that the service is configured with proper stores, clients, and settings before it's made available for use. It also initializes internal tracking structures and statistics for monitoring.
 
 ## Core Methods
 
@@ -135,12 +136,13 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 
 Checks the health status of the service and its dependencies. This method implements the standard Teranode health check interface used across all services for consistent monitoring, alerting, and orchestration. It provides both readiness and liveness checking capabilities to support different operational scenarios.
 
-The method performs checks appropriate to the service's role, including:
+!!! success "Health Check Components"
+    The method performs checks appropriate to the service's role, including:
 
-- Verifying store access for subtree, transaction, and UTXO data
-- Checking connections to dependent services (validator, blockchain)
-- Validating Kafka consumer health
-- Ensuring internal state consistency
+- **Store access verification**: Subtree, transaction, and UTXO data stores
+- **Service connections**: Validator and blockchain service connectivity
+- **Kafka consumer health**: Message processing capability
+- **Internal state consistency**: Service operational status
 
 ### HealthGRPC
 
@@ -166,13 +168,16 @@ The initialization is designed to be idempotent and can be safely called multipl
 func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
-Initializes and starts the server components including Kafka consumers and gRPC server. This method launches all the operational components of the subtree validation service, including:
+Initializes and starts the server components including Kafka consumers and gRPC server. This method launches all the operational components of the subtree validation service.
 
-- Kafka consumers for subtree and transaction metadata messages
-- The gRPC server for API access
-- Any background workers or timers required for operation
+**Components Started:**
 
-The method implements a safe startup sequence to ensure all components are properly initialized before the service is marked as ready. It also handles proper error propagation if any component fails to start.
+- **Kafka consumers**: For subtree and transaction metadata messages
+- **gRPC server**: For API access and inter-service communication
+- **Background workers**: Any timers or workers required for operation
+
+!!! info "Startup Sequence"
+    The method implements a safe startup sequence to ensure all components are properly initialized before the service is marked as ready. It also handles proper error propagation if any component fails to start.
 
 Once all components are successfully started, the method signals readiness through the provided channel and then blocks until the context is canceled or an error occurs. This design allows the caller to coordinate the startup of multiple services.
 
@@ -182,11 +187,15 @@ Once all components are successfully started, the method signals readiness throu
 func (u *Server) Stop(_ context.Context) error
 ```
 
-Gracefully shuts down the server components including Kafka consumers. This method ensures a clean and orderly shutdown of all service components, allowing in-progress operations to complete when possible and releasing all resources properly. It follows a consistent shutdown sequence that:
-1. Stops accepting new requests
-2. Pauses Kafka consumers to prevent new messages from being processed
-3. Waits for in-progress operations to complete (with reasonable timeouts)
-4. Closes connections and releases resources
+Gracefully shuts down the server components including Kafka consumers. This method ensures a clean and orderly shutdown of all service components, allowing in-progress operations to complete when possible and releasing all resources properly.
+
+!!! warning "Shutdown Sequence"
+    The method follows a consistent shutdown sequence:
+
+1. **Stop accepting new requests** - Prevents new work from starting
+2. **Pause Kafka consumers** - Prevents new messages from being processed
+3. **Wait for completion** - Allows in-progress operations to complete (with timeouts)
+4. **Release resources** - Closes connections and frees allocated resources
 
 The method is designed to be called when the service needs to be terminated, either for normal shutdown or in response to system signals.
 
@@ -198,22 +207,24 @@ func (u *Server) CheckSubtreeFromBlock(ctx context.Context, request *subtreevali
 
 Validates a subtree and its transactions based on the provided request. This method is the primary gRPC API endpoint for subtree validation, responsible for coordinating the validation process for an entire subtree of interdependent transactions. It ensures that all transactions in the subtree adhere to consensus rules and can be added to the blockchain.
 
-The method implements several important features:
+**Key Features:**
 
-- Distributed locking to prevent duplicate validation of the same subtree
-- Retry logic for lock acquisition with exponential backoff
-- Support for both legacy and current validation paths for backward compatibility
-- Proper resource cleanup even in error conditions
-- Structured error responses with appropriate gRPC status codes
+- **Distributed locking**: Prevents duplicate validation of the same subtree
+- **Retry logic**: Lock acquisition with exponential backoff
+- **Backward compatibility**: Support for both legacy and current validation paths
+- **Resource cleanup**: Proper cleanup even in error conditions
+- **Structured responses**: Appropriate gRPC status codes
 
-Validation includes checking that:
+!!! check "Validation Criteria"
+    The validation process ensures that:
 
-- All transactions in the subtree are valid according to consensus rules
-- All transaction inputs refer to unspent outputs or other transactions in the subtree
-- No double-spending conflicts exist within the subtree or with existing chain state
-- Transactions satisfy all policy rules (fees, standardness, etc.)
+- **Consensus compliance**: All transactions are valid according to consensus rules
+- **Input validity**: All transaction inputs refer to unspent outputs or other transactions in the subtree
+- **No double-spending**: No conflicts exist within the subtree or with existing chain state
+- **Policy compliance**: Transactions satisfy all policy rules (fees, standardness, etc.)
 
-The method will retry lock acquisition for up to 20 seconds with exponential backoff, making it resilient to temporary contention when multiple services attempt to validate the same subtree simultaneously.
+!!! tip "Resilience"
+    The method will retry lock acquisition for up to 20 seconds with exponential backoff, making it resilient to temporary contention when multiple services attempt to validate the same subtree simultaneously.
 
 ## Transaction Metadata Management
 
@@ -275,15 +286,17 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 
 Internal implementation of subtree validation logic. This method contains the core business logic for validating a subtree, separated from the API-level concerns handled by the public CheckSubtreeFromBlock method. The separation allows for cleaner testing and better separation of concerns.
 
-The method expects the subtree to be stored in the subtree store with a special extension (.subtreeToCheck instead of .subtree) to differentiate between validated and unvalidated subtrees. This prevents the validation service from mistakenly treating an unvalidated subtree as already validated.
+!!! info "Subtree Storage Convention"
+    The method expects the subtree to be stored in the subtree store with a special extension (`.subtreeToCheck` instead of `.subtree`) to differentiate between validated and unvalidated subtrees. This prevents the validation service from mistakenly treating an unvalidated subtree as already validated.
 
-The validation process includes:
-1. Retrieving the subtree data from storage
-2. Parsing the subtree structure
-3. Checking for existing transaction metadata
-4. Retrieving and validating missing transactions
-5. Verifying transaction dependencies and ordering
-6. Confirming all transactions meet consensus rules
+**The validation process includes:**
+
+1. **Retrieving the subtree data** from storage
+2. **Parsing the subtree structure** and transaction list
+3. **Checking for existing transaction metadata** to avoid redundant work
+4. **Retrieving and validating missing transactions** from appropriate sources
+5. **Verifying transaction dependencies and ordering** within the subtree
+6. **Confirming all transactions meet consensus rules** for blockchain inclusion
 
 ### ValidateSubtreeInternal
 
@@ -294,22 +307,24 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 Performs the actual validation of a subtree. This is the core method of the subtree validation service, responsible for the complete validation process of a transaction subtree. It handles the complex task of verifying that all transactions in a subtree are valid both individually and collectively, ensuring they can be safely added to the blockchain.
 
-The validation process includes several key steps:
-1. Retrieving the subtree structure and transaction list
-2. Identifying which transactions need validation (missing metadata)
-3. Retrieving missing transactions from appropriate sources
-4. Validating transaction dependencies and ordering
-5. Applying consensus rules to each transaction
-6. Managing transaction metadata storage and updates
-7. Handling any conflicts or validation failures
+!!! note "Validation Process Steps"
+    The validation process includes several key steps:
 
-The method employs several optimization techniques:
+1. **Retrieving the subtree structure** and transaction list
+2. **Identifying which transactions need validation** (missing metadata)
+3. **Retrieving missing transactions** from appropriate sources
+4. **Validating transaction dependencies** and ordering
+5. **Applying consensus rules** to each transaction
+6. **Managing transaction metadata** storage and updates
+7. **Handling any conflicts** or validation failures
 
-- Batch processing of transaction validations where possible
-- Caching of transaction metadata to avoid redundant validation
-- Parallel processing of independent transaction validations
-- Early termination for invalid subtrees (when AllowFailFast is true)
-- Efficient retrieval of missing transactions in batches
+**Performance Optimization Techniques:**
+
+- **Batch processing** of transaction validations where possible
+- **Caching of transaction metadata** to avoid redundant validation
+- **Parallel processing** of independent transaction validations
+- **Early termination** for invalid subtrees (when `AllowFailFast` is true)
+- **Efficient retrieval** of missing transactions in batches
 
 ### blessMissingTransaction
 
@@ -320,14 +335,15 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainh
 
 Validates a transaction and retrieves its metadata, performing the core consensus validation operations required for blockchain inclusion. This method applies full validation to a transaction, ensuring it adheres to all Bitcoin consensus rules and can be properly included in the blockchain.
 
-The validation includes:
+!!! abstract "Validation Components"
+    The validation includes:
 
-- Transaction format and structure validation
-- Input signature verification
-- Input UTXO availability and spending authorization
-- Fee calculation and policy enforcement
-- Script execution and validation
-- Double-spend prevention
+- **Transaction format**: Structure and format validation
+- **Input signatures**: Cryptographic signature verification
+- **UTXO availability**: Input UTXO availability and spending authorization
+- **Fee calculation**: Fee calculation and policy enforcement
+- **Script execution**: Script execution and validation
+- **Double-spend prevention**: Conflict detection and prevention
 
 Upon successful validation, the transaction's metadata is calculated and stored, making it available for future reference and for validation of dependent transactions.
 
@@ -357,14 +373,21 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
     blockIds map[uint32]bool, validationOptions ...validator.Option) (err error)
 ```
 
-Handles the retrieval and validation of missing transactions in a subtree, coordinating both the retrieval process and the validation workflow. This method is a critical part of the subtree validation process, responsible for:
-1. Retrieving transactions that are referenced in the subtree but not available locally
-2. Organizing transactions into dependency levels for ordered processing
-3. Validating each transaction according to consensus rules
-4. Managing parallel processing of independent transaction validations
-5. Tracking validation results and updating transaction metadata
+Handles the retrieval and validation of missing transactions in a subtree, coordinating both the retrieval process and the validation workflow. This method is a critical part of the subtree validation process.
 
-The method supports both file-based and network-based transaction retrieval, with fallback mechanisms to ensure maximum resilience. It implements a level-based processing approach where transactions are grouped by dependency level and processed in order, ensuring that parent transactions are validated before their children.
+!!! important "Key Responsibilities"
+        1. **Retrieving transactions** that are referenced in the subtree but not available locally
+    2. **Organizing transactions** into dependency levels for ordered processing
+    3. **Validating each transaction** according to consensus rules
+    4. **Managing parallel processing** of independent transaction validations
+    5. **Tracking validation results** and updating transaction metadata
+
+**Resilience Features:**
+
+- **Multiple retrieval methods**: Supports both file-based and network-based transaction retrieval
+- **Fallback mechanisms**: Ensures maximum resilience with automatic failover
+- **Level-based processing**: Transactions are grouped by dependency level and processed in order
+- **Dependency ordering**: Parent transactions are validated before their children
 
 ### prepareTxsPerLevel
 
@@ -381,12 +404,19 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
     missingTxHashes []utxo.UnresolvedMetaData, allTxs []chainhash.Hash, baseURL string) ([]missingTx, error)
 ```
 
-Retrieves transactions that are referenced in a subtree but not available locally. This method implements an intelligent retrieval strategy for missing transactions with optimizations for different scenarios. It first checks if a complete subtree data file exists locally, which would contain all transactions. If not available, it makes a decision based on the percentage of missing transactions:
+Retrieves transactions that are referenced in a subtree but not available locally. This method implements an intelligent retrieval strategy for missing transactions with optimizations for different scenarios.
 
-- If a large percentage of transactions are missing (configurable threshold), it attempts to fetch the entire subtree data file from the peer to optimize network usage.
-- Otherwise, it retrieves only the specific missing transactions individually.
+!!! tip "Intelligent Retrieval Strategy"
+    The method first checks if a complete subtree data file exists locally, which would contain all transactions. If not available, it makes a decision based on the percentage of missing transactions:
 
-The method employs fallback mechanisms to ensure maximum resilience, switching between file-based and network-based retrieval methods as needed.
+- **High missing percentage**: Attempts to fetch the entire subtree data file from the peer to optimize network usage
+- **Low missing percentage**: Retrieves only the specific missing transactions individually
+
+**Resilience Features:**
+
+- **Fallback mechanisms**: Ensures maximum resilience with automatic failover
+- **Multiple retrieval methods**: Switches between file-based and network-based retrieval as needed
+- **Network optimization**: Minimizes bandwidth usage through intelligent batching decisions
 
 ### getMissingTransactionsFromFile
 
@@ -432,12 +462,13 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 
 Returns a function that processes Kafka messages for subtree validation. It handles both recoverable and unrecoverable errors appropriately. The handler includes sophisticated error categorization to determine whether errors should result in message reprocessing or rejection.
 
-Key features include:
+!!! gear "Handler Features"
+    Key features include:
 
-- Different handling for recoverable vs. non-recoverable errors
-- State-aware processing that considers the current blockchain state
-- Proper context cancellation handling
-- Idempotent processing to prevent duplicate validation
+- **Error categorization**: Different handling for recoverable vs. non-recoverable errors
+- **State-aware processing**: Considers the current blockchain state
+- **Context handling**: Proper context cancellation handling
+- **Idempotent processing**: Prevents duplicate validation
 
 ### subtreesHandler
 

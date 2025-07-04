@@ -16,6 +16,7 @@ The settings are stored in 2 files:
 * `settings_local.conf` - Developer-specific and deployment-specific settings, local overrides (not tracked in source control)
 
 When developing locally, you should:
+
 1. Use `settings.conf` for default configuration values, and not modify it unless intended as a global change to be shared with other developers and operators.
 2. Use `settings_local.conf` for your personal development settings and overrides
 

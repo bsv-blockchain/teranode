@@ -1,8 +1,9 @@
 # Kafka Message Format Reference Documentation
 
-This document provides comprehensive information about the message formats used in Kafka topics within the Teranode ecosystem. All message formats are defined using Protocol Buffers (protobuf), providing a  structured and efficient serialization mechanism.
+This document provides comprehensive information about the message formats used in Kafka topics within the Teranode ecosystem. All message formats are defined using Protocol Buffers (protobuf), providing a structured and efficient serialization mechanism.
 
 ## Index
+
 - [Protobuf Overview](#protobuf-overview)
 - [Block Notification Message Format](#block-notification-message-format)
     - [Block Topic](#block-topic)
@@ -92,13 +93,11 @@ This document provides comprehensive information about the message formats used 
     - [Deserializing Messages](#deserializing-messages)
 - [Other Resources](#other-resources)
 
-
 ## Protobuf Overview
 
 Protocol Buffers (protobuf) is a language-neutral, platform-neutral, extensible mechanism for serializing structured data. In Teranode, all Kafka messages are defined and serialized using protobuf.
 
 The protobuf definitions for Kafka messages are located in `util/kafka/kafka_message/kafka_messages.proto`.
-
 
 ## Block Notification Message Format
 
@@ -120,11 +119,13 @@ message KafkaBlockTopicMessage {
 ### Field Specifications
 
 #### hash
+
 - Type: string
 - Description: Hexadecimal string representation of the BSV block hash
 - Required: Yes
 
 #### URL
+
 - Type: string
 - Description: URL pointing to the location where the full block data can be retrieved
 - Required: Yes
@@ -143,6 +144,7 @@ Here's a JSON representation of the message content (for illustration purposes o
 ### Code Examples
 
 #### Sending Messages
+
 ```go
 // Create the block notification message
 blockHash := block.Hash() // assumes this returns *chainhash.Hash
@@ -167,6 +169,7 @@ producer.Publish(&kafka.Message{
 ```
 
 #### Receiving Messages
+
 ```go
 // Handle incoming block notification message
 func handleBlockMessage(msg *kafka.Message) error {
@@ -196,6 +199,7 @@ func handleBlockMessage(msg *kafka.Message) error {
 ```
 
 ### Error Cases
+
 - Invalid message format: Message cannot be unmarshaled to KafkaBlockTopicMessage
 - Empty or malformed hash: Hash is not a valid hexadecimal string representation of a block hash
 - Invalid URL: DataHub URL is empty or not properly formatted
@@ -222,11 +226,13 @@ message KafkaSubtreeTopicMessage {
 ### Field Specifications
 
 #### hash
+
 - Type: string
 - Description: Hexadecimal string representation of the BSV subtree hash
 - Required: Yes
 
 #### URL
+
 - Type: string
 - Description: URL pointing to the location where the full subtree data can be retrieved
 - Required: Yes
@@ -245,6 +251,7 @@ Here's a JSON representation of the message content (for illustration purposes o
 ### Code Examples
 
 #### Sending Messages
+
 ```go
 // Create the subtree notification message
 subtreeHash := subtree.Hash() // assumes this returns *chainhash.Hash
@@ -269,6 +276,7 @@ producer.Publish(&kafka.Message{
 ```
 
 #### Receiving Messages
+
 ```go
 // Handle incoming subtree notification message
 func handleSubtreeMessage(msg *kafka.Message) error {
@@ -298,12 +306,12 @@ func handleSubtreeMessage(msg *kafka.Message) error {
 ```
 
 ### Error Cases
+
 - Invalid message format: Message cannot be unmarshaled to KafkaSubtreeTopicMessage
 - Empty or malformed hash: Hash is not a valid hexadecimal string representation of a subtree hash
 - Invalid URL: DataHub URL is empty or not properly formatted
 
 ---
-
 
 ## Transaction Validation Message Format
 
@@ -333,16 +341,19 @@ message KafkaTxValidationOptions {
 ### Field Specifications
 
 #### tx
+
 - Type: bytes
 - Description: Raw bytes of the complete BSV transaction
 - Required: Yes
 
 #### height
+
 - Type: uint32
 - Description: Current blockchain height, used for validation rules that depend on height
 - Required: Yes
 
 #### options
+
 - Type: KafkaTxValidationOptions
 - Description: Special options that modify the validation behavior
 - Required: No (if not provided, default values are used)
@@ -350,21 +361,25 @@ message KafkaTxValidationOptions {
 ##### KafkaTxValidationOptions
 
 ###### skipUtxoCreation
+
 - Type: bool
 - Description: When true, the validator will not create UTXO entries for this transaction
 - Default: false
 
 ###### addTXToBlockAssembly
+
 - Type: bool
 - Description: When true, the validated transaction will be added to block assembly
 - Default: true
 
 ###### skipPolicyChecks
+
 - Type: bool
 - Description: When true, certain policy validation checks will be skipped
 - Default: false
 
 ###### createConflicting
+
 - Type: bool
 - Description: When true, the validator may create a transaction that conflicts with existing UTXOs
 - Default: false
@@ -389,6 +404,7 @@ Here's a JSON representation of the message content (for illustration purposes o
 ### Code Examples
 
 #### Sending Messages
+
 ```go
 // Create the transaction validation message
 transactionBytes := tx.Serialize() // serialized transaction bytes
@@ -422,6 +438,7 @@ producer.Publish(&kafka.Message{
 ```
 
 #### Receiving Messages
+
 ```go
 // Handle incoming transaction validation message
 func handleTxValidationMessage(msg *kafka.Message) error {
@@ -458,12 +475,12 @@ func handleTxValidationMessage(msg *kafka.Message) error {
 ```
 
 ### Error Cases
+
 - Invalid message format: Message cannot be unmarshaled to KafkaTxValidationTopicMessage
 - Empty or invalid transaction: Transaction bytes cannot be parsed
 - Invalid height: Height is too high compared to the current blockchain height
 
 ---
-
 
 ## Transaction Metadata Message Format
 
@@ -491,20 +508,23 @@ message KafkaTxMetaTopicMessage {
 ### Field Specifications
 
 #### txHash
+
 - Type: bytes
 - Description: Raw bytes representation of the transaction hash (32 bytes)
 - Required: Yes
 
 #### action
+
 - Type: KafkaTxMetaActionType (enum)
 - Description: Specifies whether to add/update metadata (ADD) or delete metadata (DELETE)
 - Required: Yes
 - Values:
 
     - ADD (0): Add or update transaction metadata
-  - DELETE (1): Delete transaction metadata
+    - DELETE (1): Delete transaction metadata
 
 #### content
+
 - Type: bytes
 - Description: Serialized transaction metadata
 - Required: Only when action is ADD; should be empty when action is DELETE
@@ -547,6 +567,7 @@ Here's a JSON representation of a DELETE message:
 ### Code Examples
 
 #### Sending Messages
+
 ```go
 // Example 1: Send ADD transaction metadata message
 txHash := tx.TxID().Bytes() // returns 32-byte transaction hash
@@ -593,6 +614,7 @@ producer.Publish(&kafka.Message{
 ```
 
 #### Receiving Messages
+
 ```go
 // Handle incoming transaction metadata message
 func handleTxMetaMessage(msg *kafka.Message) error {
@@ -628,6 +650,7 @@ func handleTxMetaMessage(msg *kafka.Message) error {
 ```
 
 ### Error Cases
+
 - Invalid message format: Message cannot be unmarshaled to KafkaTxMetaTopicMessage
 - Empty or invalid transaction hash: Hash does not contain exactly 32 bytes
 - Unknown action type: Action is not a recognized KafkaTxMetaActionType enum value
@@ -655,12 +678,14 @@ message KafkaRejectedTxTopicMessage {
 ### Field Specifications
 
 #### txHash
+
 - Type: bytes
 - Description: Raw bytes of the transaction hash (32 bytes), computed as double SHA256 hash
 - Computation: `sha256(sha256(transaction_bytes))`
 - Required: Yes
 
 #### reason
+
 - Type: string
 - Description: Human-readable description of why the transaction was rejected
 - Required: Yes
@@ -679,6 +704,7 @@ Here's a JSON representation of the message content (for illustration purposes o
 ### Code Examples
 
 #### Sending Messages
+
 ```go
 // Create the rejected transaction message
 txHash := tx.TxID().Bytes() // returns 32-byte transaction hash
@@ -703,6 +729,7 @@ producer.Publish(&kafka.Message{
 ```
 
 #### Receiving Messages
+
 ```go
 // Handle incoming rejected transaction message
 func handleRejectedTxMessage(msg *kafka.Message) error {
@@ -730,6 +757,7 @@ func handleRejectedTxMessage(msg *kafka.Message) error {
 ```
 
 ### Error Cases
+
 - Invalid message format: Message cannot be unmarshaled to KafkaRejectedTxTopicMessage
 - Empty or invalid transaction hash: Hash does not contain exactly 32 bytes
 - Missing reason: Reason field is empty
@@ -766,11 +794,13 @@ enum InvType {
 ### Field Specifications
 
 #### peerAddress
+
 - Type: string
 - Description: Network address of the peer that has the inventory item
 - Required: Yes
 
 #### inv
+
 - Type: repeated Inv
 - Description: List of inventory items
 - Required: Yes
@@ -778,17 +808,19 @@ enum InvType {
 ##### Inv
 
 ###### type
+
 - Type: InvType (enum)
 - Description: Type of inventory item
 - Required: Yes
 - Values:
 
     - Error (0): Error or unknown type
-  - Tx (1): Transaction
-  - Block (2): Block
-  - FilteredBlock (3): Filtered block
+    - Tx (1): Transaction
+    - Block (2): Block
+    - FilteredBlock (3): Filtered block
 
 ###### hash
+
 - Type: bytes
 - Description: Hash of the inventory item (32 bytes)
 - Required: Yes
@@ -816,6 +848,7 @@ Here's a JSON representation of the message content (for illustration purposes o
 ### Code Examples
 
 #### Sending Messages
+
 ```go
 // Create the inventory message
 peerAddress := "192.168.1.10:8333"
@@ -851,6 +884,7 @@ producer.Publish(&kafka.Message{
 ```
 
 #### Receiving Messages
+
 ```go
 // Handle incoming inventory message
 func handleInvMessage(msg *kafka.Message) error {
@@ -895,6 +929,7 @@ func handleInvMessage(msg *kafka.Message) error {
 ```
 
 ### Error Cases
+
 - Invalid message format: Message cannot be unmarshaled to KafkaInvTopicMessage
 - Empty peer address: PeerAddress field is empty
 - Invalid inventory item: Hash does not contain exactly 32 bytes or Type is unrecognized
@@ -923,31 +958,37 @@ message KafkaBlocksFinalTopicMessage {
 ### Field Specifications
 
 #### header
+
 - Type: bytes
 - Description: Serialized block header
 - Required: Yes
 
 #### transaction_count
+
 - Type: uint64
 - Description: Total number of transactions in the block
 - Required: Yes
 
 #### size_in_bytes
+
 - Type: uint64
 - Description: Total size of the block in bytes
 - Required: Yes
 
 #### subtree_hashes
+
 - Type: repeated bytes
 - Description: List of Merkle tree subtree hashes that compose the block
 - Required: Yes
 
 #### coinbase_tx
+
 - Type: bytes
 - Description: Serialized coinbase transaction
 - Required: Yes
 
 #### height
+
 - Type: uint32
 - Description: Block height in the blockchain
 - Required: Yes
@@ -974,6 +1015,7 @@ Here's a JSON representation of the message content (for illustration purposes o
 ### Code Examples
 
 #### Sending Messages
+
 ```go
 // Create the final block message
 blockHeader := block.Header.Serialize() // serialized block header bytes
@@ -1013,6 +1055,7 @@ producer.Publish(&kafka.Message{
 ```
 
 #### Receiving Messages
+
 ```go
 // Handle incoming final block message
 func handleFinalBlockMessage(msg *kafka.Message) error {
@@ -1061,6 +1104,7 @@ func handleFinalBlockMessage(msg *kafka.Message) error {
 ```
 
 ### Error Cases
+
 - Invalid message format: Message cannot be unmarshaled to KafkaBlocksFinalTopicMessage
 - Invalid block header: Header bytes cannot be deserialized to a valid block header
 - Invalid coinbase transaction: Coinbase transaction bytes cannot be parsed

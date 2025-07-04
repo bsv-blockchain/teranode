@@ -98,7 +98,7 @@ cd $YOUR_WORKING_DIR/teranode/deploy/docker/testnet
 
 ```bash
 # authenticate with AWS ECR
-aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
+docker login ghcr.io
 
 ```
 

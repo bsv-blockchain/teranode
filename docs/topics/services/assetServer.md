@@ -308,74 +308,76 @@ The Asset Server can be configured using various settings that control its behav
 **HTTP Server Settings:**
 
 - **Asset HTTP Listen Address (`asset_httpListenAddress`)**: Address for the Asset Service HTTP server to listen for requests.
-  - Type: `string`
-  - Default: `":8090"`
-  - Environment Variable: `TERANODE_ASSET_HTTPLISTENADDRESS`
-  - Impact: **Critical** - Service will not start without this setting (`"no asset_httpListenAddress setting found"`)
-  - Code Usage: Required for HTTP server initialization (Server.go line 184-187)
+    - Type: `string`
+    - Default: `":8090"`
+    - Environment Variable: `TERANODE_ASSET_HTTPLISTENADDRESS`
+    - Impact: **Critical** - Service will not start without this setting (`"no asset_httpListenAddress setting found"`)
+    - Code Usage: Required for HTTP server initialization (Server.go line 184-187)
 
 - **Asset HTTP Address (`asset_httpAddress`)**: Base URL of the Asset Service HTTP server.
-  - Type: `string`
-  - Default: `"http://localhost:8090/api/v1"`
-  - Environment Variable: `TERANODE_ASSET_HTTPADDRESS`
-  - Impact: **Critical for Centrifuge** - Required when Centrifuge is enabled; URL validation performed
-  - Code Usage: Used for Centrifuge server initialization; validates URL format
+    - Type: `string`
+    - Default: `"http://localhost:8090/api/v1"`
+    - Environment Variable: `TERANODE_ASSET_HTTPADDRESS`
+    - Impact: **Critical for Centrifuge** - Required when Centrifuge is enabled; URL validation performed
+    - Code Usage: Used for Centrifuge server initialization; validates URL format
 
 - **Asset HTTP Public Address (`asset_httpPublicAddress`)**: Public-facing URL configuration.
-  - Type: `string`
-  - Default: `""` (empty string)
-  - Environment Variable: `TERANODE_ASSET_HTTPPUBLICADDRESS`
-  - Impact: Configuration placeholder - not actively used in traced Asset Server code paths
+    - Type: `string`
+    - Default: `""` (empty string)
+    - Environment Variable: `TERANODE_ASSET_HTTPPUBLICADDRESS`
+    - Impact: Configuration placeholder - not actively used in traced Asset Server code paths
 
 - **Asset API Prefix (`asset_apiPrefix`)**: URL prefix for API routes.
-  - Type: `string`
-  - Default: `"/api/v1"`
-  - Environment Variable: `TERANODE_ASSET_APIPREFIX`
-  - Impact: Determines URL structure for all API endpoints
-  - Code Usage: Applied to API route groups in HTTP server initialization
+    - Type: `string`
+    - Default: `"/api/v1"`
+    - Environment Variable: `TERANODE_ASSET_APIPREFIX`
+    - Impact: Determines URL structure for all API endpoints
+    - Code Usage: Applied to API route groups in HTTP server initialization
 
 - **Asset HTTP Port (`ASSET_HTTP_PORT`)**: HTTP port configuration.
-  - Type: `int`
-  - Default: `8090`
-  - Environment Variable: `ASSET_HTTP_PORT`
-  - Impact: Configuration placeholder - not actively used in traced Asset Server code paths
+    - Type: `int`
+    - Default: `8090`
+    - Environment Variable: `ASSET_HTTP_PORT`
+    - Impact: Configuration placeholder - not actively used in traced Asset Server code paths
 
 **Response Signing Settings:**
 
 - **Asset Sign HTTP Responses (`asset_sign_http_responses`)**: Enables cryptographic signing of HTTP responses.
-  - Type: `bool`
-  - Default: `false`
-  - Environment Variable: `TERANODE_ASSET_SIGN_HTTP_RESPONSES`
-  - Impact: When enabled, requires valid P2P private key; logs errors if key is invalid
-  - Code Usage: Controls response signing initialization using P2P private key
+    - Type: `bool`
+    - Default: `false`
+    - Environment Variable: `TERANODE_ASSET_SIGN_HTTP_RESPONSES`
+    - Impact: When enabled, requires valid P2P private key; logs errors if key is invalid
+    - Code Usage: Controls response signing initialization using P2P private key
 
 **Debug Settings:**
 
 - **Echo Debug (`ECHO_DEBUG`)**: Enables Echo framework debug mode.
-  - Type: `bool`
-  - Default: `false`
-  - Environment Variable: `ECHO_DEBUG`
-  - Impact: Enables debug logging and custom logging middleware for HTTP requests
-  - Code Usage: Controls Echo debug mode and custom request logging
+    - Type: `bool`
+    - Default: `false`
+    - Environment Variable: `ECHO_DEBUG`
+    - Impact: Enables debug logging and custom logging middleware for HTTP requests
+    - Code Usage: Controls Echo debug mode and custom request logging
 
 #### 7.2.2 Centrifuge Real-time Updates Configuration
 
 - **Asset Centrifuge Disable (`asset_centrifuge_disable`)**: Controls Centrifuge server initialization.
-  - Type: `bool`
-  - Default: `false`
-  - Environment Variable: `TERANODE_ASSET_CENTRIFUGE_DISABLE`
-  - Impact: When `true`, disables real-time WebSocket functionality entirely
-  - Code Usage: Controls conditional Centrifuge server creation (Server.go line 204)
+    - Type: `bool`
+    - Default: `false`
+    - Environment Variable: `TERANODE_ASSET_CENTRIFUGE_DISABLE`
+    - Impact: When `true`, disables real-time WebSocket functionality entirely
+    - Code Usage: Controls conditional Centrifuge server creation (Server.go line 204)
 
 - **Asset Centrifuge Listen Address (`asset_centrifugeListenAddress`)**: WebSocket server listen address.
-  - Type: `string`
-  - Default: `":8892"`
-  - Environment Variable: `TERANODE_ASSET_CENTRIFUGELISTENADDRESS`
-  - Impact: Determines Centrifuge WebSocket server listening address when enabled
-  - Code Usage: Used for Centrifuge server address configuration
+    - Type: `string`
+    - Default: `":8892"`
+    - Environment Variable: `TERANODE_ASSET_CENTRIFUGELISTENADDRESS`
+    - Impact: Determines Centrifuge WebSocket server listening address when enabled
+    - Code Usage: Used for Centrifuge server address configuration
 
 **Centrifuge Subscription Channels:**
+
 Centrifuge supports the following subscription channels:
+
 - `ping`: For connection health checks
 - `block`: For new block notifications
 - `subtree`: For Merkle tree updates
@@ -386,46 +388,48 @@ Centrifuge supports the following subscription channels:
 **HTTPS Settings:**
 
 - **Security Level HTTP (`securityLevelHTTP`)**: Determines HTTP vs HTTPS mode.
-  - Type: `int`
-  - Default: `0`
-  - Environment Variable: `TERANODE_SECURITYLEVELHTTP`
-  - Impact: `0` = HTTP mode, non-zero = HTTPS mode
-  - Code Usage: Controls server startup mode selection (HTTP vs HTTPS)
+    - Type: `int`
+    - Default: `0`
+    - Environment Variable: `TERANODE_SECURITYLEVELHTTP`
+    - Impact: `0` = HTTP mode, non-zero = HTTPS mode
+    - Code Usage: Controls server startup mode selection (HTTP vs HTTPS)
 
 - **Server Certificate File (`server_certFile`)**: TLS certificate file path.
-  - Type: `string`
-  - Default: `""` (empty string)
-  - Environment Variable: `TERANODE_SERVER_CERTFILE`
-  - Impact: **Required for HTTPS** - Service returns configuration error if missing when HTTPS enabled
-  - Code Usage: Used for HTTPS server startup; validated when securityLevelHTTP is non-zero
+    - Type: `string`
+    - Default: `""` (empty string)
+    - Environment Variable: `TERANODE_SERVER_CERTFILE`
+    - Impact: **Required for HTTPS** - Service returns configuration error if missing when HTTPS enabled
+    - Code Usage: Used for HTTPS server startup; validated when securityLevelHTTP is non-zero
 
 - **Server Key File (`server_keyFile`)**: TLS private key file path.
-  - Type: `string`
-  - Default: `""` (empty string)
-  - Environment Variable: `TERANODE_SERVER_KEYFILE`
-  - Impact: **Required for HTTPS** - Service returns configuration error if missing when HTTPS enabled
-  - Code Usage: Used for HTTPS server startup; validated when securityLevelHTTP is non-zero
+    - Type: `string`
+    - Default: `""` (empty string)
+    - Environment Variable: `TERANODE_SERVER_KEYFILE`
+    - Impact: **Required for HTTPS** - Service returns configuration error if missing when HTTPS enabled
+    - Code Usage: Used for HTTPS server startup; validated when securityLevelHTTP is non-zero
 
 **P2P Settings for Response Signing:**
 
 - **P2P Private Key (`p2p_private_key`)**: Private key for HTTP response signing.
-  - Type: `string`
-  - Default: `""` (empty string)
-  - Environment Variable: `TERANODE_P2P_PRIVATE_KEY`
-  - Impact: Used for HTTP response signing when `asset_sign_http_responses` is enabled
-  - Code Usage: Decoded and used for cryptographic signing; errors logged if invalid
+    - Type: `string`
+    - Default: `""` (empty string)
+    - Environment Variable: `TERANODE_P2P_PRIVATE_KEY`
+    - Impact: Used for HTTP response signing when `asset_sign_http_responses` is enabled
+    - Code Usage: Decoded and used for cryptographic signing; errors logged if invalid
 
 #### 7.2.4 Configuration Dependencies and Interactions
 
 **HTTP Server Operation:**
-- Primary Setting: `asset_httpListenAddress` (required)
-- HTTPS Dependencies: `securityLevelHTTP`, `server_certFile`, `server_keyFile`
-- Interaction: HTTPS mode requires both certificate and key files; missing files cause configuration errors
+
+- **Primary Setting**: `asset_httpListenAddress` (required)
+- **HTTPS Dependencies**: `securityLevelHTTP`, `server_certFile`, `server_keyFile`
+- **Interaction**: HTTPS mode requires both certificate and key files; missing files cause configuration errors
 
 **Centrifuge Real-time Updates:**
-- Primary Setting: `asset_centrifuge_disable` (controls feature)
-- Dependencies: `asset_centrifugeListenAddress`, `asset_httpAddress`
-- Interaction: When enabled, requires valid HTTP address and listen address; URL validation performed
+
+- **Primary Setting**: `asset_centrifuge_disable` (controls feature)
+- **Dependencies**: `asset_centrifugeListenAddress`, `asset_httpAddress`
+- **Interaction**: When enabled, requires valid HTTP address and listen address; URL validation performed
 
 Centrifuge supports the following subscription channels:
 
@@ -435,9 +439,10 @@ Centrifuge supports the following subscription channels:
 - `mining_on`: For mining status updates
 
 **HTTP Response Signing:**
-- Primary Setting: `asset_sign_http_responses` (enables feature)
-- Dependency: `p2p_private_key`
-- Interaction: Requires valid P2P private key; invalid keys logged as errors but don't prevent startup
+
+- **Primary Setting**: `asset_sign_http_responses` (enables feature)
+- **Dependency**: `p2p_private_key`
+- **Interaction**: Requires valid P2P private key; invalid keys logged as errors but don't prevent startup
 
 #### 7.2.5 Error Conditions and Validation
 
@@ -471,6 +476,7 @@ Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 #### 7.2.6 Environment Variables
 
 **Standard Environment Variables:**
+
 - `TERANODE_ASSET_HTTPLISTENADDRESS` - HTTP server listen address
 - `TERANODE_ASSET_HTTPADDRESS` - Base HTTP server URL
 - `TERANODE_ASSET_HTTPPUBLICADDRESS` - Public-facing URL
@@ -484,8 +490,9 @@ Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 - `TERANODE_P2P_PRIVATE_KEY` - P2P private key for signing
 
 **Special Environment Variables:**
-    - `ECHO_DEBUG` - Echo framework debug mode
-    - `ASSET_HTTP_PORT` - HTTP port (configuration placeholder)
+
+- `ECHO_DEBUG` - Echo framework debug mode
+- `ASSET_HTTP_PORT` - HTTP port (configuration placeholder)
 
 
 #### 7.2.7 Dependency Configuration
@@ -555,21 +562,25 @@ asset_httpAddress=http://localhost:8090
 ```
 
 ### 7.4 FSM Configuration
-- fsm_state_restore: Enables or disables the restore state for the Finite State Machine.
-  Example: fsm_state_restore=false
-- The FSM provides state management for the blockchain system with endpoints for querying and manipulating states.
+
+- **fsm_state_restore**: Enables or disables the restore state for the Finite State Machine.
+    - Example: `fsm_state_restore=false`
+- **FSM Functionality**: The FSM provides state management for the blockchain system with endpoints for querying and manipulating states.
 
 ### 7.5 Coinbase Configuration
-- coinbase_grpcAddress: gRPC address for coinbase-related operations.
-  Example: coinbase_grpcAddress=localhost:50051
+
+- **coinbase_grpcAddress**: gRPC address for coinbase-related operations.
+    - Example: `coinbase_grpcAddress=localhost:50051`
 
 ### 7.6 Dashboard Configuration
-- dashboard_enabled: Enables or disables the Teranode dashboard UI.
-  Example: dashboard_enabled=true
-- dashboard-related settings control authentication and user interface features.
+
+- **dashboard_enabled**: Enables or disables the Teranode dashboard UI.
+    - Example: `dashboard_enabled=true`
+- **Dashboard Features**: Dashboard-related settings control authentication and user interface features.
 
 ### 7.7 Block Validation
-- The Asset Server provides endpoints to invalidate and revalidate blocks, which is useful for managing forks and recovering from errors.
+
+- **Block Management**: The Asset Server provides endpoints to invalidate and revalidate blocks, which is useful for managing forks and recovering from errors.
 
 
 

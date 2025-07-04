@@ -41,9 +41,9 @@ The Block Validator is responsible for ensuring the integrity and consistency of
 
 The Block Validation Service:
 
-* Receives new blocks from the Legacy Service. The Legacy Service has received them from other nodes on the network.
-* Validates the blocks, after fetching them from the remote asset server.
-* Updates stores, and notifies the blockchain service of the new block.
+- Receives new blocks from the Legacy Service. The Legacy Service has received them from other nodes on the network.
+- Validates the blocks, after fetching them from the remote asset server.
+- Updates stores, and notifies the blockchain service of the new block.
 
 The Legacy Service communicates with the Block Validation over the gRPC protocol.
 
@@ -51,53 +51,44 @@ The Legacy Service communicates with the Block Validation over the gRPC protocol
 
 > **Note**: For information about how the Block Validation service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
-
-
 Finally, note that the Block Validation service benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
 ![lustre_fs.svg](img/plantuml/lustre_fs.svg)
-
-
 ## 2. Functionality
 
 The block validator is a service that validates blocks. After validating them, it will update the relevant stores and blockchain accordingly.
-
-
 ### 2.1. Receiving blocks for validation
 
 ![block_validation_p2p_block_found.svg](img/plantuml/blockvalidation/block_validation_p2p_block_found.svg)
 
-* The Legacy Service is responsible for receiving new blocks from the network. When a new block is found, it will notify the block validation service via the `BlockFound()` gRPC endpoint.
-* The block validation service will then check if the block is already known. If not, it will start the validation process.
-* The block is added to a channel for processing. The channel is used to ensure that the block validation process is asynchronous and non-blocking.
-
-
+- The Legacy Service is responsible for receiving new blocks from the network. When a new block is found, it will notify the block validation service via the `BlockFound()` gRPC endpoint.
+- The block validation service will then check if the block is already known. If not, it will start the validation process.
+- The block is added to a channel for processing. The channel is used to ensure that the block validation process is asynchronous and non-blocking.
 ### 2.2. Validating blocks
 
 #### 2.2.1. Overview
 
 ![block_validation_p2p_block_validation.svg](img/plantuml/blockvalidation/block_validation_p2p_block_validation.svg)
 
-* As seen in the section 2.1, a new block is queued for validation in the blockFoundCh. The block validation server will pick it up and start the validation process.
-* The server will request the block data from the remote node (`DoHTTPRequest()`).
-* If the parent block is not known, it will be added to the catchupCh channel for processing. We stop at this point, as we can no longer proceed. The catchup process will be explained in the next section (section 2.2.2).
-* If the parent is known, the block will be validated.
-  * First, the service validates all the block subtrees.
-    * For each subtree, we check if it is known. If not, we kick off a subtree validation process (see section 2.2.3 for more details).
-  * The validator retrieves the last 100 block headers, which are used to validate the block data. We can see more about this specific step in the section 2.2.4.
-  * The validator stores the coinbase Tx in the UTXO Store and the Tx Store.
-  * The validator adds the block to the Blockchain.
-  * For each Subtree in the block, the validator updates the TTL (Time To Live) to zero for the subtree. This allows the Store to clear out data the services will no longer use.
-  * For each Tx for each Subtree, we set the Tx as mined in the UTXO Store. This allows the UTXO Store to know which block(s) the Tx is in.
-  * Should an error occur during the validation process, the block will be invalidated and removed from the blockchain.
+- As seen in the section 2.1, a new block is queued for validation in the blockFoundCh. The block validation server will pick it up and start the validation process.
+- The server will request the block data from the remote node (`DoHTTPRequest()`).
+- If the parent block is not known, it will be added to the catchupCh channel for processing. We stop at this point, as we can no longer proceed. The catchup process will be explained in the next section (section 2.2.2).
+- If the parent is known, the block will be validated.
+    - First, the service validates all the block subtrees.
+        - For each subtree, we check if it is known. If not, we kick off a subtree validation process (see section 2.2.3 for more details).
+    - The validator retrieves the last 100 block headers, which are used to validate the block data. We can see more about this specific step in the section 2.2.4.
+    - The validator stores the coinbase Tx in the UTXO Store and the Tx Store.
+    - The validator adds the block to the Blockchain.
+    - For each Subtree in the block, the validator updates the TTL (Time To Live) to zero for the subtree. This allows the Store to clear out data the services will no longer use.
+    - For each Tx for each Subtree, we set the Tx as mined in the UTXO Store. This allows the UTXO Store to know which block(s) the Tx is in.
+    - Should an error occur during the validation process, the block will be invalidated and removed from the blockchain.
 
 Note - there is a `optimisticMining` setting that allows to reverse the block validation and block addition to the blockchain steps.
-* In the regular mode, the block is validated first, and, if valid, added to the block.
-* If `optimisticMining` is on, the block is optimistically added to the blockchain right away, and then validated in the background next. If it was to be found invalid after validation, it would be removed from the blockchain. This mode is not recommended for production use, as it can lead to a temporary fork in the blockchain. It however can be useful for performance testing purposes.
 
-
+- In the regular mode, the block is validated first, and, if valid, added to the block.
+- If `optimisticMining` is on, the block is optimistically added to the blockchain right away, and then validated in the background next. If it was to be found invalid after validation, it would be removed from the blockchain. This mode is not recommended for production use, as it can lead to a temporary fork in the blockchain. It however can be useful for performance testing purposes.
 #### 2.2.2. Catching up after a parent block is not found
 
 ![block_validation_p2p_block_catchup.svg](img/plantuml/blockvalidation/block_validation_p2p_block_catchup.svg)
@@ -115,8 +106,6 @@ Should the validation process for a block encounter a subtree it does not know a
 ![block_validation_subtree_validation_request.svg](img/plantuml/subtreevalidation/block_validation_subtree_validation_request.svg)
 
 If any transaction under the subtree is also missing, the subtree validation process will kick off a recovery process for those transactions.
-
-
 #### 2.2.4. Block Data Validation
 
 As part of the overall block validation, the service will validate the block data, ensuring the format and integrity of the data, as well as confirming that coinbase tx, subtrees and transactions are valid. This is done in the `Valid()` method under the `Block` struct.
@@ -160,7 +149,7 @@ Teranode maintains bloom filters for recent blocks to efficiently detect re-pres
 - **Retention**: Filters are maintained for a configurable number of recent blocks (`blockvalidation_bloom_filter_retention_size`)
 - **TTL Ordering**: The system enforces a strict TTL (Time-To-Live) ordering: txmetacache < utxo store < bloom filter
     - This ensures that even if a transaction is pruned from txmetacache, the bloom filter can still detect its re-presentation
-  - The longer retention period for bloom filters provides an extended window for detecting re-presented transactions
+    - The longer retention period for bloom filters provides an extended window for detecting re-presented transactions
 
 ##### The validOrderAndBlessed Mechanism
 
@@ -211,24 +200,16 @@ The `BlockValidation` proceeds to mark all transactions within the block as "min
 ![block_validation_set_tx_mined.svg](img/plantuml/blockvalidation/block_validation_set_tx_mined.svg)
 
 > **For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the [Two-Phase Transaction Commit Process](../features/two_phase_commit.md) documentation.**
-
-
 ## 3. gRPC Protobuf Definitions
 
 The Block Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/blockvalidationProto.md).
-
-
 ## 4. Data Model
 
 - [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.
 - [Subtree Data Model](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
 - [Extended Transaction Data Model](../datamodel/transaction_data_model.md): Includes additional metadata to facilitate processing.
 - [UTXO Data Model](../datamodel/utxo_data_model.md): UTXO and UTXO Metadata data models for managing unspent transaction outputs.
-
-
 ## 5. Technology
-
-
 1. **Go Programming Language (Golang)**.
 
 2. **gRPC (Google Remote Procedure Call)**:
@@ -254,11 +235,9 @@ The Block Validation Service uses gRPC for communication between nodes. The prot
 7. **Synchronization Primitives (sync)**:
 
     - Utilizes Go's `sync` package for synchronization primitives like mutexes, aiding in managing concurrent access to shared resources.
-
-
 ## 6. Directory Structure and Main Files
 
-```
+```text
 ./services/blockvalidation
 │
 ├── BlockValidation.go             - Contains the core logic for block validation.

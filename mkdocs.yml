@@ -171,9 +171,7 @@ extra:
 
 plugins:
   - search
-  - privacy:
-      links_attr_map:
-        target: _blank
+  - privacy
 
 extra_css:
   - overrides/custom.css

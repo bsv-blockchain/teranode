@@ -39,6 +39,7 @@ A double spend occurs when someone attempts to spend the same Bitcoin UTXO (Unsp
 ### 1.1 The Double Spend Problem
 
 Consider a simple scenario:
+
 1. "User A" has 1 BSV in a UTXO
 2. "User A" creates transaction A sending that 1 BSV to "User B"
 3. "User A" also creates transaction B sending the same 1 BSV to "User D"

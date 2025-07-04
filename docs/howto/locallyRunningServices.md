@@ -67,9 +67,11 @@ Teranode supports multiple database backends for UTXO storage, configured via se
 
 3. **Aerospike** (High-performance option):
 
-   - Requires both the appropriate settings AND the 'aerospike' build tag
-   - See the Aerospike Integration section below
-   - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
+!!! warning "Aerospike Requirements"
+
+      - Requires both the appropriate settings AND the 'aerospike' build tag
+      - See the Aerospike Integration section below
+      - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
 
 > **Note:** The database backend is determined by the connection string prefix in your settings:
 > - PostgreSQL: `postgres://`

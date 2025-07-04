@@ -406,6 +406,8 @@ The following datastores are supported (either in development / experimental or 
     - A dummy or placeholder implementation, used for testing (when no actual storage is needed).
     - Can be used to mock UTXO store functionality in a development or test environment.
 
+**Implementation Choice Considerations:**
+
 - The choice of implementation depends on the specific requirements of the BSV node, such as speed, data volume, persistence, and the operational environment.
 - Memory-based stores are typically faster but may require additional persistence mechanisms.
 - Databases like Aerospike provide a balance of speed and persistence, suitable for larger, more complex systems.
@@ -508,6 +510,7 @@ utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.teranode.dev:3000/tera
 ```
 
 **URL Parameters:**
+
 - `set`: Aerospike set name (default: "txmeta")
 - `externalStore`: URL for storing large transactions (required)
 - `ConnectionQueueSize`: Connection queue size for Aerospike client
@@ -546,6 +549,7 @@ utxostore.dev.[YOUR_USERNAME]=sqlitememory:///utxo?expiration=24h
 ```
 
 **URL Parameters:**
+
 - `expiration`: Duration after which spent UTXOs are cleaned up (e.g., "24h", "7d")
 - `logging`: Enable SQL query logging (true/false)
 

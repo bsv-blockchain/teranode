@@ -99,4 +99,4 @@ Note:
 
 - **Block Heights and Subtree Indexes**: These fields track the exact location of transactions within the blockchain.
     - The block heights array is particularly important for validation, as it gives visibility on what height a UTXO was mined. While most UTXOs are mined at the same height across parallel chains or forks, this is not always the case. Storing this information enables the validator to efficiently determine the height of UTXOs being spent without performing expensive lookups. Block heights indicate how deep in the chain a transaction is, which is important for maturity checks.
-  - The subtree indexes are primarily informational, allowing for future features that might need to locate exactly where a transaction was placed within a block's structure, enabling potential parallel processing and efficient lookups.
+    - The subtree indexes are primarily informational, allowing for future features that might need to locate exactly where a transaction was placed within a block's structure, enabling potential parallel processing and efficient lookups.
