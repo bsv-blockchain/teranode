@@ -200,6 +200,7 @@ func TestOrphanTx(t *testing.T) {
 	require.NoError(t, err)
 
 	blFound := false
+
 	for i := 0; i < len(subtree); i++ {
 		st := subtree[i]
 		for _, node := range st.Nodes {
@@ -244,6 +245,7 @@ func getTx(t *testing.T, assetURL string, txID string) (*bt.Tx, error) {
 		if errRead != nil {
 			return nil, errors.NewProcessingError("expected status code %d, got %d. Additionally, failed to read response body: %v", http.StatusOK, resp.StatusCode, errRead)
 		}
+
 		return nil, errors.NewProcessingError("expected status code %d, got %d. Response body: %s", http.StatusOK, resp.StatusCode, string(bodyBytes))
 	}
 
@@ -452,7 +454,6 @@ confirm node 2 is now in a broken state because it can't spend childTx1 because 
 */
 
 func TestUnminedConflictResolution(t *testing.T) {
-
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC: true,
 		EnableP2P: true,
@@ -568,7 +569,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 	err = node1.BlockAssemblyClient.RemoveTx(node1.Ctx, childTx1.TxIDChainHash())
 	require.NoError(t, err)
 
-	//restart node 1
+	// restart node 1
 	// node1.Stop(t)
 	// node1.ResetServiceManagerContext(t)
 	// node1 = daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -609,6 +610,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 	time.Sleep(10 * time.Second)
 
 	t.Logf("Get block 5 from node1")
+
 	block5, err := node1.BlockchainClient.GetBlockByHeight(node1.Ctx, 5)
 	require.NoError(t, err)
 
@@ -643,5 +645,4 @@ func TestUnminedConflictResolution(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, uint32(6), bestHeight)
-
 }

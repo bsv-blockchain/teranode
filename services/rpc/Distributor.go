@@ -236,13 +236,16 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 		// addr := addr
 		go func(address string, propagationServerClient *propagation.Client) {
+			var err error
+
+			ctx, _, endSpan1 := tracing.Tracer("rpc").Start(ctx, "Distributor:SendTransaction")
+			defer endSpan1(err)
+
 			start1, stat1, ctx1 := tracing.NewStatFromContext(ctx, addr, stat)
 			defer func() {
 				wg.Done()
 				stat1.AddTime(start1)
 			}()
-
-			var err error
 
 			var retries int32
 

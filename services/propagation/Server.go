@@ -811,11 +811,11 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 //
 // Returns:
 //   - error: Error if any step in the processing pipeline fails
-func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btTx *bt.Tx) error {
-	ctx, span, endSpan := tracing.Tracer("propagation").Start(ctx, "processTransactionInternal",
+func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btTx *bt.Tx) (err error) {
+	ctx, _, endSpan := tracing.Tracer("propagation").Start(ctx, "processTransactionInternal",
 		tracing.WithParentStat(ps.stats),
 	)
-	defer endSpan()
+	defer endSpan(err)
 
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
@@ -833,10 +833,7 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 
 	// we should store all transactions, if this fails we should not validate the transaction
 	if err := ps.storeTransaction(ctx, btTx); err != nil {
-		err = errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
-		span.RecordError(err)
-
-		return err
+		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
 	if ps.validatorKafkaProducerClient != nil {
