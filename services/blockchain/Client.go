@@ -937,7 +937,8 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 //   - chan *blockchain_api.Notification: Channel for receiving blockchain notifications
 //   - error: Any error encountered during subscription establishment
 func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
-	ch := make(chan *blockchain_api.Notification)
+	// Use a buffered channel to prevent blocking on sends
+	ch := make(chan *blockchain_api.Notification, 100)
 
 	go func() {
 		<-ctx.Done()
@@ -948,9 +949,22 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 		if err != nil {
 			c.logger.Errorf("[Blockchain] failed to close connection %v", err)
 		}
+
+		// Close the channel when context is done
+		close(ch)
 	}()
 
 	go func() {
+		defer func() {
+			// Ensure channel is closed if goroutine exits
+			select {
+			case <-ctx.Done():
+				// Context already cancelled, channel already closed
+			default:
+				close(ch)
+			}
+		}()
+
 		for c.running.Load() {
 			c.logger.Infof("[Blockchain] Subscribing to blockchain service: %s", source)
 
@@ -958,6 +972,11 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 				Source: source,
 			})
 			if err != nil {
+				if !c.running.Load() {
+					return
+				}
+
+				c.logger.Warnf("[Blockchain] failed to create subscription stream: %v", err)
 				time.Sleep(1 * time.Second)
 				continue
 			}
@@ -965,29 +984,42 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 			for c.running.Load() {
 				resp, err := stream.Recv()
 				if err != nil {
+					if !c.running.Load() || ctx.Err() != nil {
+						// Context cancelled or client stopped, exit gracefully
+						return
+					}
+
 					if !strings.Contains(err.Error(), context.Canceled.Error()) {
 						c.logger.Warnf("[Blockchain] failed to receive notification: %v", err)
 					}
 
 					c.logger.Infof("[Blockchain] retrying subscription in 1 second")
-
 					time.Sleep(1 * time.Second)
-
 					break
 				}
 
 				hash, err := chainhash.NewHash(resp.Hash)
 				if err != nil {
-					c.logger.Errorf("[Blockchain] failed to parse hash", err)
+					c.logger.Errorf("[Blockchain] failed to parse hash: %v", err)
 					continue
 				}
 
-				utils.SafeSend(ch, &blockchain_api.Notification{
+				notification := &blockchain_api.Notification{
 					Type:     resp.Type,
 					Hash:     hash[:],
 					Base_URL: resp.Base_URL,
 					Metadata: resp.Metadata,
-				})
+				}
+
+				// Use a timeout for sending to prevent blocking
+				select {
+				case ch <- notification:
+					// Successfully sent
+				case <-time.After(5 * time.Second):
+					c.logger.Warnf("[Blockchain] timeout sending notification for %s, channel may be blocked", source)
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
