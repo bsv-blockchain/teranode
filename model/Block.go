@@ -670,6 +670,9 @@ type validationDependencies struct {
 }
 
 func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, deps *validationDependencies) error {
+	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validOrderAndBlessed")
+	defer deferFn()
+
 	if b.txMap == nil {
 		return errors.NewStorageError("[validOrderAndBlessed][%s] txMap is nil, cannot check transaction order", b.String())
 	}
@@ -699,6 +702,9 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
 	validationCtx *validationContext, subtree *subtreepkg.Subtree, sIdx int) error {
+	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validateSubtree")
+	defer deferFn()
+
 	var (
 		subtreeMetaSlice    *subtreepkg.SubtreeMeta
 		subtreeHash         = subtree.RootHash()

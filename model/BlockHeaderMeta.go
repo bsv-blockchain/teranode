@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	safe "github.com/bsv-blockchain/go-safe-conversion"
 )
 
 type BlockHeaderMeta struct {
@@ -40,13 +41,19 @@ func (m *BlockHeaderMeta) Bytes() []byte {
 	binary.LittleEndian.PutUint32(b32, m.Timestamp)
 	b = append(b, b32...)
 
+	len32, _ := safe.IntToUint32(len(m.ChainWork))
+	binary.LittleEndian.PutUint32(b32, len32)
+	b = append(b, b32...)
+	b = append(b, m.ChainWork...)
+
 	b = append(b, []byte(m.Miner)...)
 
 	return b
 }
 
 func NewBlockHeaderMetaFromBytes(b []byte) (*BlockHeaderMeta, error) {
-	if len(b) < 4+4+8+8 {
+	// 4 for ID, Height; 8 for TxCount, SizeInBytes; 4 for BlockTime, Timestamp; 4 for ChainWork length
+	if len(b) < 4+4+8+8+4+4+4 {
 		return nil, errors.NewProcessingError("invalid length for BlockHeaderMeta: %d", len(b))
 	}
 
@@ -58,7 +65,15 @@ func NewBlockHeaderMetaFromBytes(b []byte) (*BlockHeaderMeta, error) {
 	m.BlockTime = binary.LittleEndian.Uint32(b[24:28])
 	m.Timestamp = binary.LittleEndian.Uint32(b[28:32])
 
-	m.Miner = string(b[32:])
+	// read in the chainwork length
+	len32 := binary.LittleEndian.Uint32(b[32:36])
+
+	if len32 > 0 {
+		m.ChainWork = make([]byte, len32)
+		copy(m.ChainWork, b[36:36+len32])
+	}
+
+	m.Miner = string(b[36+len32:])
 
 	return m, nil
 }
