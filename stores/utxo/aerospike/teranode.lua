@@ -245,16 +245,6 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBl
             end
         end
 
-        -- Get and validate specific UTXO
-        local utxo, existingSpendingData, err = getUTXOAndSpendingData(utxos, offset, utxoHash)
-        if err then return err end
-
-        if rec[BIN_UTXO_SPENDABLE_IN] then
-            if rec[BIN_UTXO_SPENDABLE_IN][offset] and rec[BIN_UTXO_SPENDABLE_IN][offset] >= currentBlockHeight then
-                return MSG_FROZEN_UNTIL .. rec[BIN_UTXO_SPENDABLE_IN][offset]
-            end
-        end
-
         -- Handle already spent UTXO
         if existingSpendingData then            
             if bytes_equal(existingSpendingData, spendingData) then
@@ -701,7 +691,7 @@ function setUnspendable(rec, setValue)
     end
 
     if oldUnspendable == setValue then
-        return "OK:" .. totalExtraRecs
+        return MSG_OK .. ":" .. totalExtraRecs
     end
 
     rec[BIN_UNSPENDABLE] = setValue
@@ -715,7 +705,7 @@ function setUnspendable(rec, setValue)
 
     aerospike:update(rec)
 
-    return "OK:" .. totalExtraRecs
+    return MSG_OK .. ":" .. totalExtraRecs
 end
 
 
