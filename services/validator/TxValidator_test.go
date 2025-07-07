@@ -707,12 +707,23 @@ func TestZeroSatoshiOutputRequiresOpFalseOpReturn(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("zero-satoshi output with OP_RETURN (not OP_FALSE OP_RETURN) is rejected when genesis activation height is reached", func(t *testing.T) {
+	t.Run("zero-satoshi output with OP_RETURN (not OP_FALSE OP_RETURN) is rejected when genesis activation height is reached and require standard is true", func(t *testing.T) {
+		tSettings.ChainCfgParams.RequireStandard = true
+
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 
 		err := txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight, &Options{})
 		if assert.Error(t, err) {
 			assert.Contains(t, err.Error(), "zero-satoshi outputs require 'OP_FALSE OP_RETURN' prefix")
 		}
+	})
+
+	t.Run("zero-satoshi output with OP_RETURN (not OP_FALSE OP_RETURN) is not rejected when genesis activation height is reached and require standard is false", func(t *testing.T) {
+		tSettings.ChainCfgParams.RequireStandard = false
+
+		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+
+		err := txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight, &Options{})
+		assert.NoError(t, err)
 	})
 }
