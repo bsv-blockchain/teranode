@@ -215,6 +215,21 @@ func TestBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, block.Header.Hash().String(), newBlockModel.Header.Hash().String())
+
+	subtreeBytes, err := subtreeStore.Get(t.Context(), block.Subtrees[0][:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+
+	subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeBytes)
+	require.NoError(t, err)
+	assert.Len(t, subtree.Nodes, 4) // 1 coinbase + 3 transactions
+
+	// check all the transactions in the block
+	subtreeDataBytes, err := subtreeStore.Get(t.Context(), block.Subtrees[0][:], fileformat.FileTypeSubtreeData)
+	require.NoError(t, err)
+
+	subtreeData, err := subtreepkg.NewSubtreeDataFromBytes(subtree, subtreeDataBytes)
+	require.NoError(t, err)
+	assert.Len(t, subtreeData.Txs, 4)
 }
 
 func TestFileStorer(t *testing.T) {

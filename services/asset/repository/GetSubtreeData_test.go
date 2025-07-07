@@ -7,10 +7,9 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockpersister"
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-subtree"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,13 +17,13 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 	tracing.SetupMockTracer()
 
 	t.Run("get subtree from block store", func(t *testing.T) {
-		ctx, subtree, metaDatas := setupSubtreeReaderTest(t)
+		ctx, subtree, txs := setupSubtreeReaderTest(t)
 
 		// create the block-store .subtree file
 		storer, err := filestorer.NewFileStorer(t.Context(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], fileformat.FileTypeSubtreeData)
 		require.NoError(t, err)
 
-		err = blockpersister.WriteTxs(t.Context(), ctx.logger, storer, metaDatas, nil)
+		err = blockpersister.WriteTxs(t.Context(), ctx.logger, storer, txs, nil)
 		require.NoError(t, err)
 
 		require.NoError(t, storer.Close(t.Context()))
@@ -60,13 +59,13 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 	})
 }
 
-func setupSubtreeReaderTest(t *testing.T) (*testContext, *subtree.Subtree, []*meta.Data) {
+func setupSubtreeReaderTest(t *testing.T) (*testContext, *subtreepkg.Subtree, []*bt.Tx) {
 	ctx := setup(t)
 	ctx.logger.Debugf("test")
 
 	_, subtree := newBlock(ctx, t, params)
 
-	metaDatas := make([]*meta.Data, 0, len(params.txs))
+	txs := make([]*bt.Tx, 0, len(params.txs))
 
 	// Create the txs in the utxo store
 	for i, tx := range params.txs {
@@ -75,12 +74,10 @@ func setupSubtreeReaderTest(t *testing.T) (*testContext, *subtree.Subtree, []*me
 			require.NoError(t, err)
 		}
 
-		metaDatas = append(metaDatas, &meta.Data{
-			Tx: tx,
-		})
+		txs = append(txs, tx)
 	}
 
-	return ctx, subtree, metaDatas
+	return ctx, subtree, txs
 }
 
 func checkSubtreeTransactions(t *testing.T, r *io.PipeReader, includeCoinbase bool) {

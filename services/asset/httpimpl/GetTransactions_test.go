@@ -8,8 +8,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-p2p/chaincfg/chainhash"
 	"github.com/libsv/go-p2p/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -49,10 +49,13 @@ func TestGetTransactions(t *testing.T) {
 
 		subtreeHash := chainhash.HashH([]byte("subtreeHash"))
 
+		emptyTxMap := make(map[chainhash.Hash]*bt.Tx)
+
 		// set mock response
 		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil).Once()
 		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX2RawBytes, nil).Once()
 		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(true, nil).Once()
+		mockRepo.On("GetSubtreeTransactions", mock.Anything, mock.Anything).Return(emptyTxMap, nil)
 
 		transactionHashes := append(test.TX1Hash.CloneBytes(), test.TX2Hash.CloneBytes()...)
 

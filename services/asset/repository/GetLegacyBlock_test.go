@@ -15,14 +15,13 @@ import (
 	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/settings"
 	memory_blob "github.com/bitcoin-sv/teranode/stores/blob/memory"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/go-subtree"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -55,18 +54,11 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	blockchainClientMock := ctx.repo.BlockchainClient.(*blockchain.Mock)
 	blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
 
-	metaDatas := make([]*meta.Data, 0, len(params.txs))
-	for _, tx := range params.txs {
-		metaDatas = append(metaDatas, &meta.Data{
-			Tx: tx,
-		})
-	}
-
 	// create the block-store .subtreeData file
 	storer, err := filestorer.NewFileStorer(context.Background(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], fileformat.FileTypeSubtreeData)
 	require.NoError(t, err)
 
-	err = blockpersister.WriteTxs(context.Background(), ctx.logger, storer, metaDatas, nil)
+	err = blockpersister.WriteTxs(context.Background(), ctx.logger, storer, params.txs, nil)
 	require.NoError(t, err)
 
 	_ = storer.Close(context.Background())
@@ -291,12 +283,12 @@ func setup(t *testing.T) *testContext {
 	}
 }
 
-func newBlock(_ *testContext, t *testing.T, b blockInfo) (*model.Block, *subtree.Subtree) {
+func newBlock(_ *testContext, t *testing.T, b blockInfo) (*model.Block, *subtreepkg.Subtree) {
 	if len(b.txs) == 0 {
 		panic("no transactions provided")
 	}
 
-	subtree, err := subtree.NewTreeByLeafCount(2)
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 
 	for i, tx := range b.txs {

@@ -9,9 +9,10 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"golang.org/x/sync/errgroup"
@@ -49,8 +50,8 @@ import (
 // The function handles special cases like coinbase transactions, which are placeholders not
 // present in the store. It also accounts for context cancellation to support clean shutdowns.
 // Concurrent access to shared state is protected using atomic operations to ensure thread safety.
-func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data, batched bool) (int, error) {
-	if len(txHashes) != len(txMetaSlice) {
+func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txs []*bt.Tx, batched bool) (int, error) {
+	if len(txHashes) != len(txs) {
 		return 0, errors.NewInvalidArgumentError("txHashes and txMetaSlice must be the same length")
 	}
 
@@ -85,7 +86,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 							continue
 						}
 
-						if txMetaSlice[i+j] == nil {
+						if txs[i+j] == nil {
 							missingTxHashesCompacted = append(missingTxHashesCompacted, &utxo.UnresolvedMetaData{
 								Hash: txHashes[i+j],
 								Idx:  i + j,
@@ -94,7 +95,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					}
 				}
 
-				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, "tx"); err != nil {
+				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, fields.Tx); err != nil {
 					return err
 				}
 
@@ -109,7 +110,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 							continue
 						}
 
-						txMetaSlice[data.Idx] = data.Data
+						txs[data.Idx] = data.Data.Tx
 					}
 
 					return nil
@@ -141,14 +142,14 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 							continue
 						}
 
-						if txMetaSlice[i+j] == nil {
-							txMeta, err := u.utxoStore.GetMeta(gCtx, &txHash)
+						if txs[i+j] == nil {
+							txMeta, err := u.utxoStore.Get(gCtx, &txHash, fields.Tx)
 							if err != nil {
 								return err
 							}
 
 							if txMeta != nil {
-								txMetaSlice[i+j] = txMeta
+								txs[i+j] = txMeta.Tx
 								continue
 							}
 						}

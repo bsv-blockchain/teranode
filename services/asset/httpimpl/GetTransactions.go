@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/sync/errgroup"
@@ -78,10 +79,12 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 	return func(c echo.Context) error {
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetTransactions_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[Asset_http] GetTransactions for %s", c.Request().RemoteAddr),
+			tracing.WithLogMessage(h.logger, "[Asset_http:GetTransactions] for %s", c.Request().RemoteAddr),
 		)
 
 		defer deferFn()
+
+		transactionFromSubtreeData := make(map[chainhash.Hash]*bt.Tx)
 
 		// this if statement is temporary and will be removed when the subtree data is implemented
 		if len(c.Param("hash")) > 0 {
@@ -98,16 +101,20 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 			subtreeExists, err := h.repository.GetSubtreeExists(ctx, subtreeHash)
 			if err != nil {
 				if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such file") {
-					return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("subtree not found", err).Error())
+					return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("subtree %s not found", subtreeHash.String(), err).Error())
 				} else {
-					return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error getting subtree", err).Error())
+					return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error getting subtree", subtreeHash.String(), err).Error())
 				}
 			}
 
-			// TODO read the data from the subtreeData file and return the txs from there
-			// https://github.com/bitcoin-sv/teranode/issues/2806
 			if !subtreeExists {
 				return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("subtree %s not found", subtreeHash.String()).Error())
+			}
+
+			// read the data from the subtreeData file and create a map of transaction hashes to transactions
+			transactionFromSubtreeData, err = h.repository.GetSubtreeTransactions(ctx, subtreeHash)
+			if err != nil {
+				h.logger.Errorf("[Asset_http:GetTransactions][%s] error getting transactions from subtree data: %s", subtreeHash.String(), err.Error())
 			}
 		}
 
@@ -139,34 +146,41 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 				}
 			}
 
-			g.Go(func() error {
-				b, err := h.repository.GetTransaction(gCtx, &hash)
-				if err != nil {
-					if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such file") {
-						return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("transaction not found", err).Error())
-					} else {
-						return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error getting transaction", err).Error())
-					}
-				}
-
+			if tx, ok := transactionFromSubtreeData[hash]; ok {
+				// If the transaction is found in the subtree data, serialize it and append to response
 				responseBytesMu.Lock()
-				responseBytes = append(responseBytes, b...)
+				responseBytes = append(responseBytes, tx.ExtendedBytes()...)
 				responseBytesMu.Unlock()
+			} else {
+				g.Go(func() error {
+					b, err := h.repository.GetTransaction(gCtx, &hash)
+					if err != nil {
+						if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such file") {
+							return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("transaction not found", err).Error())
+						} else {
+							return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error getting transaction", err).Error())
+						}
+					}
 
-				return nil
-			})
+					responseBytesMu.Lock()
+					responseBytes = append(responseBytes, b...)
+					responseBytesMu.Unlock()
+
+					return nil
+				})
+			}
 
 			nrTxAdded++
 		}
 
 		if err := g.Wait(); err != nil {
-			h.logger.Errorf("[GetTransactions] failed to get txs from repository: %s", err.Error())
+			h.logger.Errorf("failed to get txs from repository: %s", err.Error())
 			return err
 		}
 
 		prometheusAssetHTTPGetTransactions.WithLabelValues("OK", "200").Add(float64(nrTxAdded))
 
-		h.logger.Infof("[GetTransactions] sending %d txs to client (%d bytes)", nrTxAdded, len(responseBytes))
+		h.logger.Infof("[Asset_http:GetTransactions] sending %d txs to client (%d bytes)", nrTxAdded, len(responseBytes))
 
 		return c.Blob(200, echo.MIMEOctetStream, responseBytes)
 	}

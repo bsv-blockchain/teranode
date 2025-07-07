@@ -2,7 +2,6 @@ package repository_test
 
 import (
 	"context"
-	"crypto/rand"
 	"net/url"
 	"testing"
 
@@ -78,6 +77,22 @@ func TestTransaction(t *testing.T) {
 	assert.Equal(t, tx.TxID(), tx2.TxID())
 }
 
+func TestGetSubtreeTransactions(t *testing.T) {
+	txns, subtreeHash, repo := setupSubtreeData(t)
+
+	// Get the transactions from the repository
+	txMap, err := repo.GetSubtreeTransactions(context.Background(), subtreeHash)
+	require.NoError(t, err)
+	assert.Len(t, txMap, 2)
+
+	for _, txHash := range txns {
+		tx, ok := txMap[txHash]
+		require.True(t, ok, "transaction %s not found in subtree transactions", txHash.String())
+
+		assert.Equal(t, txHash, *tx.TxIDChainHash(), "transaction hash mismatch for %s", txHash.String())
+	}
+}
+
 func TestSubtree(t *testing.T) {
 	txns, key, repo := setupSubtreeData(t)
 
@@ -135,22 +150,31 @@ func TestSubtreeReader(t *testing.T) {
 func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *repository.Repository) {
 	itemsPerSubtree := 2
 
-	subtree, err := subtree.NewTreeByLeafCount(itemsPerSubtree)
+	st, err := subtree.NewTreeByLeafCount(itemsPerSubtree)
 	require.NoError(t, err)
+
+	subtreeData := subtree.NewSubtreeData(st)
 
 	txns := make([]chainhash.Hash, itemsPerSubtree)
 
-	for i := 0; i < itemsPerSubtree; i++ {
-		txid := make([]byte, 32)
-		n, err := rand.Read(txid)
-		require.NoError(t, err)
-		require.Equal(t, 32, n)
-
-		txns[i] = chainhash.HashH(txid)
+	tx := &bt.Tx{
+		Inputs:   []*bt.Input{},
+		Outputs:  []*bt.Output{},
+		Version:  0,
+		LockTime: 0,
 	}
 
-	for _, hash := range txns {
-		err := subtree.AddNode(hash, 1, 0)
+	for i := 0; i < itemsPerSubtree; i++ {
+		txx := tx.Clone()
+		txx.Version = uint32(i)  // nolint:gosec
+		txx.LockTime = uint32(i) // nolint:gosec
+
+		txns[i] = *txx.TxIDChainHash()
+
+		err := st.AddNode(txns[i], 1, 0)
+		require.NoError(t, err)
+
+		err = subtreeData.AddTx(txx, i)
 		require.NoError(t, err)
 	}
 
@@ -175,12 +199,18 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	require.NoError(t, err)
 
 	// Put the subtree into the subtree store
-	key := subtree.RootHash()
+	key := st.RootHash()
 
-	value, err := subtree.Serialize()
+	value, err := st.Serialize()
 	require.NoError(t, err)
 
 	err = subtreeStore.Set(context.Background(), key.CloneBytes(), fileformat.FileTypeSubtree, value)
+	require.NoError(t, err)
+
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+
+	err = subtreeStore.Set(context.Background(), key.CloneBytes(), fileformat.FileTypeSubtreeData, subtreeDataBytes)
 	require.NoError(t, err)
 
 	// Create a new repository

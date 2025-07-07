@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/go-subtree"
@@ -46,6 +47,8 @@ type Interface interface {
 	GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (*io.PipeReader, error)
 	GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error)
+	GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.SubtreeData, error)
+	GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error)
 	GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
 	GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, int, error)
 	GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error)
@@ -518,6 +521,77 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 	}
 
 	return subtree, nil
+}
+
+// GetSubtreeData retrieves and deserializes a complete subtree data structure.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the subtree
+//
+// Returns:
+//   - *util.SubtreeData: Deserialized subtree data structure
+//   - error: Any error encountered during retrieval
+func (repo *Repository) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.SubtreeData, error) {
+	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtreeData",
+		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtreeData: %s", hash.String()),
+	)
+
+	st, err := repo.GetSubtree(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	r, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeData)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			// try to get the subtree data from the block persister store
+			if r, err = repo.BlockPersisterStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeData); err != nil {
+				return nil, errors.NewServiceError("[GetSubtreeData][%s] error in GetSubtreeData Get method", hash.String(), err)
+			}
+		} else {
+			return nil, errors.NewServiceError("[GetSubtreeData][%s] error in GetSubtreeData Get method", hash.String(), err)
+		}
+	}
+
+	defer func() {
+		if err = r.Close(); err != nil {
+			repo.logger.Errorf("[GetSubtreeData][%s] failed to close subtree data reader: %s", hash.String(), err.Error())
+		}
+	}()
+
+	// read all transactions from the subtree data file
+	subtreeData, err := subtree.NewSubtreeDataFromReader(st, r)
+	if err != nil {
+		return nil, errors.NewProcessingError("[GetSubtreeData][%s] error in NewSubtreeDataFromReader", hash.String(), err)
+	}
+
+	return subtreeData, nil
+}
+
+func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error) {
+	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtreeTransactions",
+		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtreeTransactions: %s", hash.String()),
+	)
+
+	subtreeData, err := repo.GetSubtreeData(ctx, hash)
+	if err != nil {
+		// always return an empty map if no transactions are found
+		return make(map[chainhash.Hash]*bt.Tx), err
+	}
+
+	if subtreeData == nil || len(subtreeData.Txs) == 0 {
+		// always return an empty map if no transactions are found
+		return make(map[chainhash.Hash]*bt.Tx), errors.ErrNotFound
+	}
+
+	transactionMap := make(map[chainhash.Hash]*bt.Tx, len(subtreeData.Txs))
+
+	for _, tx := range subtreeData.Txs {
+		transactionMap[*tx.TxIDChainHash()] = tx
+	}
+
+	return transactionMap, nil
 }
 
 // GetSubtreeExists checks whether a subtree exists in the subtree store.
