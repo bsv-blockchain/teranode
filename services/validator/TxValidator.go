@@ -294,8 +294,8 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 
 		// Check dust limit after genesis activation
 		if blockHeight >= tv.settings.ChainCfgParams.GenesisActivationHeight {
-			// Only enforce dust limit for spendable outputs
-			if output.Satoshis < DustLimit && !isUnspendableOutput(output.LockingScript) {
+			// Only enforce dust limit for spendable outputs when RequireStandard is true
+			if tv.settings.ChainCfgParams.RequireStandard && output.Satoshis < DustLimit && !isUnspendableOutput(output.LockingScript) {
 				return errors.NewTxInvalidError("zero-satoshi outputs require 'OP_FALSE OP_RETURN' prefix")
 			}
 		}
