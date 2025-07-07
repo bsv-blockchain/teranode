@@ -185,6 +185,7 @@ The Alert Service initializes the necessary components and services to start pro
 
 3. **Database Technologies:**
     - Supports both SQLite and PostgreSQL:
+
         - SQLite for development and lightweight deployments.
         - PostgreSQL for production environments.
     - GORM ORM is used for database operations, with a custom logger (`gorm_logger.go`).
@@ -306,6 +307,7 @@ The SQLite database will be stored in the `DataFolder` directory specified in th
 
 - **Parameters**: None
 - **Connection Pool Settings (hardcoded)**:
+
     - Max Idle Connections: 1
     - Max Open Connections: 1
 - **Table Prefix**: Uses the database name as prefix
@@ -318,6 +320,7 @@ sqlitememory:///database_name
 
 - **Parameters**: None
 - **Connection Pool Settings (hardcoded)**:
+
     - Max Idle Connections: 1
     - Max Open Connections: 1
 - **Table Prefix**: Uses the database name as prefix
@@ -329,8 +332,10 @@ postgres://username:password@host:port/database?param1=value1&param2=value2
 ```
 
 - **Parameters**:
+
     - `sslmode`: SSL mode for the connection (default: `disable`)
 - **Connection Pool Settings (hardcoded)**:
+
     - Max Idle Connections: 2
     - Max Open Connections: 5
     - Max Connection Idle Time: 20 seconds
@@ -345,6 +350,7 @@ mysql://username:password@host:port/database?param1=value1&param2=value2
 ```
 
 - **Parameters**:
+
     - `sslmode`: SSL mode for the connection (default: `disable`)
 - **Connection Pool Settings (hardcoded)**: Same as PostgreSQL
 - **Table Prefix**: "alert_system"

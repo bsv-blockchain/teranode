@@ -250,6 +250,7 @@ The Block Persister service configuration is organized into several categories t
     - Default Value: Not explicitly set in viewed code
     - Purpose: Defines where block data files are stored
     - Supported Formats:
+
         - S3: `s3://bucket-name/prefix`
         - Local filesystem: `file://./path/to/dir`
     - Impact: Determines the persistence mechanism and reliability characteristics
@@ -272,6 +273,7 @@ The Block Persister service configuration is organized into several categories t
     - Impact: Critical for avoiding reorgs by ensuring blocks are sufficiently confirmed
     - Example: If set to 100, only blocks that are at least 100 blocks deep are processed
     - Tuning Advice:
+
         - Lower values: More immediate processing but higher risk of reprocessing due to reorgs
         - Higher values: More conservative approach with minimal reorg risk
 
@@ -281,6 +283,7 @@ The Block Persister service configuration is organized into several categories t
     - Purpose: Sleep duration between polling attempts when no blocks are available to process
     - Impact: Controls polling frequency and system load during idle periods
     - Tuning Advice:
+
         - Shorter durations: More responsive but higher CPU usage
         - Longer durations: More resource-efficient but less responsive
 
@@ -292,6 +295,7 @@ The Block Persister service configuration is organized into several categories t
     - Purpose: Controls the number of concurrent goroutines for processing subtrees
     - Impact: Directly affects CPU utilization, memory usage, and throughput
     - Tuning Advice:
+
         - Optimal value typically depends on available CPU cores
         - For systems with 8+ cores, the default value is usually appropriate
         - For high-performance systems, consider increasing to match available cores
@@ -317,6 +321,7 @@ The Block Persister service configuration is organized into several categories t
     - Purpose: Controls whether UTXO deletions are skipped during processing
     - Impact: When enabled, improves performance but affects UTXO set completeness
     - Usage Scenarios:
+
         - Enable during initial sync or recovery to improve performance
         - Disable for normal operation to maintain complete UTXO tracking
 

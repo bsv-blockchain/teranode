@@ -225,7 +225,7 @@ Note: The Docker Compose method is recommended for testing in single node enviro
 
 ```bash
 cd $YOUR_WORKING_DIR
-git clone git@github.com:bitcoin-sv/teranode.git
+git clone git@github.com:bsv-blockchain/teranode.git
 cd teranode
 ```
 
@@ -246,14 +246,7 @@ This step is not mandatory, but useful if you want to create settings variants f
 2. For a list of settings, and their default values, please refer to the reference at the end of this document.
 
 
-**Step 4: Authenticate with AWS ECR (only required during the private beta phase)**
-
-```bash
-# authenticate with AWS ECR
-docker login ghcr.io
-```
-
-**Step 5: Pull Docker Images**
+**Step 4: Pull Docker Images**
 
 1. Go to either the testnet Docker compose folder:
 
@@ -274,7 +267,7 @@ cd $YOUR_WORKING_DIR/teranode/deploy/docker/mainnet
    ```
 
 
-**Step 6: Start the Teranode Stack**
+**Step 5: Start the Teranode Stack**
 
 1. When running on a box without a public IP, you should enable `legacy_config_Upnp` (in your settings file), so you don't get banned by the SV Nodes.
 
@@ -299,7 +292,7 @@ docker exec -it blockchain teranode-cli getfsmstate
 ```
 
 
-**Step 7: Verify Services**
+**Step 6: Verify Services**
 
 1. Check if all services are running correctly:
    ```
@@ -331,7 +324,7 @@ Example output:
 
 
 
-**Step 8: Access Monitoring Tools**
+**Step 7: Access Monitoring Tools**
 
 1. **Grafana**: Access the Grafana dashboard at `http://localhost:3005`
     - Default credentials are `admin/admin`
@@ -353,7 +346,7 @@ Example output:
 Note: You must set the setting `dashboard_enabled` as true in order to see the viewer.
 
 
-**Step 9: Interact with Teranode**
+**Step 8: Interact with Teranode**
 
 - The various Teranode services expose different ports for interaction:
 
@@ -366,7 +359,7 @@ Note: You must set the setting `dashboard_enabled` as true in order to see the v
 Notice that those ports might be mapped to random ports on your host machine. You can check the mapping by running `docker-compose ps`.
 
 
-**Step 10: Logging and Troubleshooting**
+**Step 9: Logging and Troubleshooting**
 
 1. View logs for all services:
    ```
@@ -380,7 +373,7 @@ Notice that those ports might be mapped to random ports on your host machine. Yo
    ```
 
 
-**Step 11: Docker Log Rotation**
+**Step 10: Docker Log Rotation**
 
 Teranode is very verbose and will output a lot of information, especially with logLevel=DEBUG. To avoid running out of disk space, you can specify logging options directly in your docker-compose.yml file for each service.
 
@@ -393,7 +386,7 @@ services:
         max-file: "3"
 ```
 
-**Step 12: Stopping the Stack**
+**Step 11: Stopping the Stack**
 
 1. To stop all services:
    ```

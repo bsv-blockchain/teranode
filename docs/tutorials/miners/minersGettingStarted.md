@@ -75,16 +75,15 @@ Your Teranode Docker Compose setup will include:
 
 ## First-Time Setup
 
-
 ### Step 1: Prepare Your Environment
 
 - Checkout the Teranode public repository:
+
 ```bash
 cd $YOUR_WORKING_DIR
-git clone git@github.com:bitcoin-sv/teranode.git
+git clone git@github.com:bsv-blockchain/teranode.git
 cd teranode
 ```
-
 
 ### Step 2: Initial Setup
 
@@ -94,15 +93,8 @@ cd teranode
 cd $YOUR_WORKING_DIR/teranode/deploy/docker/testnet
 ```
 
-- Authenticate with AWS ECR (only required during the private beta phase)
+- Pull required images:
 
-```bash
-# authenticate with AWS ECR
-docker login ghcr.io
-
-```
-
--  Pull required images:
 ```bash
 docker-compose pull
 ```
@@ -110,26 +102,31 @@ docker-compose pull
 ### Step 3: Start Teranode
 
 - Launch all services:
+
 ```bash
 docker-compose up -d
 ```
 
 Force the node to transition to Run mode:
-```
+
+```bash
 grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.Run
 ```
 
 or LegacySync mode:
-```
+
+```bash
 grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.LegacySync
 ```
 
 - Verify services are running:
+
 ```bash
 docker-compose ps
 ```
 
 - Check individual service logs:
+
 ```bash
 # Example commands
 docker-compose logs asset
@@ -147,6 +144,7 @@ docker-compose logs legacy
 ### Step 4: Verify Installation
 
 - Check service health:
+
 ```bash
 curl http://localhost:8090/health
 ```
@@ -174,20 +172,22 @@ curl http://localhost:8090/health
 
 ## Basic Operations
 
-
 ### Checking Node Status
 
 1. View all services status:
+
 ```bash
 docker-compose ps
 ```
 
 2. Check blockchain sync:
+
 ```bash
 curl http://localhost:8090/api/v1/blockstats
 ```
 
 3. Monitor specific service logs:
+
 ```bash
 docker-compose logs -f legacy
 docker-compose logs -f blockchain
@@ -197,6 +197,7 @@ docker-compose logs -f asset
 ### Working with Transactions
 
 1. Get transaction details:
+
 ```bash
 curl http://localhost:8090/api/v1/tx/<txid>
 ```
@@ -218,6 +219,7 @@ curl http://localhost:8090/api/v1/tx/<txid>
 ### Basic Maintenance
 
 1. View logs:
+
 ```bash
 # All services
 docker-compose logs
@@ -227,16 +229,19 @@ docker-compose logs blockchain
 ```
 
 2. Check disk usage:
+
 ```bash
 df -h
 ```
 
 3. Restart a specific service:
+
 ```bash
 docker-compose restart blockchain
 ```
 
 4. Restart all services:
+
 ```bash
 docker-compose down
 docker-compose up -d
@@ -245,16 +250,19 @@ docker-compose up -d
 ### Common Operations
 
 1. Check current block height:
+
 ```bash
 curl http://localhost:8090/api/v1/bestblockheader/json
 ```
 
 2. Get block information:
+
 ```bash
 curl http://localhost:8090/api/v1/block/<blockhash>
 ```
 
 3. Check UTXO status:
+
 ```bash
 curl http://localhost:8090/api/v1/utxo/<utxohash>
 ```
@@ -263,7 +271,6 @@ curl http://localhost:8090/api/v1/utxo/<utxohash>
 
 - Explore the How-to Guides for advanced tasks
 - Review the Reference documentation for detailed endpoint information
-
 
 #### Docker Compose Setup
 

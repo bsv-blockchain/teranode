@@ -252,19 +252,23 @@ During a reorganization, the `BlockAssembler` performs two key operations:
 The service automatically manages chain selection through:
 
 1. **Best Chain Detection**:
+
     - Continuously monitors for new best block headers
     - Compares incoming blocks against current chain tip
     - Automatically triggers reorganization when a better chain is detected
 
 2. **Chain Selection Process**:
+
     - Accepts the chain with the most accumulated proof of work
     - Performs a safety check on reorganization depth:
+
         - If the reorganization involves more than 5 blocks in either direction
         - And the current chain height is greater than 1000
         - The block assembler will reset rather than attempt the reorganization
     - Block validation and transaction verification are handled by other services, not the Block Assembly
 
 3. **Chain Switching Process**:
+
     - Identifies common ancestor between competing chains
     - Rolls back the current chain to a common point with the competing (and stronger) chain
     - Applies new blocks from the competing chain
@@ -275,6 +279,7 @@ The service automatically manages chain selection through:
 The following diagram illustrates how the Block Assembly service handles a chain reorganization:
 
 - `err = b.handleReorg(ctx, bestBlockchainBlockHeader)`:
+
     - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
     - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
     - **Getting Reorg Blocks**:

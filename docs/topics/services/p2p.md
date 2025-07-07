@@ -325,6 +325,7 @@ All notifications collected from the Block and Validator listeners are sent over
 
 
 - The server listens for various types of events in a concurrent process:
+
     - The server tracks all active client channels (`clientChannels`).
     - When a new client connects, it is added to the `clientChannels`.
     - If a client disconnects, it is removed from `clientChannels`.

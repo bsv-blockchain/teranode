@@ -134,9 +134,6 @@ export OPERATOR_VERSION=v0.5.0
 export TERANODE_VERSION=v0.9.16
 export ECR_REGISTRY=ghcr.io/bsv-blockchain/teranode
 
-# Login to ECR
-docker login $ECR_REGISTRY
-
 # Load Teranode Operator
 docker pull $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
 minikube image load $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
@@ -151,9 +148,7 @@ minikube image load $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
 The Teranode Operator manages the lifecycle of Teranode instances:
 
 ```bash
-# Login to Helm registry and install operator
-helm registry login ghcr.io
-
+# Install operator
 helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/teranode/teranode-operator \
     -n teranode-operator \
     -f deploy/kubernetes/teranode/teranode-operator.yaml

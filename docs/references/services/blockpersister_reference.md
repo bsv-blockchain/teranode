@@ -275,6 +275,7 @@ This function handles the final persistence of transaction data to storage and o
 
     1. **Write the number of transactions** as a 32-bit integer header
     2. **For each transaction** in the provided slice:
+
         - Write the raw transaction bytes to storage
         - If a UTXO diff is provided, process the transaction's UTXO changes
     3. **Report any errors** or validation issues encountered

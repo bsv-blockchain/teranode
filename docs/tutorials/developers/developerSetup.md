@@ -133,7 +133,7 @@ However, most Teranode workflows will need PyYAML as a library for scripts, so a
 Clone the project:
 
 ```bash
-git clone git@github.com:bitcoin-sv/teranode.git
+git clone git@github.com:bsv-blockchain/teranode.git
 ```
 
 **Install all dependencies**:

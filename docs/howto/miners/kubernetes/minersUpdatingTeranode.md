@@ -31,9 +31,6 @@ export ECR_REGISTRY=ghcr.io/bsv-blockchain/teranode
 ### 2. Update Images
 
 ```bash
-# Login to ECR
-docker login $ECR_REGISTRY
-
 # Pull new images
 docker pull $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
 docker pull $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
@@ -46,9 +43,6 @@ minikube image load $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
 ### 3. Update Operator
 
 ```bash
-# Login to Helm registry
-helm registry login ghcr.io
-
 # Update operator
 helm upgrade teranode-operator oci://ghcr.io/bsv-blockchain/teranode/teranode-operator \
     -n teranode-operator \

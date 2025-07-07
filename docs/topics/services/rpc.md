@@ -178,6 +178,7 @@ The CreateRawTransaction method constructs a transaction that spends a given set
     - If a `LockTime` is set and not zero, it adjusts the sequence number to allow for the lock time to be effective.
 
 4. **Process Outputs**:
+
     - Validates the amount for each output to ensure it's within the valid monetary range.
     - Validates each output address, ensuring it's a supported type and appropriate for the network.
     - Creates a payment script for each address and constructs the transaction output.
@@ -317,6 +318,7 @@ The `generatetoaddress` command mines blocks immediately to a specified address.
 4. **Block Generation Loop**:
 
     - For each requested block:
+
                 - Creates a new block template with the address script
         - Performs proof-of-work calculation
         - Processes and validates the new block
@@ -414,10 +416,13 @@ The `getblockbyheight` command returns information about a block at a specific h
 3. **Response Construction**:
 
     - For verbosity=0:
+
         - Returns hex-encoded serialized block data
     - For verbosity=1:
+
         - Returns JSON object with block header information and transaction IDs
     - For verbosity=2:
+
         - Returns JSON object with complete block information including full transaction data
 
 #### (Success) Response Fields
@@ -573,8 +578,10 @@ The `getblockheader` command returns information about a block's header given it
 3. **Response Construction**:
 
     - For verbose=false:
+
         - Returns hex-encoded serialized header data
     - For verbose=true:
+
         - Calculates difficulty from bits
         - Returns JSON object with detailed header information
 
@@ -874,8 +881,10 @@ The `getrawtransaction` command retrieves raw transaction data for a specific tr
 3. **Response Formatting**:
 
     - For non-verbose (false) response:
+
                 - Returns hex-encoded serialized transaction data
     - For verbose (true) response:
+
                 - Constructs detailed JSON object with transaction information
         - Includes metadata such as blockhash, confirmation count, and timestamp
         - Processes all inputs and outputs with script details
@@ -1204,6 +1213,7 @@ The `setban` command adds or removes an IP address or subnet from the banned lis
 #### Important Notes
 
 - For "add" command:
+
     - If bantime is 0, defaults to 24 hours
     - If absolute is true, bantime is treated as Unix timestamp
 - The IP/subnet format must be valid
