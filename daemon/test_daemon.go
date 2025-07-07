@@ -43,9 +43,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
@@ -258,11 +257,8 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	)
 	require.NoError(t, err)
 
-	var w *wif.WIF
-	w, err = wif.DecodeWIF(appSettings.BlockAssembly.MinerWalletPrivateKeys[0])
+	pk, err := bec.PrivateKeyFromWif(appSettings.BlockAssembly.MinerWalletPrivateKeys[0])
 	require.NoError(t, err)
-
-	privKey := w.PrivKey
 
 	subtreeStore, err := d.daemonStores.GetSubtreeStore(ctx, logger, appSettings)
 	require.NoError(t, err)
@@ -295,7 +291,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		composeDependencies:   composeDependencies,
 		ctxCancel:             cancel,
 		d:                     d,
-		privKey:               privKey,
+		privKey:               pk,
 		rpcURL:                appSettings.RPC.RPCListenerURL,
 	}
 }
@@ -648,7 +644,7 @@ func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, useInput 
 	amountPerOutput := (amount - fee) / numOutputs.Uint64()
 
 	for i := uint64(0); i < numOutputs.Uint64(); i++ {
-		err = tx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), amountPerOutput)
+		err = tx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().Compressed(), amountPerOutput)
 		require.NoError(t, err)
 	}
 
@@ -683,7 +679,7 @@ func (td *TestDaemon) CreateTransactionFromMultipleInputs(t *testing.T, parentTx
 	})
 	require.NoError(t, err)
 
-	err = tx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), amount)
+	err = tx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().Compressed(), amount)
 	require.NoError(t, err)
 
 	err = tx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: td.privKey})
@@ -1019,7 +1015,7 @@ func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int)
 			return rawTransactions, nil, errors.NewProcessingError("insufficient funds for next transaction", nil)
 		}
 
-		err = newTx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), outputAmount)
+		err = newTx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().Compressed(), outputAmount)
 		if err != nil {
 			return rawTransactions, nil, errors.NewProcessingError("error adding output to transaction", err)
 		}
@@ -1229,7 +1225,7 @@ func (td *TestDaemon) CreateParentTransactionWithNOutputs(t *testing.T, parentTx
 	// Create the specified number of outputs, all using the same key
 	for i := 0; i < count; i++ {
 		// Add output using TestDaemon's key
-		err = newTx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), satoshisPerOutput)
+		err = newTx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().Compressed(), satoshisPerOutput)
 		if err != nil {
 			return nil, errors.NewProcessingError("failed to add output", err)
 		}
@@ -1294,7 +1290,7 @@ func (td *TestDaemon) CreateAndSendTxsConcurrently(_ *testing.T, parentTx *bt.Tx
 
 			// Add two outputs to allow for further spending
 			// splitAmount := outputAmount / 2
-			if err := newTx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().SerialiseCompressed(), outputAmount); err != nil {
+			if err := newTx.AddP2PKHOutputFromPubKeyBytes(td.privKey.PubKey().Compressed(), outputAmount); err != nil {
 				errorChan <- errors.NewProcessingError("Error adding first output to transaction", err)
 			}
 

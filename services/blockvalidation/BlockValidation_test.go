@@ -51,10 +51,10 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	"github.com/bsv-blockchain/go-chaincfg"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/jarcoal/httpmock"
-	"github.com/libsv/go-bk/bec"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
@@ -1514,7 +1514,7 @@ func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
 
 func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore utxostore.Store, subtreeValidationClient subtreevalidation.Interface, blockchainClient blockchain.ClientI, txStore blob.Store, subtreeStore blob.Store) *model.Block {
 	// Create a private key and address for outputs
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	require.NoError(t, err)
@@ -1625,7 +1625,7 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a valid block, then add two txs that spend the same UTXO
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	// Coinbase
@@ -1748,7 +1748,7 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	// Coinbase
@@ -1860,7 +1860,7 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	// Coinbase
@@ -2177,7 +2177,7 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	// Coinbase
@@ -2445,7 +2445,7 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create coinbase and a normal transaction
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	coinbaseTx := bt.NewTx()
@@ -2587,7 +2587,7 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 	}
 
 	// Create a valid coinbase transaction
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	coinbaseTx := bt.NewTx()
@@ -2684,7 +2684,7 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		stats:                         gocore.NewStat("blockvalidation"),
 	}
 
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	// Coinbase
@@ -2859,7 +2859,7 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 	defer deferFunc()
 
 	// Create a dummy block
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	coinbaseTx := bt.NewTx()
 	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
@@ -2947,7 +2947,7 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.BlockValidation.OptimisticMining = true
 
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	coinbaseTx := bt.NewTx()
 	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
@@ -3036,7 +3036,7 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	// Coinbase
@@ -3162,7 +3162,7 @@ func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 
 	// Create a valid block and validate it so it is in the stores
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	coinbaseTx := bt.NewTx()
@@ -3274,7 +3274,7 @@ func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
 	mockBlockchain.On("SetBlockMinedSet", mock.Anything, mock.Anything).Return(nil)
 
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	coinbaseTx := bt.NewTx()
@@ -3389,7 +3389,7 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
 	// Duplicate Transaction Setup
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	coinbaseTx := bt.NewTx()

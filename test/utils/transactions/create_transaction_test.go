@@ -5,14 +5,14 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCreateCoinbase(t *testing.T) {
-	_, pubKey := bec.PrivKeyFromBytes(bec.S256(), []byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	_, pubKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
 
 	tx := Create(t,
 		WithCoinbaseData(100, "/Test miner/"),
@@ -27,7 +27,7 @@ func TestCreateCoinbase(t *testing.T) {
 }
 
 func TestCreateTransaction(t *testing.T) {
-	privKey, pubKey := bec.PrivKeyFromBytes(bec.S256(), []byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	privKey, pubKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
 
 	baseTx1 := Create(t, WithCoinbaseData(100, "/Test miner/"), WithP2PKHOutputs(1, 1e8, pubKey))
 	baseTx2 := Create(t, WithCoinbaseData(101, "/Test miner/"), WithP2PKHOutputs(1, 2e8, pubKey))
@@ -101,7 +101,7 @@ func TestCreateTransaction(t *testing.T) {
 	})
 
 	t.Run("WithCustomOutputs", func(t *testing.T) {
-		customPrivKey, err := bec.NewPrivateKey(bec.S256())
+		customPrivKey, err := bec.NewPrivateKey()
 		require.NoError(t, err)
 
 		customPubKey := customPrivKey.PubKey()

@@ -8,8 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,11 +36,10 @@ func TestUTXOValidation(t *testing.T) {
 
 	parenTx := block1.CoinbaseTx
 
-	w, err := wif.DecodeWIF(td.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
+	pk, err := bec.PrivateKeyFromWif(td.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
 	require.NoError(t, err)
 
-	privateKey := w.PrivKey
-	publicKey := privateKey.PubKey().SerialiseCompressed()
+	publicKey := pk.PubKey().Compressed()
 
 	utxo := &bt.UTXO{
 		TxIDHash:      parenTx.TxIDChainHash(),
@@ -58,7 +56,7 @@ func TestUTXOValidation(t *testing.T) {
 	err = tx.AddP2PKHOutputFromPubKeyBytes(publicKey, 10000)
 	require.NoError(t, err)
 
-	err = tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	err = tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: pk})
 	require.NoError(t, err)
 
 	_, err = td.DistributorClient.SendTransaction(ctx, tx)
@@ -79,7 +77,7 @@ func TestUTXOValidation(t *testing.T) {
 	err = anotherTx.AddP2PKHOutputFromPubKeyBytes(publicKey, 10000)
 	require.NoError(t, err)
 
-	err = anotherTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	err = anotherTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: pk})
 	require.NoError(t, err)
 
 	_, err = td.UtxoStore.Spend(ctx, tx)
@@ -115,7 +113,7 @@ func TestScriptValidation(t *testing.T) {
 	parenTx := block1.CoinbaseTx
 
 	// Create a valid key pair for testing
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	utxo := &bt.UTXO{
@@ -133,7 +131,7 @@ func TestScriptValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Use a different private key to create an invalid signature
-	wrongPrivateKey, _ := bec.NewPrivateKey(bec.S256())
+	wrongPrivateKey, _ := bec.NewPrivateKey()
 	err = invalidTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: wrongPrivateKey})
 	require.NoError(t, err)
 

@@ -16,7 +16,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -160,10 +160,10 @@ func TestAlertSystem(t *testing.T) {
 
 		newUtxoRecTx := utxo2.GetSpendingTx(tx, 0)
 
-		privKey, err := bec.NewPrivateKey(bec.S256())
+		privKey, err := bec.NewPrivateKey()
 		require.NoError(t, err)
 
-		newLockingScript, err := bscript.NewP2PKHFromPubKeyBytes(privKey.PubKey().SerialiseCompressed())
+		newLockingScript, err := bscript.NewP2PKHFromPubKeyBytes(privKey.PubKey().Compressed())
 		require.NoError(t, err)
 
 		newOutput := &bt.Output{

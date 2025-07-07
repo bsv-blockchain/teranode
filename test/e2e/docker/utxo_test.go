@@ -29,7 +29,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -101,10 +101,10 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	txDistributor := &node1.DistributorClient
 
 	// Generate private keys and addresses
-	privateKey0, err := bec.NewPrivateKey(bec.S256())
+	privateKey0, err := bec.NewPrivateKey()
 	require.NoError(t, err, "Failed to generate private key")
 
-	privateKey1, err := bec.NewPrivateKey(bec.S256())
+	privateKey1, err := bec.NewPrivateKey()
 	require.NoError(t, err, "Failed to generate private key")
 
 	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)
@@ -279,7 +279,7 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 	txDistributor := &node1.DistributorClient
 
 	// Generate private keys and addresses
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err, "Failed to generate private key")
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -366,7 +366,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 	txDistributor := &node1.DistributorClient
 
 	// Generate private key and address
-	privateKey0, err := bec.NewPrivateKey(bec.S256())
+	privateKey0, err := bec.NewPrivateKey()
 	require.NoError(t, err, "Failed to generate private key")
 
 	// Get coinbase transaction from block 1
@@ -387,7 +387,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 	err = newTx.FromUTXOs(utxo)
 	require.NoError(t, err, "Error adding UTXO to transaction")
 
-	err = newTx.AddP2PKHOutputFromPubKeyBytes(privateKey0.PubKey().SerialiseCompressed(), 10000)
+	err = newTx.AddP2PKHOutputFromPubKeyBytes(privateKey0.PubKey().Compressed(), 10000)
 	require.NoError(t, err, "Error adding output to transaction")
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
@@ -444,7 +444,7 @@ func (suite *UtxoTestSuite) TestConnectionPoolLimiting() {
 	coinbaseClient := framework.Nodes[0].CoinbaseClient
 
 	// Generate keys and address
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	require.NoError(t, err)

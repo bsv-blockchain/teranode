@@ -27,8 +27,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
+	primitives "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/docker/go-connections/nat"
-	"github.com/libsv/go-bk/wif"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 	"google.golang.org/grpc"
@@ -713,11 +713,10 @@ func makeHostAddressFromPort(port string) string {
 func (tc *TeranodeTestClient) CreateAndSendTx(t *testing.T, ctx context.Context, parentTx *bt.Tx) (*bt.Tx, error) {
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 
-	w, err := wif.DecodeWIF(tc.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
+	privateKey, err := primitives.PrivateKeyFromWif(tc.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
 	require.NoError(t, err)
 
-	privateKey := w.PrivKey
-	publicKey := privateKey.PubKey().SerialiseCompressed()
+	publicKey := privateKey.PubKey().Compressed()
 
 	utxo := &bt.UTXO{
 		TxIDHash:      parentTx.TxIDChainHash(),
@@ -749,11 +748,10 @@ func (tc *TeranodeTestClient) CreateAndSendTx(t *testing.T, ctx context.Context,
 func (tc *TeranodeTestClient) CreateAndSendTxs(t *testing.T, ctx context.Context, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error) {
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 
-	w, err := wif.DecodeWIF(tc.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
+	privateKey, err := primitives.PrivateKeyFromWif(tc.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
 	require.NoError(t, err)
 
-	privateKey := w.PrivKey
-	publicKey := privateKey.PubKey().SerialiseCompressed()
+	publicKey := privateKey.PubKey().Compressed()
 
 	transactions := make([]*bt.Tx, count)
 	currentParent := parentTx
@@ -801,11 +799,10 @@ func (tc *TeranodeTestClient) CreateAndSendTxs(t *testing.T, ctx context.Context
 func (tc *TeranodeTestClient) CreateAndSendTxsConcurrently(t *testing.T, ctx context.Context, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error) {
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 
-	w, err := wif.DecodeWIF(tc.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
+	privateKey, err := primitives.PrivateKeyFromWif(tc.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
 	require.NoError(t, err)
 
-	privateKey := w.PrivKey
-	publicKey := privateKey.PubKey().SerialiseCompressed()
+	publicKey := privateKey.PubKey().Compressed()
 
 	// Step 1: Create a splitting transaction with count outputs
 	splitTx := bt.NewTx()

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 )
 
 // CreateTestTransactionChainWithCount generates a sequence of valid Bitcoin
@@ -22,7 +22,7 @@ func CreateTestTransactionChainWithCount(t *testing.T, count uint32) []*bt.Tx {
 		t.Fatalf("count must be greater than 1")
 	}
 
-	privateKey, publicKey := bec.PrivKeyFromBytes(bec.S256(), []byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
 
 	blockHeight := uint32(100)
 

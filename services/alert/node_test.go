@@ -14,7 +14,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/libsv/go-bn/models"
 	"github.com/stretchr/testify/require"
 )
@@ -212,11 +212,11 @@ func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 		confiscationTransaction := bt.Tx{}
 
 		// Generate a random private key
-		privateKey, err := bec.NewPrivateKey(bec.S256())
+		privateKey, err := bec.NewPrivateKey()
 		require.NoError(t, err)
 
 		// create a p2pkh locking script
-		lockingScript, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().SerialiseCompressed())
+		lockingScript, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().Compressed())
 		require.NoError(t, err)
 
 		// create an input, that replicates the original output, except the locking script which is going to be replaced

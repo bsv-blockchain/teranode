@@ -100,7 +100,7 @@ The `PropagationBlaster` service is designed to benchmark and test the performan
 - **Bitcoin SV (BSV) Libraries**:
 
     - **`libsv/go-bt`**: A Go library for building and serializing Bitcoin SV transactions. It's utilized for creating the raw transactions that the service broadcasts.
-    - **`libsv/go-bk/wif`**: Used for handling Wallet Import Format (WIF) keys, enabling the service to sign transactions before broadcasting them to ensure they are valid on the network.
+    - **`libsv/go-sdk`**: Used for handling Wallet Import Format (WIF) keys, enabling the service to sign transactions before broadcasting them to ensure they are valid on the network.
 
 ## 5. Directory Structure and Main Files
 

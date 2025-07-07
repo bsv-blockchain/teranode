@@ -36,9 +36,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
 	"github.com/ordishs/go-utils"
 )
 
@@ -435,7 +434,7 @@ func CreateAndSendTx(ctx context.Context, node TeranodeTestClient) (chainhash.Ha
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 
 	nilHash := chainhash.Hash{}
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
@@ -508,7 +507,7 @@ loop:
 // CreateAndSendTxToSliceOfNodes creates a new transaction using the first node in the slice, requests funds from the coinbase client, and sends the transaction to all nodes in the slice.
 func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []TeranodeTestClient) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
@@ -565,7 +564,7 @@ func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []TeranodeTestClie
 func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []TeranodeTestClient) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
@@ -739,7 +738,7 @@ func CreateAndSendTxsConcurrently(ctx context.Context, node TeranodeTestClient, 
 // UseCoinbaseUtxo uses a coinbase transaction's UTXO to create a new transaction, adds an output, fills inputs, and sends the transaction.
 func UseCoinbaseUtxo(ctx context.Context, node TeranodeTestClient, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 
 	output := coinbaseTx.Outputs[0]
 	utxoVal := &bt.UTXO{
@@ -777,7 +776,7 @@ func UseCoinbaseUtxo(ctx context.Context, node TeranodeTestClient, coinbaseTx *b
 // UseCoinbaseUtxoV2 uses a coinbase transaction's UTXO to create a new transaction, adds an output, fills inputs, and sends the transaction.
 func UseCoinbaseUtxoV2(ctx context.Context, node TeranodeTestClient, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 
 	output := coinbaseTx.Outputs[0]
 	utxoVal := &bt.UTXO{
@@ -828,14 +827,14 @@ func SendTXsWithDistributorV2(ctx context.Context, node TeranodeTestClient, logg
 		return false, errors.NewProcessingError("Coinbase private key is not set")
 	}
 
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	coinbasePrivateKey, err := bec.PrivateKeyFromWif(coinbasePrivKey)
 	if err != nil {
 		return false, errors.NewProcessingError("Failed to decode Coinbase private key", err)
 	}
 
-	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PubKey(), true)
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	if err != nil {
 		return false, errors.NewProcessingError("Failed to generate private key", err)
 	}
@@ -1125,7 +1124,7 @@ func GetUtxoBalance(ctx context.Context, node TeranodeTestClient) uint64 {
 
 // GeneratePrivateKeyAndAddress generates a new private key and address pair.
 func GeneratePrivateKeyAndAddress() (*bec.PrivateKey, *bscript.Address, error) {
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	if err != nil {
 		return nil, nil, err
 	}

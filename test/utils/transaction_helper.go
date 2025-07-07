@@ -8,9 +8,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
 	"github.com/ordishs/gocore"
 )
 
@@ -37,15 +36,15 @@ func GetTxBuildingKeysFromConfig(key string) (*TxBuildingKeys, error) {
 
 	coinbasePrivKey, _ := gocore.Config().Get(key)
 
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	coinbasePrivateKey, err := bec.PrivateKeyFromWif(coinbasePrivKey)
 	if err != nil {
 		return nil, errors.NewProcessingError("Failed to decode Coinbase private key: %v", err)
 	}
 
-	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PubKey(), true)
 	txBuildingKeys.coinbaseAddr = coinbaseAddr
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	if err != nil {
 		return nil, errors.NewProcessingError("Failed to generate private key: %v", err)
 	}

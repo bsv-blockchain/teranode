@@ -33,9 +33,9 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	"github.com/bsv-blockchain/go-chaincfg"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/jarcoal/httpmock"
-	"github.com/libsv/go-bk/bec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -330,7 +330,7 @@ func createSpendingTx(t *testing.T, prevTx *bt.Tx, vout uint32, amount uint64, a
 }
 
 func createTestTransactionChainWithCount(t *testing.T, count int) []*bt.Tx {
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)

@@ -57,8 +57,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -102,11 +101,11 @@ func (suite *TNB6TestSuite) TestUnspentTransactionOutputs() {
 	node1 := testEnv.Nodes[0]
 
 	// Create key pairs for testing
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	// Create another address for second output
-	privateKey2, _ := bec.NewPrivateKey(bec.S256())
+	privateKey2, _ := bec.NewPrivateKey()
 	address2, _ := bscript.NewAddressFromPublicKey(privateKey2.PubKey(), true)
 
 	// Get funds from coinbase
@@ -115,10 +114,8 @@ func (suite *TNB6TestSuite) TestUnspentTransactionOutputs() {
 
 	coinbaseTx := block1.CoinbaseTx
 
-	w, err := wif.DecodeWIF(node1.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
+	coinbaseTxPrivateKey, err := bec.PrivateKeyFromWif(node1.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
 	require.NoError(t, err)
-
-	coinbaseTxPrivateKey := w.PrivKey
 
 	// Create a transaction with multiple outputs
 	tx := bt.NewTx()

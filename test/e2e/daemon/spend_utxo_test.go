@@ -7,7 +7,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +34,7 @@ func TestShouldAllowSpendAllUtxos(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate private key and address for recipient
-	privateKey1, err := bec.NewPrivateKey(bec.S256())
+	privateKey1, err := bec.NewPrivateKey()
 	require.NoError(t, err, "Failed to generate private key")
 
 	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)

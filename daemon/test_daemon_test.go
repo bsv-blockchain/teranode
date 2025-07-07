@@ -6,7 +6,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,7 +14,7 @@ import (
 
 // TestCreateTransaction tests the CreateTransaction method of the TestDaemon struct.
 func TestCreateTransaction(t *testing.T) {
-	privKey, pubKey := bec.PrivKeyFromBytes(bec.S256(), []byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	privKey, pubKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
 
 	td := TestDaemon{privKey: privKey}
 
@@ -86,7 +86,7 @@ func TestCreateTransaction(t *testing.T) {
 	})
 
 	t.Run("WithCustomOutputs", func(t *testing.T) {
-		customPrivKey, err := bec.NewPrivateKey(bec.S256())
+		customPrivKey, err := bec.NewPrivateKey()
 		require.NoError(t, err)
 
 		customPubKey := customPrivKey.PubKey()

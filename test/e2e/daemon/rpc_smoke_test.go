@@ -19,9 +19,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -291,13 +290,13 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	coinbaseTx := block1.CoinbaseTx
 
 	coinbasePrivKey := tSettings.BlockAssembly.MinerWalletPrivateKeys[0]
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	coinbasePrivateKey, err := bec.PrivateKeyFromWif(coinbasePrivKey)
 	require.NoError(t, err)
 
-	_, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	_, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey.PubKey(), true)
 	require.NoError(t, err)
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -318,7 +317,7 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	err = newTx.AddP2PKHOutputFromAddress(address.AddressString, 10000)
 	require.NoError(t, err)
 
-	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey})
 	require.NoError(t, err)
 
 	// When a transaction's nLockTime is set (e.g., 500 for block height),
@@ -376,13 +375,13 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 	coinbaseTx := block1.CoinbaseTx
 
 	coinbasePrivKey := tSettings.BlockAssembly.MinerWalletPrivateKeys[0]
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	coinbasePrivateKey, err := bec.PrivateKeyFromWif(coinbasePrivKey)
 	require.NoError(t, err)
 
-	_, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	_, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey.PubKey(), true)
 	require.NoError(t, err)
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -415,7 +414,7 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey})
 	require.NoError(t, err)
 
 	t.Logf("Created transaction with size: %d bytes", len(newTx.ExtendedBytes()))
@@ -468,7 +467,7 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	output := coinbaseTx.Outputs[0]
 
 	coinbasePrivKey := td.Settings.BlockAssembly.MinerWalletPrivateKeys[0]
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	coinbasePrivateKey, err := bec.PrivateKeyFromWif(coinbasePrivKey)
 	require.NoError(t, err)
 
 	utxo := &bt.UTXO{
@@ -494,11 +493,11 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add a normal P2PKH output to spend the rest of the coins
-	addr, err := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	addr, err := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PubKey(), true)
 	require.NoError(t, err)
 	err = newTx.AddP2PKHOutputFromAddress(addr.AddressString, 10000) // Leave some for fees
 	require.NoError(t, err)
-	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey})
 	require.NoError(t, err)
 
 	t.Logf("Created transaction with OP_RETURN data size: %d bytes", len(oversizedData))
@@ -548,11 +547,11 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	// Get the coinbase transaction from block 1
 	coinbaseTx := block1.CoinbaseTx
 	coinbasePrivKey := tSettings.BlockAssembly.MinerWalletPrivateKeys[0]
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	coinbasePrivateKey, err := bec.PrivateKeyFromWif(coinbasePrivKey)
 	require.NoError(t, err)
 
 	// Create first recipient's key pair
-	privateKey1, err := bec.NewPrivateKey(bec.S256())
+	privateKey1, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)
 	require.NoError(t, err)
@@ -576,7 +575,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign TX1
-	err = tx1.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	err = tx1.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey})
 	require.NoError(t, err)
 
 	t.Logf("Sending TX1 with RPC: %s\n", tx1.TxIDChainHash())
@@ -601,7 +600,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create second recipient's key pair
-	privateKey2, err := bec.NewPrivateKey(bec.S256())
+	privateKey2, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 	address2, err := bscript.NewAddressFromPublicKey(privateKey2.PubKey(), true)
 	require.NoError(t, err)
@@ -1213,7 +1212,7 @@ func TestGetMiningCandidate(t *testing.T) {
 // generateRandomAddress generates a random Bitcoin address for the given network.
 // network: "mainnet", "testnet", or "regtest"
 func generateRandomAddress(network string) (string, error) {
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	if err != nil {
 		return "", err
 	}

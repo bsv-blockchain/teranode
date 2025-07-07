@@ -7,7 +7,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/libsv/go-bk/wif"
+	primitives "github.com/bsv-blockchain/go-sdk/primitives/ec"
 )
 
 // CreateCoinbaseTxCandidate creates a coinbase transaction for the mining candidate
@@ -22,12 +22,12 @@ func (mc *MiningCandidate) CreateCoinbaseTxCandidate(tSettings *settings.Setting
 	walletAddresses := make([]string, len(coinbasePrivKeys))
 
 	for i, coinbasePrivKey := range coinbasePrivKeys {
-		privateKey, err := wif.DecodeWIF(coinbasePrivKey)
+		privateKey, err := primitives.PrivateKeyFromWif(coinbasePrivKey)
 		if err != nil {
 			return nil, errors.NewProcessingError("can't decode coinbase priv key", err)
 		}
 
-		walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
+		walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 		if err != nil {
 			return nil, errors.NewProcessingError("can't create coinbase address", err)
 		}
@@ -47,13 +47,13 @@ func (mc *MiningCandidate) CreateCoinbaseTxCandidate(tSettings *settings.Setting
 		coinbaseTx.Outputs = []*bt.Output{}
 
 		// Add 1 coinbase output as a pay to public key
-		privateKey, err := wif.DecodeWIF(coinbasePrivKeys[0])
+		privateKey, err := primitives.PrivateKeyFromWif(coinbasePrivKeys[0])
 		if err != nil {
 			return nil, errors.NewProcessingError("can't decode coinbase priv key", err)
 		}
 
 		lockingScript := &bscript.Script{} // NewFromBytes(append(privateKey.SerialisePubKey(), bscript.OpCHECKSIG))
-		_ = lockingScript.AppendPushData(privateKey.SerialisePubKey())
+		_ = lockingScript.AppendPushData(privateKey.PubKey().Compressed())
 		_ = lockingScript.AppendOpcodes(bscript.OpCHECKSIG)
 
 		coinbaseTx.AddOutput(&bt.Output{

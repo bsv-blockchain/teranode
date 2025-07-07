@@ -7,12 +7,12 @@ import (
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCheckInputsWithDuplicateInputs(t *testing.T) {
-	privKey, err := bec.NewPrivateKey(bec.S256())
+	privKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 
 	parentTx := transactions.Create(t,

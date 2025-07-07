@@ -9,7 +9,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,11 +37,11 @@ func TestShouldAllowReassign(t *testing.T) {
 	// Generate private keys and addresses for Alice, Bob, and Charles
 	alicePrivateKey := td.GetPrivateKey(t)
 
-	bobPrivateKey, err := bec.NewPrivateKey(bec.S256())
+	bobPrivateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 	bob := bobPrivateKey.PubKey()
 
-	charlesPrivatekey, err := bec.NewPrivateKey(bec.S256())
+	charlesPrivatekey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 	charles := charlesPrivatekey.PubKey()
 
@@ -114,7 +114,7 @@ func TestShouldAllowReassign(t *testing.T) {
 	err = charlesSpendingTx.FromUTXOs(charlesUtxo)
 	require.NoError(t, err)
 
-	err = charlesSpendingTx.AddP2PKHOutputFromPubKeyBytes(bob.SerialiseCompressed(), 100)
+	err = charlesSpendingTx.AddP2PKHOutputFromPubKeyBytes(bob.Compressed(), 100)
 	require.NoError(t, err)
 
 	err = charlesSpendingTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: charlesPrivatekey})

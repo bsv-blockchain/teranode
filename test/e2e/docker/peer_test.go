@@ -17,8 +17,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -55,7 +54,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
 
 	coinbasePrivKey := tSettings.Coinbase.WalletPrivateKey
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	coinbasePrivateKey, err := bec.PrivateKeyFromWif(coinbasePrivKey)
 
 	if err != nil {
 		t.Errorf("Failed to decode Coinbase private key: %v", err)
@@ -63,7 +62,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 
 	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	if err != nil {
 		t.Errorf("Failed to generate private key: %v", err)
 	}

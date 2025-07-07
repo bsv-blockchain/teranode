@@ -28,7 +28,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -77,10 +77,10 @@ func (suite *UTXOVerificationTestSuite) TestVerifyUTXOSetConsistency() {
 	coinbaseClient := framework.Nodes[0].CoinbaseClient
 
 	// Create two addresses
-	privateKey0, err := bec.NewPrivateKey(bec.S256())
+	privateKey0, err := bec.NewPrivateKey()
 	require.NoError(t, err, "Failed to generate private key")
 
-	privateKey1, err := bec.NewPrivateKey(bec.S256())
+	privateKey1, err := bec.NewPrivateKey()
 	require.NoError(t, err, "Failed to generate private key")
 
 	address0, err := bscript.NewAddressFromPublicKey(privateKey0.PubKey(), true)

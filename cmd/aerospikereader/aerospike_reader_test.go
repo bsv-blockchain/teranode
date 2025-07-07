@@ -19,7 +19,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/usql"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -261,7 +261,7 @@ func TestAerospikeReader(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a new private key for the transaction
-	privKey, err := bec.NewPrivateKey(bec.S256())
+	privKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 
 	// Create a new transaction with the private key

@@ -17,8 +17,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -74,13 +73,13 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 	coinbaseTx := block1.CoinbaseTx
 
 	coinbasePrivKey := tSettings.BlockAssembly.MinerWalletPrivateKeys[0]
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	coinbasePrivateKey, err := bec.PrivateKeyFromWif(coinbasePrivKey)
 	require.NoError(t, err)
 
-	_, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	_, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey.PubKey(), true)
 	require.NoError(t, err)
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -101,7 +100,7 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 	err = newTx.AddP2PKHOutputFromAddress(address.AddressString, 10000)
 	require.NoError(t, err)
 
-	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey})
 	require.NoError(t, err)
 
 	t.Logf("Sending New Transaction with RPC: %s\n", newTx.TxIDChainHash())
@@ -292,13 +291,13 @@ func TestShouldNotProcessNonFinalTxWithPostgres(t *testing.T) {
 	coinbaseTx := block1.CoinbaseTx
 
 	coinbasePrivKey := tSettings.BlockAssembly.MinerWalletPrivateKeys[0]
-	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	coinbasePrivateKey, err := bec.PrivateKeyFromWif(coinbasePrivKey)
 	require.NoError(t, err)
 
-	_, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	_, err = bscript.NewAddressFromPublicKey(coinbasePrivateKey.PubKey(), true)
 	require.NoError(t, err)
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -319,7 +318,7 @@ func TestShouldNotProcessNonFinalTxWithPostgres(t *testing.T) {
 	err = newTx.AddP2PKHOutputFromAddress(address.AddressString, 10000)
 	require.NoError(t, err)
 
-	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey.PrivKey})
+	err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: coinbasePrivateKey})
 	require.NoError(t, err)
 
 	// When a transaction's nLockTime is set (e.g., 500 for block height),

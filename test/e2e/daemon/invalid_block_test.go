@@ -17,7 +17,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
-	"github.com/libsv/go-bk/wif"
+	primitives "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -103,7 +103,7 @@ func TestOrphanTx(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = parentTx.AddP2PKHOutputFromPubKeyBytes(node1.GetPrivateKey(t).PubKey().SerialiseCompressed(), 10000)
+	err = parentTx.AddP2PKHOutputFromPubKeyBytes(node1.GetPrivateKey(t).PubKey().Compressed(), 10000)
 	require.NoError(t, err)
 
 	require.NoError(t, parentTx.FillAllInputs(node1Ctx, &unlocker.Getter{PrivateKey: node1.GetPrivateKey(t)}))
@@ -307,13 +307,13 @@ func TestInvalidBlockWithContainer(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	privKey, err := wif.DecodeWIF(node1.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
+	privKey, err := primitives.PrivateKeyFromWif(node1.Settings.BlockAssembly.MinerWalletPrivateKeys[0])
 	require.NoError(t, err)
 
-	err = tx.AddP2PKHOutputFromPubKeyBytes(privKey.PrivKey.PubKey().SerialiseCompressed(), 10000)
+	err = tx.AddP2PKHOutputFromPubKeyBytes(privKey.PubKey().Compressed(), 10000)
 	require.NoError(t, err)
 
-	require.NoError(t, tx.FillAllInputs(t.Context(), &unlocker.Getter{PrivateKey: privKey.PrivKey}))
+	require.NoError(t, tx.FillAllInputs(t.Context(), &unlocker.Getter{PrivateKey: privKey}))
 
 	// Check that the transaction is signed
 	assert.Greater(t, len(tx.Inputs[0].UnlockingScript.Bytes()), 0)
@@ -347,10 +347,10 @@ func TestInvalidBlockWithContainer(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = childTx.AddP2PKHOutputFromPubKeyBytes(privKey.PrivKey.PubKey().SerialiseCompressed(), 1000)
+	err = childTx.AddP2PKHOutputFromPubKeyBytes(privKey.PubKey().Compressed(), 1000)
 	require.NoError(t, err)
 
-	require.NoError(t, childTx.FillAllInputs(t.Context(), &unlocker.Getter{PrivateKey: privKey.PrivKey}))
+	require.NoError(t, childTx.FillAllInputs(t.Context(), &unlocker.Getter{PrivateKey: privKey}))
 
 	// Check that the transaction is signed
 	assert.Greater(t, len(childTx.Inputs[0].UnlockingScript.Bytes()), 0)
@@ -396,7 +396,7 @@ func TestOrphanTxWithSingleNode(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = parentTx.AddP2PKHOutputFromPubKeyBytes(node1.GetPrivateKey(t).PubKey().SerialiseCompressed(), 10000)
+	err = parentTx.AddP2PKHOutputFromPubKeyBytes(node1.GetPrivateKey(t).PubKey().Compressed(), 10000)
 	require.NoError(t, err)
 
 	require.NoError(t, parentTx.FillAllInputs(node1.Ctx, &unlocker.Getter{PrivateKey: node1.GetPrivateKey(t)}))
@@ -514,7 +514,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = parentTx.AddP2PKHOutputFromPubKeyBytes(node1.GetPrivateKey(t).PubKey().SerialiseCompressed(), 10000)
+	err = parentTx.AddP2PKHOutputFromPubKeyBytes(node1.GetPrivateKey(t).PubKey().Compressed(), 10000)
 	require.NoError(t, err)
 
 	require.NoError(t, parentTx.FillAllInputs(node1.Ctx, &unlocker.Getter{PrivateKey: node1.GetPrivateKey(t)}))

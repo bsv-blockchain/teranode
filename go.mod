@@ -1,6 +1,8 @@
 module github.com/bitcoin-sv/teranode
 
-go 1.24.0
+go 1.24.3
+
+toolchain go1.24.4
 
 replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v0.9.0
 
@@ -17,7 +19,7 @@ require (
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0-beta9
 	github.com/bitcoin-sv/go-sdk v1.1.21
 	github.com/bitcoin-sv/testcontainers-aerospike-go v0.2.2
-	github.com/bsv-blockchain/go-bt/v2 v2.3.2
+	github.com/bsv-blockchain/go-bt/v2 v2.4.1
 	github.com/bsv-blockchain/go-chaincfg v1.1.1
 	github.com/bsv-blockchain/go-subtree v1.0.1
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
@@ -40,7 +42,7 @@ require (
 	github.com/libp2p/go-libp2p v0.41.1
 	github.com/libp2p/go-libp2p-kad-dht v0.33.1
 	github.com/libp2p/go-libp2p-pubsub v0.14.1
-	github.com/libsv/go-bk v0.1.6
+	github.com/libsv/go-bk v0.1.6 // indirect
 	github.com/looplab/fsm v1.0.2
 	github.com/mrz1836/go-datastore v0.9.5
 	github.com/mrz1836/go-logger v0.3.6
@@ -141,6 +143,7 @@ require (
 require (
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-safe-conversion v1.0.1
+	github.com/bsv-blockchain/go-sdk v1.2.4
 	github.com/bsv-blockchain/go-tx-map v1.0.2
 	github.com/bsv-blockchain/go-wire v1.0.4
 	github.com/felixge/fgprof v0.9.5

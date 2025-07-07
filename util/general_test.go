@@ -4,19 +4,19 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/libsv/go-bk/wif"
+	primitives "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestKeys(t *testing.T) {
 	wifKey := "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
 
-	w, err := wif.DecodeWIF(wifKey)
+	pk, err := primitives.PrivateKeyFromWif(wifKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	walletAddress, err := bscript.NewAddressFromPublicKey(w.PrivKey.PubKey(), false)
+	walletAddress, err := bscript.NewAddressFromPublicKey(pk.PubKey(), false)
 	if err != nil {
 		t.Fatal(err)
 	}

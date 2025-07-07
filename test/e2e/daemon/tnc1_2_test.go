@@ -12,7 +12,7 @@ import (
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +41,7 @@ func TestCheckPrevBlockHash(t *testing.T) {
 	// Generate priv and pub key
 	inputPrivKey := td.GetPrivateKey(t)
 
-	outPrivKey, err := bec.NewPrivateKey(bec.S256())
+	outPrivKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 
 	outPubKey := outPrivKey.PubKey()
@@ -112,7 +112,7 @@ func TestPrevBlockHashAfterReorg(t *testing.T) {
 
 	inputPrivKey1 := node1.GetPrivateKey(t)
 
-	outPrivKey1, err := bec.NewPrivateKey(bec.S256())
+	outPrivKey1, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 
 	outPubKey1 := outPrivKey1.PubKey()

@@ -20,9 +20,9 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/jarcoal/httpmock"
-	"github.com/libsv/go-bk/bec"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -152,7 +152,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *test
 // --- Helper functions for test setup and block/tx construction ---
 
 func createCoinbaseAndChildTx(t *testing.T) (*bt.Tx, *bt.Tx, *bec.PrivateKey, *bscript.Address) {
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	coinbaseTx := bt.NewTx()
@@ -286,7 +286,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	coinbaseTx := bt.NewTx()
 	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
@@ -406,7 +406,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings()
 
-	privateKey, _ := bec.NewPrivateKey(bec.S256())
+	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	coinbaseTx := bt.NewTx()
 	_ = coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)

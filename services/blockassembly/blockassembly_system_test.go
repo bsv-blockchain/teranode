@@ -24,8 +24,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	primitives "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
-	"github.com/libsv/go-bk/wif"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1058,12 +1058,12 @@ func CreateCoinbaseTxCandidate(m *model.MiningCandidate) (*bt.Tx, error) {
 	walletAddresses := make([]string, len(coinbasePrivKeys))
 
 	for i, coinbasePrivKey := range coinbasePrivKeys {
-		privateKey, err := wif.DecodeWIF(coinbasePrivKey)
+		privateKey, err := primitives.PrivateKeyFromWif(coinbasePrivKey)
 		if err != nil {
 			return nil, errors.NewProcessingError("can't decode coinbase priv key", err)
 		}
 
-		walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
+		walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 		if err != nil {
 			return nil, errors.NewProcessingError("can't create coinbase address", err)
 		}

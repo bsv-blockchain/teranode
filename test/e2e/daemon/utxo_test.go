@@ -13,7 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
-	"github.com/libsv/go-bk/bec"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +37,7 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
 	require.NoError(t, err)
 
-	privateKey1, err := bec.NewPrivateKey(bec.S256())
+	privateKey1, err := bec.NewPrivateKey()
 	require.NoError(t, err, "Failed to generate private key")
 
 	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)
@@ -242,7 +242,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	require.NoError(t, err, "Error adding UTXOs to transaction")
 
 	// Create output to a new address
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	require.NoError(t, err)
@@ -345,7 +345,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	require.NoError(t, err, "Error adding UTXOs to transaction")
 
 	// Create output to a new address
-	privateKey, err := bec.NewPrivateKey(bec.S256())
+	privateKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	require.NoError(t, err)

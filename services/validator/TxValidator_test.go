@@ -37,8 +37,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	"github.com/bsv-blockchain/go-chaincfg"
-	"github.com/libsv/go-bk/bec"
-	"github.com/libsv/go-bk/wif"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,6 +118,9 @@ func Test_Tx(t *testing.T) {
 	f1, err := os.Open("testdata/65cbf31895f6cab997e6c3688b2263808508adc69bcc9054eef5efac6f7895d3.bin")
 	require.NoError(t, err)
 	defer f1.Close()
+
+	// The extended version of the transaction is used to test the script verification
+	// in Go SDK, which contains additional metadata such as the block height.
 
 	f2, err := os.Open("testdata/65cbf31895f6cab997e6c3688b2263808508adc69bcc9054eef5efac6f7895d3.bin.extended")
 	require.NoError(t, err)
@@ -305,11 +307,11 @@ func TestMaxPubKeysPerMultiSigPolicy(t *testing.T) {
 }
 
 func TestMaxStackMemoryUsagePolicy(t *testing.T) {
-	// GetMaxStackMemoryUsage :
-	// 	if utxo before genesis : return max_uint64
-	// 	if utxo  after genesis :
-	// 	- If     SkipPolicyChecks/consensus : return MaxStackMemoryUsageConsensus
-	// 	- If not SkipPolicyChecks/consensus : return MaxStackMemoryUsage
+	// GetMaxStackMemoryUsage:
+	// 	if utxo before genesis: return max_uint64
+	// 	if utxo after genesis:
+	// 	- If SkipPolicyChecks/consensus: return MaxStackMemoryUsageConsensus
+	// 	- If not SkipPolicyChecks/consensus: return MaxStackMemoryUsage
 	t.Run("set MaxStackMemoryUsageConsensus lower must fail", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r == nil {
@@ -584,10 +586,10 @@ func Test_MinFeePolicy(t *testing.T) {
 			err = tx.AddOpReturnOutput(data)
 			require.NoError(t, err)
 
-			privateKey, err := wif.DecodeWIF("L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q")
+			privateKey, err := bec.PrivateKeyFromWif("L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q")
 			require.NoError(t, err)
 
-			err = tx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey.PrivKey})
+			err = tx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
 			require.NoError(t, err)
 
 			// Log transaction details for debugging
@@ -679,7 +681,7 @@ func TestSubErrorTxInvalid(t *testing.T) {
 func TestZeroSatoshiOutputRequiresOpFalseOpReturn(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings()
 
-	privKey, err := bec.NewPrivateKey(bec.S256())
+	privKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
 
 	pubKey := privKey.PubKey()
