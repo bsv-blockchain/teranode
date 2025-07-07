@@ -1305,11 +1305,18 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 
 		banScore, _, _ := s.banManager.GetBanScore(sp.ID.String())
 
+		// convert connection time to unix timestamp
+		var connTime int64
+		if sp.ConnTime != nil {
+			connTime = sp.ConnTime.Unix()
+		}
+
 		resp.Peers = append(resp.Peers, &p2p_api.Peer{
 			Id:            sp.ID.String(),
 			Addr:          sp.Addrs[0].String(),
 			CurrentHeight: sp.CurrentHeight,
 			Banscore:      int32(banScore), //nolint:gosec
+			ConnTime:      connTime,
 		})
 	}
 

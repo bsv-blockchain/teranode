@@ -1083,6 +1083,151 @@ func TestGetPeers(t *testing.T) {
 		// Verify calls to mocks
 		mockP2PNode.AssertCalled(t, "ConnectedPeers")
 	})
+
+	t.Run("populates_connection_time", func(t *testing.T) {
+		// Setup
+		logger := ulogger.New("test-server")
+		mockP2PNode := new(MockServerP2PNode)
+
+		// Generate a valid peer ID
+		privKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		require.NoError(t, err)
+		peerID, err := peer.IDFromPrivateKey(privKey)
+		require.NoError(t, err)
+
+		// Create a test connection time
+		connTime := time.Now().Add(-5 * time.Minute) // Connected 5 minutes ago
+
+		// Create a peer with test IP and connection time
+		validIP := "192.168.1.20"
+		addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/8333", validIP))
+		require.NoError(t, err)
+
+		peerInfo := PeerInfo{
+			ID:            peerID,
+			Addrs:         []ma.Multiaddr{addr},
+			CurrentHeight: 12345,
+			ConnTime:      &connTime,
+		}
+
+		// Setup mock to return our test peer
+		mockP2PNode.On("ConnectedPeers").Return([]PeerInfo{peerInfo})
+		mockP2PNode.On("HostID").Return(peer.ID("QmServerID"))
+
+		// Create a real ban manager for testing
+		banHandler := &testBanHandler{}
+		banManager := &PeerBanManager{
+			peerBanScores: make(map[string]*BanScore),
+			reasonPoints: map[BanReason]int{
+				ReasonInvalidSubtree:    10,
+				ReasonProtocolViolation: 20,
+				ReasonSpam:              50,
+			},
+			banThreshold:  100,
+			banDuration:   time.Hour,
+			decayInterval: time.Minute,
+			decayAmount:   1,
+			handler:       banHandler,
+		}
+
+		// Create server with mocks including ban manager
+		server := &Server{
+			P2PNode:    mockP2PNode,
+			logger:     logger,
+			settings:   &settings.Settings{},
+			banManager: banManager,
+		}
+
+		// Call GetPeers
+		resp, err := server.GetPeers(context.Background(), &emptypb.Empty{})
+
+		// Verify
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+
+		// We should get exactly 1 peer in the response
+		require.Len(t, resp.Peers, 1, "Should have one peer in the response")
+
+		// Verify the connection time was properly converted to Unix timestamp
+		peer := resp.Peers[0]
+		require.Equal(t, connTime.Unix(), peer.ConnTime, "Connection time should be converted to Unix timestamp")
+		require.Equal(t, peerInfo.CurrentHeight, peer.CurrentHeight, "Height should match")
+		require.Contains(t, peer.Addr, validIP, "Address should contain the IP")
+
+		// Verify calls to mocks
+		mockP2PNode.AssertCalled(t, "ConnectedPeers")
+	})
+
+	t.Run("handles_nil_connection_time", func(t *testing.T) {
+		// Setup
+		logger := ulogger.New("test-server")
+		mockP2PNode := new(MockServerP2PNode)
+
+		// Generate a valid peer ID
+		privKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		require.NoError(t, err)
+		peerID, err := peer.IDFromPrivateKey(privKey)
+		require.NoError(t, err)
+
+		// Create a peer with nil connection time
+		validIP := "192.168.1.20"
+		addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/8333", validIP))
+		require.NoError(t, err)
+
+		peerInfo := PeerInfo{
+			ID:            peerID,
+			Addrs:         []ma.Multiaddr{addr},
+			CurrentHeight: 12345,
+			ConnTime:      nil, // No connection time set
+		}
+
+		// Setup mock to return our test peer
+		mockP2PNode.On("ConnectedPeers").Return([]PeerInfo{peerInfo})
+		mockP2PNode.On("HostID").Return(peer.ID("QmServerID"))
+
+		// Create a real ban manager for testing
+		banHandler := &testBanHandler{}
+		banManager := &PeerBanManager{
+			peerBanScores: make(map[string]*BanScore),
+			reasonPoints: map[BanReason]int{
+				ReasonInvalidSubtree:    10,
+				ReasonProtocolViolation: 20,
+				ReasonSpam:              50,
+			},
+			banThreshold:  100,
+			banDuration:   time.Hour,
+			decayInterval: time.Minute,
+			decayAmount:   1,
+			handler:       banHandler,
+		}
+
+		// Create server with mocks including ban manager
+		server := &Server{
+			P2PNode:    mockP2PNode,
+			logger:     logger,
+			settings:   &settings.Settings{},
+			banManager: banManager,
+		}
+
+		// Call GetPeers
+		resp, err := server.GetPeers(context.Background(), &emptypb.Empty{})
+
+		// Verify
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+
+		// We should get exactly 1 peer in the response
+		require.Len(t, resp.Peers, 1, "Should have one peer in the response")
+
+		// Verify the connection time is 0 when nil
+		peer := resp.Peers[0]
+		require.Equal(t, int64(0), peer.ConnTime, "Connection time should be 0 when nil")
+		require.Equal(t, peerInfo.CurrentHeight, peer.CurrentHeight, "Height should match")
+		require.Contains(t, peer.Addr, validIP, "Address should contain the IP")
+
+		// Verify calls to mocks
+		mockP2PNode.AssertCalled(t, "ConnectedPeers")
+	})
 }
 
 func TestContains(t *testing.T) {

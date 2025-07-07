@@ -1150,6 +1150,139 @@ func connectWithRetries(ctx context.Context, t *testing.T, maxRetries int, node1
 	return err
 }
 
+func TestConnectionTimeTracking(t *testing.T) {
+	// logger := ulogger.NewVerboseTestLogger(t)
+	logger := ulogger.TestLogger{}
+	tSettings := settings.NewSettings()
+
+	// Disable bootstrap addresses to prevent automatic peer discovery
+	tSettings.P2P.BootstrapAddresses = []string{}
+	// Use a unique DHT protocol ID to prevent interference with other tests
+	tSettings.P2P.DHTProtocolID = fmt.Sprintf("/teranode/test/dht/%d", time.Now().UnixNano())
+
+	// Get 2 ports to use
+	port1 := findAvailablePort(t)
+	port2 := findAvailablePort(t)
+
+	// Create first node
+	config1 := P2PConfig{
+		ProcessName:        "test-conn-time-1",
+		ListenAddresses:    []string{"127.0.0.1"},
+		AdvertiseAddresses: []string{"127.0.0.1"},
+		Port:               port1,
+		PrivateKey:         generateTestPrivateKey(t),
+		UsePrivateDHT:      false,
+		Advertise:          false,
+		StaticPeers:        []string{},
+	}
+
+	// Create second node
+	config2 := P2PConfig{
+		ProcessName:        "test-conn-time-2",
+		ListenAddresses:    []string{"127.0.0.1"},
+		AdvertiseAddresses: []string{"127.0.0.1"},
+		Port:               port2,
+		PrivateKey:         generateTestPrivateKey(t),
+		UsePrivateDHT:      false,
+		Advertise:          false,
+		StaticPeers:        []string{},
+	}
+
+	// Create nodes
+	node1, err := createTestNode(t, &config1, logger, tSettings)
+	require.NoError(t, err)
+
+	node2, err := createTestNode(t, &config2, logger, tSettings)
+	require.NoError(t, err)
+
+	// Create separate parent context we can cancel explicitly for cleanup
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	defer func() {
+		// Cancel parent context to stop background goroutines
+		parentCancel()
+
+		// Then close the hosts
+		err := node1.host.Close()
+		if err != nil {
+			t.Logf("Error closing host1: %v", err)
+		}
+
+		err = node2.host.Close()
+		if err != nil {
+			t.Logf("Error closing host2: %v", err)
+		}
+
+		// Give time for goroutines to clean up
+		time.Sleep(100 * time.Millisecond)
+	}()
+
+	// Create a context with a timeout for the operations
+	ctx, cancel := context.WithTimeout(parentCtx, 10*time.Second)
+	defer cancel()
+
+	// Start both nodes
+	err = startNodeWithRetries(ctx, t, 3, node1)
+	require.NoError(t, err, "Failed to start node1")
+
+	err = startNodeWithRetries(ctx, t, 3, node2)
+	require.NoError(t, err, "Failed to start node2")
+
+	// Wait for nodes to initialize
+	time.Sleep(100 * time.Millisecond)
+
+	// Record the time before connection
+	beforeConnect := time.Now()
+
+	// Connect node1 to node2
+	peerInfo := peer.AddrInfo{
+		ID:    node2.host.ID(),
+		Addrs: node2.host.Addrs(),
+	}
+
+	err = connectWithRetries(ctx, t, 3, node1, peerInfo)
+	require.NoError(t, err, "Failed to connect to peer")
+
+	// Wait for connection to establish
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify connection was established
+	connectedness := node1.host.Network().Connectedness(node2.host.ID())
+	require.Equal(t, network.Connected, connectedness, "Node1 should be connected to node2")
+
+	// Get the connected peers from node1
+	peers := node1.ConnectedPeers()
+
+	// Find node2 in the list
+	var node2PeerInfo *PeerInfo
+	for _, peer := range peers {
+		if peer.ID == node2.host.ID() {
+			node2PeerInfo = &peer
+			break
+		}
+	}
+
+	require.NotNil(t, node2PeerInfo, "Node2 should be in the connected peers list")
+	require.NotNil(t, node2PeerInfo.ConnTime, "Connection time should be set")
+
+	// Verify the connection time is reasonable (after beforeConnect and not in the future)
+	afterConnect := time.Now()
+	assert.True(t, node2PeerInfo.ConnTime.After(beforeConnect) || node2PeerInfo.ConnTime.Equal(beforeConnect),
+		"Connection time should be after or equal to when we initiated the connection")
+	assert.True(t, node2PeerInfo.ConnTime.Before(afterConnect) || node2PeerInfo.ConnTime.Equal(afterConnect),
+		"Connection time should be before or equal to now")
+
+	// Test that disconnection clears the connection time
+	err = node1.DisconnectPeer(ctx, node2.host.ID())
+	require.NoError(t, err)
+
+	// Check immediately after disconnection - should be cleared by now
+	// since we added manual cleanup in DisconnectPeer
+	_, hasConnTime := node1.peerConnTimes.Load(node2.host.ID())
+
+	// Check that the connection time is cleared from the map
+	assert.False(t, hasConnTime, "Connection time should be cleared after disconnection")
+}
+
 func TestAtomicMetrics(t *testing.T) {
 	// logger := ulogger.NewVerboseTestLogger(t)
 	logger := ulogger.TestLogger{}

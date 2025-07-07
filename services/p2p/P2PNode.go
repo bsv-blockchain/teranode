@@ -110,6 +110,7 @@ type P2PNode struct {
 	lastRecv      int64    // Timestamp of last message received
 	lastSend      int64    // Timestamp of last message sent
 	peerHeights   sync.Map // Thread-safe map tracking peer blockchain heights
+	peerConnTimes sync.Map // Thread-safe map tracking peer connection times (peer.ID -> time.Time)
 }
 
 // Handler defines the function signature for topic message handlers.
@@ -271,6 +272,7 @@ func NewP2PNode(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 		handlerByTopic:    make(map[string]Handler),
 		startTime:         time.Now(),
 		peerHeights:       sync.Map{},
+		peerConnTimes:     sync.Map{},
 	}
 
 	// Set up connection notifications
@@ -279,13 +281,20 @@ func NewP2PNode(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 			peerID := conn.RemotePeer()
 			node.logger.Debugf("[P2PNode] Peer connected: %s", peerID.String())
 
+			// Store connection time
+			node.peerConnTimes.Store(peerID, time.Now())
+
 			// Notify any connection handlers about the new peer
 			if node.onPeerConnected != nil {
 				go node.onPeerConnected(context.Background(), peerID)
 			}
 		},
 		DisconnectedF: func(n network.Network, conn network.Conn) {
-			node.logger.Debugf("[P2PNode] Peer disconnected: %s", conn.RemotePeer().String())
+			peerID := conn.RemotePeer()
+			node.logger.Debugf("[P2PNode] Peer disconnected: %s", peerID.String())
+
+			// Remove connection time when peer disconnects
+			node.peerConnTimes.Delete(peerID)
 		},
 	})
 
@@ -1193,6 +1202,7 @@ type PeerInfo struct {
 	ID            peer.ID
 	Addrs         []multiaddr.Multiaddr
 	CurrentHeight int32
+	ConnTime      *time.Time // Connection time (nil if not connected)
 }
 
 func (s *P2PNode) ConnectedPeers() []PeerInfo {
@@ -1209,10 +1219,17 @@ func (s *P2PNode) ConnectedPeers() []PeerInfo {
 			height = h.(int32)
 		}
 
+		var connTime *time.Time
+		if ct, ok := s.peerConnTimes.Load(peerID); ok {
+			t := ct.(time.Time)
+			connTime = &t
+		}
+
 		peers = append(peers, PeerInfo{
 			ID:            peerID,
 			Addrs:         s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
 			CurrentHeight: height,
+			ConnTime:      connTime,
 		})
 	}
 
@@ -1235,10 +1252,17 @@ func (s *P2PNode) CurrentlyConnectedPeers() []PeerInfo {
 			height = h.(int32)
 		}
 
+		var connTime *time.Time
+		if ct, ok := s.peerConnTimes.Load(peerID); ok {
+			t := ct.(time.Time)
+			connTime = &t
+		}
+
 		peers = append(peers, PeerInfo{
 			ID:            peerID,
 			Addrs:         s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
 			CurrentHeight: height,
+			ConnTime:      connTime,
 		})
 	}
 
@@ -1246,6 +1270,18 @@ func (s *P2PNode) CurrentlyConnectedPeers() []PeerInfo {
 }
 
 func (s *P2PNode) DisconnectPeer(ctx context.Context, peerID peer.ID) error {
+	// Close all connections to this peer to ensure disconnection events are triggered
+	conns := s.host.Network().ConnsToPeer(peerID)
+	for _, conn := range conns {
+		err := conn.Close()
+		if err != nil {
+			s.logger.Debugf("[P2PNode] Error closing connection to %s: %v", peerID.String(), err)
+		}
+	}
+
+	// Clean up connection time immediately as a fallback
+	s.peerConnTimes.Delete(peerID)
+
 	return s.host.Network().ClosePeer(peerID)
 }
 
