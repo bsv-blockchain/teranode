@@ -940,6 +940,9 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 	// Use a buffered channel to prevent blocking on sends
 	ch := make(chan *blockchain_api.Notification, 100)
 
+	// Use sync.Once to ensure channel is closed exactly once
+	var closeOnce sync.Once
+
 	go func() {
 		<-ctx.Done()
 		c.logger.Infof("[Blockchain] server context done, closing subscription: %s", source)
@@ -951,18 +954,17 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 		}
 
 		// Close the channel when context is done
-		close(ch)
+		closeOnce.Do(func() {
+			close(ch)
+		})
 	}()
 
 	go func() {
 		defer func() {
 			// Ensure channel is closed if goroutine exits
-			select {
-			case <-ctx.Done():
-				// Context already cancelled, channel already closed
-			default:
+			closeOnce.Do(func() {
 				close(ch)
-			}
+			})
 		}()
 
 		for c.running.Load() {
