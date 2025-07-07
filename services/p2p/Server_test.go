@@ -696,11 +696,18 @@ func TestHandleSubtreeTopic(t *testing.T) {
 		mockKafkaProducer.On("Publish", mock.Anything).Return()
 
 		// Create server with mocks
+		// Create settings with blacklisted URLs
+		tSettings := createBaseTestSettings()
+		tSettings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{
+			"http://evil.com": {},
+		}
+
 		server := &Server{
 			P2PNode:                    mockP2PNode,
 			notificationCh:             make(chan *notificationMsg, 10),
 			subtreeKafkaProducerClient: mockKafkaProducer,
 			banList:                    mockBanList,
+			settings:                   tSettings,
 			logger:                     ulogger.New("test-server"),
 		}
 
@@ -1857,4 +1864,97 @@ func TestHandleMiningOnTopic(t *testing.T) {
 			t.Fatal("Expected notification message but none received")
 		}
 	})
+}
+
+func TestBlacklistBaseURL(t *testing.T) {
+	t.Run("isBlacklistedBaseURL_business_logic", func(t *testing.T) {
+		// Create settings with blacklisted URLs
+		tSettings := createBaseTestSettings()
+		tSettings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{
+			"http://evil.com":       {},
+			"https://malicious.com": {},
+		}
+
+		// Create server with minimal setup - only need settings and logger for business logic
+		server := &Server{
+			settings: tSettings,
+			logger:   ulogger.New("test-server"),
+		}
+
+		// Test blacklisted URLs - should return true
+		assert.True(t, server.isBlacklistedBaseURL("http://evil.com"))
+		assert.True(t, server.isBlacklistedBaseURL("https://malicious.com"))
+		assert.True(t, server.isBlacklistedBaseURL("http://evil.com:8080"))
+		assert.True(t, server.isBlacklistedBaseURL("https://malicious.com/api/v1"))
+		assert.True(t, server.isBlacklistedBaseURL("http://EVIL.COM"))
+		assert.True(t, server.isBlacklistedBaseURL("https://MALICIOUS.COM"))
+
+		// Test non-blacklisted URLs - should return false
+		assert.False(t, server.isBlacklistedBaseURL("http://good.com"))
+		assert.False(t, server.isBlacklistedBaseURL("https://safe.com"))
+		assert.False(t, server.isBlacklistedBaseURL("http://evil.example.com"))
+		assert.False(t, server.isBlacklistedBaseURL("http://subdomain.evil.com"))
+	})
+
+	t.Run("empty_blacklist_allows_all", func(t *testing.T) {
+		// Create settings with empty blacklist
+		tSettings := createBaseTestSettings()
+		// Don't add anything to blacklist
+
+		server := &Server{
+			settings: tSettings,
+			logger:   ulogger.New("test-server"),
+		}
+
+		// All URLs should be allowed when blacklist is empty
+		assert.False(t, server.isBlacklistedBaseURL("http://evil.com"))
+		assert.False(t, server.isBlacklistedBaseURL("https://malicious.com"))
+		assert.False(t, server.isBlacklistedBaseURL("http://anything.com"))
+	})
+
+	t.Run("case_insensitive_matching", func(t *testing.T) {
+		tSettings := createBaseTestSettings()
+		tSettings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{
+			"http://TeSt.CoM": {},
+		}
+
+		server := &Server{
+			settings: tSettings,
+			logger:   ulogger.New("test-server"),
+		}
+
+		// Should match regardless of case
+		assert.True(t, server.isBlacklistedBaseURL("http://test.com"))
+		assert.True(t, server.isBlacklistedBaseURL("HTTP://TEST.COM"))
+		assert.True(t, server.isBlacklistedBaseURL("http://TeSt.CoM"))
+	})
+
+	t.Run("port_and_path_variations", func(t *testing.T) {
+		tSettings := createBaseTestSettings()
+		tSettings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{
+			"http://bad.com": {},
+		}
+
+		server := &Server{
+			settings: tSettings,
+			logger:   ulogger.New("test-server"),
+		}
+
+		// Should block URLs with same domain but different ports/paths
+		assert.True(t, server.isBlacklistedBaseURL("http://bad.com:8080"))
+		assert.True(t, server.isBlacklistedBaseURL("http://bad.com/path/to/resource"))
+		assert.True(t, server.isBlacklistedBaseURL("http://bad.com:8080/api/v1"))
+
+		// But should NOT block different domains
+		assert.False(t, server.isBlacklistedBaseURL("http://good.com"))
+		assert.False(t, server.isBlacklistedBaseURL("http://bad.example.com"))
+	})
+}
+
+// createBaseTestSettings is a local replacement for test.CreateBaseTestSettings
+func createBaseTestSettings() *settings.Settings {
+	s := settings.NewSettings()
+	s.SubtreeValidation.BlacklistedBaseURLs = make(map[string]struct{})
+
+	return s
 }

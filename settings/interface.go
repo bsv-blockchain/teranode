@@ -393,6 +393,8 @@ type SubtreeValidationSettings struct {
 	SpendBatcherSize                          int
 	MissingTransactionsBatchSize              int
 	PercentageMissingGetFullData              float64
+	// BlacklistedBaseURLs is a set of base URLs that are not allowed for subtree validation
+	BlacklistedBaseURLs map[string]struct{}
 }
 
 type LegacySettings struct {

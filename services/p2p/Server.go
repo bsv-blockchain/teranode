@@ -1108,6 +1108,11 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 
 	s.logger.Debugf("[handleSubtreeTopic] got p2p subtree notification for %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
 
+	if s.isBlacklistedBaseURL(subtreeMessage.DataHubURL) {
+		s.logger.Errorf("[handleSubtreeTopic] Blocked subtree notification from blacklisted baseURL: %s", subtreeMessage.DataHubURL)
+		return
+	}
+
 	s.notificationCh <- &notificationMsg{
 		Timestamp: time.Now().UTC().Format(isoFormat),
 		Type:      "subtree",
@@ -1163,6 +1168,55 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 			Value: value,
 		})
 	}
+}
+
+// isBlacklistedBaseURL checks if the given baseURL matches any entry in the blacklist.
+func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
+	inputHost := s.extractHost(baseURL)
+	if inputHost == "" {
+		// Fall back to exact string matching for invalid URLs
+		for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
+			if baseURL == blocked {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	// Check each blacklisted URL
+	for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
+		blockedHost := s.extractHost(blocked)
+		if blockedHost == "" {
+			// Fall back to exact string matching for invalid blacklisted URLs
+			if baseURL == blocked {
+				return true
+			}
+
+			continue
+		}
+
+		if inputHost == blockedHost {
+			return true
+		}
+	}
+
+	return false
+}
+
+// extractHost extracts and normalizes the host component from a URL
+func (s *Server) extractHost(urlStr string) string {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return ""
+	}
+
+	host := parsedURL.Hostname()
+	if host == "" {
+		return ""
+	}
+
+	return strings.ToLower(host)
 }
 
 func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string) {

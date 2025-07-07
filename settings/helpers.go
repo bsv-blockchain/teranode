@@ -20,6 +20,17 @@ func getMultiString(key, sep string, defaultValues []string, alternativeContext 
 	return value
 }
 
+func getMultiStringMap(key, sep string, defaultValues []string, alternativeContext ...string) map[string]struct{} {
+	slice := getMultiString(key, sep, defaultValues, alternativeContext...)
+
+	m := make(map[string]struct{}, len(slice))
+	for _, value := range slice {
+		m[value] = struct{}{}
+	}
+
+	return m
+}
+
 func getInt(key string, defaultValue int, alternativeContext ...string) int {
 	value, _ := gocore.Config(alternativeContext...).GetInt(key, defaultValue)
 

@@ -31,6 +31,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 	doubleSpendWindowMillis := getInt("double_spend_window_millis", 0, alternativeContext...)
 	doubleSpendWindow := time.Duration(doubleSpendWindowMillis) * time.Millisecond
 
+	blacklistMap := getMultiStringMap("subtreevalidation_blacklisted_baseurls", "|", []string{}, alternativeContext...)
+
 	return &Settings{
 		Commit:                     gocore.GetCommit(),
 		Version:                    gocore.GetVersion(),
@@ -395,6 +397,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SpendBatcherSize:                          getInt("subtreevalidation_spendBatcherSize", 1024, alternativeContext...),
 			MissingTransactionsBatchSize:              getInt("subtreevalidation_missingTransactionsBatchSize", 16_384, alternativeContext...),
 			PercentageMissingGetFullData:              getFloat64("subtreevalidation_percentageMissingGetFullData", 20, alternativeContext...),
+			BlacklistedBaseURLs:                       blacklistMap,
 		},
 		Legacy: LegacySettings{
 			WorkingDir:                       getString("legacy_workingDir", "../../data", alternativeContext...),
