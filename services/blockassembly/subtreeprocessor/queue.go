@@ -2,8 +2,10 @@
 package subtreeprocessor
 
 import (
+	"sync"
 	"sync/atomic"
 
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/kpango/fastime"
 )
 
@@ -27,6 +29,12 @@ type LockFreeQueue struct {
 	queueLength atomic.Int64               // Tracks the current length of the queue
 }
 
+var txIDAndFeePool = sync.Pool{
+	New: func() any {
+		return &TxIDAndFee{}
+	},
+}
+
 // NewLockFreeQueue creates and initializes a new LockFreeQueue instance.
 //
 // Returns:
@@ -43,6 +51,8 @@ func NewLockFreeQueue() *LockFreeQueue {
 //
 // Returns:
 //   - int64: The current queue length
+//
+//go:inline
 func (q *LockFreeQueue) length() int64 {
 	return q.queueLength.Load()
 }
@@ -52,8 +62,13 @@ func (q *LockFreeQueue) length() int64 {
 //
 // Parameters:
 //   - v: The transaction to add to the queue
-func (q *LockFreeQueue) enqueue(v *TxIDAndFee) {
+func (q *LockFreeQueue) enqueue(node subtree.SubtreeNode, txInpoints subtree.TxInpoints) {
+	v := txIDAndFeePool.Get().(*TxIDAndFee)
+
+	v.node = node
+	v.txInpoints = txInpoints
 	v.time = fastime.Now().UnixMilli()
+	v.next.Store(nil)
 
 	prev := q.tail.Swap(v)
 	if prev == nil {
@@ -75,27 +90,34 @@ func (q *LockFreeQueue) enqueue(v *TxIDAndFee) {
 //
 // Returns:
 //   - *TxIDAndFee: The next transaction in the queue, or nil if empty
-func (q *LockFreeQueue) dequeue(validFromMillis int64) *TxIDAndFee {
+func (q *LockFreeQueue) dequeue(validFromMillis int64) (subtree.SubtreeNode, subtree.TxInpoints, int64, bool) {
 	next := q.head.next.Load()
 
 	if next == nil {
-		return nil
+		return subtree.SubtreeNode{}, subtree.TxInpoints{}, 0, false
 	}
 
 	if validFromMillis > 0 && next.time >= validFromMillis {
-		return nil
+		return subtree.SubtreeNode{}, subtree.TxInpoints{}, 0, false
 	}
 
+	oldItem := q.head
 	q.head = next
+
+	// return the dequeued to the pool for reuse
+	txIDAndFeePool.Put(oldItem)
+
 	q.queueLength.Add(-1)
 
-	return next
+	return next.node, next.txInpoints, next.time, true
 }
 
 // IsEmpty checks if the queue contains any items.
 //
 // Returns:
 //   - bool: true if the queue is empty, false otherwise
+//
+//go:inline
 func (q *LockFreeQueue) IsEmpty() bool {
 	return q.head.next.Load() == nil
 }

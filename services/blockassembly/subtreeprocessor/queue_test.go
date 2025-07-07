@@ -22,12 +22,14 @@ func Test_queue(t *testing.T) {
 	items := 0
 
 	for {
-		item := q.dequeue(0)
-		if item == nil {
+		node, txInpoints, time64, found := q.dequeue(0)
+		if !found {
 			break
 		}
 
-		assert.Equal(t, uint64(items), item.node.Fee)
+		assert.Equal(t, uint64(items), node.Fee) // nolint:gosec
+		assert.Equal(t, subtree.TxInpoints{}, txInpoints)
+		assert.Greater(t, time64, int64(0))
 
 		items++
 	}
@@ -41,12 +43,14 @@ func Test_queue(t *testing.T) {
 	items = 0
 
 	for {
-		item := q.dequeue(0)
-		if item == nil {
+		node, txInpoints, time64, found := q.dequeue(0)
+		if !found {
 			break
 		}
 
-		assert.Equal(t, uint64(items), item.node.Fee)
+		assert.Equal(t, uint64(items), node.Fee) // nolint:gosec
+		assert.Equal(t, subtree.TxInpoints{}, txInpoints)
+		assert.Greater(t, time64, int64(0))
 
 		items++
 	}
@@ -62,14 +66,14 @@ func Test_queueWithTime(t *testing.T) {
 	enqueueItems(t, q, 1, 10)
 
 	validFromMillis := time.Now().Add(-100 * time.Millisecond).UnixMilli()
-	item := q.dequeue(validFromMillis)
-	require.Nil(t, item)
+	_, _, _, found := q.dequeue(validFromMillis)
+	require.False(t, found)
 
 	time.Sleep(50 * time.Millisecond)
 
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
-	item = q.dequeue(validFromMillis)
-	require.Nil(t, item)
+	_, _, _, found = q.dequeue(validFromMillis)
+	require.False(t, found)
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -77,12 +81,14 @@ func Test_queueWithTime(t *testing.T) {
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
 
 	for {
-		item = q.dequeue(validFromMillis)
-		if item == nil {
+		node, txInpoints, time64, found := q.dequeue(validFromMillis)
+		if !found {
 			break
 		}
 
-		assert.Equal(t, uint64(items), item.node.Fee)
+		assert.Equal(t, uint64(items), node.Fee) // nolint:gosec
+		assert.Equal(t, subtree.TxInpoints{}, txInpoints)
+		assert.Greater(t, time64, int64(0))
 
 		items++
 	}
@@ -93,14 +99,14 @@ func Test_queueWithTime(t *testing.T) {
 	enqueueItems(t, q, 1, 10)
 
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
-	item = q.dequeue(validFromMillis)
-	require.Nil(t, item)
+	_, _, _, found = q.dequeue(validFromMillis)
+	require.False(t, found)
 
 	time.Sleep(50 * time.Millisecond)
 
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
-	item = q.dequeue(validFromMillis)
-	require.Nil(t, item)
+	_, _, _, found = q.dequeue(validFromMillis)
+	require.False(t, found)
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -108,12 +114,14 @@ func Test_queueWithTime(t *testing.T) {
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
 
 	for {
-		item = q.dequeue(validFromMillis)
-		if item == nil {
+		node, txInpoints, time64, found := q.dequeue(validFromMillis)
+		if !found {
 			break
 		}
 
-		assert.Equal(t, uint64(items), item.node.Fee)
+		assert.Equal(t, uint64(items), node.Fee)
+		assert.Equal(t, subtree.TxInpoints{}, txInpoints)
+		assert.Greater(t, time64, int64(0))
 
 		items++
 	}
@@ -130,14 +138,14 @@ func Test_queue2Threads(t *testing.T) {
 	items := 0
 
 	for {
-		item := q.dequeue(0)
-		if item == nil {
+		node, _, time64, found := q.dequeue(0)
+		if !found {
 			break
 		}
 
 		items++
 
-		t.Logf("Item: %d\n", item.node.Fee)
+		t.Logf("Item: %d, %d\n", node.Fee, time64)
 	}
 
 	assert.True(t, q.IsEmpty())
@@ -148,14 +156,14 @@ func Test_queue2Threads(t *testing.T) {
 	items = 0
 
 	for {
-		item := q.dequeue(0)
-		if item == nil {
+		node, _, time64, found := q.dequeue(0)
+		if !found {
 			break
 		}
 
 		items++
 
-		t.Logf("Item: %d\n", item.node.Fee)
+		t.Logf("Item: %d, %d\n", node.Fee, time64)
 	}
 
 	assert.True(t, q.IsEmpty())
@@ -174,8 +182,8 @@ func Test_queueLarge(t *testing.T) {
 	items := 0
 
 	for {
-		item := q.dequeue(0)
-		if item == nil {
+		_, _, _, found := q.dequeue(0)
+		if !found {
 			break
 		}
 
@@ -197,8 +205,8 @@ func Test_queueLarge(t *testing.T) {
 	items = 0
 
 	for {
-		item := q.dequeue(0)
-		if item == nil {
+		_, _, _, found := q.dequeue(0)
+		if !found {
 			break
 		}
 
@@ -234,13 +242,11 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 
 			for i := 0; i < iter; i++ {
 				u := (n * iter) + i
-				q.enqueue(&TxIDAndFee{
-					node: subtree.SubtreeNode{
-						Hash:        chainhash.Hash{},
-						Fee:         uint64(u),
-						SizeInBytes: 0,
-					},
-				})
+				q.enqueue(subtree.SubtreeNode{
+					Hash:        chainhash.Hash{},
+					Fee:         uint64(u),
+					SizeInBytes: 0,
+				}, subtree.TxInpoints{})
 			}
 		}(n)
 	}
@@ -257,14 +263,21 @@ func BenchmarkQueue(b *testing.B) {
 
 	b.ResetTimer()
 
+	go func() {
+		for {
+			_, _, _, found := q.dequeue(0)
+			if !found {
+				time.Sleep(1 * time.Millisecond)
+			}
+		}
+	}()
+
 	for i := 0; i < b.N; i++ {
-		q.enqueue(&TxIDAndFee{
-			node: subtree.SubtreeNode{
-				Hash:        chainhash.Hash{},
-				Fee:         uint64(i),
-				SizeInBytes: 0,
-			},
-		})
+		q.enqueue(subtree.SubtreeNode{
+			Hash:        chainhash.Hash{},
+			Fee:         uint64(i),
+			SizeInBytes: 0,
+		}, subtree.TxInpoints{})
 	}
 }
 

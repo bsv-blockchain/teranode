@@ -363,8 +363,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 	go func() {
 		var (
-			txReq *TxIDAndFee
-			err   error
+			err error
 		)
 
 		for {
@@ -485,30 +484,30 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 				validFromMillis := time.Now().Add(-1 * stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
 
 				for {
-					txReq = stp.queue.dequeue(validFromMillis)
-					if txReq == nil {
+					node, txInpoints, _, found := stp.queue.dequeue(validFromMillis)
+					if !found {
 						time.Sleep(1 * time.Millisecond)
 						break
 					}
 
 					// check if the tx needs to be removed
-					if mapLength > 0 && stp.removeMap.Exists(txReq.node.Hash) {
+					if mapLength > 0 && stp.removeMap.Exists(node.Hash) {
 						// remove from the map
-						if err = stp.removeMap.Delete(txReq.node.Hash); err != nil {
+						if err = stp.removeMap.Delete(node.Hash); err != nil {
 							stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
 						}
 
 						continue
 					}
 
-					if txReq.node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+					if node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: skipping request to add coinbase tx placeholder")
 						continue
 					}
 
 					// check if the tx is already in the currentTxMap
-					if _, ok := stp.currentTxMap.Get(txReq.node.Hash); ok {
-						stp.logger.Warnf("[SubtreeProcessor] error adding node: tx %s already in currentTxMap", txReq.node.Hash.String())
+					if _, ok := stp.currentTxMap.Get(node.Hash); ok {
+						stp.logger.Warnf("[SubtreeProcessor] error adding node: tx %s already in currentTxMap", node.Hash.String())
 						continue
 					}
 
@@ -520,7 +519,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 					// 	}
 					// }
 
-					if err = stp.addNode(txReq.node, &txReq.txInpoints, false); err != nil {
+					if err = stp.addNode(node, &txInpoints, false); err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
 					} else {
 						stp.txCount.Add(1)
@@ -614,8 +613,8 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	validUntilMillis := time.Now().UnixMilli()
 
 	for {
-		txReq := stp.queue.dequeue(0)
-		if txReq == nil || txReq.time > validUntilMillis {
+		_, _, time64, found := stp.queue.dequeue(0)
+		if !found || time64 > validUntilMillis {
 			// we are done
 			break
 		}
@@ -981,7 +980,7 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 // Parameters:
 //   - node: Transaction node to add
 func (stp *SubtreeProcessor) Add(node subtreepkg.SubtreeNode, txInpoints subtreepkg.TxInpoints) {
-	stp.queue.enqueue(&TxIDAndFee{node: node, txInpoints: txInpoints})
+	stp.queue.enqueue(node, txInpoints)
 }
 
 // AddDirectly adds a transaction node directly to the subtree processor without going through the queue.
@@ -2034,13 +2033,13 @@ func (stp *SubtreeProcessor) moveForwardBlockDeQueue(transactionMap, losingTxHas
 
 		for {
 			// TODO make sure to add the time delay here when activated
-			item := stp.queue.dequeue(validFromMillis)
-			if item == nil {
+			node, txInpoints, _, found := stp.queue.dequeue(validFromMillis)
+			if !found {
 				break
 			}
 
-			if !transactionMap.Exists(item.node.Hash) && (losingTxHashesMap == nil || !losingTxHashesMap.Exists(item.node.Hash)) {
-				_ = stp.addNode(item.node, &item.txInpoints, skipNotification)
+			if !transactionMap.Exists(node.Hash) && (losingTxHashesMap == nil || !losingTxHashesMap.Exists(node.Hash)) {
+				_ = stp.addNode(node, &txInpoints, skipNotification)
 			}
 
 			nrProcessed++
