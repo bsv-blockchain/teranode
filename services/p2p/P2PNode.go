@@ -1336,12 +1336,13 @@ func isPrivateIP(addr multiaddr.Multiaddr) bool {
 		return false
 	}
 
-	// Define private IPv4 ranges
+	// Define private IPv4 ranges according to RFC 1918 and RFC 3927
+	// These are standard private network ranges and are safe to use
 	privateRanges := []*net.IPNet{
-		{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(8, 32)},
-		{IP: net.ParseIP("172.16.0.0"), Mask: net.CIDRMask(12, 32)},
-		{IP: net.ParseIP("192.168.0.0"), Mask: net.CIDRMask(16, 32)},
-		{IP: net.ParseIP("127.0.0.0"), Mask: net.CIDRMask(8, 32)},
+		{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(8, 32)},     // RFC 1918: Class A private network
+		{IP: net.ParseIP("172.16.0.0"), Mask: net.CIDRMask(12, 32)},  // RFC 1918: Class B private network
+		{IP: net.ParseIP("192.168.0.0"), Mask: net.CIDRMask(16, 32)}, // RFC 1918: Class C private network
+		{IP: net.ParseIP("127.0.0.0"), Mask: net.CIDRMask(8, 32)},    // RFC 3927: Loopback addresses
 	}
 
 	// Check if the IP falls into any of the private ranges

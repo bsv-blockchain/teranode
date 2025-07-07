@@ -1,19 +1,102 @@
+# Git files
 .git
-.history
-.vscode
-data/
-deploy/
+.gitignore
+.github
+
+# Documentation
 docs/
-playground
-poc/
-scripts/
-3rdparty/
-.github/
-*.run
-*.private_key
-data.zip
+README.md
+*.md
+
+# Test files and directories - excluded to reduce context size
+test/
+*_test.go
+*.test
+coverage.out
 test/data
 test/utils/data
 test/model/big-test-generated_test_data
+# Specific test files that don't follow _test.go convention
+daemon/test_daemon.go
+daemon/test_daemon_test.go
+ulogger/verboseTest.go
+ulogger/errorTest.go
+
+# Local data and configuration - excluded as they contain runtime data
+data/
+daemon/data/
+# settings_local.conf - needed for Docker build, so not excluded
 *.log
 *.out
+
+# Development tools and configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.history/
+
+# Build artifacts (except what we need)
+*.a
+*.o
+*.exe
+*.dll
+*.so
+*.dylib
+*.run
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Node modules (will be installed fresh in container)
+node_modules/
+ui/dashboard/node_modules/
+ui/dashboard/dist/
+ui/dashboard/.svelte-kit/
+
+# Kubernetes and deployment files - not needed in runtime container
+deploy/
+compose/
+
+# Debug files
+debug
+*.pprof
+
+# Sensitive files - security best practice
+*.pem
+*.key
+*.crt
+*.p12
+*.private_key
+certs/
+
+# Large binary files that shouldn't be in the container
+*.bin
+*.dat
+*.db
+data.zip
+
+# Playwright test results
+ui/dashboard/test-results/
+ui/dashboard/playwright-report/
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+
+# Build cache
+.cache/
+
+# Local scripts not needed in container
+scripts/
+
+# Other directories from original .dockerignore
+playground
+poc/
+3rdparty/

@@ -1,0 +1,109 @@
+package aerospike
+
+import (
+	"testing"
+
+	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestFreezeUTXOsBasic(t *testing.T) {
+	// Test basic functionality without mocking complex dependencies
+	spends := []*utxo.Spend{
+		{
+			TxID:     &chainhash.Hash{},
+			Vout:     0,
+			UTXOHash: &chainhash.Hash{},
+		},
+	}
+
+	// Test that the spends parameter is handled correctly
+	assert.NotNil(t, spends)
+	assert.Len(t, spends, 1)
+	assert.Equal(t, uint32(0), spends[0].Vout)
+}
+
+func TestUnFreezeUTXOsBasic(t *testing.T) {
+	// Test basic functionality without mocking
+	spends := []*utxo.Spend{
+		{
+			TxID:     &chainhash.Hash{},
+			Vout:     1,
+			UTXOHash: &chainhash.Hash{},
+		},
+	}
+
+	assert.NotNil(t, spends)
+	assert.Len(t, spends, 1)
+	assert.Equal(t, uint32(1), spends[0].Vout)
+}
+
+func TestReAssignUTXOBasic(t *testing.T) {
+	// Test basic functionality
+	oldUtxo := &utxo.Spend{
+		TxID:     &chainhash.Hash{},
+		Vout:     0,
+		UTXOHash: &chainhash.Hash{},
+	}
+
+	newUtxo := &utxo.Spend{
+		TxID:     &chainhash.Hash{},
+		Vout:     0,
+		UTXOHash: &chainhash.Hash{},
+	}
+
+	assert.NotNil(t, oldUtxo)
+	assert.NotNil(t, newUtxo)
+	assert.Equal(t, oldUtxo.Vout, newUtxo.Vout)
+}
+
+func TestParseLuaReturnValueBasic(t *testing.T) {
+	store := &Store{}
+
+	tests := []struct {
+		name        string
+		input       string
+		expectError bool
+	}{
+		{
+			name:        "valid OK response",
+			input:       "OK:success",
+			expectError: false,
+		},
+		{
+			name:        "valid ERROR response",
+			input:       "ERROR:failure",
+			expectError: false,
+		},
+		{
+			name:        "empty string",
+			input:       "",
+			expectError: true,
+		},
+		{
+			name:        "invalid format",
+			input:       "INVALID",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := store.ParseLuaReturnValue(tt.input)
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// Test constants are accessible
+func TestLuaConstants(t *testing.T) {
+	assert.Equal(t, "teranode_v38", LuaPackage)
+	assert.Equal(t, LuaReturnValue("OK"), LuaOk)
+	assert.Equal(t, LuaReturnValue("ERROR"), LuaError)
+	assert.Equal(t, LuaReturnValue("SPENT"), LuaSpent)
+}

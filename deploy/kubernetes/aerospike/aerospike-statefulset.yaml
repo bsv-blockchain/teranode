@@ -15,6 +15,9 @@ spec:
       labels:
         io.kompose.service: aerospike
     spec:
+      # Disable automounting of service account token for security
+      # This statefulset does not need to interact with the Kubernetes API
+      automountServiceAccountToken: false
       containers:
         - name: aerospike
           image: aerospike:ce-7.2.0.6

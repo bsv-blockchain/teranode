@@ -35,6 +35,18 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+// Error message constants to avoid duplication
+const (
+	errMsgCreateGRPCClient = "error creating grpc client for propagation server %s"
+	errMsgCreateClient     = "error creating client for propagation server %s"
+	errMsgConnecting       = "error connecting to propagation server %s"
+	errMsgSendTransaction  = "error sending transaction %s to %s failed (deadline %s, duration %s), retrying: %v"
+	errMsgSendToServers    = "error sending transaction %s to %.2f%% of the propagation servers: %v"
+	errMsgDistributing     = "error(s) distributing transaction %s: %v"
+	errMsgNoServers        = "no propagation server addresses found"
+	errMsgAddress          = "address %s"
+)
+
 // Distributor manages reliable transaction propagation to multiple propagation service instances.
 // It provides fault-tolerant transaction broadcasting with retry logic, load balancing,
 // and failure handling to ensure transactions reach the Bitcoin SV network reliably.
@@ -140,7 +152,7 @@ func getPropagationServers(ctx context.Context, logger ulogger.Logger, tSettings
 	addresses := tSettings.Propagation.GRPCAddresses
 
 	if len(addresses) == 0 {
-		return nil, errors.NewServiceError("no propagation server addresses found")
+		return nil, errors.NewServiceError(errMsgNoServers)
 	}
 
 	propagationServers := make(map[string]*propagation.Client)
@@ -150,12 +162,12 @@ func getPropagationServers(ctx context.Context, logger ulogger.Logger, tSettings
 			MaxRetries: 3,
 		}, tSettings)
 		if err != nil {
-			return nil, errors.NewServiceError("error creating grpc client for propagation server %s", address, err)
+			return nil, errors.NewServiceError(errMsgCreateGRPCClient, address, err)
 		}
 
 		propagationServers[address], err = propagation.NewClient(ctx, logger, tSettings, pConn)
 		if err != nil {
-			return nil, errors.NewServiceError("error creating client for propagation server %s", address, err)
+			return nil, errors.NewServiceError(errMsgCreateClient, address, err)
 		}
 	}
 
@@ -167,7 +179,7 @@ func getPropagationServerFromAddress(ctx context.Context, logger ulogger.Logger,
 		MaxRetries: 3,
 	}, tSettings)
 	if err != nil {
-		return nil, errors.NewServiceError("error connecting to propagation server %s", address, err)
+		return nil, errors.NewServiceError(errMsgConnecting, address, err)
 	}
 
 	propagationServer, err := propagation.NewClient(ctx, logger, tSettings, pConn)
@@ -279,7 +291,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 					}
 
 					deadline, _ := ctx1.Deadline()
-					d.logger.Warnf("error sending transaction %s to %s failed (deadline %s, duration %s), retrying: %v", tx.TxIDChainHash().String(), address, time.Until(deadline), time.Since(start), err)
+					d.logger.Warnf(errMsgSendTransaction, tx.TxIDChainHash().String(), address, time.Until(deadline), time.Since(start), err)
 
 					if retries < d.attempts {
 						retries++
@@ -320,19 +332,19 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 		i++
 
 		if rw.Error != nil {
-			errs = append(errs, errors.NewServiceError("address %s", rw.Addr, rw.Error))
+			errs = append(errs, errors.NewServiceError(errMsgAddress, rw.Addr, rw.Error))
 			errorCount++
 		}
 	}
 
 	failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
 	if failurePercentage > float32(d.failureTolerance) || errorCount == len(d.propagationServers) {
-		err := errors.NewProcessingError("error sending transaction %s to %.2f%% of the propagation servers: %v", tx.TxIDChainHash().String(), failurePercentage, errs)
+		err := errors.NewProcessingError(errMsgSendToServers, tx.TxIDChainHash().String(), failurePercentage, errs)
 		span.RecordError(err)
 
 		return responses, err
 	} else if errorCount > 0 {
-		d.logger.Errorf("error(s) distributing transaction %s: %v", tx.TxIDChainHash().String(), errs)
+		d.logger.Errorf(errMsgDistributing, tx.TxIDChainHash().String(), errs)
 	}
 
 	return responses, nil

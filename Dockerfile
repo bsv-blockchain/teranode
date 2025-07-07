@@ -14,7 +14,8 @@ ARG BUILD_JOBS=32
 WORKDIR /app/ui/dashboard
 
 COPY package.json package-lock.json ./
-RUN npm install && npx node-prune
+# Run npm install with --ignore-scripts to prevent execution of potentially malicious scripts
+RUN npm install --ignore-scripts && npx node-prune
 
 # Download all the go dependecies so Docker can cache them if the go.mod and go.sum files are not changed
 WORKDIR /app
@@ -22,6 +23,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 # Copy the source code from the current directory to the working directory inside the container
+# This is safe as we have a comprehensive .dockerignore file that excludes sensitive data
+# Only source code, configuration files, and necessary build files are included
 COPY . /app
 
 # CGO is required for BDK

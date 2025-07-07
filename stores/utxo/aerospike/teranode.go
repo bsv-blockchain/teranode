@@ -194,6 +194,17 @@ const (
 	LuaPreserve LuaReturnValue = "PRESERVE"
 )
 
+// LuaReturnValues are the valid return values from Lua scripts
+var luaReturnValues = map[string]struct{}{
+	"OK":                {},
+	"ERROR":             {},
+	"CONFLICTING":       {},
+	"UNSPENDABLE":       {},
+	"FROZEN":            {},
+	"COINBASE_IMMATURE": {},
+	"SPENT":             {},
+}
+
 // registerLuaIfNecessary ensures required Lua scripts are registered with Aerospike.
 // It checks for existing scripts and registers new ones if needed.
 //
@@ -298,6 +309,10 @@ func (s *Store) ParseLuaReturnValue(returnValue string) (LuaReturnMessage, error
 	r := strings.Split(returnValue, ":")
 
 	if len(r) > 0 {
+		if err = checkReturnValue(r[0]); err != nil {
+			return rets, err
+		}
+
 		rets.ReturnValue = LuaReturnValue(r[0])
 
 		if rets.ReturnValue == LuaOk && len(r) > 1 && r[1][0] == '[' && r[1][len(r[1])-1] == ']' {
@@ -341,4 +356,18 @@ func (s *Store) ParseLuaReturnValue(returnValue string) (LuaReturnMessage, error
 	}
 
 	return rets, nil
+}
+
+// checkReturnValue validates the return value from a Lua script and returns an appropriate error if needed.
+func checkReturnValue(val string) error {
+	if len(val) == 0 {
+		return errors.NewProcessingError("empty return value")
+	}
+
+	// Check if the value is in the map of valid return values
+	if _, exists := luaReturnValues[val]; exists {
+		return nil
+	}
+
+	return errors.NewProcessingError("unknown return value: %s", val)
 }
