@@ -150,7 +150,17 @@ func (e *Error) As(target interface{}) bool {
 
 // SetWrappedErr sets the wrapped error in the error chain.
 func (e *Error) SetWrappedErr(err error) {
-	if e == nil {
+	if e == nil || err == nil {
+		return
+	}
+
+	// Prevent self-referencing
+	if errPtr, ok := err.(*Error); ok && errPtr == e {
+		return
+	}
+
+	// Check if adding err would create a cycle
+	if errPtr, ok := err.(*Error); ok && errPtr.contains(e) {
 		return
 	}
 
@@ -166,6 +176,11 @@ func (e *Error) SetWrappedErr(err error) {
 			// this will set lastErr.wrappedErr to nil
 			lastErr = NewError(lastWrappedErr.Error())
 		}
+	}
+
+	// Final check: don't add if err already exists in our chain
+	if errPtr, ok := err.(*Error); ok && e.contains(errPtr) {
+		return
 	}
 
 	lastErr.wrappedErr = err
@@ -274,7 +289,8 @@ func New(code ERR, message string, params ...interface{}) *Error {
 			line:     line,
 			function: parts[len(parts)-1],
 		}
-		if wErr != nil {
+		// Only wrap if wErr exists and won't create a cycle
+		if wErr != nil && wErr != returnErr && !wErr.contains(returnErr) {
 			returnErr.wrappedErr = wErr
 		}
 
@@ -289,11 +305,63 @@ func New(code ERR, message string, params ...interface{}) *Error {
 		function: parts[len(parts)-1],
 	}
 
-	if wErr != nil {
+	// Only wrap if wErr exists and won't create a cycle
+	if wErr != nil && wErr != returnErr && !wErr.contains(returnErr) {
 		returnErr.wrappedErr = wErr
 	}
 
 	return returnErr
+}
+
+// contains checks if the target error or any of its wrapped errors exist in this error's chain
+func (e *Error) contains(target *Error) bool {
+	if e == nil || target == nil {
+		return false
+	}
+
+	// Build a set of all errors in e's chain
+	eChain := make(map[*Error]bool)
+	visited := make(map[*Error]bool)
+
+	current := e
+	for current != nil {
+		if visited[current] {
+			break // Cycle detected, stop traversal
+		}
+		visited[current] = true
+		eChain[current] = true
+
+		// Move to the next wrapped error
+		if wrappedErr, ok := current.wrappedErr.(*Error); ok {
+			current = wrappedErr
+		} else {
+			break
+		}
+	}
+
+	// Check if any error in target's chain exists in e's chain
+	visited = make(map[*Error]bool)
+	current = target
+	for current != nil {
+		if visited[current] {
+			return false // Cycle detected in target chain
+		}
+		visited[current] = true
+
+		// Check if this target error exists in e's chain
+		if eChain[current] {
+			return true
+		}
+
+		// Move to the next wrapped error in target's chain
+		if wrappedErr, ok := current.wrappedErr.(*Error); ok {
+			current = wrappedErr
+		} else {
+			break
+		}
+	}
+
+	return false
 }
 
 // Error represents a custom error type that implements the error interface.

@@ -978,7 +978,9 @@ func TestError_SetWrappedErr(t *testing.T) {
 	})
 
 	/*
-		// Does not work
+		// This test doesn't work because SetWrappedErr appends to the end of the chain,
+		// it doesn't replace the entire chain. The behavior tested here (replacing a
+		// standard error in the middle of a chain) is not how SetWrappedErr works.
 
 		t.Run("non-*Error in wrappedErr breaks chain", func(t *testing.T) {
 			e := NewError("root")
@@ -992,7 +994,7 @@ func TestError_SetWrappedErr(t *testing.T) {
 			require.True(t, errors.As(e.wrappedErr, &result), "should reset to new error")
 			require.Equal(t, "new-error", result.Error())
 
-			// ensure the original stdlib error is gone from a chain
+			// ensure the original standard library error is gone from a chain
 			require.Nil(t, result.wrappedErr)
 		})
 	*/
@@ -1608,5 +1610,362 @@ func TestNew_InvalidCodeTriggersFallback(t *testing.T) {
 		require.Equal(t, "invalid error code", e.Message())
 		require.NotNil(t, e.WrappedErr())
 		require.Contains(t, e.WrappedErr().Error(), "deep issue")
+	})
+}
+
+// TestContainsMethod tests the contains method for detecting cycles and shared errors in error chains
+func TestContainsMethod(t *testing.T) {
+	t.Run("detects direct self-reference", func(t *testing.T) {
+		// Create an error that references itself
+		err1 := &Error{
+			code:    ERR_UNKNOWN,
+			message: "self-referencing error",
+		}
+		// Create a self-reference
+		err1.wrappedErr = err1
+
+		// Should detect that err1 contains itself without infinite loop
+		require.True(t, err1.contains(err1))
+	})
+
+	t.Run("detects circular reference in chain", func(t *testing.T) {
+		// Create a circular chain: err1 -> err2 -> err3 -> err1
+		err1 := &Error{
+			code:    ERR_UNKNOWN,
+			message: "error 1",
+		}
+		err2 := &Error{
+			code:       ERR_NOT_FOUND,
+			message:    "error 2",
+			wrappedErr: err1,
+		}
+		err3 := &Error{
+			code:       ERR_INVALID_ARGUMENT,
+			message:    "error 3",
+			wrappedErr: err2,
+		}
+		// Create the cycle
+		err1.wrappedErr = err3
+
+		// Should detect all errors in the cycle
+		require.True(t, err1.contains(err1))
+		require.True(t, err1.contains(err2))
+		require.True(t, err1.contains(err3))
+
+		// Should also work from any starting point in the cycle
+		require.True(t, err2.contains(err1))
+		require.True(t, err2.contains(err2))
+		require.True(t, err2.contains(err3))
+
+		require.True(t, err3.contains(err1))
+		require.True(t, err3.contains(err2))
+		require.True(t, err3.contains(err3))
+	})
+
+	t.Run("handles nil cases", func(t *testing.T) {
+		err1 := &Error{
+			code:    ERR_UNKNOWN,
+			message: "error 1",
+		}
+
+		// nil receiver should return false
+		var nilErr *Error
+		require.False(t, nilErr.contains(err1))
+
+		// nil target should return false
+		require.False(t, err1.contains(nil))
+
+		// both nil should return false
+		require.False(t, nilErr.contains(nil))
+	})
+
+	t.Run("prevents infinite loop in complex cycle", func(t *testing.T) {
+		// Create a more complex cycle with branching
+		err1 := &Error{code: ERR_UNKNOWN, message: "error 1"}
+		err2 := &Error{code: ERR_NOT_FOUND, message: "error 2"}
+		err3 := &Error{code: ERR_INVALID_ARGUMENT, message: "error 3"}
+		err4 := &Error{code: ERR_SERVICE_ERROR, message: "error 4"}
+
+		// Create cycle: err1 -> err2 -> err3 -> err1, with err4 -> err2
+		err1.wrappedErr = err2
+		err2.wrappedErr = err3
+		err3.wrappedErr = err1
+		err4.wrappedErr = err2
+
+		// Should find all errors without infinite loop
+		require.True(t, err4.contains(err2))
+		require.True(t, err4.contains(err3))
+		require.True(t, err4.contains(err1))
+		require.True(t, err4.contains(err4))
+
+		// Should not find errors not in the chain
+		err5 := &Error{code: ERR_UNKNOWN, message: "error 5"}
+		require.False(t, err4.contains(err5))
+	})
+
+	t.Run("checks target and all its wrapped errors", func(t *testing.T) {
+		// Create a chain: err1 -> err2 -> err3
+		err3 := &Error{code: ERR_NOT_FOUND, message: "error 3"}
+		err2 := &Error{code: ERR_INVALID_ARGUMENT, message: "error 2", wrappedErr: err3}
+		err1 := &Error{code: ERR_UNKNOWN, message: "error 1", wrappedErr: err2}
+
+		// Create another chain: err4 -> err5
+		err5 := &Error{code: ERR_SERVICE_ERROR, message: "error 5"}
+		err4 := &Error{code: ERR_PROCESSING, message: "error 4", wrappedErr: err5}
+
+		// Test that err1 contains err2 (directly wrapped)
+		require.True(t, err1.contains(err2))
+
+		// Test that err1 contains err3 (wrapped in err2)
+		require.True(t, err1.contains(err3))
+
+		// Test that err1 does not contain err4 or err5
+		require.False(t, err1.contains(err4))
+		require.False(t, err1.contains(err5))
+
+		// Now create err6 that wraps err2 (which wraps err3)
+		err6 := &Error{code: ERR_CONTEXT, message: "error 6", wrappedErr: err2}
+
+		// err1 should now contain err6 because err6's chain includes err2 which is in err1's chain
+		require.True(t, err1.contains(err6))
+
+		// Create a separate error that shares err3
+		err7 := &Error{code: ERR_BLOCK_NOT_FOUND, message: "error 7", wrappedErr: err3}
+
+		// err1 should contain err7 because they both have err3 in their chains
+		require.True(t, err1.contains(err7))
+
+		// err7 should also contain err1 because they share err3
+		require.True(t, err7.contains(err1))
+	})
+
+	t.Run("handles complex overlapping chains", func(t *testing.T) {
+		// Create two separate chains that merge
+		// Chain 1: err1 -> err2 -> common
+		// Chain 2: err3 -> err4 -> common
+		common := &Error{code: ERR_UNKNOWN, message: "common error"}
+
+		err2 := &Error{code: ERR_NOT_FOUND, message: "error 2", wrappedErr: common}
+		err1 := &Error{code: ERR_INVALID_ARGUMENT, message: "error 1", wrappedErr: err2}
+
+		err4 := &Error{code: ERR_SERVICE_ERROR, message: "error 4", wrappedErr: common}
+		err3 := &Error{code: ERR_PROCESSING, message: "error 3", wrappedErr: err4}
+
+		// All errors should contain each other because they share common
+		require.True(t, err1.contains(err3))
+		require.True(t, err3.contains(err1))
+		require.True(t, err1.contains(err4))
+		require.True(t, err2.contains(err3))
+	})
+}
+
+func TestErrorChainingAndCyclePrevention(t *testing.T) {
+	t.Run("contains method detects potential cycles", func(t *testing.T) {
+		// This test demonstrates what cycles would look like and shows
+		// that the contains method can detect them. The actual prevention
+		// happens in New() and SetWrappedErr() using this detection.
+
+		// Create a normal error chain
+		err1 := New(ERR_UNKNOWN, "error 1")
+		err2 := New(ERR_NOT_FOUND, "error 2", err1)
+
+		// Manually create what would be a cycle
+		manualCycle := &Error{
+			code:       ERR_INVALID_ARGUMENT,
+			message:    "would create cycle",
+			wrappedErr: err2,
+		}
+
+		// The contains method detects that adding manualCycle to err2's chain
+		// would create a cycle because manualCycle already contains err2
+		require.True(t, err2.contains(manualCycle))
+
+		// This detection is used by New() and SetWrappedErr() to prevent cycles
+	})
+
+	t.Run("SetWrappedErr prevents self-reference", func(t *testing.T) {
+		err1 := New(ERR_UNKNOWN, "error 1")
+
+		// Try to make err1 wrap itself
+		err1.SetWrappedErr(err1)
+
+		// Should not have wrapped itself
+		require.Nil(t, err1.wrappedErr)
+	})
+
+	t.Run("SetWrappedErr prevents simple cycles", func(t *testing.T) {
+		err1 := New(ERR_UNKNOWN, "error 1")
+		err2 := New(ERR_NOT_FOUND, "error 2")
+
+		// Create chain: err1 -> err2
+		err1.SetWrappedErr(err2)
+		require.Equal(t, err2, err1.wrappedErr)
+
+		// Try to create cycle: err2 -> err1
+		err2.SetWrappedErr(err1)
+
+		// Should not have created the cycle
+		require.Nil(t, err2.wrappedErr)
+	})
+
+	t.Run("SetWrappedErr prevents complex cycles", func(t *testing.T) {
+		err1 := New(ERR_UNKNOWN, "error 1")
+		err2 := New(ERR_NOT_FOUND, "error 2")
+		err3 := New(ERR_INVALID_ARGUMENT, "error 3")
+
+		// Create chain: err1 -> err2 -> err3
+		err1.SetWrappedErr(err2)
+		err2.SetWrappedErr(err3)
+
+		// Verify chain is set up correctly
+		require.Equal(t, err2, err1.wrappedErr)
+		require.Equal(t, err3, err2.wrappedErr)
+		require.Nil(t, err3.wrappedErr)
+
+		// Try to create cycle: err3 -> err1
+		err3.SetWrappedErr(err1)
+
+		// Should not have created the cycle
+		require.Nil(t, err3.wrappedErr)
+	})
+
+	t.Run("SetWrappedErr appends to existing chain", func(t *testing.T) {
+		err1 := New(ERR_UNKNOWN, "error 1")
+		err2 := New(ERR_NOT_FOUND, "error 2")
+		err3 := New(ERR_INVALID_ARGUMENT, "error 3")
+		err4 := New(ERR_SERVICE_ERROR, "error 4")
+
+		// Create initial chain: err1 -> err2
+		err1.SetWrappedErr(err2)
+
+		// Add err3 to the chain
+		err1.SetWrappedErr(err3)
+
+		// Should have appended: err1 -> err2 -> err3
+		require.Equal(t, err2, err1.wrappedErr)
+		require.Equal(t, err3, err2.wrappedErr)
+		require.Nil(t, err3.wrappedErr)
+
+		// Add err4 to the chain
+		err1.SetWrappedErr(err4)
+
+		// Should have appended: err1 -> err2 -> err3 -> err4
+		require.Equal(t, err2, err1.wrappedErr)
+		require.Equal(t, err3, err2.wrappedErr)
+		require.Equal(t, err4, err3.wrappedErr)
+		require.Nil(t, err4.wrappedErr)
+	})
+
+	t.Run("SetWrappedErr prevents adding error already in chain", func(t *testing.T) {
+		err1 := New(ERR_UNKNOWN, "error 1")
+		err2 := New(ERR_NOT_FOUND, "error 2")
+		err3 := New(ERR_INVALID_ARGUMENT, "error 3")
+
+		// Create chain: err1 -> err2 -> err3
+		err1.SetWrappedErr(err2)
+		err1.SetWrappedErr(err3)
+
+		// Try to add err2 again (already in chain)
+		err1.SetWrappedErr(err2)
+
+		// Chain should remain unchanged: err1 -> err2 -> err3
+		require.Equal(t, err2, err1.wrappedErr)
+		require.Equal(t, err3, err2.wrappedErr)
+		require.Nil(t, err3.wrappedErr)
+	})
+
+	t.Run("Complex real-world scenario with New and SetWrappedErr", func(t *testing.T) {
+		// Simulate a real error propagation scenario
+
+		// Database layer error
+		dbErr := New(ERR_STORAGE_ERROR, "failed to connect to database")
+
+		// Service layer wraps the database error
+		serviceErr := New(ERR_SERVICE_ERROR, "service unavailable", dbErr)
+
+		// API layer creates its own error
+		apiErr := New(ERR_EXTERNAL, "external API call failed")
+
+		// Later, we want to add context by linking errors
+		apiErr.SetWrappedErr(serviceErr)
+
+		// Verify the complete chain: apiErr -> serviceErr -> dbErr
+		require.Equal(t, serviceErr, apiErr.wrappedErr)
+		require.Equal(t, dbErr, serviceErr.wrappedErr)
+		require.Nil(t, dbErr.wrappedErr)
+
+		// Now simulate a bug where someone tries to create a cycle
+		dbErr.SetWrappedErr(apiErr)
+
+		// The cycle should be prevented
+		require.Nil(t, dbErr.wrappedErr)
+
+		// The original chain should remain intact
+		require.Equal(t, serviceErr, apiErr.wrappedErr)
+		require.Equal(t, dbErr, serviceErr.wrappedErr)
+	})
+
+	t.Run("New with nil wrapped error", func(t *testing.T) {
+		// Test that New handles nil wrapped errors correctly
+		err1 := New(ERR_UNKNOWN, "error with nil wrap", nil)
+		require.Nil(t, err1.wrappedErr)
+
+		// Test with explicit nil error interface
+		var nilErr error
+		err2 := New(ERR_NOT_FOUND, "error with nil interface", nilErr)
+		require.Nil(t, err2.wrappedErr)
+	})
+
+	t.Run("SetWrappedErr with standard errors", func(t *testing.T) {
+		err1 := New(ERR_UNKNOWN, "custom error")
+		stdErr := errors.New("standard error")
+
+		// Should be able to wrap standard errors
+		err1.SetWrappedErr(stdErr)
+		require.Equal(t, stdErr, err1.wrappedErr)
+
+		// Create another custom error that wraps the standard error
+		err2 := New(ERR_NOT_FOUND, "another custom error")
+		err2.SetWrappedErr(stdErr)
+
+		// Both should wrap the same standard error
+		require.Equal(t, stdErr, err2.wrappedErr)
+	})
+
+	t.Run("Error message formatting with wrapped errors", func(t *testing.T) {
+		err1 := New(ERR_UNKNOWN, "base error")
+		err2 := New(ERR_NOT_FOUND, "middle error", err1)
+		err3 := New(ERR_INVALID_ARGUMENT, "top error", err2)
+
+		// Check error messages include the chain
+		errMsg := err3.Error()
+		require.Contains(t, errMsg, "top error")
+		require.Contains(t, errMsg, "middle error")
+		require.Contains(t, errMsg, "base error")
+	})
+
+	t.Run("defensive programming scenario for cycle prevention", func(t *testing.T) {
+		// This test shows why cycle prevention exists in New() even though
+		// cycles can't be created through normal API usage. It's defensive
+		// programming against bugs or future changes.
+
+		// Scenario: shared error pool with accidental circular reference
+		commonErr := &Error{
+			code:    ERR_UNKNOWN,
+			message: "common error",
+		}
+
+		// Normal usage: wrap the common error
+		err1 := New(ERR_NOT_FOUND, "specific error", commonErr)
+
+		// Bug scenario: someone accidentally modifies commonErr to create cycle
+		commonErr.wrappedErr = err1
+
+		// Now we have a cycle: commonErr -> err1 -> commonErr
+		require.True(t, commonErr.contains(err1))
+		require.True(t, err1.contains(commonErr))
+
+		// The cycle prevention code in New() (checking contains before wrapping)
+		// would prevent extending such accidental cycles if they existed
 	})
 }

@@ -60,7 +60,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 		t.Errorf("Failed to decode Coinbase private key: %v", err)
 	}
 
-	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PubKey(), true)
 
 	privateKey, err := bec.NewPrivateKey()
 	if err != nil {
