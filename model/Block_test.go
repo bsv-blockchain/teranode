@@ -1974,8 +1974,85 @@ func TestBlock_CheckDuplicateTransactionsInSubtree(t *testing.T) {
 		// Initialize the txMap for the block
 		block.txMap = txmap.NewSplitSwissMapUint64(10)
 
-		err = block.checkDuplicateTransactionsInSubtree(subtree, 0)
+		err = block.checkDuplicateTransactionsInSubtree(subtree, 0, subtree.Size())
 		require.NoError(t, err)
+	})
+
+	t.Run("incomplete subtree", func(t *testing.T) {
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		require.NoError(t, err)
+
+		// Create a simple subtree with no duplicates
+		subtree1, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+
+		for i := 0; i < 4; i++ {
+			// create random 32 bytes
+			b := make([]byte, 32)
+			_, _ = rand.Read(b)
+			hash, _ := chainhash.NewHash(b)
+
+			err = subtree1.AddNode(*hash, 1, 100)
+			require.NoError(t, err)
+		}
+
+		subtree2, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+
+		for i := 0; i < 4; i++ {
+			// create random 32 bytes
+			b := make([]byte, 32)
+			_, _ = rand.Read(b)
+			hash, _ := chainhash.NewHash(b)
+
+			err = subtree2.AddNode(*hash, 1, 100)
+			require.NoError(t, err)
+		}
+
+		subtree3, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+
+		nodesToCheck := make([]chainhash.Hash, 2)
+
+		for i := 0; i < 2; i++ { // only add 2 nodes
+			// create random 32 bytes
+			b := make([]byte, 32)
+			_, _ = rand.Read(b)
+			hash, _ := chainhash.NewHash(b)
+
+			err = subtree3.AddNode(*hash, 1, 100)
+			require.NoError(t, err)
+
+			nodesToCheck[i] = *hash
+		}
+
+		// Initialize the txMap for the block
+		block.txMap = txmap.NewSplitSwissMapUint64(10)
+
+		subtreeSize := subtree1.Size()
+
+		err = block.checkDuplicateTransactionsInSubtree(subtree1, 0, subtreeSize)
+		require.NoError(t, err)
+
+		err = block.checkDuplicateTransactionsInSubtree(subtree2, 1, subtreeSize)
+		require.NoError(t, err)
+
+		err = block.checkDuplicateTransactionsInSubtree(subtree3, 2, subtreeSize)
+		require.NoError(t, err)
+
+		for idx, node := range nodesToCheck {
+			// Check if the node exists in the txMap
+			mapIdx, exists := block.txMap.Get(node)
+			assert.True(t, exists)
+			assert.Equal(t, uint64(8+idx), mapIdx) // Should be the index of subtree3
+		}
 	})
 }
 
@@ -3085,7 +3162,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		block.txMap = txmap.NewSplitSwissMapUint64(10)
 
 		// Test checkDuplicateTransactionsInSubtree
-		err = block.checkDuplicateTransactionsInSubtree(subtree, 0)
+		err = block.checkDuplicateTransactionsInSubtree(subtree, 0, subtree.Size())
 		assert.Error(t, err) // Should detect intra-subtree duplicates
 	})
 

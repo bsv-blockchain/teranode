@@ -603,13 +603,19 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 		return errors.NewProcessingError("[checkDuplicateTransactions][%s] failed to convert transaction count to int", b.String(), err)
 	}
 
+	// set the expected subtree size based on the first subtree in the block
+	subtreeSize := 0
+	if len(b.SubtreeSlices) > 0 {
+		subtreeSize = b.SubtreeSlices[0].Size()
+	}
+
 	b.txMap = txmap.NewSplitSwissMapUint64(transactionCountUint32)
 	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
 		subtree := b.SubtreeSlices[subIdx]
 
 		g.Go(func() (err error) {
-			return b.checkDuplicateTransactionsInSubtree(subtree, subIdx)
+			return b.checkDuplicateTransactionsInSubtree(subtree, subIdx, subtreeSize)
 		})
 	}
 
@@ -628,10 +634,11 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 // Parameters:
 // - subtree: the subtree to check for duplicate transactions
 // - subIdx: the index of the subtree in the block
+// - subtreeSize: the cap of the subtree (number of transactions in the subtree) - this is based on the first subtree in the block
 //
 // Returns:
 // - error: if a duplicate transaction is found or if there is an error adding the transaction to the txMap
-func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree, subIdx int) (err error) {
+func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree, subIdx, subtreeSize int) (err error) {
 	var idx64 uint64
 
 	for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
@@ -641,7 +648,7 @@ func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree,
 
 		subtreeNode := subtree.Nodes[txIdx]
 
-		idx64, err = safeconversion.IntToUint64((subIdx * len(subtree.Nodes)) + txIdx)
+		idx64, err = safeconversion.IntToUint64((subIdx * subtreeSize) + txIdx)
 		if err != nil {
 			return errors.NewProcessingError("[BLOCK][%s] failed to convert index to uint64", b.String(), err)
 		}
