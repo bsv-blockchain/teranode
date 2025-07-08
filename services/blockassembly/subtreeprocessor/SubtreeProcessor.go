@@ -1093,12 +1093,12 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 	// reset the chained subtrees and the current subtree
 	stp.chainedSubtrees = stp.chainedSubtrees[:fromIndex]
 
-	lenOriginalSubtreesInt32, err := safeconversion.IntToInt32(len(originalSubtrees))
+	fromIndexInt32, err := safeconversion.IntToInt32(fromIndex)
 	if err != nil {
-		return errors.NewProcessingError("error converting original subtrees length", err)
+		return errors.NewProcessingError("error converting fromIndex", err)
 	}
 
-	stp.chainedSubtreeCount.Store(lenOriginalSubtreesInt32)
+	stp.chainedSubtreeCount.Store(fromIndexInt32)
 
 	stp.currentSubtree, _ = subtreepkg.NewTreeByLeafCount(stp.currentItemsPerFile)
 
