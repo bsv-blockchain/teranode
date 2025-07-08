@@ -4679,3 +4679,142 @@ func CreateValidSubtreeMetadata(subtree *subtreepkg.Subtree) ([]byte, error) {
 	// Serialize the metadata
 	return subtreeMeta.Serialize()
 }
+
+// TestCalculateMedianTimestamp tests the CalculateMedianTimestamp function
+func TestCalculateMedianTimestamp(t *testing.T) {
+	t.Run("empty timestamps", func(t *testing.T) {
+		median, err := CalculateMedianTimestamp([]time.Time{})
+		assert.Error(t, err)
+		assert.Nil(t, median)
+		assert.Contains(t, err.Error(), "no timestamps provided")
+	})
+
+	t.Run("single timestamp", func(t *testing.T) {
+		ts := time.Now()
+		median, err := CalculateMedianTimestamp([]time.Time{ts})
+		assert.NoError(t, err)
+		assert.NotNil(t, median)
+		assert.Equal(t, ts.Unix(), median.Unix())
+	})
+
+	t.Run("odd number of timestamps", func(t *testing.T) {
+		ts1 := time.Unix(1000, 0)
+		ts2 := time.Unix(2000, 0)
+		ts3 := time.Unix(3000, 0)
+
+		// unordered to test sorting
+		timestamps := []time.Time{ts3, ts1, ts2}
+
+		median, err := CalculateMedianTimestamp(timestamps)
+		assert.NoError(t, err)
+		assert.NotNil(t, median)
+		assert.Equal(t, ts2.Unix(), median.Unix()) // median should be 2000
+	})
+
+	t.Run("even number of timestamps", func(t *testing.T) {
+		// note: Bitcoin consensus incorrectly uses lower middle element for even numbers
+		ts1 := time.Unix(1000, 0)
+		ts2 := time.Unix(2000, 0)
+		ts3 := time.Unix(3000, 0)
+		ts4 := time.Unix(4000, 0)
+
+		// unordered to test sorting
+		timestamps := []time.Time{ts4, ts2, ts1, ts3}
+
+		median, err := CalculateMedianTimestamp(timestamps)
+		assert.NoError(t, err)
+		assert.NotNil(t, median)
+		// for 4 elements, mid = 4/2 = 2, so index 2 is ts3 (3000)
+		assert.Equal(t, ts3.Unix(), median.Unix())
+	})
+
+	t.Run("eleven timestamps", func(t *testing.T) {
+		timestamps := make([]time.Time, 11)
+		for i := 0; i < 11; i++ {
+			timestamps[i] = time.Unix(int64(i*100), 0)
+		}
+
+		// shuffle them to test sorting
+		timestamps[0], timestamps[10] = timestamps[10], timestamps[0]
+		timestamps[2], timestamps[8] = timestamps[8], timestamps[2]
+
+		median, err := CalculateMedianTimestamp(timestamps)
+		assert.NoError(t, err)
+		assert.NotNil(t, median)
+		// median of 0-1000 (step 100) should be 500
+		assert.Equal(t, int64(500), median.Unix())
+	})
+
+	t.Run("duplicate timestamps", func(t *testing.T) {
+		ts := time.Unix(1000, 0)
+		timestamps := []time.Time{ts, ts, ts, ts, ts}
+
+		median, err := CalculateMedianTimestamp(timestamps)
+		assert.NoError(t, err)
+		assert.NotNil(t, median)
+		assert.Equal(t, ts.Unix(), median.Unix())
+	})
+}
+
+// TestBlock_MedianTimestampValidation tests the median timestamp validation logic
+func TestBlock_MedianTimestampValidation(t *testing.T) {
+	// test the median timestamp logic directly without full block validation
+	t.Run("median timestamp calculation and validation", func(t *testing.T) {
+		// create a simple block
+		prevHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
+		merkleRoot, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+		bits, _ := NewNBitFromString("207fffff")
+
+		baseTime := time.Now().Add(-2 * time.Hour)
+
+		// test case 1: block timestamp after median time (valid)
+		blockHeader := &BlockHeader{
+			Version:        2,
+			HashPrevBlock:  prevHash,
+			HashMerkleRoot: merkleRoot,
+			Timestamp:      uint32(baseTime.Add(2 * time.Hour).Unix()),
+			Bits:           *bits,
+			Nonce:          2,
+		}
+
+		// create previous block headers for median calculation
+		prevHeaders := make([]*BlockHeader, 11)
+		for i := 0; i < 11; i++ {
+			prevHeaders[i] = &BlockHeader{
+				Version:        2,
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: merkleRoot,
+				Timestamp:      uint32(baseTime.Add(time.Duration(i) * 10 * time.Minute).Unix()),
+				Bits:           *bits,
+				Nonce:          uint32(i),
+			}
+		}
+
+		// calculate median timestamp
+		prevTimeStamps := make([]time.Time, 11)
+		for i, bh := range prevHeaders {
+			prevTimeStamps[i] = time.Unix(int64(bh.Timestamp), 0)
+		}
+
+		medianTimestamp, err := CalculateMedianTimestamp(prevTimeStamps)
+		require.NoError(t, err)
+
+		// median of 11 timestamps (0, 10, 20, ..., 100 minutes) should be 50 minutes
+		expectedMedian := baseTime.Add(50 * time.Minute)
+		assert.Equal(t, expectedMedian.Unix(), medianTimestamp.Unix())
+
+		// verify block timestamp is after median
+		blockTime := time.Unix(int64(blockHeader.Timestamp), 0)
+		assert.True(t, blockTime.After(*medianTimestamp), "block timestamp should be after median")
+
+		// test case 2: block timestamp before median time (invalid)
+		blockHeader.Timestamp = uint32(medianTimestamp.Add(-1 * time.Minute).Unix())
+		blockTime = time.Unix(int64(blockHeader.Timestamp), 0)
+		assert.False(t, blockTime.After(*medianTimestamp), "block timestamp should not be after median")
+
+		// test case 3: block timestamp equal to median time (invalid)
+		blockHeader.Timestamp = uint32(medianTimestamp.Unix())
+		blockTime = time.Unix(int64(blockHeader.Timestamp), 0)
+		assert.False(t, blockTime.After(*medianTimestamp), "block timestamp should not be after median")
+	})
+}

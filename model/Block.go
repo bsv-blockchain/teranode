@@ -445,8 +445,11 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 
 		// validate that the block's timestamp is after the median timestamp
 		if b.Header.Timestamp <= b.medianTimestamp {
-			// TODO fix this for test mode when generating lots of blocks quickly
-			// return false, errors.NewProcessingError("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
+			// if we're not on a chain that allows blocks to be generated quickly then return an error
+			if !b.settings.ChainCfgParams.GenerateSupported {
+				return false, errors.NewBlockInvalidError("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
+			}
+			// otherwise just warn
 			logger.Warnf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
 		}
 	}
