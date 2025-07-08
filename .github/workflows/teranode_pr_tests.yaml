@@ -17,27 +17,33 @@ env:
 jobs:
   golangci:
     name: lint
-    runs-on: teranode-runner
+    runs-on: arc-runners
+    container:
+      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: false
+          cache: true
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: latest
           only-new-issues: true
-          args: --timeout=5m
+          args: -j $(nproc) --timeout=5m
 
   test:
     name: test
-    runs-on: teranode-runner
+    runs-on: arc-runners
+    container:
+      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
     steps:
       - uses: actions/checkout@v4
 
-      # Set up AWS CLI using OIDC role
+      # Set up AWS CLI
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -60,9 +66,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: false
+          cache: true
+
       - name: Run Go tests
-        run: make test
+        run: CGO_ENABLED=1 make -j$(nproc) test
         continue-on-error: false
 
       - name: Upload coverage report
@@ -78,7 +85,9 @@ jobs:
 
   smoketest:
     name: smoketest
-    runs-on: teranode-runner
+    runs-on: arc-runners
+    container:
+      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -119,7 +128,9 @@ jobs:
 
   sonarqube:
     name: Sonarqube
-    runs-on: teranode-runner
+    runs-on: arc-runners
+    container:
+      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
     needs: test
     steps:
       - name: Checkout
@@ -136,16 +147,23 @@ jobs:
         run: |
           ./scripts/check_filenames.sh
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
       # Re-run golangci-lint separately without exiting on errors and generating a report for use in Sonar
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: latest
-          args: --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
+          args: -j $(nproc) --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
 
-      - uses: twingate/github-action@4493ffc3806241aa98194a3fa679f874bce013b5
-        with:
-          service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }}
+
+      # - uses: twingate/github-action@v1.5
+      #   with:
+      #     service-key: ${{ secrets.TWINGATE_SELF_HOSTED_RUNNERS }}
+      #   continue-on-error: true
 
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@v5

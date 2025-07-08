@@ -15,7 +15,7 @@ permissions:
 jobs:
   go-test:
     name: Go test
-    runs-on: teranode-runner
+    runs-on: arc-runners
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -100,7 +100,7 @@ jobs:
 
   sonarqube:
     name: Sonarqube
-    runs-on: teranode-runner
+    runs-on: arc-runners
     needs: go-test
     timeout-minutes: 15
     steps:
@@ -127,7 +127,7 @@ jobs:
 
     - uses: twingate/github-action@4493ffc3806241aa98194a3fa679f874bce013b5
       with:
-        service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
+        service-key: ${{ secrets.TWINGATE_SELF_HOSTED_RUNNERS }} # Required
 
     - name: SonarQube Scan
       uses: sonarsource/sonarqube-scan-action@v5
