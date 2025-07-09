@@ -56,7 +56,7 @@ fi
 sleep 0.5
 echo "\nService ${HOST}:${PORT} is available."
 
-echo "Generating 100 blocks on teranode-1..."
+echo "Generating 100 blocks..."
 curl --user bitcoin:bitcoin -X POST http://${HOST}:${PORT} \
     -H "Content-Type: application/json" \
     -d '{"method": "generate", "params": [100]}'
@@ -67,7 +67,7 @@ do
   # Random delay between 250ms-1000ms
   DELAY_MS=$(( (RANDOM % 751) + 250 ))
   DELAY_S=$(awk -v delay_ms="$DELAY_MS" 'BEGIN { printf "%.3f", delay_ms / 1000 }')
-  echo "Generating block on teranode-1 (after $DELAY_S seconds delay)..."
+  echo "Generating block (after $DELAY_S seconds delay)..."
   sleep $DELAY_S
   curl --user bitcoin:bitcoin -X POST http://${HOST}:${PORT} \
     -H "Content-Type: application/json" \

@@ -38,17 +38,16 @@ This tool is typically used to ensure the correctness of blockchain data after g
 rm -rf data
 
 # run the node for least 110 blocks
-docker compose -f compose/docker-compose-host-3blasters.yml up -d
+docker compose -f compose/docker-compose-3blasters.yml up -d
 
 # stop the node after mining 110+ blocks
-
-docker compose -f compose/docker-compose-host-3blasters.yml down teranode-1 teranode-2 teranode-3
+docker compose -f compose/docker-compose-3blasters.yml down teranode1 teranode2 teranode3
 
 # run chainintegrity
 go run compose/cmd/chainintegrity/main.go --logfile=chainintegrity --debug
 
 # cleanup
-docker compose -f compose/docker-compose-host-3blasters.yml down
+docker compose -f compose/docker-compose-3blasters.yml down
 ```
 
 ## Features

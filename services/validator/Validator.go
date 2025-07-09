@@ -872,6 +872,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// 0) Check whether we have a complete transaction in extended format, with all input information
 	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
 	if !tx.IsExtended() {
+		v.logger.Errorf("transaction %s is not extended, extending... coinbase: %t, inputs: %d, outputs: %d", tx.TxIDChainHash().String(), tx.IsCoinbase(), len(tx.Inputs), len(tx.Outputs))
 		err := v.extendTransaction(ctx, tx)
 		if err != nil {
 			// error is already wrapped in our errors package
