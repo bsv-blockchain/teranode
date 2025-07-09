@@ -824,7 +824,7 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 		}
 
 		// Calculate DeleteAtHeight based on retention policy
-		deleteAtHeight := currentHeight + s.settings.UtxoStore.BlockHeightRetention
+		deleteAtHeight := currentHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 
 		batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 		batchWritePolicy.RecordExistsAction = aerospike.UPDATE

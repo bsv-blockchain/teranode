@@ -62,6 +62,28 @@ type Settings struct {
 	GlobalBlockHeightRetention uint32
 }
 
+// GetUtxoStoreBlockHeightRetention calculates the effective block height retention for UTXO store
+// by adding the adjustment to the global value. Returns 0 if the result would be negative.
+func (s *Settings) GetUtxoStoreBlockHeightRetention() uint32 {
+	result := int64(s.GlobalBlockHeightRetention) + int64(s.UtxoStore.BlockHeightRetentionAdjustment)
+	if result < 0 {
+		return 0
+	}
+
+	return uint32(result)
+}
+
+// GetSubtreeValidationBlockHeightRetention calculates the effective block height retention for subtree validation
+// by adding the adjustment to the global value. Returns 0 if the result would be negative.
+func (s *Settings) GetSubtreeValidationBlockHeightRetention() uint32 {
+	result := int64(s.GlobalBlockHeightRetention) + int64(s.SubtreeValidation.BlockHeightRetentionAdjustment)
+	if result < 0 {
+		return 0
+	}
+
+	return uint32(result)
+}
+
 type DashboardSettings struct {
 	Enabled        bool
 	DevServerPorts []int  // Vite dev server ports (e.g., 517, 417)
@@ -301,6 +323,7 @@ type UtxoStoreSettings struct {
 	UpdateTxMinedStatus              bool
 	MaxMinedRoutines                 int
 	MaxMinedBatchSize                int
+	BlockHeightRetentionAdjustment   int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
 }
 
 type P2PSettings struct {
@@ -394,7 +417,8 @@ type SubtreeValidationSettings struct {
 	MissingTransactionsBatchSize              int
 	PercentageMissingGetFullData              float64
 	// BlacklistedBaseURLs is a set of base URLs that are not allowed for subtree validation
-	BlacklistedBaseURLs map[string]struct{}
+	BlacklistedBaseURLs            map[string]struct{}
+	BlockHeightRetentionAdjustment int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
 }
 
 type LegacySettings struct {

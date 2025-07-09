@@ -317,6 +317,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UpdateTxMinedStatus:              getBool("utxostore_updateTxMinedStatus", true, alternativeContext...),
 			MaxMinedRoutines:                 getInt("utxostore_maxMinedRoutines", 128, alternativeContext...),
 			MaxMinedBatchSize:                getInt("utxostore_maxMinedBatchSize", 1024, alternativeContext...),
+			BlockHeightRetentionAdjustment:   getInt32("utxostore_blockHeightRetentionAdjustment", 0, alternativeContext...),
 		},
 		P2P: P2PSettings{
 			BestBlockTopic:     getString("p2p_bestblock_topic", "", alternativeContext...),
@@ -398,6 +399,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MissingTransactionsBatchSize:              getInt("subtreevalidation_missingTransactionsBatchSize", 16_384, alternativeContext...),
 			PercentageMissingGetFullData:              getFloat64("subtreevalidation_percentageMissingGetFullData", 20, alternativeContext...),
 			BlacklistedBaseURLs:                       blacklistMap,
+			BlockHeightRetentionAdjustment:            getInt32("subtreevalidation_blockHeightRetentionAdjustment", 0, alternativeContext...),
 		},
 		Legacy: LegacySettings{
 			WorkingDir:                       getString("legacy_workingDir", "../../data", alternativeContext...),

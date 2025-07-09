@@ -147,7 +147,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 			aerospike.NewValue(minedBlockInfo.BlockHeight),
 			aerospike.NewValue(minedBlockInfo.SubtreeIdx),
 			aerospike.NewIntegerValue(int(s.blockHeight.Load())),
-			aerospike.NewValue(s.settings.UtxoStore.BlockHeightRetention),
+			aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
 		)
 	}
 
@@ -194,11 +194,11 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 								}
 
 							case LuaDAHSet:
-								if err := s.SetDAHForChildRecords(hashes[idx], res.ChildCount, s.settings.UtxoStore.BlockHeightRetention); err != nil {
+								if err := s.SetDAHForChildRecords(hashes[idx], res.ChildCount, s.settings.GetUtxoStoreBlockHeightRetention()); err != nil {
 									errs = errors.Join(errs, err)
 								}
 
-								if err := s.setDAHExternalTransaction(ctx, hashes[idx], s.settings.UtxoStore.BlockHeightRetention); err != nil {
+								if err := s.setDAHExternalTransaction(ctx, hashes[idx], s.settings.GetUtxoStoreBlockHeightRetention()); err != nil {
 									errs = errors.Join(errs, err)
 								}
 

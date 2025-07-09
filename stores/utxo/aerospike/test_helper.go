@@ -116,7 +116,17 @@ func (s *Store) GetExternalStore() blob.Store {
 
 // SetBlockHeightRetention sets the blockHeightRetention for the store
 func (s *Store) SetBlockHeightRetention(v uint32) {
-	s.settings.UtxoStore.BlockHeightRetention = v
+	s.settings.GlobalBlockHeightRetention = v
+}
+
+// SetUtxoStoreBlockHeightRetentionAdjustment sets the UTXO store adjustment for testing
+func (s *Store) SetUtxoStoreBlockHeightRetentionAdjustment(v int32) {
+	s.settings.UtxoStore.BlockHeightRetentionAdjustment = v
+}
+
+// SetSubtreeValidationBlockHeightRetentionAdjustment sets the subtree validation adjustment for testing
+func (s *Store) SetSubtreeValidationBlockHeightRetentionAdjustment(v int32) {
+	s.settings.SubtreeValidation.BlockHeightRetentionAdjustment = v
 }
 
 // SetStoreBatcher was implemented to facilitate testing

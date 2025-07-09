@@ -608,7 +608,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	}
 
 	// get the previous block headers on this chain and pass into the validation
-	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, previousBlockHash, uint64(u.settings.UtxoStore.BlockHeightRetention))
+	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, previousBlockHash, uint64(u.settings.GetUtxoStoreBlockHeightRetention()))
 	if err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to get block headers from blockchain client", err)
 	}

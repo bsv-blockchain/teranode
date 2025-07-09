@@ -462,7 +462,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			// settings.Asset.HTTPPort = 18090
 			settings.Validator.UseLocalValidator = true
-			settings.UtxoStore.BlockHeightRetention = 1
+			settings.GlobalBlockHeightRetention = 1
 			settings.BlockValidation.OptimisticMining = false
 		},
 	})
@@ -477,7 +477,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			// settings.Asset.HTTPPort = 28090
 			settings.Validator.UseLocalValidator = true
-			settings.UtxoStore.BlockHeightRetention = 1
+			settings.GlobalBlockHeightRetention = 1
 			settings.BlockValidation.OptimisticMining = false
 		},
 	})
@@ -603,7 +603,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 	// _, err = node1.CallRPC(node1.Ctx, "generate", []any{2})
 	// require.NoError(t, err)
 
-	blocksToGenerate := node1.Settings.UtxoStore.BlockHeightRetention
+	blocksToGenerate := node1.Settings.GlobalBlockHeightRetention
 	_, err = node1.CallRPC(node1.Ctx, "generate", []any{blocksToGenerate + 1})
 	require.NoError(t, err)
 

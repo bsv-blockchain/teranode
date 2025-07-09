@@ -375,7 +375,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 				if !hasUtxos {
 					// add a DAH to the external file, since there were no spendable utxos in the transaction
-					dah := bItem.blockHeight + s.settings.UtxoStore.BlockHeightRetention
+					dah := bItem.blockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 					setOptions = append(setOptions, options.WithDeleteAt(dah))
 				}
 
@@ -401,7 +401,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 
 				if !hasUtxos {
 					// add a DAH to the external file, since there were no spendable utxos in the transaction
-					dah := bItem.blockHeight + s.settings.UtxoStore.BlockHeightRetention
+					dah := bItem.blockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 					setOptions = append(setOptions, options.WithDeleteAt(dah))
 				}
 
@@ -430,7 +430,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 		}
 
 		if bItem.conflicting {
-			dah := bItem.blockHeight + s.settings.UtxoStore.BlockHeightRetention
+			dah := bItem.blockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), dah)))
 		}
 
@@ -747,7 +747,7 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 
 	if !hasUtxos {
 		// add a DAH to the external file, since there were no spendable utxos in the transaction
-		dah := bItem.blockHeight + s.settings.UtxoStore.BlockHeightRetention
+		dah := bItem.blockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 		opts = append(opts, options.WithDeleteAt(dah))
 	}
 
@@ -851,7 +851,7 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 
 	if !hasUtxos {
 		// add a DAH to the external file, since there were no spendable utxos in the transaction
-		dah := bItem.blockHeight + s.settings.UtxoStore.BlockHeightRetention
+		dah := bItem.blockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 		opts = append(opts, options.WithDeleteAt(dah))
 	}
 

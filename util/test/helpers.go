@@ -8,9 +8,13 @@ import (
 func CreateBaseTestSettings() *settings.Settings {
 	settings := settings.NewSettings()
 	settings.ChainCfgParams = &chaincfg.RegressionNetParams
-	settings.UtxoStore.BlockHeightRetention = 10
+	settings.GlobalBlockHeightRetention = 10
 	settings.BlockValidation.OptimisticMining = false
 	settings.ChainCfgParams.CoinbaseMaturity = 1
+
+	// Initialize adjustment values to 0 for tests (use global value by default)
+	settings.UtxoStore.BlockHeightRetentionAdjustment = 0
+	settings.SubtreeValidation.BlockHeightRetentionAdjustment = 0
 
 	return settings
 }

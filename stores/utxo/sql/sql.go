@@ -946,7 +946,7 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 		WHERE id = $1
 	`
 
-	if s.settings.UtxoStore.BlockHeightRetention > 0 {
+	if s.settings.GetUtxoStoreBlockHeightRetention() > 0 {
 		// check whether the transaction has any unspent outputs
 		qUnspent := `
 			SELECT count(o.idx), t.conflicting
@@ -969,7 +969,7 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 
 		if unspent == 0 || conflicting {
 			// Now mark the transaction as tombstoned if there are no more unspent outputs
-			_ = deleteAtHeightOrNull.Scan(int64(s.blockHeight.Load() + s.settings.UtxoStore.BlockHeightRetention))
+			_ = deleteAtHeightOrNull.Scan(int64(s.blockHeight.Load() + s.settings.GetUtxoStoreBlockHeightRetention()))
 		}
 
 		if _, err := txn.ExecContext(ctx, qSetDAH, transactionID, deleteAtHeightOrNull); err != nil {
@@ -1356,8 +1356,8 @@ func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash)
 func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
 	var deleteAtHeight sql.NullInt64
 
-	if s.settings.UtxoStore.BlockHeightRetention > 0 && setValue {
-		if err := deleteAtHeight.Scan(int64(s.blockHeight.Load() + s.settings.UtxoStore.BlockHeightRetention)); err != nil {
+	if s.settings.GetUtxoStoreBlockHeightRetention() > 0 && setValue {
+		if err := deleteAtHeight.Scan(int64(s.blockHeight.Load() + s.settings.GetUtxoStoreBlockHeightRetention())); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -2083,7 +2083,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 // For each transaction with PreserveUntil <= currentHeight, it sets an appropriate DeleteAtHeight
 // and clears the PreserveUntil field.
 func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
-	deleteAtHeight := currentHeight + s.settings.UtxoStore.BlockHeightRetention
+	deleteAtHeight := currentHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 
 	query := `
 		UPDATE transactions 

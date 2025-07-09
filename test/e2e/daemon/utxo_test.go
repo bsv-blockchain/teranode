@@ -189,7 +189,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 		// EnableFullLogging: true,
 		SettingsContext: "dev.system.test",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.BlockHeightRetention = 1
+			settings.GlobalBlockHeightRetention = 1
 		},
 	})
 
@@ -268,7 +268,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	require.NotNil(t, txMeta)
 
 	// Generate blocks until just before deletion height
-	blocksToGenerate := td.Settings.UtxoStore.BlockHeightRetention
+	blocksToGenerate := td.Settings.GlobalBlockHeightRetention
 	_, err = td.CallRPC(td.Ctx, "generate", []any{blocksToGenerate + 1})
 	require.NoError(t, err)
 

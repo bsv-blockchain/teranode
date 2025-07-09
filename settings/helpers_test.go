@@ -71,9 +71,9 @@ func TestGetURL_empty(t *testing.T) {
 }
 
 func TestGetUTXOStoreURL(t *testing.T) {
-	testURL, _ := url.Parse("sqlite:///utxostore?blockHeightRetention=5")
+	testURL, _ := url.Parse("sqlite:///utxostore")
 
-	gocore.Config().Set("utxostore", "sqlite:///utxostore?blockHeightRetention=5")
+	gocore.Config().Set("utxostore", "sqlite:///utxostore")
 
 	defer gocore.Config().Unset("utxostore")
 

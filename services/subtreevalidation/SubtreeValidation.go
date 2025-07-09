@@ -687,7 +687,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree meta", v.SubtreeHash.String())
 
-	dah := u.utxoStore.GetBlockHeight() + u.settings.GlobalBlockHeightRetention
+	dah := u.utxoStore.GetBlockHeight() + u.settings.GetSubtreeValidationBlockHeightRetention()
 
 	err = u.subtreeStore.Set(ctx, merkleRoot[:], fileformat.FileTypeSubtreeMeta, completeSubtreeMetaBytes, options.WithDeleteAt(dah))
 
