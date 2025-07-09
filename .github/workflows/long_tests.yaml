@@ -38,3 +38,22 @@ jobs:
         run: |
           make testall
         continue-on-error: false
+
+  notify_on_failure:
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - longtest
+    steps:
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Long Tests failed"
+          curl -X POST https://hooks.slack.com/triggers/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 \
+          -H "Content-Type: application/json" \
+          -d '{
+            "repo": "${{ github.repository }}",
+            "commit": "${{ github.sha }}",
+            "build_number": "${{ github.run_id }}",
+            "link": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          }'
