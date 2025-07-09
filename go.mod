@@ -1,8 +1,6 @@
 module github.com/bitcoin-sv/teranode
 
-go 1.24.3
-
-toolchain go1.24.4
+go 1.24.5
 
 replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v0.9.0
 
