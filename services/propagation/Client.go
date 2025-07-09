@@ -42,6 +42,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
@@ -211,8 +212,16 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 	ctx, _, endSpan := tracing.Tracer("PropagationClient").Start(ctx, "ProcessTransaction", tracing.WithTag("tx", tx.TxID()))
 	defer endSpan()
 
+	var txBytes []byte
+
+	if tx.IsExtended() {
+		txBytes = tx.ExtendedBytes()
+	} else {
+		txBytes = tx.Bytes()
+	}
+
 	if c.settings.Propagation.AlwaysUseHTTP {
-		return c.sendTransactionViaHTTP(ctx, tx)
+		return c.sendTransactionViaHTTP(ctx, txBytes, *tx.TxIDChainHash())
 	}
 
 	if c.batchSize > 0 {
@@ -231,7 +240,7 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 
 	// Try gRPC first
 	_, err := c.client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-		Tx: tx.ExtendedBytes(),
+		Tx: txBytes,
 	})
 
 	// If successful, return nil
@@ -246,7 +255,7 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 		c.logger.Warnf("[ProcessTransaction][%s] Transaction exceeds gRPC message limit, falling back to validator /tx endpoint: %s",
 			tx.TxID(), st.Message())
 
-		return c.sendTransactionViaHTTP(ctx, tx)
+		return c.sendTransactionViaHTTP(ctx, txBytes, *tx.TxIDChainHash())
 	}
 
 	// For any other types of errors, return the unwrapped gRPC error
@@ -271,22 +280,22 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 //
 // Returns:
 //   - error: Error if HTTP transaction submission fails
-func (c *Client) sendTransactionViaHTTP(ctx context.Context, tx *bt.Tx) error {
+func (c *Client) sendTransactionViaHTTP(ctx context.Context, txBytes []byte, txHash chainhash.Hash) error {
 	// Create an HTTP client with a timeout
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
 
 	// Prepare request to validator /tx endpoint
-	req, err := http.NewRequestWithContext(ctx, "POST", c.propagationHTTPAddr.String()+"/tx", bytes.NewBuffer(tx.ExtendedBytes()))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.propagationHTTPAddr.String()+"/tx", bytes.NewBuffer(txBytes))
 	if err != nil {
-		return errors.NewServiceError("[ProcessTransaction][%s] error creating request to validator /tx endpoint", tx.TxID(), err)
+		return errors.NewServiceError("[ProcessTransaction][%s] error creating request to validator /tx endpoint", txHash, err)
 	}
 
 	// Send the request
 	resp, err := client.Do(req)
 	if err != nil {
-		return errors.NewServiceError("[ProcessTransaction][%s] error sending transaction to validator /tx endpoint", tx.TxID(), err)
+		return errors.NewServiceError("[ProcessTransaction][%s] error sending transaction to validator /tx endpoint", txHash, err)
 	}
 	defer resp.Body.Close()
 
@@ -295,10 +304,10 @@ func (c *Client) sendTransactionViaHTTP(ctx context.Context, tx *bt.Tx) error {
 		body, _ := io.ReadAll(resp.Body)
 		httpErr := errors.NewServiceError("HTTP status %d: %s", resp.StatusCode, string(body))
 
-		return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status", tx.TxID(), httpErr)
+		return errors.NewServiceError("[ProcessTransaction][%s] validator /tx endpoint returned non-OK status", txHash, httpErr)
 	}
 
-	c.logger.Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", tx.TxID())
+	c.logger.Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", txHash)
 
 	return nil
 }
@@ -469,6 +478,8 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 	// Create a slice of raw transaction bytes for the gRPC request
 	items := make([]*propagation_api.BatchTransactionItem, len(batch))
 
+	var txBytes []byte
+
 	for i, item := range batch {
 		// Serialize the trace context for this transaction
 		traceContext := make(map[string]string)
@@ -476,8 +487,14 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 		prop := otel.GetTextMapPropagator()
 		prop.Inject(item.ctx, propagation.MapCarrier(traceContext))
 
+		if item.tx.IsExtended() {
+			txBytes = item.tx.ExtendedBytes()
+		} else {
+			txBytes = item.tx.Bytes()
+		}
+
 		items[i] = &propagation_api.BatchTransactionItem{
-			Tx:           item.tx.ExtendedBytes(),
+			Tx:           txBytes,
 			TraceContext: traceContext,
 		}
 	}
