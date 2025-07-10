@@ -14,7 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	prometheus_golang "github.com/prometheus/client_golang/prometheus"
-	"github.com/sercand/kuberesolver/v5"
+	"github.com/sercand/kuberesolver/v6"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
