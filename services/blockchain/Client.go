@@ -943,6 +943,9 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 	// Use sync.Once to ensure channel is closed exactly once
 	var closeOnce sync.Once
 
+	// Create a done channel to coordinate goroutine shutdown
+	done := make(chan struct{})
+
 	go func() {
 		<-ctx.Done()
 		c.logger.Infof("[Blockchain] server context done, closing subscription: %s", source)
@@ -953,6 +956,9 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 			c.logger.Errorf("[Blockchain] failed to close connection %v", err)
 		}
 
+		// Wait for sender goroutine to exit before closing channel
+		<-done
+
 		// Close the channel when context is done
 		closeOnce.Do(func() {
 			close(ch)
@@ -961,10 +967,8 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 
 	go func() {
 		defer func() {
-			// Ensure channel is closed if goroutine exits
-			closeOnce.Do(func() {
-				close(ch)
-			})
+			// Signal that sender goroutine is done
+			close(done)
 		}()
 
 		for c.running.Load() {
