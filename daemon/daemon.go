@@ -152,7 +152,7 @@ func New(opts ...Option) *Daemon {
 
 	if d.loggerFactory == nil {
 		d.loggerFactory = func(serviceName string) ulogger.Logger {
-			return ulogger.New(serviceName, ulogger.WithLevel("DEBUG"))
+			return ulogger.New(serviceName)
 		}
 	}
 
