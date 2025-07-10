@@ -215,13 +215,13 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 							okUpdates++
 						default:
 							nrErrors++
-							errs = errors.NewError("aerospike batchRecord %s bins[SUCCESS] msg: %s", hashes[idx].String(), responseMsg, errors.Join(errs, batchRecord.BatchRec().Err))
+							errs = errors.NewError("aerospike batchRecord %s bins[SUCCESS] msg: %s, err: %w", hashes[idx].String(), responseMsg, errors.Join(errs, batchRecord.BatchRec().Err))
 						}
 					}
 				}
 			} else {
 				nrErrors++
-				errs = errors.NewError("aerospike batchRecord %s !bins[SUCCESS] err: %s", hashes[idx].String(), errors.Join(errs, batchRecord.BatchRec().Err))
+				errs = errors.NewError("aerospike batchRecord %s !bins[SUCCESS] err: %w", hashes[idx].String(), errors.Join(errs, batchRecord.BatchRec().Err))
 			}
 		}
 	}
