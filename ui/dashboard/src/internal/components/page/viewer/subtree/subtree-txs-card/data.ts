@@ -64,16 +64,29 @@ export const getColDefs = (t) => {
 
 export const filters = {}
 
-export const getRenderCells = (t) => {
+export const getRenderCells = (t, blockHash = '', coinbaseTxId = '') => {
   return {
     txid: (idField, item, colId) => {
-      return item.txid === 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
-        ? { value: 'COINBASE' }
-        : {
-            component: item[colId] ? LinkHashCopy : null,
-            props: getHashLinkProps(DetailType.tx, item.txid, t),
+      if (item.txid === 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff') {
+        // This is a coinbase placeholder
+        if (coinbaseTxId) {
+          // If we have the actual coinbase transaction ID, create a proper link
+          return {
+            component: LinkHashCopy,
+            props: {
+              ...getHashLinkProps(DetailType.tx, coinbaseTxId, t),
+              text: 'COINBASE',
+            },
             value: '',
           }
+        }
+        return { value: 'COINBASE' }
+      }
+      return {
+        component: item[colId] ? LinkHashCopy : null,
+        props: getHashLinkProps(DetailType.tx, item.txid, t),
+        value: '',
+      }
     },
     fee: (idField, item, colId) => {
       return {

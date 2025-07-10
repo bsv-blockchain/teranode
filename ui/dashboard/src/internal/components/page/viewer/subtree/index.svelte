@@ -91,7 +91,7 @@
   <SubtreeDetailsCard data={result} {display} {blockHash} on:display={onDisplay} />
   {#if display === DetailTab.overview}
     <div style="height: 20px" />
-    <SubtreeTxsCard subtree={result} />
+    <SubtreeTxsCard subtree={result} {blockHash} />
   {/if}
 {:else if $spinCount === 0}
   <div class="no-data">

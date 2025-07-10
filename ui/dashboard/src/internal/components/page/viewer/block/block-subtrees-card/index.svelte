@@ -73,6 +73,7 @@
 
 <Card
   title={t(`${baseKey}.title`, { height: block?.expandedHeader?.height })}
+  headerPadding="20px 24px 16px 24px"
   contentPadding="0"
   showFooter={showTableFooter}
 >

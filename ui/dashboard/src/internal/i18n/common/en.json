@@ -219,6 +219,14 @@
           "miner": "Miner"
         }
       },
+      "coinbase": {
+        "title": "Coinbase Transaction",
+        "fields": {
+          "blockReward": "Block Reward",
+          "outputCount": "Outputs",
+          "size": "Size"
+        }
+      },
       "subtrees": {
         "title": "Subtrees for Block #{{ height }}",
         "subtitle": "{{ count }} subtrees found",

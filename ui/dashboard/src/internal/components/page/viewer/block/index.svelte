@@ -2,6 +2,7 @@
   import { beforeUpdate } from 'svelte'
   import { page } from '$app/stores'
   import BlockDetailsCard from './block-details-card/index.svelte'
+  import BlockCoinbaseCard from './block-coinbase-card/index.svelte'
   import BlockSubtreesCard from './block-subtrees-card/index.svelte'
   import NoData from '../no-data-card/index.svelte'
 
@@ -90,6 +91,8 @@
 {#if result}
   <BlockDetailsCard data={result} {display} on:display={onDisplay} />
   {#if display === DetailTab.overview}
+    <div style="height: 20px" />
+    <BlockCoinbaseCard data={result} />
     <div style="height: 20px" />
     <BlockSubtreesCard block={result} />
   {/if}

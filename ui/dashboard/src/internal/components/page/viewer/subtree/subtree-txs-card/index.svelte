@@ -17,11 +17,14 @@
   let colDefs: any[] = []
   $: colDefs = getColDefs(t) || []
 
-  $: renderCells = getRenderCells(t) || {}
-
   export let subtree: any
+  export let blockHash = ''
 
   let data: any[] = []
+  let coinbaseTxId = ''
+  let fetchingCoinbase = false
+
+  $: renderCells = getRenderCells(t, blockHash, coinbaseTxId) || {}
 
   let page = 1
   let pageSize = 10
@@ -68,6 +71,26 @@
 
   $: if (subtree) {
     fetchData(subtree.expandedData.hash, page, pageSize)
+  }
+
+  $: if (blockHash && blockHash.length === 64 && !coinbaseTxId && !fetchingCoinbase) {
+    fetchCoinbaseId(blockHash)
+  }
+
+  async function fetchCoinbaseId(hash) {
+    if (fetchingCoinbase) return
+    
+    fetchingCoinbase = true
+    try {
+      const blockData = await api.getItemData({ type: api.ItemType.block, hash })
+      if (blockData.ok && blockData.data.coinbase_tx) {
+        coinbaseTxId = blockData.data.coinbase_tx.TxID || ''
+      }
+    } catch (error) {
+      console.warn('Failed to fetch coinbase transaction ID:', error)
+    } finally {
+      fetchingCoinbase = false
+    }
   }
 </script>
 

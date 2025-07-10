@@ -198,13 +198,13 @@
     gap: 8px;
     width: 100%;
 
-    padding-bottom: 32px;
+    padding-bottom: 16px;
     border-bottom: 1px solid #0a1018;
   }
 
   .json {
     box-sizing: var(--box-sizing);
-    margin-top: 32px;
+    margin-top: 16px;
 
     padding: 25px;
     border-radius: 10px;
@@ -216,7 +216,7 @@
 
   .fields {
     box-sizing: var(--box-sizing);
-    margin-top: 32px;
+    margin-top: 16px;
 
     display: grid;
     grid-template-columns: 1fr 1fr;
