@@ -16,6 +16,8 @@ jobs:
   go-test:
     name: Go test
     runs-on: arc-runners
+    container:
+      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -99,6 +101,8 @@ jobs:
   sonarqube:
     name: Sonarqube
     runs-on: arc-runners
+    container:
+      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
     needs: go-test
     timeout-minutes: 15
     steps:
