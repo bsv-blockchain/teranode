@@ -85,11 +85,13 @@ func (in *IndexDB) DumpRecords(count int) {
 // Usage:
 //
 // This function is used to export block headers from the index database to a file in a specified
-// output directory. It sorts the blocks by height and writes them along with metadata to the file.
+// output directory. It only includes blocks that are part of the active chain by tracing back
+// from the chainstate tip. It sorts the blocks by height and writes them along with metadata to the file.
 //
 // Parameters:
 //   - outputDir: The directory where the output file will be created.
 //   - heightHint: An estimated number of blocks to optimize memory allocation.
+//   - chainstateTip: The hash of the tip block from the chainstate database.
 //
 // Returns:
 //   - A pointer to the highest BlockIndex written to the file.
@@ -99,11 +101,11 @@ func (in *IndexDB) DumpRecords(count int) {
 //
 // This function interacts with the file system, creating and writing to files. It also calculates
 // a SHA256 hash of the output file and writes it to a separate file for verification.
-func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxopersister.BlockIndex, error) {
-	// Slice to store block information
-	blocks := make([]*utxopersister.BlockIndex, 0, heightHint)
+func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int, chainstateTip *chainhash.Hash) (*utxopersister.BlockIndex, error) {
+	// Map to store all blocks by their hash
+	allBlocks := make(map[chainhash.Hash]*utxopersister.BlockIndex, heightHint)
 
-	// Iterate over the block headers in the LevelDB
+	// First pass: Read all blocks into memory
 	iter := in.db.NewIterator(util.BytesPrefix([]byte("b")), nil)
 	defer iter.Release()
 
@@ -132,21 +134,53 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 		}
 
 		blockIndex.Hash = blockHash
-
-		blocks = append(blocks, blockIndex)
+		allBlocks[*blockHash] = blockIndex
 	}
 
 	if err := iter.Error(); err != nil {
 		return nil, err
 	}
 
+	// Second pass: Trace back from chainstate tip to identify active chain
+	activeChainBlocks := make(map[chainhash.Hash]bool)
+	currentHash := chainstateTip
+	var bestBlock *utxopersister.BlockIndex
+
+	// Trace back from the tip to genesis
+	for currentHash != nil {
+		block, exists := allBlocks[*currentHash]
+		if !exists {
+			return nil, errors.NewProcessingError("chainstate tip block not found in index: %s", currentHash.String())
+		}
+
+		activeChainBlocks[*currentHash] = true
+
+		// Keep track of the tip block (first one we process)
+		if bestBlock == nil {
+			bestBlock = block
+		}
+
+		// If we've reached genesis (height 0), stop
+		if block.Height == 0 {
+			break
+		}
+
+		// Move to the previous block
+		currentHash = block.BlockHeader.HashPrevBlock
+	}
+
+	// Third pass: Collect only active chain blocks
+	blocks := make([]*utxopersister.BlockIndex, 0, len(activeChainBlocks))
+	for hash, block := range allBlocks {
+		if activeChainBlocks[hash] {
+			blocks = append(blocks, block)
+		}
+	}
+
 	// Sort the slice by block height
 	sort.SliceStable(blocks, func(i, j int) bool {
 		return blocks[i].Height < blocks[j].Height
 	})
-
-	// Now we are sorted, the last block in the slice is the highest
-	bestBlock := blocks[len(blocks)-1]
 
 	safeOutputDir := filepath.Clean(outputDir)
 
@@ -172,7 +206,8 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 	}
 
 	// Create the output directory if it doesn't exist
-	outFile := filepath.Join(safeOutputDir, bestBlock.Hash.String()+".utxo-headers")
+	// Use chainstate tip hash for filename consistency
+	outFile := filepath.Join(safeOutputDir, chainstateTip.String()+".utxo-headers")
 
 	var file *os.File
 
@@ -200,12 +235,13 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 		return nil, errors.NewProcessingError("couldn't write header to file", err)
 	}
 
-	if _, err = bufferedWriter.Write(bestBlock.Hash[:]); err != nil {
-		return nil, errors.NewProcessingError("couldn't write block header to file", err)
+	// Write the last block hash and height (expected by seeder)
+	if err = binary.Write(bufferedWriter, binary.LittleEndian, bestBlock.Hash); err != nil {
+		return nil, errors.NewProcessingError("couldn't write block hash to file", err)
 	}
 
 	if err = binary.Write(bufferedWriter, binary.LittleEndian, bestBlock.Height); err != nil {
-		return nil, errors.NewProcessingError("error writing header number", err)
+		return nil, errors.NewProcessingError("error writing block height", err)
 	}
 
 	var (
@@ -223,26 +259,13 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 		txCount += block.TxCount
 	}
 
-	// Write the number of txs and utxos written
-	b := make([]byte, 8)
-
-	binary.LittleEndian.PutUint64(b, recordCount)
-
-	if _, err = bufferedWriter.Write(b); err != nil {
-		return nil, errors.NewProcessingError("couldn't write tx count", err)
-	}
-
-	binary.LittleEndian.PutUint64(b, txCount)
-
-	if _, err = bufferedWriter.Write(b); err != nil {
-		return nil, errors.NewProcessingError("couldn't write tx count", err)
-	}
-
 	if err = bufferedWriter.Flush(); err != nil {
 		return nil, errors.NewProcessingError("couldn't flush buffer", err)
 	}
 
-	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), bestBlock.Hash.String()+".utxo-headers") // N.B. The 2 spaces is important for the hash to be valid
+	log.Printf("Wrote %d block headers with %d total transactions to %s", recordCount, txCount, outFile)
+
+	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), chainstateTip.String()+".utxo-headers") // N.B. The 2 spaces is important for the hash to be valid
 
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)go-golangci-lint
 	if err = os.WriteFile(outFile+".sha256", []byte(hashData), 0600); err != nil {

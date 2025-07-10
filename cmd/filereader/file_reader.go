@@ -446,7 +446,23 @@ func handleUtxoHeaders(br *bufio.Reader) error {
 		lastHeight uint32
 	)
 
+	// Read the last block hash and height that's written after the file header
+	var (
+		hash   chainhash.Hash
+		height uint32
+	)
+
+	if err := binary.Read(br, binary.LittleEndian, &hash); err != nil {
+		return errors.NewProcessingError("failed to read last block hash", err)
+	}
+
+	if err := binary.Read(br, binary.LittleEndian, &height); err != nil {
+		return errors.NewProcessingError("failed to read last block height", err)
+	}
+
 	if verbose {
+		fmt.Printf("Last block hash: %s, height: %d\n", hash.String(), height)
+
 		for {
 			uh, err := utxopersister.NewUTXOHeaderFromReader(br)
 			if err != nil {

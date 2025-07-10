@@ -165,6 +165,16 @@ func ConvertBitcoinToUtxoSet(logger ulogger.Logger, _ *settings.Settings, blockc
 
 		blockHeight = blockHeightUint32
 	} else {
+		// First, get the chainstate tip by reading from the chainstate
+		var chainstateTip *chainhash.Hash
+		chainstateTip, err = readChainstateTip(chainstate, logger)
+		if err != nil {
+			logger.Errorf("Could not get chainstate tip: %v", err)
+			return
+		}
+
+		logger.Infof("Chainstate tip: %s", chainstateTip.String())
+
 		var indexDB *bitcoin.IndexDB
 		indexDB, err = bitcoin.NewIndexDB(index)
 		if err != nil {
@@ -189,7 +199,7 @@ func ConvertBitcoinToUtxoSet(logger ulogger.Logger, _ *settings.Settings, blockc
 		}
 
 		var bestBlock *utxopersister.BlockIndex
-		bestBlock, err = indexDB.WriteHeadersToFile(outputDir, height)
+		bestBlock, err = indexDB.WriteHeadersToFile(outputDir, height, chainstateTip)
 		if err != nil {
 			logger.Errorf("Could not write headers: %v", err)
 			return
@@ -199,7 +209,7 @@ func ConvertBitcoinToUtxoSet(logger ulogger.Logger, _ *settings.Settings, blockc
 			logger.Warnf("Height mismatch: height from blocks indexDB was %d, scanned height was %d", height, bestBlock.Height)
 		}
 
-		blockHash = bestBlock.Hash
+		blockHash = chainstateTip
 		previousBlockHash = bestBlock.BlockHeader.HashPrevBlock
 		blockHeight = bestBlock.Height
 	}
@@ -698,6 +708,76 @@ func formatNumber(n uint64) string {
 	}
 
 	return strings.Join(out, "")
+}
+
+// readChainstateTip reads the chainstate tip hash from the chainstate database.
+func readChainstateTip(chainstatePath string, logger ulogger.Logger) (*chainhash.Hash, error) {
+	opts := &opt.Options{
+		Compression: opt.NoCompression,
+		ReadOnly:    true,
+	}
+
+	db, err := leveldb.OpenFile(chainstatePath, opts)
+	if err != nil {
+		return nil, errors.NewProcessingError("couldn't open chainstate LevelDB", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	var obfuscateKey []byte
+	var chainstateTip *chainhash.Hash
+
+	// Iterate through the database - same approach as runImport
+	iter := db.NewIterator(nil, nil)
+	defer iter.Release()
+
+	for iter.Next() {
+		key := iter.Key()
+		value := iter.Value()
+
+		if len(key) == 0 {
+			continue
+		}
+
+		prefixByte := key[0]
+
+		switch prefixByte {
+		case 14: // obfuscateKey
+			obfuscateKey = value
+			logger.Infof("Found obfuscate key: %x (%d bytes)", obfuscateKey, len(obfuscateKey))
+
+		case 66: // 0x42 = B = "chaintip"
+			if obfuscateKey != nil {
+				obfuscateKeyExtended := getObfuscateKeyExtended(obfuscateKey, value)
+
+				// XOR the value with the obfuscateKey to de-obfuscate it
+				deobfuscatedValue := make([]byte, len(value))
+				for i := range value {
+					deobfuscatedValue[i] = value[i] ^ obfuscateKeyExtended[i]
+				}
+
+				chainstateTip, err = chainhash.NewHash(deobfuscatedValue)
+				if err != nil {
+					return nil, errors.NewProcessingError("couldn't create hash from chainstate tip", err)
+				}
+
+				logger.Infof("Found chainstate tip: %s", chainstateTip.String())
+				return chainstateTip, nil
+			}
+			// If we don't have obfuscate key yet, continue iterating
+		}
+	}
+
+	if err := iter.Error(); err != nil {
+		return nil, errors.NewProcessingError("error iterating chainstate", err)
+	}
+
+	if chainstateTip == nil {
+		return nil, errors.NewProcessingError("chainstate tip not found in database")
+	}
+
+	return chainstateTip, nil
 }
 
 /*

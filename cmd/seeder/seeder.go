@@ -272,12 +272,6 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 		blockIndex, err = utxopersister.NewUTXOHeaderFromReader(reader)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				if blockIndex == nil {
-					logger.Errorf("EOF marker not found")
-				} else {
-					logger.Infof("EOF marker found")
-				}
-
 				break
 			}
 
@@ -440,11 +434,6 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 				utxoWrapper, err = utxopersister.NewUTXOWrapperFromReader(gCtx, reader)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
-						if utxoWrapper == nil {
-							logger.Errorf("EOF marker not found")
-						} else {
-							logger.Infof("EOF marker found")
-						}
 						break OUTER
 					}
 
