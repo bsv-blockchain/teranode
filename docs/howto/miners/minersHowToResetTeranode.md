@@ -30,15 +30,9 @@ count
 (1 row)
 
 # truncate the blocks and state table.
-TRUNCATE TABLE blocks RESTART IDENTITY CASCADE;
-TRUNCATE TABLE state RESTART IDENTITY CASCADE;
-
-# Verify the table was truncated.
-SELECT COUNT(*) FROM blocks;
-count
--------
-0
-(1 row)
+DROP TABLE IF EXISTS blocks CASCADE;
+DROP TABLE IF EXISTS state CASCADE;
+DROP TABLE IF EXISTS bans CASCADE;
 ```
 
 **3. Filesystem clean-up.**

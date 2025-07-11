@@ -88,7 +88,7 @@ spec:
             cpu: 1
             memory: 1Gi
   configMapName: teranode-operator-config
-  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.9.16
+  image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.9.22
   legacy:
     enabled: true
     spec:
