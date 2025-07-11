@@ -120,7 +120,13 @@ jobs:
       run: |
         ./scripts/check_filenames.sh
 
-    # Re-run golangci-lint separately without exiting on errors and generating a report for use in Sonar
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: "false"
+
+        # Re-run golangci-lint separately without exiting on errors and generating a report for use in Sonar
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v8
       with:
