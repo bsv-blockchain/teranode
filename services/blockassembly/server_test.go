@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/subtreeprocessor"
@@ -18,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -115,6 +118,94 @@ func TestCheckBlockAssembly(t *testing.T) {
 	})
 }
 
+func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		server, _, _, _ := setup(t)
+		err := server.blockAssembler.Start(t.Context())
+		require.NoError(t, err)
+
+		resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
+		require.NoError(t, err)
+
+		require.NotNil(t, resp)
+
+		blockBytes := resp.Block
+		require.NotNil(t, blockBytes)
+
+		block, err := model.NewBlockFromBytes(blockBytes, nil)
+		require.NoError(t, err)
+
+		require.NotNil(t, block)
+		require.NotNil(t, block.Header)
+
+		assert.Equal(t, uint32(1), block.Height)
+		assert.Equal(t, uint64(1), block.TransactionCount)
+		assert.Equal(t, uint64(5000000000), block.CoinbaseTx.Outputs[0].Satoshis)
+	})
+
+	t.Run("success with lower coinbase output", func(t *testing.T) {
+		server, _, _, _ := setup(t)
+		err := server.blockAssembler.Start(t.Context())
+		require.NoError(t, err)
+
+		server.blockAssembler.bestBlockHeight.Store(250) // halvings = 150
+
+		resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
+		require.NoError(t, err)
+
+		require.NotNil(t, resp)
+
+		blockBytes := resp.Block
+		require.NotNil(t, blockBytes)
+
+		block, err := model.NewBlockFromBytes(blockBytes, nil)
+		require.NoError(t, err)
+
+		require.NotNil(t, block)
+		require.NotNil(t, block.Header)
+
+		assert.Equal(t, uint32(251), block.Height)
+		assert.Equal(t, uint64(1), block.TransactionCount)
+		assert.Equal(t, uint64(2500000000), block.CoinbaseTx.Outputs[0].Satoshis)
+	})
+
+	t.Run("with 10 txs", func(t *testing.T) {
+		server, _, _, _ := setup(t)
+		err := server.blockAssembler.Start(t.Context())
+		require.NoError(t, err)
+
+		for i := uint64(0); i < 10; i++ {
+			server.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+				Hash:        chainhash.HashH([]byte(fmt.Sprintf("%d", i))),
+				Fee:         i,
+				SizeInBytes: i,
+			}, subtreepkg.TxInpoints{})
+		}
+
+		require.Eventually(t, func() bool {
+			return server.blockAssembler.TxCount() == 11
+		}, 5*time.Second, 10*time.Millisecond)
+
+		resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
+		require.NoError(t, err)
+
+		require.NotNil(t, resp)
+
+		blockBytes := resp.Block
+		require.NotNil(t, blockBytes)
+
+		block, err := model.NewBlockFromBytes(blockBytes, nil)
+		require.NoError(t, err)
+
+		require.NotNil(t, block)
+		require.NotNil(t, block.Header)
+
+		assert.Equal(t, uint32(1), block.Height)
+		assert.Equal(t, uint64(11), block.TransactionCount)
+		assert.Equal(t, uint64(5000000045), block.CoinbaseTx.Outputs[0].Satoshis)
+	})
+}
+
 func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints]) {
 	s, subtreeStore := setupServer(t)
 
@@ -140,8 +231,29 @@ func setupServer(t *testing.T) (*BlockAssembly, *memory.Memory) {
 	subtreeStore := memory.New()
 	blockchainClient := &blockchain.Mock{}
 
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1233321,
+		Bits:           model.NBit{},
+		Nonce:          12333,
+	}
+
+	subcriptionCh := make(chan *blockchain.Notification, 100)
+
+	fsmStateRunning := blockchain.FSMStateRUNNING
+	nbits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
 	blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
 	blockchainClient.On("SendNotification", mock.Anything, mock.Anything).Return(nil)
+	blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, errors.ErrNotFound)
+	blockchainClient.On("GetFSMCurrentState", mock.Anything, mock.Anything).Return(&fsmStateRunning, nil)
+	blockchainClient.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	blockchainClient.On("GetBestBlockHeader", mock.Anything, mock.Anything, mock.Anything).Return(blockHeader, &model.BlockHeaderMeta{}, nil)
+	blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nbits, nil)
+	blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subcriptionCh, nil)
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)

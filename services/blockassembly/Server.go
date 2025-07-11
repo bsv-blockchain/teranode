@@ -1396,7 +1396,14 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 	// fake address for the coinbase tx
 	address := "1MUMxUTXcPQ1kAqB7MtJWneeAwVW4cHzzp"
 
-	coinbaseTx, err := model.CreateCoinbase(candidate.Height, 50e8, "block template", []string{address})
+	blockSubsidy := util.GetBlockSubsidyForHeight(candidate.Height, ba.settings.ChainCfgParams)
+
+	subtreeFees := uint64(0)
+	for _, subtree := range subtrees {
+		subtreeFees += subtree.Fees
+	}
+
+	coinbaseTx, err := model.CreateCoinbase(candidate.Height, blockSubsidy+subtreeFees, "block template", []string{address})
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockAssemblyBlockTemplate] error creating coinbase tx", err))
 	}

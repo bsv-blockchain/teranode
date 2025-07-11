@@ -672,7 +672,10 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[Server:ValidateBlock] failed to create block from bytes", err))
 	}
 
-	block.Height = request.Height
+	// override the height if provided in the request
+	if request.Height > 0 {
+		block.Height = request.Height
+	}
 
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "ValidateBlock",
 		tracing.WithParentStat(u.stats),

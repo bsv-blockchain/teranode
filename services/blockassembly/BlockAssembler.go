@@ -394,6 +394,10 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 							subtrees:        subtrees,
 							err:             err,
 						})
+					} else {
+						utils.SafeSend(responseCh, &miningCandidateResponse{
+							err: errors.NewProcessingError("blockchain is not in running state, current state: " + currentState.String()),
+						})
 					}
 				}
 				// stat.AddTime(start)
