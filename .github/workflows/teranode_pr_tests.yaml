@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          cache: false
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
@@ -66,7 +66,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          cache: false
 
       - name: Run Go tests
         run: CGO_ENABLED=1 make -j$(nproc) test
@@ -148,7 +148,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          cache: false
 
       # Re-run golangci-lint separately without exiting on errors and generating a report for use in Sonar
       - name: golangci-lint
