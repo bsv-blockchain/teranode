@@ -133,9 +133,10 @@ jobs:
         version: latest
         args: --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
 
-    - uses: twingate/github-action@4493ffc3806241aa98194a3fa679f874bce013b5
-      with:
-        service-key: ${{ secrets.TWINGATE_SELF_HOSTED_RUNNERS }} # Required
+    # Disabled on self hosted runners in EKS because we're creating twingate sidecar container for every job run
+    # - uses: twingate/github-action@4493ffc3806241aa98194a3fa679f874bce013b5
+    #   with:
+    #     service-key: ${{ secrets.TWINGATE_SELF_HOSTED_RUNNERS }} # Required
 
     - name: SonarQube Scan
       uses: sonarsource/sonarqube-scan-action@v5

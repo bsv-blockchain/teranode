@@ -157,7 +157,7 @@ jobs:
           version: latest
           args: -j $(nproc) --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
 
-
+      # Disabled on self hosted runners in EKS because we're creating twingate sidecar container for every job run
       # - uses: twingate/github-action@v1.5
       #   with:
       #     service-key: ${{ secrets.TWINGATE_SELF_HOSTED_RUNNERS }}
