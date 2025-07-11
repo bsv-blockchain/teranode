@@ -17,9 +17,7 @@ env:
 jobs:
   golangci:
     name: lint
-    runs-on: arc-runners
-    container:
-      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
+    runs-on: teranode-runner
     steps:
       - uses: actions/checkout@v4
 
@@ -33,13 +31,11 @@ jobs:
         with:
           version: latest
           only-new-issues: true
-          args: -j $(nproc) --timeout=5m
+          args: --timeout=5m
 
   test:
     name: test
-    runs-on: arc-runners
-    container:
-      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
+    runs-on: teranode-runner
     steps:
       - uses: actions/checkout@v4
 
@@ -69,7 +65,7 @@ jobs:
           cache: false
 
       - name: Run Go tests
-        run: CGO_ENABLED=1 make -j$(nproc) test
+        run: make test
         continue-on-error: false
 
       - name: Upload coverage report
@@ -85,9 +81,7 @@ jobs:
 
   smoketest:
     name: smoketest
-    runs-on: arc-runners
-    container:
-      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
+    runs-on: teranode-runner
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -126,9 +120,7 @@ jobs:
 
   sonarqube:
     name: Sonarqube
-    runs-on: arc-runners
-    container:
-      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
+    runs-on: teranode-runner
     needs: test
     steps:
       - name: Checkout
@@ -155,13 +147,12 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           version: latest
-          args: -j $(nproc) --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
+          args: --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
 
-      # Disabled on self hosted runners in EKS because we're creating twingate sidecar container for every job run
-      # - uses: twingate/github-action@v1.5
-      #   with:
-      #     service-key: ${{ secrets.TWINGATE_SELF_HOSTED_RUNNERS }}
-      #   continue-on-error: true
+      - uses: twingate/github-action@v1.5
+        with:
+          service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }}
+        continue-on-error: true
 
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@v5

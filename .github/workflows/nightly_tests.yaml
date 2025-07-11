@@ -48,9 +48,7 @@ jobs:
 
   run-docker-tests:
     needs: pull-image
-    runs-on: arc-runners
-    container:
-      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
+    runs-on: teranode-runner
     strategy:
       matrix:
         test_config:
@@ -185,9 +183,7 @@ jobs:
       #   run: npx github-actions-ctrf ${{ matrix.test_config.report_name }}
 
   run-daemon-tests:
-    runs-on: arc-runners
-    container:
-      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
+    runs-on: teranode-runner
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

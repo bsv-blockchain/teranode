@@ -15,9 +15,7 @@ permissions:
 jobs:
   go-test:
     name: Go test
-    runs-on: arc-runners
-    container:
-      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
+    runs-on: teranode-runner
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -100,9 +98,7 @@ jobs:
 
   sonarqube:
     name: Sonarqube
-    runs-on: arc-runners
-    container:
-      image: public.ecr.aws/i7l4o1l2/teranode-github-runner:amd64
+    runs-on: teranode-runner
     needs: go-test
     timeout-minutes: 15
     steps:
@@ -133,10 +129,9 @@ jobs:
         version: latest
         args: --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
 
-    # Disabled on self hosted runners in EKS because we're creating twingate sidecar container for every job run
-    # - uses: twingate/github-action@4493ffc3806241aa98194a3fa679f874bce013b5
-    #   with:
-    #     service-key: ${{ secrets.TWINGATE_SELF_HOSTED_RUNNERS }} # Required
+    - uses: twingate/github-action@4493ffc3806241aa98194a3fa679f874bce013b5
+      with:
+        service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
 
     - name: SonarQube Scan
       uses: sonarsource/sonarqube-scan-action@v5
