@@ -212,13 +212,7 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 	ctx, _, endSpan := tracing.Tracer("PropagationClient").Start(ctx, "ProcessTransaction", tracing.WithTag("tx", tx.TxID()))
 	defer endSpan()
 
-	var txBytes []byte
-
-	if tx.IsExtended() {
-		txBytes = tx.ExtendedBytes()
-	} else {
-		txBytes = tx.Bytes()
-	}
+	txBytes := tx.SerializeBytes()
 
 	if c.settings.Propagation.AlwaysUseHTTP {
 		return c.sendTransactionViaHTTP(ctx, txBytes, *tx.TxIDChainHash())
@@ -478,8 +472,6 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 	// Create a slice of raw transaction bytes for the gRPC request
 	items := make([]*propagation_api.BatchTransactionItem, len(batch))
 
-	var txBytes []byte
-
 	for i, item := range batch {
 		// Serialize the trace context for this transaction
 		traceContext := make(map[string]string)
@@ -487,14 +479,8 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 		prop := otel.GetTextMapPropagator()
 		prop.Inject(item.ctx, propagation.MapCarrier(traceContext))
 
-		if item.tx.IsExtended() {
-			txBytes = item.tx.ExtendedBytes()
-		} else {
-			txBytes = item.tx.Bytes()
-		}
-
 		items[i] = &propagation_api.BatchTransactionItem{
-			Tx:           txBytes,
+			Tx:           item.tx.SerializeBytes(),
 			TraceContext: traceContext,
 		}
 	}

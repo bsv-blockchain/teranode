@@ -142,8 +142,8 @@ github.com/bitly/go-hostpool v0.1.0/go.mod h1:4gOCgp6+NZnVqlKyZ/iBZFTAJKembaVENU
 github.com/bitly/go-simplejson v0.5.0/go.mod h1:cXHtHw4XUPsvGaxgjIAn8PhEWG9NfngEKAMDJEczWVA=
 github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869/go.mod h1:Ekp36dRnpXw/yCqJaO+ZrUyxD+3VXMFFr56k5XYrpB4=
 github.com/bradfitz/go-smtpd v0.0.0-20170404230938-deb6d6237625/go.mod h1:HYsPBTaaSFSlLx/70C2HPIMNZpVV8+vt/A+FMnYP11g=
-github.com/bsv-blockchain/go-bt/v2 v2.4.1 h1:Nt1Zq4309NTJdkUfzr4lJ7YCUdPUBU7zNqrASeuSqOA=
-github.com/bsv-blockchain/go-bt/v2 v2.4.1/go.mod h1:VKgjtP0Ot2wNzNef42vGVjmamCpolVN1aH+XepLnJ8w=
+github.com/bsv-blockchain/go-bt/v2 v2.4.4 h1:KIp3ER5InUFWADMXbhkH9IN9m68glr1ovVGETauFA3c=
+github.com/bsv-blockchain/go-bt/v2 v2.4.4/go.mod h1:VKgjtP0Ot2wNzNef42vGVjmamCpolVN1aH+XepLnJ8w=
 github.com/bsv-blockchain/go-chaincfg v1.1.2 h1:Vnkh/7htz0f3in8xmKNbgetS40DKf2+qZAGcy9O2hmc=
 github.com/bsv-blockchain/go-chaincfg v1.1.2/go.mod h1:ki2ML6vCfIV4RiH4KRMTHSuG3JQqBtLBDJtoc/h3VT8=
 github.com/bsv-blockchain/go-lockfree-queue v1.0.0 h1:rizOsTImw2Gk/iSTQRHqB+2OcJWBl5qN6pbIHqDWxRw=

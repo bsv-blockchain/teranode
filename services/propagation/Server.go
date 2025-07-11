@@ -832,13 +832,13 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 	// defer decoupledEndSpan()
 
 	// we should store all transactions, if this fails we should not validate the transaction
-	if err := ps.storeTransaction(ctx, btTx); err != nil {
+	if err = ps.storeTransaction(ctx, btTx); err != nil {
 		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
 	if ps.validatorKafkaProducerClient != nil {
 		// Check transaction size first - if it's too large, use HTTP endpoint instead
-		txSize := len(btTx.ExtendedBytes())
+		txSize := len(btTx.SerializeBytes())
 		maxKafkaMessageSize := ps.settings.Validator.KafkaMaxMessageBytes
 
 		if txSize > maxKafkaMessageSize {
@@ -852,7 +852,7 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
-		if _, err := ps.validator.Validate(ctx, btTx, 0); err != nil {
+		if _, err = ps.validator.Validate(ctx, btTx, 0); err != nil {
 			return errors.NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
 		}
 	}
@@ -900,7 +900,7 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 
 	fullURL := ps.validatorHTTPAddr.ResolveReference(endpoint)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), bytes.NewReader(btTx.ExtendedBytes()))
+	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), bytes.NewReader(btTx.SerializeBytes()))
 	if err != nil {
 		return errors.NewServiceError("[ProcessTransaction][%s] error creating request to validator /tx endpoint", btTx.TxID(), err)
 	}
@@ -945,7 +945,7 @@ func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
 	validationOptions := validator.NewDefaultOptions()
 
 	msg := &kafkamessage.KafkaTxValidationTopicMessage{
-		Tx:     btTx.ExtendedBytes(),
+		Tx:     btTx.SerializeBytes(),
 		Height: 0,
 		Options: &kafkamessage.KafkaTxValidationOptions{
 			SkipUtxoCreation:     validationOptions.SkipUtxoCreation,
@@ -992,7 +992,7 @@ func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) 
 	defer deferFn()
 
 	if ps.txStore != nil {
-		if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, btTx.ExtendedBytes()); err != nil {
+		if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, btTx.SerializeBytes()); err != nil {
 			// TODO make this resilient to errors
 			// write it to secondary store (Kafka) and retry?
 			return err

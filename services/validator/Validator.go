@@ -293,6 +293,8 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 //
 //gocognit:ignore
 func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
+	// this caches the tx hash in the object for the duration of all operations. It's immutable, so not a problem
+	tx.SetTxHash(tx.TxIDChainHash())
 	txID := tx.TxIDChainHash().String()
 
 	ctx, span, deferFn := tracing.Tracer("validator").Start(
@@ -306,9 +308,6 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	defer func() {
 		deferFn(err)
 	}()
-
-	// this cached the tx hash in the object for the duration of all operations. It's immutable, so not a problem
-	tx.SetTxHash(tx.TxIDChainHash())
 
 	if v.settings.Validator.VerboseDebug {
 		v.logger.Debugf("[Validator:ValidateInternal] called for %s", txID)
@@ -352,6 +351,22 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
+	var utxoHeights []uint32
+
+	// check whether the transaction is extended, extend it if not
+	// we also get the block heights of the inputs of the transaction since we are doing a DB lookup
+	if !tx.IsExtended() {
+		// get the block heights of all inputs of the transaction and extend the inputs of not extended transaction.
+		// utxoHeights is a slice of block heights for each input
+		// txInpoints is a struct containing the parent tx hashes and the vout indexes of each input
+		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID); err != nil {
+			err := errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
+			span.RecordError(err)
+
+			return nil, err
+		}
+	}
+
 	// validate the transaction format, consensus rules etc.
 	// this does not validate the signatures in the transaction yet
 	if err = v.validateTransaction(ctx, tx, blockHeight, validationOptions); err != nil {
@@ -361,15 +376,15 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
-	// get the block heights of all inputs of the transaction
-	// utxoHeights is a slice of block heights for each input
-	// txInpoints is a struct containing the parent tx hashes and the vout indexes of each input
-	utxoHeights, err := v.getTransactionInputBlockHeights(ctx, tx, txID)
-	if err != nil {
-		err := errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
-		span.RecordError(err)
+	// if the transaction was extended, we still need to get the block heights of the inputs
+	// since that processing did not happen before the validateTransaction step
+	if len(utxoHeights) == 0 {
+		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID); err != nil {
+			err := errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
+			span.RecordError(err)
 
-		return nil, err
+			return nil, err
+		}
 	}
 
 	// validate the transaction scripts and signatures
@@ -560,14 +575,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 }
 
 // getTransactionInputBlockHeights returns the block heights for each input of the transaction
-func (v *Validator) getTransactionInputBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
-	ctx, span, endSpan := tracing.Tracer("validator").Start(ctx, "getTransactionInputBlockHeights",
+func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
+	ctx, span, endSpan := tracing.Tracer("validator").Start(ctx, "getTransactionInputBlockHeightsAndExtendTx",
 		tracing.WithHistogram(getTransactionInputBlockHeights),
 	)
 	defer endSpan()
 
 	// get the utxo heights for each input
-	utxoHeights, err := v.getUtxoBlockHeights(ctx, tx, txID)
+	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, txID)
 	if err != nil {
 		span.RecordError(err)
 		return nil, err
@@ -596,8 +611,8 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 	return nil
 }
 
-// getUtxoBlockHeights returns the block heights for each input of the transaction
-func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
+// getUtxoBlockHeightsAndExtendTx returns the block heights for each input of the transaction
+func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
 	// get the block heights of the input transactions of the transaction
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, v.settings.UtxoStore.GetBatcherSize)
@@ -605,22 +620,24 @@ func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID str
 	parentTxHashes := make(map[chainhash.Hash][]int)
 	utxoHeights := make([]uint32, len(tx.Inputs))
 
-	for idx, input := range tx.Inputs {
+	for inputIdx, input := range tx.Inputs {
 		parentTxHash := input.PreviousTxIDChainHash()
 
 		if _, ok := parentTxHashes[*parentTxHash]; !ok {
 			parentTxHashes[*parentTxHash] = make([]int, 0)
 		}
 
-		parentTxHashes[*parentTxHash] = append(parentTxHashes[*parentTxHash], idx)
+		parentTxHashes[*parentTxHash] = append(parentTxHashes[*parentTxHash], inputIdx)
 	}
+
+	extend := !tx.IsExtended() // if the tx is not extended, we need to extend it with the parent tx hashes
 
 	for parentTxHash, idxs := range parentTxHashes {
 		parentTxHash := parentTxHash
-		idxs := idxs
+		inputIdxs := idxs
 
 		g.Go(func() error {
-			if err := v.getUtxoBlockHeight(gCtx, parentTxHash, idxs, utxoHeights); err != nil {
+			if err := v.getUtxoBlockHeightAndExtendForParentTx(gCtx, parentTxHash, inputIdxs, utxoHeights, tx, extend); err != nil {
 				if errors.Is(err, errors.ErrTxNotFound) {
 					return errors.NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
 				}
@@ -639,8 +656,18 @@ func (v *Validator) getUtxoBlockHeights(ctx context.Context, tx *bt.Tx, txID str
 	return utxoHeights, nil
 }
 
-func (v *Validator) getUtxoBlockHeight(gCtx context.Context, parentTxHash chainhash.Hash, idxs []int, utxoHeights []uint32) error {
-	txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, fields.BlockIDs, fields.BlockHeights)
+// getUtxoBlockHeightAndExtendForParentTx retrieves the block height for a parent transaction
+// and extends the inputs of the transaction if it is not already extended.
+func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context, parentTxHash chainhash.Hash, idxs []int,
+	utxoHeights []uint32, tx *bt.Tx, extend bool) error {
+	f := []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
+
+	if extend {
+		// add the parent tx outputs to the fields, to be able to extend the transaction
+		f = append(f, fields.Outputs)
+	}
+
+	txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, f...)
 	if err != nil {
 		return err
 	}
@@ -652,6 +679,25 @@ func (v *Validator) getUtxoBlockHeight(gCtx context.Context, parentTxHash chainh
 	} else {
 		for _, idx := range idxs {
 			utxoHeights[idx] = txMeta.BlockHeights[0]
+		}
+	}
+
+	if extend {
+		// extend the transaction inputs with the parent tx outputs
+		for _, idx := range idxs {
+			if idx > len(tx.Inputs) {
+				return errors.NewProcessingError("[Validate][%s] input index %d out of bounds for transaction with %d inputs",
+					tx.TxIDChainHash().String(), idx, len(tx.Inputs))
+			}
+
+			if txMeta.Tx == nil || txMeta.Tx.Outputs == nil || txMeta.Tx.Outputs[tx.Inputs[idx].PreviousTxOutIndex] == nil {
+				return errors.NewProcessingError("[Validate][%s] parent transaction %s does not have outputs for input index %d",
+					tx.TxIDChainHash().String(), parentTxHash.String(), idx)
+			}
+
+			// extend the input with the parent tx outputs
+			tx.Inputs[idx].PreviousTxSatoshis = txMeta.Tx.Outputs[tx.Inputs[idx].PreviousTxOutIndex].Satoshis
+			tx.Inputs[idx].PreviousTxScript = txMeta.Tx.Outputs[tx.Inputs[idx].PreviousTxOutIndex].LockingScript
 		}
 	}
 
@@ -833,7 +879,7 @@ func (v *Validator) reverseSpends(ctx context.Context, spentUtxos []*utxo.Spend)
 // Returns error if required parent transaction data cannot be found.
 func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "extendTransaction",
-		tracing.WithHistogram(prometheusTransactionValidate),
+		tracing.WithHistogram(prometheusTransactionExtend),
 	)
 	defer deferFn()
 
@@ -872,9 +918,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// 0) Check whether we have a complete transaction in extended format, with all input information
 	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
 	if !tx.IsExtended() {
-		v.logger.Errorf("transaction %s is not extended, extending... coinbase: %t, inputs: %d, outputs: %d", tx.TxIDChainHash().String(), tx.IsCoinbase(), len(tx.Inputs), len(tx.Outputs))
-		err := v.extendTransaction(ctx, tx)
-		if err != nil {
+		if err := v.extendTransaction(ctx, tx); err != nil {
 			// error is already wrapped in our errors package
 			span.RecordError(err)
 

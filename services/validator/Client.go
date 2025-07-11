@@ -198,19 +198,10 @@ type validateBatchResponse struct {
 }
 
 func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *utxometa.Data, err error) {
-	// serialize transaction to bytes
-	var txBytes []byte
-
-	if tx.IsExtended() {
-		txBytes = tx.ExtendedBytes()
-	} else {
-		txBytes = tx.Bytes()
-	}
-
 	if c.batchSize == 0 {
 		// Non-batch mode: direct validation
 		response, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
-			TransactionData:      txBytes,
+			TransactionData:      tx.SerializeBytes(),
 			BlockHeight:          blockHeight,
 			SkipUtxoCreation:     &validationOptions.SkipUtxoCreation,
 			AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
@@ -236,7 +227,7 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 	doneCh := make(chan validateBatchResponse)
 	c.batcher.Put(&batchItem{
 		req: &validator_api.ValidateTransactionRequest{
-			TransactionData:      txBytes,
+			TransactionData:      tx.SerializeBytes(),
 			BlockHeight:          blockHeight,
 			SkipUtxoCreation:     &validationOptions.SkipUtxoCreation,
 			AddTxToBlockAssembly: &validationOptions.AddTXToBlockAssembly,
@@ -426,16 +417,8 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 
 	fullURL := c.validatorHTTPAddr.ResolveReference(endpoint)
 
-	var txBytes []byte
-
-	if tx.IsExtended() {
-		txBytes = tx.ExtendedBytes()
-	} else {
-		txBytes = tx.Bytes()
-	}
-
 	// Create the HTTP request with the transaction data
-	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), bytes.NewReader(txBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", fullURL.String(), bytes.NewReader(tx.SerializeBytes()))
 	if err != nil {
 		return errors.NewServiceError("[ValidateWithOptions][%s] error creating request to validator /tx endpoint: %v", tx.TxID(), err)
 	}

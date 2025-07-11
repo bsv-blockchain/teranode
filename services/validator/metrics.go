@@ -28,6 +28,9 @@ var (
 	// prometheusTransactionValidate measures individual validation steps
 	prometheusTransactionValidate prometheus.Histogram
 
+	// prometheusTransactionExend measures transaction extension operations
+	prometheusTransactionExtend prometheus.Histogram
+
 	// prometheusTransactionValidateScripts measures individual validation script steps
 	prometheusTransactionValidateScripts prometheus.Histogram
 
@@ -115,6 +118,16 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "transactions_validate",
 			Help:      "Histogram of transaction validation",
+			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	prometheusTransactionExtend = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "transactions_extend",
+			Help:      "Histogram of transaction extension operations",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)

@@ -22,6 +22,7 @@ Usage:
 package validator
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -807,6 +808,10 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 	tx, err := bt.NewTxFromString("010000000000000000ef03fe1a25c8774c1e827f9ebdae731fe609ff159d6f7c15094e1d467a99a01e03100000000002012affffffffa086010000000000018253a080075d834402e916390940782236b29d23db6f52dfc940a12b3eff99159c0000000000ffffffffa086010000000000100f5468616e6b7320456c69676975732161e4ed95239756bbb98d11dcf973146be0c17cc1cc94340deb8bc4d44cd88e92000000000a516352676a675168948cffffffff40548900000000000763516751676a680220aa4400000000001976a9149bc0bbdd3024da4d0c38ed1aecf5c68dd1d3fa1288ac20aa4400000000001976a914169ff4804fd6596deb974f360c21584aa1e19c9788ac00000000")
 	require.NoError(t, err)
 
+	txBytes := tx.Bytes() // non-extended tx
+	txNonExtended, err := bt.NewTxFromBytes(txBytes)
+	require.NoError(t, err)
+
 	tSettings := settings.NewSettings()
 
 	t.Run("not mined parent txs", func(t *testing.T) {
@@ -823,13 +828,13 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			BlockHeights: make([]uint32, 0),
 		}, nil)
 
-		utxoHashes, err := v.getUtxoBlockHeights(ctx, tx, tx.TxID())
+		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID())
 		require.NoError(t, err)
 
 		expected := []uint32{1000, 1000, 1000}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
-			t.Errorf("getUtxoBlockHeights() got = %v, want %v", utxoHashes, expected)
+			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
 		}
 	})
 
@@ -861,13 +866,90 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			BlockHeights: []uint32{768, 769},
 		}, nil).Once()
 
-		utxoHashes, err := v.getUtxoBlockHeights(ctx, tx, tx.TxID())
+		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID())
 		require.NoError(t, err)
 
 		expected := []uint32{125, 1000, 768}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
-			t.Errorf("getUtxoBlockHeights() got = %v, want %v", utxoHashes, expected)
+			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
+		}
+	})
+
+	t.Run("non extended mined parent txs", func(t *testing.T) {
+		mockUtxoStore := utxostore.MockUtxostore{}
+
+		v := &Validator{
+			settings:  tSettings,
+			utxoStore: &mockUtxoStore,
+		}
+
+		expectedOutputs := make(map[string][]*bt.Output)
+		expectedOutputs["10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"] = []*bt.Output{
+			{
+				LockingScript: bscript.NewFromBytes([]byte("10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe")),
+				Satoshis:      1000000,
+			},
+		}
+		expectedOutputs["9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"] = []*bt.Output{
+			{
+				LockingScript: bscript.NewFromBytes([]byte("9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053")),
+				Satoshis:      2000000,
+			},
+		}
+		expectedOutputs["928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"] = []*bt.Output{
+			{
+				LockingScript: bscript.NewFromBytes([]byte("928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461")),
+				Satoshis:      3000000,
+			},
+		}
+
+		mockUtxoStore.On("GetBlockHeight").Return(uint32(1000))
+
+		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
+			return hash.String() == "10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"
+		}), mock.Anything).Return(&meta.Data{
+			BlockHeights: []uint32{125, 126},
+			Tx: &bt.Tx{
+				Outputs: expectedOutputs["10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"],
+			},
+		}, nil).Once()
+
+		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
+			return hash.String() == "9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"
+		}), mock.Anything).Return(&meta.Data{
+			BlockHeights: []uint32{},
+			Tx: &bt.Tx{
+				Outputs: expectedOutputs["9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"],
+			},
+		}, nil).Once()
+
+		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
+			return hash.String() == "928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"
+		}), mock.Anything).Return(&meta.Data{
+			BlockHeights: []uint32{768, 769},
+			Tx: &bt.Tx{
+				Outputs: expectedOutputs["928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"],
+			},
+		}, nil).Once()
+
+		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, txNonExtended, txNonExtended.TxID())
+		require.NoError(t, err)
+
+		expected := []uint32{125, 1000, 768}
+
+		if !reflect.DeepEqual(utxoHashes, expected) {
+			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
+		}
+
+		for i, input := range txNonExtended.Inputs {
+			if input.PreviousTxSatoshis != expectedOutputs[txNonExtended.Inputs[i].PreviousTxIDChainHash().String()][0].Satoshis {
+				t.Errorf("Expected PreviousTxSatoshis %d, got %d", expectedOutputs[txNonExtended.Inputs[i].PreviousTxIDChainHash().String()][0].Satoshis, input.PreviousTxSatoshis)
+			}
+
+			if !bytes.Equal(input.PreviousTxScript.Bytes(), expectedOutputs[txNonExtended.Inputs[i].PreviousTxIDChainHash().String()][0].LockingScript.Bytes()) {
+				t.Errorf("Expected PreviousTxScript %s, got %s", expectedOutputs[txNonExtended.Inputs[i].PreviousTxIDChainHash().String()][0].LockingScript, input.PreviousTxScript)
+			}
 		}
 	})
 }

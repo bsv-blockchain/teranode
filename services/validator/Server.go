@@ -702,8 +702,6 @@ func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 		// Extract validation parameters from query string
 		blockHeight, options := extractValidationParams(c)
 
-		var txBytes []byte
-
 		// Read transactions with the bt reader in a loop
 		for {
 			tx := &bt.Tx{}
@@ -719,15 +717,9 @@ func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 				return c.String(http.StatusBadRequest, "[handleMultipleTx] Invalid request body: "+err.Error())
 			}
 
-			if tx.IsExtended() {
-				txBytes = tx.ExtendedBytes()
-			} else {
-				txBytes = tx.Bytes()
-			}
-
 			// Process the transaction
 			req := &validator_api.ValidateTransactionRequest{
-				TransactionData:      txBytes,
+				TransactionData:      tx.SerializeBytes(),
 				BlockHeight:          blockHeight,
 				SkipUtxoCreation:     &options.SkipUtxoCreation,
 				AddTxToBlockAssembly: &options.AddTXToBlockAssembly,
