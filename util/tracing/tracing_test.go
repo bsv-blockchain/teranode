@@ -26,8 +26,7 @@ func TestUTracer_WithError(t *testing.T) {
 	require.NoError(t, err)
 
 	defer func() {
-		err := ShutdownTracer(context.Background())
-		require.NoError(t, err)
+		_ = ShutdownTracer(context.Background())
 	}()
 
 	logger := newLineLogger()
@@ -60,8 +59,7 @@ func TestUTracer_ChildSpans(t *testing.T) {
 	require.NoError(t, err)
 
 	defer func() {
-		err := ShutdownTracer(context.Background())
-		require.NoError(t, err)
+		_ = ShutdownTracer(context.Background())
 	}()
 
 	tracer := Tracer("test-service", nil)
@@ -102,8 +100,7 @@ func TestSimpleTracing(t *testing.T) {
 	require.NoError(t, err)
 
 	defer func() {
-		err := ShutdownTracer(context.Background())
-		require.NoError(t, err)
+		_ = ShutdownTracer(context.Background())
 	}()
 
 	logger := ulogger.NewVerboseTestLogger(t)

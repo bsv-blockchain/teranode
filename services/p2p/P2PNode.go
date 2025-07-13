@@ -103,6 +103,7 @@ type P2PNode struct {
 	handlerByTopic    map[string]Handler             // Map of topic handlers for message processing
 	startTime         time.Time                      // Time when the node was started
 	onPeerConnected   func(context.Context, peer.ID) // Callback for peer connection events
+	callbackMutex     sync.RWMutex                   // Mutex for thread-safe callback access
 
 	// IMPORTANT: The following variables must only be used atomically.
 	bytesReceived uint64   // Counter for bytes received over the network
@@ -285,9 +286,7 @@ func NewP2PNode(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 			node.peerConnTimes.Store(peerID, time.Now())
 
 			// Notify any connection handlers about the new peer
-			if node.onPeerConnected != nil {
-				go node.onPeerConnected(context.Background(), peerID)
-			}
+			node.callPeerConnected(context.Background(), peerID)
 		},
 		DisconnectedF: func(n network.Network, conn network.Conn) {
 			peerID := conn.RemotePeer()
@@ -1342,7 +1341,20 @@ func (s *P2PNode) GetPeerIPs(peerID peer.ID) []string {
 
 // SetPeerConnectedCallback sets a callback function to be called when a new peer connects
 func (s *P2PNode) SetPeerConnectedCallback(callback func(context.Context, peer.ID)) {
+	s.callbackMutex.Lock()
+	defer s.callbackMutex.Unlock()
 	s.onPeerConnected = callback
+}
+
+// callPeerConnected safely calls the peer connected callback if it exists
+func (s *P2PNode) callPeerConnected(ctx context.Context, peerID peer.ID) {
+	s.callbackMutex.RLock()
+	callback := s.onPeerConnected
+	s.callbackMutex.RUnlock()
+
+	if callback != nil {
+		go callback(ctx, peerID)
+	}
 }
 
 func extractIPFromMultiaddr(multiaddr multiaddr.Multiaddr) string {
