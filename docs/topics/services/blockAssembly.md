@@ -1,6 +1,7 @@
 # 📦 Block Assembly Service
 
 ## Index
+
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
     - [2.1. Starting the Block Assembly Service](#21-starting-the-block-assembly-service)
@@ -27,16 +28,18 @@
 9. [Configuration options (settings flags)](#9-configuration-options-settings-flags)
     - [Network and Communication Settings](#network-and-communication-settings)
     - [gRPC Client Settings](#grpc-client-settings)
-    - [Subtree Management](#subtree-management)
-    - [Block and Transaction Processing](#block-and-transaction-processing)
-    - [Blockchain Reorganization](#blockchain-reorganization)
-    - [Mining and Difficulty](#mining-and-difficulty)
-    - [Performance Tuning](#performance-tuning)
-    - [Security Settings](#security-settings)
+    - [Buffer Management and Memory Settings](#buffer-management-and-memory-settings)
+    - [Subtree Size Management](#subtree-size-management)
+    - [Concurrency and Performance Settings](#concurrency-and-performance-settings)
+    - [Double-Spend Detection and Security](#double-spend-detection-and-security)
+    - [Block Assembly Reset and Recovery](#block-assembly-reset-and-recovery)
+    - [Blockchain Reorganization Settings](#blockchain-reorganization-settings)
+    - [Mining Configuration](#mining-configuration)
     - [Service Control](#service-control)
 10. [Other Resources](#10-other-resources)
 
 ## 1. Description
+
 The Block Assembly Service is responsible for assembling new blocks and adding them to the blockchain.  The block assembly process involves the following steps:
 
 1. **Receiving Transactions from the TX Validator Service**:
@@ -87,7 +90,7 @@ Based on its settings, the Block Assembly receives TX notifications from the val
 
 The Block Assembly service also subscribes to the Blockchain service, and receives notifications when a new subtree or block is received from another node.
 
-![Block_Assembly_Service_Component_Diagram.png](img%2FBlock_Assembly_Service_Component_Diagram.png)
+![Block_Assembly_Service_Component_Diagram.png](img/Block_Assembly_Service_Component_Diagram.png)
 
 Finally, note that the Block Assembly benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
 
@@ -96,11 +99,12 @@ Specifically for Teranode, these volumes are meant to be temporary holding locat
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
 ![lustre_fs.svg](img/plantuml/lustre_fs.svg)
+
 ## 2. Functionality
 
 ### 2.1. Starting the Block Assembly Service
 
-![block_assembly_init.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_init.svg)
+![block_assembly_init.svg](img/plantuml/blockassembly/block_assembly_init.svg)
 
 The Block Assembly service initialisation involves setting up internal communication channels and external communication channels, and instantiating the Subtree Processor and Job Store.
 
@@ -110,7 +114,7 @@ The Job Store is a temporary in-memory map that tracks information about the can
 
 ### 2.2. Receiving Transactions from the TX Validator Service
 
-![block_assembly_add_tx.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_add_tx.svg)
+![block_assembly_add_tx.svg](img/plantuml/blockassembly/block_assembly_add_tx.svg)
 
 - The TX Validator interacts with the Block Assembly Client. Based on configuration, we send either transactions in batches or individually. This communication is performed over gRPC.
 - The Block Assembly client then delegates to the Server, which adds the transactions to the Subtree Processor.
@@ -119,13 +123,15 @@ The Job Store is a temporary in-memory map that tracks information about the can
 
 ### 2.3. Grouping Transactions into Subtrees
 
-![block_assembly_add_tx_to_subtree.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_add_tx_to_subtree.svg)
+![block_assembly_add_tx_to_subtree.svg](img/plantuml/blockassembly/block_assembly_add_tx_to_subtree.svg)
 
 - The Subtree Processor dequeues any transaction request (txReq) received in the previous section, and adds it to the latest (current) subtree.
 - If the current subtree is complete (i.e. if it has reached the target length, say 1M transactions), it sends the subtree to the server through an internal Go channel (newSubtreeChan).
 - The server then checks if the subtree already exists in the Subtree Store. Otherwise, the server persists the new subtree in the store with a specified (and settings-driven) TTL (Time-To-Live).
 - Finally, the server sends a notification to the BlockchainClient to announce the new subtree. This will be propagated to other nodes via the P2P service.
+
 ### 2.3.1 Dynamic Subtree Size Adjustment
+
 The Block Assembly service can dynamically adjust the subtree size based on real-time performance metrics when enabled via configuration:
 
 - The system targets a rate of approximately one subtree per second under high throughput conditions
@@ -136,12 +142,13 @@ The Block Assembly service can dynamically adjust the subtree size based on real
 
 Importantly, the system maintains a minimum subtree size threshold, configured via `minimum_merkle_items_per_subtree`. In low transaction volume scenarios, subtrees will only be created once enough transactions have accumulated to meet this minimum size requirement. This means that during periods of low network usage, the target rate of one subtree per second may not be achieved, as the system prioritizes reaching the minimum subtree size before sending.
 
-![block_assembly_dynamic_subtree.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_dynamic_subtree.svg)
+![block_assembly_dynamic_subtree.svg](img/plantuml/blockassembly/block_assembly_dynamic_subtree.svg)
 
 This self-tuning mechanism helps maintain consistent processing rates and optimal resource utilization during block assembly, automatically adapting to the node's current processing capabilities and transaction volumes.
+
 ### 2.4. Creating Mining Candidates
 
-![block_assembly_get_mining_candidate.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_get_mining_candidate.svg)
+![block_assembly_get_mining_candidate.svg](img/plantuml/blockassembly/block_assembly_get_mining_candidate.svg)
 
 - The "Miner" initiates the process by requesting a mining candidate (a block to mine) from the Block Assembly.
 - The "Block Assembler" sub-component interacts with the Subtree Processor to obtain completed subtrees that can be included in the mining candidate. It must be noted that there is no subtree limit, Teranode has no restrictions on the maximum block size (hence, neither on the number of subtrees).
@@ -149,11 +156,12 @@ This self-tuning mechanism helps maintain consistent processing rates and optima
 - The mining candidate, inclusive of the list of subtrees, a coinbase TX, a merkle proof, and associated fees, is returned back to the miner.
 - The Block Assembly Server makes status announcements, using the Status Client, about the mining candidate's height and previous hash.
 - Finally, the Server tracks the current candidate in the JobStore within a new "job" and its TTL. This information will be retrieved at a later stage, if and when the miner submits a solution to the mining challenge for this specific mining candidate.
+
 ### 2.5. Submit Mining Solution
 
 Once a miner solves the mining challenge, it submits a solution to the Block Assembly Service. The solution includes the nonce required to solve the mining challenge.
 
-![block_assembly_submit_mining_solution.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_submit_mining_solution.svg)
+![block_assembly_submit_mining_solution.svg](img/plantuml/blockassembly/block_assembly_submit_mining_solution.svg)
 
 - The "Mining" service submits a mining solution (based on a previously provided "mining candidate") to the Block Assembly Service.
 - The Block Assembly server adds the submission to a channel (blockSubmissionCh) and processes the submission (submitMiningSolution).
@@ -172,17 +180,17 @@ The block assembly service subscribes to the Blockchain service, and receives no
 
 Once a new block has been received from another node, there are 4 scenarios to consider:
 
-### 2.6.1. The block received is the same as the current chaintip (i.e. the block we have already seen).
+### 2.6.1. The block received is the same as the current chaintip (i.e. the block we have already seen)
 
 In this case, the block notification is redundant, and refers to a block that the service already considers the current chaintip. The service does nothing.
 
-### 2.6.2. The block received is a new block, and it is the new chaintip.
+### 2.6.2. The block received is a new block, and it is the new chaintip
 
 In this scenario, another node has mined a new block that is now the new chaintip.
 
 The service needs to "move up" the block. By this, we mean the process to identify transactions included in the new block (so we do not include them in future blocks) and to process the coinbase UTXOs (so we can include them in future blocks).
 
-![block_assembly_move_up.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_move_up.svg)
+![block_assembly_move_forward.svg](img/plantuml/blockassembly/block_assembly_move_forward.svg)
 
 1. **Checking for the Best Block Header**:
 
@@ -204,19 +212,69 @@ The service needs to "move up" the block. By this, we mean the process to identi
 
 5. **MoveForwardBlock Functionality**:
 
-    - This function cleans out transactions from the current subtrees that are also in the new block (to avoid duplication and maintain chain integrity).
-    - When `moveForwardBlock` is invoked, it receives a `block` object as a parameter. The function begins with basic validation checks to ensure that the provided block is valid and relevant for processing.
-    - The function handles the coinbase transaction (the first transaction in a block, used to reward miners). It processes the unspent transaction outputs (UTXOs) associated with the coinbase transaction.
-    - The function then compares the list of transactions that are pending to be mined, as maintained by the Block Assembly, with the transactions included in the newly received block. It identifies transactions from the pending list that were not included in the new block.
-    - A list of these remaining transactions is then created. These are the transactions that still require mining.
-    - The Subtree Processor assigns these remaining transactions to the current subtree. This subtree represents the first set of transactions that will be included in the next block to be assembled on top of the newly received block. This ensures that pending transactions are carried over for inclusion in future blocks mined by this node.
-### 2.6.3. The block received is a new block, but it represents a fork.
+    The `moveForwardBlock` function is a comprehensive process that handles the integration of a new block into the Block Assembly service. This function performs seven distinct processing steps to ensure proper blockchain state management and transaction processing.
+
+    **Initial Validation and Setup**:
+    - When `moveForwardBlock` is invoked, it receives a `block` object as a parameter and performs validation checks to ensure the block is not nil and is valid for processing.
+    - Error handling is implemented throughout the process, with proper error propagation and cleanup mechanisms.
+
+    **Step 1: Process Coinbase UTXOs** (`processCoinbaseUtxos`):
+    - Handles the coinbase transaction (the first transaction in a block, used to reward miners)
+    - Creates and stores coinbase UTXOs in the UTXO store with proper block height and mined block information
+    - Implements duplicate coinbase transaction handling for the two known duplicate coinbase transactions on the network
+    - Includes comprehensive error handling for UTXO creation failures
+
+    **Step 2: Process Block Subtrees** (`processBlockSubtrees`):
+    - Creates a reverse lookup map (`blockSubtreesMap`) of all subtrees contained in the received block
+    - Filters and separates chained subtrees that were not included in the block
+    - This separation is crucial for distinguishing between blocks from other nodes vs. blocks from own mining
+
+    **Step 3: Create Transaction Map** (`createTransactionMapIfNeeded`):
+    - **For blocks from other nodes**: Retrieves subtree data from the Subtree Store for each subtree in the block
+    - Deserializes subtree data and creates a comprehensive transaction map
+    - Extracts conflicting nodes that may cause transaction conflicts
+    - **For blocks from own mining**: Uses existing chained subtrees without store retrieval
+    - Implements error handling for subtree retrieval failures
+
+    **Step 4: Process Conflicting Transactions** (`processConflictingTransactions`):
+    - Identifies transactions that conflict with those in the received block
+    - Creates a map of losing transaction hashes that need to be marked as conflicting
+    - Ensures proper conflict resolution to maintain blockchain integrity
+
+    **Step 5: Reset Subtree State** (`resetSubtreeState`):
+    - Resets the current subtree and transaction map to prepare for new transaction processing
+    - Clears previous state to ensure clean processing of remaining transactions
+    - Returns the reset current subtree and transaction map for further processing
+
+    **Step 6: Process Remainder Transactions** (`processRemainderTransactions`):
+    - Processes transactions that were not included in the received block
+    - Handles transactions from both chained subtrees and the current subtree
+    - Manages transaction conflicts and updates subtree state accordingly
+    - Ensures that pending transactions are properly carried over for inclusion in future blocks
+
+    **Step 7: Finalize Block Processing** (`finalizeBlockProcessing`):
+    - Updates internal state variables and performs necessary cleanup operations
+    - Ensures the Block Assembly service is ready for the next block processing cycle
+    - Completes the integration of the new block into the service's state
+
+    **Error Handling and Recovery**:
+    - Each step includes comprehensive error handling with proper error propagation
+    - Failed operations result in appropriate error messages and cleanup procedures
+    - The function ensures that partial processing failures don't leave the service in an inconsistent state
+
+    **Performance Considerations**:
+    - The function uses concurrent processing where appropriate to optimize performance
+    - Subtree retrieval and processing are optimized to handle large blocks efficiently
+    - Memory management is carefully handled to prevent resource leaks during processing
+
+### 2.6.3. The block received is a new block, but it represents a fork
 
 In this scenario, the function needs to handle a reorganization. A blockchain reorganization occurs when a node discovers a longer or more difficult chain different from the current local chain. This can happen due to network delays or forks in the blockchain network.
 
 It is the responsibility of the block assembly to always build on top of the longest chain of work. For clarity, it is not the Block Validation or Blockchain services's responsibility to resolve forks. The Block Assembly is notified of the ongoing chains of work, and it makes sure to build on the longest one. If the longest chain of work is different from the current local chain the block assembly was working on, a reorganization will take place.
 
 #### Fork Detection and Assessment
+
 The Block Assembly service implements real-time fork detection through the following mechanisms:
 
 - **Real-time Block Monitoring**: Implemented via `blockchainSubscriptionCh` in the Block Assembler, which continuously monitors for new blocks and chain updates.
@@ -245,10 +303,12 @@ The Block Assembly service implements real-time fork detection through the follo
 The `BlockAssembler` keeps the node synchronized with the network by identifying and switching to the strongest chain (the one with the most accumulated proof of work), ensuring all nodes in the network converge on the same transaction history.
 
 #### Chain Selection and Reorganization Process
+
 During a reorganization, the `BlockAssembler` performs two key operations:
 
 1. Removes (rolls back) transactions from blocks in the current chain, starting from where the fork occurred
 2. Applies transactions from the new chain's blocks, ensuring the node switches to the stronger chain
+
 The service automatically manages chain selection through:
 
 1. **Best Chain Detection**:
@@ -301,6 +361,7 @@ The following diagram illustrates how the Block Assembly service handles a chain
 Note: If other nodes propose blocks containing a transaction that Teranode has identified as a double-spend (based on the First-Seen rule), Teranode will only build on top of such blocks when the network has reached consensus on which transaction to accept, even if it differs from Teranode's initial first-seen assessment. For more information, please review the [Double Spend Detection documentation](../architecture/understandingDoubleSpends.md).
 
 ### 2.7. Resetting the Block Assembly
+
 The Block Assembly service can be reset to the best block by calling the `ResetBlockAssembly` gRPC method.
 
 1. **State Storage and Retrieval**:
@@ -322,6 +383,7 @@ The Block Assembly service can be reset to the best block by calling the `ResetB
     - Attempts to set the new state and current blockchain chain.
 
 ![block_assembly_reset.svg](img/plantuml/blockassembly/block_assembly_reset.svg)
+
 ## 3. Data Model
 
 - [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.
@@ -330,7 +392,7 @@ The Block Assembly service can be reset to the best block by calling the `ResetB
 
 ## 4. gRPC Protobuf Definitions
 
-The Block Assembly Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/blockassemblyProto.md).
+The Block Assembly Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen in the [Block Assembly Protobuf Reference](../../references/protobuf_docs/blockassemblyProto.md).
 
 ## 5. Technology
 
@@ -351,21 +413,25 @@ The Block Assembly Service uses gRPC for communication between nodes. The protob
 The Block Assembly service implements robust error handling across multiple layers:
 
 #### Block Validation Errors
+
 - **Mining Solution Validation**: When `SubmitMiningSolution` is called, the service performs comprehensive block validation including difficulty target verification
 - **Invalid Block Handling**: Failed validations are logged with detailed error messages and the mining solution is rejected
 - **Recovery**: The service continues processing other mining candidates without interruption
 
 #### Subtree Storage Failures
+
 - **Retry Mechanism**: Failed subtree storage operations are automatically retried using `subtreeRetryChan`
 - **Error Propagation**: Storage errors are communicated back through error channels to prevent data loss
 - **Graceful Degradation**: The service can continue operating with reduced functionality if storage issues persist
 
 #### Reorganization Conflicts
+
 - **Conflicting Transaction Detection**: During reorgs, the service identifies and marks conflicting transactions in affected subtrees
 - **Transaction Recovery**: Non-conflicting transactions are automatically re-added to new subtrees
 - **Deep Reorg Protection**: Reorganizations affecting more than 5 blocks trigger a full service reset for safety
 
 #### UTXO Store Unavailability
+
 - **Connection Monitoring**: The service monitors UTXO store connectivity and handles temporary unavailability
 - **Operation Queuing**: Transactions are queued when UTXO operations fail temporarily
 - **State Consistency**: The service ensures consistent state even during UTXO store recovery
@@ -375,24 +441,27 @@ The Block Assembly service implements robust error handling across multiple laye
 The service integrates comprehensive Prometheus metrics for operational monitoring:
 
 #### Subtree Processing Metrics
+
 - `teranode_subtreeprocessor_add_tx`: Counter for transaction additions
 - `teranode_subtreeprocessor_dynamic_subtree_size`: Current dynamic subtree size
 - `teranode_subtreeprocessor_move_forward_block`: Block processing operations
 - `teranode_subtreeprocessor_move_back_block`: Block rollback operations
 
 #### Block Assembly Metrics
+
 - `teranode_blockassembly_get_mining_candidate`: Mining candidate requests
 - `teranode_blockassembly_submit_mining_solution`: Mining solution submissions
 - Duration histograms for critical operations with microsecond precision
 
 #### State Monitoring
+
 - Current service state (starting, running, resetting, etc.)
 - Transaction queue lengths and processing rates
 - Subtree counts and completion rates
 
 ## 7. Directory Structure and Main Files
 
-```
+```text
 /services/blockassembly
 ├── BlockAssembler.go              - Main logic for assembling blocks.
 ├── BlockAssembler_test.go         - Tests for BlockAssembler.go.
@@ -430,6 +499,7 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -BlockAssembly=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Block Assembly Service locally.
+
 ## 9. Configuration options (settings flags)
 
 The Block Assembly service uses the following configuration options:
@@ -450,62 +520,64 @@ The Block Assembly service uses the following configuration options:
 
 ### gRPC Client Settings
 
-3. **`blockassembly_grpcMaxRetries`**: Maximum number of retry attempts for gRPC calls.
+1. **`blockassembly_grpcMaxRetries`**: Maximum number of retry attempts for gRPC calls.
     - Type: int
     - Default: 3
     - Code Usage: Client retry configuration
     - Impact: Controls resilience of client connections during network issues.
 
-4. **`blockassembly_grpcRetryBackoff`**: Backoff duration between gRPC retry attempts.
+2. **`blockassembly_grpcRetryBackoff`**: Backoff duration between gRPC retry attempts.
     - Type: time.Duration
     - Default: 2s
     - Code Usage: Client retry timing
     - Impact: Controls the delay between retry attempts to avoid overwhelming the server.
+
 ### Buffer Management and Memory Settings
 
 Subtrees are a critical component in the Block Assembly process, organizing transactions hierarchically for efficient block construction. The following settings control how subtrees are created, sized, and managed.
 
-5. **`blockassembly_newSubtreeChanBuffer`**: Buffer size for the new subtree channel.
+1. **`blockassembly_newSubtreeChanBuffer`**: Buffer size for the new subtree channel.
     - Type: int
     - Default: 1000
     - Code Usage: `Server.Init()` method (line 232)
     - Impact: Controls how many new subtree requests can be queued before blocking.
 
-6. **`blockassembly_subtreeRetryChanBuffer`**: Buffer size for the subtree retry channel.
+2. **`blockassembly_subtreeRetryChanBuffer`**: Buffer size for the subtree retry channel.
     - Type: int
     - Default: 1000
     - Code Usage: `Server.Init()` method (line 235)
     - Impact: Controls how many subtree retry operations can be queued before blocking.
 
-7. **`blockassembly_subtreeBlockHeightRetention`**: Number of blocks for which to retain subtrees.
+3. **`blockassembly_subtreeBlockHeightRetention`**: Number of blocks for which to retain subtrees.
     - Type: uint32
     - Default: 1000
     - Code Usage: Subtree data retention management
     - Impact: Controls data retention period for subtrees, affecting storage requirements and historical data availability.
+
 ### Subtree Size Management
 
 > **Dynamic Sizing**: When `blockassembly_useDynamicSubtreeSize` is enabled, subtree sizes automatically adjust between min/max bounds to target ~1 subtree/second.
 
-8. **`initial_merkle_items_per_subtree`**: Initial number of merkle items per subtree when the service starts.
+1. **`initial_merkle_items_per_subtree`**: Initial number of merkle items per subtree when the service starts.
     - Type: int
     - Default: 1048576 (1M)
     - Code Usage: SubtreeProcessor initialization
     - Impact: Sets the starting subtree size, affecting initial memory usage and subtree creation rate.
     - Note: When `blockassembly_useDynamicSubtreeSize` is enabled, this is just the starting point.
 
-9. **`minimum_merkle_items_per_subtree`**: Minimum allowed size for subtrees.
+2. **`minimum_merkle_items_per_subtree`**: Minimum allowed size for subtrees.
     - Type: int
     - Default: 1024
     - Code Usage: `SubtreeProcessor.go` (line 855)
     - Impact: Sets a lower bound on subtree size to ensure efficient tree structures.
 
-10. **`maximum_merkle_items_per_subtree`**: Maximum allowed size for subtrees.
+3. **`maximum_merkle_items_per_subtree`**: Maximum allowed size for subtrees.
     - Type: int
     - Default: 1048576 (1M)
     - Code Usage: `SubtreeProcessor.go` (line 848)
     - Impact: Sets an upper bound on subtree size, preventing excessive memory usage.
 
-11. **`blockassembly_useDynamicSubtreeSize`**: Whether to dynamically adjust subtree size based on processing throughput.
+4. **`blockassembly_useDynamicSubtreeSize`**: Whether to dynamically adjust subtree size based on processing throughput.
     - Type: bool
     - Default: false
     - Code Usage: `SubtreeProcessor.go` (line 793)
@@ -514,43 +586,43 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
 
 ### Concurrency and Performance Settings
 
-12. **`blockassembly_sendBatchSize`**: Size of batches when sending transaction data.
+1. **`blockassembly_sendBatchSize`**: Size of batches when sending transaction data.
     - Type: int
     - Default: 100
     - Code Usage: Transaction batch processing
     - Impact: Affects throughput and memory usage during transaction processing.
 
-13. **`blockassembly_sendBatchTimeout`**: Maximum time in milliseconds to wait before sending a batch of transactions.
+2. **`blockassembly_sendBatchTimeout`**: Maximum time in milliseconds to wait before sending a batch of transactions.
     - Type: int
     - Default: 100
     - Code Usage: Transaction batch timeout control
     - Impact: Balances latency against batch efficiency in transaction processing.
 
-14. **`blockassembly_subtreeProcessorBatcherSize`**: Batch size for the subtree processor.
+3. **`blockassembly_subtreeProcessorBatcherSize`**: Batch size for the subtree processor.
     - Type: int
     - Default: 1000
     - Code Usage: `SubtreeProcessor.go` (line 519)
     - Impact: Controls memory usage and processing efficiency of transaction batches.
 
-15. **`tx_chan_buffer_size`**: Buffer size for transaction channel.
+4. **`tx_chan_buffer_size`**: Buffer size for transaction channel.
     - Type: int
     - Default: 1000
     - Code Usage: Transaction channel buffering
     - Impact: Controls how many transactions can be queued before backpressure is applied.
 
-16. **`blockassembly_subtreeProcessorConcurrentReads`**: Number of concurrent read operations in the subtree processor.
+5. **`blockassembly_subtreeProcessorConcurrentReads`**: Number of concurrent read operations in the subtree processor.
     - Type: int
     - Default: 375
     - Code Usage: `Server.removeSubtreesDAH()` (line 1177)
     - Impact: Controls parallelism for reading subtree data, affecting throughput.
 
-17. **`blockassembly_moveBackBlockConcurrency`**: Number of concurrent goroutines for block rollback during reorganization.
+6. **`blockassembly_moveBackBlockConcurrency`**: Number of concurrent goroutines for block rollback during reorganization.
     - Type: int
     - Default: 375
     - Code Usage: `SubtreeProcessor.go` (lines 1383, 1597)
     - Impact: Controls parallelism during blockchain reorganizations.
 
-18. **`blockassembly_processRemainderTxHashesConcurrency`**: Number of concurrent goroutines for processing remaining transaction hashes.
+7. **`blockassembly_processRemainderTxHashesConcurrency`**: Number of concurrent goroutines for processing remaining transaction hashes.
     - Type: int
     - Default: 375
     - Code Usage: Transaction hash processing during reorganizations
@@ -558,14 +630,14 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
 
 ### Double-Spend Detection and Security
 
-19. **`double_spend_window_millis`**: Time window in milliseconds for tracking and detecting double-spend attempts.
+1. **`double_spend_window_millis`**: Time window in milliseconds for tracking and detecting double-spend attempts.
     - Type: int (converted to time.Duration)
     - Default: 0 (disabled)
     - Code Usage: `SubtreeProcessor.go` (lines 474, 1956)
     - Impact: Controls how long transactions are monitored for conflicts.
     - Security Note: Critical for maintaining blockchain integrity.
 
-20. **`global_blockHeightRetention`**: Number of blocks to retain for global operations.
+2. **`global_blockHeightRetention`**: Number of blocks to retain for global operations.
     - Type: uint32
     - Default: 288 (2 days worth of blocks)
     - Code Usage: `Server.go` DAH calculation (lines 253, 424)
@@ -573,13 +645,13 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
 
 ### Block Assembly Reset and Recovery
 
-21. **`blockassembly_resetWaitCount`**: Number of blocks to wait before resuming mining after reset.
+1. **`blockassembly_resetWaitCount`**: Number of blocks to wait before resuming mining after reset.
     - Type: int32
     - Default: 3
     - Code Usage: `BlockAssembler.go` (lines 347-348)
     - Impact: Controls recovery behavior after service reset.
 
-22. **`blockassembly_resetWaitDuration`**: Maximum duration to wait before resuming operations.
+2. **`blockassembly_resetWaitDuration`**: Maximum duration to wait before resuming operations.
     - Type: time.Duration
     - Default: 20m
     - Code Usage: `BlockAssembler.go` (line 350)
@@ -587,7 +659,7 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
 
 ### Blockchain Reorganization Settings
 
-23. **`blockassembly_maxGetReorgHashes`**: Maximum number of transaction hashes to retrieve during reorganization.
+1. **`blockassembly_maxGetReorgHashes`**: Maximum number of transaction hashes to retrieve during reorganization.
     - Type: int
     - Default: 10000
     - Code Usage: `BlockAssembler.go` (line 1130)
@@ -595,19 +667,19 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
 
 ### Mining Configuration
 
-24. **`blockassembly_SubmitMiningSolutionWaitForResponse`**: Whether to wait for a response when submitting mining solutions.
+1. **`blockassembly_SubmitMiningSolutionWaitForResponse`**: Whether to wait for a response when submitting mining solutions.
     - Type: bool
     - Default: true
     - Code Usage: `Server.SubmitMiningSolution()` (lines 836, 852)
     - Impact: Controls synchronous vs. asynchronous behavior of mining solution submissions.
 
-25. **`blockassembly_difficultyCache`**: Whether to cache difficulty calculations.
+2. **`blockassembly_difficultyCache`**: Whether to cache difficulty calculations.
     - Type: bool
     - Default: true
     - Code Usage: Difficulty calculation optimization
     - Impact: Reduces redundant calculations, improves performance.
 
-26. **`miner_wallet_private_keys`**: Private keys used for mining rewards (pipe-separated).
+3. **`miner_wallet_private_keys`**: Private keys used for mining rewards (pipe-separated).
     - Type: []string
     - Default: [] (empty array)
     - Code Usage: Mining reward distribution
@@ -615,25 +687,25 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
 
 ### Service Control
 
-27. **`blockassembly_disabled`**: Toggle to enable or disable the block assembly functionality.
+1. **`blockassembly_disabled`**: Toggle to enable or disable the block assembly functionality.
     - Type: bool
     - Default: false
     - Code Usage: `Server.AddTx()`, `RemoveTx()`, `AddTxBatch()` (lines 621, 671, 716)
     - Impact: When true, disables all transaction processing operations.
 
-28. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration.
+2. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration.
     - Type: bool
     - Default: false
     - Code Usage: Service state restoration on startup
     - Impact: Controls whether the service attempts to restore its previous state on startup.
 
-29. **`blockmaxsize`**: Maximum block size in bytes.
+3. **`blockmaxsize`**: Maximum block size in bytes.
     - Type: int
     - Default: 0 (unlimited)
     - Code Usage: `BlockAssembler.go` block size validation (lines 764, 769, 817)
     - Impact: Controls maximum block size for mining candidates.
 
-30. **Chain Configuration Parameters**: Network-specific parameters from `ChainCfgParams`.
+4. **Chain Configuration Parameters**: Network-specific parameters from `ChainCfgParams`.
     - **`PowLimitBits`**: Mining difficulty target (lines 181, 872)
     - **`MaxCoinbaseScriptSigSize`**: Coinbase script size limit (line 905)
     - **`GenerateSupported`**: Block generation capability (line 1344)

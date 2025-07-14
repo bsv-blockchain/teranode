@@ -1,0 +1,131 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+participant "Block Assembler" as BA
+participant "Blockchain Client" as BC
+participant "Subtree Processor" as STP
+database "Subtree Store" as SStore
+database "UTXO Store" as UTXOStore
+
+BA -> BC: GetBlock(ctx, \nbestBlockchainBlockHeader.Hash())
+activate BC
+BC --> BA: block / err
+deactivate BC
+
+alt if error getting block
+    BA --> BA: Handle error and return
+end
+
+BA -> STP: MoveForwardBlock(block)
+activate STP
+
+STP -> STP: moveForwardBlockChan <- moveBlockRequest
+STP -> STP: moveForwardBlock(ctx, block, skipNotification)
+activate STP
+
+note over STP: Block validation
+STP -> STP: Validate block is not nil
+
+note over STP: Step 1: Process Coinbase UTXOs
+STP -> STP: processCoinbaseUtxos(ctx, block)
+activate STP
+STP -> UTXOStore: Create coinbase UTXOs\nwith block height and mined info
+activate UTXOStore
+UTXOStore --> STP: UTXOs created / error
+deactivate UTXOStore
+STP --> STP: Coinbase processing complete
+deactivate STP
+
+note over STP: Step 2: Process Block Subtrees
+STP -> STP: processBlockSubtrees(block)
+activate STP
+STP -> STP: Create blockSubtreesMap\nand filter chainedSubtrees
+STP --> STP: blockSubtreesMap, chainedSubtrees
+deactivate STP
+
+note over STP: Step 3: Create Transaction Map
+STP -> STP: createTransactionMapIfNeeded(ctx, block, blockSubtreesMap)
+activate STP
+
+alt if blockSubtreesMap is not empty (block from other nodes)
+    loop for each subtree in blockSubtreesMap
+        STP -> SStore: GetSubtree(subtreeHash)
+        activate SStore
+        SStore --> STP: subtree data / error
+        deactivate SStore
+
+        alt if subtree retrieval fails
+            STP --> STP: Return error
+        end
+    end
+
+    STP -> STP: Deserialize subtrees and\ncreate transaction map
+    STP -> STP: Extract conflicting nodes
+else block from our own mining
+    STP -> STP: Use existing chainedSubtrees
+end
+
+STP --> STP: transactionMap, conflictingNodes
+deactivate STP
+
+note over STP: Step 4: Process Conflicting Transactions
+STP -> STP: processConflictingTransactions(ctx, block, conflictingNodes)
+activate STP
+STP -> STP: Identify losing transactions\nand mark as conflicting
+STP --> STP: losingTxHashesMap
+deactivate STP
+
+note over STP: Step 5: Reset Subtree State
+STP -> STP: resetSubtreeState()
+activate STP
+STP -> STP: Reset current subtree\nand transaction map
+STP --> STP: currentSubtree, currentTxMap
+deactivate STP
+
+note over STP: Step 6: Process Remainder Transactions
+STP -> STP: processRemainderTransactions(ctx, params)
+activate STP
+STP -> STP: Process transactions not in block\nfrom chainedSubtrees and currentSubtree
+STP -> STP: Handle transaction conflicts\nand update subtree state
+STP --> STP: Processing complete
+deactivate STP
+
+note over STP: Step 7: Finalize Block Processing
+STP -> STP: finalizeBlockProcessing(ctx, block)
+activate STP
+STP -> STP: Update internal state\nand perform cleanup
+STP --> STP: Finalization complete
+deactivate STP
+
+STP --> BA: nil / error
+deactivate STP
+deactivate STP
+
+alt if no error
+    BA -> BA: UpdateBestBlock(ctx)
+    BA -> BA: Update internal state
+else error occurred
+    BA -> BA: Handle error and\nperform cleanup
+end
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml
