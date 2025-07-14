@@ -42,7 +42,7 @@ type CsvDataRecord struct {
 //	go test -bench=ScriptVerification -tags test_validator -timeout 120m ./test/services/validator/...
 func BenchmarkScriptVerification(b *testing.B) {
 
-	csvDataFile := "mainnet_14207txs_b886413_WUH.csv"
+	csvDataFile := "mainnet_14207txs_b886413.csv"
 
 	txsData, err := getTxsData(csvDataFile)
 	if err != nil {
@@ -93,10 +93,10 @@ func BenchmarkScriptVerification(b *testing.B) {
 
 // To run this test
 //
-//	go clean -testcache && go test -v -tags test_validator -run Test_ScriptVerificationBDKLargeTx -timeout 60m ./test/services/validator/...
+//	go clean -testcache && go test -v -run Test_ScriptVerificationBDKLargeTx -timeout 60m ./test/longtest/services/validator/...
 func Test_ScriptVerificationBDKLargeTx(t *testing.T) {
 	// Test Large Tx with GoBDK only to test accuracy
-	csvDataFiles := []string{"mainnet_large_txs.csv", "mainnet_14207txs_b886413_WUH.csv"}
+	csvDataFiles := []string{"mainnet_large_txs.csv", "mainnet_14207txs_b886413.csv"}
 	for _, csvDataFile := range csvDataFiles {
 		testName := fmt.Sprintf("File_%v", csvDataFile)
 		t.Run(testName, func(t *testing.T) {
@@ -114,6 +114,39 @@ func Test_ScriptVerificationBDKLargeTx(t *testing.T) {
 			}
 
 			bdkScriptInterpreter := createTxScriptInterpreter(tLogger, tSettings.Policy, &chaincfg.MainNetParams)
+
+			for _, txData := range txsData {
+				// fmt.Printf("Verify for %v  %v\n", txData.BlockHeight, txData.Tx.TxID())
+				err := bdkScriptInterpreter.VerifyScript(txData.Tx, txData.BlockHeight, true, txData.DataUTXOHeights)
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// To run this test
+//
+//	go clean -testcache && go test -v -run Test_ScriptVerificationBDKTestNetData -timeout 60m ./test/longtest/services/validator/...
+func Test_ScriptVerificationBDKTestNetData(t *testing.T) {
+	// Test Large Tx with GoBDK only to test accuracy
+	csvDataFiles := []string{"testnet_18869txs_b1682153.csv"}
+	for _, csvDataFile := range csvDataFiles {
+		testName := fmt.Sprintf("File_%v", csvDataFile)
+		t.Run(testName, func(t *testing.T) {
+			txsData, err := getTxsData(csvDataFile)
+			require.NoError(t, err)
+
+			tLogger := &ulogger.TestLogger{}
+			tSettings := test.CreateBaseTestSettings()
+			tSettings.ChainCfgParams, err = chaincfg.GetChainParams("testnet")
+			require.NoError(t, err)
+
+			createTxScriptInterpreter, ok := validator.TxScriptInterpreterFactory[validator.TxInterpreter("GoBDK")]
+			if !ok {
+				panic(errors.NewUnknownError("unable to find script interpreter GoBDK"))
+			}
+
+			bdkScriptInterpreter := createTxScriptInterpreter(tLogger, tSettings.Policy, &chaincfg.TestNetParams)
 
 			for _, txData := range txsData {
 				// fmt.Printf("Verify for %v  %v\n", txData.BlockHeight, txData.Tx.TxID())
