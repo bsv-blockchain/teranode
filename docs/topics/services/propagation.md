@@ -2,7 +2,6 @@
 
 ## Index
 
-
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
     - [2.1. Starting the Propagation Service](#21-starting-the-propagation-service)
@@ -18,7 +17,6 @@
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
 9. [Other Resources](#9-other-resources)
 
-
 ## 1. Description
 
 The `Propagation Service` is designed to handle the propagation of transactions across a peer-to-peer Teranode network.
@@ -29,13 +27,11 @@ At a glance, the Propagation service:
 2. Stores transactions in the tx store.
 3. Sends the transaction to the Validator service for further processing.
 
-
 ![Propagation_Service_Container_Diagram.png](img/Propagation_Service_Container_Diagram.png)
-
 
 The gRPC protocol is the primary communication method, although HTTP is also accepted.
 
--  `StartHTTPServer`: This function is designed to start a network listener for the HTTP protocol. Each function configures and starts a server to listen for incoming connections and requests on specific network addresses and ports. For example, the HTTP endpoints are `/tx`, `/txs`, and `/health`.
+- `StartHTTPServer`: This function is designed to start a network listener for the HTTP protocol. Each function configures and starts a server to listen for incoming connections and requests on specific network addresses and ports. For example, the HTTP endpoints are `/tx`, `/txs`, and `/health`.
 
 A node can start multiple parallel instances of the Propagation service. This translates into multiple pods within a Kubernetes cluster. Each instance will have its own gRPC server, and will be able to receive and propagate transactions independently. GRPC load balancing allows to distribute the load across the multiple instances.
 
@@ -60,16 +56,16 @@ The Propagation service can work with the Validator in two different configurati
 1. **Local Validator**:
 
     - When `useLocalValidator=true` (recommended for production)
-   - The Validator is instantiated directly within the Propagation service
-   - Direct method calls are used without network overhead
-   - This provides the best performance and lowest latency
+    - The Validator is instantiated directly within the Propagation service
+    - Direct method calls are used without network overhead
+    - This provides the best performance and lowest latency
 
 2. **Remote Validator Service**:
 
     - When `useLocalValidator=false`
-   - The Propagation service connects to a separate Validator service via gRPC
-   - Useful for development, testing, or specialized deployment scenarios
-   - Has higher latency due to additional network calls
+    - The Propagation service connects to a separate Validator service via gRPC
+    - Useful for development, testing, or specialized deployment scenarios
+    - Has higher latency due to additional network calls
 
 This configuration is controlled by the settings passed to `GetValidatorClient()` in daemon.go.
 
@@ -82,7 +78,6 @@ All communication channels receive txs and delegate them to the `ProcessTransact
 **HTTP:**
 
 ![propagation_http.svg](img/plantuml/propagation/propagation_http.svg)
-
 
 **gRPC:**
 
@@ -97,7 +92,7 @@ The transaction processing involves several steps to ensure proper validation an
 3. **Validation Submission**: Transactions are submitted to the validator service through one of two channels:
 
     - **Kafka**: Normal-sized transactions are sent to the validator through Kafka for asynchronous processing.
-   - **HTTP Fallback**: Large transactions exceeding Kafka message size limits are sent directly to the validator's HTTP endpoint.
+    - **HTTP Fallback**: Large transactions exceeding Kafka message size limits are sent directly to the validator's HTTP endpoint.
 
 ### 2.4. Error Handling
 
@@ -109,10 +104,9 @@ The Propagation Service implements comprehensive error handling:
 4. **Batch Processing**: When processing transaction batches, each transaction is handled independently, allowing some transactions to succeed even if others fail.
 5. **Request Limiting**: Implements limits on transaction size and batch counts to prevent resource exhaustion.
 
-
 ## 3. gRPC Protobuf Definitions
 
-The Propagation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/propagationProto.md).
+The Propagation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen in the [propagationProto.md documentation](../../references/protobuf_docs/propagationProto.md).
 
 ## 4. Data Model
 
@@ -131,7 +125,7 @@ Main technologies involved:
 2. **Peer-to-Peer (P2P) Networking**:
 
     - The service is designed for a P2P network environment, where nodes (computers) in the network communicate directly with each other without central coordination.
-    - `libsv/go-p2p/wire` is used for P2P transaction propagation in the Teranode BSV network.
+    - `bsv-blockchain/go-p2p/wire` is used for P2P transaction propagation in the Teranode BSV network.
 
 3. **Networking Protocols (HTTP)**
 
@@ -143,10 +137,9 @@ Main technologies involved:
 
     - gRPC, indicated by the use of `google.golang.org/grpc`, is a high-performance, open-source universal RPC framework. It uses Protocol Buffers as its interface definition language.
 
-
 ## 6. Directory Structure and Main Files
 
-```
+```text
 ./services/propagation
 │
 ├── Client.go                            - Contains the client-side logic for interacting with the propagation service.
@@ -173,7 +166,6 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Propagation=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Propagation Service locally.
-
 
 ## 8. Configuration options (settings flags)
 
@@ -226,14 +218,14 @@ The Propagation service interacts with the Validator service using one of two ar
 - **Local Validator Mode** (`useLocalValidator=true`):
 
     - Validator runs in-process with the Propagation service
-  - Eliminates network overhead for validation operations
-  - Recommended for production deployments to minimize latency
+    - Eliminates network overhead for validation operations
+    - Recommended for production deployments to minimize latency
 
 - **Remote Validator Mode** (`useLocalValidator=false`):
 
     - Propagation service communicates with a separate Validator service
-  - Transactions are sent via Kafka or HTTP, controlled by `propagation_alwaysUseHTTP`
-  - Large transactions exceeding Kafka limits are automatically sent via HTTP using `validator_httpAddress`
+    - Transactions are sent via Kafka or HTTP, controlled by `propagation_alwaysUseHTTP`
+    - Large transactions exceeding Kafka limits are automatically sent via HTTP using `validator_httpAddress`
 
 ### Batch Processing Optimization
 

@@ -1,24 +1,21 @@
-#  🔊 Propagation Blaster
+# 🔊 Propagation Blaster
 
 ## Index
 
-
 - [🔊 Propagation Blaster](#-propagation-blaster)
     - [Index](#index)
-  - [1. Introduction](#1-introduction)
-  - [2. Architecture](#2-architecture)
-  - [3. Functionality](#3-functionality)
-    - [3.1. Propagation Blaster Initialization and Configuration](#31-propagation-blaster-initialization-and-configuration)
-    - [3.2. Worker Operation](#32-worker-operation)
-  - [4. Technology](#4-technology)
-  - [5. Directory Structure and Main Files](#5-directory-structure-and-main-files)
-  - [6. How to run](#6-how-to-run)
-
+    - [1. Introduction](#1-introduction)
+    - [2. Architecture](#2-architecture)
+    - [3. Functionality](#3-functionality)
+        - [3.1. Propagation Blaster Initialization and Configuration](#31-propagation-blaster-initialization-and-configuration)
+        - [3.2. Worker Operation](#32-worker-operation)
+    - [4. Technology](#4-technology)
+    - [5. Directory Structure and Main Files](#5-directory-structure-and-main-files)
+    - [6. How to run](#6-how-to-run)
 
 ## 1. Introduction
 
 The `PropagationBlaster` service is designed to stress-test Teranode propagation service by generating, signing, and broadcasting transactions. This service aims to evaluate the performance and reliability of different propagation methods (HTTP, gRPC) under load.
-
 
 ## 2. Architecture
 
@@ -60,7 +57,6 @@ The service includes a Go's built-in profiler accessible via an HTTP endpoint, a
 
 ![propagation_blaster_worker.svg](img%2Fplantuml%2Fpropagation_blaster_worker.svg)
 
-
 - **Transaction Generation and Signing**:
 
     - Each worker starts a loop to continuously generate and process transactions. First, it generates a new, incomplete transaction. Then, it uses a transaction signer to sign the transaction, making it ready for broadcast.
@@ -85,11 +81,9 @@ The service includes a Go's built-in profiler accessible via an HTTP endpoint, a
 
     - Regardless of the broadcast protocol, after each transaction is processed (broadcasted or skipped), the worker increments a Prometheus counter to track the number of transactions processed.
 
-
 ## 4. Technology
 
 The `PropagationBlaster` service is designed to benchmark and test the performance and reliability of transaction propagation services within the Bitcoin SV (BSV) ecosystem. It simulates the generation, signing, and broadcasting of transactions to a BSV network, providing insights into how efficiently and reliably different propagation methods handle transaction traffic. The service leverages a range of technologies and architectural patterns to achieve its goals:
-
 
 - **Go (Golang)**: The service is written in Go, a statically typed programming language known for its simplicity, efficiency, and excellent support for concurrency and networking.
 
@@ -100,11 +94,11 @@ The `PropagationBlaster` service is designed to benchmark and test the performan
 - **Bitcoin SV (BSV) Libraries**:
 
     - **`libsv/go-bt`**: A Go library for building and serializing Bitcoin SV transactions. It's utilized for creating the raw transactions that the service broadcasts.
-    - **`libsv/go-sdk`**: Used for handling Wallet Import Format (WIF) keys, enabling the service to sign transactions before broadcasting them to ensure they are valid on the network.
+    - **`bsv-blockchain/go-sdk`**: Used for handling Wallet Import Format (WIF) keys, enabling the service to sign transactions before broadcasting them to ensure they are valid on the network.
 
 ## 5. Directory Structure and Main Files
 
-```
+```text
 cmd/propagation_blaster/
 ├── main.go               # The primary entry point for the PropagationBlaster service; initializes the service and starts the HTTP server for metrics and profiling.
 ├── main_native.go        # An alternative entry point designed for native deployment scenarios, potentially with optimizations or configurations specific to native environments.
@@ -123,5 +117,5 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -broadcast=grpc -workers=10 -buffer_
 
 where broadcast is a value in:
 
-* grpc
-* http
+- grpc
+- http

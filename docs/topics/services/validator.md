@@ -563,7 +563,7 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 
 5. **Go-Bitcoin**: A Go library that provides utilities and tools for working with Bitcoin, including transaction parsing and manipulation.
 
-6. **LibSV**: Another Go library for Bitcoin SV, used for transaction-related operations.
+6. **BSV Libraries**: Go libraries from the bsv-blockchain organization for Bitcoin SV, used for transaction-related operations.
 
 7. **Other Utilities and Libraries**:
 
