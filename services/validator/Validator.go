@@ -695,7 +695,7 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 
 	if extend {
 		// add the parent tx outputs to the fields, to be able to extend the transaction
-		f = append(f, fields.Outputs)
+		f = append(f, fields.Tx)
 	}
 
 	txMeta, err := v.utxoStore.Get(gCtx, &parentTxHash, f...)

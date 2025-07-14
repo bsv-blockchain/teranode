@@ -282,7 +282,7 @@ services:
       - teranode-network
     volumes:
       - ./scripts/generate-blocks.sh:/generate-blocks.sh
-    entrypoint: ["/generate-blocks.sh", "teranode1"]
+    entrypoint: ["/generate-blocks.sh", "teranode1", "generate"]
     restart: unless-stopped
 
   coinbase1:
@@ -292,7 +292,7 @@ services:
     container_name: coinbase1
     depends_on:
       - teranode1
-    entrypoint: [ "sh", "-c", "sleep 30 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
+    entrypoint: [ "sh", "-c", "sleep 2 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
       profilerAddr: "localhost:17092"
@@ -318,7 +318,7 @@ services:
     container_name: coinbase2
     depends_on:
       - teranode2
-    entrypoint: [ "sh", "-c", "sleep 30 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
+    entrypoint: [ "sh", "-c", "sleep 2 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
       profilerAddr: "localhost:27092"
@@ -344,7 +344,7 @@ services:
     container_name: coinbase3
     depends_on:
       - teranode3
-    entrypoint: [ "sh", "-c", "sleep 30 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
+    entrypoint: [ "sh", "-c", "sleep 2 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
       profilerAddr: "localhost:37092"

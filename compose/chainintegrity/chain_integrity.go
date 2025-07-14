@@ -492,12 +492,16 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 				if subtree, err = subtreepkg.NewSubtreeFromReader(subtreeReader); err != nil || subtree == nil {
 					logger.Errorf("[%s] failed to parse subtree %s for block %s: %s", loggerContext, subtreeHash, block, err)
 
-					_ = subtreeReader.Close()
+					if subtreeReader != nil {
+						_ = subtreeReader.Close()
+					}
 
 					continue
 				}
 
-				_ = subtreeReader.Close()
+				if subtreeReader != nil {
+					_ = subtreeReader.Close()
+				}
 
 				var (
 					tx          []byte

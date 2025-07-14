@@ -61,7 +61,7 @@ ui/dashboard/.svelte-kit/
 
 # Kubernetes and deployment files - not needed in runtime container
 deploy/
-compose/
+# compose/
 
 # Debug files
 debug
