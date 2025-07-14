@@ -34,15 +34,26 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Constants defining key validation parameters and limits.
+// Constants defining key validation parameters and limits for Bitcoin SV consensus rules.
+// These constants establish the fundamental constraints that govern transaction and block validation,
+// ensuring compliance with Bitcoin SV protocol specifications and network consensus requirements.
 const (
 	// MaxBlockSize defines the maximum allowed size of a block in bytes (4GB).
+	// This limit governs the maximum amount of transaction data that can be included in a single block,
+	// directly impacting network throughput and scalability. Blocks exceeding this size are rejected
+	// as invalid by the consensus rules, ensuring network stability and preventing resource exhaustion.
 	MaxBlockSize = 4 * 1024 * 1024 * 1024
 
-	// MaxSatoshis defines the maximum number of satoshis that can exist (21M BSV).
+	// MaxSatoshis defines the maximum number of satoshis that can exist in the Bitcoin SV ecosystem (21M BSV).
+	// This represents the absolute monetary supply limit, with each BSV consisting of 100,000,000 satoshis.
+	// Any transaction that would create more satoshis than this limit violates consensus rules and must be
+	// rejected to maintain the integrity of the monetary system and prevent inflation attacks.
 	MaxSatoshis = 21_000_000_00_000_000
 
-	// coinbaseTxID represents the transaction ID for coinbase transactions.
+	// coinbaseTxID represents the special transaction ID used for coinbase transactions.
+	// Coinbase transactions are the first transaction in each block and create new bitcoins as mining rewards.
+	// This constant is used to identify and handle coinbase transactions differently from regular transactions
+	// during validation, as they have special rules and don't spend existing UTXOs.
 	coinbaseTxID = "0000000000000000000000000000000000000000000000000000000000000000"
 
 	// MaxTxSigopsCountPolicyAfterGenesis defines the maximum number of signature
@@ -56,21 +67,41 @@ const (
 	DustLimit = uint64(1)
 )
 
-// Validator implements Bitcoin SV transaction validation and manages the lifecycle
-// of transactions from validation through block assembly.
+// Validator implements comprehensive Bitcoin SV transaction validation and manages the complete lifecycle
+// of transactions from initial validation through block assembly integration. This struct serves as the
+// primary validation engine, coordinating between multiple components to ensure transaction validity
+// according to Bitcoin SV consensus rules and policy constraints.
+//
+// The Validator orchestrates the validation process by:
+// - Performing structural and semantic transaction validation
+// - Executing Bitcoin scripts and verifying signatures
+// - Managing UTXO state transitions and double-spend prevention
+// - Coordinating with block assembly for transaction inclusion
+// - Handling both individual and batch validation scenarios
 type Validator struct {
-	// logger handles structured logging for the validator
+	// logger provides structured logging capabilities for the validator, enabling comprehensive
+	// monitoring and debugging of validation operations. All validation activities, errors, and
+	// performance metrics are logged through this component for operational visibility and troubleshooting.
 	logger ulogger.Logger
 
+	// settings contains the complete configuration for the validator, including consensus parameters,
+	// policy rules, network settings, and operational thresholds. These settings control the behavior
+	// of all validation operations and determine how strictly various rules are enforced.
 	settings *settings.Settings
 
-	// txValidator performs transaction-specific validation checks
+	// txValidator performs the core transaction-specific validation checks including structure validation,
+	// input/output verification, script execution, and consensus rule enforcement. This component
+	// implements the detailed validation logic that determines transaction validity.
 	txValidator TxValidatorI
 
-	// utxoStore manages the UTXO set and transaction metadata
+	// utxoStore manages the UTXO set and transaction metadata, providing access to unspent transaction
+	// outputs for input validation and double-spend prevention. This store maintains the current state
+	// of all UTXOs and enables efficient lookup and verification of transaction inputs.
 	utxoStore utxo.Store
 
-	// blockAssembler handles block template creation and transaction ordering
+	// blockAssembler handles block template creation and transaction ordering for mining operations.
+	// This component coordinates with the validator to include validated transactions in block templates
+	// and manages the prioritization and selection of transactions for block inclusion.
 	blockAssembler blockassembly.Store
 
 	// saveInParallel indicates if UTXOs should be saved concurrently

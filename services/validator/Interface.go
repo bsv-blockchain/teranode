@@ -36,48 +36,81 @@ import (
 // Any implementation of this interface must provide comprehensive transaction validation
 // capabilities along with health monitoring and block height management.
 type Interface interface {
-	// Health performs health checks on the validator implementation
+	// Health performs comprehensive health checks on the validator implementation to ensure
+	// proper operation and readiness to process transactions. This method validates internal
+	// state, connectivity to dependent services, and resource availability.
+	//
 	// Parameters:
-	//   - ctx: Context for the health check operation
-	//   - checkLiveness: If true, only checks basic liveness
+	//   - ctx: Context for the health check operation, supports cancellation and timeouts
+	//   - checkLiveness: If true, performs only basic liveness checks; if false, performs
+	//     comprehensive readiness checks including database connectivity and service dependencies
+	//
 	// Returns:
-	//   - int: HTTP status code indicating health status
-	//   - string: Detailed health status message
-	//   - error: Any errors encountered during health check
+	//   - int: HTTP status code indicating health status (200 for healthy, 503 for unhealthy)
+	//   - string: Detailed health status message with diagnostic information
+	//   - error: Any critical errors encountered during health check that prevent operation
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 
-	// Validate performs comprehensive validation of a transaction
+	// Validate performs comprehensive validation of a Bitcoin transaction according to consensus
+	// rules and policy constraints. This method executes all validation steps including structure
+	// validation, script execution, UTXO verification, and consensus rule enforcement.
+	//
+	// The validation process includes:
+	// - Transaction structure and format validation
+	// - Input/output consistency checks
+	// - Script execution and signature verification
+	// - UTXO existence and double-spend prevention
+	// - Consensus rule compliance (block size, fees, etc.)
+	//
 	// Parameters:
-	//   - ctx: Context for the validation operation
-	//   - tx: The transaction to validate
-	//   - blockHeight: Current block height for validation context
-	//   - opts: Optional validation settings
+	//   - ctx: Context for the validation operation, supports cancellation and timeouts
+	//   - tx: The Bitcoin transaction to validate, must be properly formatted
+	//   - blockHeight: Current block height for validation context and consensus rule application
+	//   - opts: Optional validation settings that modify validation behavior (e.g., policy rules)
+	//
 	// Returns:
-	//   - error: Any validation errors encountered
+	//   - *meta.Data: Transaction metadata including validation results and processing information
+	//   - error: Validation errors if transaction violates consensus rules or policy constraints
 	Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error)
 
-	// ValidateWithOptions performs comprehensive validation of a transaction with options passed in directly
+	// ValidateWithOptions performs comprehensive validation of a transaction with validation
+	// options passed directly rather than using variadic parameters. This method provides
+	// the same validation functionality as Validate but with explicit options configuration.
+	//
 	// Parameters:
-	//   - ctx: Context for the validation operation
-	//   - tx: The transaction to validate
-	//   - blockHeight: Current block height for validation context
-	//   - opts: validation options
+	//   - ctx: Context for the validation operation, supports cancellation and timeouts
+	//   - tx: The Bitcoin transaction to validate, must be properly formatted
+	//   - blockHeight: Current block height for validation context and consensus rule application
+	//   - validationOptions: Explicit validation options configuration including policy rules
+	//
 	// Returns:
-	//   - error: Any validation errors encountered
+	//   - *meta.Data: Transaction metadata including validation results and processing information
+	//   - error: Validation errors if transaction violates consensus rules or policy constraints
 	ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error)
 
-	// GetBlockHeight returns the current block height
+	// GetBlockHeight returns the current block height known to the validator service.
+	// This height is used for validation context and consensus rule application, and should
+	// reflect the latest confirmed block in the blockchain.
+	//
 	// Returns:
-	//   - uint32: Current block height
+	//   - uint32: Current block height, zero if blockchain state is not available
 	GetBlockHeight() uint32
 
-	// GetMedianBlockTime returns the median time of the last 11 blocks
+	// GetMedianBlockTime returns the median timestamp of the last 11 blocks, which is used
+	// for certain consensus rules including transaction locktime validation. This value
+	// provides a more stable time reference than individual block timestamps.
+	//
 	// Returns:
-	//   - uint32: Median block time in Unix timestamp format
+	//   - uint32: Median block time in Unix timestamp format, zero if insufficient block history
 	GetMedianBlockTime() uint32
 
-	// TriggerBatcher triggers the transaction batch processor
-	// This method is used to manually trigger batch processing
+	// TriggerBatcher manually triggers the transaction batch processor to process queued
+	// transactions. This method is typically used for testing or administrative purposes
+	// to force immediate processing of pending validation requests rather than waiting
+	// for automatic batch processing intervals.
+	//
+	// This method does not return any values and executes asynchronously. The actual
+	// batch processing results can be monitored through metrics and logging systems.
 	TriggerBatcher()
 }
 

@@ -15,12 +15,67 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
+// Client provides a gRPC client interface for the subtree validation service.
+//
+// The Client struct encapsulates the connection and communication logic needed to
+// interact with a remote subtree validation service via gRPC. It handles the
+// low-level details of service communication while providing a clean, high-level
+// interface for validation operations.
+//
+// The client is designed to be used by other services within the Teranode ecosystem
+// that need to validate transaction subtrees, such as the block validation service,
+// propagation service, or other components that process blockchain transactions.
+//
+// Key Features:
+//   - gRPC-based communication with automatic connection management
+//   - Retry logic with configurable backoff for resilient operation
+//   - Comprehensive error handling and logging
+//   - Integration with Teranode's settings and configuration system
+//
+// Thread Safety:
+// The Client struct is safe for concurrent use across multiple goroutines.
+// The underlying gRPC connection handles concurrent requests efficiently.
 type Client struct {
+	// apiClient is the generated gRPC client for communicating with the subtree validation service
 	apiClient subtreevalidation_api.SubtreeValidationAPIClient
+	// logger provides structured logging capabilities for client operations
 	logger    ulogger.Logger
+	// settings contains the configuration parameters for the client and service connections
 	settings  *settings.Settings
 }
 
+// NewClient creates a new subtree validation service client with gRPC connectivity.
+//
+// This constructor function establishes a connection to the subtree validation service
+// using the provided configuration settings and returns a client interface that can
+// be used to perform validation operations. The function handles all the complexity
+// of setting up the gRPC connection, including retry logic and connection options.
+//
+// The client is configured with retry mechanisms to handle transient network issues
+// and service unavailability. Connection parameters are derived from the block
+// validation settings, specifically the retry count and backoff duration settings.
+//
+// Parameters:
+//   - ctx: Context for connection establishment and cancellation
+//   - logger: Logger instance for structured logging of client operations
+//   - tSettings: Teranode settings containing service addresses and connection parameters
+//   - source: Identifier string for the calling service (used in error messages)
+//
+// Returns:
+//   - Interface: A client interface for subtree validation operations
+//   - error: Configuration error if gRPC address is missing, or service error if connection fails
+//
+// Configuration Requirements:
+// The function requires the following settings to be configured:
+//   - SubtreeValidation.GRPCAddress: The address of the subtree validation service
+//   - BlockValidation.CheckSubtreeFromBlockRetries: Maximum number of retry attempts
+//   - BlockValidation.CheckSubtreeFromBlockRetryBackoffDuration: Delay between retries
+//
+// Example Usage:
+//   client, err := NewClient(ctx, logger, settings, "block-validation")
+//   if err != nil {
+//       return fmt.Errorf("failed to create subtree validation client: %w", err)
+//   }
 func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source string) (Interface, error) {
 	subtreeValidationGrpcAddress := tSettings.SubtreeValidation.GRPCAddress
 	if subtreeValidationGrpcAddress == "" {

@@ -13,18 +13,79 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
+// existerIfc defines the interface for checking file existence in blob storage.
+//
+// This interface abstracts the existence checking functionality needed by the
+// subtree validation service to determine whether files already exist in storage
+// before attempting operations. It's primarily used in the locking mechanism
+// to implement atomic "check-and-create" operations for preventing race conditions.
+//
+// The interface is typically implemented by blob storage systems that support
+// efficient existence checks without requiring full file retrieval, which is
+// essential for performance in high-throughput validation scenarios.
 type existerIfc interface {
+	// Exists checks whether a file exists in the blob storage system.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and request-scoped values
+	//   - key: The storage key/path to check for existence
+	//   - fileType: The type of file being checked (affects storage behavior)
+	//   - opts: Optional file-specific options for the existence check
+	//
+	// Returns:
+	//   - bool: true if the file exists, false otherwise
+	//   - error: Error if the existence check operation fails
 	Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error)
 }
 
+// QuorumOption defines a functional option for configuring Quorum behavior.
+//
+// This type follows the functional options pattern commonly used in Go for
+// configurable struct initialization. It allows callers to customize Quorum
+// instances with specific behaviors while maintaining backward compatibility
+// and providing sensible defaults.
+//
+// QuorumOption functions are typically used with constructor functions or
+// configuration methods to modify Quorum instances in a flexible and
+// composable manner.
 type QuorumOption func(*Quorum)
 
+// WithTimeout configures the timeout duration for individual lock attempts.
+//
+// This option sets the maximum time to wait for a single lock operation to complete.
+// It's used to prevent indefinite blocking when attempting to acquire locks in
+// high-contention scenarios. The timeout applies to each individual attempt rather
+// than the total operation time.
+//
+// Parameters:
+//   - timeout: Maximum duration to wait for a single lock attempt
+//
+// Returns:
+//   - QuorumOption: A function that applies the timeout configuration to a Quorum instance
+//
+// Example:
+//   quorum := NewQuorum(logger, exister, "/locks/subtree", WithTimeout(5*time.Second))
 func WithTimeout(timeout time.Duration) QuorumOption {
 	return func(q *Quorum) {
 		q.timeout = timeout
 	}
 }
 
+// WithAbsoluteTimeout configures the absolute maximum timeout for the entire lock operation.
+//
+// This option sets the total maximum time allowed for the complete lock acquisition
+// process, including all retry attempts. Once this timeout is reached, the operation
+// will fail regardless of individual attempt timeouts. This provides a hard upper
+// bound on lock acquisition time.
+//
+// Parameters:
+//   - timeout: Maximum total duration for the entire lock operation
+//
+// Returns:
+//   - QuorumOption: A function that applies the absolute timeout configuration to a Quorum instance
+//
+// Example:
+//   quorum := NewQuorum(logger, exister, "/locks/subtree", WithAbsoluteTimeout(30*time.Second))
 func WithAbsoluteTimeout(timeout time.Duration) QuorumOption {
 	return func(q *Quorum) {
 		q.absoluteTimeout = timeout
@@ -35,16 +96,83 @@ var noopFunc = func() {
 	// NOOP
 }
 
+// Quorum implements a distributed locking mechanism using file-based coordination.
+//
+// The Quorum struct provides a way to implement mutual exclusion across multiple
+// processes or services by using file existence as a coordination primitive. It's
+// particularly useful in distributed systems where multiple instances need to
+// coordinate access to shared resources or ensure only one instance performs
+// a specific operation at a time.
+//
+// The locking mechanism works by attempting to create files in a shared storage
+// system (typically blob storage) and using the atomic nature of file creation
+// to ensure mutual exclusion. The system supports both individual operation
+// timeouts and absolute operation timeouts for flexible timeout management.
+//
+// Key Features:
+//   - Distributed coordination using file-based locking
+//   - Configurable timeout mechanisms (per-attempt and absolute)
+//   - Integration with blob storage systems
+//   - Comprehensive logging and error handling
+//   - Support for different file types and storage options
+//
+// Thread Safety:
+// Quorum instances are safe for concurrent use from multiple goroutines.
+// The underlying file operations and timeout management are handled safely.
 type Quorum struct {
+	// logger provides structured logging for lock operations and debugging
 	logger          ulogger.Logger
+	// path specifies the base path in storage where lock files are created
 	path            string
+	// timeout defines the maximum duration for individual lock attempts
 	timeout         time.Duration
+	// absoluteTimeout defines the maximum total duration for the entire lock operation
 	absoluteTimeout time.Duration
+	// fileType specifies the type of files created for locking (affects storage behavior)
 	fileType        fileformat.FileType
+	// exister provides the interface for checking file existence in the storage system
 	exister         existerIfc
+	// existerOpts contains additional options passed to existence check operations
 	existerOpts     []options.FileOption
 }
 
+// NewQuorum creates a new Quorum instance with the specified configuration.
+//
+// This constructor function initializes a Quorum with the provided parameters and
+// applies any optional configuration through the functional options pattern. The
+// function validates required parameters and sets sensible defaults for optional
+// configuration values.
+//
+// The function creates a Quorum instance configured for distributed locking
+// operations using the provided storage interface and path. Default timeout
+// values are applied, but can be overridden using the provided options.
+//
+// Parameters:
+//   - logger: Logger instance for structured logging of lock operations
+//   - exister: Interface for checking file existence in the storage system
+//   - path: Base path in storage where lock files will be created (must not be empty)
+//   - quorumOpts: Optional configuration functions to customize the Quorum behavior
+//
+// Returns:
+//   - *Quorum: Configured Quorum instance ready for locking operations
+//   - error: Configuration error if required parameters are invalid
+//
+// Default Configuration:
+//   - Individual timeout: 10 seconds
+//   - Absolute timeout: Not set (no absolute limit)
+//   - File type: Default file type from storage system
+//
+// Example Usage:
+//   quorum, err := NewQuorum(
+//       logger,
+//       blobStore,
+//       "/locks/subtree-validation",
+//       WithTimeout(5*time.Second),
+//       WithAbsoluteTimeout(30*time.Second),
+//   )
+//   if err != nil {
+//       return fmt.Errorf("failed to create quorum: %w", err)
+//   }
 func NewQuorum(logger ulogger.Logger, exister existerIfc, path string, quorumOpts ...QuorumOption) (*Quorum, error) {
 	if path == "" {
 		return nil, errors.NewConfigurationError("Path is required")

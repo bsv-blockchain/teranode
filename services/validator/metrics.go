@@ -1,8 +1,27 @@
 /*
-Package validator implements Bitcoin SV transaction validation functionality.
+Package validator implements comprehensive Bitcoin SV transaction validation functionality
+for the Teranode blockchain node. This service provides critical validation operations
+including transaction structure validation, script execution, UTXO verification, and
+consensus rule enforcement to ensure blockchain integrity and compliance.
 
-This file implements Prometheus metrics collection for the validator service,
+The validator service integrates with multiple Teranode components:
+- UTXO store for unspent transaction output verification
+- Script engine for Bitcoin script execution and validation  
+- Block processor for coordinated validation workflows
+- Mempool for transaction pre-validation before block inclusion
+
+This metrics.go file implements Prometheus metrics collection for the validator service,
 providing detailed monitoring and observability of transaction validation operations.
+The metrics track performance, error rates, validation times, and resource utilization
+to enable comprehensive monitoring of the validation pipeline's health and efficiency.
+
+Key metrics categories include:
+- Health check monitoring and service availability
+- Transaction validation performance and timing
+- Script validation execution metrics
+- Batch processing performance tracking
+- UTXO operations and database interactions
+- Error rates and validation failure analysis
 */
 package validator
 
@@ -19,14 +38,21 @@ var (
 	// prometheusHealth tracks the number of health check calls
 	prometheusHealth prometheus.Counter
 
-	// prometheusInvalidTransactions counts invalid transactions
+	// prometheusInvalidTransactions counts the total number of transactions that failed validation.
+	// This counter increments for each transaction that violates consensus rules, has invalid scripts,
+	// or fails structural validation checks. High values may indicate network attacks or client issues.
 	prometheusInvalidTransactions prometheus.Counter
 
-	// prometheusTransactionValidateTotal measures total validation time
+	// prometheusTransactionValidateTotal measures the complete end-to-end validation time for transactions.
+	// This histogram tracks the total time spent validating a transaction from initial receipt through
+	// final validation completion, including all validation steps and database operations. Units: seconds.
 	prometheusTransactionValidateTotal prometheus.Histogram
 
-	// prometheusTransactionValidate measures individual validation steps
+	// prometheusTransactionValidate measures the time spent in individual transaction validation steps.
+	// This histogram captures the duration of core validation operations excluding script execution,
+	// such as structure validation, input/output checks, and consensus rule verification. Units: seconds.
 	prometheusTransactionValidate prometheus.Histogram
+
 
 	// prometheusTransactionExend measures transaction extension operations
 	prometheusTransactionExtend prometheus.Histogram
@@ -34,34 +60,54 @@ var (
 	// prometheusTransactionValidateScripts measures individual validation script steps
 	prometheusTransactionValidateScripts prometheus.Histogram
 
-	// prometheusTransactionValidateBatch measures batch validation performance
+	// prometheusTransactionValidateBatch measures the performance of batch validation operations.
+	// This histogram tracks the time required to validate multiple transactions together, enabling
+	// analysis of batch processing efficiency and optimization opportunities. Units: seconds.
 	prometheusTransactionValidateBatch prometheus.Histogram
 
-	// prometheusTransactionSpendUtxos measures UTXO spending operations
+	// prometheusTransactionSpendUtxos measures the time spent processing UTXO spending operations.
+	// This histogram tracks database operations for retrieving, validating, and marking UTXOs as spent
+	// during transaction validation. High values may indicate database performance issues. Units: seconds.
 	prometheusTransactionSpendUtxos prometheus.Histogram
 
-	// getTransactionInputBlockHeights measures time taken to get UTXO heights
+	// getTransactionInputBlockHeights measures the time taken to retrieve UTXO block heights.
+	// This histogram tracks database queries to determine the block height of transaction inputs,
+	// which is required for certain consensus rules and validation checks. Units: seconds.
 	getTransactionInputBlockHeights prometheus.Histogram
 
-	// prometheusTransaction2PhaseCommit measures 2-phase commit operations
+	// prometheusTransaction2PhaseCommit measures the time spent in 2-phase commit operations.
+	// This histogram tracks the duration of distributed transaction coordination, including
+	// prepare and commit phases for ensuring data consistency across multiple services. Units: seconds.
 	prometheusTransaction2PhaseCommit prometheus.Histogram
 
-	// prometheusValidateTransaction measures overall transaction processing
+	// prometheusValidateTransaction measures the overall time spent processing transactions.
+	// This histogram captures the complete transaction processing pipeline from receipt through
+	// final validation, including all validation steps, database operations, and result handling. Units: seconds.
 	prometheusValidateTransaction prometheus.Histogram
 
-	// prometheusTransactionSize tracks transaction size distribution
+	// prometheusTransactionSize tracks the distribution of transaction sizes processed by the validator.
+	// This histogram provides insights into transaction size patterns, helping optimize memory allocation
+	// and processing strategies for different transaction types. Units: bytes.
 	prometheusTransactionSize prometheus.Histogram
 
-	// prometheusValidatorSendToBlockAssembly measures block assembly operations
+	// prometheusValidatorSendToBlockAssembly measures the time spent sending validated transactions to block assembly.
+	// This histogram tracks the duration of communication with the block assembly service, including
+	// message serialization, network transmission, and acknowledgment processing. Units: seconds.
 	prometheusValidatorSendToBlockAssembly prometheus.Histogram
 
-	// prometheusValidatorSendToBlockValidationKafka measures Kafka operations for block validation
+	// prometheusValidatorSendToBlockValidationKafka measures Kafka publishing operations for block validation events.
+	// This histogram tracks the time required to publish validation results to Kafka topics used for
+	// block validation coordination and inter-service communication. Units: seconds.
 	prometheusValidatorSendToBlockValidationKafka prometheus.Histogram
 
-	// prometheusValidatorSendToP2PKafka measures Kafka operations for P2P
+	// prometheusValidatorSendToP2PKafka measures Kafka publishing operations for peer-to-peer network events.
+	// This histogram tracks the duration of publishing transaction validation results to P2P Kafka topics,
+	// enabling efficient propagation of validation status across the network. Units: seconds.
 	prometheusValidatorSendToP2PKafka prometheus.Histogram
 
-	// prometheusValidatorSetTxMeta measures transaction metadata operations
+	// prometheusValidatorSetTxMeta measures the time spent updating transaction metadata.
+	// This histogram tracks database operations for storing and updating transaction metadata,
+	// including validation status, processing timestamps, and related transaction information. Units: seconds.
 	prometheusValidatorSetTxMeta prometheus.Histogram
 )
 

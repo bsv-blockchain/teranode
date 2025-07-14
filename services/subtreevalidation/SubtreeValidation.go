@@ -1,6 +1,35 @@
 // Package subtreevalidation provides functionality for validating subtrees in a blockchain context.
 // It handles the validation of transaction subtrees, manages transaction metadata caching,
 // and interfaces with blockchain and validation services.
+//
+// The subtreevalidation service is a core component of the Teranode blockchain node that manages
+// the validation of transaction subtrees. Unlike traditional Bitcoin implementations that use a
+// mempool, Teranode uses a subtree-based approach for transaction management and validation.
+//
+// Key Features:
+//   - Subtree validation and processing for blockchain transactions
+//   - Transaction metadata caching and retrieval
+//   - Integration with validator services for transaction validation
+//   - Concurrent processing with proper locking mechanisms
+//   - Metrics collection and monitoring support
+//   - gRPC API for external service integration
+//
+// Architecture:
+// The service operates as both a gRPC server and client, providing validation services to other
+// components while consuming blockchain and validator services. It maintains transaction metadata
+// in various storage backends and implements sophisticated caching strategies for performance.
+//
+// Integration:
+// This service integrates with:
+//   - Blockchain service for block and transaction data
+//   - Validator service for transaction validation logic
+//   - Blob storage for persistent transaction metadata
+//   - P2P service for network communication
+//   - Metrics collection systems for monitoring
+//
+// Concurrency:
+// The service is designed for high-concurrency operations with proper synchronization mechanisms
+// to handle multiple validation requests simultaneously while maintaining data consistency.
 package subtreevalidation
 
 import (
@@ -49,23 +78,80 @@ type missingTx struct {
 }
 
 // SetSubtreeExists marks a subtree as existing in the local storage.
+//
+// This method is intended to track which subtrees have been processed and stored locally
+// to avoid redundant processing. Currently, this is a placeholder implementation that
+// always returns success without performing any actual storage operations.
+//
+// Parameters:
+//   - subtreeHash: The hash identifier of the subtree to mark as existing
+//
+// Returns:
+//   - error: Always nil in the current implementation
+//
+// TODO: Implement actual local storage tracking for subtree existence.
 func (u *Server) SetSubtreeExists(_ *chainhash.Hash) error {
 	// TODO: implement for local storage
 	return nil
 }
 
 // GetSubtreeExists checks if a subtree exists in the local storage.
+//
+// This method queries the local storage to determine whether a specific subtree
+// has already been processed and stored. It's used to optimize processing by
+// avoiding duplicate work on subtrees that have already been validated.
+//
+// Parameters:
+//   - ctx: Context for cancellation and request-scoped values
+//   - subtreeHash: The hash identifier of the subtree to check
+//
+// Returns:
+//   - bool: Always false in the current implementation
+//   - error: Always nil in the current implementation
+//
+// TODO: Implement actual local storage lookup for subtree existence.
 func (u *Server) GetSubtreeExists(_ context.Context, _ *chainhash.Hash) (bool, error) {
 	return false, nil
 }
 
-// to help mocking the operations
+// txMetaCacheOps defines the interface for transaction metadata cache operations.
+//
+// This interface abstracts the caching operations to enable mocking during testing
+// and to provide a clean separation between the validation logic and the underlying
+// storage implementation. It allows the subtree validation service to work with
+// different cache implementations while maintaining consistent behavior.
+//
+// The interface is typically implemented by UTXO stores that support caching
+// functionality, enabling efficient storage and retrieval of transaction metadata
+// during the validation process.
 type txMetaCacheOps interface {
+	// Delete removes transaction metadata from the cache for the specified hash.
+	// Returns an error if the deletion operation fails.
 	Delete(ctx context.Context, hash *chainhash.Hash) error
+	
+	// SetCacheFromBytes stores raw transaction metadata bytes in the cache using the provided key.
+	// This method allows direct storage of pre-serialized metadata for performance optimization.
+	// Returns an error if the cache operation fails.
 	SetCacheFromBytes(key, txMetaBytes []byte) error
 }
 
 // SetTxMetaCacheFromBytes stores raw transaction metadata bytes in the cache.
+//
+// This method provides a direct way to store pre-serialized transaction metadata
+// in the cache without requiring deserialization and re-serialization. It's used
+// for performance optimization when metadata is already in byte format.
+//
+// The method checks if the underlying UTXO store supports caching operations
+// through the txMetaCacheOps interface. If caching is not supported, the method
+// returns successfully without performing any operation.
+//
+// Parameters:
+//   - ctx: Context for cancellation and request-scoped values (currently unused)
+//   - key: The cache key for storing the metadata
+//   - txMetaBytes: The serialized transaction metadata to store
+//
+// Returns:
+//   - error: Error from the cache operation, or nil if successful or caching not supported
 func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []byte) error {
 	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
 		return cache.SetCacheFromBytes(key, txMetaBytes)
@@ -75,6 +161,21 @@ func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []b
 }
 
 // DelTxMetaCache removes transaction metadata from the cache if caching is enabled.
+//
+// This method removes cached transaction metadata for the specified transaction hash.
+// It includes distributed tracing support to monitor cache deletion operations and
+// only performs the deletion if the underlying UTXO store supports caching.
+//
+// The method is typically called during cleanup operations or when transaction
+// metadata needs to be invalidated due to blockchain reorganizations or other
+// state changes.
+//
+// Parameters:
+//   - ctx: Context for cancellation, tracing, and request-scoped values
+//   - hash: The transaction hash whose metadata should be removed from cache
+//
+// Returns:
+//   - error: Error from the cache deletion operation, or nil if successful or caching not supported
 func (u *Server) DelTxMetaCache(ctx context.Context, hash *chainhash.Hash) error {
 	if cache, ok := u.utxoStore.(txMetaCacheOps); ok {
 		ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "SubtreeValidation:DelTxMetaCache")
@@ -369,12 +470,12 @@ func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHa
 	return nil
 }
 
-// ValidateSubtree contains the parameters needed for validating a subtree.
+// ValidateSubtree encapsulates all the necessary information required to validate a transaction subtree.
 //
-// This structure encapsulates all the necessary information required to validate
-// a transaction subtree, providing a clean interface for the validation methods.
-// It contains the identifying information for the subtree, source location for
-// retrieving missing transactions, and configuration options for the validation process.
+// This structure provides a clean interface for the validation methods, containing the identifying
+// information for the subtree, source location for retrieving missing transactions, and configuration
+// options for the validation process. It serves as the primary input parameter for subtree validation
+// operations throughout the service.
 type ValidateSubtree struct {
 	// SubtreeHash is the unique identifier hash of the subtree to be validated
 	SubtreeHash chainhash.Hash
@@ -386,9 +487,9 @@ type ValidateSubtree struct {
 	// This may be empty if the subtree transactions need to be fetched from the store
 	TxHashes []chainhash.Hash
 
-	// AllowFailFast enables early termination of validation when an error is encountered
-	// When true, validation stops at the first error; when false, attempts to validate all transactions
-	// AllowFailFast enables quick failure for invalid subtrees
+	// AllowFailFast enables early termination of validation when an error is encountered.
+	// When true, validation stops at the first error for quick failure detection.
+	// When false, validation attempts to process all transactions to collect comprehensive error information.
 	AllowFailFast bool
 }
 
@@ -1021,10 +1122,27 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 	return missingTxs, nil
 }
 
-// txMapWrapper contains transaction metadata used during validation.
+// txMapWrapper contains transaction metadata used during validation processing.
+//
+// This structure wraps transaction data with additional metadata required for the validation
+// process, particularly for tracking dependency relationships and block-level information.
+// It serves as an internal data structure to maintain context during the complex validation
+// workflow where transactions need to be processed in dependency order.
+//
+// The wrapper is used in the prepareTxsPerLevel method to organize transactions by their
+// dependency levels, ensuring proper validation ordering while maintaining performance
+// through parallel processing of independent transactions.
 type txMapWrapper struct {
+	// missingTx contains the transaction data and its original position in the subtree
 	missingTx          missingTx
+	// someParentsInBlock indicates whether some of this transaction's parents are already in a block.
+	// This flag is used to optimize validation by skipping certain checks for transactions
+	// whose parents have already been validated and included in the blockchain.
 	someParentsInBlock bool
+	// childLevelInBlock represents the dependency level of this transaction within the block structure.
+	// Lower levels indicate transactions with fewer dependencies, allowing for optimized
+	// parallel processing during validation. Level 0 transactions have no dependencies
+	// within the current subtree and can be validated first.
 	childLevelInBlock  uint32
 }
 
