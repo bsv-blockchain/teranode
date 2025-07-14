@@ -38,13 +38,14 @@ jobs:
     secrets: inherit
 
   # Run chain integrity test
-  chainintegrity:
-    needs: build-and-deploy
-    #uses: ./.github/workflows/chainintegrity-3blasters.yaml
-    uses: ./.github/workflows/chainintegrity.yaml
-    permissions:
-      contents: read
-      pull-requests: read
-      id-token: write
-      packages: read
-    secrets: inherit
+  # Chain Integrity is currently disabled for PRs because of slowness and fuzziness, it's still enabled for main branch pushes.
+#  chainintegrity:
+#    needs: build-and-deploy
+#    #uses: ./.github/workflows/chainintegrity-3blasters.yaml
+#    uses: ./.github/workflows/chainintegrity.yaml
+#    permissions:
+#      contents: read
+#      pull-requests: read
+#      id-token: write
+#      packages: read
+#    secrets: inherit
