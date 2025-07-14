@@ -605,17 +605,20 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 	b.startChannelListeners(ctx)
 
 	// Check if the UTXO store supports cleanup operations
-	if cleanupServiceProvider, ok := b.utxoStore.(cleanup.CleanupServiceProvider); ok {
-		b.logger.Infof("[BlockAssembler] initialising cleanup service")
+	if !b.settings.UtxoStore.DisableDAHCleaner {
+		if cleanupServiceProvider, ok := b.utxoStore.(cleanup.CleanupServiceProvider); ok {
+			b.logger.Infof("[BlockAssembler] initialising cleanup service")
 
-		b.cleanupService, err = cleanupServiceProvider.GetCleanupService()
-		if err != nil {
-			return err
+			b.cleanupService, err = cleanupServiceProvider.GetCleanupService()
+			if err != nil {
+				return err
+			}
+
+			if b.cleanupService != nil {
+				b.logger.Infof("[BlockAssembler] starting cleanup service")
+				b.cleanupService.Start(ctx)
+			}
 		}
-
-		b.logger.Infof("[BlockAssembler] starting cleanup service")
-
-		b.cleanupService.Start(ctx)
 	}
 
 	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
