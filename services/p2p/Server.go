@@ -1311,9 +1311,15 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 			connTime = sp.ConnTime.Unix()
 		}
 
+		var addr string
+
+		if len(sp.Addrs) > 0 {
+			addr = sp.Addrs[0].String()
+		}
+
 		resp.Peers = append(resp.Peers, &p2p_api.Peer{
 			Id:            sp.ID.String(),
-			Addr:          sp.Addrs[0].String(),
+			Addr:          addr,
 			CurrentHeight: sp.CurrentHeight,
 			Banscore:      int32(banScore), //nolint:gosec
 			ConnTime:      connTime,
