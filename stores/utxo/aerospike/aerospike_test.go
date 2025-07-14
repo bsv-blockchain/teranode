@@ -59,6 +59,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/url"
+	"os"
 	"testing"
 
 	"github.com/aerospike/aerospike-client-go/v8"
@@ -227,4 +228,88 @@ func TestUnmined(t *testing.T) {
 
 		assert.Equal(t, 0, count)
 	})
+}
+
+func TestLargeTxStoresExternally(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	ctx := context.Background()
+
+	tSettings := test.CreateBaseTestSettings()
+
+	container, err := aeroTest.RunContainer(ctx)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		err = container.Terminate(ctx)
+		require.NoError(t, err)
+	})
+
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+
+	port, err := container.ServicePort(ctx)
+	require.NoError(t, err)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=utxo&externalStore=file://./data/external?hashPrefix=2", host, port))
+	require.NoError(t, err)
+
+	store, err := New(ctx, logger, tSettings, aeroURL)
+	require.NoError(t, err)
+
+	b, err := os.ReadFile("test/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400")
+	require.NoError(t, err)
+
+	tx, err := bt.NewTxFromBytes(b)
+	require.NoError(t, err)
+
+	// Remove the external store
+	err = os.RemoveAll("./data/external")
+	require.NoError(t, err)
+
+	_, err = store.Create(context.Background(), tx, 1)
+	require.NoError(t, err)
+
+	// check that the tx is stored externally
+	_, err = os.Stat("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx")
+	require.NoError(t, err)
+
+	// Create a transaction that spends the 2 outputs of tx
+	spendTx := bt.NewTx()
+
+	err = spendTx.FromUTXOs(&bt.UTXO{
+		TxIDHash:      tx.TxIDChainHash(),
+		Vout:          0,
+		Satoshis:      tx.Outputs[0].Satoshis,
+		LockingScript: tx.Outputs[0].LockingScript,
+	}, &bt.UTXO{
+		TxIDHash:      tx.TxIDChainHash(),
+		Vout:          1,
+		Satoshis:      tx.Outputs[1].Satoshis,
+		LockingScript: tx.Outputs[1].LockingScript,
+	})
+	require.NoError(t, err)
+
+	// Now let's spend the outputs
+	_, err = store.Spend(context.Background(), spendTx)
+	require.NoError(t, err)
+
+	// check that the tx is stored externally
+	_, err = os.Stat("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah")
+	require.Error(t, err) // DAH should not exist
+
+	err = store.SetBlockHeight(100_000)
+	require.NoError(t, err)
+
+	// Now mark as mined
+	err = store.SetMinedMulti(context.Background(), []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+		BlockID:     1,
+		BlockHeight: 1,
+		SubtreeIdx:  1,
+	})
+	require.NoError(t, err)
+
+	dah, err := os.ReadFile("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah")
+	require.NoError(t, err)
+
+	require.Equal(t, "100011", string(dah))
 }

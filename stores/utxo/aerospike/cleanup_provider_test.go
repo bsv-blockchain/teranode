@@ -4,6 +4,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/cleanup"
 	"github.com/stretchr/testify/assert"
 )
@@ -45,4 +46,36 @@ func TestCleanupServiceConcurrency(t *testing.T) {
 
 	wg.Wait()
 	// Test passes if no race condition occurs
+}
+
+func TestCleanupServiceDisabled(t *testing.T) {
+	// Test that cleanup service returns nil when disabled
+	store := &Store{
+		settings: &settings.Settings{
+			UtxoStore: settings.UtxoStoreSettings{
+				DisableDAHCleaner: true,
+			},
+		},
+	}
+
+	service, err := store.GetCleanupService()
+	assert.Nil(t, service)
+	assert.Nil(t, err)
+}
+
+func TestCleanupServiceEnabled(t *testing.T) {
+	// Test that cleanup service returns nil when enabled (default behavior)
+	store := &Store{
+		settings: &settings.Settings{
+			UtxoStore: settings.UtxoStoreSettings{
+				DisableDAHCleaner: false,
+			},
+		},
+	}
+
+	service, err := store.GetCleanupService()
+	// Should return an error because we don't have a valid aerospike client
+	// but the important thing is that it didn't return early due to disabled setting
+	assert.NotNil(t, err)
+	assert.Nil(t, service)
 }

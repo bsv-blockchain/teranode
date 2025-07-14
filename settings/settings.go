@@ -318,6 +318,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxMinedRoutines:                 getInt("utxostore_maxMinedRoutines", 128, alternativeContext...),
 			MaxMinedBatchSize:                getInt("utxostore_maxMinedBatchSize", 1024, alternativeContext...),
 			BlockHeightRetentionAdjustment:   getInt32("utxostore_blockHeightRetentionAdjustment", 0, alternativeContext...),
+			DisableDAHCleaner:                getBool("utxostore_disableDAHCleaner", false, alternativeContext...),
 		},
 		P2P: P2PSettings{
 			BestBlockTopic:     getString("p2p_bestblock_topic", "", alternativeContext...),

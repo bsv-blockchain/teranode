@@ -128,6 +128,10 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
+	// s.blockHeight is the last mined block, but for the LUA script we are telling it to
+	// evaluate this spend in this block height (i.e. 1 greater)
+	thisBlockHeight := s.blockHeight.Load() + 1
+
 	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
 
 	for idx, hash := range hashes {
@@ -146,7 +150,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 			aerospike.NewValue(minedBlockInfo.BlockID),
 			aerospike.NewValue(minedBlockInfo.BlockHeight),
 			aerospike.NewValue(minedBlockInfo.SubtreeIdx),
-			aerospike.NewIntegerValue(int(s.blockHeight.Load())),
+			aerospike.NewValue(thisBlockHeight),
 			aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
 		)
 	}
@@ -194,11 +198,11 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 								}
 
 							case LuaDAHSet:
-								if err := s.SetDAHForChildRecords(hashes[idx], res.ChildCount, s.settings.GetUtxoStoreBlockHeightRetention()); err != nil {
+								if err := s.SetDAHForChildRecords(hashes[idx], res.ChildCount, thisBlockHeight+s.settings.GetUtxoStoreBlockHeightRetention()); err != nil {
 									errs = errors.Join(errs, err)
 								}
 
-								if err := s.setDAHExternalTransaction(ctx, hashes[idx], s.settings.GetUtxoStoreBlockHeightRetention()); err != nil {
+								if err := s.setDAHExternalTransaction(ctx, hashes[idx], thisBlockHeight+s.settings.GetUtxoStoreBlockHeightRetention()); err != nil {
 									errs = errors.Join(errs, err)
 								}
 

@@ -20,6 +20,11 @@ var (
 // GetCleanupService returns a cleanup service for the Aerospike store.
 // This implements the cleanup.CleanupProvider interface.
 func (s *Store) GetCleanupService() (cleanup.Service, error) {
+	// Check if DAH cleaner is disabled in settings
+	if s.settings.UtxoStore.DisableDAHCleaner {
+		return nil, nil
+	}
+
 	// Use a mutex to ensure thread safety when creating the singleton
 	cleanupServiceMutex.Lock()
 	defer cleanupServiceMutex.Unlock()

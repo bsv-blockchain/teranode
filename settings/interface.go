@@ -324,6 +324,7 @@ type UtxoStoreSettings struct {
 	MaxMinedRoutines                 int
 	MaxMinedBatchSize                int
 	BlockHeightRetentionAdjustment   int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
+	DisableDAHCleaner                bool  // Disable the DAH cleaner process completely
 }
 
 type P2PSettings struct {
