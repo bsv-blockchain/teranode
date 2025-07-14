@@ -244,3 +244,153 @@ The health checks return appropriate HTTP status codes:
 
 - `200 OK`: Service is healthy
 - `503 Service Unavailable`: Service or dependencies are unhealthy
+
+## Alert Datastore
+
+### Overview
+
+The Alert Service uses a persistent datastore to manage alert-related data, consensus state, and operational history. The datastore integrates with the `github.com/bitcoin-sv/alert-system` library to provide alert message processing, validation, and P2P network communication.
+
+### Supported Database Backends
+
+The alert datastore supports multiple database backends:
+
+- **SQLite** (including in-memory mode)
+- **PostgreSQL**
+- **MySQL**
+
+Database selection is configured via the `StoreURL` setting in the Alert service configuration.
+
+### Alert Data Models
+
+#### 1. Genesis Alert
+
+**Purpose**: Bootstrap alert created during service initialization
+
+- **Function**: `models.CreateGenesisAlert()` creates this foundational alert
+- **Storage**: Stored in the database during startup to establish the alert system baseline
+- **Role**: Provides the initial state for the alert consensus system
+
+#### 2. Alert Messages
+
+Core alert data structure containing:
+
+- **Alert ID**: Unique identifier for each alert
+- **Alert Type**: Type of alert operation
+  - UTXO freeze
+  - UTXO unfreeze
+  - UTXO reassignment
+  - Peer ban/unban
+  - Block invalidation
+- **Timestamp**: When the alert was created/received
+- **Status**: Alert processing status (pending, processed, failed)
+- **Payload**: Alert-specific data payload
+- **Signatures**: Cryptographic signatures for alert validation
+
+#### 3. UTXO-Related Alert Data
+
+For UTXO freeze, unfreeze, and reassignment operations:
+
+- **UTXO Identifiers**:
+  - Transaction hashes (txid)
+  - Output indices (vout)
+- **Block Height**: Target block height for UTXO operations
+- **Operation Type**: Freeze, unfreeze, or reassign
+- **New Address**: For UTXO reassignment operations (destination address)
+- **Execution Status**: Whether the UTXO operation has been applied
+
+#### 4. Peer Management Alert Data
+
+For peer banning and unbanning operations:
+
+- **Peer Addresses**: IP addresses with optional netmasks
+- **Ban Duration**: How long peers should remain banned (typically 100 years for permanent bans)
+- **Ban Reason**: Textual description of why the peer was banned
+- **Ban Status**: Active, expired, or lifted
+- **Target Networks**: Both P2P and Legacy peer networks
+
+#### 5. Block Invalidation Alert Data
+
+For block invalidation operations:
+
+- **Block Hash**: Hash of the block to be invalidated
+- **Invalidation Reason**: Why the block should be invalidated
+- **Recovery Actions**: Instructions for handling transactions from invalidated blocks
+- **Re-validation Status**: Status of transaction re-validation process
+
+#### 6. Alert Consensus Data
+
+For alert validation and consensus:
+
+- **Consensus State**: Current consensus status of alerts
+- **Validation Results**: Results of alert validation processes
+- **Participant Signatures**: Signatures from network participants
+- **Consensus Threshold**: Required consensus level for alert execution
+
+#### 7. P2P Network Alert Data
+
+For P2P network communication:
+
+- **Topic Subscriptions**: P2P topics the alert system subscribes to
+- **Network Participants**: Other nodes participating in the alert network
+- **Message History**: Historical alert messages received from the P2P network
+- **Network Status**: Connection status to the private alert P2P network
+
+#### 8. Configuration and State Data
+
+Operational configuration and state:
+
+- **Alert Processing Interval**: How frequently alerts are processed (default: 5 minutes)
+- **Network Configuration**: Network-specific settings (mainnet vs testnet)
+- **Service State**: Current operational state of the alert service
+- **Last Processed**: Timestamps of last processed alerts by type
+
+### Database Configuration
+
+#### Connection Settings
+
+The datastore connection is configured via the `StoreURL` setting:
+
+```
+# SQLite example
+StoreURL: sqlite://path/to/alert.db
+
+# PostgreSQL example
+StoreURL: postgres://user:password@host:port/database?sslmode=disable
+
+# MySQL example
+StoreURL: mysql://user:password@host:port/database
+```
+
+#### Auto-Migration
+
+The Alert service supports automatic database schema migration:
+
+- **Enabled**: When `Datastore.AutoMigrate` is true
+- **Models**: Uses models from the `github.com/bitcoin-sv/alert-system` library
+- **Safety**: Migrations are applied during service startup
+
+#### SSL Configuration
+
+For PostgreSQL and MySQL connections:
+
+- **SSL Mode**: Configurable via query parameter `sslmode`
+- **Default**: `disable` for development, `require` recommended for production
+- **Certificates**: Standard SSL certificate configuration supported
+
+### Data Flow and Lifecycle
+
+#### Alert Reception and Storage
+
+1. **Alert Reception**: Alerts received from private P2P network
+2. **Validation**: Alert signatures and consensus validation
+3. **Storage**: Alert data stored in datastore for persistence
+4. **Processing**: Alerts processed according to their type and timing
+5. **Execution**: Alert actions executed (UTXO operations, peer bans, etc.)
+6. **State Updates**: Alert processing state updated in datastore
+
+#### Data Retention
+
+- **Alert History**: All alert messages are retained for audit purposes
+- **Consensus Data**: Consensus validation data is preserved
+- **Cleanup**: No automatic cleanup - manual maintenance may be required

@@ -82,10 +82,8 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
 A high level diagram:
 
 ![Block_Assembly_Service_Container_Diagram.png](img%2FBlock_Assembly_Service_Container_Diagram.png)
-Based on its settings, the Block Assembly receives TX notifications from the validator service via 3 different paths:
 
-- A Kafka topic.
-- A gRPC client.
+Based on its settings, the Block Assembly receives TX notifications from the validator service via direct gRPC calls.
 
 The Block Assembly service also subscribes to the Blockchain service, and receives notifications when a new subtree or block is received from another node.
 
@@ -114,9 +112,11 @@ The Job Store is a temporary in-memory map that tracks information about the can
 
 ![block_assembly_add_tx.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_add_tx.svg)
 
-- The TX Validator interacts with the Block Assembly Client. Based on configuration, we send either transactions in batches or individually. This communication can be done over gRPC or through Kafka.
+- The TX Validator interacts with the Block Assembly Client. Based on configuration, we send either transactions in batches or individually. This communication is performed over gRPC.
 - The Block Assembly client then delegates to the Server, which adds the transactions to the Subtree Processor.
 - At a later stage, the Subtree Processor will group the transactions into subtrees, which will be used to create mining candidates.
+
+
 ### 2.3. Grouping Transactions into Subtrees
 
 ![block_assembly_add_tx_to_subtree.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_add_tx_to_subtree.svg)

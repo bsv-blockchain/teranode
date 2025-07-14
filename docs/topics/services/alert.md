@@ -80,6 +80,7 @@ The Alert Service initializes the necessary components and services to start pro
 
     - The service loads its configuration.
     - It initializes the datastore (database connection). This is a dependency for the alert library, which uses the datastore to store alert data.
+    > **Note**: For detailed information about the alert datastore structure, data models, and configuration options, see the [Alert Service Datastore Reference](../../references/alert_reference.md).
     - It creates and stores a genesis alert in the database.
     - If enabled, it verifies the RPC connection to the Bitcoin node.
 
@@ -493,4 +494,4 @@ Supported schemes: sqlite://, sqlitememory://, postgres://, mysql://
 
 ## 7. Other Resources
 
-[Alert Reference](../../references/services/alert_reference.md)
+[Alert Reference](../../references/alert_reference.md)

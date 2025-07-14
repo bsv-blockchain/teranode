@@ -28,7 +28,10 @@ The `Validator` (also called `Transaction Validator` or `Tx Validator`) is a go 
 1. Receiving new transactions from the `Propagation`service,
 2. Validating them,
 3. Persisting the data into the utxo store,
-4. Propagating the transactions to the `Subtree Validation` and `Block Assembly` service (if the Tx is passed), or notify the `P2P` service (if the tx is rejected).
+4. Propagating the transactions to other services based on validation results:
+   - **Block Assembly service**: Direct gRPC calls for validated transactions (if the Tx is passed)
+   - **Subtree Validation service**: Kafka topic for transaction metadata (if the Tx is passed)
+   - **P2P service**: Kafka topic for rejected transaction notifications (if the tx is rejected)
 
 ### 1.1 Deployment Models
 
@@ -64,7 +67,7 @@ Also, the `Validator` will accept subscriptions from the P2P Service, where reje
 
 ![Tx_Validator_Component_Diagram.png](img/Tx_Validator_Component_Diagram.png)
 
-The Validator notifies the Block Assembly service of new transactions through direct gRPC calls.
+The Validator notifies the Block Assembly service of new transactions through gRPC calls via the Block Assembly client interface.
 
 A node can start multiple parallel instances of the TX Validator. This translates into multiple pods within a Kubernetes cluster. Each instance / pod will have its own gRPC server, and will be able to receive and process transactions independently. GRPC load balancing allows to distribute the load across the multiple instances.
 
@@ -93,6 +96,23 @@ The Validator uses Kafka for several critical messaging paths:
     - Useful for high-throughput scenarios where immediate responses aren't needed
 
 The Kafka integration provides resilience, allowing the system to handle temporary outages or service unavailability by buffering messages.
+
+### Communication Patterns Summary
+
+The Validator uses different communication patterns depending on the target service and use case:
+
+**Outbound Communications (Validator → Other Services):**
+- **Block Assembly**: gRPC calls via `blockassembly.ClientI` interface - used for real-time transaction forwarding to mining candidates
+- **Subtree Validation**: Kafka producer via `txmetaKafkaProducerClient` - used for transaction metadata publishing
+- **P2P Service**: Kafka producer via `rejectedTxKafkaProducerClient` - used for rejected transaction notifications
+
+**Inbound Communications (Other Services → Validator):**
+- **Propagation Service**: Direct method calls (local validator) or gRPC calls (remote validator)
+- **Subtree Validation Service**: Direct method calls (local validator) or gRPC calls (remote validator)
+- **Kafka Consumers**: Kafka messages via `consumerClient` - used for asynchronous validation requests
+- **HTTP API**: REST endpoints for external validation requests
+
+The choice between local method calls and gRPC depends on the deployment model configured via the `useLocalValidator` setting.
 
 ## 2. Functionality
 
@@ -436,7 +456,7 @@ We can dive deeper into the submission to the Block Assembly:
 
 ![tx_validation_block_assembly.svg](img/plantuml/validator/tx_validation_block_assembly.svg)
 
-The Validator notifies the Block Assembly service of new transactions through direct gRPC calls by calling the `Store()` method on the Block Assembly client.
+The Validator notifies the Block Assembly service of new transactions through gRPC calls via the Block Assembly client interface by calling the `Store()` method on the Block Assembly client.
 
 ### Configuration Settings Affecting Validator Behavior
 

@@ -111,27 +111,55 @@ The Asset Service exposes the following HTTP methods:
 
 ### 4.1.1. getTransaction() and getTransactions()
 
+- **URL**: `/tx/:hash` (single transaction), `/txs` (multiple transactions via POST)
+- **Method**: GET (single), POST (multiple)
+- **Response Format**: JSON
+- **Content**: Transaction data with extended metadata
+
 ![asset_server_http_get_transaction.svg](img/plantuml/assetserver/asset_server_http_get_transaction.svg)
 
 ### 4.1.2. GetTransactionMeta()
+
+- **URL**: `/tx/:hash/meta`
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Transaction metadata including UTXO information
 
 ![asset_server_http_get_transaction_meta.svg](img/plantuml/assetserver/asset_server_http_get_transaction_meta.svg)
 
 ### 4.1.3. GetSubtree()
 
+- **URL**: `/subtree/:hash`
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Subtree data with transaction IDs and Merkle root
+
 ![asset_server_http_get_subtree.svg](img/plantuml/assetserver/asset_server_http_get_subtree.svg)
 
 ### 4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()
+
+- **URL**: `/block/:hash/header` (single), `/blocks/headers` (multiple), `/block/best/header` (best)
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Block header data including previous block ID and metadata
 
 ![asset_server_http_get_block_header.svg](img/plantuml/assetserver/asset_server_http_get_block_header.svg)
 
 ### 4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()
 
+- **URL**: `/block/:hash` (single), `/blocks` (multiple), `/blocks/last/:count` (last N blocks)
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Block data with subtree identifiers and metadata
+
 ![asset_server_http_get_block.svg](img/plantuml/assetserver/asset_server_http_get_block.svg)
 
-The server also provides a legacy `/rest/hash/:hash.bin` endpoint for retrieving raw block data by hash. This is a deprecated legacy endpoint that might not have support in future versions.
-
 ### 4.1.6. GetUTXO() and GetUTXOsByTXID()
+
+- **URL**: `/utxo/:hash` (single UTXO), `/utxos/:hash/json` (UTXOs by transaction ID)
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: UTXO data with additional metadata for processing
 
 ![asset_server_http_get_utxo.svg](img/plantuml/assetserver/asset_server_http_get_utxo.svg)
 
@@ -144,12 +172,22 @@ The server also provides a legacy `/rest/hash/:hash.bin` endpoint for retrieving
 
 Generic hash search. The server searches for a hash in the Blockchain, the UTXO store and the subtree store.
 
-![asset_server_http_search.svg](img/plantuml/assetserver/asset_server_http_search.svg)
+- **URL**: `/search/:hash`
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Search results from blockchain, UTXO store, and subtree store
 
+![asset_server_http_search.svg](img/plantuml/assetserver/asset_server_http_search.svg)
 
 ### 4.1.8. GetBlockStats()
 
-Retrieves block statistics
+
+Retrieves block statistics.
+
+- **URL**: `/block/:hash/stats`
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Block statistics and performance metrics
 
 ![asset_server_http_get_block_stats.svg](img/plantuml/assetserver/asset_server_http_get_block_stats.svg)
 
@@ -157,11 +195,21 @@ Retrieves block statistics
 
 Retrieves block graph data for a given period
 
+- **URL**: `/blocks/graph/:period`
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Block graph data and visualization metrics for specified time period
+
 ![asset_server_http_get_block_graph_data.svg](img/plantuml/assetserver/asset_server_http_get_block_graph_data.svg)
 
 ### 4.1.10. GetBlockForks()
 
 Retrieves information about block forks
+
+- **URL**: `/blocks/forks`
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Information about blockchain forks and alternative chains
 
 ![asset_server_http_get_block_forks.svg](img/plantuml/assetserver/asset_server_http_get_block_forks.svg)
 
@@ -169,17 +217,32 @@ Retrieves information about block forks
 
 Retrieves subtrees for a block in JSON format
 
+- **URL**: `/block/:hash/subtrees`
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Subtrees data for a specific block with transaction IDs and Merkle roots
+
 ![asset_server_http_get_block_subtrees.svg](img/plantuml/assetserver/asset_server_http_get_block_subtrees.svg)
 
 ### 4.1.12. GetLegacyBlock()
 
 Retrieves a block in legacy format, and as a binary stream.
 
+- **URL**: `/block_legacy/:hash`
+- **Method**: GET
+- **Response Format**: Binary stream (application/octet-stream)
+- **Content**: Block in legacy Bitcoin protocol format
+
 ![asset_server_http_get_legacy_block.svg](img/plantuml/assetserver/asset_server_http_get_legacy_block.svg)
 
 ### 4.1.13. GetBlockHeadersToCommonAncestor()
 
 Retrieves block headers up to a common ancestor point between two chains. This is useful for chain reorganization and fork resolution.
+
+- **URL**: `/blocks/headers/ancestor/:hash1/:hash2`
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Block headers from two chains up to their common ancestor point
 
 ![asset_server_http_get_headers_to_common_ancestor.svg](img/plantuml/assetserver/asset_server_http_get_headers_to_common_ancestor.svg)
 

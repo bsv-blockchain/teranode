@@ -19,25 +19,41 @@ skinparam participant {
   BackgroundColor #DDDDDD
 }
 
-
-
 participant "HTTP Client" as Client
-participant "HTTP Server\n(asset/http_impl/http.go)" as HTTPServer
+participant "HTTP Server\n(GetLegacyBlock)" as HTTPServer
 participant "Repository" as Repo
 participant "BlockchainClient" as BC
+participant "Block Persister Store" as BPS
 
 Client -> HTTPServer : GET /block_legacy/:hash
 activate HTTPServer
-HTTPServer -> Repo : GetLegacyBlock(ctx, hash)
+HTTPServer -> Repo : GetLegacyBlockReader(ctx, hash)
 activate Repo
+
 Repo -> BC : GetBlock(ctx, hash)
 activate BC
 BC --> Repo : model.Block
 deactivate BC
-Repo --> HTTPServer : []byte (Legacy Block Data)
+
+note over Repo : Extract subtree hashes\nfrom block
+
+loop for each subtree in block
+    Repo -> BPS : GetSubtreeDataReaderFromBlockPersister(ctx, subtreeHash)
+    activate BPS
+    note over BPS : Retrieves enriched subtree data\nwith transaction payloads\n(FileTypeSubtreeData)
+    BPS --> Repo : io.ReadCloser (Subtree Data)
+    deactivate BPS
+
+    note over Repo : Skip 4-byte header\nStream transaction data\nto legacy block format
+end
+
+Repo --> HTTPServer : io.PipeReader (Legacy Block Stream)
 deactivate Repo
-HTTPServer --> Client : Response (Binary Legacy Block Data)
+
+HTTPServer --> Client : Binary Stream (Legacy Bitcoin Protocol Format)
 deactivate HTTPServer
+
+note over Client : Receives block in traditional\nBitcoin protocol format\ncompatible with legacy clients
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 
