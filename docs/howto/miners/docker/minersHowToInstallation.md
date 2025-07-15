@@ -406,6 +406,423 @@ Additional Notes:
 If you have local access to SV Nodes, you can use them to speed up the initial block synchronization too. You can set `legacy_connect_peers: "172.x.x.x:8333|10.x.x.x:8333"` in your `docker-compose.yml` to force the legacy service to only connect to those peers.
 
 
+## Aerospike Operations and Configuration
+
+Teranode includes Aerospike 8.0 community edition for storing the UTXO set. The Aerospike database stores all indexes in memory and the data on disk.
+
+### Aerospike Configuration
+
+The default configuration is set to stop writing when 50% of the system memory has been consumed. To future proof, you might want to run a dedicated cluster, with more memory and disk space allocated.
+
+See [aerospike.conf / stop-writes-sys-memory-pct](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/aerospike.conf)
+
+By default, the Aerospike data is written to a single mount mounted in the `aerospike` container. For performance reasons, it is recommended to use at least 4 dedicated disks for the Aerospike data.
+
+See [aerospike.conf / storage-engine](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/aerospike.conf)
+
+### Aerospike Administration
+
+You can access the Aerospike container and run administrative commands:
+
+```bash
+docker exec -it aerospike /bin/bash
+
+# Command for basic sanity checking
+asadm -e "info"
+asadm -e "summary -l"
+```
+
+For more information about Aerospike, you can access the [Aerospike documentation](https://www.aerospike.com/docs).
+
+## Docker Logs Management
+
+Teranode is very verbose and will output a lot of information, especially with `logLevel=DEBUG`. Make sure to setup log rotation for the containers to avoid running out of disk space.
+
+### System-wide Docker Log Configuration
+
+```bash
+sudo bash -c 'cat <<EOF > /etc/docker/daemon.json
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m"
+  }
+}
+EOF'
+sudo systemctl restart docker
+```
+
+### Per-Service Log Configuration
+
+Alternatively, you can specify logging options directly in your docker-compose.yml file for each service:
+
+```yaml
+services:
+  [servicename]:
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+```
+
+## Teranode Network Architecture
+
+Teranode offers two network connectivity options:
+
+### SVNode P2P Network
+- **Description**: All data transmitted over P2P connections (via `legacy` service)
+- **Use Case**: Traditional Bitcoin SV network connectivity
+- **Characteristics**: Compatible with existing SV Node infrastructure
+
+### Teranode P2P Network
+- **Description**: Only small messages over P2P, with bulk data downloaded via HTTP(S) (via `peer` and `asset` services)
+- **Use Case**: Enhanced performance and stability
+- **Characteristics**: Significant performance advantages over traditional SV Node network
+
+### Teranode Network Requirements
+
+To connect to the Teranode network, you'll need:
+
+1. **Public-facing `peer` service** exposed via TCP (defaults to port 9905, P2P_PORT setting)
+2. **Public-facing `asset` service** exposed via HTTP(S) (selective endpoint exposure recommended)
+3. **Valid SSL certificates** if using HTTPS for the asset service
+
+## Asset Service Setup
+
+The asset service provides HTTP access to blockchain data. For production deployments, you should configure proper caching and security.
+
+### Basic Asset Service Configuration
+
+Update your configuration with your publicly accessible endpoints:
+
+```bash
+asset_httpPublicAddress = https://teranode-1-asset-cache.example.com/api/v1
+peer_p2pPublicAddress = /ip4/1.2.3.4/tcp/9905
+```
+
+### Asset Service with Nginx Caching
+
+For the `asset` service, we have provided an `asset-cache` example using nginx to limit endpoints and provide a caching mechanism. This improves performance and provides better security by exposing only necessary endpoints.
+
+### Asset Service Viewer
+
+The asset service includes a web-based viewer for blockchain data:
+
+- **Port**: Exposed on **port 8090** of the asset container
+- **Access URL**: `http://localhost:8090/viewer`
+
+## RPC Interface
+
+A SVNode compatible RPC interface is available for interacting with Teranode programmatically.
+
+### RPC Configuration
+
+- **Port**: 9292
+- **Default Credentials**: `bitcoin:bitcoin`
+- **Protocol**: JSON-RPC over HTTP
+
+### RPC Usage Example
+
+```bash
+curl --user bitcoin:bitcoin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"version","params":[]}' -H 'content-type: text/plain;' http://localhost:9292/
+```
+
+> **Note**: Most methods have not been implemented yet. The RPC interface is primarily for compatibility and basic operations.
+
+## teranode-cli Command Reference
+
+The `teranode-cli` is a command-line tool that can be used to interact with the Teranode services. It is available in all containers.
+
+### Accessing teranode-cli
+
+```bash
+docker exec -it blockchain teranode-cli
+```
+
+### Available Commands
+
+Running `teranode-cli` without arguments will show a list of all available commands:
+
+```
+Usage: teranode-cli <command> [options]
+
+Available Commands:
+  aerospikereader      Aerospike Reader
+  checkblocktemplate   Check block template
+  export-blocks        Export blockchain to CSV
+  filereader           File Reader
+  getfsmstate          Get the current FSM State
+  import-blocks        Import blockchain from CSV
+  seeder               Seeder
+  setfsmstate          Set the FSM State
+  settings             Settings
+
+Use 'teranode-cli <command> --help' for more information about a command
+```
+
+### Common CLI Operations
+
+**Check FSM State**:
+```bash
+docker exec -it blockchain teranode-cli getfsmstate
+```
+
+**Set FSM State to Legacy Syncing**:
+```bash
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate LEGACYSYNCING
+```
+
+**Set FSM State to Running**:
+```bash
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate RUNNING
+```
+
+## Teranode Reset Procedures
+
+If you require to sync a Teranode from scratch, you will need to clean-up data from Aerospike, Postgres, and your filesystem.
+
+### 1. Aerospike Clean-up
+
+See the [Aerospike documentation](https://aerospike.com/docs/server/operations/manage/sets#truncating-a-set-in-a-namespace) for more information.
+
+```bash
+# Access Aerospike container
+docker exec -it aerospike /bin/bash
+
+# Truncate the UTXO set
+asadm --enable -e "manage truncate ns utxo-store set utxo"
+
+# Verify the total records count, should slowly decrease to 0
+asadm -e "info"
+```
+
+### 2. Postgres Clean-up
+
+```bash
+# Access Postgres container
+docker exec -it postgres psql -U postgres
+
+# Connect to the database used by Teranode
+postgres=> \c <db_name>
+
+# Sanity count check
+teranode_mainnet=> SELECT COUNT(*) FROM blocks;
+ count
+--------
+ 123123
+(1 row)
+
+# Truncate the blocks and state tables
+TRUNCATE TABLE blocks RESTART IDENTITY CASCADE;
+TRUNCATE TABLE state RESTART IDENTITY CASCADE;
+TRUNCATE TABLE bans RESTART IDENTITY CASCADE;
+TRUNCATE TABLE alert_system_alert_messages RESTART IDENTITY CASCADE;
+TRUNCATE TABLE alert_system_public_keys RESTART IDENTITY CASCADE;
+
+# Verify the table was truncated
+SELECT COUNT(*) FROM blocks;
+ count
+-------
+     0
+(1 row)
+
+# Dropping these indexes will significantly speed up seeding
+# The blockchain service will re-create them
+DROP INDEX idx_chain_work_id;
+DROP INDEX idx_chain_work_peer_id;
+```
+
+### 3. Filesystem Clean-up
+
+```bash
+# Define your data mount point
+DATA_MOUNT_POINT=/mnt/teranode
+sudo rm -rf $DATA_MOUNT_POINT/*
+
+# Or for Docker Compose setup
+sudo rm -rf ~/teranode-public/docker/testnet/data/*
+sudo rm -rf ~/teranode-public/docker/mainnet/data/*
+```
+
+## Teranode Seeding
+
+If you have access to an SV Node, you can speed up the Initial Block Download (IBD) by seeding the Teranode with an export from SV Node. Only run this on a gracefully shut down SV Node instance (e.g., after using the RPC `stop` method).
+
+### Step 1: Export from SV Node
+
+```bash
+docker run -it \
+  -v /mnt/teranode/seed:/mnt/teranode/seed \
+  --entrypoint="" \
+  434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.8.12 \
+  /app/teranode-cli bitcoin2utxoset -bitcoinDir=/home/ubuntu/bitcoin-data -outputDir=/mnt/teranode/seed/export
+```
+
+This script assumes your `bitcoin-data` directory is located in `/home/ubuntu/bitcoin-data` and contains the `blocks` and `chainstate` directories. It will generate `${blockhash}.utxo-headers` and `${blockhash}.utxo-set` files.
+
+> **Note**: If you get a `Block hash mismatch between last block and chainstate` error message, you should try starting and stopping the SV Node again, it means there are still a few unprocessed blocks.
+
+### Step 2: Seed Teranode
+
+Once you have the export, you can seed any fresh Teranode with the following command:
+
+```bash
+docker run -it \
+  -e SETTINGS_CONTEXT=docker.m \
+  -v ${teranode-location}/docker/base/settings_local.conf:/app/settings_local.conf \
+  -v ${teranode-location}/docker/mainnet/data/teranode:/app/data \
+  -v /mnt/teranode/seed:/mnt/teranode/seed \
+  --network my-teranode-network \
+  --entrypoint="" \
+  434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.8.12 \
+  /app/teranode-cli seeder -inputDir /mnt/teranode/seed -hash 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
+```
+
+### Step 3: Complete Seeding Process
+
+For Docker Compose setup, use the following instructions:
+
+```bash
+# Stop all services
+docker compose down
+
+# Clear out the postgres, aerospike and external data
+sudo rm -rf ~/teranode-public/docker/testnet/data/*
+
+# Bring up the dependent services
+# Blockchain service will insert the correct genesis block for your selected network
+docker compose up -d aerospike postgres kafka-shared blockchain
+
+# Wait to make sure genesis block gets inserted
+# You will see it in the blockchain logs as `genesis block inserted`
+docker compose logs -f -n 100 blockchain
+
+# Run the seeder (see command above)
+docker run -it ...
+
+# Bring down blockchain to reset the internal caches
+docker compose down blockchain
+
+# Bring all other services back online
+docker compose up -d
+
+# Transition Teranode to LEGACYSYNCING
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate LEGACYSYNCING
+```
+
+## CPU Miner Setup
+
+Teranode provides a basic CPU miner that can be used for testing purposes. When using the Docker setup described here, you need to make sure to run it as part of your defined Docker network.
+
+### Basic CPU Miner Configuration
+
+```bash
+docker run -it \
+  --entrypoint="" --network my-teranode-network \
+  434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.7.4 \
+  /app/miner.run -rpcconnect rpc -rpcuser bitcoin -rpcpassword bitcoin -rpcport 9292 \
+  -coinbase-addr mgqipciCS56nCYSjB1vTcDGskN82yxfo1G -coinbase-sig "/Your miner tag/" \
+  -cpus 2
+```
+
+### Miner Configuration Parameters
+
+- **-rpcconnect**: RPC server hostname (use container name for Docker networks)
+- **-rpcuser**: RPC username (default: bitcoin)
+- **-rpcpassword**: RPC password (default: bitcoin)
+- **-rpcport**: RPC port (default: 9292)
+- **-coinbase-addr**: Address to receive mining rewards
+- **-coinbase-sig**: Custom signature for mined blocks
+- **-cpus**: Number of CPU cores to use for mining
+
+> **Note**: The example address used here is a testnet address, linked to the [BSV Faucet](https://bsvfaucet.org/). For mainnet mining, use a valid mainnet address.
+
+## Advanced Configuration Examples
+
+### Private Network Configuration
+
+When running on a box without a public IP, you should enable `legacy_config_Upnp` in your settings file to avoid getting banned by the SV Nodes:
+
+```conf
+legacy_config_Upnp = true
+```
+
+### Peer Connection Optimization
+
+If you have local access to SV Nodes, that will speed up the IBD. You can set specific peer connections in your docker-compose.yml:
+
+```yaml
+environment:
+  - legacy_config_ConnectPeers=172.x.x.x:8333|10.x.x.x:8333
+```
+
+### Settings Override Examples
+
+You can override any setting using environment variables in your docker-compose.yml. See the `x-teranode-settings` section for examples:
+
+```yaml
+x-teranode-settings: &teranode-settings
+  SETTINGS_CONTEXT: docker.m
+  # Override specific settings
+  logLevel: DEBUG
+  legacy_config_Upnp: "true"
+  asset_httpPublicAddress: "https://your-domain.com/api/v1"
+```
+
+### Network-Specific Settings
+
+**Testnet Configuration**:
+```yaml
+environment:
+  - SETTINGS_CONTEXT=docker.t
+  - legacy_config_TestNet=true
+```
+
+**Mainnet Configuration**:
+```yaml
+environment:
+  - SETTINGS_CONTEXT=docker.m
+  - legacy_config_TestNet=false
+```
+
+## Troubleshooting
+
+### Common Issues and Solutions
+
+**Issue**: Container fails to start with permission errors
+**Solution**: Ensure proper file permissions on data directories:
+```bash
+sudo chown -R 1000:1000 ./data/
+```
+
+**Issue**: Aerospike stops writing due to memory limits
+**Solution**: Increase system memory or adjust `stop-writes-sys-memory-pct` in aerospike.conf
+
+**Issue**: Postgres connection errors
+**Solution**: Check database initialization and ensure proper network connectivity between containers
+
+**Issue**: Slow synchronization
+**Solution**:
+- Use seeding process for faster initial sync
+- Configure specific peer connections for better connectivity
+- Ensure adequate system resources (CPU, memory, disk I/O)
+
+### Log Analysis
+
+Monitor service logs for troubleshooting:
+
+```bash
+# Follow logs for all containers
+docker compose logs -f -n 100
+
+# Follow logs for specific container
+docker logs -f legacy -n 100
+
+# Check container health status
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
 ## Settings Reference
 
 You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
