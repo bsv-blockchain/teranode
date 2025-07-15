@@ -16,11 +16,11 @@ Expiration settings:
 
 The default configuration is set stop writing when 50% of the system memory has been consumed. To future-proof, consider running a dedicated cluster, with more memory and disk space allocated.
 
-* See the [sample aerospike.conf](https://github.com/bitcoin-sv/teranode/blob/main/deploy/docker/base/aerospike.conf) for an example of configuration of the `stop-writes-sys-memory-pct` parameter.
+* See the [sample aerospike.conf](https://github.com/bsv-blockchain/teranode/blob/main/deploy/docker/base/aerospike.conf) for an example of configuration of the `stop-writes-sys-memory-pct` parameter.
 
 By default, the Aerospike data is written to a single mount mounted in the aerospike container. For performance reasons, it is recommended to use at least 4 dedicated disks for the Aerospike data.
 
-* See the [sample aerospike.conf](https://github.com/bitcoin-sv/teranode/blob/main/deploy/docker/base/aerospike.conf) for an example of configuration of the `storage-engine` parameter.
+* See the [sample aerospike.conf](https://github.com/bsv-blockchain/teranode/blob/main/deploy/docker/base/aerospike.conf) for an example of configuration of the `storage-engine` parameter.
 
 # Sanity Checking
 

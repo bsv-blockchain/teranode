@@ -14,7 +14,6 @@ The Teranode settings can be configured in the operator ConfigMap. You can refer
 
 For a list of settings, and their default values, please refer to the reference at the end of this document.
 
-
 ## Optional vs Required services
 
 While most services are required for the proper functioning of Teranode, some services are optional and can be disabled if not needed. The following table provides an overview of the services and their status:
@@ -36,4 +35,4 @@ Additionally, it can be used as a backup for the UTXO store.
 
 ## Settings Reference
 
-You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+You can find the pre-configured settings file [here](https://github.com/bsv-blockchain/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

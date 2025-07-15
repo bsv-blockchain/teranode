@@ -10,7 +10,6 @@ Last modified: 22-January-2025
 
 ## Configuring Setting Files
 
-
 The Docker Compose installation provides a pre-configured set of settings to make the installation fully operational.
 
 However, you can change the configuration and override any of the default settings in your local `settings_local.conf` file. To check how this file is created, please review the Docker installation guide [here](./minersHowToInstallation.md).
@@ -38,7 +37,6 @@ While most services are required for the proper functioning of Teranode, some se
 
 The Block and UTXO persister services are optional and can be disabled. If enabled, your node will be in Archive Mode, storing historical block and UTXO data. This data can be useful for analytics and historical lookups but comes with additional storage and processing overhead. Additionally, it can be used as a backup for the UTXO store.
 
-
 ## Settings Reference
 
-You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+You can find the pre-configured settings file [here](https://github.com/bsv-blockchain/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

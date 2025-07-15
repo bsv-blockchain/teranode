@@ -2,7 +2,7 @@
 
 ## Open BSV License Version 5
 
-This software is licensed under the Open BSV License Version 5, granted by BSV Association, Grafenauweg 6, 6300 Zug, Switzerland (CHE-427.008.338). The complete text of the Open BSV License can be found in the [LICENSE](https://github.com/bitcoin-sv/teranode/blob/main/LICENSE) file in the repository root.
+This software is licensed under the Open BSV License Version 5, granted by BSV Association, Grafenauweg 6, 6300 Zug, Switzerland (CHE-427.008.338). The complete text of the Open BSV License can be found in the [LICENSE](https://github.com/bsv-blockchain/teranode/blob/main/LICENSE) file in the repository root.
 
 ### What you can do with this software
 
@@ -71,4 +71,4 @@ Contributions to this project are welcome. By contributing, you agree that your 
 
 ### Questions
 
-If you have questions about the license or how you can use this software, please review the full license text in the [LICENSE](https://github.com/bitcoin-sv/teranode/blob/main/LICENSE) file or visit the BSV Association website for more information about the Open BSV License.
+If you have questions about the license or how you can use this software, please review the full license text in the [LICENSE](https://github.com/bsv-blockchain/teranode/blob/main/LICENSE) file or visit the BSV Association website for more information about the Open BSV License.

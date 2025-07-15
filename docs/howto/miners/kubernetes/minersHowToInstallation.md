@@ -12,9 +12,9 @@ Last modified: 27-May-2025
   3. [Create persistent volume provider](#3-create-persistent-volume-provider)
   4. [Load Teranode Images](#4-load-teranode-images)
   5. [Deploy Teranode](#5-deploy-teranode)
-    - [Verifying the Deployment](#verifying-the-deployment)
-    - [Production Considerations](#production-considerations)
-    - [Other Resources](#other-resources)
+  - [Verifying the Deployment](#verifying-the-deployment)
+  - [Production Considerations](#production-considerations)
+  - [Other Resources](#other-resources)
 
 ## Introduction
 
@@ -36,7 +36,6 @@ Additionally, ensure you have a storage provider capable of providing ReadWriteM
 
 ![miniKubeOperatorPrerequisites.svg](img/mermaid/miniKubeOperatorPrerequisites.svg)
 
-
 ## Deployment with Minikube
 
 Minikube creates a local Kubernetes cluster on your machine. For running Teranode, we recommend the following process:
@@ -44,6 +43,7 @@ Minikube creates a local Kubernetes cluster on your machine. For running Teranod
 ![KubernetesOperatorInstallationSteps.svg](img/mermaid/KubernetesOperatorInstallationSteps.svg)
 
 ### 1. Start Minikube
+
 ```bash
 # Start minikube with recommended resources
 minikube start --cpus=4 --memory=8192 --disk-size=20gb
@@ -69,6 +69,7 @@ kubectl apply -f deploy/kubernetes/kafka/ -n teranode-operator
 To know more, please refer to the [Third Party Reference Documentation](../../../references/thirdPartySoftwareRequirements.md)
 
 ### 3. Create persistent volume provider
+
 For this example, we will create a local folder and expose it to Minikube via a docker based NFS server.
 
 ```bash
@@ -115,7 +116,6 @@ docker network connect minikube nfs-server
 kubectl apply -f deploy/kubernetes/nfs/
 ```
 
-
 ### 4. Load Teranode Images
 
 Pull and load the required Teranode images into Minikube:
@@ -155,12 +155,14 @@ helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/teranode/t
 ```
 
 Apply the Teranode configuration and custom resources:
+
 ```bash
 kubectl apply -f deploy/kubernetes/teranode/teranode-configmap.yaml -n teranode-operator
 kubectl apply -f deploy/kubernetes/teranode/teranode-cr.yaml -n teranode-operator
 ```
 
 A fresh Teranode starts up in IDLE state by default. To start syncing from the legacy network, you can run:
+
 ```bash
 kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
 ```
@@ -194,7 +196,7 @@ For production deployments, consider:
 - Configuring appropriate resource requests and limits
 - Setting up proper backup and disaster recovery procedures
 
-An example CR for a mainnet deployment is available in [kubernetes/teranode/teranode-cr-mainnet.yaml](https://github.com/bitcoin-sv/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml).
+An example CR for a mainnet deployment is available in [kubernetes/teranode/teranode-cr-mainnet.yaml](https://github.com/bsv-blockchain/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml).
 
 ## Other Resources
 

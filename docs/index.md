@@ -2,26 +2,25 @@
 
 ## Index
 
-
 - [Tutorials](#tutorials)
-    - [Development Tutorials](#development-tutorials)
-    - [Miner Tutorials](#miner-tutorials)
+  - [Development Tutorials](#development-tutorials)
+  - [Miner Tutorials](#miner-tutorials)
 - [How-to Guides](#how-to-guides)
-    - [Development](#development)
-    - [Miners](#miners)
+  - [Development](#development)
+  - [Miners](#miners)
 - [Key Topics](#key-topics)
-    - [Introduction](#introduction)
-    - [Architecture](#architecture)
-        - [Core Services](#core-services)
-        - [Overlay Services](#overlay-services)
-        - [Infrastructure Components](#infrastructure-components)
-    - [Additional Topics](#additional-topics)
+  - [Introduction](#introduction)
+  - [Architecture](#architecture)
+    - [Core Services](#core-services)
+    - [Overlay Services](#overlay-services)
+    - [Infrastructure Components](#infrastructure-components)
+  - [Additional Topics](#additional-topics)
 - [Reference](#reference)
-    - [Service Documentation](#service-documentation)
-    - [Store Documentation](#store-documentation)
-    - [Data Model](#data-model)
-    - [API Documentation](#api-documentation)
-    - [Additional Reference](#additional-reference)
+  - [Service Documentation](#service-documentation)
+  - [Store Documentation](#store-documentation)
+  - [Data Model](#data-model)
+  - [API Documentation](#api-documentation)
+  - [Additional Reference](#additional-reference)
 - [Additional Resources](#additional-resources)
 
 ----
@@ -29,6 +28,7 @@
 ## Tutorials
 
 ### Development Tutorials
+
 - [Setting Up for Development](./tutorials/developers/developerSetup.md)
 
 ### Miner Tutorials
@@ -72,7 +72,6 @@
 6. [Troubleshooting Guide](./howto/miners/kubernetes/minersHowToTroubleshooting.md)
 7. [Security Best Practices](./howto/miners/kubernetes/minersSecurityBestPractices.md)
 
-
 #### Common Tasks
 
 1. [Interacting with Asset Server](./howto/miners/minersHowToInteractWithAssetServer.md)
@@ -89,14 +88,17 @@
 ## Key Topics
 
 ### Introduction
+
 - [What is Teranode?](./topics/teranodeIntro.md)
 
 ### Architecture
+
 - [Overall System Design](./topics/architecture/teranode-overall-system-design.md)
 - [Microservices Overview](./topics/architecture/teranode-microservices-overview.md)
 - [State Management](./topics/architecture/stateManagement.md)
 
 #### Core Services
+
 - [Asset Server](./topics/services/assetServer.md)
 - [Propagation Service](./topics/services/propagation.md)
 - [Validator Service](./topics/services/validator.md)
@@ -107,6 +109,7 @@
 - [Alert Service](./topics/services/alert.md)
 
 #### Overlay Services
+
 - [Block Persister Service](./topics/services/blockPersister.md)
 - [UTXO Persister Service](./topics/services/utxoPersister.md)
 - [P2P Service](./topics/services/p2p.md)
@@ -115,18 +118,20 @@
 - [RPC Service](./topics/services/rpc.md)
 
 #### Infrastructure Components
+
 - **Stores**
-    - [Blob Server](./topics/stores/blob.md)
-    - [UTXO Store](./topics/stores/utxo.md)
+  - [Blob Server](./topics/stores/blob.md)
+  - [UTXO Store](./topics/stores/utxo.md)
 - **Messaging**
-    - [Kafka](./topics/kafka/kafka.md)
+  - [Kafka](./topics/kafka/kafka.md)
 - **Utilities**
-    - [UTXO Seeder](./topics/commands/seeder.md)
-    - [TX Blaster](./topics/commands/txBlaster.md)
-    - [Propagation Blaster](./topics/commands/propagationBlaster.md)
-    - [Chain Integrity](./topics/commands/chainIntegrity.md)
+  - [UTXO Seeder](./topics/commands/seeder.md)
+  - [TX Blaster](./topics/commands/txBlaster.md)
+  - [Propagation Blaster](./topics/commands/propagationBlaster.md)
+  - [Chain Integrity](./topics/commands/chainIntegrity.md)
 
 ### Additional Topics
+
 - [Technology Stack](./topics/technologyStack.md)
 - [Testing Framework](./topics/understandingTheTestingFramework.md)
 - [QA Guide & Instructions for Functional Requirement Tests](./topics/functionalRequirementTests.md)
@@ -138,6 +143,7 @@
 ## Reference
 
 ### Service Documentation
+
 - [Alert Service](./references/services/alert_reference.md)
 - [Asset Service](./references/services/asset_reference.md)
 - [Block Assembly](./references/services/blockassembly_reference.md)
@@ -155,10 +161,12 @@
 - [TX Validator](./references/services/validator_reference.md)
 
 ### Store Documentation
+
 - [Blob Store](./references/stores/blob_reference.md)
 - [UTXO Store](./references/stores/utxo_reference.md)
 
 ### Data Model
+
 - [Block Data Model](./topics/datamodel/block_data_model.md)
 - [Block Header Data Model](./topics/datamodel/block_header_data_model.md)
 - [Subtree Data Model](./topics/datamodel/subtree_data_model.md)
@@ -166,6 +174,7 @@
 - [UTXO Data Model](./topics/datamodel/utxo_data_model.md)
 
 ### API Documentation
+
 - [Alert gRPC API](./references/protobuf_docs/alertProto.md)
 - [Block Assembly gRPC API](./references/protobuf_docs/blockassemblyProto.md)
 - [Blockchain gRPC API](./references/protobuf_docs/blockchainProto.md)
@@ -176,6 +185,7 @@
 - [Validator gRPC API](./references/protobuf_docs/validatorProto.md)
 
 ### Additional Reference
+
 - [Third Party Software Requirements](./references/thirdPartySoftwareRequirements.md)
 - [Project Structure](./references/projectStructure.md)
 - [Coding Conventions](./references/codingConventions.md)
@@ -188,6 +198,7 @@
 - [Git Commit Signing Setup Guide](./references/gitCommitSigningSetupGuide.md)
 
 ## Additional Resources
+
 1. [Glossary](./references/glossary.md)
 2. Contributing to Teranode
 3. [License Information](./references/licenseInformation.md)
@@ -210,7 +221,7 @@ Licensed under the Open BSV License Version 5;
 you may not use this software except in compliance with the License.
 You may obtain a copy of the License at
 
-    https://github.com/bitcoin-sv/teranode/blob/main/LICENSE
+    https://github.com/bsv-blockchain/teranode/blob/main/LICENSE
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,

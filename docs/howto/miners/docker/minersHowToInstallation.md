@@ -10,16 +10,15 @@ Last modified: 26-May-2025
 - [Software Requirements](#software-requirements)
 - [Network Considerations](#network-considerations)
 - [Installation Process](#installation-process)
-    - [Teranode Initial Block Synchronization](#teranode-initial-block-synchronization)
-        - [Full P2P Download](#full-p2p-download)
-        - [Initial Data Set Installation](#initial-data-set-installation)
-    - [Teranode Installation Types](#teranode-installation-types)
-        - [Pre-built Binaries](#pre-built-binaries)
-        - [Docker Container](#docker-container)
-        - [Docker Compose](#docker-compose)
-    - [Installing Teranode with Docker Compose](#installing-teranode-with-docker-compose)
+  - [Teranode Initial Block Synchronization](#teranode-initial-block-synchronization)
+    - [Full P2P Download](#full-p2p-download)
+    - [Initial Data Set Installation](#initial-data-set-installation)
+  - [Teranode Installation Types](#teranode-installation-types)
+    - [Pre-built Binaries](#pre-built-binaries)
+    - [Docker Container](#docker-container)
+    - [Docker Compose](#docker-compose)
+  - [Installing Teranode with Docker Compose](#installing-teranode-with-docker-compose)
 - [Reference Settings](#settings-reference)
-
 
 ## Introduction
 
@@ -33,8 +32,6 @@ This guide is applicable to:
 
 3. Configurations designed to connect to and process the BSV mainnet with current production load.
 
-
-
 This guide does not cover:
 
 1. Advanced clustering configurations.
@@ -46,8 +43,6 @@ This guide does not cover:
 4. Advanced network configurations.
 
 5. Any sort of source code build or manipulation of any kind.
-
-
 
 ## Prerequisites
 
@@ -78,9 +73,7 @@ This section will outline the various vendors in use in Teranode.
 
 To know more, please refer to the [Third Party Reference Documentation](../../../references/thirdPartySoftwareRequirements.md)
 
-
 Note - if using Docker Compose, the shared Docker storage, which is automatically managed by Docker Compose, is used instead. This approach provides a more accessible testing environment while still allowing for essential functionality and performance evaluation.
-
 
 ## Network Considerations
 
@@ -97,37 +90,24 @@ Key considerations:
 
 ## Installation Process
 
-
 ### Teranode Initial Block Synchronization
-
-
 
 Teranode requires an initial block synchronization to function properly. There are two approaches for completing the synchronization process.
 
-
-
 #### Full P2P Download
-
-
 
 - Start the node and download all blocks from genesis using peer-to-peer (P2P) network.
 - This method downloads the entire blockchain history.
-
-
 
 **Pros:**
 
 - Simple to implement
 - Ensures the node has the complete blockchain history
 
-
-
 **Cons:**
 
 - Time-consuming process
 - Can take 5-8 days, depending on available bandwidth
-
-
 
 #### Initial Data Set Installation
 
@@ -138,19 +118,14 @@ Pros:
 - Significantly faster than full P2P download
 - Allows for quicker node setup
 
-
 Cons:
 
 - Requires additional steps
 - The data set must be validated, to ensure it has not been tampered with
 
-
 Where possible, BSV recommends using the Initial Data Set Installation approach.
 
-
-
 ### Teranode Installation Types
-
 
 Teranode supports four installation methods:
 
@@ -160,7 +135,6 @@ Teranode supports four installation methods:
 - Kubernetes Operator
 
 Note: Only Docker Compose (testing) and Kubernetes Operator (production) are officially supported.
-
 
 #### Pre-built Binaries
 
@@ -180,31 +154,26 @@ Note: Only Docker Compose (testing) and Kubernetes Operator (production) are off
 - This method sets up a single-node Teranode instance along with all required external dependencies.
 - Components included:
 
-    - Teranode Docker image
-    - Kafka
-    - PostgreSQL
-    - Aerospike
-    - Grafana
-    - Prometheus
-    - Docker Shared Storage
+  - Teranode Docker image
+  - Kafka
+  - PostgreSQL
+  - Aerospike
+  - Grafana
+  - Prometheus
+  - Docker Shared Storage
 - Advantages:
 
-    - Easiest method to get a full Teranode environment running quickly.
-    - Automatically manages start order and networking between components.
-    - Used by developers and QA for testing, ensuring reliability.
+  - Easiest method to get a full Teranode environment running quickly.
+  - Automatically manages start order and networking between components.
+  - Used by developers and QA for testing, ensuring reliability.
 - Considerations:
 
-    - This setup uses predefined external dependencies, which may not be customizable.
-    - While convenient for development and testing, it is not optimized, nor intended, for production usage.
+  - This setup uses predefined external dependencies, which may not be customizable.
+  - While convenient for development and testing, it is not optimized, nor intended, for production usage.
 
 Note: The Docker Compose method is recommended for testing in single node environments as it provides a consistent environment that mirrors the development setup. However, for production deployments or specific performance requirements, users need to consider using the Kubernetes operator approach (separate document).
 
-
-
-
 ### Installing Teranode with Docker Compose
-
-
 
 **Prerequisites**:
 
@@ -215,8 +184,6 @@ Note: The Docker Compose method is recommended for testing in single node enviro
 - Sufficient disk space (at least 100GB recommended)
 
 - A stable internet connection
-
-
 
 **Step 1: Create Repository**
 
@@ -233,9 +200,11 @@ cd teranode
 
 1. Create a `.env` file in the root directory of the project.
 2. While not required (your docker compose file will be preconfigured), the following line can be used to set the context:
+
    ```
    SETTINGS_CONTEXT_1=docker.m
    ```
+
 3. Authenticate with AWS ECR (please check with your Teranode team for the latest credentials).
 
 This step is not mandatory, but useful if you want to create settings variants for specific contexts.
@@ -244,7 +213,6 @@ This step is not mandatory, but useful if you want to create settings variants f
 
 1. You can see the current settings under the `$YOUR_WORKING_DIR/teranode/settings.conf` file. You can override any settings here.
 2. For a list of settings, and their default values, please refer to the reference at the end of this document.
-
 
 **Step 4: Pull Docker Images**
 
@@ -260,47 +228,49 @@ Or to the mainnet Docker compose folder:
 cd $YOUR_WORKING_DIR/teranode/deploy/docker/mainnet
 ```
 
-
 2. Pull the required Docker images:
+
    ```
    docker-compose pull
    ```
-
 
 **Step 5: Start the Teranode Stack**
 
 1. When running on a box without a public IP, you should enable `legacy_config_Upnp` (in your settings file), so you don't get banned by the SV Nodes.
 
 2. Launch the entire Teranode stack using Docker Compose:
+
    ```
    docker-compose up -d
    ```
 
 Force the node to transition to Run mode:
+
 ```bash
 docker exec -it blockchain teranode-cli setfsmstate --fsmstate running
 ```
 
 or LegacySync mode:
+
 ```bash
 docker exec -it blockchain teranode-cli setfsmstate --fsmstate legacysyncing
 ```
 
 You can verify the current state with:
+
 ```bash
 docker exec -it blockchain teranode-cli getfsmstate
 ```
 
-
 **Step 6: Verify Services**
 
 1. Check if all services are running correctly:
+
    ```
    docker-compose ps
    ```
 
 Example output:
-
 
 | NAME | IMAGE | COMMAND | SERVICE | CREATED | STATUS | PORTS                                                                                                                                                                                                                                                                                                                                                                       |
 |------|-------|---------|----------|---------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -319,10 +289,7 @@ Example output:
 | rpc | ghcr.io/bsv-blockchain/teranode:v0.5.50 | `/app/entrypoint.sh …` | rpc | 2 minutes ago | Up 2 minutes | 0/tcp, 3005/tcp, 8098/tcp, 0.0.0.0:9292->9292/tcp, :::9292->9292/tcp, 0.0.0.0:32770->4040/tcp, [::]:32770->4040/tcp, 0.0.0.0:32773->8000/tcp, [::]:32773->8000/tcp, 0.0.0.0:32780->9091/tcp, [::]:32780->9091/tcp                                                                                                                                                           |
 | subtreevalidation | ghcr.io/bsv-blockchain/teranode:v0.5.50 | `/app/entrypoint.sh …` | subtreevalidation | 2 minutes ago | Up 2 minutes (healthy) | 0/tcp, 3005/tcp, 8098/tcp, 9292/tcp, 0.0.0.0:32789->4040/tcp, [::]:32789->4040/tcp, 0.0.0.0:32791->8000/tcp, [::]:32791->8000/tcp, 0.0.0.0:32793->8086/tcp, [::]:32793->8086/tcp, 0.0.0.0:32795->9091/tcp, [::]:32795->9091/tcp                                                                                                                                             |
 
-
 2. Ensure all services show a status of "Up" or "Healthy".
-
-
 
 **Step 7: Access Monitoring Tools**
 
@@ -331,47 +298,43 @@ Example output:
     - Navigate to the "Teranode - Service Overview" dashboard for key metrics
     - Explore other dashboards for detailed service metrics. For example, you can check the Legacy sync metrics in the "Teranode - Legacy Service" dashboard.
 
-
 2. **Kafka Console**: Available internally on port 8080
-
-
 
 3. **Prometheus**: Available internally on port 9090
 
-
 4. **Teranode Blockchain Viewer**: A basic blockchain viewer is available and can be accessed via the asset container. It provides an interface to browse blockchain data.
     - **Port**: Exposed on port **8090** of the asset container.
-    - **Access URL**: http://localhost:8090/viewer
+    - **Access URL**: <http://localhost:8090/viewer>
 
 Note: You must set the setting `dashboard_enabled` as true in order to see the viewer.
-
 
 **Step 8: Interact with Teranode**
 
 - The various Teranode services expose different ports for interaction:
 
-    - **Blockchain service**: Port 8082
-    - **Asset service**: Ports 8090
-    - **Miner service**: Ports 8089, 8092, 8099
-    - **P2P service**: Ports 9905, 9906
-    - **RPC service**: 9292
+  - **Blockchain service**: Port 8082
+  - **Asset service**: Ports 8090
+  - **Miner service**: Ports 8089, 8092, 8099
+  - **P2P service**: Ports 9905, 9906
+  - **RPC service**: 9292
 
 Notice that those ports might be mapped to random ports on your host machine. You can check the mapping by running `docker-compose ps`.
-
 
 **Step 9: Logging and Troubleshooting**
 
 1. View logs for all services:
+
    ```
    docker-compose logs
    ```
+
 2. View logs for a specific service (e.g., teranode-blockchain):
+
    ```
     docker-compose logs -f legacy
     docker-compose logs -f blockchain
     docker-compose logs -f asset
    ```
-
 
 **Step 10: Docker Log Rotation**
 
@@ -389,6 +352,7 @@ services:
 **Step 11: Stopping the Stack**
 
 1. To stop all services:
+
    ```
    docker-compose down
    ```
@@ -399,9 +363,7 @@ Additional Notes:
 - Under no circumstances should you use this Docker Compose approach for production usage.
 - Please discuss with the Teranode support team for advanced configuration options and optimizations not covered in the present document.
 
-
 ## Optimizations
-
 
 If you have local access to SV Nodes, you can use them to speed up the initial block synchronization too. You can set `legacy_connect_peers: "172.x.x.x:8333|10.x.x.x:8333"` in your `docker-compose.yml` to force the legacy service to only connect to those peers.
 
@@ -825,4 +787,4 @@ docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
 ## Settings Reference
 
-You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+You can find the pre-configured settings file [here](https://github.com/bsv-blockchain/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

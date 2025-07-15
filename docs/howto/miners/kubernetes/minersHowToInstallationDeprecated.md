@@ -10,11 +10,11 @@ Last modified: 29-January-2025
 - [Software Requirements](#software-requirements)
 - [Network Considerations](#network-considerations)
 - [Installation Process](#installation-process)
-    - [Teranode Initial Synchronization](#teranode-initial-synchronization)
-        - [Full P2P Download](#full-p2p-download)
-        - [Initial Data Set Installation](#initial-data-set-installation)
-    - [Teranode Installation - Introduction to the Kubernetes Operator](#teranode-installation---introduction-to-the-kubernetes-operator)
-    - [Installing Teranode with the Custom Kubernetes Operator](#installing-teranode-with-the-custom-kubernetes-operator)
+  - [Teranode Initial Synchronization](#teranode-initial-synchronization)
+    - [Full P2P Download](#full-p2p-download)
+    - [Initial Data Set Installation](#initial-data-set-installation)
+  - [Teranode Installation - Introduction to the Kubernetes Operator](#teranode-installation---introduction-to-the-kubernetes-operator)
+  - [Installing Teranode with the Custom Kubernetes Operator](#installing-teranode-with-the-custom-kubernetes-operator)
 - [Optimizations](#optimizations)
 - [Reference - Settings](#reference---settings)
 
@@ -153,7 +153,7 @@ data:
   utxostore: 'aerospike://...'
 ```
 
-To review the list of settings you could configure in the ConfigMap, please refer to the list [here](https://github.com/bitcoin-sv/teranode/blob/main/settings.conf).
+To review the list of settings you could configure in the ConfigMap, please refer to the list [here](https://github.com/bsv-blockchain/teranode/blob/main/settings.conf).
 
 #### Storage Requirements
 
@@ -186,6 +186,7 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 1. **Ensure you have kubectl installed and configured to access your Kubernetes cluster.**
 
 2. **Verify access to your Kubernetes cluster:**
+
    ```bash
    kubectl cluster-info
    ```
@@ -193,6 +194,7 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 ### Step 2: Install Operator Lifecycle Manager (OLM)
 
 1. **If OLM is not already installed, install it using the following command:**
+
    ```bash
    operator-sdk olm install
    ```
@@ -200,6 +202,7 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 ### Step 3: Create BSVA CatalogSource
 
 1. **Clone the Teranode repository:**
+
    ```bash
    cd $YOUR_WORKING_DIR
    git clone git@github.com:bsv-blockchain/teranode-operator.git
@@ -207,6 +210,7 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
    ```
 
 2. **Create the BSVA CatalogSource in the OLM namespace:**
+
    ```bash
    kubectl create -f olm/catalog-source.yaml
    ```
@@ -214,6 +218,7 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 ### Step 4: Create Target Namespace
 
 1. **Create the namespace where you want to install the Teranode operator** (this example uses 'teranode-operator'):
+
    ```bash
    kubectl create namespace teranode-operator
    ```
@@ -221,11 +226,13 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 ### Step 5: Create OperatorGroup and Subscription
 
 1. **(Optional) If you're deploying to a namespace other than 'teranode-operator', modify the OperatorGroup to specify your installation namespace:**
+
    ```bash
    echo "  - <your-namespace>" >> olm/og.yaml
    ```
 
 2. **Create the OperatorGroup and Subscription resources:**
+
    ```bash
    kubectl create -f olm/og.yaml -n teranode-operator
    kubectl create -f olm/subscription.yaml -n teranode-operator
@@ -281,6 +288,7 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 ### Step 7: Configure Ingress (if applicable)
 
 1. **Verify that ingress resources are created for Asset, Peer, and Propagation services:**
+
    ```bash
    kubectl get ingress
    ```
@@ -295,11 +303,13 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 ### Step 9: Change the node status to Run or LegacySync
 
 1. **Force the node to transition to Run mode:**
+
    ```bash
    grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.Run
    ```
 
 2. **Or LegacySync mode:**
+
    ```bash
    grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.LegacySync
    ```
@@ -309,7 +319,7 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 **Teranode Blockchain Viewer**: A basic blockchain viewer is available and can be accessed via the asset container. It provides an interface to browse blockchain data.
 
 - **Port**: Exposed on port **8090** of the asset container.
-- **Access URL**: http://localhost:8090/viewer
+- **Access URL**: <http://localhost:8090/viewer>
 
 !!! note
     You must set the setting `dashboard_enabled` as true in order to see the viewer.
@@ -319,6 +329,7 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 1. **Set up your preferred monitoring stack** (e.g., Prometheus, Grafana) to monitor the Teranode cluster.
 
 2. **Use standard Kubernetes logging practices to access logs:**
+
    ```bash
    kubectl logs <pod-name>
    ```
@@ -326,16 +337,19 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 ### Step 12: Troubleshooting
 
 1. Check pod status:
+
    ```bash
    kubectl describe pod <pod-name>
    ```
 
 2. View pod logs:
+
    ```bash
    kubectl logs <pod-name>
    ```
 
 3. Verify ConfigMaps and Secrets:
+
    ```bash
    kubectl get configmaps
    kubectl get secrets
@@ -343,7 +357,7 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 
 Additional Notes:
 
-- You can also refer to the [teranode-operator repository](https://github.com/bitcoin-sv/teranode-operator) for up to date instructions.
+- You can also refer to the [teranode-operator repository](https://github.com/bsv-blockchain/teranode-operator) for up to date instructions.
 - This installation uses the 'stable' channel of the BSVA Catalog, which includes automatic upgrades for minor releases.
 - To change the channel or upgrade policy, modify the `olm/subscription.yaml` file before creating the Subscription.
 - **SharedPVCName** represents a persistent volume shared across a number of services (Block Validation, Subtree Validation, Block Assembly, Asset Server, Block Persister, UTXO Persister). The Persistent Volume must be in access mode *ReadWriteMany* ([Access Modes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes)). While the implementation of the storage is left at the user's discretion, the BSV Association has successfully tested using an AWS FSX for Lustre volume at high throughput, and it can be considered as a reliable option for any Teranode deployment.
@@ -359,4 +373,4 @@ If you have local access to SV Nodes, you can use them to speed up the initial b
 
 ## Reference - Settings
 
-You can find the pre-configured settings file [here](https://github.com/bitcoin-sv/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+You can find the pre-configured settings file [here](https://github.com/bsv-blockchain/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
