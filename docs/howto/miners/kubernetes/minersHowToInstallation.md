@@ -130,8 +130,8 @@ aws ecr list-images \
   --output text
 
 # Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)
-export OPERATOR_VERSION=v0.5.0
-export TERANODE_VERSION=v0.9.22
+export OPERATOR_VERSION=v0.5.3
+export TERANODE_VERSION=v0.9.27
 export ECR_REGISTRY=ghcr.io/bsv-blockchain/teranode
 
 # Load Teranode Operator
