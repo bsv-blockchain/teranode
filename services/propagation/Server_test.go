@@ -23,6 +23,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/null"
 	"github.com/bitcoin-sv/teranode/stores/utxo/factory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
+	"github.com/bitcoin-sv/teranode/test/longtest/util/postgres"
 	"github.com/bitcoin-sv/teranode/test/utils/aerospike"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -561,23 +562,16 @@ func Test_handleMultipleTx(t *testing.T) {
 	})
 }
 
-func Test_processTransactionInternal(t *testing.T) {
+func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 	initPrometheusMetrics()
 
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
 
-	utxoStoreStr, teardown, err := aerospike.InitAerospikeContainer()
+	// Parse the URL and set it in settings
+	parsedURL, err := url.Parse(utxoStoreURL)
 	require.NoError(t, err)
-
-	utxoStoreURL, err := url.Parse(utxoStoreStr)
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
-	tSettings.UtxoStore.UtxoStore = utxoStoreURL
+	tSettings.UtxoStore.UtxoStore = parsedURL
 
 	blockAssemblyClient := blockassembly.NewMock()
 	blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
@@ -622,4 +616,26 @@ func Test_processTransactionInternal(t *testing.T) {
 		// make sure we only added the transaction once to block assembly
 		assert.Len(t, blockAssemblyClient.Mock.Calls, 2, "processTransactionInternal should only call block assembly once for the same transaction")
 	})
+}
+
+func Test_processTransactionInternalAerospike(t *testing.T) {
+	utxoStore, teardown, err := aerospike.InitAerospikeContainer()
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = teardown()
+	})
+
+	testProcessTransactionInternal(t, utxoStore)
+}
+
+func Test_processTransactionInternalPostgres(t *testing.T) {
+	container, err := postgres.RunPostgresTestContainer(context.Background(), "propagation-test")
+	require.NoError(t, err)
+
+	defer func() {
+		_ = container.Terminate(context.Background())
+	}()
+
+	testProcessTransactionInternal(t, container.ConnectionString())
 }
