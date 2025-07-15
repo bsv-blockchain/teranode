@@ -1,8 +1,6 @@
 package doublespendtest
 
 import (
-	"context"
-	"fmt"
 	"net/url"
 	"testing"
 
@@ -10,9 +8,6 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/settings"
-	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/teranode/util/uaerospike"
-	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -71,43 +66,4 @@ func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *daemon.Te
 	require.NoError(t, err)
 
 	return td, coinbaseTx1, txOriginal, txDoubleSpend, block102, tx2
-}
-
-// TODO should be moved into a test helper package
-func initAerospike() (string, func() error, error) {
-	teranode_aerospike.InitPrometheusMetrics()
-
-	ctx := context.Background()
-
-	container, err := aeroTest.RunContainer(ctx)
-	if err != nil {
-		return "", nil, err
-	}
-
-	cleanup := func() error {
-		return container.Terminate(ctx)
-	}
-
-	host, err := container.Host(ctx)
-	if err != nil {
-		return "", cleanup, err
-	}
-
-	port, err := container.ServicePort(ctx)
-	if err != nil {
-		return "", cleanup, err
-	}
-
-	// raw client to be able to do gets and cleanup
-	client, aeroErr := uaerospike.NewClient(host, port)
-	if aeroErr != nil {
-		return "", cleanup, aeroErr
-	}
-
-	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%s&externalStore=file://./data/externalStore", host, port, "test", "test", "10m")
-
-	return aerospikeContainerURL, func() error {
-		client.Close()
-		return cleanup()
-	}, nil
 }

@@ -14,13 +14,16 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/null"
+	"github.com/bitcoin-sv/teranode/stores/utxo/factory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
+	"github.com/bitcoin-sv/teranode/test/utils/aerospike"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
@@ -29,6 +32,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 /*
@@ -554,5 +558,68 @@ func Test_handleMultipleTx(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, "OK", string(responseBody))
+	})
+}
+
+func Test_processTransactionInternal(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	utxoStoreStr, teardown, err := aerospike.InitAerospikeContainer()
+	require.NoError(t, err)
+
+	utxoStoreURL, err := url.Parse(utxoStoreStr)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = teardown()
+	})
+
+	tSettings.UtxoStore.UtxoStore = utxoStoreURL
+
+	blockAssemblyClient := blockassembly.NewMock()
+	blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+
+	t.Run("Test sending tx in parallel", func(t *testing.T) {
+		utxoStore, err := factory.NewStore(t.Context(), logger, tSettings, "test", false)
+		require.NoError(t, err)
+
+		_ = utxoStore.SetBlockHeight(101)
+
+		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, blockAssemblyClient)
+		require.NoError(t, err)
+
+		// Create a PropagationServer
+		ps := &PropagationServer{
+			logger:    logger,
+			validator: validatorInstance,
+			settings:  tSettings,
+		}
+
+		txs := transactions.CreateTestTransactionChainWithCount(t, 5)
+
+		// Add the first transaction to the store
+		_, err = utxoStore.Create(t.Context(), txs[1], 1)
+		require.NoError(t, err, "processTransactionInternal should not return an error for valid transaction")
+
+		g := errgroup.Group{}
+
+		// add the transaction in parallel
+		for i := 1; i < 100; i++ {
+			g.Go(func() error {
+				if err := ps.processTransactionInternal(t.Context(), txs[2]); err != nil {
+					return err
+				}
+
+				return ps.processTransactionInternal(t.Context(), txs[3])
+			})
+		}
+
+		require.NoError(t, g.Wait(), "processTransactionInternal should not return an error for valid transaction")
+
+		// make sure we only added the transaction once to block assembly
+		assert.Len(t, blockAssemblyClient.Mock.Calls, 2, "processTransactionInternal should only call block assembly once for the same transaction")
 	})
 }

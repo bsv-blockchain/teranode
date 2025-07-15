@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/test/txregistry"
 	"github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/test/utils/aerospike"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/stretchr/testify/assert"
@@ -122,7 +123,7 @@ func TestDoubleSpendPostgres(t *testing.T) {
 }
 
 func TestDoubleSpendAerospike(t *testing.T) {
-	utxoStore, teardown, err := initAerospike()
+	utxoStore, teardown, err := aerospike.InitAerospikeContainer()
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
