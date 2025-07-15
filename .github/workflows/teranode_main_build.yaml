@@ -43,8 +43,8 @@ jobs:
   # Run chain integrity test
   chainintegrity:
     needs: build-and-deploy
-    #uses: ./.github/workflows/chainintegrity-3blasters.yaml
-    uses: ./.github/workflows/chainintegrity.yaml
+    uses: ./.github/workflows/chainintegrity-3blasters.yaml
+    # uses: ./.github/workflows/chainintegrity.yaml
     permissions:
       contents: read
       pull-requests: read

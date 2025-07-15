@@ -299,10 +299,8 @@ type UtxoStoreSettings struct {
 	ParentPreservationBlocks         uint32
 	OutpointBatcherSize              int
 	OutpointBatcherDurationMillis    int
-	SpendBatcherConcurrency          int
 	SpendBatcherDurationMillis       int
 	SpendBatcherSize                 int
-	StoreBatcherConcurrency          int
 	StoreBatcherDurationMillis       int
 	StoreBatcherSize                 int
 	UtxoBatchSize                    int

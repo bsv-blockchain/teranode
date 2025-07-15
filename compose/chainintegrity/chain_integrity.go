@@ -64,11 +64,13 @@ func CheckChainIntegrityBaseline(checkInterval int, alertThreshold int, debug bo
 		panic(fmt.Sprintf("Failed to fetch block headers from Node1: %v", err))
 	}
 
-	if len(blockHeaders) <= 10 {
+	const minHeight = 100
+
+	if len(blockHeaders) <= minHeight {
 		panic("Not enough block headers to baseline!")
 	}
 
-	baselineHeaders := blockHeaders[:len(blockHeaders)-10]
+	baselineHeaders := blockHeaders[:]
 	fmt.Printf("[Baseline] Using %d block headers from Node1\n", len(baselineHeaders))
 
 	for _, nodeContext := range nodeContexts {
@@ -428,7 +430,7 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 		if block.CoinbaseTx.Inputs[0].UnlockingScript.String() != genesisScript {
 			// check that all coinbase utxos were created
 			for vout, output := range block.CoinbaseTx.Outputs {
-				logger.Debugf("[%s] block.CoinbaseTx.Outputs: accessing index %d (len=%d)", loggerContext, vout, len(block.CoinbaseTx.Outputs))
+				logger.Debugf("[%s] block.CoinbaseTx.Outputs: accessing index %d (len=%d), coinbase tx id %s", loggerContext, vout, len(block.CoinbaseTx.Outputs), block.CoinbaseTx.TxIDChainHash())
 
 				var utxoHash *chainhash.Hash
 
@@ -455,6 +457,27 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 				if utxo == nil {
 					logger.Errorf("[%s] utxo %s does not exist in utxo store", loggerContext, utxoHash)
 				} else {
+					if utxo.SpendingData != nil {
+						meta, err := utxoStore.GetMeta(ctx, utxo.SpendingData.TxID)
+						if err != nil {
+							logger.Errorf("[%s] failed to get utxo %s from utxo store: %s", loggerContext, utxoHash, err)
+							continue
+						}
+
+						if meta == nil {
+							logger.Errorf("[%s] utxo %s does not exist in utxo store", loggerContext, utxoHash)
+							continue
+						}
+
+						if len(meta.BlockIDs) == 0 {
+							// non-mined spending tx obviously won't appear on the other nodes
+							// so for the sake of the integtrity check we pretend it is unspent
+							// and assume this is what it will be on the other nodes
+							utxo.SpendingData = nil
+							utxo.Status = 0
+						}
+					}
+
 					//nolint:gosec
 					logger.Debugf("[%s] coinbase vout %d utxo %s exists in utxo store with status %s, spending data %v, locktime %d", loggerContext, vout, utxoHash, utxostore.Status(utxo.Status), utxo.SpendingData, utxo.LockTime)
 				}
@@ -485,12 +508,14 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 
 				subtreeReader, err = subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 				if err != nil {
-					logger.Errorf("[%s] failed to get subtree %s for block %s: %s", loggerContext, subtreeHash, block, err)
+					logger.Errorf("[%s] failed to get subtree %s for block %s: %v", loggerContext, subtreeHash, block, err)
 					logger.Debugf("[%s] block dump: %s", loggerContext, block.Header.StringDump())
+
+					os.Exit(1)
 				}
 
 				if subtree, err = subtreepkg.NewSubtreeFromReader(subtreeReader); err != nil || subtree == nil {
-					logger.Errorf("[%s] failed to parse subtree %s for block %s: %s", loggerContext, subtreeHash, block, err)
+					logger.Errorf("[%s] failed to parse subtree %s for block %s: %v", loggerContext, subtreeHash, block, err)
 
 					if subtreeReader != nil {
 						_ = subtreeReader.Close()
@@ -511,7 +536,7 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 
 				for nodeIdx, node := range subtree.Nodes {
 
-					logger.Debugf("[%s] subtree.Nodes: accessing index %d (len=%d)", loggerContext, nodeIdx, len(subtree.Nodes))
+					logger.Debugf("[%s] subtree.Nodes: accessing index %d (len=%d), tx id %s", loggerContext, nodeIdx, len(subtree.Nodes), node.Hash)
 
 					if !subtreepkg.CoinbasePlaceholderHash.Equal(node.Hash) {
 						logger.Debugf("[%s] checking transaction %s", loggerContext, node.Hash)
@@ -534,6 +559,11 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 							txMeta, err = utxoStore.Get(ctx, &node.Hash)
 							if err != nil {
 								logger.Errorf("[%s] failed to get transaction %s from txmeta store: %s", loggerContext, node.Hash, err)
+								continue
+							}
+
+							if len(txMeta.BlockIDs) == 0 {
+								logger.Debugf("[%s] transaction %s is not mined", loggerContext, node.Hash)
 								continue
 							}
 
@@ -588,9 +618,34 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 									//nolint:gocritic // rewrite to switch
 									if utxo == nil {
 										logger.Errorf("[%s] parent utxo %s does not exist in utxo store", loggerContext, utxoHash)
+									} else if utxo.SpendingData == nil {
+										logger.Errorf("[%s] parent utxo %s does not have a spending data", loggerContext, utxoHash)
+									} else if utxo.SpendingData.TxID == nil {
+										logger.Errorf("[%s] parent utxo %s does not have a spending data TxID", loggerContext, utxoHash)
 									} else if !utxo.SpendingData.TxID.IsEqual(btTx.TxIDChainHash()) {
 										logger.Errorf("[%s] parent utxo %s (%s:%d) is not marked as spent by transaction %s instead it is spent by %s", loggerContext, utxoHash, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, btTx.TxIDChainHash(), utxo.SpendingData.TxID)
 									} else {
+										if utxo.SpendingData != nil {
+											meta, err := utxoStore.GetMeta(ctx, utxo.SpendingData.TxID)
+											if err != nil {
+												logger.Errorf("[%s] failed to get utxo %s from utxo store: %s", loggerContext, utxoHash, err)
+												continue
+											}
+
+											if meta == nil {
+												logger.Errorf("[%s] utxo %s does not exist in utxo store", loggerContext, utxoHash)
+												continue
+											}
+
+											if len(meta.BlockIDs) == 0 {
+												// non-mined spending tx obviously won't appear on the other nodes
+												// so for the sake of the integtrity check we pretend it is unspent
+												// and assume this is what it will be on the other nodes
+												utxo.SpendingData = nil
+												utxo.Status = 0
+											}
+										}
+
 										//nolint:gosec
 										logger.Debugf("[%s] transaction %s parent utxo %s exists in utxo store with status %s, spending data %v, locktime %d", loggerContext, btTx.TxIDChainHash(), utxoHash, utxostore.Status(utxo.Status), utxo.SpendingData, utxo.LockTime)
 									}

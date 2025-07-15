@@ -229,7 +229,7 @@ services:
     network_mode: "host"
     volumes:
       - ./scripts/generate-blocks.sh:/generate-blocks.sh
-    entrypoint: ["/generate-blocks.sh"]
+    entrypoint: ["/generate-blocks.sh", "--host", "localhost", "--port", "19292", "--generate"]
     restart: unless-stopped
 
   coinbase-1:

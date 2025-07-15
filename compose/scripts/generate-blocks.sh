@@ -14,11 +14,42 @@ trap 'handle_signal' TERM INT QUIT HUP
 # Block generator script for chain integrity tests
 # Generates blocks on a specified teranode host with random delays
 
-HOST="$1"
+# Default values
+HOST=""
 PORT="9292"
+NUM_BLOCKS=-1 # -1 means infinite
+GENERATE=false
+
+# Parse command-line arguments
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --host)
+      HOST="$2"
+      shift 2
+      ;;
+    --numBlocks)
+      NUM_BLOCKS="$2"
+      shift 2
+      ;;
+    --port)
+      PORT="$2"
+      shift 2
+      ;;
+    --generate)
+      GENERATE=true
+      shift 1
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Usage: $0 --host <host> [--port <port>] [--numBlocks <number>] [--generate]"
+      exit 1
+      ;;
+  esac
+done
 
 if [ -z "$HOST" ]; then
-  echo "Usage: $0 <host>"
+  echo "Error: --host is a required argument."
+  echo "Usage: $0 --host <host> [--port <port>] [--numBlocks <number>] [--generate]"
   exit 1
 fi
 
@@ -56,24 +87,35 @@ fi
 sleep 0.5
 echo "\nService ${HOST}:${PORT} is available."
 
-if [ "$2" = "generate" ]; then
-  echo "Generating 100 blocks..."
+if [ "$GENERATE" = true ]; then
+  echo "Pre-generating 100 blocks due to --generate flag..."
   curl --user bitcoin:bitcoin -X POST http://${HOST}:${PORT} \
       -H "Content-Type: application/json" \
       -d '{"method": "generate", "params": [100]}'
-  echo "Done."
-else
-  sleep 5
+  echo "Done pre-generating blocks."
 fi
 
-while true
-do
-  # Random delay between 250ms-1000ms
+COUNT=0
+while [ "$NUM_BLOCKS" -eq -1 ] || [ "$COUNT" -lt "$NUM_BLOCKS" ]; do
+  # Random delay between 5s and 7s
   DELAY_MS=$(( (RANDOM % 2000) + 2000 ))
   DELAY_S=$(awk -v delay_ms="$DELAY_MS" 'BEGIN { printf "%.3f", delay_ms / 1000 }')
-  echo "Generating block (after $DELAY_S seconds delay)..."
+  
+  if [ "$NUM_BLOCKS" -ne -1 ]; then
+    echo "Generating block $((COUNT + 1))/$NUM_BLOCKS (after $DELAY_S seconds delay)..."
+  else
+    echo "Generating block (after $DELAY_S seconds delay)..."
+  fi
+
   sleep $DELAY_S
   curl --user bitcoin:bitcoin -X POST http://${HOST}:${PORT} \
     -H "Content-Type: application/json" \
     -d '{"method": "generate", "params": [1]}'
+  
+  COUNT=$((COUNT + 1))
 done
+
+if [ "$NUM_BLOCKS" -ne -1 ]; then
+    echo "Finished generating $NUM_BLOCKS blocks."
+    exit 0
+fi

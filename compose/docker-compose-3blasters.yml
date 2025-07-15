@@ -121,11 +121,11 @@ services:
     volumes:
       - ../settings.conf:/app/settings.conf
       - ../settings_local.conf:/app/settings_local.conf
-      - ../data/teranode1/txstore:/app/data/teranode1/txstore
-      - ../data/teranode1/subtreestore:/app/data/teranode1/subtreestore
-      - ../data/teranode1/blockstore:/app/data/teranode1/blockstore
-      - ../data/teranode1/subtree_quorum:/app/data/teranode1/subtree_quorum
-      - ../data/teranode1/external:/app/data/teranode1/external
+      - ../data/teranode1/txstore:/app/data/txstore
+      - ../data/teranode1/subtreestore:/app/data/subtreestore
+      - ../data/teranode1/blockstore:/app/data/blockstore
+      - ../data/teranode1/subtree_quorum:/app/data/subtree_quorum
+      - ../data/teranode1/external:/app/data/external
       - ./wait.sh:/app/wait.sh
     ports:
       - "18000:8000"
@@ -160,14 +160,15 @@ services:
       JAEGER_SERVICE_NAME: teranode2
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
+      logLevel: "DEBUG"
     volumes:
       - ../settings.conf:/app/settings.conf
       - ../settings_local.conf:/app/settings_local.conf
-      - ../data/teranode2/txstore:/app/data/teranode2/txstore
-      - ../data/teranode2/subtreestore:/app/data/teranode2/subtreestore
-      - ../data/teranode2/blockstore:/app/data/teranode2/blockstore
-      - ../data/teranode2/subtree_quorum:/app/data/teranode2/subtree_quorum
-      - ../data/teranode2/external:/app/data/teranode2/external
+      - ../data/teranode2/txstore:/app/data/txstore
+      - ../data/teranode2/subtreestore:/app/data/subtreestore
+      - ../data/teranode2/blockstore:/app/data/blockstore
+      - ../data/teranode2/subtree_quorum:/app/data/subtree_quorum
+      - ../data/teranode2/external:/app/data/external
       - ./wait.sh:/app/wait.sh
     ports:
       - "28000:8000"
@@ -202,14 +203,15 @@ services:
       JAEGER_SERVICE_NAME: teranode3
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
+      logLevel: "DEBUG"
     volumes:
       - ../settings.conf:/app/settings.conf
       - ../settings_local.conf:/app/settings_local.conf
-      - ../data/teranode3/txstore:/app/data/teranode3/txstore
-      - ../data/teranode3/subtreestore:/app/data/teranode3/subtreestore
-      - ../data/teranode3/blockstore:/app/data/teranode3/blockstore
-      - ../data/teranode3/subtree_quorum:/app/data/teranode3/subtree_quorum
-      - ../data/teranode3/external:/app/data/teranode3/external
+      - ../data/teranode3/txstore:/app/data/txstore
+      - ../data/teranode3/subtreestore:/app/data/subtreestore
+      - ../data/teranode3/blockstore:/app/data/blockstore
+      - ../data/teranode3/subtree_quorum:/app/data/subtree_quorum
+      - ../data/teranode3/external:/app/data/external
       - ./wait.sh:/app/wait.sh
     ports:
       - "38000:8000"
@@ -271,7 +273,7 @@ services:
     volumes:
       - ../settings.conf:/app/settings.conf
       - ../data/miner3:/app/data
-    restart: unless-stopped
+    restart: no
 
   block-generator-1:
     image: curlimages/curl:latest
@@ -282,8 +284,8 @@ services:
       - teranode-network
     volumes:
       - ./scripts/generate-blocks.sh:/generate-blocks.sh
-    entrypoint: ["/generate-blocks.sh", "teranode1", "generate"]
-    restart: unless-stopped
+    entrypoint: ["/generate-blocks.sh", "--host", "teranode1", "--numBlocks", "8", "--generate"]
+    restart: no
 
   coinbase1:
     <<: *teranode-coinbase-base
@@ -292,7 +294,7 @@ services:
     container_name: coinbase1
     depends_on:
       - teranode1
-    entrypoint: [ "sh", "-c", "sleep 2 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
+    entrypoint: [ "sh", "-c", "sleep 5 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
       profilerAddr: "localhost:17092"
@@ -310,15 +312,15 @@ services:
       - teranode-network
     volumes:
       - ./scripts/generate-blocks.sh:/generate-blocks.sh
-    entrypoint: ["/generate-blocks.sh", "teranode2"]
-    restart: unless-stopped
+    entrypoint: ["/generate-blocks.sh", "--host", "teranode2", "--numBlocks", "8"]
+    restart: no
 
   coinbase2:
     <<: *teranode-coinbase-base
     container_name: coinbase2
     depends_on:
       - teranode2
-    entrypoint: [ "sh", "-c", "sleep 2 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
+    entrypoint: [ "sh", "-c", "sleep 5 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
       profilerAddr: "localhost:27092"
@@ -336,15 +338,15 @@ services:
       - teranode-network
     volumes:
       - ./scripts/generate-blocks.sh:/generate-blocks.sh
-    entrypoint: ["/generate-blocks.sh", "teranode3"]
-    restart: unless-stopped
+    entrypoint: ["/generate-blocks.sh", "--host", "teranode3", "--numBlocks", "8"]
+    restart: no
 
   coinbase3:
     <<: *teranode-coinbase-base
     container_name: coinbase3
     depends_on:
       - teranode3
-    entrypoint: [ "sh", "-c", "sleep 2 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
+    entrypoint: [ "sh", "-c", "sleep 5 && exec ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
       profilerAddr: "localhost:37092"
@@ -366,7 +368,7 @@ services:
       startCoinbase: "false"
       startFaucet: "false"
     entrypoint: ["./blaster.run"]
-    command: ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=10"]
+    command: ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=10", "-iterations=50"]
     volumes:
       - ../settings.conf:/app/settings_local.conf
       # - ../settings_local.conf:/app/settings_local.conf
@@ -384,7 +386,7 @@ services:
       startCoinbase: "false"
       startFaucet: "false"
     entrypoint: ["./blaster.run"]
-    command: ["-workers=1", "-profile=:7092", "-print=0", "-log=0", "-limit=10"]
+    command: ["-workers=1", "-profile=:7092", "-print=0", "-log=0", "-limit=10", "-iterations=50"]
     volumes:
       - ../settings.conf:/app/settings_local.conf
       # - ../settings_local.conf:/app/settings_local.conf
@@ -401,7 +403,7 @@ services:
       startCoinbase: "false"
       startFaucet: "false"
     entrypoint: ["./blaster.run"]
-    command: ["-workers=1", "-profile=:7094", "-print=0", "-log=0", "-limit=10"]
+    command: ["-workers=1", "-profile=:7094", "-print=0", "-log=0", "-limit=10", "-iterations=50"]
     volumes:
       - ../settings.conf:/app/settings_local.conf
       # - ../settings_local.conf:/app/settings_local.conf

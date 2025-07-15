@@ -248,20 +248,23 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBl
         -- Handle already spent UTXO
         if existingSpendingData then            
             if bytes_equal(existingSpendingData, spendingData) then
-                return MSG_OK
+                -- Already spent with same data, skip this one
+                goto continue
             elseif isFrozen(existingSpendingData) then
                 return MSG_FROZEN
             else
                 return MSG_SPENT .. spendingDataBytesToHex(existingSpendingData)
             end
         end
-
+            
         -- Create new UTXO with spending data
         local newUtxo = createUTXOWithSpendingData(utxoHash, spendingData)
         
         -- Update the record
         utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
         rec[BIN_SPENT_UTXOS] = rec[BIN_SPENT_UTXOS] + 1
+
+        ::continue::
     end
 
     -- Update the record with the new utxos

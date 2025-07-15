@@ -250,15 +250,15 @@ services:
       - teranode-network
     volumes:
       - ./scripts/generate-blocks.sh:/generate-blocks.sh
-    entrypoint: ["/generate-blocks.sh", "teranode1"]
-    restart: unless-stopped
+    entrypoint: ["/generate-blocks.sh", "--host", "teranode1", "--generate", "--numBlocks", "20"]
+    restart: no
 
   coinbase1:
     <<: *teranode-coinbase-base
     container_name: coinbase1-chainintegrity-${TEST_ID:-default}
     depends_on:
       - teranode1
-    entrypoint: [ "sh", "-c", "sleep 30 && ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
+    entrypoint: [ "sh", "-c", "sleep 5 && ./coinbase.run -all=0 -coinbase=1 -faucet=1" ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.test}.coinbase
       profilerAddr: "localhost:17092"
@@ -278,7 +278,7 @@ services:
       startCoinbase: "false"
       startFaucet: "false"
     entrypoint: ["./blaster.run"]
-    command: ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=100"]
+    command: ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=100", "-iterations=200"]
     volumes:
       - ../settings.conf:/app/settings.conf
       - ../settings_local.conf:/app/settings_local.conf
