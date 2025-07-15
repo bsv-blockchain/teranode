@@ -7,14 +7,14 @@ Last modified: 27-May-2025
 - [Introduction](#introduction)
 - [Prerequisites](#prerequisites)
 - [Deployment with Minikube](#deployment-with-minikube)
-  1. [Start Minikube](#1-start-minikube)
-  2. [Deploy Dependencies](#2-deploy-dependencies)
-  3. [Create persistent volume provider](#3-create-persistent-volume-provider)
-  4. [Load Teranode Images](#4-load-teranode-images)
-  5. [Deploy Teranode](#5-deploy-teranode)
-  - [Verifying the Deployment](#verifying-the-deployment)
-  - [Production Considerations](#production-considerations)
-  - [Other Resources](#other-resources)
+    1. [Start Minikube](#1-start-minikube)
+    2. [Deploy Dependencies](#2-deploy-dependencies)
+    3. [Create persistent volume provider](#3-create-persistent-volume-provider)
+    4. [Load Teranode Images](#4-load-teranode-images)
+    5. [Deploy Teranode](#5-deploy-teranode)
+    - [Verifying the Deployment](#verifying-the-deployment)
+    - [Production Considerations](#production-considerations)
+    - [Other Resources](#other-resources)
 
 ## Introduction
 

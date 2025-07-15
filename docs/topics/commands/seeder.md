@@ -105,7 +105,7 @@ The service reads these structures from input files and converts them to the for
     - `github.com/bsv-blockchain/go-bt/v2`: For handling Bitcoin transactions and scripts.
 3. **Custom TERANODE Libraries**:
 
-    - `github.com/bitcoin-sv/teranode`: For blockchain and UTXO store operations, error handling, and logging.
+    - `github.com/bsv-blockchain/teranode`: For blockchain and UTXO store operations, error handling, and logging.
 
 4. **Concurrent Processing**:
 

@@ -34,13 +34,12 @@ For each microservice, we maintain several YAML files that define its behavior w
 
 - **Application YAML Configuration Files**: These files manage the deployment setup of containerized applications. For example, `txblaster.yaml` specifies the deployment details for the TXBlaster service. Key fields within these files include:
 
-  - `name`: Serves as a base prefix for application naming within Kubernetes.
-  - `REPO:IMAGE:TAG`: Specifies the Docker image to be used. This reference is updated with the actual image name during the CI build process.
-  - `command`: Indicates the command to be executed within the Docker container. For instance, `txblaster.yaml` might specify `./txblaster.run` as the command, ensuring that the corresponding executable is available within the Docker image.
-  - `role`: Defines which Kubernetes nodes can run the application, based on assigned roles. Node roles can be checked with the command `$ kubectl get node -L role`.
-  - `replicas`: Determines the number of application instances to start within the service. A setting of 0 requires manual service startup.
-  - `volumeMounts` (optional): Specifies volume configurations, such as for `lustre` volumes, enabling detailed storage setup. For example, in `blockassembly.yaml`, a volume mount might be defined as follows:
-
+    - `name`: Serves as a base prefix for application naming within Kubernetes.
+    - `REPO:IMAGE:TAG`: Specifies the Docker image to be used. This reference is updated with the actual image name during the CI build process.
+    - `command`: Indicates the command to be executed within the Docker container. For instance, `txblaster.yaml` might specify `./txblaster.run` as the command, ensuring that the corresponding executable is available within the Docker image.
+    - `role`: Defines which Kubernetes nodes can run the application, based on assigned roles. Node roles can be checked with the command `$ kubectl get node -L role`.
+    - `replicas`: Determines the number of application instances to start within the service. A setting of 0 requires manual service startup.
+    - `volumeMounts` (optional): Specifies volume configurations, such as for `lustre` volumes, enabling detailed storage setup. For example, in `blockassembly.yaml`, a volume mount might be defined as follows:
     ```
     volumes:
 
@@ -48,7 +47,6 @@ For each microservice, we maintain several YAML files that define its behavior w
         persistentVolumeClaim:
           claimName: subtree-pvc
     ```
-
     Here, `lustre-pvc` references a specific PersistentVolumeClaim defined in `lustre-pvc.yaml`, indicating a Lustre filesystem storage configuration.
 
 - **Volume YAML Configuration Files**: These files define persistent volumes for storage purposes. A `lustre-pvc.yaml` file, for instance, would specify the configuration for a Lustre filesystem storage volume.
@@ -65,12 +63,14 @@ For each microservice, we maintain several YAML files that define its behavior w
 
 Microservice configurations can be influenced by settings. There are 2 ways to provide settings:
 
-- Via settings in the `settings.conf` and `settings_local.conf` files, embedded within the Docker image.
-- By Kubernetes pod-specific settings. These settings can override configurations defined in the `.conf` files, allowing for dynamic adjustment based on the deployment environment or specific operational requirements.
+* Via settings in the `settings.conf` and `settings_local.conf` files, embedded within the Docker image.
+* By Kubernetes pod-specific settings. These settings can override configurations defined in the `.conf` files, allowing for dynamic adjustment based on the deployment environment or specific operational requirements.
 
 ### Kubernetes Resolver for gRPC
 
-- [Kubernetes Resolver for gRPC](https://github.com/bsv-blockchain/teranode/blob/main/pkg/k8sresolver/README.md)
+* [Kubernetes Resolver for gRPC](https://github.com/bsv-blockchain/teranode/blob/main/pkg/k8sresolver/README.md)
+
+
 
 ## How to
 
@@ -79,7 +79,9 @@ Microservice configurations can be influenced by settings. There are 2 ways to p
 - Install the AWS Command Line Interface (CLI) via Homebrew: `brew install awscli`. Check the [AWS CLI Installation Guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) for other installation methods.
 - Run `aws configure` to set up the AWS Command Line Interface (CLI).
 - Enter the `AWS Access Key ID`, `AWS Secret Access Key`, `Default region name` (e.g., `eu-north-1`), and `Default output format` as required.
-  - Please check with your DevOPS team for the specific credentials available to you.
+    - Please check with your DevOPS team for the specific credentials available to you.
+
+
 
 ### Kubernetes (k8s) Cluster Access
 
@@ -96,30 +98,31 @@ Microservice configurations can be influenced by settings. There are 2 ways to p
 
 3. **Zsh Configuration**:
 
-- Download the `k8s_shortcuts.sh` shortcuts file from the shared repository and place it in the home directory.
+    - Download the `k8s_shortcuts.sh` shortcuts file from the shared repository and place it in the home directory.
 
-```bash
-cp docs/staging/operations/.k8s_shortcuts.sh ~/.k8s_shortcuts.sh
-```
+    ```bash
+    cp docs/staging/operations/.k8s_shortcuts.sh ~/.k8s_shortcuts.sh
+    ```
 
-- Add Kubernetes shortcuts to `.zprofile` for ease of use.
+    - Add Kubernetes shortcuts to `.zprofile` for ease of use.
 
-```bash
+    ```bash
+    {
+    echo ""
+    echo "# Load k8s shortcuts"
+    echo "autoload -Uz compinit"
+    echo "compinit"
+    echo "source ~/.k8s_shortcuts.sh"
+    } >> ~/.zprofile
+    ```
 
-{
-echo ""
-echo "# Load k8s shortcuts"
-echo "autoload -Uz compinit"
-echo "compinit"
-echo "source ~/.k8s_shortcuts.sh"
-} >> ~/.zprofile
-```
+    - Please read more about the shortcuts [here](k8Shortcuts.md).
 
-- Please read more about the shortcuts [here](k8Shortcuts.md).
+
 
 ### Deployment and Scaling
 
-#### **Service Start Order**
+#### **Service Start Order**:
 
 The Teranode services must be started in a specific order, as follows:
 
@@ -135,6 +138,7 @@ Failing to start services in the right order will lead to errors and incorrect b
 
 Service restarts or downtime can cause the node to be left in an inconsistent state. For example, the Block Assembly will miss any transaction received during a downtime, being unable to promptly recover.
 
+
 #### Lustre
 
 Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. The system is designed to support high-performance, large-scale data storage and workloads, widely used in environments that require fast and efficient access to large volumes of data across many nodes.
@@ -145,6 +149,7 @@ Teranode microservices make use of the Lustre file system in order to share info
 
 As seen in the diagram above, the Block Validation, Block Assembly and Asset Services share a lustre file system storage. The data is ultimately persisted in AWS S3.
 
+
 ## Key Kubernetes Commands Documentation
 
 #### Environment Switching and Namespace Management
@@ -152,16 +157,18 @@ As seen in the diagram above, the Block Validation, Block Assembly and Asset Ser
 1. **Environment Shortcuts**:
 
 - Define aliases for switching between environments (e.g., `m1`, `m2`, `m3`) in `.zprofile`.
-  - Please check with your DevOPS team for the specific environments available to you.
+    - Please check with your DevOPS team for the specific environments available to you.
 
 2. **Namespace Configuration**:
 
-- Use `kcn` command to switch Kubernetes namespaces easily.
-- Example:
+    - Use `kcn` command to switch Kubernetes namespaces easily.
+    - Example:
 
-```bash
-kcn m1
-```
+    ```bash
+    kcn m1
+    ```
+
+---
 
 #### Viewing Pods in a Specific Cluster
 
@@ -207,18 +214,15 @@ Example:
 
 - **To reset a Service**:
 
-  - If you're experiencing issues with a service not functioning as expected, you might attempt to delete all pods associated with a namespace to force them to restart. An example can be seen here:
-
+    - If you're experiencing issues with a service not functioning as expected, you might attempt to delete all pods associated with a namespace to force them to restart. An example can be seen here:
     ```sh
     kubectl delete pod -n [namespace] --all
     ```
-
-  - This command deletes all pods in the specified namespace, which should cause them to be recreated based on their deployment or stateful set configurations.
+    - This command deletes all pods in the specified namespace, which should cause them to be recreated based on their deployment or stateful set configurations.
 
 - **To reset a specific service in all namespaces**:
 
-  - Example to reset the p2p service can be seen here:
-
+    - Example to reset the p2p service can be seen here:
     ```sh
     kubectl delete pod p2p1
     ```
@@ -229,7 +233,9 @@ Example:
 
 #### Accessing the Shell for any Service
 
+
 - You can open an interactive terminal (`bash`) in a specified pod with the `keti {pod} -- bash` command. For example:
+
 
 ```bash
 # Get the list of pods for the AWS node you are connected to
@@ -264,6 +270,9 @@ lrwxrwxrwx 1 root root         8 Jan 29 23:38 aerospiketest.run -> teranode.run
 
 ```
 
+
+
+
 #### Managing Persistent Storage
 
 - **`k get pv`**: Lists all Persistent Volumes (PVs) in the cluster, essential for managing storage resources.
@@ -271,7 +280,6 @@ lrwxrwxrwx 1 root root         8 Jan 29 23:38 aerospiketest.run -> teranode.run
 - **`k describe pvc {storage}`**: Provides detailed information about a Persistent Volume Claim (PVC).
 
 Example:
-
 ```bash
 # Provides detailed information about the Persistent Volume Claim (PVC) named `subtree-lustre-pv`
 k describe pvc subtree-lustre-pv
@@ -281,19 +289,18 @@ k describe pvc subtree-lustre-pv
 
 - **To forward a pod port to localhost**:
 
-  - Set the Kubernetes configuration file:
-
+    - Set the Kubernetes configuration file:
     ```sh
     export KUBECONFIG=~/.kube/config
     ```
-
-  - Forward the port:
-
+    - Forward the port:
     ```sh
     kubectl port-forward asset1-63453452352-23452 8090:8090
     ```
-
     This command forwards the port `8090` from the specified `asset1` pod to the
+
+
+
 
 #### Overriding pod settings
 

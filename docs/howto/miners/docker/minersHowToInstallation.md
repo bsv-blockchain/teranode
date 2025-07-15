@@ -154,22 +154,24 @@ Note: Only Docker Compose (testing) and Kubernetes Operator (production) are off
 - This method sets up a single-node Teranode instance along with all required external dependencies.
 - Components included:
 
-  - Teranode Docker image
-  - Kafka
-  - PostgreSQL
-  - Aerospike
-  - Grafana
-  - Prometheus
-  - Docker Shared Storage
+    - Teranode Docker image
+    - Kafka
+    - PostgreSQL
+    - Aerospike
+    - Grafana
+    - Prometheus
+    - Docker Shared Storage
+
 - Advantages:
 
-  - Easiest method to get a full Teranode environment running quickly.
-  - Automatically manages start order and networking between components.
-  - Used by developers and QA for testing, ensuring reliability.
+    - Easiest method to get a full Teranode environment running quickly.
+    - Automatically manages start order and networking between components.
+    - Used by developers and QA for testing, ensuring reliability.
+
 - Considerations:
 
-  - This setup uses predefined external dependencies, which may not be customizable.
-  - While convenient for development and testing, it is not optimized, nor intended, for production usage.
+    - This setup uses predefined external dependencies, which may not be customizable.
+    - While convenient for development and testing, it is not optimized, nor intended, for production usage.
 
 Note: The Docker Compose method is recommended for testing in single node environments as it provides a consistent environment that mirrors the development setup. However, for production deployments or specific performance requirements, users need to consider using the Kubernetes operator approach (separate document).
 
@@ -312,11 +314,11 @@ Note: You must set the setting `dashboard_enabled` as true in order to see the v
 
 - The various Teranode services expose different ports for interaction:
 
-  - **Blockchain service**: Port 8082
-  - **Asset service**: Ports 8090
-  - **Miner service**: Ports 8089, 8092, 8099
-  - **P2P service**: Ports 9905, 9906
-  - **RPC service**: 9292
+    - **Blockchain service**: Port 8082
+    - **Asset service**: Ports 8090
+    - **Miner service**: Ports 8089, 8092, 8099
+    - **P2P service**: Ports 9905, 9906
+    - **RPC service**: 9292
 
 Notice that those ports might be mapped to random ports on your host machine. You can check the mapping by running `docker-compose ps`.
 
@@ -376,11 +378,11 @@ Teranode includes Aerospike 8.0 community edition for storing the UTXO set. The 
 
 The default configuration is set to stop writing when 50% of the system memory has been consumed. To future proof, you might want to run a dedicated cluster, with more memory and disk space allocated.
 
-See [aerospike.conf / stop-writes-sys-memory-pct](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/aerospike.conf)
+See [aerospike.conf / stop-writes-sys-memory-pct](https://github.com/bsv-blockchain/teranode-public/blob/master/docker/base/aerospike.conf)
 
 By default, the Aerospike data is written to a single mount mounted in the `aerospike` container. For performance reasons, it is recommended to use at least 4 dedicated disks for the Aerospike data.
 
-See [aerospike.conf / storage-engine](https://github.com/bitcoin-sv/teranode-public/blob/master/docker/base/aerospike.conf)
+See [aerospike.conf / storage-engine](https://github.com/bsv-blockchain/teranode-public/blob/master/docker/base/aerospike.conf)
 
 ### Aerospike Administration
 
@@ -716,6 +718,7 @@ If you have local access to SV Nodes, that will speed up the IBD. You can set sp
 
 ```yaml
 environment:
+
   - legacy_config_ConnectPeers=172.x.x.x:8333|10.x.x.x:8333
 ```
 
@@ -737,6 +740,7 @@ x-teranode-settings: &teranode-settings
 **Testnet Configuration**:
 ```yaml
 environment:
+
   - SETTINGS_CONTEXT=docker.t
   - legacy_config_TestNet=true
 ```
@@ -744,6 +748,7 @@ environment:
 **Mainnet Configuration**:
 ```yaml
 environment:
+
   - SETTINGS_CONTEXT=docker.m
   - legacy_config_TestNet=false
 ```
@@ -766,6 +771,7 @@ sudo chown -R 1000:1000 ./data/
 
 **Issue**: Slow synchronization
 **Solution**:
+
 - Use seeding process for faster initial sync
 - Configure specific peer connections for better connectivity
 - Ensure adequate system resources (CPU, memory, disk I/O)

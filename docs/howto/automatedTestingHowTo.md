@@ -107,7 +107,7 @@ package tna
 
 import (
     "testing"
-    "github.com/bitcoin-sv/teranode/test/setup"
+    "github.com/bsv-blockchain/teranode/test/setup"
 )
 
 type TNANewTestSuite struct {

@@ -215,21 +215,25 @@ The service needs to "move up" the block. By this, we mean the process to identi
     The `moveForwardBlock` function is a comprehensive process that handles the integration of a new block into the Block Assembly service. This function performs seven distinct processing steps to ensure proper blockchain state management and transaction processing.
 
     **Initial Validation and Setup**:
+
     - When `moveForwardBlock` is invoked, it receives a `block` object as a parameter and performs validation checks to ensure the block is not nil and is valid for processing.
     - Error handling is implemented throughout the process, with proper error propagation and cleanup mechanisms.
 
     **Step 1: Process Coinbase UTXOs** (`processCoinbaseUtxos`):
+
     - Handles the coinbase transaction (the first transaction in a block, used to reward miners)
     - Creates and stores coinbase UTXOs in the UTXO store with proper block height and mined block information
     - Implements duplicate coinbase transaction handling for the two known duplicate coinbase transactions on the network
     - Includes comprehensive error handling for UTXO creation failures
 
     **Step 2: Process Block Subtrees** (`processBlockSubtrees`):
+
     - Creates a reverse lookup map (`blockSubtreesMap`) of all subtrees contained in the received block
     - Filters and separates chained subtrees that were not included in the block
     - This separation is crucial for distinguishing between blocks from other nodes vs. blocks from own mining
 
     **Step 3: Create Transaction Map** (`createTransactionMapIfNeeded`):
+
     - **For blocks from other nodes**: Retrieves subtree data from the Subtree Store for each subtree in the block
     - Deserializes subtree data and creates a comprehensive transaction map
     - Extracts conflicting nodes that may cause transaction conflicts
@@ -237,32 +241,38 @@ The service needs to "move up" the block. By this, we mean the process to identi
     - Implements error handling for subtree retrieval failures
 
     **Step 4: Process Conflicting Transactions** (`processConflictingTransactions`):
+
     - Identifies transactions that conflict with those in the received block
     - Creates a map of losing transaction hashes that need to be marked as conflicting
     - Ensures proper conflict resolution to maintain blockchain integrity
 
     **Step 5: Reset Subtree State** (`resetSubtreeState`):
+
     - Resets the current subtree and transaction map to prepare for new transaction processing
     - Clears previous state to ensure clean processing of remaining transactions
     - Returns the reset current subtree and transaction map for further processing
 
     **Step 6: Process Remainder Transactions** (`processRemainderTransactions`):
+
     - Processes transactions that were not included in the received block
     - Handles transactions from both chained subtrees and the current subtree
     - Manages transaction conflicts and updates subtree state accordingly
     - Ensures that pending transactions are properly carried over for inclusion in future blocks
 
     **Step 7: Finalize Block Processing** (`finalizeBlockProcessing`):
+
     - Updates internal state variables and performs necessary cleanup operations
     - Ensures the Block Assembly service is ready for the next block processing cycle
     - Completes the integration of the new block into the service's state
 
     **Error Handling and Recovery**:
+
     - Each step includes comprehensive error handling with proper error propagation
     - Failed operations result in appropriate error messages and cleanup procedures
     - The function ensures that partial processing failures don't leave the service in an inconsistent state
 
     **Performance Considerations**:
+
     - The function uses concurrent processing where appropriate to optimize performance
     - Subtree retrieval and processing are optimized to handle large blocks efficiently
     - Memory management is carefully handled to prevent resource leaks during processing

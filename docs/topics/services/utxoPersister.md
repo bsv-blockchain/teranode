@@ -230,7 +230,7 @@ If the current height is less than 100 blocks behind the best block height, the 
 
 2. **Blockchain-specific Libraries:**
     - github.com/bsv-blockchain/go-bt/v2: A Bitcoin SV library for Go, used for handling Bitcoin transactions and blocks.
-    - github.com/bitcoin-sv/teranode: Custom package for Bitcoin SV operations.
+    - github.com/bsv-blockchain/teranode: Custom package for Bitcoin SV operations.
 
 
 3. **Storage:**

@@ -29,6 +29,7 @@ The `Validator` (also called `Transaction Validator` or `Tx Validator`) is a go 
 2. Validating them,
 3. Persisting the data into the utxo store,
 4. Propagating the transactions to other services based on validation results:
+
    - **Block Assembly service**: Direct gRPC calls for validated transactions (if the Tx is passed)
    - **Subtree Validation service**: Kafka topic for transaction metadata (if the Tx is passed)
    - **P2P service**: Kafka topic for rejected transaction notifications (if the tx is rejected)

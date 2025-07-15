@@ -292,6 +292,7 @@ Core alert data structure containing:
 For UTXO freeze, unfreeze, and reassignment operations:
 
 - **UTXO Identifiers**:
+
   - Transaction hashes (txid)
   - Output indices (vout)
 - **Block Height**: Target block height for UTXO operations
