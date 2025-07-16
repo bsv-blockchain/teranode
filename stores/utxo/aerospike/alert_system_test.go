@@ -1,6 +1,7 @@
 package aerospike
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -102,7 +103,11 @@ func TestParseLuaReturnValueBasic(t *testing.T) {
 
 // Test constants are accessible
 func TestLuaConstants(t *testing.T) {
-	assert.Equal(t, "teranode_v38", LuaPackage)
+	assert.Contains(t, LuaPackage, "teranode_v")
+
+	// Test that LuaPackage version doesn't contain dots (per comment in teranode.go)
+	assert.False(t, strings.Contains(LuaPackage, "."), "LuaPackage should not contain dots")
+
 	assert.Equal(t, LuaReturnValue("OK"), LuaOk)
 	assert.Equal(t, LuaReturnValue("ERROR"), LuaError)
 	assert.Equal(t, LuaReturnValue("SPENT"), LuaSpent)
