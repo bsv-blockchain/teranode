@@ -26,6 +26,7 @@
 
 ### CheckSubtreeFromBlockRequest
 Defines the input parameters for subtree validation.
+
 swagger:model CheckSubtreeFromBlockRequest
 
 
@@ -46,6 +47,7 @@ swagger:model CheckSubtreeFromBlockRequest
 
 ### CheckSubtreeFromBlockResponse
 Contains the validation result for a subtree check.
+
 swagger:model CheckSubtreeFromBlockResponse
 
 
@@ -62,6 +64,7 @@ swagger:model CheckSubtreeFromBlockResponse
 
 ### EmptyMessage
 Represents an empty message structure used for health check requests.
+
 swagger:model EmptyMessage
 
 
@@ -73,6 +76,7 @@ swagger:model EmptyMessage
 
 ### HealthResponse
 Encapsulates the service health status information.
+
 swagger:model HealthResponse
 
 

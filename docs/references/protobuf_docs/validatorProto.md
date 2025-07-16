@@ -7,8 +7,6 @@
 
 ## Table of Contents
 
-- [GRPC Documentation - ValidatorAPI](#grpc-documentation---validatorapi)
-    - [Table of Contents](#table-of-contents)
   - [validator\_api.proto](#validator_apiproto)
     - [EmptyMessage](#emptymessage)
     - [GetBlockHeightResponse](#getblockheightresponse)
@@ -34,6 +32,7 @@
 
 ### EmptyMessage
 Represents an empty request message. Used for endpoints that don't require input parameters.
+
 swagger:model EmptyMessage
 
 
@@ -45,6 +44,7 @@ swagger:model EmptyMessage
 
 ### GetBlockHeightResponse
 Provides the current block height.
+
 swagger:model GetBlockHeightResponse
 
 
@@ -61,6 +61,7 @@ swagger:model GetBlockHeightResponse
 
 ### GetMedianBlockTimeResponse
 Provides the median time of recent blocks. Used for time-based validation rules.
+
 swagger:model GetMedianBlockTimeResponse
 
 
@@ -77,6 +78,7 @@ swagger:model GetMedianBlockTimeResponse
 
 ### HealthResponse
 Provides health check information for the validation service.
+
 swagger:model HealthResponse
 
 
@@ -95,6 +97,7 @@ swagger:model HealthResponse
 
 ### ValidateTransactionBatchRequest
 Contains multiple transactions for batch validation.
+
 swagger:model ValidateTransactionBatchRequest
 
 
@@ -111,6 +114,7 @@ swagger:model ValidateTransactionBatchRequest
 
 ### ValidateTransactionBatchResponse
 Provides batch validation results for multiple transactions.
+
 swagger:model ValidateTransactionBatchResponse
 
 
@@ -129,6 +133,7 @@ swagger:model ValidateTransactionBatchResponse
 
 ### ValidateTransactionRequest
 Contains data for transaction validation.
+
 swagger:model ValidateTransactionRequest
 
 
@@ -150,6 +155,7 @@ swagger:model ValidateTransactionRequest
 
 ### ValidateTransactionResponse
 Provides transaction validation results.
+
 swagger:model ValidateTransactionResponse
 
 

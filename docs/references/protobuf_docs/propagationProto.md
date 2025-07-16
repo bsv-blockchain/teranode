@@ -3,12 +3,9 @@
 
 ## Table of Contents
 
-- [GRPC Documentation - PropagationAPI](#grpc-documentation---propagationapi)
-    - [Table of Contents](#table-of-contents)
   - [propagation\_api.proto](#propagation_apiproto)
     - [EmptyMessage](#emptymessage)
-    - [GetRequest](#getrequest)
-    - [GetResponse](#getresponse)
+    - [BatchTransactionItem](#batchtransactionitem)
     - [HealthResponse](#healthresponse)
     - [ProcessTransactionBatchRequest](#processtransactionbatchrequest)
     - [ProcessTransactionBatchResponse](#processtransactionbatchresponse)
@@ -29,6 +26,7 @@
 
 ### EmptyMessage
 Represents an empty request or response. Used when no additional data needs to be transmitted.
+
 swagger:model EmptyMessage
 
 
@@ -36,32 +34,30 @@ swagger:model EmptyMessage
 
 
 
-<a name="GetRequest"></a>
+<a name="BatchTransactionItem"></a>
 
-### GetRequest
-Represents a request to retrieve a transaction by its ID.
-swagger:model GetRequest
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| txid | [bytes](#bytes) |  | Transaction ID in bytes |
-
-
-
-
-
-
-<a name="GetResponse"></a>
-
-### GetResponse
-Contains the retrieved transaction data.
-swagger:model GetResponse
+### BatchTransactionItem
+Represents a single transaction item in a batch request with trace context support.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| tx | [bytes](#bytes) |  | Raw transaction bytes |
+| tx | [bytes](#bytes) |  | Raw transaction bytes to process |
+| trace_context | [BatchTransactionItem.TraceContextEntry](#batchtransactionitem-tracecontextentry) | repeated | Serialized OpenTelemetry trace context as key-value pairs for proper span propagation |
+
+
+
+
+<a name="BatchTransactionItem.TraceContextEntry"></a>
+
+### BatchTransactionItem.TraceContextEntry
+
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| key | [string](#string) |  |  |
+| value | [string](#string) |  |  |
 
 
 
@@ -72,6 +68,7 @@ swagger:model GetResponse
 
 ### HealthResponse
 Provides information about the service's health status.
+
 swagger:model HealthResponse
 
 
@@ -90,12 +87,13 @@ swagger:model HealthResponse
 
 ### ProcessTransactionBatchRequest
 Represents a request to process multiple transactions in a batch.
+
 swagger:model ProcessTransactionBatchRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| tx | [bytes](#bytes) | repeated | Array of raw transaction bytes to process |
+| items | [BatchTransactionItem](#batchtransactionitem) | repeated | Array of transaction items to process, each containing transaction bytes and trace context |
 
 
 
@@ -106,12 +104,13 @@ swagger:model ProcessTransactionBatchRequest
 
 ### ProcessTransactionBatchResponse
 Contains the results of batch transaction processing.
+
 swagger:model ProcessTransactionBatchResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| errors | [errors.TError](#errors-TError) | repeated | Error messages for each transaction in the batch. Empty error indicates success for that transaction. |
+| errors | [errors.TError](#errors-TError) | repeated | Error messages for each transaction in the batch. Empty string indicates success for that transaction. |
 
 
 
@@ -122,6 +121,7 @@ swagger:model ProcessTransactionBatchResponse
 
 ### ProcessTransactionRequest
 Represents a request to process a single transaction.
+
 swagger:model ProcessTransactionRequest
 
 
