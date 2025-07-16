@@ -29,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -106,6 +107,12 @@ type Server struct {
 
 	// invalidSubtreeKafkaProducer publishes invalid subtree events to Kafka
 	invalidSubtreeKafkaProducer kafka.KafkaAsyncProducerI
+
+	// invalidSubtreeLock is used to synchronize access to the invalid subtree producer
+	invalidSubtreeLock sync.Mutex
+
+	// invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages
+	invalidSubtreeDeDuplicateMap *expiringmap.ExpiringMap[string, struct{}]
 }
 
 var (
@@ -166,6 +173,7 @@ func New(
 		blockchainClient:                  blockchainClient,
 		subtreeConsumerClient:             subtreeConsumerClient,
 		txmetaConsumerClient:              txmetaConsumerClient,
+		invalidSubtreeDeDuplicateMap:      expiringmap.New[string, struct{}](time.Minute * 1),
 	}
 
 	var err error
@@ -718,6 +726,18 @@ func (u *Server) publishInvalidSubtree(subtreeHash, peerURL, reason string) {
 	if u.invalidSubtreeKafkaProducer == nil {
 		return
 	}
+
+	u.invalidSubtreeLock.Lock()
+	defer u.invalidSubtreeLock.Unlock()
+
+	// de-duplicate the subtree hash to avoid flooding Kafka with the same message
+	if _, ok := u.invalidSubtreeDeDuplicateMap.Get(subtreeHash); ok {
+		u.logger.Debugf("[publishInvalidSubtree] Skipping duplicate invalid subtree %s from peer %s to Kafka: %s", subtreeHash, peerURL, reason)
+
+		return
+	}
+
+	u.invalidSubtreeDeDuplicateMap.Set(subtreeHash, struct{}{})
 
 	u.logger.Infof("[publishInvalidSubtree] publishing invalid subtree %s from peer %s to Kafka: %s", subtreeHash, peerURL, reason)
 

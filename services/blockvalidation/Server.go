@@ -272,6 +272,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	go func() {
 		var err error
 
+	CATCHUPLOOP:
 		for {
 			_, _, ctx1 := tracing.NewStatFromContext(ctx, "catchupCh", u.stats, false)
 			select {
@@ -284,6 +285,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					// stop mining
 					if err = u.blockchainClient.CatchUpBlocks(ctx); err != nil {
 						u.logger.Errorf("[BlockValidation Init] failed to send CATCHUPBLOCKS event [%v]", err)
+
+						continue
 					}
 
 					u.logger.Infof("[BlockValidation Init] processing catchup on channel [%s] [%d]", c.block.Hash().String(), c.block.Height)
@@ -301,7 +304,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 							retries++
 
-							continue
+							continue CATCHUPLOOP
 						}
 
 						break
@@ -313,6 +316,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					state, err := u.blockchainClient.GetFSMCurrentState(ctx)
 					if err != nil {
 						u.logger.Errorf("[BlockValidation Init] failed to get FSM current state [%v]", err)
+
+						continue
 					}
 
 					if err == nil && *state == blockchain.FSMStateCATCHINGBLOCKS {

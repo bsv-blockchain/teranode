@@ -1240,7 +1240,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) (err error
 			SizeInBytes: unminedTransaction.Size,
 		}
 
-		if err = b.subtreeProcessor.AddDirectly(subtreeNode, unminedTransaction.TxInpoints); err != nil {
+		if err = b.subtreeProcessor.AddDirectly(subtreeNode, unminedTransaction.TxInpoints, true); err != nil {
 			return errors.NewProcessingError("error adding unmined transaction to subtree processor", err)
 		}
 	}

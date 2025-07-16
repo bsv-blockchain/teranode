@@ -991,15 +991,16 @@ func (stp *SubtreeProcessor) Add(node subtreepkg.SubtreeNode, txInpoints subtree
 // Parameters:
 //   - node: Transaction node to add
 //   - txInpoints: Transaction inpoints for the node
+//   - skipNotification: Whether to skip notification of new subtrees
 //
 // Returns:
 //   - error: Any error encountered during addition
-func (stp *SubtreeProcessor) AddDirectly(node subtreepkg.SubtreeNode, txInpoints subtreepkg.TxInpoints) error {
+func (stp *SubtreeProcessor) AddDirectly(node subtreepkg.SubtreeNode, txInpoints subtreepkg.TxInpoints, skipNotification bool) error {
 	if _, ok := stp.currentTxMap.Get(node.Hash); ok {
 		return errors.NewInvalidArgumentError("transaction already exists in currentTxMap")
 	}
 
-	return stp.addNode(node, &txInpoints, false)
+	return stp.addNode(node, &txInpoints, skipNotification)
 }
 
 // Remove prevents a transaction from being processed from the queue into a subtree, and removes it if already present.

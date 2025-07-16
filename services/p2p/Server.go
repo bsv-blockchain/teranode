@@ -819,12 +819,11 @@ func (s *Server) handleMiningOnNotification(ctx context.Context) error {
 
 	s.logger.Debugf("P2P publishing miningOnMessage")
 
-	if err := s.P2PNode.Publish(ctx, s.miningOnTopicName, msgBytes); err != nil {
+	if err = s.P2PNode.Publish(ctx, s.miningOnTopicName, msgBytes); err != nil {
 		return errors.NewError("miningOnMessage - publish error: %w", err)
 	}
 
 	// Also send to local WebSocket clients
-	s.logger.Infof("[handleMiningOnNotification] Sending own mining_on message to WebSocket clients")
 	s.notificationCh <- &notificationMsg{
 		Timestamp:    time.Now().UTC().Format(isoFormat),
 		Type:         "mining_on",
@@ -837,7 +836,6 @@ func (s *Server) handleMiningOnNotification(ctx context.Context) error {
 		SizeInBytes:  miningOnMessage.SizeInBytes,
 		TxCount:      miningOnMessage.TxCount,
 	}
-	s.logger.Infof("[handleMiningOnNotification] Successfully sent mining_on message to WebSocket clients")
 
 	return nil
 }

@@ -128,7 +128,7 @@ type txMetaCacheOps interface {
 	// Delete removes transaction metadata from the cache for the specified hash.
 	// Returns an error if the deletion operation fails.
 	Delete(ctx context.Context, hash *chainhash.Hash) error
-	
+
 	// SetCacheFromBytes stores raw transaction metadata bytes in the cache using the provided key.
 	// This method allows direct storage of pre-serialized metadata for performance optimization.
 	// Returns an error if the cache operation fails.
@@ -367,7 +367,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainh
 			// conflicting transaction, which has been saved, but not spent
 			u.logger.Warnf("[blessMissingTransaction][%s][%s] transaction is conflicting", subtreeHash.String(), tx.TxID())
 		} else {
-			return nil, errors.NewServiceError("[blessMissingTransaction][%s][%s] failed to validate transaction", subtreeHash.String(), tx.TxID(), err)
+			return nil, errors.NewProcessingError("[blessMissingTransaction][%s][%s] failed to validate transaction", subtreeHash.String(), tx.TxID(), err)
 		}
 	}
 
@@ -1134,7 +1134,7 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 // through parallel processing of independent transactions.
 type txMapWrapper struct {
 	// missingTx contains the transaction data and its original position in the subtree
-	missingTx          missingTx
+	missingTx missingTx
 	// someParentsInBlock indicates whether some of this transaction's parents are already in a block.
 	// This flag is used to optimize validation by skipping certain checks for transactions
 	// whose parents have already been validated and included in the blockchain.
@@ -1143,7 +1143,7 @@ type txMapWrapper struct {
 	// Lower levels indicate transactions with fewer dependencies, allowing for optimized
 	// parallel processing during validation. Level 0 transactions have no dependencies
 	// within the current subtree and can be validated first.
-	childLevelInBlock  uint32
+	childLevelInBlock uint32
 }
 
 // prepareTxsPerLevel organizes transactions by their dependency level for ordered processing.
