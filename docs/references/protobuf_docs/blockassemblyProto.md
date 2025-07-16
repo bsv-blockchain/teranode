@@ -57,7 +57,6 @@ Response indicating whether the addition of a batch of transactions was successf
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | ok | [bool](#bool) |  | true if the transactions were successfully added |
-| txIdErrors | [bytes](#bytes) | repeated | list of transaction IDs that encountered errors |
 
 
 
@@ -77,7 +76,7 @@ Request for adding a new transaction to the mining candidate block.
 | size | [uint64](#uint64) |  | the size of the transaction in bytes |
 | locktime | [uint32](#uint32) |  | the earliest time a transaction can be mined into a block |
 | utxos | [bytes](#bytes) | repeated | the UTXOs consumed by this transaction |
-| parents | [bytes](#bytes) | repeated | the parent transactions of this transaction |
+| txInpoints | [bytes](#bytes) |  | a serialized list of input outpoints for this transaction |
 
 
 
@@ -288,7 +287,7 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
 | AddTx | [AddTxRequest](#blockassembly_api-AddTxRequest) | [AddTxResponse](#blockassembly_api-AddTxResponse) | Adds a single transaction to the next available subtree. The transaction will be included in block assembly for mining. |
 | RemoveTx | [RemoveTxRequest](#blockassembly_api-RemoveTxRequest) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Removes a transaction from consideration for block inclusion. This is useful for handling double-spends or invalid transactions. |
 | AddTxBatch | [AddTxBatchRequest](#blockassembly_api-AddTxBatchRequest) | [AddTxBatchResponse](#blockassembly_api-AddTxBatchResponse) | Efficiently adds multiple transactions in a single request. Provides better performance than multiple individual AddTx calls. |
-| GetMiningCandidate | [GetMiningCandidateRequest](#blockassembly_api-GetMiningCandidateRequest) | [.model.MiningCandidate](#model-MiningCandidate) | Retrieves a block template ready for mining. Includes all necessary components for miners to begin work. |
+| GetMiningCandidate | [GetMiningCandidateRequest](#blockassembly_api-GetMiningCandidateRequest) | [model.MiningCandidate](#model-MiningCandidate) | Retrieves a block template ready for mining. Includes all necessary components for miners to begin work. |
 | GetCurrentDifficulty | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetCurrentDifficultyResponse](#blockassembly_api-GetCurrentDifficultyResponse) | Retrieves the current network mining difficulty. Used by miners to understand the current mining requirements. |
 | SubmitMiningSolution | [SubmitMiningSolutionRequest](#blockassembly_api-SubmitMiningSolutionRequest) | [OKResponse](#blockassembly_api-OKResponse) | Submits a solved block to the network. Includes the proof-of-work solution and block details. |
 | DeDuplicateBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Removes duplicate transactions from the assembly process. Ensures transaction uniqueness within blocks. |
