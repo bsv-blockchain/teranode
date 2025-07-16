@@ -58,6 +58,11 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+const (
+	p2pClientTimeout    = 5 * time.Second
+	legacyClientTimeout = 5 * time.Second
+)
+
 // live items expire after 10s, cleanup runs every minute
 var rpcCallCache = cache.New(10*time.Second, time.Minute)
 
@@ -1053,23 +1058,73 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 	var newPeerInfo *p2p_api.GetPeersResponse
 
-	var err error
-
 	// get legacy peer info
-	legacyPeerInfo, err = s.peerClient.GetPeers(ctx)
-	if err != nil {
-		// not critical - legacy service may not be running, so log as info
-		s.logger.Infof("error getting legacy peer info: %v", err)
-	} else if legacyPeerInfo != nil {
+	if s.peerClient != nil {
+		// create a timeout context to prevent hanging if legacy peer service is not responding
+		peerCtx, cancel := context.WithTimeout(ctx, legacyClientTimeout)
+		defer cancel()
+
+		// use a goroutine with select to handle timeouts more reliably
+		type peerResult struct {
+			resp *peer_api.GetPeersResponse
+			err  error
+		}
+		resultCh := make(chan peerResult, 1)
+
+		go func() {
+			resp, err := s.peerClient.GetPeers(peerCtx)
+			resultCh <- peerResult{resp: resp, err: err}
+		}()
+
+		select {
+		case result := <-resultCh:
+			if result.err != nil {
+				// not critical - legacy service may not be running, so log as info
+				s.logger.Infof("error getting legacy peer info: %v", result.err)
+			} else {
+				legacyPeerInfo = result.resp
+			}
+		case <-peerCtx.Done():
+			// timeout reached
+			s.logger.Infof("timeout getting legacy peer info from peer service")
+		}
+	}
+	if legacyPeerInfo != nil {
 		peerCount += len(legacyPeerInfo.Peers)
 	}
 
 	// get new peer info
-	newPeerInfo, err = s.p2pClient.GetPeers(ctx)
-	if err != nil {
-		// not critical - p2p service may not be running, so log as warning
-		s.logger.Warnf("error getting new peer info: %v", err)
-	} else if newPeerInfo != nil {
+	if s.p2pClient != nil {
+		// create a timeout context to prevent hanging if p2p service is not responding
+		peerCtx, cancel := context.WithTimeout(ctx, p2pClientTimeout)
+		defer cancel()
+
+		// use a goroutine with select to handle timeouts more reliably
+		type peerResult struct {
+			resp *p2p_api.GetPeersResponse
+			err  error
+		}
+		resultCh := make(chan peerResult, 1)
+
+		go func() {
+			resp, err := s.p2pClient.GetPeers(peerCtx)
+			resultCh <- peerResult{resp: resp, err: err}
+		}()
+
+		select {
+		case result := <-resultCh:
+			if result.err != nil {
+				// not critical - p2p service may not be running, so log as warning
+				s.logger.Warnf("error getting new peer info: %v", result.err)
+			} else {
+				newPeerInfo = result.resp
+			}
+		case <-peerCtx.Done():
+			// timeout reached
+			s.logger.Warnf("timeout getting new peer info from p2p service")
+		}
+	}
+	if newPeerInfo != nil {
 		peerCount += len(newPeerInfo.Peers)
 
 		for _, np := range newPeerInfo.Peers {
@@ -1285,16 +1340,68 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 		return nil, err
 	}
 
-	p2pConnections, err := s.p2pClient.GetPeers(ctx)
-	if err != nil {
-		// not critical - p2p service may not be running, so log as info
-		s.logger.Infof("error getting p2p peer info: %v", err)
+	var p2pConnections *p2p_api.GetPeersResponse
+	if s.p2pClient != nil {
+		// create a timeout context to prevent hanging if p2p service is not responding
+		peerCtx, cancel := context.WithTimeout(ctx, p2pClientTimeout)
+		defer cancel()
+
+		// use a goroutine with select to handle timeouts more reliably
+		type peerResult struct {
+			resp *p2p_api.GetPeersResponse
+			err  error
+		}
+		resultCh := make(chan peerResult, 1)
+
+		go func() {
+			resp, err := s.p2pClient.GetPeers(peerCtx)
+			resultCh <- peerResult{resp: resp, err: err}
+		}()
+
+		select {
+		case result := <-resultCh:
+			if result.err != nil {
+				// not critical - p2p service may not be running, so log as info
+				s.logger.Infof("error getting p2p peer info: %v", result.err)
+			} else {
+				p2pConnections = result.resp
+			}
+		case <-peerCtx.Done():
+			// timeout reached
+			s.logger.Infof("timeout getting p2p peer info from p2p service")
+		}
 	}
 
-	legacyConnections, err := s.peerClient.GetPeers(ctx)
-	if err != nil {
-		// not critical - legacy service may not be running, so log as info
-		s.logger.Infof("error getting legacy peer info: %v", err)
+	var legacyConnections *peer_api.GetPeersResponse
+	if s.peerClient != nil {
+		// create a timeout context to prevent hanging if legacy peer service is not responding
+		peerCtx, cancel := context.WithTimeout(ctx, legacyClientTimeout)
+		defer cancel()
+
+		// use a goroutine with select to handle timeouts more reliably
+		type peerResult struct {
+			resp *peer_api.GetPeersResponse
+			err  error
+		}
+		resultCh := make(chan peerResult, 1)
+
+		go func() {
+			resp, err := s.peerClient.GetPeers(peerCtx)
+			resultCh <- peerResult{resp: resp, err: err}
+		}()
+
+		select {
+		case result := <-resultCh:
+			if result.err != nil {
+				// not critical - legacy service may not be running, so log as info
+				s.logger.Infof("error getting legacy peer info: %v", result.err)
+			} else {
+				legacyConnections = result.resp
+			}
+		case <-peerCtx.Done():
+			// timeout reached
+			s.logger.Infof("timeout getting legacy peer info from peer service")
+		}
 	}
 
 	connectionCount := 0
@@ -1603,21 +1710,25 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	// check if P2P service is available
 	var p2pBanned bool
 
-	isBanned, err := s.p2pClient.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
-	if err != nil {
-		s.logger.Warnf("Failed to check if banned in P2P service: %v", err)
-	} else {
-		p2pBanned = isBanned.IsBanned
+	if s.p2pClient != nil {
+		isBanned, err := s.p2pClient.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+		if err != nil {
+			s.logger.Warnf("Failed to check if banned in P2P service: %v", err)
+		} else {
+			p2pBanned = isBanned.IsBanned
+		}
 	}
 
 	// check if legacy peer service is available
 	var peerBanned bool
 
-	isBannedLegacy, err := s.peerClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
-	if err != nil {
-		s.logger.Warnf("Failed to check if banned in legacy peer service: %v", err)
-	} else {
-		peerBanned = isBannedLegacy.IsBanned
+	if s.peerClient != nil {
+		isBannedLegacy, err := s.peerClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+		if err != nil {
+			s.logger.Warnf("Failed to check if banned in legacy peer service: %v", err)
+		} else {
+			peerBanned = isBannedLegacy.IsBanned
+		}
 	}
 
 	return p2pBanned || peerBanned, nil
@@ -1660,20 +1771,24 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 	// check if P2P service is available
 	var bannedList []string
 
-	p2pListBannedResp, err := s.p2pClient.ListBanned(ctx, &emptypb.Empty{})
-	if err != nil {
-		s.logger.Warnf("Failed to get banned list in P2P service: %v", err)
-	} else {
-		bannedList = p2pListBannedResp.Banned
+	if s.p2pClient != nil {
+		p2pListBannedResp, err := s.p2pClient.ListBanned(ctx, &emptypb.Empty{})
+		if err != nil {
+			s.logger.Warnf("Failed to get banned list in P2P service: %v", err)
+		} else {
+			bannedList = p2pListBannedResp.Banned
+		}
 	}
 
 	// check if legacy peer service is available
 
-	listBannedLegacy, err := s.peerClient.ListBanned(ctx, &emptypb.Empty{})
-	if err != nil {
-		s.logger.Warnf("Failed to get banned list in legacy peer service: %v", err)
-	} else {
-		bannedList = append(bannedList, listBannedLegacy.Banned...)
+	if s.peerClient != nil {
+		listBannedLegacy, err := s.peerClient.ListBanned(ctx, &emptypb.Empty{})
+		if err != nil {
+			s.logger.Warnf("Failed to get banned list in legacy peer service: %v", err)
+		} else {
+			bannedList = append(bannedList, listBannedLegacy.Banned...)
+		}
 	}
 
 	return bannedList, nil
@@ -1716,14 +1831,18 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	s.logger.Debugf("in handleClearBanned")
 
 	// check if P2P service is available
-	_, err := s.p2pClient.ClearBanned(ctx, &emptypb.Empty{})
-	if err != nil {
-		s.logger.Warnf("Failed to clear banned list in P2P service: %v", err)
+	if s.p2pClient != nil {
+		_, err := s.p2pClient.ClearBanned(ctx, &emptypb.Empty{})
+		if err != nil {
+			s.logger.Warnf("Failed to clear banned list in P2P service: %v", err)
+		}
 	}
 	// check if legacy peer service is available
-	_, err = s.peerClient.ClearBanned(ctx, &emptypb.Empty{})
-	if err != nil {
-		s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
+	if s.peerClient != nil {
+		_, err := s.peerClient.ClearBanned(ctx, &emptypb.Empty{})
+		if err != nil {
+			s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
+		}
 	}
 
 	return true, nil
@@ -1805,92 +1924,96 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		expirationTimeInt64 := expirationTime.Unix()
 
 		// ban teranode peers
-		banPeerResponse, err := s.p2pClient.BanPeer(ctx, &p2p_api.BanPeerRequest{
-			Addr:  c.IPOrSubnet,
-			Until: expirationTimeInt64,
-		})
-		if err == nil {
-			if banPeerResponse.Ok {
-				success = true
+		if s.p2pClient != nil {
+			banPeerResponse, err := s.p2pClient.BanPeer(ctx, &p2p_api.BanPeerRequest{
+				Addr:  c.IPOrSubnet,
+				Until: expirationTimeInt64,
+			})
+			if err == nil {
+				if banPeerResponse.Ok {
+					success = true
 
-				s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
+					s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
+				} else {
+					s.logger.Errorf("Failed to add ban for %s until %v", c.IPOrSubnet, expirationTime)
+				}
 			} else {
-				s.logger.Errorf("Failed to add ban for %s until %v", c.IPOrSubnet, expirationTime)
+				s.logger.Errorf("Error while trying to ban teranode peer: %v", err)
 			}
-		} else {
-			s.logger.Errorf("Error while trying to ban teranode peer: %v", err)
 		}
 
 		// and ban legacy peers
-		until := expirationTimeInt64
+		if s.peerClient != nil {
+			until := expirationTimeInt64
 
-		resp, err := s.peerClient.BanPeer(ctx, &peer_api.BanPeerRequest{
-			Addr:  c.IPOrSubnet,
-			Until: until,
-		})
+			resp, err := s.peerClient.BanPeer(ctx, &peer_api.BanPeerRequest{
+				Addr:  c.IPOrSubnet,
+				Until: until,
+			})
 
-		if err != nil {
-			s.logger.Errorf("Error while trying to ban legacy peer: %v", err)
+			if err != nil {
+				s.logger.Errorf("Error while trying to ban legacy peer: %v", err)
 
-			if !success {
-				return nil, &bsvjson.RPCError{
-					Code:    bsvjson.ErrRPCInvalidParameter,
-					Message: "Failed to add ban",
+				if !success {
+					return nil, &bsvjson.RPCError{
+						Code:    bsvjson.ErrRPCInvalidParameter,
+						Message: "Failed to add ban",
+					}
 				}
+			} else if resp == nil || !resp.Ok {
+				if !success {
+					return nil, &bsvjson.RPCError{
+						Code:    bsvjson.ErrRPCInvalidParameter,
+						Message: "Failed to ban peer",
+					}
+				}
+			} else {
+				s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
 			}
 		}
-
-		if resp == nil || !resp.Ok {
-			if !success {
-				return nil, &bsvjson.RPCError{
-					Code:    bsvjson.ErrRPCInvalidParameter,
-					Message: "Failed to ban peer",
-				}
-			}
-		}
-
-		s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
 	case "remove":
 		var success bool
 
-		unbanPeerResponse, err := s.p2pClient.UnbanPeer(ctx, &p2p_api.UnbanPeerRequest{
-			Addr: c.IPOrSubnet,
-		})
-		if err == nil {
-			if unbanPeerResponse.Ok {
-				success = true
+		if s.p2pClient != nil {
+			unbanPeerResponse, err := s.p2pClient.UnbanPeer(ctx, &p2p_api.UnbanPeerRequest{
+				Addr: c.IPOrSubnet,
+			})
+			if err == nil {
+				if unbanPeerResponse.Ok {
+					success = true
+				} else {
+					s.logger.Errorf("Failed to unban teranode peer: %v", err)
+				}
 			} else {
-				s.logger.Errorf("Failed to unban teranode peer: %v", err)
+				s.logger.Errorf("Error while trying to unban teranode peer: %v", err)
 			}
-		} else {
-			s.logger.Errorf("Error while trying to unban teranode peer: %v", err)
 		}
 
 		// unban legacy peer
-		resp, err := s.peerClient.UnbanPeer(ctx, &peer_api.UnbanPeerRequest{
-			Addr: c.IPOrSubnet,
-		})
-		if err != nil {
-			s.logger.Errorf("Error while trying to unban legacy peer: %v", err)
+		if s.peerClient != nil {
+			resp, err := s.peerClient.UnbanPeer(ctx, &peer_api.UnbanPeerRequest{
+				Addr: c.IPOrSubnet,
+			})
+			if err != nil {
+				s.logger.Errorf("Error while trying to unban legacy peer: %v", err)
 
-			if !success {
-				return nil, &bsvjson.RPCError{
-					Code:    bsvjson.ErrRPCInvalidParameter,
-					Message: "Error while trying to unban peer",
+				if !success {
+					return nil, &bsvjson.RPCError{
+						Code:    bsvjson.ErrRPCInvalidParameter,
+						Message: "Error while trying to unban peer",
+					}
 				}
+			} else if resp == nil || !resp.Ok {
+				if !success {
+					return nil, &bsvjson.RPCError{
+						Code:    bsvjson.ErrRPCInvalidParameter,
+						Message: "Failed to unban peer",
+					}
+				}
+			} else {
+				s.logger.Debugf("Removed ban for %s", c.IPOrSubnet)
 			}
 		}
-
-		if resp == nil || !resp.Ok {
-			if !success {
-				return nil, &bsvjson.RPCError{
-					Code:    bsvjson.ErrRPCInvalidParameter,
-					Message: "Failed to unban peer",
-				}
-			}
-		}
-
-		s.logger.Debugf("Removed ban for %s", c.IPOrSubnet)
 	default:
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInvalidParameter,

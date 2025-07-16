@@ -1112,18 +1112,19 @@ LOOP:
 			return nil, err
 		}
 
-		if len(blockHeaders) == 0 {
+		blockHeadersLength := len(blockHeaders)
+		if blockHeadersLength == 0 {
 			return nil, errors.NewServiceError("[catchup][%s] failed to get block headers up to [%s]", blockUpTo.Hash().String(), blockHeaderHashUpTo.String())
 		}
 
-		for _, blockHeader := range blockHeaders {
+		for i, blockHeader := range blockHeaders {
 			// check if parent block is currently being validated, then wait for it to finish. If the parent block was being validated, when the for loop is done, GetBlockExists will return true.
 			exists := u.parentExistsAndIsValidated(ctx, blockHeader, blockUpTo)
 			if exists {
 				break LOOP
 			}
 
-			u.logger.Warnf("[catchup][%s] parent block does not exist [%s]", blockUpTo.Hash().String(), blockHeader.String())
+			u.logger.Warnf("[catchup][%s] [%d/%d] parent block does not exist [%s]", blockUpTo.Hash().String(), i, blockHeadersLength, blockHeader.String())
 
 			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
 
