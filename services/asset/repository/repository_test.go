@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"encoding/binary"
 	"net/url"
 	"testing"
 
@@ -78,19 +79,40 @@ func TestTransaction(t *testing.T) {
 }
 
 func TestGetSubtreeTransactions(t *testing.T) {
-	txns, subtreeHash, repo := setupSubtreeData(t)
+	t.Run("GetSubtreeTransactions form subtree store", func(t *testing.T) {
+		txns, subtreeHash, repo := setupSubtreeData(t)
 
-	// Get the transactions from the repository
-	txMap, err := repo.GetSubtreeTransactions(context.Background(), subtreeHash)
-	require.NoError(t, err)
-	assert.Len(t, txMap, 2)
+		// Get the transactions from the repository
+		txMap, err := repo.GetSubtreeTransactions(context.Background(), subtreeHash)
+		require.NoError(t, err)
+		assert.Len(t, txMap, 2)
 
-	for _, txHash := range txns {
-		tx, ok := txMap[txHash]
-		require.True(t, ok, "transaction %s not found in subtree transactions", txHash.String())
+		for _, txHash := range txns {
+			tx, ok := txMap[txHash]
+			require.True(t, ok, "transaction %s not found in subtree transactions", txHash.String())
 
-		assert.Equal(t, txHash, *tx.TxIDChainHash(), "transaction hash mismatch for %s", txHash.String())
-	}
+			assert.Equal(t, txHash, *tx.TxIDChainHash(), "transaction hash mismatch for %s", txHash.String())
+		}
+	})
+
+	t.Run("GetSubtreeTransactions form block store", func(t *testing.T) {
+		txns, subtreeHash, repo := setupSubtreeData(t)
+
+		err := repo.SubtreeStore.Del(t.Context(), subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData)
+		require.NoError(t, err)
+
+		// Get the transactions from the repository
+		txMap, err := repo.GetSubtreeTransactions(context.Background(), subtreeHash)
+		require.NoError(t, err)
+		assert.Len(t, txMap, 2)
+
+		for _, txHash := range txns {
+			tx, ok := txMap[txHash]
+			require.True(t, ok, "transaction %s not found in subtree transactions", txHash.String())
+
+			assert.Equal(t, txHash, *tx.TxIDChainHash(), "transaction hash mismatch for %s", txHash.String())
+		}
+	})
 }
 
 func TestSubtree(t *testing.T) {
@@ -211,6 +233,15 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	require.NoError(t, err)
 
 	err = subtreeStore.Set(context.Background(), key.CloneBytes(), fileformat.FileTypeSubtreeData, subtreeDataBytes)
+	require.NoError(t, err)
+
+	// write the length of the subtree data as the first 4 bytes of the subtree data file in the block store
+	subtreeDataLen := uint32(len(subtreeDataBytes)) //nolint:gosec
+	subtreeDataLenBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(subtreeDataLenBytes, subtreeDataLen)
+
+	blockStoreSubtreeDataBytes := append(subtreeDataLenBytes, subtreeDataBytes...)
+	err = blockStore.Set(context.Background(), key.CloneBytes(), fileformat.FileTypeSubtreeData, blockStoreSubtreeDataBytes)
 	require.NoError(t, err)
 
 	// Create a new repository
