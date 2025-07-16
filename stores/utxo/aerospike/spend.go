@@ -218,7 +218,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 
 				s.logger.Debugf("[SPEND][%s:%d] error in aerospike spend: %+v", spend.TxID.String(), spend.Vout, spend.Err)
 
-				if errors.As(batchErr, &errSpent) {
+				if errors.AsData(batchErr, &errSpent) {
 					spends[idx].ConflictingTxID = errSpent.SpendingData.TxID
 				}
 

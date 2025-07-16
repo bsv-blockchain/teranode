@@ -89,15 +89,30 @@ func TestStore_GetBinsToStore(t *testing.T) {
 			fields.SubtreeIdxs.String():  aerospike.NewValue(subtreeIdxs),
 			fields.Conflicting.String():  aerospike.BoolValue(false),
 			fields.Unspendable.String():  aerospike.BoolValue(false),
+			fields.TxID.String():         aerospike.BytesValue(tx.TxIDChainHash().CloneBytes()),
 		}
 
 		// check the bin values
 		for _, v := range bins[0] {
 			if _, ok := expectedBinValues[v.Name]; ok {
 				assert.Equal(t, expectedBinValues[v.Name], v.Value, "expected %v, got %v, for bin name: %s", expectedBinValues[v.Name], v.Value, v.Name)
-			} else {
-				t.Errorf("unexpected bin name: %s", v.Name)
+
+				continue
 			}
+
+			if v.Name == fields.CreatedAt.String() {
+				assert.GreaterOrEqual(t, v.Value, aerospike.NewIntegerValue(0))
+
+				continue
+			}
+
+			if v.Name == fields.UnminedSince.String() {
+				assert.Equal(t, v.Value, aerospike.NewIntegerValue(0))
+
+				continue
+			}
+
+			t.Errorf("unexpected bin name: %s", v.Name)
 		}
 	})
 
@@ -140,7 +155,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 
 		// check the bins
 		require.Equal(t, 1, len(bins))
-		require.Equal(t, 19, len(bins[0]))
+		require.Equal(t, 22, len(bins[0]))
 
 		hasCoinbase := false
 		hasConflicting := false

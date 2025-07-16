@@ -23,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,6 +99,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 
 	// Create a mock blockchain client
 	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	stp, _ := st.NewSubtreeProcessor(
 		context.Background(),

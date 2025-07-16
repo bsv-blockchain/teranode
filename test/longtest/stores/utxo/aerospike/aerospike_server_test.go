@@ -529,7 +529,7 @@ func TestAerospike(t *testing.T) {
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
-		assert.Equal(t, 1, value.Bins[fields.DeleteAtHeight.String()])
+		assert.Equal(t, 11, value.Bins[fields.DeleteAtHeight.String()])
 
 		// try to spend with different txid
 		spends, err = store.Spend(ctx, spendTx3)
@@ -538,7 +538,9 @@ func TestAerospike(t *testing.T) {
 		var tErr *errors.Error
 		require.ErrorAs(t, err, &tErr)
 		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.Len(t, spends, 1)
 		require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
+		require.NotNil(t, spends[0].ConflictingTxID)
 		require.Equal(t, spendTxAll.TxIDChainHash().String(), spends[0].ConflictingTxID.String())
 
 		// an error was observed were the utxos map got nilled out when trying to double spend
@@ -858,12 +860,15 @@ func TestCoinbase(t *testing.T) {
 
 	cleanDB(t, client)
 
-	txMeta, err := store.Create(ctx, coinbaseTx, 0)
+	txMeta, err := store.Create(ctx, coinbaseTx, 1)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 	assert.True(t, txMeta.IsCoinbase)
 
 	var tErr *errors.Error
+
+	err = store.SetBlockHeight(0) // coinbase is immature
+	require.NoError(t, err)
 
 	spends, err := store.Spend(ctx, spendCoinbaseTx)
 	require.ErrorAs(t, err, &tErr)
@@ -1397,7 +1402,7 @@ func TestCreateZeroSat(t *testing.T) {
 	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["totalUtxos"])
 	assert.Equal(t, 2, response.Bins["spentUtxos"])
-	assert.Equal(t, 2, response.Bins[fields.DeleteAtHeight.String()])
+	assert.Equal(t, 11, response.Bins[fields.DeleteAtHeight.String()])
 }
 
 func TestAerospikeWithBatchSize(t *testing.T) {
