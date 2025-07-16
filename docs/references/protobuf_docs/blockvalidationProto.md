@@ -1,4 +1,5 @@
 # GRPC Documentation - BlockValidationAPI
+
 <a name="top"></a>
 
 ## Table of Contents
@@ -15,20 +16,16 @@
 
 - [Scalar Value Types](#scalar-value-types)
 
-
-
 <a name="blockvalidation_api.proto"></a>
 <p align="right"><a href="#top">Top</a></p>
 
 ## blockvalidation_api.proto
 
-
-
 <a name="BlockFoundRequest"></a>
 
 ### BlockFoundRequest
-swagger:model BlockFoundRequest
 
+swagger:model BlockFoundRequest
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
@@ -36,130 +33,58 @@ swagger:model BlockFoundRequest
 | base_url | [string](#string) |  | Base URL where the block can be retrieved from |
 | wait_to_complete | [bool](#bool) |  | Whether to wait for the block processing to complete |
 
-
-
-
-
-
 <a name="EmptyMessage"></a>
 
 ### EmptyMessage
+
+Represents an empty request or response message. Used for endpoints that don't require input parameters or return data.
+
 swagger:model EmptyMessage
-
-
-
-
-
 
 <a name="HealthResponse"></a>
 
 ### HealthResponse
-swagger:model HealthResponse
 
+swagger:model HealthResponse
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | ok | [bool](#bool) |  | Indicates if the service is healthy |
 | details | [string](#string) |  | Additional health status details |
-| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Timestamp when the health check was performed |
-
-
-
-
-
+| timestamp | google.protobuf.Timestamp |  | Timestamp when the health check was performed |
 
 <a name="ProcessBlockRequest"></a>
 
 ### ProcessBlockRequest
-swagger:model ProcessBlockRequest
 
+swagger:model ProcessBlockRequest
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | block | [bytes](#bytes) |  | The block data to process |
 | height | [uint32](#uint32) |  | The height of the block in the blockchain |
 
-
-
-
-
-
 <a name="ValidateBlockRequest"></a>
 
 ### ValidateBlockRequest
-swagger:model ValidateBlockRequest
 
+swagger:model ValidateBlockRequest
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | block | [bytes](#bytes) |  | The block data to validate |
 | height | [uint32](#uint32) |  | The height of the block in the blockchain |
 
-
-
-
-
-
 <a name="ValidateBlockResponse"></a>
 
 ### ValidateBlockResponse
-swagger:model ValidateBlockResponse
 
+swagger:model ValidateBlockResponse
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | ok | [bool](#bool) |  | Indicates if the block is valid |
 | message | [string](#string) |  | Additional information about validation results |
-
-
-
-
-
-
-<a name="SetMinedMultiResponse"></a>
-
-### SetMinedMultiResponse
-swagger:model SetMinedMultiResponse
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  |  |
-
-
-
-
-
-
-<a name="SetTxMetaRequest"></a>
-
-### SetTxMetaRequest
-swagger:model SetTxMetaRequest
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| data | [bytes](#bytes) | repeated |  |
-
-
-
-
-
-
-<a name="SetTxMetaResponse"></a>
-
-### SetTxMetaResponse
-swagger:model SetTxMetaResponse
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  |  |
-
-
-
-
-
 
  <!-- end messages -->
 
@@ -167,22 +92,18 @@ swagger:model SetTxMetaResponse
 
  <!-- end HasExtensions -->
 
-
 <a name="BlockValidationAPI"></a>
 
 ### BlockValidationAPI
 
-
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [EmptyMessage](#blockvalidation_api-EmptyMessage) | [HealthResponse](#blockvalidation_api-HealthResponse) | Returns the health status of the BlockValidation service. |
-| BlockFound | [BlockFoundRequest](#blockvalidation_api-BlockFoundRequest) | [EmptyMessage](#blockvalidation_api-EmptyMessage) | Notifies the service that a new block has been found and requires validation. |
-| ProcessBlock | [ProcessBlockRequest](#blockvalidation_api-ProcessBlockRequest) | [EmptyMessage](#blockvalidation_api-EmptyMessage) | Processes a block to validate its content and structure. |
-| ValidateBlock | [ValidateBlockRequest](#blockvalidation_api-ValidateBlockRequest) | [ValidateBlockResponse](#blockvalidation_api-ValidateBlockResponse) | Validates a block without processing it, returning validation results. |
+| HealthGRPC | [EmptyMessage](#EmptyMessage) | [HealthResponse](#HealthResponse) | Returns the health status of the BlockValidation service. |
+| BlockFound | [BlockFoundRequest](#BlockFoundRequest) | [EmptyMessage](#EmptyMessage) | Notifies the service that a new block has been found and requires validation. |
+| ProcessBlock | [ProcessBlockRequest](#ProcessBlockRequest) | [EmptyMessage](#EmptyMessage) | Processes a block to validate its content and structure. |
+| ValidateBlock | [ValidateBlockRequest](#ValidateBlockRequest) | [ValidateBlockResponse](#ValidateBlockResponse) | Validates a block without processing it, returning validation results. |
 
  <!-- end services -->
-
-
 
 ## Scalar Value Types
 
@@ -203,6 +124,5 @@ swagger:model SetTxMetaResponse
 | <a name="bool" /> bool |  | bool | boolean | boolean | bool | bool | boolean | TrueClass/FalseClass |
 | <a name="string" /> string | A string must always contain UTF-8 encoded or 7-bit ASCII text. | string | String | str/unicode | string | string | string | String (UTF-8) |
 | <a name="bytes" /> bytes | May contain any arbitrary sequence of bytes. | string | ByteString | str | []byte | ByteString | string | String (ASCII-8BIT) |
-
 
 ---
