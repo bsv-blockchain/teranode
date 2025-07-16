@@ -655,10 +655,16 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
 	require.NoError(t, err)
 
-	var s []*subtree.Subtree
-
-	miningCandidate, mcErr := baClient.GetMiningCandidate(ctx)
+	// Get mining candidate with subtree hashes included
+	miningCandidate, mcErr := baClient.GetMiningCandidate(ctx, true)
 	require.NoError(t, mcErr)
+
+	// Get the block candidate which contains the actual subtrees
+	blockCandidate, err := baClient.GetBlockAssemblyBlockCandidate(ctx)
+	require.NoError(t, err)
+
+	// Get subtrees from the block candidate
+	s := blockCandidate.SubtreeSlices
 
 	// Verify the mining candidate is built on Chain A
 	prevHash, _ := chainhash.NewHash(miningCandidate.PreviousHash)
@@ -767,7 +773,20 @@ func TestShouldHandleReorg(t *testing.T) {
 	}
 	err = ba.blockchainClient.AddBlock(ctx, blockA, "")
 	require.NoError(t, err)
-	time.Sleep(2 * time.Second)
+
+	// Wait for the block to be processed
+	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainAHeader1.Hash(), 10*time.Second)
+	require.NoError(t, err, "Timeout waiting for Chain A block to be processed")
+
+	// Wait for the block assembly service to process the block
+	require.Eventually(t, func() bool {
+		mc1, _, err := ba.blockAssembler.getMiningCandidate()
+		if err != nil || mc1 == nil {
+			return false
+		}
+		prevHash := chainhash.Hash(mc1.PreviousHash)
+		return prevHash.String() == chainAHeader1.Hash().String()
+	}, 5*time.Second, 100*time.Millisecond, "Timeout waiting for block assembly to process the block")
 
 	// Verify transactions in original chain
 	mc1, st1, err := ba.blockAssembler.getMiningCandidate()
@@ -793,7 +812,12 @@ func TestShouldHandleReorg(t *testing.T) {
 	err = ba.blockchainClient.AddBlock(ctx, blockB, "")
 	require.NoError(t, err)
 
-	time.Sleep(2 * time.Second)
+	// Wait for the reorganization to complete
+	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainBHeader1.Hash(), 10*time.Second)
+	require.NoError(t, err, "Timeout waiting for reorganization to Chain B")
+
+	// Additional wait to ensure block assembly has processed the reorg
+	time.Sleep(500 * time.Millisecond)
 
 	// Verify transactions are still present after reorg
 	mc2, st2, err := ba.blockAssembler.getMiningCandidate()
@@ -825,6 +849,31 @@ func TestShouldHandleReorg(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, chainBHeader1.Hash(), bestHeader.Hash(),
 		"Block assembler should follow Chain B due to higher difficulty")
+}
+
+// waitForBestBlockHash waits for the best block to match the expected hash
+func waitForBestBlockHash(ctx context.Context, blockchainClient blockchain.ClientI, expectedHash *chainhash.Hash, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			bestHeader, _, err := blockchainClient.GetBestBlockHeader(ctx)
+			if err != nil {
+				return err
+			}
+
+			if bestHeader.Hash().IsEqual(expectedHash) {
+				return nil
+			}
+
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	return errors.NewProcessingError("timeout waiting for best block hash %s", expectedHash)
 }
 
 // TestShouldHandleReorgWithLongerChain verifies reorganization with extended chains.
@@ -967,7 +1016,12 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	err = ba.blockchainClient.AddBlock(ctx, blockA4, "")
 	require.NoError(t, err)
 
-	time.Sleep(2 * time.Second)
+	// Wait for the block to be processed
+	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainAHeader4.Hash(), 10*time.Second)
+	require.NoError(t, err, "Timeout waiting for Chain A block 4 to be processed")
+
+	// Additional wait to ensure block assembly has processed the block
+	time.Sleep(500 * time.Millisecond)
 
 	// Get mining candidate while on Chain A
 	t.Log("Getting mining candidate on Chain A...")
@@ -994,7 +1048,13 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	}
 	err = ba.blockchainClient.AddBlock(ctx, blockB, "")
 	require.NoError(t, err)
-	time.Sleep(2 * time.Second)
+
+	// Wait for the reorganization to complete by checking for the expected best block
+	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainBHeader1.Hash(), 10*time.Second)
+	require.NoError(t, err, "Timeout waiting for reorganization to complete")
+
+	// Additional wait to ensure block assembly has processed the reorg
+	time.Sleep(500 * time.Millisecond)
 
 	// Verify transactions are still present after reorg
 	mc2, subtrees2, err := ba.blockAssembler.getMiningCandidate()

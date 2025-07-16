@@ -116,9 +116,6 @@ type BlockAssembler struct {
 	// bestBlockHeight atomically stores the current best block height
 	bestBlockHeight atomic.Uint32
 
-	// currentChain stores the current blockchain state
-	currentChain []*model.BlockHeader
-
 	// currentChainMap maps block hashes to their heights
 	currentChainMap map[chainhash.Hash]uint32
 
@@ -154,6 +151,19 @@ type BlockAssembler struct {
 
 	// unminedCleanupTicker manages periodic cleanup of old unmined transactions
 	unminedCleanupTicker *time.Ticker
+	// cachedCandidate stores the cached mining candidate
+	cachedCandidate *CachedMiningCandidate
+}
+
+// CachedMiningCandidate holds a cached mining candidate with expiration
+type CachedMiningCandidate struct {
+	mu             sync.RWMutex
+	candidate      *model.MiningCandidate
+	subtrees       []*subtree.Subtree
+	lastHeight     uint32
+	lastUpdate     time.Time
+	generating     bool
+	generationChan chan struct{}
 }
 
 // NewBlockAssembler creates and initializes a new BlockAssembler instance.
@@ -206,6 +216,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		resetWaitCount:      atomic.Int32{},
 		resetWaitDuration:   atomic.Int32{},
 		currentRunningState: atomic.Value{},
+		cachedCandidate:     &CachedMiningCandidate{},
 	}
 
 	b.setCurrentRunningState(StateStarting)
@@ -523,6 +534,9 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 	b.bestBlockHeader.Store(bestBlockchainBlockHeader)
 	b.bestBlockHeight.Store(height)
 
+	// Invalidate cache when block height changes
+	b.invalidateMiningCandidateCache()
+
 	if b.cleanupService != nil && height > 0 {
 		err := b.cleanupService.UpdateBlockHeight(height)
 		if err != nil {
@@ -732,21 +746,111 @@ func (b *BlockAssembler) Reset() {
 //   - *model.MiningCandidate: Mining candidate block
 //   - []*util.Subtree: Associated subtrees
 //   - error: Any error encountered during retrieval
-func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*subtree.Subtree, error) {
+func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, []*subtree.Subtree, error) {
 	// make sure we call this on the select, so we don't get a candidate when we found a new block
-	responseCh := make(chan *miningCandidateResponse)
 
+	startTime := time.Now()
+
+	// Try to get from cache first
+	b.cachedCandidate.mu.RLock()
+
+	currentHeight := b.bestBlockHeight.Load()
+
+	// Return cached if still valid (same height and within timeout)
+	if b.cachedCandidate.candidate != nil &&
+		b.cachedCandidate.lastHeight == currentHeight &&
+		time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateCacheTimeout {
+		candidate := b.cachedCandidate.candidate
+		subtrees := b.cachedCandidate.subtrees
+		b.cachedCandidate.mu.RUnlock()
+
+		// Record cache hit metrics
+		prometheusBlockAssemblerCacheHits.Inc()
+		prometheusBlockAssemblyGetMiningCandidateDuration.Observe(time.Since(startTime).Seconds())
+
+		b.logger.Debugf("[BlockAssembler] Returning cached mining candidate in %v", time.Since(startTime))
+
+		return candidate, subtrees, nil
+	}
+
+	// Check if already generating
+	if b.cachedCandidate.generating {
+		ch := b.cachedCandidate.generationChan
+		b.cachedCandidate.mu.RUnlock()
+
+		// Wait for ongoing generation
+		<-ch
+
+		return b.GetMiningCandidate(ctx)
+	}
+
+	// Mark as generating - upgrade to write lock
+	b.cachedCandidate.mu.RUnlock()
+	b.cachedCandidate.mu.Lock()
+
+	// Double check generating flag in case another goroutine set it while we upgraded locks
+	if b.cachedCandidate.generating {
+		ch := b.cachedCandidate.generationChan
+		b.cachedCandidate.mu.Unlock()
+
+		// Wait for ongoing generation
+		<-ch
+
+		return b.GetMiningCandidate(ctx)
+	}
+
+	b.cachedCandidate.generating = true
+	b.cachedCandidate.generationChan = make(chan struct{})
+	b.cachedCandidate.mu.Unlock()
+
+	// Generate new candidate
+	responseCh := make(chan *miningCandidateResponse)
 	utils.SafeSend(b.miningCandidateCh, responseCh, 10*time.Second)
 
 	// wait for 10 seconds for the response
+	var candidate *model.MiningCandidate
+
+	var subtrees []*subtree.Subtree
+
+	var err error
+
 	select {
 	case <-time.After(10 * time.Second):
 		// make sure to close the channel, otherwise the for select will hang, because no one is reading from it
 		close(responseCh)
-		return nil, nil, errors.NewServiceError("timeout getting mining candidate")
+
+		err = errors.NewServiceError("timeout getting mining candidate")
 	case response := <-responseCh:
-		return response.miningCandidate, response.subtrees, response.err
+		candidate = response.miningCandidate
+		subtrees = response.subtrees
+		err = response.err
 	}
+
+	// Update cache
+	b.cachedCandidate.mu.Lock()
+	if err == nil {
+		b.cachedCandidate.candidate = candidate
+		b.cachedCandidate.subtrees = subtrees
+		b.cachedCandidate.lastHeight = currentHeight
+		b.cachedCandidate.lastUpdate = time.Now()
+
+		// Record cache miss metrics
+		prometheusBlockAssemblerCacheMisses.Inc()
+	}
+
+	b.cachedCandidate.generating = false
+
+	close(b.cachedCandidate.generationChan)
+	b.cachedCandidate.mu.Unlock()
+
+	// Record total generation time
+	prometheusBlockAssemblyGetMiningCandidateDuration.Observe(time.Since(startTime).Seconds())
+
+	if err == nil {
+		b.logger.Debugf("[BlockAssembler] Generated new mining candidate in %v", time.Since(startTime))
+	}
+
+	return candidate, subtrees, err
 }
 
 // getMiningCandidate creates a new mining candidate from the current block state.
@@ -1296,4 +1400,15 @@ func (b *BlockAssembler) startUnminedTransactionCleanup(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// invalidateMiningCandidateCache invalidates the cached mining candidate
+func (b *BlockAssembler) invalidateMiningCandidateCache() {
+	b.cachedCandidate.mu.Lock()
+	b.cachedCandidate.candidate = nil
+	b.cachedCandidate.subtrees = nil
+	b.cachedCandidate.lastHeight = 0
+	b.cachedCandidate.lastUpdate = time.Time{}
+	b.cachedCandidate.generating = false
+	b.cachedCandidate.mu.Unlock()
 }

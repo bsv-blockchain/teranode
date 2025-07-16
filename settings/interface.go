@@ -223,6 +223,7 @@ type BlockAssemblySettings struct {
 	UseDynamicSubtreeSize               bool
 	ResetWaitCount                      int32
 	ResetWaitDuration                   time.Duration
+	MiningCandidateCacheTimeout         time.Duration
 }
 
 type BlockValidationSettings struct {

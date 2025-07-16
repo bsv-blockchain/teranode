@@ -64,7 +64,8 @@ type QuorumOption func(*Quorum)
 //   - QuorumOption: A function that applies the timeout configuration to a Quorum instance
 //
 // Example:
-//   quorum := NewQuorum(logger, exister, "/locks/subtree", WithTimeout(5*time.Second))
+//
+//	quorum := NewQuorum(logger, exister, "/locks/subtree", WithTimeout(5*time.Second))
 func WithTimeout(timeout time.Duration) QuorumOption {
 	return func(q *Quorum) {
 		q.timeout = timeout
@@ -85,7 +86,8 @@ func WithTimeout(timeout time.Duration) QuorumOption {
 //   - QuorumOption: A function that applies the absolute timeout configuration to a Quorum instance
 //
 // Example:
-//   quorum := NewQuorum(logger, exister, "/locks/subtree", WithAbsoluteTimeout(30*time.Second))
+//
+//	quorum := NewQuorum(logger, exister, "/locks/subtree", WithAbsoluteTimeout(30*time.Second))
 func WithAbsoluteTimeout(timeout time.Duration) QuorumOption {
 	return func(q *Quorum) {
 		q.absoluteTimeout = timeout
@@ -121,19 +123,19 @@ var noopFunc = func() {
 // The underlying file operations and timeout management are handled safely.
 type Quorum struct {
 	// logger provides structured logging for lock operations and debugging
-	logger          ulogger.Logger
+	logger ulogger.Logger
 	// path specifies the base path in storage where lock files are created
-	path            string
+	path string
 	// timeout defines the maximum duration for individual lock attempts
-	timeout         time.Duration
+	timeout time.Duration
 	// absoluteTimeout defines the maximum total duration for the entire lock operation
 	absoluteTimeout time.Duration
 	// fileType specifies the type of files created for locking (affects storage behavior)
-	fileType        fileformat.FileType
+	fileType fileformat.FileType
 	// exister provides the interface for checking file existence in the storage system
-	exister         existerIfc
+	exister existerIfc
 	// existerOpts contains additional options passed to existence check operations
-	existerOpts     []options.FileOption
+	existerOpts []options.FileOption
 }
 
 // NewQuorum creates a new Quorum instance with the specified configuration.
@@ -163,16 +165,17 @@ type Quorum struct {
 //   - File type: Default file type from storage system
 //
 // Example Usage:
-//   quorum, err := NewQuorum(
-//       logger,
-//       blobStore,
-//       "/locks/subtree-validation",
-//       WithTimeout(5*time.Second),
-//       WithAbsoluteTimeout(30*time.Second),
-//   )
-//   if err != nil {
-//       return fmt.Errorf("failed to create quorum: %w", err)
-//   }
+//
+//	quorum, err := NewQuorum(
+//	    logger,
+//	    blobStore,
+//	    "/locks/subtree-validation",
+//	    WithTimeout(5*time.Second),
+//	    WithAbsoluteTimeout(30*time.Second),
+//	)
+//	if err != nil {
+//	    return fmt.Errorf("failed to create quorum: %w", err)
+//	}
 func NewQuorum(logger ulogger.Logger, exister existerIfc, path string, quorumOpts ...QuorumOption) (*Quorum, error) {
 	if path == "" {
 		return nil, errors.NewConfigurationError("Path is required")

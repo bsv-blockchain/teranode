@@ -66,66 +66,66 @@ type Server struct {
 	// This embedding pattern allows the Server to implement the validator API interface while maintaining
 	// flexibility for custom method implementations and middleware integration.
 	validator_api.UnsafeValidatorAPIServer
-	
+
 	// validator is the core validation engine that implements the Interface contract for transaction validation.
 	// This component handles all validation logic including consensus rule enforcement, script execution,
 	// and UTXO verification. It serves as the primary business logic layer for the validation service.
 	validator Interface
-	
+
 	// logger provides structured logging capabilities for the validator server, enabling comprehensive
 	// monitoring and debugging of validation operations. All server activities, errors, and performance
 	// metrics are logged through this component for operational visibility.
 	logger ulogger.Logger
-	
+
 	// settings contains the complete configuration for the validator service, including validation parameters,
 	// network settings, database connections, and operational thresholds. These settings control the
 	// behavior of all validation operations and service integrations.
 	settings *settings.Settings
-	
+
 	// utxoStore provides direct access to the UTXO database for transaction input validation and
 	// double-spend prevention. This store is used to verify transaction inputs, check UTXO availability,
 	// and maintain the current state of unspent transaction outputs across the blockchain.
 	utxoStore utxo.Store
-	
+
 	// kafkaSignal is a channel used to coordinate graceful shutdown of Kafka-related components.
 	// When a shutdown signal is received, this channel notifies all Kafka consumers and producers
 	// to complete their current operations and terminate cleanly.
 	kafkaSignal chan os.Signal
-	
+
 	// stats collects performance metrics for the validator service, including request counts,
 	// processing times, and error rates. These metrics are used for monitoring and optimization.
 	stats *gocore.Stat
-	
+
 	// ctx is the server's main context used for operation management and cancellation.
 	// This context is used to manage the lifecycle of the server and its components.
 	ctx context.Context
-	
+
 	// blockchainClient connects to the blockchain service for block-related operations,
 	// including block height retrieval, chain state verification, and FSM synchronization.
 	// This client is used to ensure the validator service remains synchronized with the blockchain.
 	blockchainClient blockchain.ClientI
-	
+
 	// consumerClient receives validation requests via Kafka, providing an asynchronous
 	// validation path for high-throughput processing. This client is used to consume
 	// Kafka messages and trigger validation operations.
 	consumerClient kafka.KafkaConsumerGroupI
-	
+
 	// txMetaKafkaProducerClient publishes transaction metadata to Kafka, enabling
 	// downstream processing and analytics. This producer is used to send transaction
 	// metadata to Kafka topics for further processing.
 	txMetaKafkaProducerClient kafka.KafkaAsyncProducerI
-	
+
 	// rejectedTxKafkaProducerClient publishes rejected transaction information to Kafka,
 	// providing visibility into validation failures and error conditions. This producer
 	// is used to send rejected transaction data to Kafka topics for monitoring and analysis.
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
-	
+
 	// blockAssemblyClient connects to the block assembly service for mining integration,
 	// enabling the validator service to participate in block template generation and
 	// transaction inclusion in mining operations. This client is used to interact with
 	// the block assembly service and coordinate transaction inclusion.
 	blockAssemblyClient blockassembly.ClientI
-	
+
 	// httpServer handles HTTP API requests for transaction validation, providing a
 	// synchronous validation path for clients. This server is used to process HTTP
 	// requests and return validation results.

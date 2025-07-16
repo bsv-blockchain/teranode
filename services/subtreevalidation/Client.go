@@ -39,9 +39,9 @@ type Client struct {
 	// apiClient is the generated gRPC client for communicating with the subtree validation service
 	apiClient subtreevalidation_api.SubtreeValidationAPIClient
 	// logger provides structured logging capabilities for client operations
-	logger    ulogger.Logger
+	logger ulogger.Logger
 	// settings contains the configuration parameters for the client and service connections
-	settings  *settings.Settings
+	settings *settings.Settings
 }
 
 // NewClient creates a new subtree validation service client with gRPC connectivity.
@@ -72,10 +72,11 @@ type Client struct {
 //   - BlockValidation.CheckSubtreeFromBlockRetryBackoffDuration: Delay between retries
 //
 // Example Usage:
-//   client, err := NewClient(ctx, logger, settings, "block-validation")
-//   if err != nil {
-//       return fmt.Errorf("failed to create subtree validation client: %w", err)
-//   }
+//
+//	client, err := NewClient(ctx, logger, settings, "block-validation")
+//	if err != nil {
+//	    return fmt.Errorf("failed to create subtree validation client: %w", err)
+//	}
 func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source string) (Interface, error) {
 	subtreeValidationGrpcAddress := tSettings.SubtreeValidation.GRPCAddress
 	if subtreeValidationGrpcAddress == "" {

@@ -344,6 +344,9 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					ba.logger.Errorf(err.Error())
 				}
 
+				// Invalidate mining candidate cache when new subtree is available
+				ba.blockAssembler.invalidateMiningCandidateCache()
+
 				if newSubtreeRequest.ErrChan != nil {
 					newSubtreeRequest.ErrChan <- err
 				}

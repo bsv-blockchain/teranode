@@ -6,7 +6,7 @@ consensus rule enforcement to ensure blockchain integrity and compliance.
 
 The validator service integrates with multiple Teranode components:
 - UTXO store for unspent transaction output verification
-- Script engine for Bitcoin script execution and validation  
+- Script engine for Bitcoin script execution and validation
 - Block processor for coordinated validation workflows
 - Mempool for transaction pre-validation before block inclusion
 
@@ -52,7 +52,6 @@ var (
 	// This histogram captures the duration of core validation operations excluding script execution,
 	// such as structure validation, input/output checks, and consensus rule verification. Units: seconds.
 	prometheusTransactionValidate prometheus.Histogram
-
 
 	// prometheusTransactionExend measures transaction extension operations
 	prometheusTransactionExtend prometheus.Histogram
