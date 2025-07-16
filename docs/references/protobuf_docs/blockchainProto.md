@@ -9,6 +9,7 @@
     - [CheckBlockIsCurrentChainResponse](#CheckBlockIsCurrentChainResponse)
     - [GetBestHeightAndTimeResponse](#GetBestHeightAndTimeResponse)
     - [GetBlockByHeightRequest](#GetBlockByHeightRequest)
+    - [GetChainTipsResponse](#GetChainTipsResponse)
     - [GetBlockByIDRequest](#GetBlockByIDRequest)
     - [GetBlockExistsResponse](#GetBlockExistsResponse)
     - [GetBlockGraphDataRequest](#GetBlockGraphDataRequest)
@@ -160,6 +161,21 @@ GetBlockByHeightRequest represents a request to retrieve a block at a specific h
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | height | [uint32](#uint32) |  | Block height to retrieve |
+
+
+
+
+
+
+<a name="GetChainTipsResponse"></a>
+
+### GetChainTipsResponse
+GetChainTipsResponse contains information about all known tips in the block tree.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| tips | [model.ChainTip](#model-ChainTip) | repeated | List of chain tips |
 
 
 
@@ -1004,6 +1020,7 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | GetBlockHeaderIDs | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeaderIDsResponse](#blockchain_api-GetBlockHeaderIDsResponse) | Retrieves block header IDs for a range of blocks. |
 | GetBestBlockHeader | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) | Retrieves the header of the current best block. |
 | CheckBlockIsInCurrentChain | [CheckBlockIsCurrentChainRequest](#blockchain_api-CheckBlockIsCurrentChainRequest) | [CheckBlockIsCurrentChainResponse](#blockchain_api-CheckBlockIsCurrentChainResponse) | Verifies if specified blocks are in the main chain. |
+| GetChainTips | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetChainTipsResponse](#blockchain_api-GetChainTipsResponse) | Retrieves information about all known tips in the block tree. |
 | GetBlockHeader | [GetBlockHeaderRequest](#blockchain_api-GetBlockHeaderRequest) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) | Retrieves the header of a specific block. |
 | InvalidateBlock | [InvalidateBlockRequest](#blockchain_api-InvalidateBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Marks a block as invalid in the blockchain. |
 | RevalidateBlock | [RevalidateBlockRequest](#blockchain_api-RevalidateBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Restores a previously invalidated block. |
