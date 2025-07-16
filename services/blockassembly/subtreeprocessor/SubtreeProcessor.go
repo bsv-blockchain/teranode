@@ -405,10 +405,10 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 					}
 					newSubtreeChan <- send
 
-					// wait for a response
-					// if we don't then we can't mine initial blocks and run coinbase splitter together
-					// this is because getMiningCandidate would create subtrees in the background and
-					// submitMiningSolution would try to setDAH on something that might not yet exist
+					// Wait for a response to ensure proper synchronization.
+					// This prevents race conditions when mining initial blocks and running coinbase splitter together.
+					// Without this wait, getMiningCandidate creates subtrees in the background while
+					// submitMiningSolution tries to setDAH on subtrees that might not yet exist.
 					<-send.ErrChan
 				}
 
