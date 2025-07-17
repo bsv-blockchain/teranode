@@ -692,7 +692,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Equal(t, uint64(5000000999), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
-		assert.Equal(t, uint32(4), miningCandidate.NumTxs)
+		assert.Equal(t, uint32(3), miningCandidate.NumTxs)
 		assert.Equal(t, uint64(1079), miningCandidate.SizeWithoutCoinbase)
 		assert.Equal(t, uint32(1), miningCandidate.SubtreeCount)
 		// Check the MerkleProof
@@ -810,7 +810,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Equal(t, uint64(8000000000), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
-		assert.Equal(t, uint32(4), miningCandidate.NumTxs)
+		assert.Equal(t, uint32(3), miningCandidate.NumTxs)
 		assert.Equal(t, uint64(45080), miningCandidate.SizeWithoutCoinbase) // 3 * 1500 + 80
 		assert.Equal(t, uint32(1), miningCandidate.SubtreeCount)
 		// Check the MerkleProof
