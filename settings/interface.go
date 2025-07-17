@@ -467,6 +467,7 @@ type RPCSettings struct {
 	RPCQuirks      bool
 	RPCListenerURL *url.URL
 	CacheEnabled   bool
+	RPCTimeout     time.Duration
 }
 
 type FaucetSettings struct {

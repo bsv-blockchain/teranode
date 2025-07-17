@@ -952,8 +952,48 @@ func (s *RPCServer) standardCmdResult(ctx context.Context, cmd *parsedRPCCmd, cl
 
 	return nil, bsvjson.ErrRPCMethodNotFound
 handled:
+	// Create a timeout context for the RPC call
+	timeoutCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.RPCTimeout)
+	defer cancel()
 
-	return handler(ctx, s, cmd.cmd, closeChan)
+	// Create channels for the result and error
+	resultCh := make(chan interface{}, 1)
+	errCh := make(chan error, 1)
+
+	// Execute the handler in a goroutine
+	go func() {
+		result, err := handler(timeoutCtx, s, cmd.cmd, closeChan)
+		select {
+		case <-timeoutCtx.Done():
+			// Context already canceled, do nothing
+			return
+		default:
+			resultCh <- result
+			errCh <- err
+		}
+	}()
+
+	// Wait for either the result, timeout, or close notification
+	select {
+	case <-timeoutCtx.Done():
+		// Check if it was a timeout or context cancellation
+		if timeoutCtx.Err() == context.DeadlineExceeded {
+			s.logger.Warnf("RPC call '%s' timed out after %v seconds", cmd.method, s.settings.RPC.RPCTimeout.Seconds())
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCTimeout,
+				Message: fmt.Sprintf("RPC call timed out after %v seconds", s.settings.RPC.RPCTimeout.Seconds()),
+			}
+		}
+		return nil, ctx.Err()
+	case <-closeChan:
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCMisc,
+			Message: "Connection closed by client",
+		}
+	case result := <-resultCh:
+		err := <-errCh
+		return result, err
+	}
 }
 
 // parseCmd parses a JSON-RPC request object into known concrete command.  The

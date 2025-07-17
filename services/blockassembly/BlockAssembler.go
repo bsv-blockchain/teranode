@@ -1040,6 +1040,11 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 		return nil, nil, errors.NewProcessingError("error converting subtree count", err)
 	}
 
+	// remove the coinbase tx from the tx count
+	if txCount > 0 {
+		txCount--
+	}
+
 	miningCandidate := &model.MiningCandidate{
 		// create a job ID from the top tree hash and the previous block hash, to prevent empty block job id collisions
 		Id:                  chainhash.HashB(append(append(id[:], previousHash...), timeBytes...)),

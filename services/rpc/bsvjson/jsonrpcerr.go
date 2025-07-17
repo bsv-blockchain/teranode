@@ -39,6 +39,7 @@ const (
 	ErrRPCDatabase            RPCErrorCode = -20
 	ErrRPCDeserialization     RPCErrorCode = -22
 	ErrRPCVerify              RPCErrorCode = -25
+	ErrRPCTimeout             RPCErrorCode = -30
 )
 
 // Peer-to-peer client errors.
