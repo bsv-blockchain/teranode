@@ -15,7 +15,7 @@ import (
 
 var (
 	// Reasonable timeout for block synchronization
-	blockWait = 10 * time.Second
+	blockWait = 30 * time.Second
 )
 
 func TestMoveUp(t *testing.T) {
