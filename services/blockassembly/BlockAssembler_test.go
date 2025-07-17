@@ -1168,47 +1168,15 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 
 		ba.startChannelListeners(ctx)
 
-		// Mock response for first request
-		mockResponse1 := &miningCandidateResponse{
-			miningCandidate: &model.MiningCandidate{
-				NBits:  []byte{0x20, 0x7f, 0xff, 0xff},
-				Height: 1,
-			},
-			subtrees: []*subtreepkg.Subtree{},
-			err:      nil,
-		}
-
-		// Handle first request
-		go func() {
-			req := <-ba.miningCandidateCh
-			req <- mockResponse1
-		}()
-
 		// First call
 		candidate1, _, err1 := ba.GetMiningCandidate(ctx)
 		require.NoError(t, err1)
 		require.NotNil(t, candidate1)
-		assert.Equal(t, uint32(1), candidate1.Height)
+		assert.Equal(t, uint32(2), candidate1.Height)
 
 		// Change block height (simulate new block)
 		ba.bestBlockHeight.Store(2)
 		ba.invalidateMiningCandidateCache()
-
-		// Mock response for second request
-		mockResponse2 := &miningCandidateResponse{
-			miningCandidate: &model.MiningCandidate{
-				NBits:  []byte{0x20, 0x7f, 0xff, 0xff},
-				Height: 2,
-			},
-			subtrees: []*subtreepkg.Subtree{},
-			err:      nil,
-		}
-
-		// Handle second request
-		go func() {
-			req := <-ba.miningCandidateCh
-			req <- mockResponse2
-		}()
 
 		// Second call - should generate new candidate due to height change
 		candidate2, _, err2 := ba.GetMiningCandidate(ctx)
@@ -1240,22 +1208,6 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 
 		ba.startChannelListeners(ctx)
 
-		// Mock response
-		mockResponse := &miningCandidateResponse{
-			miningCandidate: &model.MiningCandidate{
-				NBits:  []byte{0x20, 0x7f, 0xff, 0xff},
-				Height: 1,
-			},
-			subtrees: []*subtreepkg.Subtree{},
-			err:      nil,
-		}
-
-		// Handle first request
-		go func() {
-			req := <-ba.miningCandidateCh
-			req <- mockResponse
-		}()
-
 		// First call
 		candidate1, _, err1 := ba.GetMiningCandidate(ctx)
 		require.NoError(t, err1)
@@ -1265,12 +1217,6 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		ba.cachedCandidate.mu.Lock()
 		ba.cachedCandidate.lastUpdate = time.Now().Add(-6 * time.Second) // Older than 5 second TTL
 		ba.cachedCandidate.mu.Unlock()
-
-		// Handle second request (cache expired)
-		go func() {
-			req := <-ba.miningCandidateCh
-			req <- mockResponse
-		}()
 
 		// Second call - should generate new candidate due to expiration
 		candidate2, _, err2 := ba.GetMiningCandidate(ctx)

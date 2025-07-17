@@ -743,7 +743,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 		if txMeta.IsCoinbase {
 			// Not recoverable, returning TxInvalid error
-			return errors.NewTxInvalidError("[ValidateSubtreeInternal][%s] invalid subtree index for coinbase tx %d", v.SubtreeHash.String(), idx, err)
+			return errors.NewTxInvalidError("[ValidateSubtreeInternal][%s] invalid subtree index for coinbase tx %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
 		// finally add the transaction hash and fee to the subtree

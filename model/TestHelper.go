@@ -308,10 +308,14 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 }
 
 func LoadTxMetaIntoMemory() error {
+	if TestTxMetafileNameTemplate == "" {
+		return errors.NewProcessingError("TestTxMetafileNameTemplate is not set")
+	}
+
 	// create a reader from the txmetacache file
 	file, err := os.Open(TestTxMetafileNameTemplate)
 	if err != nil {
-		return err
+		return errors.NewNotFoundError("failed to open txmeta file: %s - %s", TestTxMetafileNameTemplate, err)
 	}
 	defer file.Close()
 

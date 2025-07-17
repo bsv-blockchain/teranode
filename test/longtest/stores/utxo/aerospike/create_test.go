@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/pkg/go-batcher"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranodeaerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
@@ -370,6 +371,13 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 			td = daemon.NewTestDaemon(t, daemon.TestOptions{
 				EnableRPC:       true,
 				SettingsContext: "dev.system.test",
+				SettingsOverrideFunc: func(settings *settings.Settings) {
+					// we have other long tests running in parallel that are
+					// using block assembly and taking a long long time
+					// so its easier to just use another port
+					settings.BlockAssembly.GRPCListenAddress = "0.0.0.0:18085"
+					settings.BlockAssembly.GRPCAddress = "127.0.0.1:18085"
+				},
 			})
 		}()
 

@@ -10,250 +10,283 @@ import (
 
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // go test -v -tags test_blockassembly ./test/...
 
-func TestServer_Performance(t *testing.T) {
-	t.Run("GetMiningCandidate", func(t *testing.T) {
-		ba, cancelCtx, err := initMockedServer(t)
-		require.NoError(t, err)
+func TestServer_Performance_GetMiningCandidate(t *testing.T) {
+	ba, cancelCtx, err := initMockedServer(t)
+	require.NoError(t, err)
 
-		defer cancelCtx()
+	defer cancelCtx()
 
-		ctx := context.Background()
-		miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.GetMiningCandidateRequest{})
-		require.NoError(t, err)
-		require.NotNil(t, miningCandidate)
+	ctx := context.Background()
+	miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.GetMiningCandidateRequest{})
+	require.NoError(t, err)
+	require.NotNil(t, miningCandidate)
 
-		assert.NotEmpty(t, miningCandidate.Id)
-		assert.NotEmpty(t, miningCandidate.PreviousHash)
-		assert.NotEmpty(t, miningCandidate.NBits)
-		assert.NotEmpty(t, miningCandidate.Time)
-		assert.NotEmpty(t, miningCandidate.Version)
-	})
+	assert.NotEmpty(t, miningCandidate.Id)
+	assert.NotEmpty(t, miningCandidate.PreviousHash)
+	assert.NotEmpty(t, miningCandidate.NBits)
+	assert.NotEmpty(t, miningCandidate.Time)
+	assert.NotEmpty(t, miningCandidate.Version)
+}
 
-	t.Run("1_million_txs_-_1_by_1", func(t *testing.T) {
-		ba, cancelCtx, err := initMockedServer(t)
-		require.NoError(t, err)
+func TestServer_Performance_1_million_txs_1_by_1(t *testing.T) {
+	ba, cancelCtx, err := initMockedServer(t)
+	require.NoError(t, err)
 
-		defer cancelCtx()
+	defer cancelCtx()
 
-		startingTxCount := ba.TxCount()
-		assert.Equal(t, uint64(1), startingTxCount)
+	startingTxCount := ba.TxCount()
+	assert.Equal(t, uint64(1), startingTxCount)
 
-		var wg sync.WaitGroup
-		for n := uint64(0); n < 1_024; n++ {
-			bytesN := make([]byte, 8)
-			binary.LittleEndian.PutUint64(bytesN, n)
+	var wg sync.WaitGroup
+	for n := uint64(0); n < 1_024; n++ {
+		bytesN := make([]byte, 8)
+		binary.LittleEndian.PutUint64(bytesN, n)
 
-			wg.Add(1)
+		wg.Add(1)
 
-			go func(bytesN []byte) {
-				defer wg.Done()
+		go func(bytesN []byte) {
+			defer wg.Done()
 
-				txid := make([]byte, 32)
-				bytesI := make([]byte, 8)
-
-				for i := uint64(0); i < 1_024; i++ {
-					// set the n and i as bytes to the txid
-					binary.LittleEndian.PutUint64(bytesI, i)
-
-					copy(txid[0:8], bytesN)
-					copy(txid[8:16], bytesI)
-					_, _ = ba.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
-						Txid:     txid,
-						Fee:      i,
-						Size:     i,
-						Locktime: 0,
-						Utxos:    nil,
-					})
-				}
-			}(bytesN)
-		}
-
-		wg.Wait()
-
-		for {
-			if ba.TxCount() >= 1_048_576+startingTxCount {
-				break
+			txInpoints := subtreepkg.TxInpoints{
+				ParentTxHashes: []chainhash.Hash{{}},
+				Idxs:           [][]uint32{{0}},
 			}
+			txInpointsBytes, _ := txInpoints.Serialize()
 
-			time.Sleep(100 * time.Millisecond)
+			txid := make([]byte, 32)
+			bytesI := make([]byte, 8)
+
+			for i := uint64(0); i < 1_024; i++ {
+				// set the n and i as bytes to the txid
+				binary.LittleEndian.PutUint64(bytesI, i)
+
+				copy(txid[0:8], bytesN)
+				copy(txid[8:16], bytesI)
+
+				_, _ = ba.AddTx(context.Background(), &blockassembly_api.AddTxRequest{
+					Txid:       txid,
+					Fee:        i,
+					Size:       i,
+					Locktime:   0,
+					Utxos:      nil,
+					TxInpoints: txInpointsBytes,
+				})
+			}
+		}(bytesN)
+	}
+
+	wg.Wait()
+
+	for {
+		if ba.TxCount() >= 1_048_576+startingTxCount {
+			break
 		}
 
-		assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
-		assert.Equal(t, 1025, ba.SubtreeCount())
-	})
+		time.Sleep(100 * time.Millisecond)
+	}
 
+	assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
+	assert.Equal(t, 1025, ba.SubtreeCount())
+}
+
+func TestServer_Performance_1_million_txs_1_by_1_with_sync_pool(t *testing.T) {
 	var txRequestPool = sync.Pool{
 		New: func() any {
 			return &blockassembly_api.AddTxRequest{}
 		},
 	}
+	ba, cancelCtx, err := initMockedServer(t)
+	require.NoError(t, err)
 
-	t.Run("1_million_txs_-_1_by_1 with sync pool", func(t *testing.T) {
-		ba, cancelCtx, err := initMockedServer(t)
-		require.NoError(t, err)
+	defer cancelCtx()
 
-		defer cancelCtx()
+	startingTxCount := ba.TxCount()
+	assert.Equal(t, uint64(1), startingTxCount)
 
-		startingTxCount := ba.TxCount()
-		assert.Equal(t, uint64(1), startingTxCount)
+	var wg sync.WaitGroup
+	for n := uint64(0); n < 1_024; n++ {
+		bytesN := make([]byte, 8)
+		binary.LittleEndian.PutUint64(bytesN, n)
 
-		var wg sync.WaitGroup
-		for n := uint64(0); n < 1_024; n++ {
-			bytesN := make([]byte, 8)
-			binary.LittleEndian.PutUint64(bytesN, n)
+		wg.Add(1)
 
-			wg.Add(1)
+		go func(bytesN []byte) {
+			defer wg.Done()
 
-			go func(bytesN []byte) {
-				defer wg.Done()
-
-				txid := make([]byte, 32)
-				bytesI := make([]byte, 8)
-
-				for i := uint64(0); i < 1_024; i++ {
-					// set the n and i as bytes to the txid
-					binary.LittleEndian.PutUint64(bytesI, i)
-
-					copy(txid[0:8], bytesN)
-					copy(txid[8:16], bytesI)
-
-					requestObject := txRequestPool.Get().(*blockassembly_api.AddTxRequest)
-					requestObject.Txid = txid[:]
-					requestObject.Fee = i
-					requestObject.Size = i
-					requestObject.Locktime = 0
-					requestObject.Utxos = nil
-
-					_, _ = ba.AddTx(context.Background(), requestObject)
-
-					requestObject.Txid = nil
-					requestObject.Utxos = nil
-					txRequestPool.Put(requestObject)
-				}
-			}(bytesN)
-		}
-
-		wg.Wait()
-
-		for {
-			if ba.TxCount() >= 1_048_576+startingTxCount {
-				break
+			txInpoints := subtreepkg.TxInpoints{
+				ParentTxHashes: []chainhash.Hash{{}},
+				Idxs:           [][]uint32{{0}},
 			}
+			txInpointsBytes, _ := txInpoints.Serialize()
 
-			time.Sleep(100 * time.Millisecond)
+			txid := make([]byte, 32)
+			bytesI := make([]byte, 8)
+
+			for i := uint64(0); i < 1_024; i++ {
+				// set the n and i as bytes to the txid
+				binary.LittleEndian.PutUint64(bytesI, i)
+
+				copy(txid[0:8], bytesN)
+				copy(txid[8:16], bytesI)
+
+				requestObject := txRequestPool.Get().(*blockassembly_api.AddTxRequest)
+				requestObject.Txid = txid[:]
+				requestObject.Fee = i
+				requestObject.Size = i
+				requestObject.Locktime = 0
+				requestObject.Utxos = nil
+				requestObject.TxInpoints = txInpointsBytes
+
+				_, _ = ba.AddTx(context.Background(), requestObject)
+
+				requestObject.Txid = nil
+				requestObject.Utxos = nil
+				txRequestPool.Put(requestObject)
+			}
+		}(bytesN)
+	}
+
+	wg.Wait()
+
+	for {
+		if ba.TxCount() >= 1_048_576+startingTxCount {
+			break
 		}
 
-		assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
-		assert.Equal(t, 1025, ba.SubtreeCount())
-	})
+		time.Sleep(100 * time.Millisecond)
+	}
 
-	t.Run("1_million_txs_-_in_batches", func(t *testing.T) {
-		ba, cancelCtx, err := initMockedServer(t)
-		require.NoError(t, err)
+	assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
+	assert.Equal(t, 1025, ba.SubtreeCount())
+}
 
-		defer cancelCtx()
+func TestServer_Performance_1_million_txs_in_batches(t *testing.T) {
+	ba, cancelCtx, err := initMockedServer(t)
+	require.NoError(t, err)
 
-		var wg sync.WaitGroup
-		startingTxCount := ba.TxCount()
+	defer cancelCtx()
 
-		for n := uint64(0); n < 1_024; n++ {
-			wg.Add(1)
+	var wg sync.WaitGroup
+	startingTxCount := ba.TxCount()
 
-			go func() {
-				defer wg.Done()
+	for n := uint64(0); n < 1_024; n++ {
+		wg.Add(1)
 
-				requests := make([]*blockassembly_api.AddTxRequest, 0, 1_024)
+		go func() {
+			defer wg.Done()
 
-				for i := uint64(0); i < 1_024; i++ {
-					txid := chainhash.HashH([]byte(fmt.Sprintf("%d-%d", n, i)))
-					requests = append(requests, &blockassembly_api.AddTxRequest{
-						Txid:     txid[:],
-						Fee:      i,
-						Size:     i,
-						Locktime: 0,
-						Utxos:    nil,
-					})
-				}
+			txInpoints := subtreepkg.TxInpoints{
+				ParentTxHashes: []chainhash.Hash{{}},
+				Idxs:           [][]uint32{{0}},
+			}
+			txInpointsBytes, _ := txInpoints.Serialize()
 
-				_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{
-					TxRequests: requests,
+			requests := make([]*blockassembly_api.AddTxRequest, 0, 1_024)
+
+			for i := uint64(0); i < 1_024; i++ {
+				txid := chainhash.HashH([]byte(fmt.Sprintf("%d-%d", n, i)))
+				requests = append(requests, &blockassembly_api.AddTxRequest{
+					Txid:       txid[:],
+					Fee:        i,
+					Size:       i,
+					Locktime:   0,
+					Utxos:      nil,
+					TxInpoints: txInpointsBytes,
 				})
-				require.NoError(t, err)
-			}()
-		}
-		wg.Wait()
-
-		for {
-			if ba.TxCount() >= startingTxCount+1_048_576 {
-				break
 			}
 
-			time.Sleep(10 * time.Millisecond)
+			_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{
+				TxRequests: requests,
+			})
+			require.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	for {
+		if ba.TxCount() >= startingTxCount+1_048_576 {
+			break
 		}
 
-		assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
-		assert.Equal(t, 1025, ba.SubtreeCount()) // SubtreeCount now is accumulated with the previous test case
-	})
+		time.Sleep(10 * time.Millisecond)
+	}
 
-	t.Run("1_million_txs_-_in_batches with sync pool", func(t *testing.T) {
-		ba, cancelCtx, err := initMockedServer(t)
-		require.NoError(t, err)
+	assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
+	assert.Equal(t, 1025, ba.SubtreeCount()) // SubtreeCount now is accumulated with the previous test case
+}
 
-		defer cancelCtx()
+func TestServer_Performance_1_million_txs_in_batches_with_sync_pool(t *testing.T) {
+	var txRequestPool = sync.Pool{
+		New: func() any {
+			return &blockassembly_api.AddTxRequest{}
+		},
+	}
+	ba, cancelCtx, err := initMockedServer(t)
+	require.NoError(t, err)
 
-		var wg sync.WaitGroup
-		startingTxCount := ba.TxCount()
+	defer cancelCtx()
 
-		for n := uint64(0); n < 1_024; n++ {
-			wg.Add(1)
+	var wg sync.WaitGroup
+	startingTxCount := ba.TxCount()
 
-			go func() {
-				defer wg.Done()
+	for n := uint64(0); n < 1_024; n++ {
+		wg.Add(1)
 
-				requests := make([]*blockassembly_api.AddTxRequest, 0, 1_024)
+		go func() {
+			defer wg.Done()
 
-				for i := uint64(0); i < 1_024; i++ {
-					txid := chainhash.HashH([]byte(fmt.Sprintf("%d-%d", n, i)))
+			txInpoints := subtreepkg.TxInpoints{
+				ParentTxHashes: []chainhash.Hash{{}},
+				Idxs:           [][]uint32{{0}},
+			}
+			txInpointsBytes, _ := txInpoints.Serialize()
 
-					requestObject := txRequestPool.Get().(*blockassembly_api.AddTxRequest)
-					requestObject.Txid = txid[:]
-					requestObject.Fee = i
-					requestObject.Size = i
-					requestObject.Locktime = 0
-					requestObject.Utxos = nil
+			requests := make([]*blockassembly_api.AddTxRequest, 0, 1_024)
 
-					requests = append(requests, requestObject)
-				}
+			for i := uint64(0); i < 1_024; i++ {
+				txid := chainhash.HashH([]byte(fmt.Sprintf("%d-%d", n, i)))
 
-				_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{
-					TxRequests: requests,
-				})
-				require.NoError(t, err)
+				requestObject := txRequestPool.Get().(*blockassembly_api.AddTxRequest)
+				requestObject.Txid = txid[:]
+				requestObject.Fee = i
+				requestObject.Size = i
+				requestObject.Locktime = 0
+				requestObject.Utxos = nil
+				requestObject.TxInpoints = txInpointsBytes
 
-				for _, request := range requests {
-					request.Txid = nil
-					request.Utxos = nil
-					txRequestPool.Put(request)
-				}
-			}()
-		}
-		wg.Wait()
-
-		for {
-			if ba.TxCount() >= startingTxCount+1_048_576 {
-				break
+				requests = append(requests, requestObject)
 			}
 
-			time.Sleep(10 * time.Millisecond)
+			_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{
+				TxRequests: requests,
+			})
+			require.NoError(t, err)
+
+			for _, request := range requests {
+				request.Txid = nil
+				request.Utxos = nil
+				request.TxInpoints = nil
+				txRequestPool.Put(request)
+			}
+		}()
+	}
+	wg.Wait()
+
+	for {
+		if ba.TxCount() >= startingTxCount+1_048_576 {
+			break
 		}
 
-		assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
-		assert.Equal(t, 1025, ba.SubtreeCount()) // SubtreeCount now is accumulated with the previous test case
-	})
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	assert.Equal(t, 1_048_576+startingTxCount, ba.TxCount())
+	assert.Equal(t, 1025, ba.SubtreeCount()) // SubtreeCount now is accumulated with the previous test case
 }

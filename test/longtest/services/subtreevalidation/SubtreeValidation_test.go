@@ -22,6 +22,8 @@ import (
 	"github.com/bitcoin-sv/teranode/util/kafka" //nolint:gci
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/jarcoal/httpmock"
@@ -45,6 +47,14 @@ var (
 func newTx(random uint32) *bt.Tx {
 	tx := bt.NewTx()
 	tx.LockTime = random
+	// Add a dummy input
+	tx.Inputs = []*bt.Input{{
+		PreviousTxOutIndex: 0,
+		PreviousTxSatoshis: 0,
+		UnlockingScript:    bscript.NewFromBytes([]byte{}),
+		SequenceNumber:     0xfffffffe,
+	}}
+	_ = tx.Inputs[0].PreviousTxIDAdd(&chainhash.Hash{})
 	return tx
 }
 
@@ -73,6 +83,14 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 	for i := 0; i < numberOfItems; i++ {
 		tx := bt.NewTx()
+		// Add a dummy input
+		tx.Inputs = []*bt.Input{{
+			PreviousTxOutIndex: uint32(i % 10), // Vary the output index
+			PreviousTxSatoshis: 0,
+			UnlockingScript:    bscript.NewFromBytes([]byte{}),
+			SequenceNumber:     0xfffffffe,
+		}}
+		_ = tx.Inputs[0].PreviousTxIDAdd(&chainhash.Hash{})
 		_ = tx.AddOpReturnOutput([]byte(fmt.Sprintf("tx%d", i)))
 
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))

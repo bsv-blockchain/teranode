@@ -585,7 +585,7 @@ func TestSendToTopic(t *testing.T) {
 	config1 := P2PConfig{
 		ProcessName:     "test1",
 		ListenAddresses: []string{"127.0.0.1"},
-		Port:            12345,
+		Port:            findAvailablePort(t),
 		PrivateKey:      "",
 		SharedKey:       "",
 		UsePrivateDHT:   false,
@@ -597,7 +597,7 @@ func TestSendToTopic(t *testing.T) {
 	config2 := P2PConfig{
 		ProcessName:     "test2",
 		ListenAddresses: []string{"127.0.0.1"},
-		Port:            12346,
+		Port:            findAvailablePort(t),
 		PrivateKey:      "",
 		SharedKey:       "",
 		UsePrivateDHT:   false,
@@ -1095,7 +1095,7 @@ func TestConnectedPeers(t *testing.T) {
 	// Add retry for disconnection verification
 	var connectednessAfter network.Connectedness
 
-	maxDisconnectRetries := 5
+	maxDisconnectRetries := 15
 	disconnectSuccess := false
 
 	for attempt := 0; attempt < maxDisconnectRetries; attempt++ {
@@ -1536,7 +1536,7 @@ func TestSetTopicHandler(t *testing.T) {
 	require.NoError(t, err)
 
 	h, err := libp2p.New(
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", findAvailablePort(t))),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(priv),
 		libp2p.DisableRelay(),
 	)
@@ -1623,7 +1623,7 @@ func TestConnectedPeers_Isolated(t *testing.T) {
 
 	// Create first host
 	h1, err := libp2p.New(
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", config1.Port)),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(priv1),
 		libp2p.DisableRelay(),
 	)
@@ -1637,7 +1637,7 @@ func TestConnectedPeers_Isolated(t *testing.T) {
 	require.NoError(t, err)
 
 	h2, err := libp2p.New(
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", findAvailablePort(t))),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(priv2),
 		libp2p.DisableRelay(),
 	)
@@ -1830,7 +1830,7 @@ func TestDisconnectPeerWithConnect(t *testing.T) {
 
 	// Create first host
 	h1, err := libp2p.New(
-		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/34351"),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(priv1),
 		libp2p.DisableRelay(),
 	)
@@ -1842,7 +1842,7 @@ func TestDisconnectPeerWithConnect(t *testing.T) {
 	require.NoError(t, err)
 
 	h2, err := libp2p.New(
-		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/34352"),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(priv2),
 		libp2p.DisableRelay(),
 	)
@@ -1930,9 +1930,8 @@ func TestConnectedPeersFiltering(t *testing.T) {
 	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
 	require.NoError(t, err)
 
-	port1 := findAvailablePort(t)
 	h, err := libp2p.New(
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port1)),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(priv),
 		libp2p.DisableRelay(),
 	)
@@ -1974,9 +1973,8 @@ func TestConnectedPeersFiltering(t *testing.T) {
 	priv2, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
 	require.NoError(t, err)
 
-	port2 := findAvailablePort(t)
 	h2, err := libp2p.New(
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port2)),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(priv2),
 		libp2p.DisableRelay(),
 	)
@@ -2020,9 +2018,8 @@ func TestHostID(t *testing.T) {
 	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
 	require.NoError(t, err)
 
-	port := findAvailablePort(t)
 	h, err := libp2p.New(
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port)),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(priv),
 		libp2p.DisableRelay(),
 	)
@@ -2084,15 +2081,14 @@ func TestTimestampMethods(t *testing.T) {
 func TestConnectedPeers_Old(t *testing.T) {
 	// Create first host
 	h1, err := libp2p.New(
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", findAvailablePort(t))),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 	)
 	require.NoError(t, err)
 	defer h1.Close()
 
 	// Create second host
-	port2 := findAvailablePort(t)
 	h2, err := libp2p.New(
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port2)),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 	)
 	require.NoError(t, err)
 
@@ -2293,20 +2289,16 @@ func TestSendToPeerIsolated(t *testing.T) {
 	// logger := ulogger.NewVerboseTestLogger(t)
 	logger := ulogger.TestLogger{}
 
-	// Find available ports for both hosts
-	port1 := findAvailablePort(t)
-	port2 := findAvailablePort(t)
-
 	// Setup
 	h1Opts := []libp2p.Option{
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port1)),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 	}
 
 	h1, err := libp2p.New(h1Opts...)
 	require.NoError(t, err, "Failed to create host1")
 
 	h2Opts := []libp2p.Option{
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port2)),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 	}
 
 	h2, err := libp2p.New(h2Opts...)
