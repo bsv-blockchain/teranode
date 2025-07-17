@@ -264,7 +264,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("[Init] blockassembly client is nil while enabled in the validator", nil)
 	}
 
-	v.validator, err = New(ctx, v.logger, v.settings, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient, v.blockAssemblyClient)
+	v.validator, err = New(ctx, v.logger, v.settings, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient, v.blockAssemblyClient, v.blockchainClient)
 	if err != nil {
 		return errors.NewServiceError("[Init] could not create validator", err)
 	}

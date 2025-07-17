@@ -236,7 +236,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 	t.Logf("Extending %d transactions from block %s", len(block.Tx), blockHex)
 	g, gCtx := errgroup.WithContext(ctx) // we don't want the tracing to be linked to these calls
 
-	validationClient, err := validator.New(ctx, ulogger.TestLogger{}, store.GetSettings(), store, nil, nil, nil)
+	validationClient, err := validator.New(ctx, ulogger.TestLogger{}, store.GetSettings(), store, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	mockBlockchain := &blockchain.MockStore{}

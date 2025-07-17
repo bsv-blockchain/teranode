@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -722,9 +723,27 @@ func initialiseInvalidSubtreeKafkaProducer(ctx context.Context, logger ulogger.L
 }
 
 // publishInvalidSubtree publishes an invalid subtree event to Kafka
-func (u *Server) publishInvalidSubtree(subtreeHash, peerURL, reason string) {
+func (u *Server) publishInvalidSubtree(ctx context.Context, subtreeHash, peerURL, reason string) {
 	if u.invalidSubtreeKafkaProducer == nil {
 		return
+	}
+
+	if u.blockchainClient != nil {
+		var (
+			state *blockchain.FSMStateType
+			err   error
+		)
+
+		if state, err = u.blockchainClient.GetFSMCurrentState(ctx); err != nil {
+			u.logger.Errorf("[publishInvalidSubtree] failed to publish invalid subtree - error getting blockchain FSM state: %v", err)
+
+			return
+		}
+
+		if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
+			// ignore notifications while syncing or catching up
+			return
+		}
 	}
 
 	u.invalidSubtreeLock.Lock()

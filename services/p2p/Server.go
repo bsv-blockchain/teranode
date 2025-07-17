@@ -33,6 +33,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
 	"github.com/bitcoin-sv/teranode/services/p2p/p2p_api"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -356,6 +357,19 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
 	// Therefore, autocommit is set to true.
 	rejectedTxHandler := func(msg *kafka.KafkaMessage) error {
+		var (
+			syncing bool
+			err     error
+		)
+
+		if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
+			return err
+		}
+
+		if syncing {
+			return nil
+		}
+
 		var m kafkamessage.KafkaRejectedTxTopicMessage
 		if err := proto.Unmarshal(msg.Value, &m); err != nil {
 			s.logger.Errorf("[Start] error unmarshalling rejectedTxMessage: %v", err)
@@ -397,6 +411,19 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Handler for invalid blocks Kafka messages
 	if s.invalidBlocksKafkaConsumerClient != nil {
 		invalidBlocksHandler := func(msg *kafka.KafkaMessage) error {
+			var (
+				syncing bool
+				err     error
+			)
+
+			if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
+				return err
+			}
+
+			if syncing {
+				return nil
+			}
+
 			var m kafkamessage.KafkaInvalidBlockTopicMessage
 			if err := proto.Unmarshal(msg.Value, &m); err != nil {
 				s.logger.Errorf("[Start] error unmarshalling invalidBlocksMessage: %v", err)
@@ -422,6 +449,19 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Handler for invalid subtrees Kafka messages
 	if s.invalidSubtreeKafkaConsumerClient != nil {
 		invalidSubtreeHandler := func(msg *kafka.KafkaMessage) error {
+			var (
+				syncing bool
+				err     error
+			)
+
+			if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
+				return err
+			}
+
+			if syncing {
+				return nil
+			}
+
 			var m kafkamessage.KafkaInvalidSubtreeTopicMessage
 			if err := proto.Unmarshal(msg.Value, &m); err != nil {
 				s.logger.Errorf("[Start] error unmarshalling invalidSubtreeMessage: %v", err)
@@ -904,6 +944,22 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 			if notification == nil {
 				continue
 			}
+
+			var (
+				syncing bool
+				err     error
+			)
+
+			if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
+				s.logger.Errorf("[blockchainSubscriptionListener] error getting blockchain FSM state: %v", err)
+
+				continue
+			}
+
+			if syncing {
+				continue
+			}
+
 			// received a message
 			if err := s.processBlockchainNotification(ctx, notification); err != nil {
 				s.logger.Errorf("[blockchainSubscriptionListener] Error processing notification (Type: %s, Hash: %s): %v", notification.Type, notification.Hash, err)
@@ -1851,4 +1907,26 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 	s.blockPeerMap.Delete(blockHash)
 
 	return nil
+}
+
+func (s *Server) isBlockchainSynchingOrCatchingUp(ctx context.Context) (bool, error) {
+	if s.blockchainClient != nil {
+		var (
+			state *blockchain.FSMStateType
+			err   error
+		)
+
+		if state, err = s.blockchainClient.GetFSMCurrentState(ctx); err != nil {
+			s.logger.Errorf("[isBlockchainSynchingOrCatchingUp] error getting blockchain FSM state: %v", err)
+
+			return false, err
+		}
+
+		if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
+			// ignore notifications while syncing or catching up
+			return true, nil
+		}
+	}
+
+	return false, nil
 }

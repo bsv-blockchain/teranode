@@ -1169,7 +1169,11 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		ba.startChannelListeners(ctx)
 
 		// First call
+		h := ba.bestBlockHeight.Load()
+		t.Logf("First call: height=%d", h)
 		candidate1, _, err1 := ba.GetMiningCandidate(ctx)
+		h = ba.bestBlockHeight.Load()
+		t.Logf("Check call: height=%d", h)
 		require.NoError(t, err1)
 		require.NotNil(t, candidate1)
 		assert.Equal(t, uint32(2), candidate1.Height)

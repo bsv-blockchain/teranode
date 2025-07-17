@@ -263,7 +263,7 @@ func TestInvalidSubtreeReporting_NilKafkaProducer(t *testing.T) {
 	// call publishInvalidSubtree directly
 	// should not panic even with nil producer
 	assert.NotPanics(t, func() {
-		server.publishInvalidSubtree(subtreeHash.String(), baseURL, "test_reason")
+		server.publishInvalidSubtree(context.Background(), subtreeHash.String(), baseURL, "test_reason")
 	})
 }
 
@@ -352,7 +352,7 @@ func TestPublishInvalidSubtree_DirectCall(t *testing.T) {
 	}
 
 	// call publishInvalidSubtree directly
-	server.publishInvalidSubtree(subtreeHash, peerURL, reason)
+	server.publishInvalidSubtree(context.Background(), subtreeHash, peerURL, reason)
 
 	// verify invalid subtree message was published
 	require.Len(t, kafkaProducer.messages, 1)

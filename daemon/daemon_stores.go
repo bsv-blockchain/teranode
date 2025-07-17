@@ -144,6 +144,13 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 
 		var validatorClient validator.Interface
 
+		var blockchainClient blockchain.ClientI
+
+		blockchainClient, err = d.GetBlockchainClient(ctx, logger, appSettings, "validator")
+		if err != nil {
+			return nil, errors.NewServiceError("could not create block validation client for local validator", err)
+		}
+
 		validatorClient, err = validator.New(ctx,
 			logger,
 			appSettings,
@@ -151,6 +158,7 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 			txMetaKafkaProducerClient,
 			rejectedTxKafkaProducerClient,
 			blockAssemblyClient,
+			blockchainClient,
 		)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create local validator", err)

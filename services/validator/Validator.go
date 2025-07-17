@@ -16,6 +16,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
@@ -104,6 +106,11 @@ type Validator struct {
 	// and manages the prioritization and selection of transactions for block inclusion.
 	blockAssembler blockassembly.Store
 
+	// blockchainClient provides access to the blockchain service for block-related operations,
+	// including block height retrieval, chain state verification, and FSM synchronization.
+	// This client is used to ensure the validator service remains synchronized with the blockchain.
+	blockchainClient blockchain.ClientI
+
 	// saveInParallel indicates if UTXOs should be saved concurrently
 	saveInParallel bool
 
@@ -122,7 +129,7 @@ type Validator struct {
 // Returns an error if initialization fails.
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store utxo.Store,
 	txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
-	blockAssemblyClient blockassembly.ClientI) (Interface, error) {
+	blockAssemblyClient blockassembly.ClientI, blockchainClient blockchain.ClientI) (Interface, error) {
 	initPrometheusMetrics()
 
 	var ba blockassembly.Store
@@ -141,6 +148,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		stats:                         gocore.NewStat("validator"),
 		txmetaKafkaProducerClient:     txMetaKafkaProducerClient,
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
+		blockchainClient:              blockchainClient,
 	}
 
 	txmetaKafkaURL := v.settings.Kafka.TxMetaConfig
@@ -268,6 +276,24 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 			// TODO which errors should we be sending here?
 			if !errors.Is(err, errors.ErrStorageError) && !errors.Is(err, errors.ErrServiceError) {
+				if v.blockchainClient != nil {
+					var (
+						state *blockchain.FSMStateType
+						err1  error
+					)
+
+					if state, err1 = v.blockchainClient.GetFSMCurrentState(ctx); err1 != nil {
+						v.logger.Errorf("[ValidateWithOptions] failed to publish rejected tx - error getting blockchain FSM state: %v", err1)
+
+						return
+					}
+
+					if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
+						// ignore notifications while syncing or catching up
+						return
+					}
+				}
+
 				startKafka := time.Now()
 
 				m := &kafkamessage.KafkaRejectedTxTopicMessage{

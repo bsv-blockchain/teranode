@@ -519,7 +519,7 @@ func Test_handleMultipleTx(t *testing.T) {
 
 		_ = utxoStore.SetBlockHeight(101)
 
-		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, nil)
+		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, nil, nil)
 		require.NoError(t, err)
 
 		// Create a PropagationServer
@@ -582,7 +582,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 
 		_ = utxoStore.SetBlockHeight(101)
 
-		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, blockAssemblyClient)
+		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
 		require.NoError(t, err)
 
 		// Create a PropagationServer

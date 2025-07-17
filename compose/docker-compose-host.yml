@@ -174,6 +174,20 @@ services:
       - ../data/teranode3/subtree_quorum:/app/data/teranode3/subtree_quorum
       - ../data/teranode3/external:/app/data/teranode3/external
       - ./wait.sh:/app/wait.sh
+
+  first-100-blocks-1:
+    image: curlimages/curl:latest
+    profiles:
+      - default
+    container_name: first-100-blocks-1
+    network_mode: "host"
+    depends_on:
+      - teranode-1
+    volumes:
+      - ./scripts/generate-blocks.sh:/generate-blocks.sh
+    entrypoint: ["/generate-blocks.sh", "--host", "localhost", "--port", "19292", "--numBlocks", "0", "--generate"]
+    restart: no
+
   miner-1:
     <<: *teranode-commands-base
     profiles:
