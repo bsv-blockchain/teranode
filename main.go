@@ -39,5 +39,7 @@ func main() {
 	stats := gocore.Config().Stats()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
-	daemon.New().Start(logger, os.Args[1:], tSettings)
+	daemon.New(daemon.WithLoggerFactory(func(serviceName string) ulogger.Logger {
+		return ulogger.New(serviceName, ulogger.WithLevel(tSettings.LogLevel))
+	})).Start(logger, os.Args[1:], tSettings)
 }
