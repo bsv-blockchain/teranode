@@ -2077,6 +2077,11 @@ func (stp *SubtreeProcessor) deDuplicateTransactions() {
 		return
 	}
 
+	if err = stp.currentSubtree.AddCoinbaseNode(); err != nil {
+		stp.logger.Errorf("[DeDuplicateTransactions] error adding coinbase node in de-duplication: %s", err.Error())
+		return
+	}
+
 	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
 

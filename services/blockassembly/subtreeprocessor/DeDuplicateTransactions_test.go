@@ -29,6 +29,18 @@ func TestDeDuplicateTransactions(t *testing.T) {
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)
+
+	go func() {
+		for {
+			select {
+			case newSubtreeRequest := <-newSubtreeChan:
+				if newSubtreeRequest.ErrChan != nil {
+					newSubtreeRequest.ErrChan <- nil
+				}
+			}
+		}
+	}()
+
 	stp, err := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, blobStore, nil, utxoStore, newSubtreeChan)
 	require.NoError(t, err)
 
@@ -47,16 +59,18 @@ func TestDeDuplicateTransactions(t *testing.T) {
 	stp.Add(node2, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{hash2}})
 	stp.Add(node3, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{hash3}})
 
-	// Add duplicates
-	stp.Add(node1, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{hash1}})
-	stp.Add(node2, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{hash2}})
-
 	// Wait for the queue to be processed
 	waitForSubtreeProcessorQueueToEmpty(t, stp)
 
+	// Add duplicates directly to the subtree processor
+	_ = stp.addNode(node1, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{hash1}}, true)
+	_ = stp.addNode(node2, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{hash2}}, true)
+
+	stp.setTxCountFromSubtrees()
+
 	// Get initial transaction count
 	initialTxCount := stp.TxCount()
-	assert.Equal(t, uint64(5), initialTxCount, "Expected 5 transactions before deduplication")
+	assert.Equal(t, uint64(6), initialTxCount, "Expected 5 transactions before deduplication")
 
 	// Call DeDuplicateTransactions
 	stp.DeDuplicateTransactions()

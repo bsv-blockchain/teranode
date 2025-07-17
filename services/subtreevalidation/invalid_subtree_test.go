@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
@@ -22,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/jarcoal/httpmock"
+	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,10 +66,11 @@ func TestInvalidSubtreeReporting_MalformedTransactionData(t *testing.T) {
 
 	// create server with mocked dependencies
 	server := &Server{
-		logger:                      ulogger.TestLogger{},
-		settings:                    tSettings,
-		subtreeStore:                memory.New(),
-		invalidSubtreeKafkaProducer: &mockKafkaProducer{},
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
 
 	// mock the HTTP response with malformed transaction data
@@ -117,10 +120,11 @@ func TestInvalidSubtreeReporting_TransactionCountMismatch(t *testing.T) {
 
 	// create server with mocked dependencies
 	server := &Server{
-		logger:                      ulogger.TestLogger{},
-		settings:                    tSettings,
-		subtreeStore:                memory.New(),
-		invalidSubtreeKafkaProducer: &mockKafkaProducer{},
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
 
 	// create a valid extended transaction using a known valid tx
@@ -178,10 +182,11 @@ func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 
 	// create server with mocked dependencies
 	server := &Server{
-		logger:                      ulogger.TestLogger{},
-		settings:                    tSettings,
-		subtreeStore:                memory.New(),
-		invalidSubtreeKafkaProducer: &mockKafkaProducer{},
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
 
 	// test case 1: peer cannot provide transactions
@@ -211,6 +216,9 @@ func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 	assert.Equal(t, subtreeHash.String(), msg.SubtreeHash)
 	assert.Equal(t, baseURL, msg.PeerUrl)
 	assert.Equal(t, "peer_cannot_provide_transactions", msg.Reason)
+
+	// clear out the invalid subtree de-duplicate map
+	server.invalidSubtreeDeDuplicateMap.Clear()
 
 	// test case 2: peer cannot provide subtree
 	kafkaProducer.messages = nil // reset messages
@@ -245,10 +253,11 @@ func TestInvalidSubtreeReporting_NilKafkaProducer(t *testing.T) {
 
 	// create server with nil kafka producer
 	server := &Server{
-		logger:                      ulogger.TestLogger{},
-		settings:                    tSettings,
-		subtreeStore:                memory.New(),
-		invalidSubtreeKafkaProducer: nil, // nil producer
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  nil, // nil producer
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
 
 	// call publishInvalidSubtree directly
@@ -270,10 +279,11 @@ func TestInvalidSubtreeReporting_HTTPErrorResponse(t *testing.T) {
 
 	// create server with mocked dependencies
 	server := &Server{
-		logger:                      ulogger.TestLogger{},
-		settings:                    tSettings,
-		subtreeStore:                memory.New(),
-		invalidSubtreeKafkaProducer: &mockKafkaProducer{},
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
 
 	// mock HTTP 500 error response
@@ -334,10 +344,11 @@ func TestPublishInvalidSubtree_DirectCall(t *testing.T) {
 
 	// create server with mocked dependencies
 	server := &Server{
-		logger:                      ulogger.TestLogger{},
-		settings:                    tSettings,
-		subtreeStore:                memory.New(),
-		invalidSubtreeKafkaProducer: kafkaProducer,
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  kafkaProducer,
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
 	}
 
 	// call publishInvalidSubtree directly

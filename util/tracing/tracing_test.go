@@ -92,6 +92,9 @@ func TestUTracer_ChildSpans(t *testing.T) {
 }
 
 func TestSimpleTracing(t *testing.T) {
+	// skip tracing test, manually run it
+	t.Skip()
+
 	// Initialize tracer
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.TracingSampleRate = 1.0

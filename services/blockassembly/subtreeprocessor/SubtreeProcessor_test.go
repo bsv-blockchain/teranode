@@ -1490,14 +1490,15 @@ func Test_removeMap(t *testing.T) {
 		settings := test.CreateBaseTestSettings()
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 128
 
-		newSubtreeChan := make(chan NewSubtreeRequest)
+		newSubtreeChan := make(chan NewSubtreeRequest, 100)
 
 		go func() {
 			for {
-				newSubtreeRequest := <-newSubtreeChan
-
-				if newSubtreeRequest.ErrChan != nil {
-					newSubtreeRequest.ErrChan <- nil
+				select {
+				case newSubtreeRequest := <-newSubtreeChan:
+					if newSubtreeRequest.ErrChan != nil {
+						newSubtreeRequest.ErrChan <- nil
+					}
 				}
 			}
 		}()
