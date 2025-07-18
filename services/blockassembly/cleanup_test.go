@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -168,4 +169,77 @@ func (m *MockUnminedTxIterator) Err() error {
 func (m *MockUnminedTxIterator) Close() error {
 	args := m.Called()
 	return args.Error(0)
+}
+
+// TestLoadUnminedTransactionsExcludesConflicting tests that loadUnminedTransactions excludes conflicting transactions
+func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
+	t.Run("conflicting transactions are excluded during loading", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(utxo.MockUtxostore)
+		logger := ulogger.TestLogger{}
+		settings := test.CreateBaseTestSettings()
+		settings.UtxoStore.UnminedTxRetention = 5
+
+		// Create mock transactions - only normal transaction should be returned by iterator
+		normalTxHash := chainhash.DoubleHashB([]byte("normal-tx"))
+
+		normalTx := &utxo.UnminedTransaction{
+			Hash:       (*chainhash.Hash)(normalTxHash),
+			Fee:        1000,
+			Size:       250,
+			TxInpoints: subtree.TxInpoints{},
+			CreatedAt:  1000,
+		}
+
+		// Setup cleanup expectation
+		mockStore.On("QueryOldUnminedTransactions", mock.Anything, uint32(95)).
+			Return([]chainhash.Hash{}, nil).
+			Once()
+
+		// Setup iterator expectations - iterator should only return non-conflicting transactions
+		mockIterator := new(MockUnminedTxIterator)
+		mockStore.On("GetUnminedTxIterator").
+			Return(mockIterator, nil).
+			Once()
+
+		// Iterator should only return normal transactions (conflicting ones are filtered out by the iterator)
+		mockIterator.On("Next", mock.Anything).
+			Return(normalTx, nil).
+			Once()
+
+		// Second call returns nil (end of iteration)
+		mockIterator.On("Next", mock.Anything).
+			Return(nil, nil).
+			Once()
+
+		// Setup mock subtree processor
+		mockSubtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
+
+		// Should only be called once for the normal transaction
+		mockSubtreeProcessor.On("AddDirectly", mock.MatchedBy(func(node subtree.SubtreeNode) bool {
+			return node.Hash.String() == normalTx.Hash.String()
+		}), mock.Anything, true).
+			Return(nil).
+			Once()
+
+		// Create BlockAssembler with mocked dependencies
+		ba := &BlockAssembler{
+			utxoStore:        mockStore,
+			logger:           logger,
+			settings:         settings,
+			bestBlockHeight:  atomic.Uint32{},
+			subtreeProcessor: mockSubtreeProcessor,
+		}
+
+		// Set block height
+		ba.bestBlockHeight.Store(100)
+
+		// Call loadUnminedTransactions
+		err := ba.loadUnminedTransactions(ctx)
+
+		require.NoError(t, err)
+		mockStore.AssertExpectations(t)
+		mockIterator.AssertExpectations(t)
+		mockSubtreeProcessor.AssertExpectations(t)
+	})
 }

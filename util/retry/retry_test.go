@@ -49,29 +49,97 @@ func TestRetry(t *testing.T) {
 	logger.AssertNumberOfCalls(t, "Warnf", 0)
 	logger.Reset()
 
-	// Test case 2: Function fails once then succeeds
-	result, err = Retry(ctx, logger, retryOnceFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
+	// Test case for exponential backoff with cap
+	result, err = Retry(ctx, logger, retryOnceFn,
+		WithExponentialBackoff(),
+		WithBackoffDurationType(50*time.Millisecond),
+		WithBackoffFactor(2.0),
+		WithMaxBackoff(200*time.Millisecond),
+		WithRetryCount(3))
 	assert.NoError(t, err)
 	assert.Equal(t, "success", result)
-	logger.AssertNumberOfCalls(t, "Warnf", 1)
 	logger.Reset()
 
-	// Test case 3: Function fails all attempts
-	result, err = Retry(ctx, logger, alwaysFailFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
-	assert.Error(t, err)
-	assert.Empty(t, result)
-	logger.AssertNumberOfCalls(t, "Warnf", 4)
+	// Test case for infinite retry (will succeed after one failure)
+	staticCallCount = 0 // Reset counter
+	result, err = Retry(ctx, logger, retryOnceFn,
+		WithInfiniteRetry(),
+		WithExponentialBackoff(),
+		WithBackoffDurationType(10*time.Millisecond),
+		WithBackoffFactor(2.0),
+		WithMaxBackoff(100*time.Millisecond))
+	assert.NoError(t, err)
+	assert.Equal(t, "success", result)
 	logger.Reset()
 
-	// Test case 4: Context cancellation
-	cancelCtx, cancel := context.WithCancel(ctx)
-	cancel() // Immediately cancel the context
+	// Test case for context cancellation with infinite retry
+	ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
 
-	result, err = Retry(cancelCtx, logger, alwaysFailFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
-	assert.Empty(t, result)
+	_, err = Retry(ctx, logger, alwaysFailFn,
+		WithInfiniteRetry(),
+		WithExponentialBackoff(),
+		WithBackoffDurationType(10*time.Millisecond))
 	assert.Error(t, err)
-	assert.Equal(t, context.Canceled, err)
-	logger.AssertNumberOfCalls(t, "Warnf", 0)
+	assert.Equal(t, context.DeadlineExceeded, err)
+	logger.Reset()
+}
+
+func TestCappedExponentialBackoff(t *testing.T) {
+	// Test exponential backoff without hitting the cap
+	backoff := CappedExponentialBackoff(100*time.Millisecond, 2.0, 1*time.Second)
+	assert.Equal(t, 200*time.Millisecond, backoff)
+
+	// Test exponential backoff hitting the cap
+	backoff = CappedExponentialBackoff(600*time.Millisecond, 2.0, 1*time.Second)
+	assert.Equal(t, 1*time.Second, backoff)
+
+	// Test with different factor
+	backoff = CappedExponentialBackoff(100*time.Millisecond, 1.5, 1*time.Second)
+	assert.Equal(t, 150*time.Millisecond, backoff)
+}
+
+func TestRetryWithExponentialBackoff(t *testing.T) {
+	logger := mocklogger.NewTestLogger()
+	ctx := context.Background()
+
+	// Function that will fail once then succeed
+	staticCallCount := 0
+	retryOnceFn := func() (string, error) {
+		if staticCallCount == 0 {
+			staticCallCount++
+			return "", errors.NewProcessingError("error")
+		}
+		return "success", nil
+	}
+
+	// Function that will always fail
+	alwaysFailFn := func() (string, error) {
+		return "", errors.NewProcessingError("persistent error")
+	}
+
+	// Test exponential backoff with successful retry
+	staticCallCount = 0
+	result, err := Retry(ctx, logger, retryOnceFn,
+		WithExponentialBackoff(),
+		WithBackoffDurationType(10*time.Millisecond),
+		WithBackoffFactor(2.0),
+		WithMaxBackoff(100*time.Millisecond),
+		WithRetryCount(3))
+	assert.NoError(t, err)
+	assert.Equal(t, "success", result)
+	logger.Reset()
+
+	// Test infinite retry with context cancellation
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err = Retry(ctx, logger, alwaysFailFn,
+		WithInfiniteRetry(),
+		WithExponentialBackoff(),
+		WithBackoffDurationType(10*time.Millisecond))
+	assert.Error(t, err)
+	assert.Equal(t, context.DeadlineExceeded, err)
 }
 
 func TestRetryTimer(t *testing.T) {

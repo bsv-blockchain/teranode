@@ -34,6 +34,7 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 		,t.inserted_at
 		FROM transactions t
 		WHERE t.unmined_since IS NOT NULL
+		  AND t.conflicting = false
 		ORDER BY t.id ASC
 	`
 

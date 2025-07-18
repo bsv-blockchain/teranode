@@ -132,6 +132,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient := &blockchain.Mock{}
 		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
 		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.ErrNotFound)
+		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 
@@ -165,6 +166,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient := &blockchain.Mock{}
 		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
 		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.ErrNotFound)
+		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 

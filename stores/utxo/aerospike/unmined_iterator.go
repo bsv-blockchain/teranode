@@ -52,6 +52,7 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 		fields.External.String(),
 		fields.Inputs.String(),
 		fields.CreatedAt.String(),
+		fields.Conflicting.String(),
 	}
 
 	policy := as.NewQueryPolicy()
@@ -85,23 +86,46 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 		return nil, it.err
 	}
 
-	rec, ok := <-it.result
-	if !ok || rec == nil {
-		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
+	// Loop to handle skipping conflicting transactions without recursion
+	var rec *as.Result
+	var ok bool
+	for {
+		rec, ok = <-it.result
+		if !ok || rec == nil {
+			if err := it.Close(); err != nil {
+				it.store.logger.Warnf("failed to close iterator: %v", err)
+			}
+
+			return nil, nil
 		}
 
-		return nil, nil
-	}
+		if rec.Err != nil {
+			if err := it.Close(); err != nil {
+				it.store.logger.Warnf("failed to close iterator: %v", err)
+			}
 
-	if rec.Err != nil {
-		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
+			it.err = rec.Err
+
+			return nil, it.err
 		}
 
-		it.err = rec.Err
+		// Check if the transaction is conflicting and skip it if so
+		// Note: This implements a dual filtering approach where conflicting transactions
+		// can be filtered at both the SQL query level (for SQL-backed stores) and here
+		// at the iterator level (for Aerospike stores). This ensures consistent behavior
+		// across different storage backends while allowing each to optimize filtering
+		// based on their capabilities.
+		conflictingVal := rec.Record.Bins[fields.Conflicting.String()]
+		if conflictingVal != nil {
+			conflicting, ok := conflictingVal.(bool)
+			if ok && conflicting {
+				// Skip conflicting transaction and continue to next iteration
+				continue
+			}
+		}
 
-		return nil, it.err
+		// If we reach here, we have a non-conflicting transaction
+		break
 	}
 
 	txidVal := rec.Record.Bins[fields.TxID.String()]

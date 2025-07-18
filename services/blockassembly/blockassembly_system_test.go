@@ -65,6 +65,9 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, ba)
 
+	// Skip waiting for pending blocks in tests to prevent hanging
+	ba.SetSkipWaitForPendingBlocks(true)
+
 	err = ba.Init(ctx)
 	require.NoError(t, err)
 

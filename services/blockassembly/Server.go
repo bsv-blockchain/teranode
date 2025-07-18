@@ -104,6 +104,9 @@ type BlockAssembly struct {
 
 	// blockSubmissionChan handles block submission requests
 	blockSubmissionChan chan *BlockSubmissionRequest
+
+	// skipWaitForPendingBlocks stores the flag value for tests
+	skipWaitForPendingBlocks bool
 }
 
 // subtreeRetrySend encapsulates the data needed for retrying subtree storage operations
@@ -238,6 +241,11 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	ba.blockAssembler, err = NewBlockAssembler(ctx, ba.logger, ba.settings, ba.stats, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
 	if err != nil {
 		return errors.NewServiceError("failed to init block assembler", err)
+	}
+
+	// Apply the skip flag if it was set before Init
+	if ba.skipWaitForPendingBlocks {
+		ba.blockAssembler.SetSkipWaitForPendingBlocks(true)
 	}
 
 	// start the new subtree retry processor in the background
@@ -1518,4 +1526,13 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 	}
 
 	return bt.ErrTxNil
+}
+
+// SetSkipWaitForPendingBlocks sets the flag to skip waiting for pending blocks during startup.
+// This is primarily used in test environments to prevent blocking on pending blocks.
+func (ba *BlockAssembly) SetSkipWaitForPendingBlocks(skip bool) {
+	ba.skipWaitForPendingBlocks = skip
+	if ba.blockAssembler != nil {
+		ba.blockAssembler.SetSkipWaitForPendingBlocks(skip)
+	}
 }

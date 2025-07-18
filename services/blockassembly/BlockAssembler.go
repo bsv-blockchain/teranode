@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/retry"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
@@ -42,6 +43,12 @@ type miningCandidateResponse struct {
 }
 
 type State uint32
+
+const (
+	// pendingBlocksPollInterval is the interval at which the block assembler
+	// polls for pending blocks during startup
+	pendingBlocksPollInterval = 1 * time.Second
+)
 
 // create state strings for the processor
 var (
@@ -153,6 +160,9 @@ type BlockAssembler struct {
 	unminedCleanupTicker *time.Ticker
 	// cachedCandidate stores the cached mining candidate
 	cachedCandidate *CachedMiningCandidate
+
+	// skipWaitForPendingBlocks allows tests to skip waiting for pending blocks during startup
+	skipWaitForPendingBlocks bool
 }
 
 // CachedMiningCandidate holds a cached mining candidate with expiration
@@ -597,6 +607,13 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 
 			b.setBestBlockHeader(header, meta.Height)
 			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader.Load())
+		}
+	}
+
+	// Wait for any pending blocks to be processed before loading unmined transactions
+	if !b.skipWaitForPendingBlocks {
+		if err = b.waitForPendingBlocks(ctx); err != nil {
+			return errors.NewProcessingError("[BlockAssembler] failed to wait for pending blocks", err)
 		}
 	}
 
@@ -1416,4 +1433,57 @@ func (b *BlockAssembler) invalidateMiningCandidateCache() {
 	b.cachedCandidate.lastUpdate = time.Time{}
 	b.cachedCandidate.generating = false
 	b.cachedCandidate.mu.Unlock()
+}
+
+// SetSkipWaitForPendingBlocks sets the flag to skip waiting for pending blocks during startup.
+// This is primarily used in test environments to prevent blocking on pending blocks.
+func (b *BlockAssembler) SetSkipWaitForPendingBlocks(skip bool) {
+	b.skipWaitForPendingBlocks = skip
+}
+
+// waitForPendingBlocks waits for any pending blocks to be processed before loading unmined transactions.
+// This method continuously polls the blockchain client to check if there are any blocks that have not been
+// marked as mined yet. It will wait until the list of blocks returned by GetBlocksMinedNotSet is empty,
+// indicating that all blocks have been processed and marked as mined.
+//
+// The method implements a polling loop with a 1-second interval and includes logging to provide visibility
+// into the waiting process. This ensures that the BlockAssembly service doesn't start loading unmined
+// transactions until all pending blocks have been fully processed.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout support
+//
+// Returns:
+//   - error: Any error encountered during the waiting process or blockchain client calls
+func (b *BlockAssembler) waitForPendingBlocks(ctx context.Context) error {
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "waitForPendingBlocks",
+		tracing.WithParentStat(b.stats),
+		tracing.WithLogMessage(b.logger, "[waitForPendingBlocks] checking for pending blocks"),
+	)
+	defer deferFn()
+
+	// Use retry utility with infinite retries until no pending blocks remain
+	_, err := retry.Retry(ctx, b.logger, func() (interface{}, error) {
+		blockNotMined, err := b.blockchainClient.GetBlocksMinedNotSet(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(blockNotMined) == 0 {
+			b.logger.Infof("[waitForPendingBlocks] no pending blocks found, ready to load unmined transactions")
+			return nil, nil
+		}
+
+		// Return an error to trigger retry when blocks are still pending
+		return nil, errors.NewProcessingError("waiting for %d blocks to be processed", len(blockNotMined))
+	},
+		retry.WithMessage("[waitForPendingBlocks] blockchain service check"),
+		retry.WithInfiniteRetry(),
+		retry.WithExponentialBackoff(),
+		retry.WithBackoffDurationType(1*time.Second),
+		retry.WithBackoffFactor(2.0),
+		retry.WithMaxBackoff(30*time.Second),
+	)
+
+	return err
 }

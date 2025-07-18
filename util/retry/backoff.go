@@ -18,3 +18,20 @@ func BackoffAndSleep(retries int, backoffMultiplier int, durationType time.Durat
 	backoffPeriod := time.Duration(backoff) * durationType
 	sleepFunc(backoffPeriod)
 }
+
+// CappedExponentialBackoff calculates the next backoff duration using exponential backoff
+// with a maximum cap. The backoff starts at initialBackoff and is multiplied by backoffFactor
+// each time, up to maxBackoff.
+// Parameters:
+// currentBackoff: The current backoff duration
+// backoffFactor: The multiplier for exponential backoff (e.g., 2.0 for doubling)
+// maxBackoff: The maximum backoff duration
+// Returns:
+// time.Duration: The next backoff duration to use
+func CappedExponentialBackoff(currentBackoff time.Duration, backoffFactor float64, maxBackoff time.Duration) time.Duration {
+	nextBackoff := time.Duration(float64(currentBackoff) * backoffFactor)
+	if nextBackoff > maxBackoff {
+		return maxBackoff
+	}
+	return nextBackoff
+}

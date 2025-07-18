@@ -2,8 +2,15 @@ package retry
 
 import (
 	"context"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/ulogger"
+)
+
+const (
+	// maxLinearBackoffRetries is the maximum number of retries to consider for linear backoff
+	// when using infinite retry to prevent excessive sleep delays
+	maxLinearBackoffRetries = 10
 )
 
 // Retry will retry a function call a number of times, with a backoff time between each retry.
@@ -37,32 +44,78 @@ func Retry[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error
 	}
 
 	// If we reach here, we have an error, so we need to retry
-	// Loop through the number of retries
-	for i := 0; i < setOptions.RetryCount; i++ {
+	// Initialize backoff parameters for exponential backoff
+	var currentBackoff time.Duration
+	if setOptions.ExponentialBackoff {
+		currentBackoff = setOptions.BackoffDurationType
+	}
+
+	// Determine retry limit
+	maxRetries := setOptions.RetryCount
+	if setOptions.InfiniteRetry {
+		maxRetries = -1 // Use -1 to indicate infinite retries
+	}
+
+	// Loop through the number of retries (or infinite if maxRetries is -1)
+	for i := 0; maxRetries == -1 || i < maxRetries; i++ {
 		select {
 		case <-ctx.Done(): // Check if the context has been cancelled
 			logger.Errorf("Context cancelled, stopping retries")
 			return result, ctx.Err()
 
 		default:
-			// Log the retry message
-			logger.Warnf(setOptions.Message+" (attempt %d): %v, will retry", i+1, err)
+			// Calculate wait time for logging
+			var waitTime time.Duration
+			if setOptions.ExponentialBackoff {
+				waitTime = currentBackoff
+			} else {
+				// Calculate linear backoff wait time
+				retryCountForBackoff := i
+				if setOptions.InfiniteRetry && i > maxLinearBackoffRetries {
+					retryCountForBackoff = maxLinearBackoffRetries
+				}
+				backoff := (setOptions.BackoffMultiplier * retryCountForBackoff) + 1
+				waitTime = time.Duration(backoff) * setOptions.BackoffDurationType
+			}
+
+			// Log the retry message with wait time
+			logger.Warnf(setOptions.Message+" (attempt %d): %v, trying again in %.1f seconds",
+				i+1, err, waitTime.Seconds())
+
+			// Wait before retrying
+			if setOptions.ExponentialBackoff {
+				// Use exponential backoff
+				select {
+				case <-ctx.Done():
+					return result, ctx.Err()
+				case <-time.After(currentBackoff):
+					// Update backoff for next iteration
+					currentBackoff = CappedExponentialBackoff(currentBackoff, setOptions.BackoffFactor, setOptions.MaxBackoff)
+				}
+			} else {
+				// Use linear backoff
+				// Cap the retry count for linear backoff to prevent infinite sleep times
+				retryCountForBackoff := i
+				if setOptions.InfiniteRetry && i > maxLinearBackoffRetries {
+					retryCountForBackoff = maxLinearBackoffRetries // Cap for infinite retry to prevent excessive delays
+				}
+				BackoffAndSleep(retryCountForBackoff, setOptions.BackoffMultiplier, setOptions.BackoffDurationType)
+			}
 
 			// Call the function
 			result, err = f()
 
-			// If the function was successful, return nil
+			// If the function was successful, return result
 			if err == nil {
 				return result, nil
 			}
-
-			// Backoff and sleep for the backoff time
-			BackoffAndSleep(i, setOptions.BackoffMultiplier, setOptions.BackoffDurationType)
 		}
 	}
 
-	// Log the retry message
-	logger.Warnf(setOptions.Message+" (given up after %d attempts): %v", setOptions.RetryCount, err)
+	// Log the retry message for finite retries
+	if !setOptions.InfiniteRetry {
+		logger.Warnf(setOptions.Message+" (given up after %d attempts): %v", setOptions.RetryCount, err)
+	}
 
 	return result, err
 }

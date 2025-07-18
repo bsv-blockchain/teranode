@@ -270,6 +270,9 @@ func setupServer(t *testing.T) (*BlockAssembly, *memory.Memory) {
 
 	s := New(ulogger.TestLogger{}, tSettings, nil, utxoStore, subtreeStore, blockchainClient)
 
+	// Skip waiting for pending blocks in tests to prevent mock issues
+	s.SetSkipWaitForPendingBlocks(true)
+
 	require.NoError(t, s.Init(t.Context()))
 
 	return s, subtreeStore
