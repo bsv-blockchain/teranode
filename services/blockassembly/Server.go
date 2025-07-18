@@ -1426,14 +1426,16 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 		for i, subtree := range subtrees {
 			// the job subtree hash needs to be stored for the block, before the coinbase is replaced in the first
 			// subtree, which changes the id of the subtree
-			merkleSubtreeHashes[i] = *subtree.RootHash()
-
 			if i == 0 {
-				subtrees[i].ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, coinbaseSizeUint64)
-			}
+				rootHash, err := subtrees[i].RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, coinbaseSizeUint64)
+				if err != nil {
+					return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockAssemblyBlockTemplate] error replacing root node in subtree", err))
+				}
 
-			rootHash := subtrees[i].RootHash()
-			merkleSubtreeHashes[i] = chainhash.Hash(rootHash[:])
+				merkleSubtreeHashes[i] = *rootHash
+			} else {
+				merkleSubtreeHashes[i] = *subtree.RootHash()
+			}
 		}
 	}
 
