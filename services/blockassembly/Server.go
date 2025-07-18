@@ -504,9 +504,13 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 		return nil
 	}
 
+	if subtreeRequest.SkipNotification {
+		return nil
+	}
+
 	isRunning, err := ba.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
 	if err != nil {
-		ba.logger.Errorf("[SubtreeProcessor] Failed to get current state: %s", err)
+		return errors.NewProcessingError("[SubtreeProcessor] failed to get current state: %s", err)
 	}
 
 	// only send notification if the FSM is in the running state

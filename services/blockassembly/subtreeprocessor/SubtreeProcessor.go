@@ -62,9 +62,10 @@ type Job struct {
 // and the subtree processor, including an error channel for asynchronous result reporting.
 
 type NewSubtreeRequest struct {
-	Subtree     *subtreepkg.Subtree                                     // The subtree to process
-	ParentTxMap *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints] // Map of parent transactions
-	ErrChan     chan error                                              // Channel for error reporting
+	Subtree          *subtreepkg.Subtree                                     // The subtree to process
+	ParentTxMap      *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints] // Map of parent transactions
+	SkipNotification bool                                                    // Whether to skip notification to the network
+	ErrChan          chan error                                              // Channel for error reporting
 }
 
 // moveBlockRequest represents a request to move a block in the chain.
@@ -621,6 +622,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	}
 
 	for _, block := range moveBackBlocks {
+		// delete / unspend all transactions spending the coinbase tx
 		if err := stp.utxoStore.Delete(context.Background(), block.CoinbaseTx.TxIDChainHash()); err != nil {
 			// no need to error out if the key doesn't exist anyway
 			if !errors.Is(err, errors.ErrTxNotFound) {
@@ -961,15 +963,19 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 		return errors.NewProcessingError("[%s] error creating new subtree", oldSubtreeHash.String(), err)
 	}
 
-	if !skipNotification {
-		// Send the subtree to the newSubtreeChan, including a reference to the parent transactions map
-		errCh := make(chan error)
-		stp.newSubtreeChan <- NewSubtreeRequest{Subtree: oldSubtree, ParentTxMap: stp.currentTxMap, ErrChan: errCh}
+	// Send the subtree to the newSubtreeChan, including a reference to the parent transactions map
+	errCh := make(chan error)
 
-		err = <-errCh
-		if err != nil {
-			return errors.NewProcessingError("[%s] error sending subtree to newSubtreeChan", oldSubtreeHash.String(), err)
-		}
+	stp.newSubtreeChan <- NewSubtreeRequest{
+		Subtree:          oldSubtree,
+		ParentTxMap:      stp.currentTxMap,
+		SkipNotification: skipNotification,
+		ErrChan:          errCh,
+	}
+
+	err = <-errCh
+	if err != nil {
+		return errors.NewProcessingError("[%s] error sending subtree to newSubtreeChan", oldSubtreeHash.String(), err)
 	}
 
 	return nil
@@ -1799,11 +1805,14 @@ func (stp *SubtreeProcessor) resetSubtreeState() (*subtreepkg.Subtree, *txmap.Sy
 
 // processRemainderTransactions processes remaining transactions from the block
 func (stp *SubtreeProcessor) processRemainderTransactions(ctx context.Context, params *RemainderTransactionParams) error {
-	remainderStartTime := time.Now()
-
-	stp.logger.Debugf("[moveForwardBlock][%s] processing remainder tx hashes into subtrees", params.Block.String())
-
 	if params.TransactionMap != nil && params.TransactionMap.Length() > 0 {
+		_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "processRemainderTransactions",
+			tracing.WithParentStat(stp.stats),
+			tracing.WithLogMessage(stp.logger, "[moveForwardBlock][%s] processing %d remainder tx hashes into subtrees", params.Block.String(), params.TransactionMap.Length()),
+		)
+
+		defer deferFn()
+
 		// Process external block transactions
 		remainderSubtrees := make([]*subtreepkg.Subtree, 0, len(params.ChainedSubtrees)+1)
 		remainderSubtrees = append(remainderSubtrees, params.ChainedSubtrees...)
@@ -1835,8 +1844,6 @@ func (stp *SubtreeProcessor) processRemainderTransactions(ctx context.Context, p
 			return err
 		}
 	}
-
-	stp.logger.Debugf("[moveForwardBlock][%s] processing remainder tx hashes into subtrees DONE in %s", params.Block.String(), time.Since(remainderStartTime).String())
 
 	return nil
 }
