@@ -119,7 +119,7 @@ func TestHandleGetRawTransaction(t *testing.T) {
 
 	result, err := handleGetRawTransaction(context.Background(), s, cmd, nil)
 	require.NoError(t, err)
-	assert.Equal(t, txHex, string(result.([]byte)))
+	assert.Equal(t, txHex, result)
 
 	// Test case 2: Verbose mode (return transaction details)
 	verboseLevel = 1

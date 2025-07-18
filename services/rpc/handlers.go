@@ -429,8 +429,6 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 // - Can be optimized with indexing for faster lookups
 // - Performance critical for high-volume applications like payment processors
 //
-// TODO: this is not implemented correctly, it should return the transaction in the same format as bitcoind
-//
 // Parameters:
 //   - ctx: Context for cancellation and tracing
 //   - s: The RPC server instance providing access to service clients
@@ -478,20 +476,13 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 		return nil, errors.NewServiceError("Error reading response body", err)
 	}
 
+	tx, err := bt.NewTxFromString(string(body))
+	if err != nil {
+		return nil, errors.NewServiceError("Error parsing transaction", err)
+	}
+
 	if *c.Verbose == 0 {
-		return body, nil
-	}
-
-	// parse the transaction
-
-	bytes, err := hex.DecodeString(string(body))
-	if err != nil {
-		return nil, errors.NewServiceError("Error parsing transaction", err)
-	}
-
-	tx, err := bt.NewTxFromBytes(bytes)
-	if err != nil {
-		return nil, errors.NewServiceError("Error parsing transaction", err)
+		return tx.String(), nil
 	}
 
 	// inputs
@@ -549,7 +540,7 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	// return verbose transaction
 	// do we want to send all the vin and vout data?
 	return bsvjson.TxRawResult{
-		Hex:      string(body),
+		Hex:      tx.String(),
 		Txid:     tx.TxID(),
 		Hash:     tx.TxID(),
 		Size:     int32(tx.Size()),  //nolint:gosec
