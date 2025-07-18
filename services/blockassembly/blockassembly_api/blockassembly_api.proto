@@ -65,6 +65,11 @@ service BlockAssemblyAPI {
   // CheckBlockAssembly checks the current state of block assembly.
   // This verifies that the block assembly and subtree processor are functioning correctly.
   rpc GetBlockAssemblyBlockCandidate (EmptyMessage) returns (GetBlockAssemblyBlockCandidateResponse) {}
+
+  // GetBlockAssemblyTxs retrieves the transactions currently being assembled in the block assembly.
+  // This provides visibility into the transactions that are candidates for inclusion in the next block.
+  // NOTE: this method is primarily for debugging purposes and may not be suitable for production use.
+  rpc GetBlockAssemblyTxs (EmptyMessage) returns (GetBlockAssemblyTxsResponse) {}
 }
 
 // An empty message used as a placeholder or a request with no data.
@@ -143,6 +148,8 @@ message StateMessage {
   int64 queueCount = 7; // the size of the queue
   uint32 currentHeight = 8; // the height of the chaintip
   string currentHash = 9; // the hash of the chaintip
+  uint32 removeMapCount = 10; // the number of transactions in the remove map
+  repeated string subtrees = 11; // the hashes of the current subtrees
 }
 
 // Response containing the current difficulty of the blockchain.
@@ -160,4 +167,10 @@ message GenerateBlocksRequest {
 // Response for the GetBlockAssemblyBlockCandidate method.
 message GetBlockAssemblyBlockCandidateResponse {
   bytes block = 1; // the block candidate in block assembly
+}
+
+// Response for the GetBlockAssemblyTxs method.
+message GetBlockAssemblyTxsResponse {
+  uint64 txCount = 1; // the number of transactions in the block assembly
+  repeated string txs = 2; // the transactions currently being assembled in the block assembly
 }

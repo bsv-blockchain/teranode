@@ -1187,6 +1187,47 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	return infos, nil
 }
 
+func handleGetRawMempool(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetRawMempool",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGetRawmempool),
+		tracing.WithLogMessage(s.logger, "[handleGetRawMempool] called"),
+	)
+	defer deferFn()
+
+	verbose := cmd.(*bsvjson.GetRawMempoolCmd).Verbose
+
+	txs, err := s.blockAssemblyClient.GetTransactionHashes(ctx)
+	if err != nil {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInternal.Code,
+			Message: "Error retrieving raw mempool: " + err.Error(),
+		}
+	}
+
+	if verbose != nil && *verbose {
+		miningCandidate, err := s.blockAssemblyClient.GetMiningCandidate(ctx)
+		if err != nil {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCInternal.Code,
+				Message: "Error retrieving mining candidate: " + err.Error(),
+			}
+		}
+
+		result := bsvjson.GetRawMempoolVerboseResult{
+			Size:    int32(len(txs)),                        //nolint:gosec
+			Fee:     float64(miningCandidate.CoinbaseValue), //nolint:gosec
+			Time:    int64(miningCandidate.Time),            //nolint:gosec
+			Height:  int64(miningCandidate.Height),          //nolint:gosec
+			Depends: txs,
+		}
+
+		return result, nil
+	}
+
+	return txs, nil
+}
+
 // handleGetDifficulty implements the getdifficulty command, which returns the current
 // proof-of-work difficulty as a multiple of the minimum difficulty.
 //

@@ -18,6 +18,11 @@ func (m *MockSubtreeProcessor) GetCurrentTxMap() *txmap.SyncedMap[chainhash.Hash
 	return args.Get(0).(*txmap.SyncedMap[chainhash.Hash, subtree.TxInpoints])
 }
 
+func (m *MockSubtreeProcessor) GetRemoveMap() *txmap.SwissMap {
+	args := m.Called()
+	return args.Get(0).(*txmap.SwissMap)
+}
+
 func (m *MockSubtreeProcessor) GetCurrentRunningState() State {
 	args := m.Called()
 	return args.Get(0).(State)
@@ -40,12 +45,34 @@ func (m *MockSubtreeProcessor) GetCurrentBlockHeader() *model.BlockHeader {
 
 func (m *MockSubtreeProcessor) GetCurrentSubtree() *subtree.Subtree {
 	args := m.Called()
+	if args.Get(0) == nil {
+		return nil
+	}
 	return args.Get(0).(*subtree.Subtree)
 }
 
 func (m *MockSubtreeProcessor) GetChainedSubtrees() []*subtree.Subtree {
 	args := m.Called()
+	if args.Get(0) == nil {
+		return nil
+	}
 	return args.Get(0).([]*subtree.Subtree)
+}
+
+func (m *MockSubtreeProcessor) GetSubtreeHashes() []chainhash.Hash {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil
+	}
+	return args.Get(0).([]chainhash.Hash)
+}
+
+func (m *MockSubtreeProcessor) GetTransactionHashes() []chainhash.Hash {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil
+	}
+	return args.Get(0).([]chainhash.Hash)
 }
 
 func (m *MockSubtreeProcessor) GetUtxoStore() utxostore.Store {

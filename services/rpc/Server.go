@@ -181,7 +181,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getnettotals":          handleUnimplemented,
 	"getnetworkhashps":      handleUnimplemented,
 	"getpeerinfo":           handleGetpeerinfo,
-	"getrawmempool":         handleUnimplemented,
+	"getrawmempool":         handleGetRawMempool,
 	"getrawtransaction":     handleGetRawTransaction,
 	"gettxout":              handleUnimplemented,
 	"gettxoutproof":         handleUnimplemented,

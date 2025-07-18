@@ -160,6 +160,12 @@ type SubtreeProcessor struct {
 	// getSubtreesChan handles requests to retrieve current subtrees
 	getSubtreesChan chan chan []*subtreepkg.Subtree
 
+	// getSubtreeHashesChan handles requests to retrieve current subtree hashes
+	getSubtreeHashesChan chan chan []chainhash.Hash
+
+	// getTransactionHashesChan handles requests to retrieve transaction hashes
+	getTransactionHashesChan chan chan []chainhash.Hash
+
 	// moveForwardBlockChan receives requests to process new blocks
 	moveForwardBlockChan chan moveBlockRequest
 
@@ -249,23 +255,29 @@ var (
 	// StateGetSubtrees indicates the processor is retrieving subtrees
 	StateGetSubtrees State = 3
 
+	// StateGetSubtreeHashes indicates the processor is retrieving subtree hashes
+	StateGetSubtreeHashes State = 4
+
+	// StateGetTransactionHashes indicates the processor is retrieving transaction hashes
+	StateGetTransactionHashes State = 5
+
 	// StateReorg indicates the processor is reorganizing blocks
-	StateReorg State = 4
+	StateReorg State = 6
 
 	// StateMoveForwardBlock indicates the processor is moving forward a block
-	StateMoveForwardBlock State = 5
+	StateMoveForwardBlock State = 7
 
 	// StateDeduplicateTransactions indicates the processor is deduplicating transactions
-	StateDeduplicateTransactions State = 6
+	StateDeduplicateTransactions State = 8
 
 	// StateResetBlocks indicates the processor is resetting blocks
-	StateResetBlocks State = 7
+	StateResetBlocks State = 9
 
 	// StateRemoveTx indicates the processor is removing transactions
-	StateRemoveTx State = 8
+	StateRemoveTx State = 10
 
 	// StateCheckSubtreeProcessor indicates the processor is checking its state
-	StateCheckSubtreeProcessor State = 9
+	StateCheckSubtreeProcessor State = 11
 )
 
 var StateStrings = map[State]string{
@@ -273,6 +285,8 @@ var StateStrings = map[State]string{
 	StateRunning:                 "running",
 	StateDequeue:                 "dequeue",
 	StateGetSubtrees:             "getSubtrees",
+	StateGetSubtreeHashes:        "getSubtreeHashes",
+	StateGetTransactionHashes:    "getTransactionHashes",
 	StateReorg:                   "reorg",
 	StateMoveForwardBlock:        "moveForwardBlock",
 	StateDeduplicateTransactions: "deDuplicateTransactions",
@@ -329,6 +343,8 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		maxBlockSamples:           10,
 		txChan:                    make(chan *[]TxIDAndFee, tSettings.SubtreeValidation.TxChanBufferSize),
 		getSubtreesChan:           make(chan chan []*subtreepkg.Subtree),
+		getSubtreeHashesChan:      make(chan chan []chainhash.Hash),
+		getTransactionHashesChan:  make(chan chan []chainhash.Hash),
 		moveForwardBlockChan:      make(chan moveBlockRequest),
 		reorgBlockChan:            make(chan reorgBlocksRequest),
 		deDuplicateTransactionsCh: make(chan struct{}),
@@ -417,6 +433,42 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 				logger.Infof("[SubtreeProcessor] get current subtrees DONE")
 
+				stp.setCurrentRunningState(StateRunning)
+
+			case getSubtreeHashesChan := <-stp.getSubtreeHashesChan:
+				stp.setCurrentRunningState(StateGetSubtreeHashes)
+				logger.Infof("[SubtreeProcessor] get current subtree hashes")
+				subtreeHashes := make([]chainhash.Hash, 0, stp.chainedSubtreeCount.Load()+1)
+
+				for _, subtree := range stp.chainedSubtrees {
+					subtreeHashes = append(subtreeHashes, *subtree.RootHash())
+				}
+
+				if stp.currentSubtree.Length() > 0 {
+					subtreeHashes = append(subtreeHashes, *stp.currentSubtree.RootHash())
+				}
+
+				getSubtreeHashesChan <- subtreeHashes
+				logger.Infof("[SubtreeProcessor] get current subtree hashes DONE")
+				stp.setCurrentRunningState(StateRunning)
+
+			case getTransactionHashesChan := <-stp.getTransactionHashesChan:
+				stp.setCurrentRunningState(StateGetTransactionHashes)
+				logger.Infof("[SubtreeProcessor] get current transaction hashes")
+				transactionHashes := make([]chainhash.Hash, 0, stp.currentTxMap.Length()+1)
+				for _, subtree := range stp.chainedSubtrees {
+					for _, node := range subtree.Nodes {
+						transactionHashes = append(transactionHashes, node.Hash)
+					}
+				}
+				if stp.currentSubtree.Length() > 0 {
+					for _, node := range stp.currentSubtree.Nodes {
+						transactionHashes = append(transactionHashes, node.Hash)
+					}
+				}
+
+				getTransactionHashesChan <- transactionHashes
+				logger.Infof("[SubtreeProcessor] get current transaction hashes DONE")
 				stp.setCurrentRunningState(StateRunning)
 
 			case reorgReq := <-stp.reorgBlockChan:
@@ -746,12 +798,37 @@ func (stp *SubtreeProcessor) GetCurrentTxMap() *txmap.SyncedMap[chainhash.Hash, 
 	return stp.currentTxMap
 }
 
+// GetRemoveMap returns the map of transactions marked for removal.
+// This map is used to track transactions that should be excluded from processing.
+//
+// Returns:
+//   - *txmap.SwissMap: Map of transactions to be removed
+func (stp *SubtreeProcessor) GetRemoveMap() *txmap.SwissMap {
+	return stp.removeMap
+}
+
 // GetChainedSubtrees returns all completed subtrees in the chain.
 //
 // Returns:
 //   - []*util.Subtree: Array of chained subtrees
 func (stp *SubtreeProcessor) GetChainedSubtrees() []*subtreepkg.Subtree {
 	return stp.chainedSubtrees
+}
+
+func (stp *SubtreeProcessor) GetSubtreeHashes() []chainhash.Hash {
+	response := make(chan []chainhash.Hash)
+
+	stp.getSubtreeHashesChan <- response
+
+	return <-response
+}
+
+func (stp *SubtreeProcessor) GetTransactionHashes() []chainhash.Hash {
+	response := make(chan []chainhash.Hash)
+
+	stp.getTransactionHashesChan <- response
+
+	return <-response
 }
 
 // GetUtxoStore returns the UTXO store instance.

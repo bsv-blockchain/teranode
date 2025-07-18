@@ -162,12 +162,35 @@ type Interface interface {
 	//   - *util.SyncedMap[chainhash.Hash, meta.TxInpoints]: Current transaction map
 	GetCurrentTxMap() *txmap.SyncedMap[chainhash.Hash, subtree.TxInpoints]
 
+	// GetRemoveMap returns the map of transactions scheduled for removal.
+	// This map contains transactions that have been marked for removal
+	// but not yet processed.
+	//
+	// Returns:
+	//   - *txmap.SwissMap: Map of transactions to be removed
+	GetRemoveMap() *txmap.SwissMap
+
 	// GetChainedSubtrees returns subtrees that are chained together.
 	// These represent transaction dependencies and processing order.
 	//
 	// Returns:
 	//   - []*util.Subtree: Array of chained subtrees
 	GetChainedSubtrees() []*subtree.Subtree
+
+	// GetSubtreeHashes returns the hashes of all subtrees currently managed by the processor.
+	// This provides a quick reference to the subtrees without needing to access their full structures.
+	//
+	// Returns:
+	//   - []chainhash.Hash: Array of subtree hashes
+	GetSubtreeHashes() []chainhash.Hash
+
+	// GetTransactionHashes returns the hashes of all transactions currently being processed.
+	// This provides a complete list of transactions in the processor's queue.
+	// NOTE: This can be a very large list, so use with caution.
+	//
+	// Returns:
+	//   - []chainhash.Hash: Array of transaction hashes
+	GetTransactionHashes() []chainhash.Hash
 
 	// GetUtxoStore returns the UTXO store used by the processor.
 	// This provides access to the underlying UTXO validation system.

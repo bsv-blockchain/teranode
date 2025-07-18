@@ -8,7 +8,6 @@ package blockassembly_api
 
 import (
 	context "context"
-
 	model "github.com/bitcoin-sv/teranode/model"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
@@ -34,6 +33,7 @@ const (
 	BlockAssemblyAPI_GenerateBlocks_FullMethodName                 = "/blockassembly_api.BlockAssemblyAPI/GenerateBlocks"
 	BlockAssemblyAPI_CheckBlockAssembly_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/CheckBlockAssembly"
 	BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyBlockCandidate"
+	BlockAssemblyAPI_GetBlockAssemblyTxs_FullMethodName            = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyTxs"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -84,6 +84,10 @@ type BlockAssemblyAPIClient interface {
 	// CheckBlockAssembly checks the current state of block assembly.
 	// This verifies that the block assembly and subtree processor are functioning correctly.
 	GetBlockAssemblyBlockCandidate(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockAssemblyBlockCandidateResponse, error)
+	// GetBlockAssemblyTxs retrieves the transactions currently being assembled in the block assembly.
+	// This provides visibility into the transactions that are candidates for inclusion in the next block.
+	// NOTE: this method is primarily for debugging purposes and may not be suitable for production use.
+	GetBlockAssemblyTxs(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockAssemblyTxsResponse, error)
 }
 
 type blockAssemblyAPIClient struct {
@@ -224,6 +228,16 @@ func (c *blockAssemblyAPIClient) GetBlockAssemblyBlockCandidate(ctx context.Cont
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) GetBlockAssemblyTxs(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockAssemblyTxsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlockAssemblyTxsResponse)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetBlockAssemblyTxs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockAssemblyAPIServer is the server API for BlockAssemblyAPI service.
 // All implementations must embed UnimplementedBlockAssemblyAPIServer
 // for forward compatibility.
@@ -272,6 +286,10 @@ type BlockAssemblyAPIServer interface {
 	// CheckBlockAssembly checks the current state of block assembly.
 	// This verifies that the block assembly and subtree processor are functioning correctly.
 	GetBlockAssemblyBlockCandidate(context.Context, *EmptyMessage) (*GetBlockAssemblyBlockCandidateResponse, error)
+	// GetBlockAssemblyTxs retrieves the transactions currently being assembled in the block assembly.
+	// This provides visibility into the transactions that are candidates for inclusion in the next block.
+	// NOTE: this method is primarily for debugging purposes and may not be suitable for production use.
+	GetBlockAssemblyTxs(context.Context, *EmptyMessage) (*GetBlockAssemblyTxsResponse, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
 
@@ -320,6 +338,9 @@ func (UnimplementedBlockAssemblyAPIServer) CheckBlockAssembly(context.Context, *
 }
 func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyBlockCandidate(context.Context, *EmptyMessage) (*GetBlockAssemblyBlockCandidateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockAssemblyBlockCandidate not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyTxs(context.Context, *EmptyMessage) (*GetBlockAssemblyTxsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockAssemblyTxs not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) mustEmbedUnimplementedBlockAssemblyAPIServer() {}
 func (UnimplementedBlockAssemblyAPIServer) testEmbeddedByValue()                          {}
@@ -576,6 +597,24 @@ func _BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_Handler(srv interface{}, c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_GetBlockAssemblyTxs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyMessage)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).GetBlockAssemblyTxs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_GetBlockAssemblyTxs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).GetBlockAssemblyTxs(ctx, req.(*EmptyMessage))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockAssemblyAPI_ServiceDesc is the grpc.ServiceDesc for BlockAssemblyAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -634,6 +673,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockAssemblyBlockCandidate",
 			Handler:    _BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_Handler,
+		},
+		{
+			MethodName: "GetBlockAssemblyTxs",
+			Handler:    _BlockAssemblyAPI_GetBlockAssemblyTxs_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

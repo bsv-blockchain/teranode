@@ -133,3 +133,17 @@ func (m *Mock) GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block
 
 	return args.Get(0).(*model.Block), nil
 }
+
+func (m *Mock) GetTransactionHashes(ctx context.Context) ([]string, error) {
+	args := m.Called(ctx)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	if args.Get(0) == nil {
+		return nil, nil
+	}
+
+	return args.Get(0).([]string), nil
+}

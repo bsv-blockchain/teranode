@@ -460,3 +460,20 @@ func (s *Client) GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Blo
 
 	return block, nil
 }
+
+// GetTransactionHashes retrieves all transaction hashes in block assembly.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - []string: List of transaction hashes
+//   - error: Any error encountered during retrieval
+func (s *Client) GetTransactionHashes(ctx context.Context) ([]string, error) {
+	resp, err := s.client.GetBlockAssemblyTxs(ctx, &blockassembly_api.EmptyMessage{})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.Txs, nil
+}

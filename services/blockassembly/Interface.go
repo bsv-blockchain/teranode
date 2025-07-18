@@ -136,6 +136,16 @@ type ClientI interface {
 	//   - *model.Block: Block candidate
 	//   - error: Any error encountered during retrieval
 	GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block, error)
+
+	// GetTransactionHashes retrieves all transaction hashes in block assembly.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation
+	//
+	// Returns:
+	//   - []*chainhash.Hash: List of transaction hashes
+	//   - error: Any error encountered during retrieval
+	GetTransactionHashes(ctx context.Context) ([]string, error)
 }
 
 // Store defines the interface for block assembly storage operations.

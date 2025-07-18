@@ -58,6 +58,7 @@ var (
 	prometheusHandleGetMiningCandidate   prometheus.Histogram
 	prometheusHandleSubmitMiningSolution prometheus.Histogram
 	prometheusHandleGetpeerinfo          prometheus.Histogram
+	prometheusHandleGetRawmempool        prometheus.Histogram
 	prometheusHandleGetblockchaininfo    prometheus.Histogram
 	prometheusHandleGetinfo              prometheus.Histogram
 	prometheusHandleGetDifficulty        prometheus.Histogram
@@ -90,7 +91,7 @@ func _initPrometheusMetrics() {
 	//		Name:      "health",
 	//		Help:      "Number of calls to the health endpoint of the rpc service",
 	//	},
-	//)
+	// )
 	prometheusHandleGetBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -205,6 +206,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "rpc",
 			Name:      "get_peer_info",
 			Help:      "Histogram of calls to handleGetpeerinfo in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleGetRawmempool = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "rpc",
+			Name:      "get_rawmempool",
+			Help:      "Histogram of calls to handleGetRawmempool in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

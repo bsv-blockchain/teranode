@@ -1293,6 +1293,18 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		return nil, errors.NewProcessingError("error converting subtree count", err)
 	}
 
+	subtreeHashes := ba.blockAssembler.subtreeProcessor.GetSubtreeHashes()
+	subtreeHashesStrings := make([]string, 0, len(subtreeHashes))
+	for _, hash := range subtreeHashes {
+		subtreeHashesStrings = append(subtreeHashesStrings, hash.String())
+	}
+
+	removeMap := ba.blockAssembler.subtreeProcessor.GetRemoveMap()
+	removeMapLen32, err := safeconversion.IntToUint32(removeMap.Length())
+	if err != nil {
+		return nil, errors.NewProcessingError("error converting remove map length", err)
+	}
+
 	return &blockassembly_api.StateMessage{
 		BlockAssemblyState:    StateStrings[ba.blockAssembler.GetCurrentRunningState()],
 		SubtreeProcessorState: subtreeprocessor.StateStrings[ba.blockAssembler.subtreeProcessor.GetCurrentRunningState()],
@@ -1303,6 +1315,32 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		QueueCount:            ba.blockAssembler.QueueLength(),
 		CurrentHeight:         ba.blockAssembler.bestBlockHeight.Load(),
 		CurrentHash:           ba.blockAssembler.bestBlockHeader.Load().Hash().String(),
+		RemoveMapCount:        removeMapLen32,
+		Subtrees:              subtreeHashesStrings,
+	}, nil
+}
+
+func (ba *BlockAssembly) GetBlockAssemblyTxs(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.GetBlockAssemblyTxsResponse, error) {
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "GetBlockAssemblyTxsResponse",
+		tracing.WithParentStat(ba.stats),
+		tracing.WithLogMessage(ba.logger, "[GetBlockAssemblyTxsResponse] called"),
+	)
+	defer deferFn()
+
+	txHashes := ba.blockAssembler.subtreeProcessor.GetTransactionHashes()
+	txHashesStrings := make([]string, 0, len(txHashes))
+	for _, hash := range txHashes {
+		txHashesStrings = append(txHashesStrings, hash.String())
+	}
+
+	lenUint64, err := safeconversion.IntToUint64(len(txHashesStrings))
+	if err != nil {
+		return nil, errors.NewProcessingError("error converting transaction count", err)
+	}
+
+	return &blockassembly_api.GetBlockAssemblyTxsResponse{
+		TxCount: lenUint64,
+		Txs:     txHashesStrings,
 	}, nil
 }
 
