@@ -322,12 +322,17 @@ func (q *Quorum) TryLockIfNotExistsWithTimeout(ctx context.Context, hash *chainh
 
 	for {
 		locked, exists, release, err = q.TryLockIfNotExists(ctx, hash, fileType)
-		if err != nil || locked || exists {
+		if err != nil || exists {
 			if locked {
 				q.logger.Warnf("[TryLockIfNotExistsWithTimeout][%s] New lock acquired after waiting for previous lock to expire. Two potential issues. 1) Whatever acquired the previous lock is taking longer than lock timeout to process therefore we are about to duplicate effort or 2) whatever acquired the previous lock is stuck", hash)
 			}
 
 			return locked, exists, release, err
+		}
+
+		if locked {
+			q.logger.Debugf("[TryLockIfNotExistsWithTimeout][%s] Lock acquired after %d retries", hash, retryCount)
+			return locked, exists, release, nil
 		}
 
 		retryCount++
