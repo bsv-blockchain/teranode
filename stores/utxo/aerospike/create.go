@@ -386,7 +386,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 					wrapper.Bytes(),
 					setOptions...,
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing outputs to external store [%s]", bItem.txHash.String(), err))
+					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("error writing outputs to external store [%s]", bItem.txHash.String()))
 					// NOOP for this record
 					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
@@ -413,7 +413,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 					bItem.tx.ExtendedBytes(),
 					setOptions...,
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-					utils.SafeSend[error](bItem.done, errors.NewStorageError("[sendStoreBatch] error batch writing transaction to external store [%s]", bItem.txHash.String(), err))
+					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[sendStoreBatch] error batch writing transaction to external store [%s]", bItem.txHash.String()))
 					// NOOP for this record
 					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
@@ -758,7 +758,8 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 		bItem.tx.ExtendedBytes(),
 		opts...,
 	); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-		utils.SafeSend[error](bItem.done, errors.NewStorageError("[GetBinsToStore] error writing transaction to external store [%s]", bItem.txHash.String(), err))
+		utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[GetBinsToStore] error writing transaction to external store [%s]", bItem.txHash.String()))
+
 		return
 	}
 
@@ -797,13 +798,12 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 			ok := errors.As(err, &aErr)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					s.logger.Warnf("[StoreTransactionExternally][%s] bin %d already exists in store", bItem.txHash, binIdx)
-					continue
+					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[StoreTransactionExternally][%s] bin %d already exists in store", bItem.txHash, binIdx))
+					return
 				}
 			}
 
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("[StoreTransactionExternally][%s] could not put bins (extended mode) to store", bItem.txHash, err))
-
 			return
 		}
 	}
@@ -862,7 +862,7 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 		wrapper.Bytes(),
 		opts...,
 	); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-		utils.SafeSend[error](bItem.done, errors.NewStorageError("[StorePartialTransactionExternally] error writing output to external store [%s]", bItem.txHash.String(), err))
+		utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[StorePartialTransactionExternally] error writing output to external store [%s]", bItem.txHash.String()))
 		return
 	}
 
