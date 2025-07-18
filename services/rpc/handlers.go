@@ -58,11 +58,6 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-const (
-	p2pClientTimeout    = 5 * time.Second
-	legacyClientTimeout = 5 * time.Second
-)
-
 // live items expire after 10s, cleanup runs every minute
 var rpcCallCache = cache.New(10*time.Second, time.Minute)
 
@@ -1061,7 +1056,7 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	// get legacy peer info
 	if s.peerClient != nil {
 		// create a timeout context to prevent hanging if legacy peer service is not responding
-		peerCtx, cancel := context.WithTimeout(ctx, legacyClientTimeout)
+		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 		defer cancel()
 
 		// use a goroutine with select to handle timeouts more reliably
@@ -1096,7 +1091,7 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	// get new peer info
 	if s.p2pClient != nil {
 		// create a timeout context to prevent hanging if p2p service is not responding
-		peerCtx, cancel := context.WithTimeout(ctx, p2pClientTimeout)
+		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 		defer cancel()
 
 		// use a goroutine with select to handle timeouts more reliably
@@ -1343,7 +1338,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	var p2pConnections *p2p_api.GetPeersResponse
 	if s.p2pClient != nil {
 		// create a timeout context to prevent hanging if p2p service is not responding
-		peerCtx, cancel := context.WithTimeout(ctx, p2pClientTimeout)
+		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 		defer cancel()
 
 		// use a goroutine with select to handle timeouts more reliably
@@ -1375,7 +1370,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	var legacyConnections *peer_api.GetPeersResponse
 	if s.peerClient != nil {
 		// create a timeout context to prevent hanging if legacy peer service is not responding
-		peerCtx, cancel := context.WithTimeout(ctx, legacyClientTimeout)
+		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 		defer cancel()
 
 		// use a goroutine with select to handle timeouts more reliably
@@ -1768,26 +1763,70 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 
 	s.logger.Debugf("in handleListBanned")
 
+	// Define a constant for the client call timeout
+	const clientCallTimeout = 5 * time.Second
+
 	// check if P2P service is available
 	var bannedList []string
 
 	if s.p2pClient != nil {
-		p2pListBannedResp, err := s.p2pClient.ListBanned(ctx, &emptypb.Empty{})
-		if err != nil {
-			s.logger.Warnf("Failed to get banned list in P2P service: %v", err)
-		} else {
-			bannedList = p2pListBannedResp.Banned
+		// Create a timeout context for the P2P client call
+		p2pCtx, cancel := context.WithTimeout(ctx, clientCallTimeout)
+		defer cancel()
+
+		// Use a goroutine with select to handle timeouts more reliably
+		type p2pResult struct {
+			resp *p2p_api.ListBannedResponse
+			err  error
+		}
+		resultCh := make(chan p2pResult, 1)
+
+		go func() {
+			resp, err := s.p2pClient.ListBanned(p2pCtx, &emptypb.Empty{})
+			resultCh <- p2pResult{resp: resp, err: err}
+		}()
+
+		select {
+		case result := <-resultCh:
+			if result.err != nil {
+				s.logger.Warnf("Failed to get banned list in P2P service: %v", result.err)
+			} else {
+				bannedList = result.resp.Banned
+			}
+		case <-p2pCtx.Done():
+			// Timeout reached
+			s.logger.Warnf("Timeout getting banned list from P2P service after %v seconds", clientCallTimeout.Seconds())
 		}
 	}
 
 	// check if legacy peer service is available
-
 	if s.peerClient != nil {
-		listBannedLegacy, err := s.peerClient.ListBanned(ctx, &emptypb.Empty{})
-		if err != nil {
-			s.logger.Warnf("Failed to get banned list in legacy peer service: %v", err)
-		} else {
-			bannedList = append(bannedList, listBannedLegacy.Banned...)
+		// Create a timeout context for the legacy peer client call
+		legacyCtx, cancel := context.WithTimeout(ctx, clientCallTimeout)
+		defer cancel()
+
+		// Use a goroutine with select to handle timeouts more reliably
+		type legacyResult struct {
+			resp *peer_api.ListBannedResponse
+			err  error
+		}
+		resultCh := make(chan legacyResult, 1)
+
+		go func() {
+			resp, err := s.peerClient.ListBanned(legacyCtx, &emptypb.Empty{})
+			resultCh <- legacyResult{resp: resp, err: err}
+		}()
+
+		select {
+		case result := <-resultCh:
+			if result.err != nil {
+				s.logger.Warnf("Failed to get banned list in legacy peer service: %v", result.err)
+			} else {
+				bannedList = append(bannedList, result.resp.Banned...)
+			}
+		case <-legacyCtx.Done():
+			// Timeout reached
+			s.logger.Warnf("Timeout getting banned list from legacy peer service after %v seconds", clientCallTimeout.Seconds())
 		}
 	}
 

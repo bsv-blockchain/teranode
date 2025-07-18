@@ -459,15 +459,16 @@ type PropagationSettings struct {
 }
 
 type RPCSettings struct {
-	RPCUser        string
-	RPCPass        string
-	RPCLimitUser   string
-	RPCLimitPass   string
-	RPCMaxClients  int
-	RPCQuirks      bool
-	RPCListenerURL *url.URL
-	CacheEnabled   bool
-	RPCTimeout     time.Duration
+	RPCUser           string
+	RPCPass           string
+	RPCLimitUser      string
+	RPCLimitPass      string
+	RPCMaxClients     int
+	RPCQuirks         bool
+	RPCListenerURL    *url.URL
+	CacheEnabled      bool
+	RPCTimeout        time.Duration
+	ClientCallTimeout time.Duration
 }
 
 type FaucetSettings struct {

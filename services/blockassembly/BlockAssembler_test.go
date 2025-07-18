@@ -1110,7 +1110,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		// Test cache functionality by directly manipulating cache
 		ba.bestBlockHeight.Store(1)
 
-		// Set up cache manually
+		// Set up cache manually with a fixed time for deterministic testing
+		testTime := time.Now()
 		ba.cachedCandidate.mu.Lock()
 		ba.cachedCandidate.candidate = &model.MiningCandidate{
 			NBits:  []byte{0x20, 0x7f, 0xff, 0xff},
@@ -1118,7 +1119,7 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		}
 		ba.cachedCandidate.subtrees = []*subtreepkg.Subtree{}
 		ba.cachedCandidate.lastHeight = 1
-		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastUpdate = testTime
 		ba.cachedCandidate.generating = false
 		ba.cachedCandidate.mu.Unlock()
 
@@ -1127,20 +1128,20 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		currentHeight := ba.bestBlockHeight.Load()
 		isValid := ba.cachedCandidate.candidate != nil &&
 			ba.cachedCandidate.lastHeight == currentHeight &&
-			time.Since(ba.cachedCandidate.lastUpdate) < 5*time.Second
+			testTime.Sub(ba.cachedCandidate.lastUpdate) < 5*time.Second
 		ba.cachedCandidate.mu.RUnlock()
 
 		assert.True(t, isValid, "Cache should be valid with recent timestamp and same height")
 
-		// Test cache expiration
+		// Test cache expiration - use a time more than 5 seconds in the past
 		ba.cachedCandidate.mu.Lock()
-		ba.cachedCandidate.lastUpdate = time.Now().Add(-6 * time.Second)
+		ba.cachedCandidate.lastUpdate = testTime.Add(-10 * time.Second)
 		ba.cachedCandidate.mu.Unlock()
 
 		ba.cachedCandidate.mu.RLock()
 		isValid = ba.cachedCandidate.candidate != nil &&
 			ba.cachedCandidate.lastHeight == currentHeight &&
-			time.Since(ba.cachedCandidate.lastUpdate) < 5*time.Second
+			testTime.Sub(ba.cachedCandidate.lastUpdate) < 5*time.Second
 		ba.cachedCandidate.mu.RUnlock()
 
 		assert.False(t, isValid, "Cache should be invalid due to expiration")
@@ -1152,7 +1153,13 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
-		ctx := context.Background()
+		// Create a cancellable context for proper cleanup
+		ctx, cancel := context.WithCancel(context.Background())
+		defer func() {
+			cancel()
+			time.Sleep(10 * time.Millisecond) // Allow goroutines to exit cleanly
+		}()
+
 		ba := testItems.blockAssembler
 
 		// Setup initial block
@@ -1196,7 +1203,13 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
-		ctx := context.Background()
+		// Create a cancellable context for proper cleanup
+		ctx, cancel := context.WithCancel(context.Background())
+		defer func() {
+			cancel()
+			time.Sleep(10 * time.Millisecond) // Allow goroutines to exit cleanly
+		}()
+
 		ba := testItems.blockAssembler
 
 		// Setup genesis block
@@ -1234,7 +1247,13 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
-		ctx := context.Background()
+		// Create a cancellable context for proper cleanup
+		ctx, cancel := context.WithCancel(context.Background())
+		defer func() {
+			cancel()
+			time.Sleep(10 * time.Millisecond) // Allow goroutines to exit cleanly
+		}()
+
 		ba := testItems.blockAssembler
 
 		// Setup genesis block
