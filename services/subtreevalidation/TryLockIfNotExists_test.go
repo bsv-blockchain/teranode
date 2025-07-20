@@ -329,10 +329,6 @@ func TestTryLockIfNotExistsWithTimeout(t *testing.T) {
 		assert.False(t, exists, "Exists should be false as exister is configured to return false")
 		require.NotNil(t, release, "Release function should not be nil")
 
-		expectedWarningPart := fmt.Sprintf("[TryLockIfNotExistsWithTimeout][%s] New lock acquired after waiting for previous lock to expire", localTestHash)
-		assert.Contains(t, clogger.WarnBuf.String(), expectedWarningPart,
-			"Expected warning log message not found. Log was: %s", clogger.WarnBuf.String())
-
 		if release != nil {
 			release()
 		}

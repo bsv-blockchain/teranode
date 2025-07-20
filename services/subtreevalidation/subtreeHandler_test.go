@@ -49,13 +49,13 @@ func TestLock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	gotLock, _, releaseFn, err := q.TryLockIfNotExists(ctx, &hash, fileformat.FileTypeSubtree)
+	gotLock, _, releaseFn, err := q.TryLockIfFileNotExists(ctx, &hash, fileformat.FileTypeSubtree)
 	require.NoError(t, err)
 	assert.True(t, gotLock)
 
 	defer releaseFn()
 
-	gotLock, _, releaseFn, err = q.TryLockIfNotExists(ctx, &hash, fileformat.FileTypeSubtree)
+	gotLock, _, releaseFn, err = q.TryLockIfFileNotExists(ctx, &hash, fileformat.FileTypeSubtree)
 	require.NoError(t, err)
 	assert.False(t, gotLock)
 

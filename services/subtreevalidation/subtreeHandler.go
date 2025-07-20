@@ -112,7 +112,7 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 		u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseURL.String())
 		defer u.logger.Infof("Finished processing subtree message for %s", hash.String())
 
-		gotLock, _, releaseLockFunc, err := q.TryLockIfNotExists(ctx, hash, fileformat.FileTypeSubtree)
+		gotLock, _, releaseLockFunc, err := q.TryLockIfFileNotExists(ctx, hash, fileformat.FileTypeSubtree)
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
 			return errors.NewProcessingError("error getting lock for Subtree %s", hash.String(), err)

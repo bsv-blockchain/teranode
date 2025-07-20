@@ -201,13 +201,31 @@ func NewQuorum(logger ulogger.Logger, exister existerIfc, path string, quorumOpt
 	return q, nil
 }
 
-func (q *Quorum) TryLockIfNotExists(ctx context.Context, hash *chainhash.Hash, fileType fileformat.FileType) (locked bool, exists bool, release func(), err error) {
-	b, err := q.exister.Exists(ctx, hash[:], fileType)
+// TryLockIfFileNotExists attempts to acquire a lock for the given hash if the file does not already exist.
+//
+// This method checks if a file with the specified hash exists in the storage system.
+// If the file does not exist, it attempts to create a lock file atomically.
+// If the lock file is successfully created, it returns a release function to remove the lock.
+// If the file already exists, it returns that the file exists without acquiring a lock.
+//
+// Parameters:
+//   - ctx: Context for cancellation and request-scoped values
+//   - hash: The hash of the file to check and potentially lock
+//   - fileType: The type of file being checked (affects storage behavior)
+//
+// Returns:
+//   - locked: true if the lock was successfully acquired, false otherwise
+//   - exists: true if the file already exists, false otherwise
+//   - release: A function to call to release the lock, or a no-op if no lock was acquired
+//   - error: Error if the operation fails, nil if successful
+func (q *Quorum) TryLockIfFileNotExists(ctx context.Context, hash *chainhash.Hash, fileType fileformat.FileType) (locked bool, exists bool, release func(), err error) {
+	fileExists, err := q.exister.Exists(ctx, hash[:], fileType)
 	if err != nil {
 		return false, false, noopFunc, err
 	}
 
-	if b {
+	// return early if the file already exists, no need to acquire a lock
+	if fileExists {
 		return false, true, noopFunc, nil
 	}
 
@@ -220,18 +238,18 @@ func (q *Quorum) TryLockIfNotExists(ctx context.Context, hash *chainhash.Hash, f
 	file, err := os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
-			q.logger.Debugf("[TryLockIfNotExists] lock file %s already exists", lockFile)
+			q.logger.Debugf("[TryLockIfFileNotExists] lock file %s already exists", lockFile)
 
 			return false, false, noopFunc, nil // Lock held by someone else
 		}
 
-		q.logger.Errorf("[TryLockIfNotExists] error creating lock file %s: %v", lockFile, err)
+		q.logger.Errorf("[TryLockIfFileNotExists] error creating lock file %s: %v", lockFile, err)
 
 		return false, false, noopFunc, err
 	}
 
 	// Close the file immediately after creating it
-	if err := file.Close(); err != nil {
+	if err = file.Close(); err != nil {
 		q.logger.Warnf("failed to close lock file %q: %v", lockFile, err)
 	}
 
@@ -321,12 +339,8 @@ func (q *Quorum) TryLockIfNotExistsWithTimeout(ctx context.Context, hash *chainh
 	retryCount := 0
 
 	for {
-		locked, exists, release, err = q.TryLockIfNotExists(ctx, hash, fileType)
+		locked, exists, release, err = q.TryLockIfFileNotExists(ctx, hash, fileType)
 		if err != nil || exists {
-			if locked {
-				q.logger.Warnf("[TryLockIfNotExistsWithTimeout][%s] New lock acquired after waiting for previous lock to expire. Two potential issues. 1) Whatever acquired the previous lock is taking longer than lock timeout to process therefore we are about to duplicate effort or 2) whatever acquired the previous lock is stuck", hash)
-			}
-
 			return locked, exists, release, err
 		}
 
