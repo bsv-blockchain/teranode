@@ -236,28 +236,31 @@ func TestMoveBackBlockProcessBlock(t *testing.T) {
 
 func TestRotate(t *testing.T) {
 	newSubtreeChan := make(chan NewSubtreeRequest)
-	endTestChan := make(chan bool)
+	done := make(chan struct{})
+	defer close(done)
 
 	go func() {
 		for {
-			subtreeRequest := <-newSubtreeChan
-			subtree := subtreeRequest.Subtree
-			assert.Equal(t, 4, subtree.Length())
-			assert.Equal(t, uint64(3), subtree.Fees)
+			select {
+			case subtreeRequest := <-newSubtreeChan:
+				subtree := subtreeRequest.Subtree
+				assert.Equal(t, 4, subtree.Length())
+				assert.Equal(t, uint64(3), subtree.Fees)
 
-			// Test the merkle root with the coinbase placeholder
-			merkleRoot := subtree.RootHash()
-			assert.Equal(t, "fd8e7ab196c23534961ef2e792e13426844f831e83b856aa99998ab9908d854f", merkleRoot.String())
+				// Test the merkle root with the coinbase placeholder
+				merkleRoot := subtree.RootHash()
+				assert.Equal(t, "fd8e7ab196c23534961ef2e792e13426844f831e83b856aa99998ab9908d854f", merkleRoot.String())
 
-			// Test the merkle root with the coinbase placeholder replaced
-			merkleRoot = subtree.ReplaceRootNode(coinbaseHash, 0, 0)
-			assert.Equal(t, "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766", merkleRoot.String())
+				// Test the merkle root with the coinbase placeholder replaced
+				merkleRoot = subtree.ReplaceRootNode(coinbaseHash, 0, 0)
+				assert.Equal(t, "f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766", merkleRoot.String())
 
-			if subtreeRequest.ErrChan != nil {
-				subtreeRequest.ErrChan <- nil
+				if subtreeRequest.ErrChan != nil {
+					subtreeRequest.ErrChan <- nil
+				}
+			case <-done:
+				return
 			}
-
-			endTestChan <- true
 		}
 	}()
 
@@ -273,10 +276,17 @@ func TestRotate(t *testing.T) {
 		stp.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 	}
 
-	<-endTestChan
+	// Wait for the subtree to be processed
+	time.Sleep(200 * time.Millisecond)
 
-	assert.Equal(t, 0, stp.currentSubtree.Length())
-	assert.Equal(t, 1, len(stp.chainedSubtrees))
+	// Use thread-safe method to check current subtree length
+	assert.Equal(t, 0, stp.GetCurrentLength())
+
+	// Access chainedSubtrees in a thread-safe manner
+	stp.Lock()
+	chainedSubtreesLen := len(stp.chainedSubtrees)
+	stp.Unlock()
+	assert.Equal(t, 1, chainedSubtreesLen)
 
 	// Add one more txid to trigger the rotate
 	// hash, err := chainhash.NewHashFromStr("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
@@ -288,15 +298,34 @@ func TestRotate(t *testing.T) {
 	// in the subtree processor, because this is a performance issue
 	// stp.Add(util.SubtreeNode{Hash: *hash, Fee: 1})
 	// time.Sleep(100 * time.Millisecond)
-	// assert.Equal(t, 1, stp.currentSubtree.Length())
+	// assert.Equal(t, 1, stp.GetCurrentLength())
 
 	// Still 1 because the tree is not yet complete
-	assert.Equal(t, 1, len(stp.chainedSubtrees))
+	stp.Lock()
+	chainedSubtreesLen = len(stp.chainedSubtrees)
+	stp.Unlock()
+	assert.Equal(t, 1, chainedSubtreesLen)
 }
 
 func Test_RemoveTxFromSubtrees(t *testing.T) {
 	t.Run("remove transaction from subtrees", func(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest)
+		done := make(chan struct{})
+		defer close(done)
+
+		// Handle channel reads to prevent blocking
+		go func() {
+			for {
+				select {
+				case req := <-newSubtreeChan:
+					if req.ErrChan != nil {
+						req.ErrChan <- nil
+					}
+				case <-done:
+					return
+				}
+			}
+		}()
 		subtreeStore := blob_memory.New()
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
@@ -353,6 +382,22 @@ func Test_RemoveTxFromSubtrees(t *testing.T) {
 func TestReChainSubtrees(t *testing.T) {
 	// Create a SubtreeProcessor
 	newSubtreeChan := make(chan NewSubtreeRequest)
+	done := make(chan struct{})
+	defer close(done)
+
+	// Handle channel reads to prevent blocking
+	go func() {
+		for {
+			select {
+			case req := <-newSubtreeChan:
+				if req.ErrChan != nil {
+					req.ErrChan <- nil
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
@@ -1219,10 +1264,10 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		processingDone := make(chan struct{})
+		defer close(processingDone)
 
-		var wg sync.WaitGroup
-
-		wg.Add(4) // we are expecting 4 subtrees
+		subtreeCount := 0
+		subtreeCountMutex := sync.Mutex{}
 
 		go func() {
 			for {
@@ -1232,7 +1277,9 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 						newSubtreeRequest.ErrChan <- nil
 					}
 
-					wg.Done()
+					subtreeCountMutex.Lock()
+					subtreeCount++
+					subtreeCountMutex.Unlock()
 				case <-processingDone:
 					return
 				}
@@ -1262,7 +1309,16 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 
-		wg.Wait()
+		// Wait for 4 subtrees to be created
+		for {
+			subtreeCountMutex.Lock()
+			count := subtreeCount
+			subtreeCountMutex.Unlock()
+			if count >= 4 {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 
 		// this is to make sure the subtrees are added to the chain
 		for stp.txCount.Load() < 17 {
@@ -1311,7 +1367,6 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 
 		// Wait for any background processing to complete
 		time.Sleep(100 * time.Millisecond)
-		close(processingDone)
 
 		assert.Equal(t, 6, len(stp.chainedSubtrees))
 		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
@@ -1353,19 +1408,24 @@ func TestMoveBackBlocks(t *testing.T) {
 
 		newSubtreeChan := make(chan NewSubtreeRequest)
 
-		var wg sync.WaitGroup
-
-		wg.Add(8) // we are expecting 8 subtrees (2 blocks with 4 subtrees each)
+		subtreeCount := 0
+		subtreeCountMutex := sync.Mutex{}
+		processingDone := make(chan struct{})
 
 		go func() {
 			for {
-				newSubtreeRequest := <-newSubtreeChan
+				select {
+				case newSubtreeRequest := <-newSubtreeChan:
+					if newSubtreeRequest.ErrChan != nil {
+						newSubtreeRequest.ErrChan <- nil
+					}
 
-				if newSubtreeRequest.ErrChan != nil {
-					newSubtreeRequest.ErrChan <- nil
+					subtreeCountMutex.Lock()
+					subtreeCount++
+					subtreeCountMutex.Unlock()
+				case <-processingDone:
+					return
 				}
-
-				wg.Done()
 			}
 		}()
 
@@ -1392,7 +1452,16 @@ func TestMoveBackBlocks(t *testing.T) {
 			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 
-		wg.Wait()
+		// Wait for 8 subtrees to be created
+		for {
+			subtreeCountMutex.Lock()
+			count := subtreeCount
+			subtreeCountMutex.Unlock()
+			if count >= 8 {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 
 		// Ensure subtrees are added to the chain
 		for stp.txCount.Load() < 34 {
@@ -1491,6 +1560,8 @@ func Test_removeMap(t *testing.T) {
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 128
 
 		newSubtreeChan := make(chan NewSubtreeRequest, 100)
+		done := make(chan struct{})
+		defer close(done)
 
 		go func() {
 			for {
@@ -1499,6 +1570,8 @@ func Test_removeMap(t *testing.T) {
 					if newSubtreeRequest.ErrChan != nil {
 						newSubtreeRequest.ErrChan <- nil
 					}
+				case <-done:
+					return
 				}
 			}
 		}()
@@ -1769,6 +1842,22 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
 
 		newSubtreeChan := make(chan NewSubtreeRequest)
+		done := make(chan struct{})
+		defer close(done)
+
+		// Handle channel reads to prevent blocking
+		go func() {
+			for {
+				select {
+				case req := <-newSubtreeChan:
+					if req.ErrChan != nil {
+						req.ErrChan <- nil
+					}
+				case <-done:
+					return
+				}
+			}
+		}()
 		subtreeStore := blob_memory.New()
 
 		ctx := context.Background()
@@ -1870,6 +1959,22 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
 
 		newSubtreeChan := make(chan NewSubtreeRequest)
+		done := make(chan struct{})
+		defer close(done)
+
+		// Handle channel reads to prevent blocking
+		go func() {
+			for {
+				select {
+				case req := <-newSubtreeChan:
+					if req.ErrChan != nil {
+						req.ErrChan <- nil
+					}
+				case <-done:
+					return
+				}
+			}
+		}()
 		subtreeStore := blob_memory.New()
 
 		ctx := context.Background()
