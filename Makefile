@@ -156,7 +156,8 @@ testall: test longtest sequentialtest
 .PHONY: smoketest
 smoketest:
 	# SETTINGS_CONTEXT=test go test -race -tags "testtxmetacache" -count=1 -timeout=180s -coverprofile=coverage.out ./test/e2e/daemon/... 2>&1 | grep -v "ld: warning:"
-	cd test/e2e/daemon && SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -v -count=1 -race -timeout=5m -run '^(TestBlockSubsidy|TestMoveUp|TestMoveDownMoveUpWhenNewBlockIsGenerated|TestMoveDownMoveUpWhenNoNewBlockIsGenerated|TestTDRestart|TestGetBlockVerbosity|TestGetBlockHeaderVerbose|TestGetMiningCandidate|TestGenerateToAddress|TestBlockManagement|TestSendTxAndCheckState|TestShouldNotProcessNonFinalTx|TestShouldRejectOversizedTx|TestShouldRejectOversizedScript|TestShouldAllowChainedTransactionsUseRpc|TestDoubleInput|TestGetBestBlockHash|TestGetPeerInfo|TestGetMiningInfo|TestVersion)$$' .
+	cd test/e2e/daemon && SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -v -count=1 -race -timeout=5m -parallel 1 -run '^(TestBlockSubsidy|TestMoveUp|TestMoveDownMoveUpWhenNewBlockIsGenerated|TestMoveDownMoveUpWhenNoNewBlockIsGenerated|TestTDRestart|TestGetBlockVerbosity|TestGetBlockHeaderVerbose|TestGetMiningCandidate|TestGenerateToAddress|TestBlockManagement|TestSendTxAndCheckState|TestShouldNotProcessNonFinalTx|TestShouldRejectOversizedTx|TestShouldRejectOversizedScript|TestShouldAllowChainedTransactionsUseRpc|TestDoubleInput|TestGetBestBlockHash|TestGetPeerInfo|TestGetMiningInfo|TestVersion)$$' .
+
 
 .PHONY: nightly-tests
 nightly-tests:
