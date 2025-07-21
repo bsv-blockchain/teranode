@@ -670,9 +670,20 @@ func (s *Server) sendDirectHandshake(ctx context.Context, peerID peer.ID) {
 
 	s.logger.Infof("[sendDirectHandshake] Sending direct handshake to peer %s: BestHeight=%d", peerID.String(), localHeight)
 
-	// send handshake directly to the peer via stream
+	// try to send handshake directly to the peer via stream
 	if err := s.sendHandshakeToPeer(ctx, peerID, msgBytes); err != nil {
-		s.logger.Errorf("[sendDirectHandshake] error sending handshake to peer %s: %v", peerID.String(), err)
+		// if stream-based handshake fails (e.g., protocol not supported), fall back to pubsub
+		s.logger.Warnf("[sendDirectHandshake] Stream handshake failed for peer %s: %v, falling back to pubsub", peerID.String(), err)
+
+		// send via pubsub topic with a small delay to ensure peer is subscribed
+		go func() {
+			time.Sleep(2 * time.Second)
+			if err := s.P2PNode.Publish(ctx, s.handshakeTopicName, msgBytes); err != nil {
+				s.logger.Errorf("[sendDirectHandshake] Fallback pubsub handshake also failed: %v", err)
+			} else {
+				s.logger.Infof("[sendDirectHandshake] Successfully sent handshake via pubsub fallback to peer %s", peerID.String())
+			}
+		}()
 	} else {
 		s.logger.Infof("[sendDirectHandshake] Successfully sent direct handshake to peer %s", peerID.String())
 	}
