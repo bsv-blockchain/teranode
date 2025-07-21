@@ -28,6 +28,9 @@ func initMockedServer(t *testing.T) (*blockassembly.BlockAssembly, context.Cance
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	ba := blockassembly.New(ulogger.TestLogger{}, tSettings, blobStore, utxoStore, blobStore, blockchainClient)
 
+	// Skip waiting for pending blocks in tests to avoid timeout
+	ba.SetSkipWaitForPendingBlocks(true)
+
 	err = ba.Init(ctx)
 	require.NoError(t, err)
 
