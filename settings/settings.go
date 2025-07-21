@@ -120,6 +120,12 @@ func NewSettings(alternativeContext ...string) *Settings {
 			InvalidSubtreesConfig: getURL("kafka_invalidSubtreesConfig", "", alternativeContext...),
 			SubtreesConfig:        getURL("kafka_subtreesConfig", "", alternativeContext...),
 			BlocksConfig:          getURL("kafka_blocksConfig", "", alternativeContext...),
+			// TLS settings
+			EnableTLS:     getBool("KAFKA_ENABLE_TLS", false, alternativeContext...),
+			TLSSkipVerify: getBool("KAFKA_TLS_SKIP_VERIFY", false, alternativeContext...),
+			TLSCAFile:     getString("KAFKA_TLS_CA_FILE", "", alternativeContext...),
+			TLSCertFile:   getString("KAFKA_TLS_CERT_FILE", "", alternativeContext...),
+			TLSKeyFile:    getString("KAFKA_TLS_KEY_FILE", "", alternativeContext...),
 		},
 		Aerospike: AerospikeSettings{
 			Debug:                  getBool("aerospike_debug", false, alternativeContext...),

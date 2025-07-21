@@ -2201,7 +2201,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 	if legacyInvConfigURL != nil {
 		sm.legacyKafkaInvCh = make(chan *kafka.Message, 10_000)
 
-		producer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, sm.logger, legacyInvConfigURL)
+		producer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, sm.logger, legacyInvConfigURL, &sm.settings.Kafka)
 		if err != nil {
 			sm.logger.Errorf("[Legacy Manager] error starting kafka producer: %v", err)
 			return

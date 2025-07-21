@@ -856,7 +856,7 @@ func startPropagationService(
 	// Create the logger for the Propagation service
 	var validatorKafkaProducerClient kafka.KafkaAsyncProducerI
 
-	validatorKafkaProducerClient, err = getKafkaTxAsyncProducer(ctx, createLogger(loggerKafkaConsumerTransaction))
+	validatorKafkaProducerClient, err = getKafkaTxAsyncProducer(ctx, createLogger(loggerKafkaConsumerTransaction), appSettings)
 	if err != nil {
 		return err
 	}

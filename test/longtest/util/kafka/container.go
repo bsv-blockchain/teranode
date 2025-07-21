@@ -74,7 +74,7 @@ func GetTestContainerFreePort() (int, error) {
 	return 0, errors.NewConfigurationError("failed to find a free port after 3 attempts")
 }
 
-// RunContainer starts a Kafka container. If config is nil, uses default configuration
+// RunContainer starts a Kafka container. If config is nil, uses default configuration. NO TLS.
 func RunTestContainer(ctx context.Context) (*GenericTestContainerWrapper, error) {
 	randomName := fmt.Sprintf("kafka-test-%s", uuid.New().String()[:8])
 
@@ -118,6 +118,71 @@ func RunTestContainer(ctx context.Context) (*GenericTestContainerWrapper, error)
 			"--node-id", "0",
 			"--kafka-addr", fmt.Sprintf("PLAINTEXT://0.0.0.0:%d", kafkaPort),
 			"--advertise-kafka-addr", fmt.Sprintf("PLAINTEXT://localhost:%d", kafkaPort),
+			"--pandaproxy-addr", fmt.Sprintf("0.0.0.0:%d", kafkaProxyPort),
+			"--advertise-pandaproxy-addr", fmt.Sprintf("localhost:%d", kafkaProxyPort),
+		},
+		WaitingFor: wait.ForLog("Successfully started Redpanda!"),
+	}
+
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &GenericTestContainerWrapper{
+		Container:      container,
+		KafkaPort:      kafkaPort,
+		KafkaProxyPort: kafkaProxyPort,
+	}, nil
+}
+
+// RunTestContainerTLS starts a Kafka container with TLS enabled
+func RunTestContainerTLS(ctx context.Context) (*GenericTestContainerWrapper, error) {
+	randomName := fmt.Sprintf("kafka-tls-test-%s", uuid.New().String()[:8])
+
+	kafkaPort, err := GetTestContainerFreePort()
+	if err != nil {
+		return nil, err
+	}
+
+	kafkaProxyPort, err := GetTestContainerFreePort()
+	if err != nil {
+		return nil, err
+	}
+
+	kafkaAdminPort, err := GetTestContainerFreePort()
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if ports are available
+	ports := []int{kafkaPort, kafkaProxyPort, kafkaAdminPort}
+	for _, port := range ports {
+		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			return nil, errors.NewConfigurationError(fmt.Sprintf("port %d is not available: %v", port, err), err)
+		}
+
+		listener.Close()
+	}
+
+	req := testcontainers.ContainerRequest{
+		Name:  randomName,
+		Image: fmt.Sprintf("%s:%s", TestContainerRedpandaImage, TestContainerRedpandaVersion),
+		ExposedPorts: []string{
+			fmt.Sprintf("%d:%d/tcp", kafkaPort, kafkaPort),
+			fmt.Sprintf("%d:%d/tcp", kafkaProxyPort, kafkaProxyPort),
+		},
+		Cmd: []string{
+			"redpanda", "start",
+			"--smp", "1",
+			"--overprovisioned",
+			"--node-id", "0",
+			"--kafka-addr", fmt.Sprintf("SSL://0.0.0.0:%d", kafkaPort),
+			"--advertise-kafka-addr", fmt.Sprintf("SSL://localhost:%d", kafkaPort),
 			"--pandaproxy-addr", fmt.Sprintf("0.0.0.0:%d", kafkaProxyPort),
 			"--advertise-pandaproxy-addr", fmt.Sprintf("localhost:%d", kafkaProxyPort),
 		},

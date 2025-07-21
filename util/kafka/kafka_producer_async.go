@@ -15,6 +15,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	inmemorykafka "github.com/bitcoin-sv/teranode/util/kafka/in_memory_kafka"
@@ -80,11 +81,12 @@ type KafkaAsyncProducer struct {
 //   - ctx: Context for producer operations
 //   - logger: Logger instance
 //   - url: URL containing Kafka configuration
+//   - kafkaSettings: Optional Kafka settings for authentication (can be nil for no auth)
 //
 // Returns:
 //   - *KafkaAsyncProducer: Configured async producer
 //   - error: Any error encountered during setup
-func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL) (*KafkaAsyncProducer, error) {
+func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL, kafkaSettings ...*settings.KafkaSettings) (*KafkaAsyncProducer, error) {
 	partitionsInt32, err := safeconversion.IntToInt32(util.GetQueryParamInt(url, "partitions", 1))
 	if err != nil {
 		return nil, err
@@ -109,8 +111,14 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 		FlushFrequency:        util.GetQueryParamDuration(url, "flush_frequency", 10*time.Second),
 	}
 
+	// Get kafkaSettings from variadic parameter
+	var settings *settings.KafkaSettings
+	if len(kafkaSettings) > 0 {
+		settings = kafkaSettings[0]
+	}
+
 	producer, err := retry.Retry(ctx, logger, func() (*KafkaAsyncProducer, error) {
-		return NewKafkaAsyncProducer(logger, producerConfig)
+		return NewKafkaAsyncProducer(logger, producerConfig, settings)
 	}, retry.WithMessage(fmt.Sprintf("[P2P] error starting kafka async producer for topic %s", producerConfig.Topic)))
 	if err != nil {
 		logger.Fatalf("[P2P] failed to start kafka async producer for topic %s: %v", producerConfig.Topic, err)
@@ -125,11 +133,12 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 // Parameters:
 //   - logger: Logger instance
 //   - cfg: Producer configuration
+//   - kafkaSettings: Optional Kafka settings for authentication (can be nil for no auth)
 //
 // Returns:
 //   - *KafkaAsyncProducer: Configured async producer
 //   - error: Any error encountered during setup
-func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
+func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig, kafkaSettings *settings.KafkaSettings) (*KafkaAsyncProducer, error) {
 	logger.Debugf("Starting async kafka producer for %v", cfg.URL)
 
 	if cfg.URL.Scheme == memoryScheme {
@@ -157,6 +166,21 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 	config.Producer.Flush.Messages = cfg.FlushMessages
 	config.Producer.Flush.Frequency = cfg.FlushFrequency
 	// config.Producer.Return.Successes = true
+
+	// Apply authentication settings if provided
+	if kafkaSettings != nil {
+		cfg.Logger.Debugf("Configuring Kafka TLS authentication - EnableTLS: %v, SkipVerify: %v, CA: %s, Cert: %s",
+			kafkaSettings.EnableTLS, kafkaSettings.TLSSkipVerify, kafkaSettings.TLSCAFile, kafkaSettings.TLSCertFile)
+
+		if err := ValidateKafkaAuthSettings(kafkaSettings); err != nil {
+			return nil, errors.NewConfigurationError("invalid Kafka authentication settings", err)
+		}
+		if err := configureKafkaAuth(config, kafkaSettings); err != nil {
+			return nil, errors.NewConfigurationError("failed to configure Kafka authentication", err)
+		}
+
+		cfg.Logger.Debugf("Successfully configured Kafka TLS authentication for async producer topic %s", cfg.Topic)
+	}
 
 	cfg.Logger.Infof("Starting Kafka async producer for %s topic", cfg.Topic)
 

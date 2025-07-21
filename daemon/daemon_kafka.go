@@ -12,8 +12,8 @@ import (
 )
 
 // getKafkaAsyncProducer creates a new Kafka async producer from the provided URL.
-func getKafkaAsyncProducer(ctx context.Context, logger ulogger.Logger, url *url.URL) (*kafka.KafkaAsyncProducer, error) {
-	producer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, url)
+func getKafkaAsyncProducer(ctx context.Context, logger ulogger.Logger, url *url.URL, kafkaSettings ...*settings.KafkaSettings) (*kafka.KafkaAsyncProducer, error) {
+	producer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, url, kafkaSettings...)
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func getKafkaBlocksAsyncProducer(ctx context.Context, logger ulogger.Logger,
 		return nil, errors.NewConfigurationError("missing Kafka URL for blocks producer - blocksConfig")
 	}
 
-	return getKafkaAsyncProducer(ctx, logger, kafkaBlocksConfig)
+	return getKafkaAsyncProducer(ctx, logger, kafkaBlocksConfig, &settings.Kafka)
 }
 
 // getKafkaBlocksFinalAsyncProducer creates a new Kafka async producer for blocks final using the configuration from settings.
@@ -40,7 +40,7 @@ func getKafkaBlocksFinalAsyncProducer(ctx context.Context, logger ulogger.Logger
 		return nil, errors.NewConfigurationError("missing Kafka URL for blocks final producer - blocksFinalConfig")
 	}
 
-	return getKafkaAsyncProducer(ctx, logger, kafkaBlocksFinalConfig)
+	return getKafkaAsyncProducer(ctx, logger, kafkaBlocksFinalConfig, &settings.Kafka)
 }
 
 // getKafkaRejectedTxAsyncProducer creates a new Kafka async producer for rejected transactions using the configuration from settings.
@@ -51,7 +51,7 @@ func getKafkaRejectedTxAsyncProducer(ctx context.Context, logger ulogger.Logger,
 		return nil, errors.NewConfigurationError("missing Kafka URL for rejected tx producer - rejectedTxConfig")
 	}
 
-	return getKafkaAsyncProducer(ctx, logger, kafkaRejectedTxConfig)
+	return getKafkaAsyncProducer(ctx, logger, kafkaRejectedTxConfig, &settings.Kafka)
 }
 
 // getKafkaSubtreesAsyncProducer creates a new Kafka async producer for subtrees using the configuration from settings.
@@ -62,7 +62,7 @@ func getKafkaSubtreesAsyncProducer(ctx context.Context, logger ulogger.Logger,
 		return nil, errors.NewConfigurationError("missing Kafka URL for subtrees producer - subtreesConfig")
 	}
 
-	return getKafkaAsyncProducer(ctx, logger, kafkaSubtreesConfig)
+	return getKafkaAsyncProducer(ctx, logger, kafkaSubtreesConfig, &settings.Kafka)
 }
 
 // getKafkaTxmetaAsyncProducer creates a new Kafka async producer for txmeta using the configuration from settings.
@@ -73,11 +73,11 @@ func getKafkaTxmetaAsyncProducer(ctx context.Context, logger ulogger.Logger,
 		return nil, errors.NewConfigurationError("missing Kafka URL for txmeta producer - txmetaConfig")
 	}
 
-	return getKafkaAsyncProducer(ctx, logger, kafkaTxmetaConfig)
+	return getKafkaAsyncProducer(ctx, logger, kafkaTxmetaConfig, &settings.Kafka)
 }
 
 // getKafkaTxAsyncProducer creates a new Kafka async producer for validator transactions using the configuration from gocore.
-func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger) (kafka.KafkaAsyncProducerI, error) {
+func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger, settings *settings.Settings) (kafka.KafkaAsyncProducerI, error) {
 	value, found := gocore.Config().Get("kafka_validatortxsConfig")
 	if !found || value == "" {
 		return nil, nil
@@ -90,7 +90,7 @@ func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger) (kafka.
 
 	var producer kafka.KafkaAsyncProducerI
 
-	producer, err = kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	producer, err = kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL, &settings.Kafka)
 	if err != nil {
 		return nil, errors.NewServiceError("could not create validatortxs kafka producer for local validator", err)
 	}
@@ -100,8 +100,8 @@ func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger) (kafka.
 
 // getKafkaConsumerGroup creates a new Kafka consumer group from the provided URL and consumer group ID.
 func getKafkaConsumerGroup(logger ulogger.Logger, url *url.URL, consumerGroupID string,
-	autoCommit bool) (*kafka.KafkaConsumerGroup, error) {
-	consumer, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, consumerGroupID, autoCommit)
+	autoCommit bool, kafkaSettings ...*settings.KafkaSettings) (*kafka.KafkaConsumerGroup, error) {
+	consumer, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, consumerGroupID, autoCommit, kafkaSettings...)
 	if err != nil {
 		return nil, errors.NewConfigurationError("missing Kafka URL for "+url.String(), err)
 	}
@@ -117,7 +117,7 @@ func getKafkaBlocksConsumerGroup(logger ulogger.Logger, settings *settings.Setti
 		return nil, errors.NewConfigurationError("missing Kafka URL for blocks consumer - blocksConfig")
 	}
 
-	return getKafkaConsumerGroup(logger, kafkaBlocksConfig, consumerGroupID, false)
+	return getKafkaConsumerGroup(logger, kafkaBlocksConfig, consumerGroupID, false, &settings.Kafka)
 }
 
 /*
@@ -135,7 +135,7 @@ func getKafkaRejectedTxConsumerGroup(logger ulogger.Logger, settings *settings.S
 		return nil, errors.NewConfigurationError("missing Kafka URL for rejected tx consumer - rejectedTxConfig")
 	}
 
-	return getKafkaConsumerGroup(logger, kafkaRejectedTxConfig, consumerGroupID, true)
+	return getKafkaConsumerGroup(logger, kafkaRejectedTxConfig, consumerGroupID, true, &settings.Kafka)
 }
 
 // getKafkaSubtreesConsumerGroup creates a new Kafka consumer group for subtrees using the configuration from settings.
@@ -146,7 +146,7 @@ func getKafkaSubtreesConsumerGroup(logger ulogger.Logger, settings *settings.Set
 		return nil, errors.NewConfigurationError("missing Kafka URL for subtrees consumer - subtreesConfig")
 	}
 
-	return getKafkaConsumerGroup(logger, kafkaSubtreesConfig, consumerGroupID, true)
+	return getKafkaConsumerGroup(logger, kafkaSubtreesConfig, consumerGroupID, true, &settings.Kafka)
 }
 
 // getKafkaTxConsumerGroup creates a new Kafka consumer group for validator transactions using the configuration from gocore.
@@ -157,7 +157,7 @@ func getKafkaTxConsumerGroup(logger ulogger.Logger, settings *settings.Settings,
 		return nil, nil
 	}
 
-	return getKafkaConsumerGroup(logger, kafkaTxConfig, consumerGroupID, true)
+	return getKafkaConsumerGroup(logger, kafkaTxConfig, consumerGroupID, true, &settings.Kafka)
 }
 
 // getKafkaTxmetaConsumerGroup creates a new Kafka consumer group for txmeta using the configuration from settings.
@@ -168,7 +168,7 @@ func getKafkaTxmetaConsumerGroup(logger ulogger.Logger, settings *settings.Setti
 		return nil, errors.NewConfigurationError("missing Kafka URL for txmeta consumer - txmetaConfig")
 	}
 
-	return getKafkaConsumerGroup(logger, kafkaTxmetaConfig, consumerGroupID, true)
+	return getKafkaConsumerGroup(logger, kafkaTxmetaConfig, consumerGroupID, true, &settings.Kafka)
 }
 
 func getKafkaInvalidBlocksConsumerGroup(logger ulogger.Logger, settings *settings.Settings, consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {
@@ -177,7 +177,7 @@ func getKafkaInvalidBlocksConsumerGroup(logger ulogger.Logger, settings *setting
 		return nil, nil // Optional, return nil if not configured
 	}
 
-	return getKafkaConsumerGroup(logger, kafkaInvalidBlocksConfig, consumerGroupID, true)
+	return getKafkaConsumerGroup(logger, kafkaInvalidBlocksConfig, consumerGroupID, true, &settings.Kafka)
 }
 
 func getKafkaInvalidSubtreeConsumerGroup(logger ulogger.Logger, settings *settings.Settings, consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {

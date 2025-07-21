@@ -73,7 +73,7 @@ func (m *BlockchainDaemon) StartBlockchainService() error {
 	m.serviceManager = servicemanager.NewServiceManager(m.ctx, m.Logger)
 
 	// Get Kafka producer
-	blocksFinalKafkaAsyncProducer, err := kafka.NewKafkaAsyncProducerFromURL(m.ctx, ulogger.New("kpbf"), m.Settings.Kafka.BlocksFinalConfig)
+	blocksFinalKafkaAsyncProducer, err := kafka.NewKafkaAsyncProducerFromURL(m.ctx, ulogger.New("kpbf"), m.Settings.Kafka.BlocksFinalConfig, &m.Settings.Kafka)
 	if err != nil {
 		return err
 	}

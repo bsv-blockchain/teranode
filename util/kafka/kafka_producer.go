@@ -8,6 +8,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/util"
 	imk "github.com/bitcoin-sv/teranode/util/kafka/in_memory_kafka"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
@@ -86,12 +87,13 @@ func (k *SyncKafkaProducer) Send(key []byte, data []byte) error {
 //
 // Parameters:
 //   - kafkaURL: URL containing Kafka configuration including topic and partition settings
+//   - kafkaSettings: Optional Kafka settings for authentication (can be nil for no auth)
 //
 // Returns:
 //   - ClusterAdmin: Kafka cluster administrator interface (nil for memory scheme)
 //   - KafkaProducerI: Configured Kafka producer
 //   - error: Any error encountered during setup
-func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, error) {
+func NewKafkaProducer(kafkaURL *url.URL, kafkaSettings *settings.KafkaSettings) (sarama.ClusterAdmin, KafkaProducerI, error) {
 	topic := kafkaURL.Path[1:]
 
 	// Handle in-memory producer case
@@ -116,6 +118,16 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 
 	config := sarama.NewConfig()
 	config.Version = sarama.V2_1_0_0
+
+	// Apply authentication settings if provided
+	if kafkaSettings != nil {
+		if err := ValidateKafkaAuthSettings(kafkaSettings); err != nil {
+			return nil, nil, errors.NewConfigurationError("invalid Kafka authentication settings", err)
+		}
+		if err := configureKafkaAuth(config, kafkaSettings); err != nil {
+			return nil, nil, errors.NewConfigurationError("failed to configure Kafka authentication", err)
+		}
+	}
 
 	clusterAdmin, err := sarama.NewClusterAdmin(brokersURL, config)
 	if err != nil {
@@ -157,7 +169,7 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 
 	flushBytes := util.GetQueryParamInt(kafkaURL, "flush_bytes", 1024)
 
-	producer, err := ConnectProducer(brokersURL, topic, partitionsInt32, flushBytes)
+	producer, err := ConnectProducer(brokersURL, topic, partitionsInt32, kafkaSettings, flushBytes)
 	if err != nil {
 		_ = clusterAdmin.Close() // Best effort close
 		return nil, nil, errors.NewServiceError("unable to connect to kafka", err)
@@ -172,18 +184,26 @@ func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, e
 //   - brokersURL: List of Kafka broker URLs
 //   - topic: Topic to produce messages to
 //   - partitions: Number of partitions for the topic
-//   - flushBytes: Optional parameter to specify flush size in bytes
+//   - kafkaSettings: Optional Kafka settings for authentication (nil for no auth)
+//   - flushBytes: Optional flush size in bytes (defaults to 16KB if not provided)
 //
 // Returns:
 //   - KafkaProducerI: Configured Kafka producer
 //   - error: Any error encountered during connection
-func ConnectProducer(brokersURL []string, topic string, partitions int32, flushBytes ...int) (KafkaProducerI, error) {
+func ConnectProducer(brokersURL []string, topic string, partitions int32, kafkaSettings *settings.KafkaSettings, flushBytes ...int) (KafkaProducerI, error) {
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
 	config.Producer.Return.Errors = true
 	config.Producer.RequiredAcks = sarama.WaitForAll
 	config.Producer.Retry.Max = 5
 	config.Producer.Partitioner = sarama.NewManualPartitioner
+
+	// Apply authentication settings if provided
+	if kafkaSettings != nil {
+		if err := configureKafkaAuth(config, kafkaSettings); err != nil {
+			return nil, errors.NewConfigurationError("failed to configure Kafka authentication", err)
+		}
+	}
 
 	flush := 16 * 1024
 	if len(flushBytes) > 0 {

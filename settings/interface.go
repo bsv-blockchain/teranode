@@ -115,6 +115,12 @@ type KafkaSettings struct {
 	InvalidSubtreesConfig *url.URL
 	SubtreesConfig        *url.URL
 	BlocksConfig          *url.URL
+	// TLS settings
+	EnableTLS     bool
+	TLSSkipVerify bool
+	TLSCAFile     string
+	TLSCertFile   string
+	TLSKeyFile    string
 }
 
 type AerospikeSettings struct {

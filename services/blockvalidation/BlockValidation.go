@@ -285,7 +285,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 func initialiseInvalidBlockKafkaProducer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (*kafka.KafkaAsyncProducer, error) {
 	logger.Infof("Initializing Kafka producer for invalid blocks topic: %s", tSettings.Kafka.InvalidBlocks)
 
-	invalidBlockKafkaProducer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, tSettings.Kafka.InvalidBlocksConfig)
+	invalidBlockKafkaProducer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, tSettings.Kafka.InvalidBlocksConfig, &tSettings.Kafka)
 	if err != nil {
 		return nil, err
 	}

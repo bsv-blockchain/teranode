@@ -14,6 +14,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	inmemorykafka "github.com/bitcoin-sv/teranode/util/kafka/in_memory_kafka"
@@ -62,7 +63,7 @@ type KafkaConsumerGroup struct {
 }
 
 // NewKafkaConsumerGroupFromURL creates a new KafkaConsumerGroup from a URL.
-func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerGroupID string, autoCommit bool) (*KafkaConsumerGroup, error) {
+func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerGroupID string, autoCommit bool, kafkaSettings ...*settings.KafkaSettings) (*KafkaConsumerGroup, error) {
 	if url == nil {
 		return nil, errors.NewConfigurationError("missing kafka url")
 	}
@@ -110,7 +111,7 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 		Replay: util.GetQueryParamInt(url, "replay", 1) == 1,
 	}
 
-	return NewKafkaConsumerGroup(consumerConfig)
+	return NewKafkaConsumerGroup(consumerConfig, kafkaSettings...)
 }
 
 // Close gracefully shuts down the Kafka consumer group
@@ -138,7 +139,7 @@ func (k *KafkaConsumerGroup) Close() error {
 
 // NewKafkaConsumerGroup creates a new Kafka consumer group
 // We DO NOT read autocommit parameter from the URL because the handler func has specific error handling logic.
-func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error) {
+func NewKafkaConsumerGroup(cfg KafkaConsumerConfig, kafkaSettings ...*settings.KafkaSettings) (*KafkaConsumerGroup, error) {
 	if cfg.URL == nil {
 		return nil, errors.NewConfigurationError("kafka URL is not set", nil)
 	}
@@ -180,6 +181,22 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
+
+	// Configure authentication if KafkaSettings are provided
+	if len(kafkaSettings) > 0 && kafkaSettings[0] != nil {
+		cfg.Logger.Debugf("Configuring Kafka TLS authentication - EnableTLS: %v, SkipVerify: %v, CA: %s, Cert: %s",
+			kafkaSettings[0].EnableTLS, kafkaSettings[0].TLSSkipVerify, kafkaSettings[0].TLSCAFile, kafkaSettings[0].TLSCertFile)
+
+		// Validate KafkaSettings before applying them
+		if err := ValidateKafkaAuthSettings(kafkaSettings[0]); err != nil {
+			return nil, errors.NewConfigurationError("invalid Kafka authentication settings", err)
+		}
+		if err := configureKafkaAuth(config, kafkaSettings[0]); err != nil {
+			return nil, errors.NewConfigurationError("failed to configure Kafka authentication", err)
+		}
+
+		cfg.Logger.Debugf("Successfully configured Kafka TLS authentication for consumer group %s", cfg.ConsumerGroupID)
+	}
 
 	// https://github.com/IBM/sarama/issues/1689
 	// https://github.com/IBM/sarama/pull/1699
