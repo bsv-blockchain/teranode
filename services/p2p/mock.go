@@ -138,6 +138,15 @@ func (m *MockServerP2PNode) UpdatePeerHeight(pid peer.ID, height int32) {
 	m.Called(pid, height)
 }
 
+func (m *MockServerP2PNode) SetPeerStartingHeight(peerID peer.ID, height int32) {
+	m.Called(peerID, height)
+}
+
+func (m *MockServerP2PNode) GetPeerStartingHeight(peerID peer.ID) (int32, bool) {
+	args := m.Called(peerID)
+	return args.Get(0).(int32), args.Bool(1)
+}
+
 func (m *MockServerP2PNode) SetPeerConnectedCallback(callback func(context.Context, peer.ID)) {
 	m.Called(callback)
 }

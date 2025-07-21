@@ -418,6 +418,9 @@ func TestSendBestBlockMessage(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := settings.NewSettings()
 
+	// Override listen mode to full for this test to ensure publish works
+	tSettings.P2P.ListenMode = settings.ListenModeFull
+
 	topicPrefix := tSettings.ChainCfgParams.TopicPrefix
 	if topicPrefix == "" {
 		t.Log("missing config ChainCfgParams.TopicPrefix")
@@ -2211,6 +2214,11 @@ func TestPublish(t *testing.T) {
 		topics: map[string]*pubsub.Topic{
 			"test-topic": topic,
 		},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode: settings.ListenModeFull,
+			},
+		},
 	}
 
 	// Set up a subscription to verify message is published
@@ -2307,6 +2315,11 @@ func TestSendToPeerIsolated(t *testing.T) {
 	// Define protocol ID for testing
 	testProtocolID := "test-protocol-id"
 
+	settings := &settings.Settings{
+		P2P: settings.P2PSettings{
+			ListenMode: settings.ListenModeFull,
+		},
+	}
 	// Create a P2PNode wrapping h1
 	node := &P2PNode{
 		host:              h1,
@@ -2314,6 +2327,7 @@ func TestSendToPeerIsolated(t *testing.T) {
 		topics:            make(map[string]*pubsub.Topic),
 		startTime:         time.Now(),
 		bitcoinProtocolID: testProtocolID,
+		settings:          settings,
 		// Don't need to initialize the atomic fields as they start at zero
 	}
 

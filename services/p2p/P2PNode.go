@@ -66,6 +66,8 @@ type P2PNodeI interface {
 	SetPeerConnectedCallback(callback func(context.Context, peer.ID))
 
 	UpdatePeerHeight(peerID peer.ID, height int32)
+	SetPeerStartingHeight(peerID peer.ID, height int32)
+	GetPeerStartingHeight(peerID peer.ID) (int32, bool)
 
 	// Stats methods
 	LastSend() time.Time
@@ -106,12 +108,13 @@ type P2PNode struct {
 	callbackMutex     sync.RWMutex                   // Mutex for thread-safe callback access
 
 	// IMPORTANT: The following variables must only be used atomically.
-	bytesReceived uint64   // Counter for bytes received over the network
-	bytesSent     uint64   // Counter for bytes sent over the network
-	lastRecv      int64    // Timestamp of last message received
-	lastSend      int64    // Timestamp of last message sent
-	peerHeights   sync.Map // Thread-safe map tracking peer blockchain heights
-	peerConnTimes sync.Map // Thread-safe map tracking peer connection times (peer.ID -> time.Time)
+	bytesReceived       uint64   // Counter for bytes received over the network
+	bytesSent           uint64   // Counter for bytes sent over the network
+	lastRecv            int64    // Timestamp of last message received
+	lastSend            int64    // Timestamp of last message sent
+	peerHeights         sync.Map // Thread-safe map tracking peer blockchain heights
+	peerStartingHeights sync.Map // Thread-safe map tracking peer starting heights when first connected
+	peerConnTimes       sync.Map // Thread-safe map tracking peer connection times (peer.ID -> time.Time)
 }
 
 // Handler defines the function signature for topic message handlers.
@@ -568,6 +571,9 @@ func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler
 	}
 
 	topic := s.topics[topicName]
+	if topic == nil {
+		return errors.NewServiceError("[P2PNode][SetTopicHandler] topic not found: %s", topicName)
+	}
 
 	sub, err := topic.Subscribe()
 	if err != nil {
@@ -575,6 +581,7 @@ func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler
 	}
 
 	s.handlerByTopic[topicName] = handler
+	s.logger.Infof("[P2PNode][SetTopicHandler] Successfully subscribed to topic: %s", topicName)
 
 	go func() {
 		s.logger.Infof("[P2PNode][SetTopicHandler] starting handler for topic: %s", topicName)
@@ -594,7 +601,11 @@ func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler
 					continue
 				}
 
-				s.logger.Debugf("[P2PNode][SetTopicHandler]: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), strings.TrimSpace(string(m.Message.Data)))
+				if strings.Contains(*m.Message.Topic, "handshake") {
+					s.logger.Infof("[P2PNode][SetTopicHandler]: topic: %s - from: %s - self: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), s.host.ID().ShortString(), strings.TrimSpace(string(m.Message.Data)))
+				} else {
+					s.logger.Debugf("[P2PNode][SetTopicHandler]: topic: %s - from: %s - message: %s\n", *m.Message.Topic, m.ReceivedFrom.ShortString(), strings.TrimSpace(string(m.Message.Data)))
+				}
 				handler(ctx, m.Data, m.ReceivedFrom.String())
 			}
 		}
@@ -612,6 +623,17 @@ func (s *P2PNode) GetTopic(topicName string) *pubsub.Topic {
 }
 
 func (s *P2PNode) Publish(ctx context.Context, topicName string, msgBytes []byte) error {
+	// check listen mode - if listen_only, don't publish outbound messages except handshakes
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+		// allow handshake messages even in listen_only mode as they're essential for peer discovery
+		if !strings.Contains(topicName, "handshake") {
+			s.logger.Debugf("[P2PNode][Publish] skipping publish in listen_only mode for topic: %s", topicName)
+			return nil
+		} else {
+			s.logger.Debugf("[P2PNode][Publish] allowing handshake message in listen_only mode for topic: %s", topicName)
+		}
+	}
+
 	if len(s.topics) == 0 {
 		return errors.NewServiceError("[P2PNode][Publish] topics not initialised")
 	}
@@ -637,6 +659,16 @@ func (s *P2PNode) Publish(ctx context.Context, topicName string, msgBytes []byte
 
 /* SendToPeer sends a message to a peer. It will attempt to connect to the peer if not already connected. */
 func (s *P2PNode) SendToPeer(ctx context.Context, peerID peer.ID, msg []byte) (err error) {
+	// check listen mode - if listen_only, don't send direct messages except handshakes
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+		// allow handshake messages even in listen_only mode
+		if !strings.Contains(string(msg), "\"type\":\"version\"") && !strings.Contains(string(msg), "\"type\":\"verack\"") {
+			s.logger.Debugf("[P2PNode][SendToPeer] skipping send in listen_only mode to peer: %s", peerID.String())
+			return nil
+		}
+		s.logger.Debugf("[P2PNode][SendToPeer] allowing handshake message in listen_only mode to peer: %s", peerID.String())
+	}
+
 	h2pi := s.host.Peerstore().PeerInfo(peerID)
 	s.logger.Infof("[P2PNode][SendToPeer] dialing %s", h2pi.Addrs)
 
@@ -1198,10 +1230,11 @@ func (s *P2PNode) BytesReceived() uint64 {
 }
 
 type PeerInfo struct {
-	ID            peer.ID
-	Addrs         []multiaddr.Multiaddr
-	CurrentHeight int32
-	ConnTime      *time.Time // Connection time (nil if not connected)
+	ID             peer.ID
+	Addrs          []multiaddr.Multiaddr
+	CurrentHeight  int32
+	StartingHeight int32      // Height when peer first connected
+	ConnTime       *time.Time // Connection time (nil if not connected)
 }
 
 func (s *P2PNode) ConnectedPeers() []PeerInfo {
@@ -1218,6 +1251,11 @@ func (s *P2PNode) ConnectedPeers() []PeerInfo {
 			height = h.(int32)
 		}
 
+		var startingHeight int32
+		if sh, ok := s.peerStartingHeights.Load(peerID); ok {
+			startingHeight = sh.(int32)
+		}
+
 		var connTime *time.Time
 		if ct, ok := s.peerConnTimes.Load(peerID); ok {
 			t := ct.(time.Time)
@@ -1225,10 +1263,11 @@ func (s *P2PNode) ConnectedPeers() []PeerInfo {
 		}
 
 		peers = append(peers, PeerInfo{
-			ID:            peerID,
-			Addrs:         s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
-			CurrentHeight: height,
-			ConnTime:      connTime,
+			ID:             peerID,
+			Addrs:          s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
+			CurrentHeight:  height,
+			StartingHeight: startingHeight,
+			ConnTime:       connTime,
 		})
 	}
 
@@ -1251,6 +1290,11 @@ func (s *P2PNode) CurrentlyConnectedPeers() []PeerInfo {
 			height = h.(int32)
 		}
 
+		var startingHeight int32
+		if sh, ok := s.peerStartingHeights.Load(peerID); ok {
+			startingHeight = sh.(int32)
+		}
+
 		var connTime *time.Time
 		if ct, ok := s.peerConnTimes.Load(peerID); ok {
 			t := ct.(time.Time)
@@ -1258,10 +1302,11 @@ func (s *P2PNode) CurrentlyConnectedPeers() []PeerInfo {
 		}
 
 		peers = append(peers, PeerInfo{
-			ID:            peerID,
-			Addrs:         s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
-			CurrentHeight: height,
-			ConnTime:      connTime,
+			ID:             peerID,
+			Addrs:          s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
+			CurrentHeight:  height,
+			StartingHeight: startingHeight,
+			ConnTime:       connTime,
 		})
 	}
 
@@ -1286,7 +1331,30 @@ func (s *P2PNode) DisconnectPeer(ctx context.Context, peerID peer.ID) error {
 
 func (s *P2PNode) UpdatePeerHeight(peerID peer.ID, height int32) {
 	s.logger.Debugf("[P2PNode] UpdatePeerHeight: %s %d\n", peerID.String(), height)
+
+	// if this is the first height we see from this peer, use it as starting height
+	if _, exists := s.peerStartingHeights.Load(peerID); !exists && height > 0 {
+		s.logger.Infof("[P2PNode] Setting starting height for peer %s to %d (first height update)", peerID.String(), height)
+		s.peerStartingHeights.Store(peerID, height)
+	}
+
 	s.peerHeights.Store(peerID, height)
+}
+
+// SetPeerStartingHeight stores the starting height for a peer (height when first connected)
+func (s *P2PNode) SetPeerStartingHeight(peerID peer.ID, height int32) {
+	s.logger.Infof("[P2PNode] SetPeerStartingHeight: %s %d", peerID.String(), height)
+	s.peerStartingHeights.Store(peerID, height)
+}
+
+// GetPeerStartingHeight retrieves the starting height for a peer
+func (s *P2PNode) GetPeerStartingHeight(peerID peer.ID) (int32, bool) {
+	if height, exists := s.peerStartingHeights.Load(peerID); exists {
+		if h, ok := height.(int32); ok {
+			return h, true
+		}
+	}
+	return 0, false
 }
 
 // TODO: remove

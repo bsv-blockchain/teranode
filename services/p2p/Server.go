@@ -177,6 +177,11 @@ func NewServer(
 		return nil, errors.NewConfigurationError("error getting p2p_shared_key")
 	}
 
+	listenMode := tSettings.P2P.ListenMode
+	if listenMode != settings.ListenModeFull && listenMode != settings.ListenModeListenOnly {
+		return nil, errors.NewConfigurationError("listen_mode must be either '%s' or '%s' (got '%s')", settings.ListenModeFull, settings.ListenModeListenOnly, listenMode)
+	}
+
 	banlist, banChan, err := GetBanList(ctx, logger, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("error getting banlist", err)
@@ -627,25 +632,84 @@ func (s *Server) sendHandshake(ctx context.Context) {
 		return
 	}
 
+	s.logger.Infof("[sendHandshake] Sending version handshake: PeerID=%s, BestHeight=%d, Topic=%s", msg.PeerID, msg.BestHeight, s.handshakeTopicName)
+
 	go func() {
 		if err := s.P2PNode.Publish(ctx, s.handshakeTopicName, msgBytes); err != nil {
 			s.logger.Errorf("[sendHandshake][p2p-handshake] publish error: %v", err)
+		} else {
+			s.logger.Infof("[sendHandshake] Successfully published handshake to topic %s", s.handshakeTopicName)
 		}
 	}()
 }
 
+func (s *Server) sendDirectHandshake(ctx context.Context, peerID peer.ID) {
+	localHeight := uint32(0)
+	bestHash := ""
+
+	if header, bhMeta, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil && bhMeta != nil {
+		localHeight = bhMeta.Height
+		bestHash = header.Hash().String()
+	}
+
+	msg := HandshakeMessage{
+		Type:       "version",
+		PeerID:     s.P2PNode.HostID().String(),
+		BestHeight: localHeight,
+		BestHash:   bestHash,
+		DataHubURL: s.AssetHTTPAddressURL,
+		UserAgent:  s.bitcoinProtocolID,
+		Services:   0,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		s.logger.Errorf("[sendDirectHandshake] json marshal error: %v", err)
+		return
+	}
+
+	s.logger.Infof("[sendDirectHandshake] Sending direct handshake to peer %s: BestHeight=%d", peerID.String(), localHeight)
+
+	// send handshake directly to the peer via stream
+	if err := s.sendHandshakeToPeer(ctx, peerID, msgBytes); err != nil {
+		s.logger.Errorf("[sendDirectHandshake] error sending handshake to peer %s: %v", peerID.String(), err)
+	} else {
+		s.logger.Infof("[sendDirectHandshake] Successfully sent direct handshake to peer %s", peerID.String())
+	}
+}
+
+func (s *Server) sendHandshakeToPeer(ctx context.Context, peerID peer.ID, msgBytes []byte) error {
+	// check listen mode - allow handshakes even in listen_only mode
+	// note: SendToPeer has its own listen mode check, but we want handshakes to work
+	// so we temporarily bypass it or modify SendToPeer to allow handshakes
+	return s.P2PNode.SendToPeer(ctx, peerID, msgBytes)
+}
+
 func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string) {
+	s.logger.Infof("[handleHandshakeTopic] Received handshake from %s, message: %s", from, string(m))
+
 	var hs HandshakeMessage
 	if err := json.Unmarshal(m, &hs); err != nil {
 		s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] json unmarshal error: %v", err)
 		return
 	}
 
+	s.logger.Infof("[handleHandshakeTopic] Parsed handshake: Type=%s, PeerID=%s, BestHeight=%d", hs.Type, hs.PeerID, hs.BestHeight)
+	s.logger.Infof("[handleHandshakeTopic] Our HostID=%s, Message from=%s, Message PeerID=%s", s.P2PNode.HostID().String(), from, hs.PeerID)
+
 	if hs.PeerID == s.P2PNode.HostID().String() {
+		s.logger.Debugf("[handleHandshakeTopic] Ignoring self handshake (PeerID matches our HostID)")
 		return // ignore self
 	}
-	// update peer height
+	// update peer height and store starting height if first time seeing this peer
 	if peerID2, err := peer.Decode(hs.PeerID); err == nil {
+		// store starting height if we haven't seen this peer before
+		if _, exists := s.P2PNode.GetPeerStartingHeight(peerID2); !exists {
+			s.logger.Infof("[handleHandshakeTopic] Setting starting height for peer %s to %d", peerID2.String(), hs.BestHeight)
+			s.P2PNode.SetPeerStartingHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
+		} else {
+			s.logger.Debugf("[handleHandshakeTopic] Peer %s already has starting height set", peerID2.String())
+		}
 		s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
 	}
 
@@ -757,8 +821,15 @@ func (s *Server) SyncHeights(hs HandshakeMessage, localHeight uint32) {
 			hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 	}
 
-	// update peer height
+	// update peer height and store starting height if first time seeing this peer
 	if peerID2, err := peer.Decode(hs.PeerID); err == nil {
+		// store starting height if we haven't seen this peer before
+		if _, exists := s.P2PNode.GetPeerStartingHeight(peerID2); !exists {
+			s.logger.Infof("[SyncHeights] Setting starting height for peer %s to %d", peerID2.String(), hs.BestHeight)
+			s.P2PNode.SetPeerStartingHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
+		} else {
+			s.logger.Debugf("[SyncHeights] Peer %s already has starting height set", peerID2.String())
+		}
 		s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
 	}
 }
@@ -802,8 +873,31 @@ func (s *Server) receiveHandshakeStreamHandler(ns network.Stream) {
 
 func (s *Server) P2PNodeConnected(ctx context.Context, peerID peer.ID) {
 	s.logger.Infof("[P2PNodeConnected] Peer connected: %s", peerID.String())
-	// Send handshake (version) when a new peer connects
-	s.sendHandshake(ctx)
+	s.logger.Infof("[P2PNodeConnected] Total connected peers: %d", len(s.P2PNode.ConnectedPeers()))
+
+	// try to get the peer's current height from the first message/block data we have
+	// and use it as starting height since handshake protocol isn't used by other peers
+	go func() {
+		// give some time for the peer to potentially send initial data
+		time.Sleep(500 * time.Millisecond)
+
+		// check if we already have height info for this peer from other sources (block messages, etc)
+		peerInfos := s.P2PNode.ConnectedPeers()
+		for _, peerInfo := range peerInfos {
+			if peerInfo.ID == peerID {
+				// if we don't have a starting height yet, use current height as starting height
+				if _, exists := s.P2PNode.GetPeerStartingHeight(peerID); !exists && peerInfo.CurrentHeight > 0 {
+					s.logger.Infof("[P2PNodeConnected] Setting starting height for peer %s to %d (from initial connection data)", peerID.String(), peerInfo.CurrentHeight)
+					s.P2PNode.SetPeerStartingHeight(peerID, peerInfo.CurrentHeight)
+				}
+				break
+			}
+		}
+	}()
+
+	// send handshake (version) when a new peer connects using direct stream (no timing issues)
+	s.logger.Infof("[P2PNodeConnected] Sending direct handshake in response to new peer connection")
+	go s.sendDirectHandshake(ctx, peerID)
 }
 
 func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Hash) error {
@@ -1372,11 +1466,12 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 		}
 
 		resp.Peers = append(resp.Peers, &p2p_api.Peer{
-			Id:            sp.ID.String(),
-			Addr:          addr,
-			CurrentHeight: sp.CurrentHeight,
-			Banscore:      int32(banScore), //nolint:gosec
-			ConnTime:      connTime,
+			Id:             sp.ID.String(),
+			Addr:           addr,
+			StartingHeight: sp.StartingHeight,
+			CurrentHeight:  sp.CurrentHeight,
+			Banscore:       int32(banScore), //nolint:gosec
+			ConnTime:       connTime,
 		})
 	}
 

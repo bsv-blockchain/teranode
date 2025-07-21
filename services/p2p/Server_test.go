@@ -1463,6 +1463,8 @@ func TestHandshakeFlow(t *testing.T) {
 		mockP2PNode.On("GetProcessName").Return("test-node")
 
 		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
+		mockP2PNode.On("GetPeerStartingHeight", mock.Anything).Return(int32(0), false) // First time seeing peer
+		mockP2PNode.On("SetPeerStartingHeight", mock.Anything, mock.Anything).Return()
 
 		// Create a requester peer ID
 		requesterPeerID, err := peer.Decode(peerIDStr)
@@ -1583,6 +1585,8 @@ func TestHandshakeFlow(t *testing.T) {
 
 		// Expect UpdatePeerHeight to be called with the height from the verack message
 		mockP2PNode.On("UpdatePeerHeight", senderPeerID, int32(200)).Return()
+		mockP2PNode.On("GetPeerStartingHeight", senderPeerID).Return(int32(0), false) // First time seeing peer
+		mockP2PNode.On("SetPeerStartingHeight", senderPeerID, int32(200)).Return()
 
 		// Create server with mocks
 		server := &Server{

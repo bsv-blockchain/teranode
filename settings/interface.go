@@ -7,6 +7,12 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 )
 
+// listen mode constants
+const (
+	ListenModeFull       = "full"
+	ListenModeListenOnly = "listen_only"
+)
+
 type Settings struct {
 	Commit                     string
 	Version                    string
@@ -345,6 +351,7 @@ type P2PSettings struct {
 
 	ListenAddresses    []string
 	AdvertiseAddresses []string
+	ListenMode         string // "full" (default) or "listen_only"
 	MiningOnTopic      string
 
 	PeerID string
