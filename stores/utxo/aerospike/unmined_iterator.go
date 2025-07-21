@@ -92,20 +92,13 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 	for {
 		rec, ok = <-it.result
 		if !ok || rec == nil {
-			if err := it.Close(); err != nil {
-				it.store.logger.Warnf("failed to close iterator: %v", err)
-			}
-
+			it.closeWithLogging()
 			return nil, nil
 		}
 
 		if rec.Err != nil {
-			if err := it.Close(); err != nil {
-				it.store.logger.Warnf("failed to close iterator: %v", err)
-			}
-
+			it.closeWithLogging()
 			it.err = rec.Err
-
 			return nil, it.err
 		}
 
@@ -128,143 +121,147 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 		break
 	}
 
-	txidVal := rec.Record.Bins[fields.TxID.String()]
-	if txidVal == nil {
-		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
-		}
-
-		it.err = errors.NewProcessingError("txid not found")
-
+	// Extract transaction data from the record
+	txData, err := it.extractTransactionData(rec.Record.Bins)
+	if err != nil {
+		it.closeWithLogging()
+		it.err = err
 		return nil, it.err
+	}
+
+	// Process external transaction if needed
+	txInpoints, err := it.processTransactionInpoints(ctx, txData, rec.Record.Bins)
+	if err != nil {
+		it.closeWithLogging()
+		it.err = err
+		return nil, it.err
+	}
+
+	// Extract created_at timestamp
+	createdAt, err := it.extractCreatedAt(rec.Record.Bins)
+	if err != nil {
+		it.closeWithLogging()
+		return nil, err
+	}
+
+	return &utxo.UnminedTransaction{
+		Hash:       txData.hash,
+		Fee:        txData.fee,
+		Size:       txData.size,
+		TxInpoints: txInpoints,
+		CreatedAt:  createdAt,
+	}, nil
+}
+
+// transactionData holds the basic transaction data extracted from a record
+type transactionData struct {
+	hash *chainhash.Hash
+	fee  uint64
+	size uint64
+}
+
+// closeWithLogging closes the iterator with error logging
+func (it *unminedTxIterator) closeWithLogging() {
+	if err := it.Close(); err != nil {
+		it.store.logger.Warnf("failed to close iterator: %v", err)
+	}
+}
+
+// extractTransactionData extracts basic transaction data from Aerospike record bins
+func (it *unminedTxIterator) extractTransactionData(bins map[string]interface{}) (*transactionData, error) {
+	// Extract and validate txid
+	txidVal := bins[fields.TxID.String()]
+	if txidVal == nil {
+		return nil, errors.NewProcessingError("txid not found")
 	}
 
 	txidValBytes, ok := txidVal.([]byte)
 	if !ok {
-		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
-		}
-
-		it.err = errors.NewProcessingError("txid not []byte")
-
-		return nil, it.err
+		return nil, errors.NewProcessingError("txid not []byte")
 	}
 
 	hash, err := chainhash.NewHash(txidValBytes)
 	if err != nil {
-		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
-		}
-
-		it.err = err
-
-		return nil, it.err
+		return nil, err
 	}
 
-	feeVal := rec.Record.Bins[fields.Fee.String()]
+	// Extract and validate fee
+	feeVal := bins[fields.Fee.String()]
 	if feeVal == nil {
-		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
-		}
-
-		it.err = errors.NewProcessingError("fee not found")
-
-		return nil, it.err
+		return nil, errors.NewProcessingError("fee not found")
 	}
 
 	fee, err := toUint64(feeVal)
 	if err != nil {
-		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
-		}
-
-		it.err = errors.NewProcessingError("Failed to convert fee")
-
-		return nil, it.err
+		return nil, errors.NewProcessingError("Failed to convert fee")
 	}
 
-	sizeVal := rec.Record.Bins[fields.SizeInBytes.String()]
+	// Extract and validate size
+	sizeVal := bins[fields.SizeInBytes.String()]
 	if sizeVal == nil {
-		if err := it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
-		}
-
-		it.err = errors.NewProcessingError("size not found")
-
-		return nil, it.err
+		return nil, errors.NewProcessingError("size not found")
 	}
 
 	size, _ := toUint64(sizeVal)
 
-	// If the tx is external, we need to fetch it from the external store...
-	var externalTx *bt.Tx
-
-	external, ok := rec.Record.Bins[fields.External.String()].(bool)
-	if ok && external {
-		if externalTx, err = it.store.GetTxFromExternalStore(ctx, *hash); err != nil {
-			if err := it.Close(); err != nil {
-				it.store.logger.Warnf("failed to close iterator: %v", err)
-			}
-
-			it.err = err
-
-			return nil, it.err
-		}
-	}
-
-	var txInpoints subtree.TxInpoints
-
-	if external {
-		txInpoints, err = subtree.NewTxInpointsFromTx(externalTx)
-		if err != nil {
-			if err := it.Close(); err != nil {
-				it.store.logger.Warnf("failed to close iterator: %v", err)
-			}
-
-			it.err = errors.NewTxInvalidError("could not process tx inpoints", err)
-
-			return nil, it.err
-		}
-	} else {
-		txInpoints, err = processInputsToTxInpoints(rec.Record.Bins)
-		if err != nil {
-			if err := it.Close(); err != nil {
-				it.store.logger.Warnf("failed to close iterator: %v", err)
-			}
-
-			it.err = errors.NewTxInvalidError("could not process input interfaces", err)
-
-			return nil, it.err
-		}
-	}
-
-	var createdAt int
-
-	createdAtVal, ok := rec.Record.Bins[fields.CreatedAt.String()]
-	if ok && createdAtVal != nil {
-		createdAt, ok = createdAtVal.(int)
-		if !ok {
-			if err = it.Close(); err != nil {
-				it.store.logger.Warnf("failed to close iterator: %v", err)
-			}
-
-			return nil, errors.NewProcessingError("created_at not int64")
-		}
-	} else {
-		if err = it.Close(); err != nil {
-			it.store.logger.Warnf("failed to close iterator: %v", err)
-		}
-
-		return nil, errors.NewProcessingError("created_at not found")
-	}
-
-	return &utxo.UnminedTransaction{
-		Hash:       hash,
-		Fee:        fee,
-		Size:       size,
-		TxInpoints: txInpoints,
-		CreatedAt:  createdAt,
+	return &transactionData{
+		hash: hash,
+		fee:  fee,
+		size: size,
 	}, nil
+}
+
+// processTransactionInpoints processes transaction inputs based on whether it's external or internal
+func (it *unminedTxIterator) processTransactionInpoints(ctx context.Context, txData *transactionData, bins map[string]interface{}) (subtree.TxInpoints, error) {
+	external, ok := bins[fields.External.String()].(bool)
+	if !ok || !external {
+		return it.processInternalTransactionInpoints(bins)
+	}
+
+	return it.processExternalTransactionInpoints(ctx, txData.hash)
+}
+
+// processExternalTransactionInpoints processes inputs for external transactions
+func (it *unminedTxIterator) processExternalTransactionInpoints(ctx context.Context, hash *chainhash.Hash) (subtree.TxInpoints, error) {
+	var externalTx *bt.Tx
+	var err error
+
+	externalTx, err = it.store.GetTxFromExternalStore(ctx, *hash)
+	if err != nil {
+		return subtree.TxInpoints{}, err
+	}
+
+	txInpoints, err := subtree.NewTxInpointsFromTx(externalTx)
+	if err != nil {
+		return subtree.TxInpoints{}, errors.NewTxInvalidError("could not process tx inpoints", err)
+	}
+
+	return txInpoints, nil
+}
+
+// processInternalTransactionInpoints processes inputs for internal transactions
+func (it *unminedTxIterator) processInternalTransactionInpoints(bins map[string]interface{}) (subtree.TxInpoints, error) {
+	txInpoints, err := processInputsToTxInpoints(bins)
+	if err != nil {
+		return subtree.TxInpoints{}, errors.NewTxInvalidError("could not process input interfaces", err)
+	}
+
+	return txInpoints, nil
+}
+
+// extractCreatedAt extracts the created_at timestamp from record bins
+func (it *unminedTxIterator) extractCreatedAt(bins map[string]interface{}) (int, error) {
+	createdAtVal, ok := bins[fields.CreatedAt.String()]
+	if !ok || createdAtVal == nil {
+		return 0, errors.NewProcessingError("created_at not found")
+	}
+
+	createdAt, ok := createdAtVal.(int)
+	if !ok {
+		return 0, errors.NewProcessingError("created_at not int64")
+	}
+
+	return createdAt, nil
 }
 
 // Err returns the first error encountered during iteration, if any.

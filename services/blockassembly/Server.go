@@ -248,145 +248,173 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 		ba.blockAssembler.SetSkipWaitForPendingBlocks(true)
 	}
 
-	// start the new subtree retry processor in the background
-	go func() {
-		var err error
-
-		for {
-			select {
-			case <-ctx.Done():
-				ba.logger.Infof("Stopping subtree retry processor")
-				return
-			case subtreeRetry := <-subtreeRetryChan:
-				dah := ba.blockAssembler.utxoStore.GetBlockHeight() + ba.settings.GlobalBlockHeightRetention
-				if len(subtreeRetry.subtreeMetaBytes) > 0 {
-					// store the subtree meta
-					if err = ba.subtreeStore.Set(ctx,
-						subtreeRetry.subtreeHash[:],
-						fileformat.FileTypeSubtreeMeta,
-						subtreeRetry.subtreeMetaBytes,
-						options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
-					); err != nil {
-						if errors.Is(err, errors.ErrBlobAlreadyExists) {
-							ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree meta already exists", subtreeRetry.subtreeHash.String())
-						} else {
-							ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree meta: %s", subtreeRetry.subtreeHash.String(), err)
-
-							if subtreeRetry.retries > 10 {
-								ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree meta, retries exhausted", subtreeRetry.subtreeHash.String())
-							} else {
-								subtreeRetry.retries++
-								go func() {
-									// backoff and wait before re-adding to retry queue
-									retry.BackoffAndSleep(subtreeRetry.retries, 2, time.Second)
-
-									// re-add the subtree to the retry queue
-									subtreeRetryChan <- subtreeRetry
-								}()
-							}
-						}
-					}
-				}
-
-				if err = ba.subtreeStore.Set(ctx,
-					subtreeRetry.subtreeHash[:],
-					fileformat.FileTypeSubtree,
-					subtreeRetry.subtreeBytes,
-					options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
-				); err != nil {
-					if errors.Is(err, errors.ErrBlobAlreadyExists) {
-						ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree already exists", subtreeRetry.subtreeHash.String())
-						continue
-					}
-
-					ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree: %s", subtreeRetry.subtreeHash.String(), err)
-
-					if subtreeRetry.retries > 10 {
-						ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree, retries exhausted", subtreeRetry.subtreeHash.String())
-						continue
-					}
-
-					subtreeRetry.retries++
-					go func() {
-						// backoff and wait before re-adding to retry queue
-						retry.BackoffAndSleep(subtreeRetry.retries, 2, time.Second)
-
-						// re-add the subtree to the retry queue
-						subtreeRetryChan <- subtreeRetry
-					}()
-
-					continue
-				}
-
-				// TODO #145
-				// the repository in the blob server sometimes cannot find subtrees that were just stored
-				// this is the dumbest way we can think of to fix it, at least temporarily
-				time.Sleep(20 * time.Millisecond)
-
-				if err = ba.blockchainClient.SendNotification(ctx, &blockchain.Notification{
-					Type:     model.NotificationType_Subtree,
-					Hash:     (&subtreeRetry.subtreeHash)[:],
-					Base_URL: "",
-					Metadata: &blockchain.NotificationMetadata{
-						Metadata: nil,
-					},
-				}); err != nil {
-					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to send subtree notification: %s", subtreeRetry.subtreeHash.String(), err)
-				}
-			}
-		}
-	}()
-
-	// start the new subtree listener in the background
-	go func() {
-		var err error
-
-		for {
-			select {
-			case <-ctx.Done():
-				ba.logger.Infof("Stopping subtree listener")
-				return
-
-			case newSubtreeRequest := <-newSubtreeChan:
-				if err = ba.storeSubtree(ctx, newSubtreeRequest, subtreeRetryChan); err != nil {
-					ba.logger.Errorf(err.Error())
-				}
-
-				// Invalidate mining candidate cache when new subtree is available
-				ba.blockAssembler.invalidateMiningCandidateCache()
-
-				if newSubtreeRequest.ErrChan != nil {
-					newSubtreeRequest.ErrChan <- err
-				}
-			}
-		}
-	}()
-
-	// start the block submission listener in the background
-	go func() {
-		var err error
-
-		for {
-			select {
-			case <-ctx.Done():
-				ba.logger.Infof("Stopping block submission listener")
-				return
-
-			case blockSubmission := <-ba.blockSubmissionChan:
-				if _, err = ba.submitMiningSolution(ctx, blockSubmission); err != nil {
-					ba.logger.Warnf("Failed to submit block for job id %s %+v", chainhash.Hash(blockSubmission.Id), err)
-				}
-
-				if blockSubmission.responseChan != nil {
-					blockSubmission.responseChan <- err
-				}
-
-				prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
-			}
-		}
-	}()
+	// start background processors
+	go ba.runSubtreeRetryProcessor(ctx, subtreeRetryChan)
+	go ba.runNewSubtreeListener(ctx, newSubtreeChan, subtreeRetryChan)
+	go ba.runBlockSubmissionListener(ctx)
 
 	return nil
+}
+
+// runSubtreeRetryProcessor handles retry logic for failed subtree storage operations.
+// It processes subtrees that failed to be stored and retries them with exponential backoff.
+func (ba *BlockAssembly) runSubtreeRetryProcessor(ctx context.Context, subtreeRetryChan chan *subtreeRetrySend) {
+	for {
+		select {
+		case <-ctx.Done():
+			ba.logger.Infof("Stopping subtree retry processor")
+			return
+		case subtreeRetry := <-subtreeRetryChan:
+			ba.processSubtreeRetry(ctx, subtreeRetry, subtreeRetryChan)
+		}
+	}
+}
+
+// runNewSubtreeListener handles incoming requests for new subtrees.
+// It stores subtrees and invalidates mining candidate cache when new subtrees are available.
+func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeChan <-chan subtreeprocessor.NewSubtreeRequest, subtreeRetryChan chan *subtreeRetrySend) {
+	for {
+		select {
+		case <-ctx.Done():
+			ba.logger.Infof("Stopping subtree listener")
+			return
+
+		case newSubtreeRequest := <-newSubtreeChan:
+			err := ba.storeSubtree(ctx, newSubtreeRequest, subtreeRetryChan)
+			if err != nil {
+				ba.logger.Errorf(err.Error())
+			}
+
+			// Invalidate mining candidate cache when new subtree is available
+			ba.blockAssembler.invalidateMiningCandidateCache()
+
+			if newSubtreeRequest.ErrChan != nil {
+				newSubtreeRequest.ErrChan <- err
+			}
+		}
+	}
+}
+
+// runBlockSubmissionListener handles incoming block submission requests.
+// It processes mining solutions and submits validated blocks to the blockchain.
+func (ba *BlockAssembly) runBlockSubmissionListener(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			ba.logger.Infof("Stopping block submission listener")
+			return
+
+		case blockSubmission := <-ba.blockSubmissionChan:
+			_, err := ba.submitMiningSolution(ctx, blockSubmission)
+			if err != nil {
+				ba.logger.Warnf("Failed to submit block for job id %s %+v", chainhash.Hash(blockSubmission.Id), err)
+			}
+
+			if blockSubmission.responseChan != nil {
+				blockSubmission.responseChan <- err
+			}
+
+			prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
+		}
+	}
+}
+
+// processSubtreeRetry processes a single subtree retry request, handling both meta and subtree data storage.
+func (ba *BlockAssembly) processSubtreeRetry(ctx context.Context, subtreeRetry *subtreeRetrySend, subtreeRetryChan chan *subtreeRetrySend) {
+	dah := ba.blockAssembler.utxoStore.GetBlockHeight() + ba.settings.GlobalBlockHeightRetention
+
+	// Store subtree meta if present
+	if len(subtreeRetry.subtreeMetaBytes) > 0 {
+		if err := ba.storeSubtreeMetaWithRetry(ctx, subtreeRetry, subtreeRetryChan, dah); err != nil {
+			return
+		}
+	}
+
+	// Store subtree data
+	if err := ba.storeSubtreeDataWithRetry(ctx, subtreeRetry, subtreeRetryChan, dah); err != nil {
+		return
+	}
+
+	// Send notification after successful storage
+	ba.sendSubtreeNotification(ctx, subtreeRetry.subtreeHash)
+}
+
+// storeSubtreeMetaWithRetry attempts to store subtree metadata with retry logic.
+func (ba *BlockAssembly) storeSubtreeMetaWithRetry(ctx context.Context, subtreeRetry *subtreeRetrySend, subtreeRetryChan chan *subtreeRetrySend, dah uint32) error {
+	err := ba.subtreeStore.Set(ctx,
+		subtreeRetry.subtreeHash[:],
+		fileformat.FileTypeSubtreeMeta,
+		subtreeRetry.subtreeMetaBytes,
+		options.WithDeleteAt(dah),
+	)
+
+	if err != nil {
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree meta already exists", subtreeRetry.subtreeHash.String())
+		} else {
+			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree meta: %s", subtreeRetry.subtreeHash.String(), err)
+			ba.handleRetryLogic(subtreeRetry, subtreeRetryChan, "subtree meta")
+		}
+	}
+
+	return err
+}
+
+// storeSubtreeDataWithRetry attempts to store subtree data with retry logic.
+func (ba *BlockAssembly) storeSubtreeDataWithRetry(ctx context.Context, subtreeRetry *subtreeRetrySend, subtreeRetryChan chan *subtreeRetrySend, dah uint32) error {
+	err := ba.subtreeStore.Set(ctx,
+		subtreeRetry.subtreeHash[:],
+		fileformat.FileTypeSubtree,
+		subtreeRetry.subtreeBytes,
+		options.WithDeleteAt(dah),
+	)
+
+	if err != nil {
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree already exists", subtreeRetry.subtreeHash.String())
+		} else {
+			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree: %s", subtreeRetry.subtreeHash.String(), err)
+			ba.handleRetryLogic(subtreeRetry, subtreeRetryChan, "subtree")
+		}
+	}
+
+	return err
+}
+
+// handleRetryLogic manages the retry logic for failed storage operations.
+func (ba *BlockAssembly) handleRetryLogic(subtreeRetry *subtreeRetrySend, subtreeRetryChan chan *subtreeRetrySend, itemType string) {
+	if subtreeRetry.retries > 10 {
+		ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store %s, retries exhausted", subtreeRetry.subtreeHash.String(), itemType)
+		return
+	}
+
+	subtreeRetry.retries++
+	go func() {
+		// backoff and wait before re-adding to retry queue
+		retry.BackoffAndSleep(subtreeRetry.retries, 2, time.Second)
+
+		// re-add the subtree to the retry queue
+		subtreeRetryChan <- subtreeRetry
+	}()
+}
+
+// sendSubtreeNotification sends a notification about a successfully stored subtree.
+func (ba *BlockAssembly) sendSubtreeNotification(ctx context.Context, subtreeHash chainhash.Hash) {
+	// TODO #145
+	// the repository in the blob server sometimes cannot find subtrees that were just stored
+	// this is the dumbest way we can think of to fix it, at least temporarily
+	time.Sleep(20 * time.Millisecond)
+
+	if err := ba.blockchainClient.SendNotification(ctx, &blockchain.Notification{
+		Type:     model.NotificationType_Subtree,
+		Hash:     (&subtreeHash)[:],
+		Base_URL: "",
+		Metadata: &blockchain.NotificationMetadata{
+			Metadata: nil,
+		},
+	}); err != nil {
+		ba.logger.Errorf("[BlockAssembly:Init][%s] failed to send subtree notification: %s", subtreeHash.String(), err)
+	}
 }
 
 // storeSubtree stores a completed subtree to the subtree store with retry capability.
