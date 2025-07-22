@@ -161,6 +161,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.ProfilerAddr = ""
 	appSettings.RPC.CacheEnabled = false
 	appSettings.P2P.DHTUsePrivate = true
+	appSettings.P2P.BootstrapAddresses = nil
 
 	// Override with test settings...
 	if opts.SettingsOverrideFunc != nil {
