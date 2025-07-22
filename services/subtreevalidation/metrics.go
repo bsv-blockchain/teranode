@@ -31,47 +31,47 @@ var (
 	// prometheusHealth tracks the duration of health check operations.
 	// This histogram measures how long health checks take to complete,
 	// which is important for monitoring service responsiveness.
-	prometheusHealth                                     prometheus.Histogram
+	prometheusHealth prometheus.Histogram
 
 	// prometheusSubtreeValidationCheckSubtree tracks the duration of subtree existence checks.
 	// This histogram measures the time taken to verify if a subtree already exists
 	// in storage, which is a common optimization operation.
-	prometheusSubtreeValidationCheckSubtree              prometheus.Histogram
+	prometheusSubtreeValidationCheckSubtree prometheus.Histogram
 
 	// prometheusSubtreeValidationValidateSubtree tracks the duration of complete subtree validation operations.
 	// This is the primary metric for monitoring the core validation functionality,
 	// measuring end-to-end validation time including all sub-operations.
-	prometheusSubtreeValidationValidateSubtree           prometheus.Histogram
+	prometheusSubtreeValidationValidateSubtree prometheus.Histogram
 
 	// prometheusSubtreeValidationValidateSubtreeRetry counts retry attempts during subtree validation.
 	// This counter tracks how often validation operations need to be retried,
 	// which helps identify reliability issues or transient failures.
-	prometheusSubtreeValidationValidateSubtreeRetry      prometheus.Counter
+	prometheusSubtreeValidationValidateSubtreeRetry prometheus.Counter
 
 	// prometheusSubtreeValidationValidateSubtreeHandler tracks the duration of validation API handler operations.
 	// This histogram measures the time spent in the gRPC handler layer,
 	// including request processing and response generation.
-	prometheusSubtreeValidationValidateSubtreeHandler    prometheus.Histogram
+	prometheusSubtreeValidationValidateSubtreeHandler prometheus.Histogram
 
 	// prometheusSubtreeValidationValidateSubtreeDuration tracks detailed validation processing time.
 	// This histogram provides granular timing information for the internal
 	// validation logic, separate from handler overhead.
-	prometheusSubtreeValidationValidateSubtreeDuration   prometheus.Histogram
+	prometheusSubtreeValidationValidateSubtreeDuration prometheus.Histogram
 
 	// prometheusSubtreeValidationBlessMissingTransaction tracks the duration of bless missing transaction operations.
 	// This histogram measures the time taken to handle missing transactions,
 	// which is an important aspect of subtree validation.
-	prometheusSubtreeValidationBlessMissingTransaction   prometheus.Histogram
+	prometheusSubtreeValidationBlessMissingTransaction prometheus.Histogram
 
 	// prometheusSubtreeValidationSetTXMetaCacheKafka tracks the duration of setting tx meta cache from kafka operations.
 	// This histogram measures the time taken to update the transaction metadata cache
 	// from Kafka messages, which is a critical step in subtree validation.
-	prometheusSubtreeValidationSetTXMetaCacheKafka       prometheus.Histogram
+	prometheusSubtreeValidationSetTXMetaCacheKafka prometheus.Histogram
 
 	// prometheusSubtreeValidationDelTXMetaCacheKafka tracks the duration of deleting tx meta cache from kafka operations.
 	// This histogram measures the time taken to remove transaction metadata from the cache
 	// based on Kafka messages, which is an important maintenance operation.
-	prometheusSubtreeValidationDelTXMetaCacheKafka       prometheus.Histogram
+	prometheusSubtreeValidationDelTXMetaCacheKafka prometheus.Histogram
 
 	// prometheusSubtreeValidationSetTXMetaCacheKafkaErrors counts errors setting tx meta cache from kafka operations.
 	// This counter tracks how often errors occur when updating the transaction metadata cache

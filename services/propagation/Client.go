@@ -35,12 +35,12 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/pkg/go-batcher"
 	"github.com/bitcoin-sv/teranode/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-batcher"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"go.opentelemetry.io/otel"

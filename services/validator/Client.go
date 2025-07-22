@@ -32,12 +32,12 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/pkg/go-batcher"
 	"github.com/bitcoin-sv/teranode/services/validator/validator_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	utxometa "github.com/bitcoin-sv/teranode/stores/utxo/meta"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bsv-blockchain/go-batcher"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
