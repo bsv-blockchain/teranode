@@ -21,13 +21,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PeerService_GetPeers_FullMethodName    = "/p2p_api.PeerService/GetPeers"
-	PeerService_BanPeer_FullMethodName     = "/p2p_api.PeerService/BanPeer"
-	PeerService_UnbanPeer_FullMethodName   = "/p2p_api.PeerService/UnbanPeer"
-	PeerService_IsBanned_FullMethodName    = "/p2p_api.PeerService/IsBanned"
-	PeerService_ListBanned_FullMethodName  = "/p2p_api.PeerService/ListBanned"
-	PeerService_ClearBanned_FullMethodName = "/p2p_api.PeerService/ClearBanned"
-	PeerService_AddBanScore_FullMethodName = "/p2p_api.PeerService/AddBanScore"
+	PeerService_GetPeers_FullMethodName       = "/p2p_api.PeerService/GetPeers"
+	PeerService_BanPeer_FullMethodName        = "/p2p_api.PeerService/BanPeer"
+	PeerService_UnbanPeer_FullMethodName      = "/p2p_api.PeerService/UnbanPeer"
+	PeerService_IsBanned_FullMethodName       = "/p2p_api.PeerService/IsBanned"
+	PeerService_ListBanned_FullMethodName     = "/p2p_api.PeerService/ListBanned"
+	PeerService_ClearBanned_FullMethodName    = "/p2p_api.PeerService/ClearBanned"
+	PeerService_AddBanScore_FullMethodName    = "/p2p_api.PeerService/AddBanScore"
+	PeerService_ConnectPeer_FullMethodName    = "/p2p_api.PeerService/ConnectPeer"
+	PeerService_DisconnectPeer_FullMethodName = "/p2p_api.PeerService/DisconnectPeer"
 )
 
 // PeerServiceClient is the client API for PeerService service.
@@ -43,6 +45,8 @@ type PeerServiceClient interface {
 	ListBanned(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListBannedResponse, error)
 	ClearBanned(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ClearBannedResponse, error)
 	AddBanScore(ctx context.Context, in *AddBanScoreRequest, opts ...grpc.CallOption) (*AddBanScoreResponse, error)
+	ConnectPeer(ctx context.Context, in *ConnectPeerRequest, opts ...grpc.CallOption) (*ConnectPeerResponse, error)
+	DisconnectPeer(ctx context.Context, in *DisconnectPeerRequest, opts ...grpc.CallOption) (*DisconnectPeerResponse, error)
 }
 
 type peerServiceClient struct {
@@ -123,6 +127,26 @@ func (c *peerServiceClient) AddBanScore(ctx context.Context, in *AddBanScoreRequ
 	return out, nil
 }
 
+func (c *peerServiceClient) ConnectPeer(ctx context.Context, in *ConnectPeerRequest, opts ...grpc.CallOption) (*ConnectPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConnectPeerResponse)
+	err := c.cc.Invoke(ctx, PeerService_ConnectPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) DisconnectPeer(ctx context.Context, in *DisconnectPeerRequest, opts ...grpc.CallOption) (*DisconnectPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DisconnectPeerResponse)
+	err := c.cc.Invoke(ctx, PeerService_DisconnectPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PeerServiceServer is the server API for PeerService service.
 // All implementations must embed UnimplementedPeerServiceServer
 // for forward compatibility.
@@ -136,6 +160,8 @@ type PeerServiceServer interface {
 	ListBanned(context.Context, *emptypb.Empty) (*ListBannedResponse, error)
 	ClearBanned(context.Context, *emptypb.Empty) (*ClearBannedResponse, error)
 	AddBanScore(context.Context, *AddBanScoreRequest) (*AddBanScoreResponse, error)
+	ConnectPeer(context.Context, *ConnectPeerRequest) (*ConnectPeerResponse, error)
+	DisconnectPeer(context.Context, *DisconnectPeerRequest) (*DisconnectPeerResponse, error)
 	mustEmbedUnimplementedPeerServiceServer()
 }
 
@@ -166,6 +192,12 @@ func (UnimplementedPeerServiceServer) ClearBanned(context.Context, *emptypb.Empt
 }
 func (UnimplementedPeerServiceServer) AddBanScore(context.Context, *AddBanScoreRequest) (*AddBanScoreResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddBanScore not implemented")
+}
+func (UnimplementedPeerServiceServer) ConnectPeer(context.Context, *ConnectPeerRequest) (*ConnectPeerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ConnectPeer not implemented")
+}
+func (UnimplementedPeerServiceServer) DisconnectPeer(context.Context, *DisconnectPeerRequest) (*DisconnectPeerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DisconnectPeer not implemented")
 }
 func (UnimplementedPeerServiceServer) mustEmbedUnimplementedPeerServiceServer() {}
 func (UnimplementedPeerServiceServer) testEmbeddedByValue()                     {}
@@ -314,6 +346,42 @@ func _PeerService_AddBanScore_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerService_ConnectPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConnectPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).ConnectPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_ConnectPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).ConnectPeer(ctx, req.(*ConnectPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_DisconnectPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DisconnectPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).DisconnectPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_DisconnectPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).DisconnectPeer(ctx, req.(*DisconnectPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PeerService_ServiceDesc is the grpc.ServiceDesc for PeerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -348,6 +416,14 @@ var PeerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddBanScore",
 			Handler:    _PeerService_AddBanScore_Handler,
+		},
+		{
+			MethodName: "ConnectPeer",
+			Handler:    _PeerService_ConnectPeer_Handler,
+		},
+		{
+			MethodName: "DisconnectPeer",
+			Handler:    _PeerService_DisconnectPeer_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

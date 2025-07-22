@@ -363,8 +363,10 @@ type P2PSettings struct {
 	SharedKey   string
 	StaticPeers []string
 
-	SubtreeTopic   string
-	HandshakeTopic string // new pubsub topic for version/verack handshake
+	SubtreeTopic          string
+	HandshakeTopic        string // new pubsub topic for version/verack handshake
+	HandshakeTopicSize    int
+	HandshakeTopicTimeout time.Duration
 
 	DHTProtocolID   string
 	DHTUsePrivate   bool

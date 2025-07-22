@@ -79,4 +79,12 @@ type ClientI interface {
 	// AddBanScore adds to a peer's ban score with the specified reason.
 	// Returns an AddBanScoreResponse indicating success or an error if the operation fails.
 	AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error)
+
+	// ConnectPeer connects to a specific peer using the provided multiaddr
+	// Returns an error if the connection fails.
+	ConnectPeer(ctx context.Context, peerAddr string) error
+
+	// DisconnectPeer disconnects from a specific peer using their peer ID
+	// Returns an error if the disconnection fails.
+	DisconnectPeer(ctx context.Context, peerID string) error
 }

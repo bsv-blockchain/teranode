@@ -172,3 +172,59 @@ func (c *Client) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Cl
 func (c *Client) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error) {
 	return c.client.AddBanScore(ctx, req)
 }
+
+// ConnectPeer connects to a specific peer using the provided multiaddr.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerAddr: The peer address in multiaddr format
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) ConnectPeer(ctx context.Context, peerAddr string) error {
+	req := &p2p_api.ConnectPeerRequest{
+		PeerAddress: peerAddr,
+	}
+
+	var (
+		resp *p2p_api.ConnectPeerResponse
+		err  error
+	)
+
+	if resp, err = c.client.ConnectPeer(ctx, req); err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Success {
+		return errors.NewServiceError("failed to connect to peer: %s", resp.Error)
+	}
+
+	return nil
+}
+
+// DisconnectPeer disconnects from a specific peer using their peer ID.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The peer ID to disconnect from
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) DisconnectPeer(ctx context.Context, peerID string) error {
+	req := &p2p_api.DisconnectPeerRequest{
+		PeerId: peerID,
+	}
+
+	var (
+		resp *p2p_api.DisconnectPeerResponse
+		err  error
+	)
+
+	if resp, err = c.client.DisconnectPeer(ctx, req); err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Success {
+		return errors.NewServiceError("failed to disconnect from peer: %s", resp.Error)
+	}
+
+	return nil
+}

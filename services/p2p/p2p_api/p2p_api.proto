@@ -82,6 +82,24 @@ message AddBanScoreRequest {
   message AddBanScoreResponse {
     bool ok = 1;
   }
+
+  message ConnectPeerRequest {
+    string peer_address = 1; // multiaddr format: /ip4/127.0.0.1/tcp/9005/p2p/12D3KooW...
+  }
+
+  message ConnectPeerResponse {
+    bool success = 1;
+    string error = 2;
+  }
+
+  message DisconnectPeerRequest {
+    string peer_id = 1; // peer ID to disconnect from
+  }
+
+  message DisconnectPeerResponse {
+    bool success = 1;
+    string error = 2;
+  }
   
   // Add new service for peer operations
   service PeerService {
@@ -92,5 +110,7 @@ message AddBanScoreRequest {
     rpc ListBanned(google.protobuf.Empty) returns (ListBannedResponse) {}
     rpc ClearBanned(google.protobuf.Empty) returns (ClearBannedResponse) {}
     rpc AddBanScore(AddBanScoreRequest) returns (AddBanScoreResponse) {}
+    rpc ConnectPeer(ConnectPeerRequest) returns (ConnectPeerResponse) {}
+    rpc DisconnectPeer(DisconnectPeerRequest) returns (DisconnectPeerResponse) {}
   }
   

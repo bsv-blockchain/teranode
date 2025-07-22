@@ -1742,7 +1742,7 @@ func TestPeerDisconnect(t *testing.T) {
 
 	// Create first host
 	h1, err := libp2p.New(
-		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/34351"),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(priv1),
 		libp2p.DisableRelay(),
 	)
@@ -1754,7 +1754,7 @@ func TestPeerDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	h2, err := libp2p.New(
-		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/34352"),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(priv2),
 		libp2p.DisableRelay(),
 	)

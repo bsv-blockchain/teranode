@@ -27,6 +27,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
+	"github.com/bitcoin-sv/teranode/services/p2p"
 	"github.com/bitcoin-sv/teranode/services/propagation"
 	distributor "github.com/bitcoin-sv/teranode/services/rpc"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -72,6 +73,7 @@ type TestDaemon struct {
 	Settings              *settings.Settings
 	SubtreeStore          blob.Store
 	UtxoStore             utxo.Store
+	P2PClient             p2p.ClientI
 	composeDependencies   tc.ComposeStack
 	ctxCancel             context.CancelFunc
 	d                     *Daemon
@@ -269,12 +271,18 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	utxoStore, err = d.daemonStores.GetUtxoStore(ctx, logger, appSettings)
 	require.NoError(t, err)
 
+	var p2pClient p2p.ClientI
+
+	p2pClient, err = p2p.NewClient(ctx, logger, appSettings)
+	require.NoError(t, err)
+
 	assert.NotNil(t, blockchainClient)
 	assert.NotNil(t, blockAssemblyClient)
 	assert.NotNil(t, propagationClient)
 	assert.NotNil(t, blockValidationClient)
 	assert.NotNil(t, subtreeStore)
 	assert.NotNil(t, utxoStore)
+	assert.NotNil(t, p2pClient)
 	assert.NotNil(t, distributorClient)
 
 	return &TestDaemon{
@@ -289,6 +297,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		Settings:              appSettings,
 		SubtreeStore:          subtreeStore,
 		UtxoStore:             utxoStore,
+		P2PClient:             p2pClient,
 		composeDependencies:   composeDependencies,
 		ctxCancel:             cancel,
 		d:                     d,
@@ -1346,4 +1355,73 @@ func (td *TestDaemon) LogJSON(t *testing.T, label string, data interface{}) {
 	}
 
 	t.Logf("\n%s:\n%s", label, string(jsonData))
+}
+
+func (td *TestDaemon) ConnectToPeer(t *testing.T, peer *TestDaemon) {
+	peerAddr := peerAddress(peer)
+
+	// Use the P2P client to connect to the peer dynamically
+	err := td.P2PClient.ConnectPeer(td.Ctx, peerAddr)
+	require.NoError(t, err, "Failed to connect to peer")
+
+	timeout := time.After(15 * time.Second)          // Increased timeout for connection and peer info propagation
+	ticker := time.NewTicker(250 * time.Millisecond) // Poll interval
+
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-td.Ctx.Done():
+			t.Error("context cancelled while waiting for peer")
+			return
+		case <-timeout:
+			t.Errorf("timed out waiting for peer %s to appear in getpeerinfo", peerAddr)
+			// For debugging, make one last call to getpeerinfo and log its current state
+			finalResponseStr, finalErr := td.CallRPC(td.Ctx, "getpeerinfo", []any{})
+			if finalErr != nil {
+				t.Logf("Final getpeerinfo call on timeout also failed: %v", finalErr)
+			} else {
+				t.Logf("Final getpeerinfo response on timeout: %+v", finalResponseStr)
+			}
+
+			t.FailNow() // Fail test immediately after logging
+
+			return
+		case <-ticker.C:
+			r, err := td.P2PClient.GetPeers(td.Ctx)
+			if err != nil {
+				// If there's an error calling RPC, log it and continue retrying
+				t.Logf("Error calling getpeerinfo: %v. Retrying...", err)
+				continue
+			}
+
+			if len(r.Peers) == 0 {
+				t.Logf("getpeerinfo returned empty peer list. Retrying...")
+				continue
+			}
+
+			found := false
+
+			for _, p := range r.Peers {
+				if p != nil && p.Id == peer.Settings.P2P.PeerID {
+					found = true
+					break
+				}
+			}
+
+			if found {
+				return // Exit the main for loop and function successfully
+			}
+		}
+	}
+}
+
+func (td *TestDaemon) DisconnectFromPeer(t *testing.T, peer *TestDaemon) {
+	// Use the P2P client to disconnect from the peer dynamically
+	err := td.P2PClient.DisconnectPeer(td.Ctx, peer.Settings.P2P.PeerID)
+	require.NoError(t, err, "Failed to disconnect from peer")
+}
+
+func peerAddress(peer *TestDaemon) string {
+	return fmt.Sprintf("/dns/127.0.0.1/tcp/%d/p2p/%s", peer.Settings.P2P.Port, peer.Settings.P2P.PeerID)
 }

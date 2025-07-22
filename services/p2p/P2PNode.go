@@ -61,6 +61,7 @@ type P2PNodeI interface {
 	HostID() peer.ID
 	ConnectedPeers() []PeerInfo
 	CurrentlyConnectedPeers() []PeerInfo
+	ConnectToPeer(ctx context.Context, peerAddr string) error
 	DisconnectPeer(ctx context.Context, peerID peer.ID) error
 	SendToPeer(ctx context.Context, pid peer.ID, msg []byte) error
 	SetPeerConnectedCallback(callback func(context.Context, peer.ID))
@@ -494,7 +495,7 @@ func (s *P2PNode) Start(ctx context.Context, streamHandler func(network.Stream),
 
 	go func() {
 		if err := s.discoverPeers(ctx, topicNames); err != nil && !errors.Is(err, context.Canceled) {
-			s.logger.Errorf("[P2PNode] error discovering peers: %v", err)
+			s.logger.Warnf("[P2PNode] error discovering peers: %v", err)
 		}
 	}()
 
@@ -1469,4 +1470,27 @@ func isPrivateIP(addr multiaddr.Multiaddr) bool {
 	}
 
 	return false
+}
+
+// ConnectToPeer connects to a specific peer using the provided multiaddr string
+func (s *P2PNode) ConnectToPeer(ctx context.Context, peerAddr string) error {
+	// Parse the multiaddr string
+	maddr, err := multiaddr.NewMultiaddr(peerAddr)
+	if err != nil {
+		return errors.NewServiceError("[P2PNode][ConnectToPeer] invalid multiaddr: %v", err)
+	}
+
+	// Extract peer info from the multiaddr
+	peerInfo, err := peer.AddrInfoFromP2pAddr(maddr)
+	if err != nil {
+		return errors.NewServiceError("[P2PNode][ConnectToPeer] failed to get peer info: %v", err)
+	}
+
+	// Connect to the peer
+	s.logger.Infof("[P2PNode][ConnectToPeer] connecting to peer %s at %s", peerInfo.ID, peerAddr)
+	if err := s.host.Connect(ctx, *peerInfo); err != nil {
+		return errors.NewServiceError("[P2PNode][ConnectToPeer] failed to connect to peer %s: %v", peerInfo.ID, err)
+	}
+
+	return nil
 }

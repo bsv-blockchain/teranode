@@ -151,6 +151,11 @@ func (m *MockServerP2PNode) SetPeerConnectedCallback(callback func(context.Conte
 	m.Called(callback)
 }
 
+func (m *MockServerP2PNode) ConnectToPeer(ctx context.Context, peerAddr string) error {
+	args := m.Called(ctx, peerAddr)
+	return args.Error(0)
+}
+
 // MockBanList is a mock implementation of BanListI interface for testing purposes.
 // This mock provides a testable substitute for the real ban list implementation,
 // allowing unit tests to verify ban management behavior without requiring actual

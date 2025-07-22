@@ -46,6 +46,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
@@ -635,7 +636,19 @@ func (s *Server) sendHandshake(ctx context.Context) {
 	s.logger.Infof("[sendHandshake] Sending version handshake: PeerID=%s, BestHeight=%d, Topic=%s", msg.PeerID, msg.BestHeight, s.handshakeTopicName)
 
 	go func() {
-		if err := s.P2PNode.Publish(ctx, s.handshakeTopicName, msgBytes); err != nil {
+		var err error
+
+		// should we wait for the topic to have enough subscribers before publishing?
+		if s.settings != nil && s.settings.P2P.HandshakeTopicSize > 0 {
+			ctx, cancel := context.WithTimeout(ctx, s.settings.P2P.HandshakeTopicTimeout)
+			defer cancel()
+
+			err = s.P2PNode.GetTopic(s.handshakeTopicName).Publish(ctx, msgBytes, pubsub.WithReadiness(pubsub.MinTopicSize(s.settings.P2P.HandshakeTopicSize)))
+		} else {
+			err = s.P2PNode.Publish(ctx, s.handshakeTopicName, msgBytes)
+		}
+
+		if err != nil {
 			s.logger.Errorf("[sendHandshake][p2p-handshake] publish error: %v", err)
 		} else {
 			s.logger.Infof("[sendHandshake] Successfully published handshake to topic %s", s.handshakeTopicName)
@@ -723,6 +736,8 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 		}
 		s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
 	}
+
+	s.logger.Infof("[handleHandshakeTopic] Message type: %s, from peer: %s, height: %d", hs.Type, hs.PeerID, hs.BestHeight)
 
 	if hs.Type == "version" {
 		err := s.sendVerack(ctx, from, hs)
@@ -1564,6 +1579,70 @@ func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreReques
 		req.PeerId, req.Reason, score, banned)
 
 	return &p2p_api.AddBanScoreResponse{Ok: true}, nil
+}
+
+// ConnectPeer connects to a specific peer using the provided multiaddr
+func (s *Server) ConnectPeer(ctx context.Context, req *p2p_api.ConnectPeerRequest) (*p2p_api.ConnectPeerResponse, error) {
+	s.logger.Infof("[ConnectPeer] Attempting to connect to peer: %s", req.PeerAddress)
+
+	// Check if P2P node is available
+	if s.P2PNode == nil {
+		return &p2p_api.ConnectPeerResponse{
+			Success: false,
+			Error:   "P2P node not available",
+		}, nil
+	}
+
+	// Use the P2PNode's ConnectToPeer method
+	if err := s.P2PNode.ConnectToPeer(ctx, req.PeerAddress); err != nil {
+		s.logger.Errorf("[ConnectPeer] Failed to connect to peer %s: %v", req.PeerAddress, err)
+		return &p2p_api.ConnectPeerResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+
+	s.logger.Infof("[ConnectPeer] Successfully connected to peer: %s", req.PeerAddress)
+	return &p2p_api.ConnectPeerResponse{
+		Success: true,
+	}, nil
+}
+
+// DisconnectPeer disconnects from a specific peer
+func (s *Server) DisconnectPeer(ctx context.Context, req *p2p_api.DisconnectPeerRequest) (*p2p_api.DisconnectPeerResponse, error) {
+	s.logger.Infof("[DisconnectPeer] Attempting to disconnect from peer: %s", req.PeerId)
+
+	// Check if P2P node is available
+	if s.P2PNode == nil {
+		return &p2p_api.DisconnectPeerResponse{
+			Success: false,
+			Error:   "P2P node not available",
+		}, nil
+	}
+
+	// Parse the peer ID
+	peerID, err := peer.Decode(req.PeerId)
+	if err != nil {
+		s.logger.Errorf("[DisconnectPeer] Invalid peer ID %s: %v", req.PeerId, err)
+		return &p2p_api.DisconnectPeerResponse{
+			Success: false,
+			Error:   fmt.Sprintf("invalid peer ID: %v", err),
+		}, nil
+	}
+
+	// Use the P2PNode's DisconnectPeer method
+	if err := s.P2PNode.DisconnectPeer(ctx, peerID); err != nil {
+		s.logger.Errorf("[DisconnectPeer] Failed to disconnect from peer %s: %v", req.PeerId, err)
+		return &p2p_api.DisconnectPeerResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+
+	s.logger.Infof("[DisconnectPeer] Successfully disconnected from peer: %s", req.PeerId)
+	return &p2p_api.DisconnectPeerResponse{
+		Success: true,
+	}, nil
 }
 
 // registerRemainingHandlers registers all topic handlers except the block handler (which is registered during readiness check)
