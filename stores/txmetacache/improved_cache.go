@@ -442,7 +442,7 @@ func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
 	idx := h % BucketsCount
 
 	if !c.buckets[idx].Get(dst, k, h, true) {
-		return errors.NewProcessingError("key %v not found in cache", k, errors.ErrNotFound)
+		return errors.NewNotFoundError("key %v not found in cache", k, errors.ErrNotFound)
 	}
 
 	return nil

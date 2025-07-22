@@ -298,7 +298,7 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 			// check the length of the spending txs, if it's less than the index, then the input is not spent
 			if len(parenTxIDS) <= int(input.PreviousTxOutIndex) {
 				// throw an error
-				return nil, errors.NewProcessingError("[GetCounterConflictingTxHashes][%s] cannot process counter conflicting, input %d of %s is out of range", txHash.String(), input.PreviousTxOutIndex, input.PreviousTxIDChainHash().String())
+				return nil, errors.NewProcessingError("[GetCounterConflictingTxHashes][%s] cannot process counter conflicting, input %d of %s is out of range (len: %d, %v)", txHash.String(), input.PreviousTxOutIndex, input.PreviousTxIDChainHash().String(), len(parenTxIDS), parenTxIDS)
 			}
 
 			spendingTxID := parenTxIDS[input.PreviousTxOutIndex]

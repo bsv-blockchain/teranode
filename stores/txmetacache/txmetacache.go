@@ -328,7 +328,7 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 	cachedBytes := make([]byte, 0)
 
 	err := t.cache.Get(&cachedBytes, hash[:])
-	if err != nil {
+	if err != nil && !errors.Is(err, errors.ErrNotFound) {
 		return nil, err
 	}
 
@@ -364,18 +364,16 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 
 	// add to cache, but only if the blockIDs have not been set
 	if len(txMeta.BlockIDs) == 0 {
-		err = t.SetCache(hash, txMeta)
-		if err != nil {
-			return nil, err
-		}
+		// don't return errors from SetCache, as it is not critical if the cache fails to set
+		_ = t.SetCache(hash, txMeta)
 	}
 
 	return txMeta, nil
 }
 
-// Get retrieves transaction metadata from either the cache or the underlying store.
-// It supports selective field retrieval to optimize performance when only specific
-// transaction metadata fields are needed.
+// Get retrieves transaction data from the underlying store.
+// It never uses a caching mechanism, because the Get function by default
+// returns fields that are never cached in the txmetacache
 //
 // Parameters:
 // - ctx: Context for the operation
@@ -383,78 +381,10 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 // - fields: Optional list of specific metadata fields to retrieve
 //
 // Returns:
-// - Transaction metadata if found
+// - Transaction data if found
 // - Error if retrieval fails
-//
-// This method first checks the cache for the requested data, and if not found or if
-// specific fields are requested, it falls back to the underlying store.
 func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
-	skipCache := false
-
-	var err error
-
-	if len(f) > 0 {
-		// if any of the fields are tx, skip the cache as the cache specifically skips storing tx
-		for _, field := range f {
-			if field == fields.Tx {
-				skipCache = true
-
-				t.logger.Warnf("txMetaCache GET - skipping cache check as requesting Tx data for %s, fields: %v", hash.String(), f)
-
-				break
-			}
-		}
-	}
-
-	if !skipCache {
-		cachedBytes := make([]byte, 0)
-
-		err = t.cache.Get(&cachedBytes, hash[:])
-		if err != nil {
-			return nil, err
-		}
-
-		// if found in cache
-		if len(cachedBytes) > 0 {
-			if !t.returnValue(cachedBytes) {
-				t.logger.Debugf("txMetaCache has the value %s, but it is too old with height: %d, returning nil", hash.String(), readHeightFromValue(cachedBytes))
-				t.metrics.hitOldTx.Add(1)
-
-				return nil, nil
-			}
-
-			t.metrics.hits.Add(1)
-
-			txmetaData := meta.Data{}
-			if err = meta.NewMetaDataFromBytes(cachedBytes, &txmetaData); err != nil {
-				return nil, err
-			}
-
-			return &txmetaData, nil
-		}
-
-		// if not found in the cache, add it to the cache, record cache miss
-		t.metrics.misses.Add(1)
-		t.logger.Warnf("txMetaCache GET miss for %s", hash.String())
-	}
-
-	txMeta, err := t.utxoStore.Get(ctx, hash)
-
-	if err != nil {
-		return nil, err
-	}
-
-	prometheusBlockValidationTxMetaCacheGetOrigin.Add(1)
-
-	// add to cache, but only if the blockIDs have not been set
-	if len(txMeta.BlockIDs) == 0 {
-		err = t.SetCache(hash, txMeta)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return txMeta, nil
+	return t.utxoStore.Get(ctx, hash, f...)
 }
 
 // BatchDecorate retrieves metadata for multiple transactions in a single batch operation.
@@ -531,10 +461,8 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 
 	// add to cache, but only if the blockIDs have not been set
 	if len(txMeta.BlockIDs) == 0 && !txMeta.Conflicting {
-		err = t.SetCache(txHash, txMeta)
-		if err != nil {
-			return nil, err
-		}
+		// don't return errors from SetCache, as it is not critical if the cache fails to set
+		_ = t.SetCache(txHash, txMeta)
 	}
 
 	return txMeta, nil
@@ -572,10 +500,8 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 
 	// if the blockID is not set, then we need to set it
 	if len(txMeta.BlockIDs) == 0 {
-		err = t.SetCache(hash, txMeta)
-		if err != nil {
-			return err
-		}
+		// don't return errors from SetCache, as it is not critical if the cache fails to set
+		_ = t.SetCache(hash, txMeta)
 	}
 
 	return nil

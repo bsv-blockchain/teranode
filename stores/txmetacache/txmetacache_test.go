@@ -478,21 +478,9 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 		err = cache.SetCache(hash, metaData)
 		require.NoError(t, err)
 
-		// Test Get
-		metaGet, err := cache.Get(ctx, hash)
-		require.NoError(t, err)
-		require.NotNil(t, metaGet)
-		require.Equal(t, metaData.Fee, metaGet.Fee)
-		require.Equal(t, metaData.SizeInBytes, metaGet.SizeInBytes)
-
-		// Advance block height beyond cache retention period
-		err = utxoStore.SetBlockHeight(200)
-		require.NoError(t, err)
-
-		// Test Get after height advancement
-		metaGet, err = cache.Get(ctx, hash)
-		require.NoError(t, err)
-		require.Nil(t, metaGet)
+		// Test Get should never use the cache, always get it from the utxostore
+		_, err = cache.Get(ctx, hash)
+		require.Error(t, err)
 	})
 
 	t.Run("test Get with specific fields", func(t *testing.T) {
@@ -525,13 +513,9 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 		err = cache.SetCache(hash, metaData)
 		require.NoError(t, err)
 
-		// Test Get with specific fields
-		metaGet, err := cache.Get(ctx, hash, fields.Fee, fields.SizeInBytes)
-		require.NoError(t, err)
-		require.NotNil(t, metaGet)
-		require.Equal(t, metaData.Fee, metaGet.Fee)
-		require.Equal(t, metaData.SizeInBytes, metaGet.SizeInBytes)
-		require.Empty(t, metaGet.BlockIDs) // BlockIDs should be empty as not requested
+		// Test Get with specific fields should never return anything from the cache
+		_, err = cache.Get(ctx, hash, fields.Fee, fields.SizeInBytes)
+		require.Error(t, err)
 	})
 
 	t.Run("test Get with non-existent hash", func(t *testing.T) {

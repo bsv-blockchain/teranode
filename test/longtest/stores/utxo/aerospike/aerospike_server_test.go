@@ -225,6 +225,20 @@ func TestAerospike(t *testing.T) {
 		assert.Len(t, resp.Tx.Inputs, 1)
 	})
 
+	t.Run("aerospike_get utxos", func(t *testing.T) {
+		cleanDB(t, client)
+
+		txMeta, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+		assert.NotNil(t, txMeta)
+
+		resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Utxos)
+		require.NoError(t, err)
+
+		assert.NotNil(t, resp.SpendingDatas)
+		assert.Len(t, resp.SpendingDatas, 5)
+	})
+
 	t.Run("aerospike_store", func(t *testing.T) {
 		cleanDB(t, client)
 
