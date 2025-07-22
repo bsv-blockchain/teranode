@@ -151,7 +151,9 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	}
 
 	policy := util.GetAerospikeReadPolicy(s.settings)
-	policy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
+	// we only want to read from the master for tx metadata, due to blockIDs being updated
+	// however we still want to read from the replica for the utxos in case of aerospike failures
+	policy.ReplicaPolicy = aerospike.SEQUENCE
 
 	value, aErr := s.client.Get(policy, key, fields.FieldNamesToStrings(binNames)...)
 	if aErr != nil {
@@ -500,7 +502,9 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 	var err error
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
+	// we only want to read from the master for tx metadata, due to blockIDs being updated
+	// however we still want to read from the replica for the utxos in case of aerospike failures
+	batchPolicy.ReplicaPolicy = aerospike.SEQUENCE
 
 	policy := util.GetAerospikeBatchReadPolicy(s.settings)
 
@@ -1112,7 +1116,9 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	var err error
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
+	// we only want to read from the master for tx metadata, due to blockIDs being updated
+	// however we still want to read from the replica for the utxos in case of aerospike failures
+	batchPolicy.ReplicaPolicy = aerospike.SEQUENCE
 
 	policy := util.GetAerospikeBatchReadPolicy(s.settings)
 
