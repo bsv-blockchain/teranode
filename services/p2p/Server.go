@@ -1432,6 +1432,28 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 			return
 		}
 	}
+
+	// Send peer's block info to Kafka if we have a producer client
+	if s.blocksKafkaProducerClient != nil {
+		hash, err := chainhash.NewHashFromStr(miningOnMessage.Hash)
+		if err != nil {
+			s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] type:version - error getting chainhash from string %s: %v", miningOnMessage.Hash, err)
+		} else {
+			msg := &kafkamessage.KafkaBlockTopicMessage{
+				Hash: hash.String(),
+				URL:  miningOnMessage.DataHubURL,
+			}
+
+			value, err := proto.Marshal(msg)
+			if err != nil {
+				s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] type:version - error marshaling KafkaBlockTopicMessage: %v", err)
+			} else {
+				s.blocksKafkaProducerClient.Publish(&kafka.Message{
+					Value: value,
+				})
+			}
+		}
+	}
 }
 
 // GetPeers returns a list of connected peers.
