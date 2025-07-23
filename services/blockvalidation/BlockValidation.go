@@ -825,7 +825,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
 
 			// only get the bloom filters for the current chain.
-			bloomFilters, err := u.collectNecessaryBloomFilters(ctx, block, blockHeaders)
+			bloomFilters, err := u.collectNecessaryBloomFilters(decoupledCtx, block, blockHeaders)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to collect necessary bloom filters: %s", block.String(), err)
 
@@ -872,11 +872,13 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			}
 
 			// check the old block IDs and invalidate the block if needed
-			if err = u.checkOldBlockIDs(ctx, oldBlockIDsMap, block); err != nil {
+			if err = u.checkOldBlockIDs(decoupledCtx, oldBlockIDsMap, block); err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to check old block IDs: %s", block.String(), err)
 
-				if invalidateBlockErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invalidateBlockErr != nil {
-					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
+				if !errors.Is(err, context.Canceled) {
+					if invalidateBlockErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invalidateBlockErr != nil {
+						u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
+					}
 				}
 			}
 		}()
