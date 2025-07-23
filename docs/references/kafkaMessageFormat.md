@@ -528,14 +528,14 @@ message KafkaTxMetaTopicMessage {
 - Type: bytes
 - Description: Serialized transaction metadata
 - Required: Only when action is ADD; should be empty when action is DELETE
-- Content: Serialized transaction metadata that includes transaction details, parent transaction hashes, block IDs, fees, and other relevant information
+- Content: Serialized transaction metadata that includes transaction details, transaction input outpoints (TxInpoints), block IDs, fees, and other relevant information
 
 ### Transaction Metadata
 
 The content field contains serialized transaction metadata, which typically includes:
 
 - Complete transaction content
-- Parent transaction hashes (inputs)
+- Transaction input outpoints (TxInpoints) - containing parent transaction hashes and output indices
 - Block heights where the transaction appears
 - Transaction fee
 - Size in bytes

@@ -25,7 +25,7 @@ The Subtree Validator is responsible for ensuring the integrity and consistency 
 2. **Transaction Legitimacy**: Ensures all transactions within subtrees are valid, including checks for double-spending.
 
 3. **Decorates the Subtree with additional metadata**: Adds metadata to the subtree, to facilitate faster block validation at a later stage (by the Block Validation Service).
-    - Specifically, the subtree metadata will contain all of the transaction parent hashes. This decorated subtree can be validated and processed faster by the Block Validation Service, preventing unnecessary round trips to the UTXO Store.
+    - Specifically, the subtree metadata will contain all of the transaction input outpoints ([TxInpoints](../datamodel/utxo_data_model.md#txinpoints-structure)). This decorated subtree can be validated and processed faster by the Block Validation Service, preventing unnecessary round trips to the UTXO Store.
 
 > **Note**: For information about how the Subtree Validation service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 

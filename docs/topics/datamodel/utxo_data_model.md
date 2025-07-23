@@ -24,7 +24,7 @@ For every transaction, a UTXO record is stored in the database. The record conta
 | **tx**                   | `bt.Tx Object`                       | Raw transaction data containing inputs, outputs, version, and locktime.                                            |
 | **fee**                  | `Integer`                            | Transaction fee associated with this UTXO.                                                                         |
 | **sizeInBytes**          | `Integer`                            | The size of the transaction in bytes.                                                                              |
-| **parentTxHashes**       | `Array<chainhash.Hash>`              | List of parent transaction hashes (from the transaction inputs).                                                   |
+| **txInpoints**           | `TxInpoints`                         | Transaction input outpoints containing parent transaction hashes and their corresponding output indices.           |
 | **isCoinbase**           | `Boolean`                            | Indicates whether this UTXO is from a coinbase transaction.                                                        |
 
 
@@ -73,7 +73,7 @@ For convenience, the UTXO can be decorated using the `UTXO MetaData` format, wid
 | Hash                | Unique identifier for the transaction.                                                           | String/Hexadecimal                       |
 | Fee                 | The fee associated with the transaction.                                                         | Decimal                                  |
 | Size in Bytes       | The size of the transaction in bytes.                                                            | Integer                                  |
-| ParentTxHashes      | List of hashes representing the parent transactions.                                             | Array of Strings/Hexadecimals            |
+| TxInpoints          | Transaction input outpoints containing parent transaction hashes and their corresponding output indices.  | TxInpoints Object                        |
 | BlockIDs            | List of IDs of the blocks that include this transaction.                                         | Array of Integers                        |
 | BlockHeights        | List of block heights where this transaction appears.                                              | Array of Integers                        |
 | SubtreeIdxs         | List of subtree indexes where this transaction appears within blocks.                              | Array of Integers                        |
@@ -83,11 +83,55 @@ For convenience, the UTXO can be decorated using the `UTXO MetaData` format, wid
 | Conflicting         | Indicates whether this transaction is a double spend.                                            | Boolean                                  |
 | ConflictingChildren | List of transaction hashes that spend from this transaction and are also marked as conflicting.  | Array of Strings/Hexadecimals            |
 
+## TxInpoints Structure
+
+The `TxInpoints` field contains complete outpoint information for all transaction inputs, providing precise identification of which UTXOs are being consumed by a transaction.
+
+### Structure Definition
+
+```go
+type TxInpoints struct {
+    ParentTxHashes []chainhash.Hash  // Array of parent transaction hashes
+    Idxs           [][]uint32        // Array of arrays containing output indices for each parent transaction
+    nrInpoints     int               // Internal variable tracking total number of inpoints
+}
+```
+
+### Field Descriptions
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ParentTxHashes` | `[]chainhash.Hash` | Array of unique parent transaction hashes from which this transaction consumes UTXOs |
+| `Idxs` | `[][]uint32` | Parallel array to `ParentTxHashes`. Each element contains the output indices being consumed from the corresponding parent transaction |
+| `nrInpoints` | `int` | Internal counter tracking the total number of individual outpoints across all parent transactions |
+
+### Key Features
+
+1. **Complete Outpoint Information**: Each input is precisely identified by both the parent transaction hash and the specific output index being consumed.
+
+2. **Efficient Storage**: Uses parallel arrays to avoid duplicating parent transaction hashes when multiple outputs from the same transaction are consumed.
+
+3. **Validation Support**: Enables validators to quickly determine exactly which UTXOs are being spent without additional lookups.
+
+4. **Chained Transaction Support**: Facilitates handling of complex transaction chains where multiple outputs from the same parent transaction are consumed.
+
+### Example
+
+For a transaction consuming:
+
+- Output 0 of transaction A
+- Output 2 of transaction A
+- Output 1 of transaction B
+
+The TxInpoints structure would contain:
+```
+ParentTxHashes: [hashA, hashB]
+Idxs: [[0, 2], [1]]
+```
+
+This structure efficiently represents that the transaction consumes three UTXOs total: two from transaction A (outputs 0 and 2) and one from transaction B (output 1).
 
 Note:
-
-- **Parent Transactions**: 1 or more parent transaction hashes. For each input that our transaction has, we can have a different parent transaction. I.e. a TX can be spending UTXOs from multiple transactions.
-
 
 - **Blocks**: 1 or more block hashes. Each block represents a block that mined the transaction.
 
