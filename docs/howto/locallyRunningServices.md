@@ -17,6 +17,7 @@ Before running Teranode, ensure the required infrastructure services are started
 ```
 
 > **Note:** If you configure your settings to use Aerospike for UTXO storage, you'll also need to run:
+>
 > ```bash
 > # Start Aerospike in Docker
 > ./scripts/aerospike.sh
@@ -30,7 +31,7 @@ Execute all services in a single terminal window with the command below. Replace
 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
 ```
 
-> **📝 Note:** Confirm that settings for your context are correctly established as outlined in the Installation Guide. If not yet done, please review it [here](../tutorials/developers/developerSetup.md).
+> **📝 Note:** Confirm that settings for your context are correctly established as outlined in the [Installation Guide](../tutorials/developers/developerSetup.md).
 >
 > **⚠️ Warning:** When restarting services, it's recommended to clean the data directory first:
 >
@@ -45,7 +46,8 @@ SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
 Teranode supports multiple database backends for UTXO storage, configured via settings rather than build tags:
 
 1. **PostgreSQL** (Default for development):
-   ```
+
+   ```shell
    # Make sure PostgreSQL is running
    ./scripts/postgres.sh
 
@@ -57,7 +59,8 @@ Teranode supports multiple database backends for UTXO storage, configured via se
    ```
 
 2. **SQLite** (Lightweight option):
-   ```
+
+   ```shell
    # Your settings_local.conf should have an SQLite connection string
    utxostore.dev.[YOUR_USERNAME] = sqlite:///utxostore?blockHeightRetention=5
 
@@ -67,13 +70,14 @@ Teranode supports multiple database backends for UTXO storage, configured via se
 
 3. **Aerospike** (High-performance option):
 
-!!! warning "Aerospike Requirements"
+   !!! warning "Aerospike Requirements"
 
-      - Requires both the appropriate settings AND the 'aerospike' build tag
-      - See the Aerospike Integration section below
-      - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
+       - Requires both the appropriate settings AND the 'aerospike' build tag
+       - See the Aerospike Integration section below
+       - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
 
 > **Note:** The database backend is determined by the connection string prefix in your settings:
+>
 > - PostgreSQL: `postgres://`
 > - SQLite: `sqlite:///`
 > - Aerospike: `aerospike://`
@@ -87,11 +91,13 @@ Teranode supports various build tags that enable specific features or configurat
 To use Aerospike as the UTXO storage backend:
 
 1. First, start the Aerospike Docker container:
+
    ```shell
    ./scripts/aerospike.sh
    ```
 
 2. Run Teranode with the aerospike tag:
+
    ```shell
    rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike .
    ```
@@ -101,16 +107,19 @@ To use Aerospike as the UTXO storage backend:
 Teranode supports different transaction metadata cache sizes through build tags:
 
 - **Large Cache (Default)**: Used when no specific tx metadata cache tag is specified
+
   ```shell
   SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike .
   ```
 
 - **Small Cache**: Reduces memory usage with a smaller transaction metadata cache
+
   ```shell
   SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike,smalltxmetacache .
   ```
 
 - **Test Cache**: Configured specifically for testing scenarios
+
   ```shell
   SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike,testtxmetacache .
   ```
@@ -146,7 +155,6 @@ For running various test suites (not typically needed for development):
 - `test_services`: Tests specific to services
 - `test_longlong`: For extended duration tests
 
-
 ### Component Options
 
 Launch the node with specific components using command-line options. This allows you to enable only the components you need for your development tasks.
@@ -176,6 +184,7 @@ Enable or disable components by setting the corresponding option to `1` or `0`. 
 #### Additional Options
 
 | Option                        | Description                                     |
+|-------------------------------|-------------------------------------------------|
 |-------------------------------|-------------------------------------------------|
 | `-all=<1|0>`                  | Enable/disable all services unless explicitly overridden by other flags. By default (when no flags are specified), the system behaves as if `-all=1` was set. |
 | `-help=1`                     | Display command-line help information            |
@@ -215,9 +224,6 @@ Teranode respects the `NO_COLOR` environment variable to disable colored output 
 NO_COLOR=1 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
 ```
 
-
-
-
 #### Example Usage:
 
 **Running specific components only:**
@@ -241,27 +247,20 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -all=0 -Validator=
 You can also run each service on its own:
 
 1. Navigate to a service's directory:
+
    ```shell
    cd services/validator
    ```
+
 2. Run the service:
+
    ```shell
    SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
    ```
 
 ## 📜 Running Specific Commands
 
-For executing particular tasks, use commands found under the _cmd/_ directory:
-
-1. Change directory to the command's location:
-   ```shell
-   cd cmd/txblaster
-   ```
-2. Execute the command:
-   ```shell
-   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
-   ```
-
+For executing particular tasks, use commands found under the _cmd/_ directory.
 
 ## 🖥 Running UI Dashboard
 

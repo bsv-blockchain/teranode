@@ -3,27 +3,27 @@
 ## Index
 
 - [Tutorials](#tutorials)
-    - [Development Tutorials](#development-tutorials)
-    - [Miner Tutorials](#miner-tutorials)
+  - [Development Tutorials](#development-tutorials)
+  - [Miner Tutorials](#miner-tutorials)
 - [How-to Guides](#how-to-guides)
-    - [Development](#development)
-    - [Miners](#miners)
+  - [Development](#development)
+  - [Miners](#miners)
 - [Key Topics](#key-topics)
-    - [Introduction](#introduction)
-    - [Architecture](#architecture)
-        - [Core Services](#core-services)
-        - [Overlay Services](#overlay-services)
-        - [Infrastructure Components](#infrastructure-components)
-    - [Additional Topics](#additional-topics)
+  - [Introduction](#introduction)
+  - [Architecture](#architecture)
+    - [Core Services](#core-services)
+    - [Overlay Services](#overlay-services)
+    - [Infrastructure Components](#infrastructure-components)
+  - [Additional Topics](#additional-topics)
 - [Reference](#reference)
-    - [Service Documentation](#service-documentation)
-    - [Store Documentation](#store-documentation)
-    - [Data Model](#data-model)
-    - [API Documentation](#api-documentation)
-    - [Additional Reference](#additional-reference)
+  - [Service Documentation](#service-documentation)
+  - [Store Documentation](#store-documentation)
+  - [Data Model](#data-model)
+  - [API Documentation](#api-documentation)
+  - [Additional Reference](#additional-reference)
 - [Additional Resources](#additional-resources)
 
-----
+-----
 
 ## Tutorials
 
@@ -120,15 +120,12 @@
 #### Infrastructure Components
 
 - **Stores**
-    - [Blob Server](./topics/stores/blob.md)
-    - [UTXO Store](./topics/stores/utxo.md)
+  - [Blob Server](./topics/stores/blob.md)
+  - [UTXO Store](./topics/stores/utxo.md)
 - **Messaging**
-    - [Kafka](./topics/kafka/kafka.md)
+  - [Kafka](./topics/kafka/kafka.md)
 - **Utilities**
-    - [UTXO Seeder](./topics/commands/seeder.md)
-    - [TX Blaster](./topics/commands/txBlaster.md)
-    - [Propagation Blaster](./topics/commands/propagationBlaster.md)
-    - [Chain Integrity](./topics/commands/chainIntegrity.md)
+  - [UTXO Seeder](./topics/commands/seeder.md)
 
 ### Additional Topics
 
@@ -213,7 +210,7 @@ By leveraging a microservices architecture and modern technologies, Teranode add
 
 We encourage you to explore the various sections of this documentation based on your specific needs and to contribute to the ongoing development and improvement of Teranode.
 
----
+-----
 
 **Copyright 2025 BSV Association.**
 
