@@ -653,44 +653,28 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	validNetworkSpeed := sm.syncPeerState.validNetworkSpeed(sm.minSyncPeerNetworkSpeed)
 	lastBlockSince := time.Since(sm.syncPeerState.getLastBlockTime())
 
+	sm.logger.Debugf("[CheckSyncPeer] sync peer %s check, network violations: %v (limit %v), time since last block: %v (limit %v)", sm.syncPeer.String(), validNetworkSpeed, maxNetworkViolations, lastBlockSince, maxLastBlockTime)
+
 	// Check network speed of the sync peer and its last block time. If we're currently
 	// flushing the cache skip this round.
 	if (validNetworkSpeed < maxNetworkViolations) && (lastBlockSince <= maxLastBlockTime) {
 		return
 	}
 
-	sm.logger.Debugf("sync peer %s is slow, network speed: %v, last block time: %v", sm.syncPeer.String(), validNetworkSpeed, lastBlockSince)
-
-	// Don't update sync peers if you have all the available blocks.
-	_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
-	if err != nil {
-		// TODO we should return an error here to the caller
-		sm.logger.Errorf("failed to get best block header: %v", err)
-		return
+	var reason string
+	if validNetworkSpeed >= maxNetworkViolations {
+		reason = "network speed violation"
+	} else if lastBlockSince > maxLastBlockTime {
+		reason = "last block time out of range"
 	}
-
-	bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
-	if err != nil {
-		sm.logger.Errorf("failed to convert block height to int32: %v", err)
-	}
-
-	// check whether this sync peer is still valid, if its height is the same or higher than ours
-	if sm.topBlock() >= bestBlockHeightInt32 {
-		// Update the time and violations to prevent disconnects.
-		sm.syncPeerState.updateLastBlockTime()
-		sm.syncPeerState.setViolations(0)
-
-		return
-	}
-
-	sm.logger.Debugf("sync peer %s is not at the same height (%d) as us (%d), updating sync peer", sm.syncPeer.String(), sm.topBlock(), bestBlockHeaderMeta.Height)
+	sm.logger.Debugf("[CheckSyncPeer] sync peer %s is stalled due to %s, updating sync peer", sm.syncPeer.String(), reason)
 
 	state, exists := sm.peerStates.Get(sm.syncPeer)
 	if !exists {
 		return
 	}
 
-	sm.logger.Debugf("removing sync peer %s", sm.syncPeer.String())
+	sm.logger.Debugf("[CheckSyncPeer] removing sync peer %s", sm.syncPeer.String())
 
 	sm.clearRequestedState(state)
 	sm.updateSyncPeer(state)
