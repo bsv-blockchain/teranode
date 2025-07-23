@@ -275,7 +275,7 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 	if txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 			// TODO which errors should we be sending here?
-			if !errors.Is(err, errors.ErrStorageError) && !errors.Is(err, errors.ErrServiceError) {
+			if !errors.Is(err, errors.ErrStorageError) && !errors.Is(err, errors.ErrServiceError) && !errors.Is(err, errors.ErrTxMissingParent) {
 				if v.blockchainClient != nil {
 					var (
 						state *blockchain.FSMStateType

@@ -140,7 +140,7 @@ var TxScriptInterpreterFactory = make(map[TxInterpreter]TxScriptInterpreterCreat
 //
 // Returns:
 //   - TxValidatorI: The created transaction validator
-func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ...TxValidatorOption) TxValidatorI {
+func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ...TxValidatorOption) *TxValidator {
 	options := NewTxValidatorOptions(opts...)
 
 	var txScriptInterpreter TxScriptInterpreter
@@ -384,6 +384,10 @@ func (tv *TxValidator) checkTxSize(txSize int) error {
 }
 
 func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
+	if tv.isConsolidationTx(tx) {
+		return nil
+	}
+
 	inputSats := tx.TotalInputSatoshis()
 	outputSats := tx.TotalOutputSatoshis()
 
@@ -409,6 +413,30 @@ func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
 	}
 
 	return nil
+}
+
+// isConsolidationTx checks if a transaction is a consolidation transaction
+// A consolidation transaction is typically one that has multiples of inputs and fewer outputs,
+// which is a common pattern for consolidating small UTXOs into a larger one.
+//
+// Parameters:
+//   - tx: The transaction to check
+//
+// Returns:
+//   - bool: true if the transaction is a consolidation transaction, false otherwise
+func (tv *TxValidator) isConsolidationTx(tx *bt.Tx) bool {
+	if tx == nil {
+		return false
+	}
+
+	// A consolidation transaction is one that has a single input and multiple outputs
+	// This is a common pattern for consolidating small UTXOs into a larger one
+	if len(tx.Inputs) >= 150 && len(tx.Outputs) <= 2 {
+		return true
+	}
+
+	// Additional checks can be added here if needed to identify consolidation transactions
+	return false
 }
 
 func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, validationOptions *Options) error {
