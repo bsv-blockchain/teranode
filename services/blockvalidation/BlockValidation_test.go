@@ -3407,6 +3407,7 @@ func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(true, nil)
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil)
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())

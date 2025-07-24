@@ -136,9 +136,6 @@ type BlockValidation struct {
 	// stats tracks operational metrics for monitoring
 	stats *gocore.Stat
 
-	// lastUsedBaseURL stores the most recent source URL used for retrievals
-	lastUsedBaseURL string
-
 	// invalidBlockKafkaProducer publishes invalid block events to Kafka
 	invalidBlockKafkaProducer kafka.KafkaAsyncProducerI
 }
@@ -206,7 +203,6 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		setMinedChan:                  make(chan *chainhash.Hash, 1000),
 		revalidateBlockChan:           make(chan revalidateBlockData, 2),
 		stats:                         gocore.NewStat("blockvalidation"),
-		lastUsedBaseURL:               "",
 	}
 
 	go func() {
@@ -261,7 +257,6 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 						if notification.Type == model.NotificationType_Block {
 							cHash := chainhash.Hash(notification.Hash)
 							bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification: %s", cHash.String())
-
 							// push block hash to the setMinedChan
 							bv.setMinedChan <- &cHash
 						}
@@ -607,21 +602,20 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		}
 	}
 
-	useBaseURL := u.lastUsedBaseURL
-	if useBaseURL == "" {
-		_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(ctx, blockHash)
-		if err != nil {
-			return errors.NewServiceError("[setTxMined][%s] failed to get block header from blockchain", blockHash.String(), err)
-		}
+	var baseURL string
 
-		if blockHeaderMeta != nil && blockHeaderMeta.PeerID != "" {
-			useBaseURL = blockHeaderMeta.PeerID
-		}
+	_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(ctx, blockHash)
+	if err != nil {
+		return errors.NewServiceError("[setTxMined][%s] failed to get block header from blockchain", blockHash.String(), err)
+	}
+
+	if blockHeaderMeta != nil && blockHeaderMeta.PeerID != "" {
+		baseURL = blockHeaderMeta.PeerID
 	}
 
 	// make sure all the subtrees are loaded in the block
 	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
-		return u.subtreeValidationClient.CheckSubtreeFromBlock(ctx, subtreeHash, useBaseURL, block.Height, block.Hash(), block.Header.HashPrevBlock)
+		return u.subtreeValidationClient.CheckSubtreeFromBlock(ctx, subtreeHash, baseURL, block.Height, block.Hash(), block.Header.HashPrevBlock)
 	}
 
 	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore, fallbackGetFunc)
@@ -720,9 +714,6 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		tracing.WithLogMessage(u.logger, "[ValidateBlock][%s] validating block from %s", block.Hash().String(), baseURL),
 	)
 	defer deferFn()
-
-	// TODO: Check if this is a safe thing to do
-	u.lastUsedBaseURL = baseURL
 
 	// first check if the block already exists in the blockchain
 	blockExists, err := u.GetBlockExists(ctx, block.Header.Hash())
@@ -1184,8 +1175,6 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	)
 	defer deferFn()
 
-	u.lastUsedBaseURL = blockData.baseURL
-
 	// get all X previous block headers, 100 is the default
 	previousBlockHeaderCount := u.settings.BlockValidation.PreviousBlockHeaderCount
 
@@ -1390,8 +1379,6 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 
 	start := gocore.CurrentTime()
 	stat := gocore.NewStat("validateBlockSubtrees")
-
-	u.lastUsedBaseURL = baseURL
 
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, u.settings.BlockValidation.ValidateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
