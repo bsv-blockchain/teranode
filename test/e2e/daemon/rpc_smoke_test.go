@@ -120,14 +120,7 @@ func TestSendTxAndCheckState(t *testing.T) {
 	// Assert transaction properties
 	assert.Equal(t, newTx.TxIDChainHash().String(), getRawTransaction.Result.Txid)
 
-	// Wait for transaction to be processed
-	delay := td.Settings.BlockAssembly.DoubleSpendWindow
-	if delay != 0 {
-		// t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(delay * time.Millisecond)
-	}
-
-	time.Sleep(250 * time.Millisecond) // Make absolutely sure block assembly has processed the tx
+	waitForBlockAssemblyToProcessTx(t, td, newTx.TxIDChainHash().String())
 
 	block := td.MineAndWait(t, 1)
 
@@ -586,14 +579,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	require.NoError(t, err, "Failed to send TX1 with rpc")
 	t.Logf("TX1 sent with RPC: %s\n", resp)
 
-	// Wait for transaction to be processed if there's a delay window
-	delay := tSettings.BlockAssembly.DoubleSpendWindow
-	if delay != 0 {
-		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(delay * time.Millisecond)
-	}
-
-	time.Sleep(250 * time.Millisecond) // Make absolutely sure block assembly has processed the tx
+	waitForBlockAssemblyToProcessTx(t, td, tx1.TxIDChainHash().String())
 
 	// Generate one block to include TX1
 	_, err = td.CallRPC(td.Ctx, "generate", []any{1})
@@ -634,11 +620,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	require.NoError(t, err, "Failed to send TX2 with rpc")
 	t.Logf("TX2 sent with RPC: %s\n", resp)
 
-	// Wait for transaction to be processed if there's a delay window
-	if delay != 0 {
-		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
-		time.Sleep(delay * time.Millisecond)
-	}
+	waitForBlockAssemblyToProcessTx(t, td, tx2.TxIDChainHash().String())
 
 	// Generate one block to include TX2
 	_, err = td.CallRPC(td.Ctx, "generate", []any{1})
@@ -1339,4 +1321,26 @@ func TestBlockManagement(t *testing.T) {
 	require.Nil(t, reconsiderBlockResp.Error, "Should not have an error")
 	// reconsiderblock typically returns null on success
 	t.Logf("reconsiderblock completed for block: %s", blockHash)
+}
+
+func waitForBlockAssemblyToProcessTx(t *testing.T, td *daemon.TestDaemon, txHashStr string) {
+	var (
+		txs []string
+		err error
+	)
+
+	for i := 0; i < 10; i++ {
+		txs, err = td.BlockAssemblyClient.GetTransactionHashes(td.Ctx)
+		require.NoError(t, err)
+
+		for _, tx := range txs {
+			if tx == txHashStr {
+				return
+			}
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatalf("tx %s not found in block assembly", txHashStr)
 }
