@@ -582,15 +582,6 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
-	// TODO Stu discuss with Gokhan - we need to be able to change state while running not at startup ??? Each endpoint should check the state?
-	// Blocks until the FSM transitions from the IDLE state
-	// err = ba.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
-	// if err != nil {
-	// 	ba.logger.Errorf("[Block Assembly Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
-	// 	return err
-	// }
-
 	if err = ba.blockAssembler.Start(ctx); err != nil {
 		return errors.NewServiceError("failed to start block assembler", err)
 	}

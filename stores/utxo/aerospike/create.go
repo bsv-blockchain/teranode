@@ -499,7 +499,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 					continue
 				}
 
-				utils.SafeSend[error](batch[idx].done, errors.NewStorageError("[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].txHash.String(), idx, batchID, err))
+				utils.SafeSend[error](batch[idx].done, errors.NewStorageError("[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d", batch[idx].txHash.String(), idx, batchID, err))
 			}
 		} else if len(batch[idx].tx.Outputs) <= s.utxoBatchSize {
 			// We notify the done channel that the operation was successful, except

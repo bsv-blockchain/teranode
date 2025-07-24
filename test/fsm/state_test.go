@@ -463,7 +463,6 @@ func (suite *FsmTestSuite) TestNodeCatchUpStateMultipleNodes_WithP2PSwitch() {
 			defer wg.Done()
 
 			_, hashes, err := testEnv.Nodes[nodeIndex].CreateAndSendTxs(t, ctx, block1.CoinbaseTx, 10)
-
 			if err != nil {
 				t.Errorf("Failed to create and send raw txs to node %d: %v", nodeIndex, err)
 				return

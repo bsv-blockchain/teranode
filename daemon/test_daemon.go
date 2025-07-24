@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -52,6 +53,23 @@ import (
 	"go.opentelemetry.io/otel"
 	otelprop "go.opentelemetry.io/otel/propagation"
 )
+
+// getFreePort asks the kernel for a free open port that is ready to use.
+func getFreePort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		return 0, err
+	}
+
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, err
+	}
+
+	defer func() { _ = l.Close() }()
+
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
 
 const (
 	blockHashMismatch         = "Block hash mismatch at height %d"
@@ -120,6 +138,108 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
 	}
 
+	// Dynamically allocate free ports for all relevant services
+	allocatePort := func(schema string) (listenAddr string, clientAddr string, addrPort int) {
+		port, err := getFreePort()
+		require.NoError(t, err)
+
+		return fmt.Sprintf("0.0.0.0:%d", port), fmt.Sprintf("%slocalhost:%d", schema, port), port
+	}
+
+	var (
+		listenAddr string
+		clientAddr string
+		port       int
+	)
+
+	// RPC
+	listenAddr, _, _ = allocatePort("")
+	listenURL, err := url.Parse("http://" + listenAddr)
+	require.NoError(t, err)
+
+	appSettings.RPC.RPCListenerURL = listenURL
+
+	// Legacy
+	listenAddr, clientAddr, _ = allocatePort("")
+	appSettings.Legacy.GRPCListenAddress = listenAddr
+	appSettings.Legacy.GRPCAddress = clientAddr
+
+	// Propagation
+	listenAddr, clientAddr, _ = allocatePort("")
+	appSettings.Propagation.GRPCListenAddress = listenAddr
+	appSettings.Propagation.GRPCAddresses = []string{clientAddr}
+
+	listenAddr, clientAddr, _ = allocatePort("http://")
+	appSettings.Propagation.HTTPListenAddress = listenAddr
+	appSettings.Propagation.HTTPAddresses = []string{clientAddr}
+
+	// Coinbase
+	listenAddr, clientAddr, _ = allocatePort("")
+	appSettings.Coinbase.GRPCListenAddress = listenAddr
+	appSettings.Coinbase.GRPCAddress = clientAddr
+
+	// BlockChain
+	listenAddr, clientAddr, _ = allocatePort("")
+	appSettings.BlockChain.GRPCListenAddress = listenAddr
+	appSettings.BlockChain.GRPCAddress = clientAddr
+
+	listenAddr, _, _ = allocatePort("http://")
+	appSettings.BlockChain.HTTPListenAddress = listenAddr
+
+	// BlockAssembly
+	listenAddr, clientAddr, _ = allocatePort("")
+	appSettings.BlockAssembly.GRPCListenAddress = listenAddr
+	appSettings.BlockAssembly.GRPCAddress = clientAddr
+
+	// BlockValidation
+	listenAddr, clientAddr, _ = allocatePort("")
+	appSettings.BlockValidation.GRPCListenAddress = listenAddr
+	appSettings.BlockValidation.GRPCAddress = clientAddr
+
+	// Validator
+	listenAddr, clientAddr, _ = allocatePort("")
+	appSettings.Validator.GRPCListenAddress = listenAddr
+	appSettings.Validator.GRPCAddress = clientAddr
+
+	listenAddr, clientAddr, _ = allocatePort("http://")
+	appSettings.Validator.HTTPListenAddress = listenAddr
+	appSettings.Validator.HTTPAddress, _ = url.Parse(clientAddr)
+
+	// P2P
+	_, _, p2pPort := allocatePort("")
+	appSettings.P2P.BootstrapAddresses = []string{}
+	appSettings.P2P.StaticPeers = nil
+	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
+	appSettings.P2P.Port = p2pPort
+
+	listenAddr, clientAddr, _ = allocatePort("")
+	appSettings.P2P.GRPCListenAddress = listenAddr
+	appSettings.P2P.GRPCAddress = clientAddr
+
+	listenAddr, clientAddr, _ = allocatePort("http://")
+	appSettings.P2P.HTTPListenAddress = listenAddr
+	appSettings.P2P.HTTPAddress = clientAddr
+
+	// SubtreeValidation
+	listenAddr, clientAddr, _ = allocatePort("")
+	appSettings.SubtreeValidation.GRPCListenAddress = listenAddr
+	appSettings.SubtreeValidation.GRPCAddress = clientAddr
+
+	// Asset
+	listenAddr, clientAddr, port = allocatePort("http://")
+	appSettings.Asset.HTTPListenAddress = listenAddr
+	appSettings.Asset.HTTPAddress = clientAddr + appSettings.Asset.APIPrefix
+	appSettings.Asset.HTTPPublicAddress = clientAddr + appSettings.Asset.APIPrefix
+	appSettings.Asset.HTTPPort = port
+
+	// Faucet
+	listenAddr, _, _ = allocatePort("http://")
+	appSettings.Faucet.HTTPListenAddress = listenAddr
+
+	// Health Check
+	_, _, port = allocatePort("http://")
+	appSettings.HealthCheckPort = port
+
 	path := filepath.Join("data", appSettings.ClientName)
 	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
 		// a bit hacky. Ideally, all stores sit under data/${ClientName}
@@ -163,6 +283,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.ProfilerAddr = ""
 	appSettings.RPC.CacheEnabled = false
 	appSettings.P2P.DHTUsePrivate = true
+	appSettings.UsePrometheusGRPCMetrics = false
 	appSettings.P2P.BootstrapAddresses = nil
 
 	// Override with test settings...
@@ -189,6 +310,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		})
 	}
 
+	// d := New(loggerFactory, WithContext(ctx))
 	d := New(loggerFactory, WithContext(ctx))
 
 	services := []string{
@@ -225,7 +347,8 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	case <-readyCh:
 		t.Logf("Daemon %s started successfully", appSettings.ClientName)
 	case <-time.After(30 * time.Second):
-		t.Fatalf("Daemon %s failed to start within 30s", appSettings.ClientName)
+		servicesNotReady := d.ServiceManager.ServicesNotReady()
+		t.Fatalf("Daemon %s failed to start within 30s. Waiting on: %v", appSettings.ClientName, servicesNotReady)
 	}
 
 	ports := []int{appSettings.HealthCheckPort}
@@ -512,6 +635,9 @@ func (td *TestDaemon) VerifyConflictingInSubtrees(t *testing.T, subtreeHash *cha
 
 	require.NoError(t, err, failedParsingSubtreeBytes)
 
+	err = latestSubtreeReader.Close() // Ensure the reader is closed after use
+	require.NoError(t, err, "Failed to close subtree reader")
+
 	require.Len(t, latestSubtree.ConflictingNodes, len(expectedConflicts),
 		"Unexpected number of conflicting nodes in subtree")
 
@@ -553,6 +679,9 @@ func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 		// Ensure the reader is closed after use
 		require.NoError(t, err, failedParsingSubtreeBytes)
 
+		err = subtreeReader.Close() // Ensure the reader is closed after use
+		require.NoError(t, err, "Failed to close subtree reader")
+
 		for _, tx := range txs {
 			hash := *tx.TxIDChainHash()
 			found := subtree.HasNode(hash)
@@ -589,6 +718,9 @@ func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 		_ = subtreeReader.Close() // Ensure the reader is closed after use
 
 		require.NoError(t, err, failedParsingSubtreeBytes)
+
+		err = subtreeReader.Close() // Ensure the reader is closed after use
+		require.NoError(t, err, "Failed to close subtree reader")
 
 		for _, tx := range txs {
 			hash := *tx.TxIDChainHash()
@@ -1149,7 +1281,7 @@ func StartDaemonDependencies(t *testing.T, removeDataDir bool, dependencies []da
 }
 
 // StopDaemonDependencies stops the Docker Compose stack and checks if the containers are gone and ports are free.
-func StopDaemonDependencies(_ context.Context, compose tc.ComposeStack) {
+func StopDaemonDependencies(ctx context.Context, compose tc.ComposeStack) {
 	if compose == nil {
 		log.Printf("No docker stack to stop.")
 		return
@@ -1193,7 +1325,7 @@ func StopDaemonDependencies(_ context.Context, compose tc.ComposeStack) {
 	waitInterval := 500 * time.Millisecond
 
 	log.Printf("Calling ForPortsFree (timeout %s, interval %s)...", waitTimeout, waitInterval)
-	waitCtx, cancelWait := context.WithTimeout(context.Background(), waitTimeout)
+	waitCtx, cancelWait := context.WithTimeout(ctx, waitTimeout)
 
 	defer cancelWait()
 

@@ -203,25 +203,6 @@ func TestPrintUsage(t *testing.T) {
 	assert.Contains(t, output, "-all=0")
 }
 
-// getFreePort asks the kernel for a free open port that is ready to use.
-func getFreePort() (int, error) {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
-	if err != nil {
-		return 0, err
-	}
-
-	var l *net.TCPListener
-
-	l, err = net.ListenTCP("tcp", addr)
-	if err != nil {
-		return 0, err
-	}
-
-	defer func() { _ = l.Close() }()
-
-	return l.Addr().(*net.TCPAddr).Port, nil
-}
-
 // TestDaemon_Start_AllServices tests the Start method of the Daemon to ensure it can start all services correctly.
 func TestDaemon_Start_AllServices(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

@@ -234,7 +234,7 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 
 	// Try gRPC first
 	_, err := c.client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-		Tx: txBytes,
+		Tx: tx.SerializeBytes(),
 	})
 
 	// If successful, return nil

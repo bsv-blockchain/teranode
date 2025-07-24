@@ -46,6 +46,9 @@ func TestMoveUp(t *testing.T) {
 
 	defer node1.Stop(t)
 
+	// connect node2 to node1 via p2p
+	node2.ConnectToPeer(t, node1)
+
 	// Wait for node1 to have at least one peer (node2)
 	err = helper.WaitForNodePeerCount(t.Context(), node1, 1, blockWait)
 	require.NoError(t, err)
@@ -125,6 +128,8 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		},
 	})
 
+	node2.ConnectToPeer(t, node1)
+
 	// Wait for node2 to have at least one peer (node1)
 	err = helper.WaitForNodePeerCount(t.Context(), node2, 1, blockWait)
 	require.NoError(t, err)
@@ -136,6 +141,9 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		node1.Stop(t)
 		node2.Stop(t)
 	}()
+
+	// connect node2 to node1 via p2p
+	node2.ConnectToPeer(t, node1)
 
 	// verify blockheight on node2
 	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 4, blockWait)
@@ -195,6 +203,9 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
 	})
+
+	// connect node2 to node1 via p2p
+	node2.ConnectToPeer(t, node1)
 
 	// Wait for node2 to have at least one peer (node1)
 	err = helper.WaitForNodePeerCount(t.Context(), node2, 1, blockWait)
@@ -396,8 +407,6 @@ func TestInvalidBlock(t *testing.T) {
 	err = node1.BlockchainClient.InvalidateBlock(t.Context(), node1BestBlockHeader.Hash())
 	require.NoError(t, err)
 
-	time.Sleep(1 * time.Second)
-
 	// Best block should be 2
 	node1BestBlockHeaderNew, node1BestBlockHeaderMetaNew, err := node1.BlockchainClient.GetBestBlockHeader(t.Context())
 	require.NoError(t, err)
@@ -437,8 +446,14 @@ func TestBlockValidationCatchup(t *testing.T) {
 	})
 	defer node1.Stop(t)
 
+	// connect node2 to node1 via p2p
+	node2.ConnectToPeer(t, node1)
+
+	_, err := node1.CallRPC(node1.Ctx, "generate", []any{100})
+	require.NoError(t, err)
+
 	// Wait for node1 to have at least one peer (node2)
-	err := helper.WaitForNodePeerCount(t.Context(), node1, 1, blockWait)
+	err = helper.WaitForNodePeerCount(t.Context(), node1, 1, blockWait)
 	require.NoError(t, err)
 
 	// Print peer info for debugging
@@ -506,6 +521,11 @@ func TestBlockValidationCatchup(t *testing.T) {
 	})
 	defer node2.Stop(t)
 
+	// connect node2 to node1 via p2p
+	node2.ConnectToPeer(t, node1)
+
+	// _, err = node2.CallRPC("generate", []any{1})
+
 	// Wait for node2 to have at least one peer (node1)
 	err = helper.WaitForNodePeerCount(t.Context(), node2, 1, blockWait)
 	require.NoError(t, err)
@@ -516,6 +536,7 @@ func TestBlockValidationCatchup(t *testing.T) {
 
 	// _, err = node2.CallRPC(node2.Ctx, "generate", []any{1})
 	// require.NoError(t, err)
+
 	//                / 201a -> ... -> 301a
 	// 0 -> 1 ... 100
 	//                \ 100b -> ... -> 101b (* reorg to longer chain)

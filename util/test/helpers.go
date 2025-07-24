@@ -1,6 +1,8 @@
 package test
 
 import (
+	"net/url"
+
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bsv-blockchain/go-chaincfg"
 )
@@ -11,6 +13,13 @@ func CreateBaseTestSettings() *settings.Settings {
 	settings.GlobalBlockHeightRetention = 10
 	settings.BlockValidation.OptimisticMining = false
 	settings.ChainCfgParams.CoinbaseMaturity = 1
+
+	// We sometimes get 'hot key' errors while running the test
+	// To mitigate this, we tweak the aerospike write policy
+	settings.Aerospike.WritePolicyURL = &url.URL{
+		Scheme:   "aerospike",
+		RawQuery: "MaxRetries=15&SleepBetweenRetries=1s&SleepMultiplier=1&TotalTimeout=5s&SocketTimeout=5s",
+	}
 
 	// Initialize adjustment values to 0 for tests (use global value by default)
 	settings.UtxoStore.BlockHeightRetentionAdjustment = 0

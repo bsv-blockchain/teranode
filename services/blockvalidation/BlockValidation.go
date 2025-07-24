@@ -319,16 +319,25 @@ func (u *BlockValidation) start(ctx context.Context) error {
 				g.Go(func() error {
 					u.logger.Debugf("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
 
-					if err := u.setTxMined(gCtx, blockHash); err != nil {
-						u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
-						u.setMinedChan <- blockHash
-					} else {
-						_ = u.blockHashesCurrentlyValidated.Delete(*blockHash)
+					select {
+					case <-gCtx.Done():
+						return nil
+					default:
+						if err := u.setTxMined(gCtx, blockHash); err != nil {
+							if errors.Is(err, context.Canceled) {
+								u.logger.Infof("[BlockValidation:start] failed to set block mined: %s", err)
+							} else {
+								u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
+							}
+							u.setMinedChan <- blockHash
+						} else {
+							_ = u.blockHashesCurrentlyValidated.Delete(*blockHash)
+						}
+
+						u.logger.Infof("[BlockValidation:start] processed block mined and set mined_set: %s", blockHash.String())
+
+						return nil
 					}
-
-					u.logger.Infof("[BlockValidation:start] processed block mined and set mined_set: %s", blockHash.String())
-
-					return nil
 				})
 			}
 		}

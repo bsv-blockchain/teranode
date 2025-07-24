@@ -27,7 +27,6 @@ type serviceWrapper struct {
 }
 
 var (
-	instance  *ServiceManager
 	once      sync.Once
 	mu        sync.RWMutex
 	listeners []string = make([]string, 0)
@@ -46,17 +45,6 @@ type ServiceManager struct {
 
 // NewServiceManager creates a new service manager or returns the existing instance
 func NewServiceManager(ctx context.Context, logger ulogger.Logger) *ServiceManager {
-	// once.Do(func() {
-	// 	instance = initServiceManager(ctx, logger)
-	// })
-
-	// return instance
-
-	return initServiceManager(ctx, logger)
-}
-
-// initServiceManager initializes a new ServiceManager instance
-func initServiceManager(ctx context.Context, logger ulogger.Logger) *ServiceManager {
 	ctx, cancelFunc := context.WithCancel(ctx)
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -124,6 +112,7 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 		index:    len(sm.dependencyChannels) - 1,
 		readyCh:  make(chan struct{}, 1),
 	}
+
 	sm.dependencyChannelsMux.Unlock()
 
 	sm.services = append(sm.services, sw)
@@ -137,6 +126,8 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 	sm.logger.Infof("🟢 Starting service %s...", name)
 
 	sm.g.Go(func() error {
+		ctx := sm.Ctx
+
 		if sw.index > 0 {
 			sm.dependencyChannelsMux.Lock()
 			channel := sm.dependencyChannels[sw.index-1]
@@ -151,7 +142,7 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 		close(sm.dependencyChannels[sw.index])
 		sm.dependencyChannelsMux.Unlock()
 
-		if err := service.Start(sm.Ctx, sw.readyCh); err != nil {
+		if err := service.Start(ctx, sw.readyCh); err != nil {
 			sm.logger.Errorf("Error from service start %s: %v", name, err)
 			return err
 		}
@@ -163,9 +154,36 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 }
 
 func (sm *ServiceManager) WaitForServiceToBeReady() {
+	var wg sync.WaitGroup
+
 	for _, service := range sm.services {
-		<-service.readyCh
+		wg.Add(1)
+		go func(s serviceWrapper) {
+			defer wg.Done()
+			<-s.readyCh
+			sm.logger.Infof("🟢 Service %s is ready", s.name)
+		}(service)
 	}
+
+	wg.Wait()
+}
+
+func (sm *ServiceManager) ServicesNotReady() []string {
+	var notReadyServices []string
+
+	for _, service := range sm.services {
+		select {
+		case _, ok := <-service.readyCh:
+			if ok {
+				notReadyServices = append(notReadyServices, service.name)
+			}
+		default:
+			// Service is not ready
+			notReadyServices = append(notReadyServices, service.name)
+		}
+	}
+
+	return notReadyServices
 }
 
 func (sm *ServiceManager) waitForPreviousServiceToStart(sw serviceWrapper, channel chan bool) error {

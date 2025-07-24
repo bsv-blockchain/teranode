@@ -510,12 +510,12 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		b.logger.Warnf("[BlockAssembler] decremented getMiningCandidate wait count: %d", b.resetWaitCount.Load())
 	}
 
-	if err = b.SetState(ctx); err != nil {
+	if err = b.SetState(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		b.logger.Errorf("[BlockAssembler][%s] error setting state: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
 
 	currentDifficulty, err := b.blockchainClient.GetNextWorkRequired(ctx, bestBlockchainBlockHeader.Hash())
-	if err != nil {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		b.logger.Errorf("[BlockAssembler][%s] error getting next work required: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
 
@@ -1472,6 +1472,15 @@ func (b *BlockAssembler) waitForPendingBlocks(ctx context.Context) error {
 		if len(blockNotMined) == 0 {
 			b.logger.Infof("[waitForPendingBlocks] no pending blocks found, ready to load unmined transactions")
 			return nil, nil
+		}
+
+		if len(blockNotMined) == 1 && blockNotMined[0].Height == 0 && blockNotMined[0].ID == 0 {
+			// ignore genesis block
+			return nil, nil
+		}
+
+		for _, block := range blockNotMined {
+			b.logger.Debugf("[waitForPendingBlocks] waiting for block %s to be processed, height %d, ID %d", block.Hash(), block.Height, block.ID)
 		}
 
 		// Return an error to trigger retry when blocks are still pending

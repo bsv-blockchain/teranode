@@ -657,7 +657,7 @@ type RPCServer struct {
 
 	// blockAssemblyClient provides access to block assembly and mining services
 	// Used for mining-related RPC commands like getminingcandidate and generate
-	blockAssemblyClient *blockassembly.Client
+	blockAssemblyClient blockassembly.ClientI
 
 	// peerClient provides access to legacy peer network services
 	// Used for peer management and information retrieval
@@ -1365,7 +1365,7 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // Returns:
 //   - *RPCServer: Configured server instance ready for initialization
 //   - error: Any error encountered during configuration
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store) (*RPCServer, error) {
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI) (*RPCServer, error) {
 	initPrometheusMetrics()
 
 	assetHTTPAddress := tSettings.Asset.HTTPAddress
@@ -1388,6 +1388,9 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		assetHTTPURL:           parsedURL,
 		helpCacher:             newHelpCacher(),
 		utxoStore:              utxoStore,
+		blockAssemblyClient:    blockAssemblyClient,
+		peerClient:             peerClient,
+		p2pClient:              p2pClient,
 	}
 
 	rpcUser := tSettings.RPC.RPCUser
@@ -1463,20 +1466,6 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 func (s *RPCServer) Init(ctx context.Context) (err error) {
 	rpcHandlers = rpcHandlersBeforeInit
 	// rand.Seed(time.Now().UnixNano())
-	s.blockAssemblyClient, err = blockassembly.NewClient(ctx, s.logger, s.settings)
-	if err != nil {
-		return
-	}
-
-	s.peerClient, err = peer.NewClient(ctx, s.logger, s.settings)
-	if err != nil {
-		s.logger.Errorf("error initializing peer client: %v", err)
-	}
-
-	s.p2pClient, err = p2p.NewClient(ctx, s.logger, s.settings)
-	if err != nil {
-		s.logger.Errorf("error initializing p2p client: %v", err)
-	}
 
 	return nil
 }

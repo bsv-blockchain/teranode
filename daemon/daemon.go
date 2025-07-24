@@ -72,6 +72,7 @@ const (
 	loggerRPC                      = "rpc"
 	loggerSubtreeValidation        = "stval"
 	loggerSubtrees                 = "subtrees"
+	loggerTemp                     = "temp"
 	loggerTransactions             = "txs"
 	loggerTxValidator              = "txval"
 	loggerUtxos                    = "utxos"
@@ -296,7 +297,6 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	if err != nil {
 		logger.Errorf("error starting services: %v", err)
 		sm.ForceShutdown()
-		// d.closeDoneOnce.Do(func() { close(d.doneCh) })
 		d.closeDoneOnce.Do(func() { close(d.doneCh) })
 	}
 
@@ -563,7 +563,11 @@ func getBlockHeightTrackerCh(ctx context.Context, logger ulogger.Logger, blockch
 				if notification.Type == model.NotificationType_Block {
 					blockHeight, _, err = blockchainClient.GetBestHeightAndTime(ctx)
 					if err != nil {
-						logger.Errorf("[File] error getting best height and time: %v", err)
+						if errors.Is(err, context.Canceled) {
+							logger.Infof("[File] error getting best height and time: %v", err)
+						} else {
+							logger.Errorf("[File] error getting best height and time: %v", err)
+						}
 					} else {
 						ch <- blockHeight
 					}

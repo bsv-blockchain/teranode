@@ -655,10 +655,16 @@ func (s *Server) sendHandshake(ctx context.Context) {
 		}
 
 		if err != nil {
-			s.logger.Errorf("[sendHandshake][p2p-handshake] publish error: %v", err)
-		} else {
-			s.logger.Infof("[sendHandshake] Successfully published handshake to topic %s", s.handshakeTopicName)
+			if errors.Is(err, context.DeadlineExceeded) {
+				s.logger.Warnf("[sendHandshake][p2p-handshake] (handshake topic size: %d), publish timeout - no subscribers yet", s.settings.P2P.HandshakeTopicSize)
+				return
+			}
+
+			s.logger.Errorf("[sendHandshake][p2p-handshake] (handshake topic size: %d), publish error: %v", s.settings.P2P.HandshakeTopicSize, err)
+			return
 		}
+
+		s.logger.Infof("[sendHandshake] Successfully published handshake to topic %s", s.handshakeTopicName)
 	}()
 }
 

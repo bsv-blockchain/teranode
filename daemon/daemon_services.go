@@ -104,19 +104,19 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 
 	// Create a slice of service starters
 	starters := []serviceStarter{
-		{startBlockchain, func() error { return startBlockchainService(ctx, appSettings, sm, args, createLogger) }},
-		{startP2P, func() error { return startP2PService(ctx, d, appSettings, sm, createLogger) }},
-		{startAsset, func() error { return startAssetService(ctx, d, appSettings, sm, createLogger) }},
-		{startRPC, func() error { return startRPCService(ctx, d, appSettings, sm, createLogger) }},
-		{startAlert, func() error { return startAlertService(ctx, d, appSettings, sm, createLogger) }},
-		{startBlockPersister, func() error { return startBlockPersisterService(ctx, d, appSettings, sm, createLogger) }},
-		{startUTXOPersister, func() error { return startUTXOPersisterService(ctx, d, appSettings, sm, createLogger) }},
-		{startBlockAssembly, func() error { return startBlockAssemblyService(ctx, d, appSettings, sm, createLogger) }},
-		{startSubtreeValidation, func() error { return startSubtreeValidationService(ctx, d, appSettings, sm, createLogger) }},
-		{startBlockValidation, func() error { return startBlockValidationService(ctx, d, appSettings, sm, createLogger) }},
-		{startValidator, func() error { return startValidatorService(ctx, d, appSettings, sm, createLogger) }},
-		{startPropagation, func() error { return startPropagationService(ctx, d, appSettings, sm, createLogger) }},
-		{startLegacy, func() error { return startLegacyService(ctx, d, appSettings, sm, createLogger, logger) }},
+		{startBlockchain, func() error { return d.startBlockchainService(ctx, appSettings, args, createLogger) }},
+		{startP2P, func() error { return d.startP2PService(ctx, appSettings, createLogger) }},
+		{startAsset, func() error { return d.startAssetService(ctx, appSettings, createLogger) }},
+		{startRPC, func() error { return d.startRPCService(ctx, appSettings, createLogger) }},
+		{startAlert, func() error { return d.startAlertService(ctx, appSettings, createLogger) }},
+		{startBlockPersister, func() error { return d.startBlockPersisterService(ctx, appSettings, createLogger) }},
+		{startUTXOPersister, func() error { return d.startUTXOPersisterService(ctx, appSettings, createLogger) }},
+		{startBlockAssembly, func() error { return d.startBlockAssemblyService(ctx, appSettings, createLogger) }},
+		{startSubtreeValidation, func() error { return d.startSubtreeValidationService(ctx, appSettings, createLogger) }},
+		{startBlockValidation, func() error { return d.startBlockValidationService(ctx, appSettings, createLogger) }},
+		{startValidator, func() error { return d.startValidatorService(ctx, appSettings, createLogger) }},
+		{startPropagation, func() error { return d.startPropagationService(ctx, appSettings, createLogger) }},
+		{startLegacy, func() error { return d.startLegacyService(ctx, appSettings, createLogger) }},
 	}
 
 	// Loop through and start each service if needed
@@ -178,8 +178,8 @@ func startProfiler(logger ulogger.Logger, appSettings *settings.Settings) {
 }
 
 // startBlockchainService initializes and starts the Blockchain service.
-func startBlockchainService(ctx context.Context, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager, args []string, createLogger func(string) ulogger.Logger) error {
+func (d *Daemon) startBlockchainService(ctx context.Context, appSettings *settings.Settings,
+	args []string, createLogger func(string) ulogger.Logger) error {
 	// Create the blockchain store url from the app settings
 	blockchainStoreURL := appSettings.BlockChain.StoreURL
 	if blockchainStoreURL == nil {
@@ -230,14 +230,14 @@ func startBlockchainService(ctx context.Context, appSettings *settings.Settings,
 	}
 
 	// Add the blockchain service to the ServiceManager
-	return sm.AddService(serviceBlockchainFormal, blockchainService)
+	return d.ServiceManager.AddService(serviceBlockchainFormal, blockchainService)
 }
 
 // startP2PService initializes and starts the P2P service.
-func startP2PService(ctx context.Context, daemon *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
+func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger) error {
 	// Create a blockchain client for the P2P service
-	blockchainClient, err := daemon.daemonStores.GetBlockchainClient(
+	blockchainClient, err := d.daemonStores.GetBlockchainClient(
 		ctx, createLogger(loggerBlockchainClient), appSettings, serviceNameP2P,
 	)
 	if err != nil {
@@ -302,13 +302,12 @@ func startP2PService(ctx context.Context, daemon *Daemon, appSettings *settings.
 		return err
 	}
 
-	// Add the P2P service to the ServiceManager
-	return sm.AddService(serviceNameP2PFormal, p2pService)
+	return d.ServiceManager.AddService(serviceNameP2PFormal, p2pService)
 }
 
 // startAssetService initializes and starts the Asset service.
-func startAssetService(ctx context.Context, d *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
+func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger) error {
 	// Get the UTXO store for the Asset service
 	utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger(loggerUtxos), appSettings)
 	if err != nil {
@@ -354,7 +353,7 @@ func startAssetService(ctx context.Context, d *Daemon, appSettings *settings.Set
 	}
 
 	// Initialize the Asset service with the necessary parts
-	return sm.AddService(serviceAssetFormal, asset.NewServer(
+	return d.ServiceManager.AddService(serviceAssetFormal, asset.NewServer(
 		createLogger(serviceAsset),
 		appSettings,
 		utxoStore,
@@ -366,8 +365,8 @@ func startAssetService(ctx context.Context, d *Daemon, appSettings *settings.Set
 }
 
 // startRPCService initializes and adds the RPC service to the ServiceManager.
-func startRPCService(ctx context.Context, d *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
+func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger) error {
 	// Create blockchain client for the RPC service
 	blockchainClient, err := d.daemonStores.GetBlockchainClient(
 		ctx, createLogger(loggerBlockchainClient), appSettings, serviceRPC,
@@ -384,21 +383,40 @@ func startRPCService(ctx context.Context, d *Daemon, appSettings *settings.Setti
 		return err
 	}
 
+	blockAssemblyClient, err := blockassembly.NewClient(ctx, createLogger("ba"), appSettings)
+	if err != nil {
+		return err
+	}
+
+	peerClient, err := peer.NewClient(ctx, createLogger("peer"), appSettings)
+	if err != nil {
+		return err
+	}
+
+	p2pClient, err := p2p.NewClient(ctx, createLogger("p2p"), appSettings)
+	if err != nil {
+		return err
+	}
+
 	// Create the RPC server with the necessary parts
 	var rpcServer *rpc.RPCServer
 
-	rpcServer, err = rpc.NewServer(createLogger(loggerRPC), appSettings, blockchainClient, utxoStore)
+	rpcServer, err = rpc.NewServer(createLogger(loggerRPC), appSettings, blockchainClient, utxoStore, blockAssemblyClient, peerClient, p2pClient)
 	if err != nil {
 		return err
 	}
 
 	// Add the RPC service to the ServiceManager
-	return sm.AddService(serviceRPCFormal, rpcServer)
+	if err := d.ServiceManager.AddService(serviceRPCFormal, rpcServer); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // startAlertService initializes and adds the Alert service to the ServiceManager.
-func startAlertService(ctx context.Context, d *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
+func (d *Daemon) startAlertService(ctx context.Context, appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger) error {
 	// Create the blockchain client for the Alert service
 	blockchainClient, err := d.daemonStores.GetBlockchainClient(
 		ctx, createLogger(loggerBlockchainClient), appSettings, serviceAlert,
@@ -440,7 +458,7 @@ func startAlertService(ctx context.Context, d *Daemon, appSettings *settings.Set
 	}
 
 	// Create the Alert service with the necessary parts
-	return sm.AddService(serviceAlertFormal, alert.New(
+	return d.ServiceManager.AddService(serviceAlertFormal, alert.New(
 		createLogger(serviceAlert),
 		appSettings,
 		blockchainClient,
@@ -452,8 +470,8 @@ func startAlertService(ctx context.Context, d *Daemon, appSettings *settings.Set
 }
 
 // startBlockPersisterService initializes and adds the BlockPersister service to the ServiceManager.
-func startBlockPersisterService(ctx context.Context, d *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
+func (d *Daemon) startBlockPersisterService(ctx context.Context, appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger) error {
 	// Create the block store for the BlockPersister service
 	blockStore, err := d.daemonStores.GetBlockStore(ctx, createLogger(loggerBlockPersisterStore), appSettings)
 	if err != nil {
@@ -487,7 +505,7 @@ func startBlockPersisterService(ctx context.Context, d *Daemon, appSettings *set
 	}
 
 	// Add the BlockPersister service to the ServiceManager
-	return sm.AddService(serviceBlockPersisterFormal, blockpersister.New(ctx,
+	return d.ServiceManager.AddService(serviceBlockPersisterFormal, blockpersister.New(ctx,
 		createLogger(serviceBlockPersister),
 		appSettings,
 		blockStore,
@@ -498,8 +516,8 @@ func startBlockPersisterService(ctx context.Context, d *Daemon, appSettings *set
 }
 
 // startUTXOPersisterService initializes and adds the UTXOPersister service to the ServiceManager.
-func startUTXOPersisterService(ctx context.Context, d *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
+func (d *Daemon) startUTXOPersisterService(ctx context.Context, appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger) error {
 	// Create the block store for the UTXOPersister service
 	blockStore, err := d.daemonStores.GetBlockStore(ctx, createLogger(loggerBlockPersisterStore), appSettings)
 	if err != nil {
@@ -517,7 +535,7 @@ func startUTXOPersisterService(ctx context.Context, d *Daemon, appSettings *sett
 	}
 
 	// Add the UTXOPersister service to the ServiceManager
-	return sm.AddService(serviceUtxoPersisterFormal, utxopersister.New(ctx,
+	return d.ServiceManager.AddService(serviceUtxoPersisterFormal, utxopersister.New(ctx,
 		createLogger(serviceUtxoPersister),
 		appSettings,
 		blockStore,
@@ -526,8 +544,8 @@ func startUTXOPersisterService(ctx context.Context, d *Daemon, appSettings *sett
 }
 
 // startBlockAssemblyService initializes and adds the BlockAssembly service to the ServiceManager.
-func startBlockAssemblyService(ctx context.Context, d *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
+func (d *Daemon) startBlockAssemblyService(ctx context.Context, appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger) error {
 	// Check if the BlockAssembly service should be started
 	if appSettings.BlockAssembly.GRPCListenAddress == "" {
 		return nil
@@ -566,7 +584,7 @@ func startBlockAssemblyService(ctx context.Context, d *Daemon, appSettings *sett
 	}
 
 	// Add the BlockAssembly service to the ServiceManager
-	return sm.AddService(serviceBlockAssemblyFormal, blockassembly.New(
+	return d.ServiceManager.AddService(serviceBlockAssemblyFormal, blockassembly.New(
 		createLogger(serviceBlockAssembly),
 		appSettings,
 		txStore,
@@ -577,29 +595,28 @@ func startBlockAssemblyService(ctx context.Context, d *Daemon, appSettings *sett
 }
 
 // startSubtreeValidationService initializes and adds the SubtreeValidation service to the ServiceManager.
-func startSubtreeValidationService(
-	ctx context.Context, d *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager,
+func (d *Daemon) startSubtreeValidationService(
+	ctx context.Context,
+	appSettings *settings.Settings,
 	createLogger func(string) ulogger.Logger,
 ) error {
-	return startValidationService(ctx, d, appSettings, sm, createLogger, serviceSubtreeValidation)
+	return d.startValidationService(ctx, appSettings, createLogger, serviceSubtreeValidation)
 }
 
 // startBlockValidationService initializes and adds the BlockValidation service to the ServiceManager.
-func startBlockValidationService(
-	ctx context.Context, d *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager,
+func (d *Daemon) startBlockValidationService(
+	ctx context.Context,
+	appSettings *settings.Settings,
 	createLogger func(string) ulogger.Logger,
 ) error {
-	return startValidationService(ctx, d, appSettings, sm, createLogger, serviceBlockValidation)
+	return d.startValidationService(ctx, appSettings, createLogger, serviceBlockValidation)
 }
 
 // startValidationService consolidates shared setup logic for both SubtreeValidation and
 // BlockValidation services and registers the resulting service with the ServiceManager.
 // Pass serviceSubtreeValidation or serviceBlockValidation to start the desired service.
-func startValidationService(
-	ctx context.Context, d *Daemon,
-	appSettings *settings.Settings, sm *servicemanager.ServiceManager,
+func (d *Daemon) startValidationService(
+	ctx context.Context, appSettings *settings.Settings,
 	createLogger func(string) ulogger.Logger, validationType string,
 ) error {
 	// Common dependencies shared by all validation services
@@ -691,7 +708,7 @@ func startValidationService(
 		}
 
 		// Add the SubtreeValidation service to the ServiceManager
-		return sm.AddService(serviceSubtreeValidationFormal, service)
+		return d.ServiceManager.AddService(serviceSubtreeValidationFormal, service)
 
 	case serviceBlockValidation:
 		// Skip if disabled via config
@@ -724,7 +741,7 @@ func startValidationService(
 		)
 
 		// Add the BlockValidation service to the ServiceManager
-		return sm.AddService(serviceBlockValidationFormal, d.blockValidationSrv)
+		return d.ServiceManager.AddService(serviceBlockValidationFormal, d.blockValidationSrv)
 
 	default:
 		// Return an error if the validation type is unknown
@@ -733,9 +750,10 @@ func startValidationService(
 }
 
 // startValidatorService initializes and adds the Validator service to the ServiceManager.
-func startValidatorService(
-	ctx context.Context, d *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
+func (d *Daemon) startValidatorService(
+	ctx context.Context, appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger,
+) error {
 	// Check if the Validator service should be started
 	if appSettings.Validator.GRPCListenAddress == "" {
 		return nil
@@ -802,7 +820,7 @@ func startValidatorService(
 	}
 
 	// Add the Validator service to the ServiceManager
-	return sm.AddService(serviceValidatorFormal, validator.NewServer(
+	return d.ServiceManager.AddService(serviceValidatorFormal, validator.NewServer(
 		createLogger(serviceValidator),
 		appSettings,
 		utxoStore,
@@ -815,9 +833,11 @@ func startValidatorService(
 }
 
 // startPropagationService initializes and adds the Propagation service to the ServiceManager.
-func startPropagationService(
-	ctx context.Context, d *Daemon, appSettings *settings.Settings,
-	sm *servicemanager.ServiceManager, createLogger func(string) ulogger.Logger) error {
+func (d *Daemon) startPropagationService(
+	ctx context.Context,
+	appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger,
+) error {
 	// Check if the Propagation service should be started
 	if appSettings.Propagation.GRPCListenAddress == "" {
 		return nil
@@ -862,7 +882,7 @@ func startPropagationService(
 	}
 
 	// Add the Propagation service to the ServiceManager
-	return sm.AddService(servicePropagationFormal, propagation.New(
+	return d.ServiceManager.AddService(servicePropagationFormal, propagation.New(
 		createLogger(loggerPropagation),
 		appSettings,
 		txStore,
@@ -873,10 +893,11 @@ func startPropagationService(
 }
 
 // startLegacyService initializes and adds the Legacy service to the ServiceManager.
-func startLegacyService(
-	ctx context.Context, d *Daemon,
-	appSettings *settings.Settings, sm *servicemanager.ServiceManager,
-	createLogger func(string) ulogger.Logger, logger ulogger.Logger) error {
+func (d *Daemon) startLegacyService(
+	ctx context.Context,
+	appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger,
+) error {
 	// if appSettings.ChainCfgParams.Net == chaincfg.RegressionNetParams.Net {
 	// 	logger.Warnf("legacy service not supported in regtest mode. Skipping legacy service...")
 	// 	return nil
@@ -886,7 +907,7 @@ func startLegacyService(
 	// Get the subtree store
 	var subtreeStore blob.Store
 
-	subtreeStore, err = d.daemonStores.GetSubtreeStore(ctx, logger, appSettings)
+	subtreeStore, err = d.daemonStores.GetSubtreeStore(ctx, createLogger(loggerSubtrees), appSettings)
 	if err != nil {
 		return err
 	}
@@ -894,7 +915,7 @@ func startLegacyService(
 	// Get the temporary store
 	var tempStore blob.Store
 
-	tempStore, err = d.daemonStores.GetTempStore(ctx, logger, appSettings)
+	tempStore, err = d.daemonStores.GetTempStore(ctx, createLogger(loggerTemp), appSettings)
 	if err != nil {
 		return err
 	}
@@ -902,7 +923,7 @@ func startLegacyService(
 	// Get the UTXO store
 	var utxoStore utxo.Store
 
-	utxoStore, err = d.daemonStores.GetUtxoStore(ctx, logger, appSettings)
+	utxoStore, err = d.daemonStores.GetUtxoStore(ctx, createLogger(loggerUtxos), appSettings)
 	if err != nil {
 		return err
 	}
@@ -910,7 +931,7 @@ func startLegacyService(
 	// Get the validator client
 	var validatorClient validator.Interface
 
-	validatorClient, err = d.daemonStores.GetValidatorClient(ctx, logger, appSettings)
+	validatorClient, err = d.daemonStores.GetValidatorClient(ctx, createLogger(loggerTxValidator), appSettings)
 	if err != nil {
 		return err
 	}
@@ -918,7 +939,7 @@ func startLegacyService(
 	// Get the blockchain client
 	var blockchainClient blockchain.ClientI
 
-	blockchainClient, err = d.daemonStores.GetBlockchainClient(ctx, logger, appSettings, serviceLegacy)
+	blockchainClient, err = d.daemonStores.GetBlockchainClient(ctx, createLogger(loggerBlockchainClient), appSettings, serviceLegacy)
 	if err != nil {
 		return err
 	}
@@ -926,7 +947,7 @@ func startLegacyService(
 	// Get the subtree validation client
 	var subtreeValidationClient subtreevalidation.Interface
 
-	subtreeValidationClient, err = d.daemonStores.GetSubtreeValidationClient(ctx, logger, appSettings)
+	subtreeValidationClient, err = d.daemonStores.GetSubtreeValidationClient(ctx, createLogger(loggerSubtreeValidation), appSettings)
 	if err != nil {
 		return err
 	}
@@ -934,7 +955,7 @@ func startLegacyService(
 	// Get the block validation client
 	var blockValidationClient blockvalidation.Interface
 
-	blockValidationClient, err = d.daemonStores.GetBlockValidationClient(ctx, logger, appSettings)
+	blockValidationClient, err = d.daemonStores.GetBlockValidationClient(ctx, createLogger(loggerBlockValidation), appSettings)
 	if err != nil {
 		return err
 	}
@@ -942,13 +963,13 @@ func startLegacyService(
 	// Get the block assembly client
 	var blockassemblyClient *blockassembly.Client
 
-	blockassemblyClient, err = blockassembly.NewClient(ctx, logger, appSettings)
+	blockassemblyClient, err = blockassembly.NewClient(ctx, createLogger(loggerBlockAssembly), appSettings)
 	if err != nil {
 		return err
 	}
 
 	// Add the Legacy service to the ServiceManager
-	return sm.AddService(serviceLegacyFormal, legacy.New(
+	return d.ServiceManager.AddService(serviceLegacyFormal, legacy.New(
 		createLogger(serviceLegacy),
 		appSettings,
 		blockchainClient,

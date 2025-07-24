@@ -37,7 +37,6 @@ import (
 // The Client struct is safe for concurrent use across multiple goroutines.
 // The underlying gRPC connection handles concurrent requests efficiently.
 type Client struct {
-	// apiClient is the generated gRPC client for communicating with the subtree validation service
 	apiClient subtreevalidation_api.SubtreeValidationAPIClient
 	// logger provides structured logging capabilities for client operations
 	logger ulogger.Logger

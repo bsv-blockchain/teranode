@@ -136,7 +136,11 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 
 			blockHeight, medianBlockTime, err := blockchainClient.GetBestHeightAndTime(ctx)
 			if err != nil {
-				logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
+				if errors.Is(err, context.Canceled) {
+					logger.Infof("[UTXOStore] error getting best height and time for %s: %v", source, err)
+				} else {
+					logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
+				}
 			} else {
 				logger.Debugf("[UTXOStore] setting block height to %d", blockHeight)
 
@@ -163,7 +167,11 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 						if notification.Type == model.NotificationType_Block {
 							blockHeight, medianBlockTime, err = blockchainClient.GetBestHeightAndTime(ctx)
 							if err != nil {
-								logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
+								if errors.Is(err, context.Canceled) {
+									logger.Infof("[UTXOStore] error getting best height and time for %s: %v", source, err)
+								} else {
+									logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
+								}
 							} else {
 								logger.Debugf("[UTXOStore] updated block height to %d and median time to %d for %s", blockHeight, medianBlockTime, source)
 

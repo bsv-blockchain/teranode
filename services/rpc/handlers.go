@@ -817,7 +817,7 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	if err != nil {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: err.Error(),
+			Message: errors.NewServiceError("RPC blockassembly client", err).Error(),
 		}
 	}
 
