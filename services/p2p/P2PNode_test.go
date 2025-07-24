@@ -2685,6 +2685,9 @@ type mockNetworkImpl struct {
 }
 
 func (m *mockNetworkImpl) Connectedness(pid peer.ID) network.Connectedness {
+	if m == nil || m.connectedPeers == nil {
+		return network.NotConnected
+	}
 	if m.connectedPeers[pid] {
 		return network.Connected
 	}
@@ -3039,28 +3042,28 @@ func TestAttemptConnection(t *testing.T) {
 	testCases := []struct {
 		name              string
 		peer              peer.AddrInfo
-		alreadyStored     bool
+		alreadyAttempted  bool
 		connectError      bool
 		expectErrorStored bool
 	}{
 		{
 			name:              "New peer - successful connection",
 			peer:              peer1,
-			alreadyStored:     false,
+			alreadyAttempted:  false,
 			connectError:      false,
 			expectErrorStored: false,
 		},
 		{
 			name:              "New peer - connection failure",
 			peer:              peer2,
-			alreadyStored:     false,
+			alreadyAttempted:  false,
 			connectError:      true,
 			expectErrorStored: true,
 		},
 		{
-			name:              "Already stored peer",
+			name:              "Recently attempted peer - should skip",
 			peer:              peer3,
-			alreadyStored:     true,
+			alreadyAttempted:  true,
 			connectError:      false,
 			expectErrorStored: false,
 		},
@@ -3069,14 +3072,8 @@ func TestAttemptConnection(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Create maps for tracking
-			peerAddrMap := &sync.Map{}
 			peerAddrErrorMap := &sync.Map{}
 			connectionAttempts := &sync.Map{}
-
-			// Pre-store peer if needed
-			if tc.alreadyStored {
-				peerAddrMap.Store(tc.peer.ID.String(), tc.peer)
-			}
 
 			// Create a connect function for our mock host
 			connectFunc := func(ctx context.Context, addr peer.AddrInfo) error {
@@ -3094,14 +3091,21 @@ func TestAttemptConnection(t *testing.T) {
 				peerID:         peer.ID("self-peer"),
 				connectedPeers: make(map[peer.ID]bool),
 				connFunc:       connectFunc,
+				network:        &mockNetworkImpl{connectedPeers: make(map[peer.ID]bool)},
 			}
 
 			// Create a P2PNode
 			node := &P2PNode{
-				host:      mockHost,
-				logger:    ulogger.TestLogger{},
-				settings:  settings.NewSettings(),
-				startTime: time.Now(),
+				host:               mockHost,
+				logger:             ulogger.TestLogger{},
+				settings:           settings.NewSettings(),
+				startTime:          time.Now(),
+				connectionAttempts: sync.Map{},
+			}
+
+			// Pre-store peer if needed
+			if tc.alreadyAttempted {
+				node.connectionAttempts.Store(tc.peer.ID.String(), time.Now().Add(-time.Second))
 			}
 
 			// Create a context
@@ -3109,17 +3113,20 @@ func TestAttemptConnection(t *testing.T) {
 			defer cancel()
 
 			// Call the method
-			node.attemptConnection(ctx, tc.peer, peerAddrMap, peerAddrErrorMap)
+			node.attemptConnection(ctx, tc.peer, peerAddrErrorMap)
 
 			// Allow time for the goroutine to complete
 			time.Sleep(100 * time.Millisecond)
 
-			// Check if the peer was added to the map
-			_, peerStored := peerAddrMap.Load(tc.peer.ID.String())
-			assert.True(t, peerStored, "Expected peer to be stored in peerAddrMap")
+			// Check connection attempts based on the test case
+			if tc.alreadyAttempted {
+				// Should not have attempted connection again within 30 seconds
+				_, connectionAttempted := connectionAttempts.Load(tc.peer.ID.String())
+				assert.False(t, connectionAttempted, "Should not attempt connection for recently attempted peer")
+			}
 
-			// If peer was not already stored, check connection attempt
-			if !tc.alreadyStored {
+			// If peer was not already attempted, check connection attempt
+			if !tc.alreadyAttempted {
 				_, connectionAttempted := connectionAttempts.Load(tc.peer.ID.String())
 				assert.True(t, connectionAttempted, "Expected a connection attempt")
 
@@ -3127,9 +3134,9 @@ func TestAttemptConnection(t *testing.T) {
 				_, errorStored := peerAddrErrorMap.Load(tc.peer.ID.String())
 				assert.Equal(t, tc.expectErrorStored, errorStored, "Expected error to be stored: %v, got: %v", tc.expectErrorStored, errorStored)
 			} else {
-				// If peer was already stored, ensure no connection attempt
+				// If peer was already attempted, ensure no connection attempt
 				_, connectionAttempted := connectionAttempts.Load(tc.peer.ID.String())
-				assert.False(t, connectionAttempted, "Did not expect a connection attempt for already stored peer")
+				assert.False(t, connectionAttempted, "Did not expect a connection attempt for already attempted peer")
 			}
 		})
 	}

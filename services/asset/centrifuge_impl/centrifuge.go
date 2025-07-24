@@ -337,6 +337,11 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 						c.logger.Errorf("[Centrifuge] error extracting coinbase height: %s", err)
 					}
 
+					miner, err := util.ExtractCoinbaseMiner(block.CoinbaseTx)
+					if err != nil {
+						c.logger.Errorf("[Centrifuge] error extracting coinbase miner: %s", err)
+					}
+
 					// marshal the block header to json
 					data, err = json.Marshal(struct {
 						Hash       string             `json:"hash"`
@@ -345,6 +350,7 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 						CoinbaseTx string             `json:"coinbaseTx"`
 						Subtrees   []*chainhash.Hash  `json:"subtrees"`
 						BaseURL    string             `json:"baseUrl"`
+						Miner      string             `json:"miner"`
 					}{
 						Hash:       block.String(),
 						Height:     height,
@@ -352,6 +358,7 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 						CoinbaseTx: block.CoinbaseTx.String(),
 						Subtrees:   block.Subtrees,
 						BaseURL:    c.baseURL,
+						Miner:      miner,
 					})
 					if err != nil {
 						c.logger.Errorf("[Centrifuge] error marshalling block: %s", err)

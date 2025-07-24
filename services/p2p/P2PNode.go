@@ -116,6 +116,7 @@ type P2PNode struct {
 	peerHeights         sync.Map // Thread-safe map tracking peer blockchain heights
 	peerStartingHeights sync.Map // Thread-safe map tracking peer starting heights when first connected
 	peerConnTimes       sync.Map // Thread-safe map tracking peer connection times (peer.ID -> time.Time)
+	connectionAttempts  sync.Map // Thread-safe map tracking ongoing connection attempts (peer.ID -> time.Time)
 }
 
 // Handler defines the function signature for topic message handlers.
@@ -288,6 +289,8 @@ func NewP2PNode(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 
 			// Store connection time
 			node.peerConnTimes.Store(peerID, time.Now())
+			// Clean up any pending connection attempts since we're now connected
+			node.connectionAttempts.Delete(peerID.String())
 
 			// Notify any connection handlers about the new peer
 			node.callPeerConnected(context.Background(), peerID)
@@ -298,6 +301,8 @@ func NewP2PNode(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 
 			// Remove connection time when peer disconnects
 			node.peerConnTimes.Delete(peerID)
+			// Clean up any pending connection attempts
+			node.connectionAttempts.Delete(peerID.String())
 		},
 	})
 
@@ -878,8 +883,8 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) error 
 			s.logger.Infof("[P2PNode] shutting down")
 			return nil
 		default:
-			// Create a copy of the map to avoid concurrent modifications
-			peerAddrMap := sync.Map{}
+			// clean up stale connection attempts (older than 30 seconds)
+			s.cleanupStaleConnectionAttempts()
 
 			eg := errgroup.Group{}
 
@@ -892,7 +897,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) error 
 				topicNameCopy := topicName
 
 				eg.Go(func() error {
-					return s.findPeers(ctx, topicNameCopy, routingDiscovery, &peerAddrMap, &peerAddrErrorMap)
+					return s.findPeers(ctx, topicNameCopy, routingDiscovery, &peerAddrErrorMap)
 				})
 			}
 
@@ -925,7 +930,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) error 
 	}
 }
 
-func (s *P2PNode) findPeers(ctx context.Context, topicName string, routingDiscovery *dRouting.RoutingDiscovery, peerAddrMap *sync.Map, peerAddrErrorMap *sync.Map) error {
+func (s *P2PNode) findPeers(ctx context.Context, topicName string, routingDiscovery *dRouting.RoutingDiscovery, peerAddrErrorMap *sync.Map) error {
 	// Find peers subscribed to the topic
 	addrChan, err := routingDiscovery.FindPeers(ctx, topicName)
 	if err != nil {
@@ -954,7 +959,7 @@ func (s *P2PNode) findPeers(ctx context.Context, topicName string, routingDiscov
 
 		go func() {
 			defer wg.Done()
-			s.attemptConnection(ctx, addr, peerAddrMap, peerAddrErrorMap)
+			s.attemptConnection(ctx, addr, peerAddrErrorMap)
 		}()
 	}
 
@@ -1032,20 +1037,49 @@ func (s *P2PNode) shouldSkipNoGoodAddresses(addr peer.AddrInfo) bool {
 	return false
 }
 
+// cleanupStaleConnectionAttempts removes connection attempts older than 30 seconds
+func (s *P2PNode) cleanupStaleConnectionAttempts() {
+	now := time.Now()
+	staleThreshold := 30 * time.Second
+
+	s.connectionAttempts.Range(func(key, value interface{}) bool {
+		attemptTime := value.(time.Time)
+		if now.Sub(attemptTime) > staleThreshold {
+			s.connectionAttempts.Delete(key)
+		}
+		return true
+	})
+}
+
 // attemptConnection tries to connect to a peer if it hasn't been attempted already
-func (s *P2PNode) attemptConnection(ctx context.Context, peerAddr peer.AddrInfo, peerAddrMap *sync.Map, peerAddrErrorMap *sync.Map) {
-	if _, ok := peerAddrMap.Load(peerAddr.ID.String()); ok {
+func (s *P2PNode) attemptConnection(ctx context.Context, peerAddr peer.AddrInfo, peerAddrErrorMap *sync.Map) {
+	// check if we're already connected
+	if s.host.Network().Connectedness(peerAddr.ID) == network.Connected {
 		return
 	}
 
-	peerAddrMap.Store(peerAddr.ID.String(), true)
+	// check if a connection attempt is already in progress
+	now := time.Now()
+	if attemptTime, ok := s.connectionAttempts.Load(peerAddr.ID.String()); ok {
+		// If the attempt is less than 30 seconds old, skip
+		if attemptTime.(time.Time).Add(30 * time.Second).After(now) {
+			return
+		}
+	}
+
+	// mark this connection attempt
+	s.connectionAttempts.Store(peerAddr.ID.String(), now)
 
 	err := s.host.Connect(ctx, peerAddr)
 	if err != nil {
 		peerAddrErrorMap.Store(peerAddr.ID.String(), true)
 		s.logger.Debugf("[P2PNode][%s] Failed to connect: %v", peerAddr.String(), err)
+		// remove from connection attempts on failure
+		s.connectionAttempts.Delete(peerAddr.ID.String())
 	} else {
 		s.logger.Infof("[P2PNode][%s] Connected in %s", peerAddr.String(), time.Since(s.startTime))
+		// remove from connection attempts on success
+		s.connectionAttempts.Delete(peerAddr.ID.String())
 	}
 }
 

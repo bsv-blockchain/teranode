@@ -105,6 +105,7 @@ export async function connectToP2PServer() {
               hash: jsonData.hash,
               height: jsonData.height,
               timestamp: jsonData.timestamp,
+              miner: jsonData.miner,
               receivedAt: new Date()
             }
             miningNodes.set(miningNodeSet)
