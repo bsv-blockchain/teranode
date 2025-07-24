@@ -225,7 +225,9 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 				continue
 			}
 
-			repo.logger.Errorf("[writeTransactionsViaSubtreeStore][%s] failed to get tx meta from store for tx %s", subtreeHash.String(), txHashes[i].String())
+			if txMetaSlice[i] == nil || txMetaSlice[i].Tx == nil {
+				repo.logger.Errorf("[writeTransactionsViaSubtreeStore][%s] failed to get tx meta from store for tx %s", subtreeHash.String(), txHashes[i].String())
+			}
 		}
 
 		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore][%s] failed to get %d of %d tx meta from store", subtreeHash.String(), missed, len(txHashes))
