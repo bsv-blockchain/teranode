@@ -367,14 +367,6 @@ func TestHandleMultipleTx(t *testing.T) {
 			expectedResponse:   "Failed to process transaction",
 			storeError:         errors.NewStorageError("test store error"),
 		},
-		{
-			name: "Invalid transaction data",
-			setupRequestBody: func() *bytes.Buffer {
-				return bytes.NewBuffer([]byte("invalid-tx-data"))
-			},
-			expectedStatusCode: http.StatusInternalServerError,
-			expectedResponse:   "transaction is not extended",
-		},
 	}
 
 	for _, tc := range testCases {

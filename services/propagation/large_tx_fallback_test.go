@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,6 +81,15 @@ func TestLargeTransactionFallback(t *testing.T) {
 		// Create a small transaction (under 1MB)
 		smallTx := bt.NewTx()
 
+		smallTx.Inputs = []*bt.Input{
+			{
+				PreviousTxSatoshis: 1000,
+				PreviousTxOutIndex: 1,
+				SequenceNumber:     1,
+			},
+		}
+		_ = smallTx.Inputs[0].PreviousTxIDAdd(&chainhash.Hash{})
+
 		// Add a simple P2PKH output
 		err := smallTx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000)
 		require.NoError(t, err)
@@ -101,6 +111,15 @@ func TestLargeTransactionFallback(t *testing.T) {
 	t.Run("Large transaction uses HTTP fallback", func(t *testing.T) {
 		// Create a large transaction (over 1MB)
 		largeTx := bt.NewTx()
+
+		largeTx.Inputs = []*bt.Input{
+			{
+				PreviousTxSatoshis: 1000,
+				PreviousTxOutIndex: 1,
+				SequenceNumber:     1,
+			},
+		}
+		_ = largeTx.Inputs[0].PreviousTxIDAdd(&chainhash.Hash{})
 
 		// Add a simple P2PKH output first
 		err := largeTx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000)

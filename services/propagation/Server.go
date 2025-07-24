@@ -823,8 +823,9 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		return errors.NewTxInvalidError("[ProcessTransaction][%s] received coinbase transaction", btTx.TxID())
 	}
 
-	if !btTx.IsExtended() {
-		return errors.NewTxInvalidError("[ProcessTransaction][%s] transaction is not extended", btTx.TxID())
+	// do some very simple sanity checks on the transaction
+	if err = ps.txSanityChecks(btTx); err != nil {
+		return err
 	}
 
 	// // decouple the tracing context to not cancel the context when the tx is being saved in the background
@@ -855,6 +856,20 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		if _, err = ps.validator.Validate(ctx, btTx, 0); err != nil {
 			return errors.NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
 		}
+	}
+
+	return nil
+}
+
+func (ps *PropagationServer) txSanityChecks(btTx *bt.Tx) error {
+	if len(btTx.Inputs) == 0 {
+		prometheusInvalidTransactions.Inc()
+		return errors.NewTxInvalidError("[ProcessTransaction][%s] received transaction with no inputs", btTx.TxID())
+	}
+
+	if len(btTx.Outputs) == 0 {
+		prometheusInvalidTransactions.Inc()
+		return errors.NewTxInvalidError("[ProcessTransaction][%s] received transaction with no outputs", btTx.TxID())
 	}
 
 	return nil

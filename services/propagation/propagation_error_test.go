@@ -80,7 +80,7 @@ func TestPropagationServiceErrors(t *testing.T) {
 		for _, terr := range resp.Errors {
 			require.NotNil(t, terr)
 			assert.Equal(t, errors.ERR_TX_INVALID, terr.Code)
-			assert.Contains(t, terr.Message, "transaction is not extended")
+			assert.Contains(t, terr.Message, "transaction with no inputs")
 		}
 	})
 }

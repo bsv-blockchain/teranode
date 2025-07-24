@@ -29,6 +29,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -573,14 +574,49 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 	require.NoError(t, err)
 	tSettings.UtxoStore.UtxoStore = parsedURL
 
-	blockAssemblyClient := blockassembly.NewMock()
-	blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+	txs := transactions.CreateTestTransactionChainWithCount(t, 5)
 
-	t.Run("Test sending tx in parallel", func(t *testing.T) {
-		utxoStore, err := factory.NewStore(t.Context(), logger, tSettings, "test", false)
+	utxoStore, err := factory.NewStore(t.Context(), logger, tSettings, "test", false)
+	require.NoError(t, err)
+
+	_ = utxoStore.SetBlockHeight(101)
+
+	t.Run("Test sending non extended tx", func(t *testing.T) {
+		for _, tx := range txs {
+			_ = utxoStore.Delete(t.Context(), tx.TxIDChainHash())
+		}
+
+		blockAssemblyClient := blockassembly.NewMock()
+		blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+
+		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
 		require.NoError(t, err)
 
-		_ = utxoStore.SetBlockHeight(101)
+		// Create a PropagationServer
+		ps := &PropagationServer{
+			logger:    logger,
+			validator: validatorInstance,
+			settings:  tSettings,
+		}
+
+		// Add the first transaction to the store
+		_, err = utxoStore.Create(t.Context(), txs[1], 1)
+		require.NoError(t, err, "processTransactionInternal should not return an error for valid transaction")
+
+		tx2NotExtended, err := bt.NewTxFromBytes(txs[2].Bytes())
+		require.NoError(t, err, "should be able to create a transaction from bytes")
+
+		err = ps.processTransactionInternal(t.Context(), tx2NotExtended)
+		require.NoError(t, err, "processTransactionInternal should not return an error for valid transaction")
+	})
+
+	t.Run("Test sending tx in parallel", func(t *testing.T) {
+		for _, tx := range txs {
+			_ = utxoStore.Delete(t.Context(), tx.TxIDChainHash())
+		}
+
+		blockAssemblyClient := blockassembly.NewMock()
+		blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 		validatorInstance, err := validator.New(t.Context(), logger, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
 		require.NoError(t, err)
