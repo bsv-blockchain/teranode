@@ -257,6 +257,9 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 	tx, err := bt.NewTxFromString(txHex)
 	require.NoError(t, err)
 
+	// set previous sats to 0, which makes the tx invalid
+	tx.Inputs[0].PreviousTxSatoshis = 0
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
@@ -286,7 +289,7 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
-	_, err = v.Validate(context.Background(), tx, 100, WithSkipPolicyChecks(true))
+	_, err = v.Validate(context.Background(), tx, 100, WithSkipPolicyChecks(false))
 	require.Error(t, err)
 
 	require.Equal(t, 0, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should be empty")
