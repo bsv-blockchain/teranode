@@ -284,7 +284,7 @@ services:
       - teranode-network
     volumes:
       - ./scripts/generate-blocks.sh:/generate-blocks.sh
-    entrypoint: ["/generate-blocks.sh", "--host", "teranode1", "--numBlocks", "8", "--generate"]
+    entrypoint: ["/generate-blocks.sh", "--host", "teranode1", "--stopHeight", "120", "--generate"]
     restart: no
 
   coinbase1:
@@ -312,7 +312,7 @@ services:
       - teranode-network
     volumes:
       - ./scripts/generate-blocks.sh:/generate-blocks.sh
-    entrypoint: ["/generate-blocks.sh", "--host", "teranode2", "--numBlocks", "8"]
+    entrypoint: ["/generate-blocks.sh", "--host", "teranode2", "--stopHeight", "120"]
     restart: no
 
   coinbase2:
@@ -338,7 +338,7 @@ services:
       - teranode-network
     volumes:
       - ./scripts/generate-blocks.sh:/generate-blocks.sh
-    entrypoint: ["/generate-blocks.sh", "--host", "teranode3", "--numBlocks", "8"]
+    entrypoint: ["/generate-blocks.sh", "--host", "teranode3", "--stopHeight", "120"]
     restart: no
 
   coinbase3:
