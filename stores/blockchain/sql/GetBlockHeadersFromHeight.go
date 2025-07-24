@@ -139,7 +139,7 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 			&blockHeaderMeta.Height,
 			&blockHeaderMeta.TxCount,
 			&blockHeaderMeta.SizeInBytes,
-			&blockHeaderMeta.Miner,
+			&blockHeaderMeta.PeerID,
 			&blockHeaderMeta.BlockTime,
 			&insertedAt,
 		); err != nil {

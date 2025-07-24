@@ -155,7 +155,7 @@ func (s *SQL) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainh
 			&blockHeaderMeta.Height,
 			&blockHeaderMeta.TxCount,
 			&blockHeaderMeta.SizeInBytes,
-			&blockHeaderMeta.Miner,
+			&blockHeaderMeta.PeerID,
 			&blockHeaderMeta.BlockTime,
 			&insertedAt,
 		); err != nil {

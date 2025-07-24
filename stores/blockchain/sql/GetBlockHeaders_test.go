@@ -36,10 +36,10 @@ func TestSQLGetBlockHeaders(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
-		_, _, err = s.StoreBlock(context.Background(), block1, "")
+		_, _, err = s.StoreBlock(context.Background(), block1, "test_peer")
 		require.NoError(t, err)
 
-		_, _, err = s.StoreBlock(context.Background(), block2, "")
+		_, _, err = s.StoreBlock(context.Background(), block2, "test_peer")
 		require.NoError(t, err)
 
 		block2Alt := &model.Block{
@@ -58,7 +58,7 @@ func TestSQLGetBlockHeaders(t *testing.T) {
 			},
 		}
 
-		_, _, err = s.StoreBlock(context.Background(), block2Alt, "")
+		_, _, err = s.StoreBlock(context.Background(), block2Alt, "test_peer")
 		require.NoError(t, err)
 
 		headers, metas, err := s.GetBlockHeaders(context.Background(), block2.Hash(), 2)
@@ -66,8 +66,10 @@ func TestSQLGetBlockHeaders(t *testing.T) {
 		assert.Equal(t, 2, len(headers))
 		assert.Equal(t, block2.Header.Hash(), headers[0].Hash())
 		assert.Equal(t, uint32(2), metas[0].Height)
+		assert.Equal(t, "test_peer", metas[0].PeerID)
 		assert.Equal(t, block1.Header.Hash(), headers[1].Hash())
 		assert.Equal(t, uint32(1), metas[1].Height)
+		assert.Equal(t, "test_peer", metas[1].PeerID)
 
 		headers, metas, err = s.GetBlockHeaders(context.Background(), block1.Hash(), 2)
 		require.NoError(t, err)

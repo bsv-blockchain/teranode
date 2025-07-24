@@ -95,24 +95,25 @@ func TestGetSubtreeTransactions(t *testing.T) {
 		}
 	})
 
-	// 	t.Run("GetSubtreeTransactions form block store", func(t *testing.T) {
-	// 		txns, subtreeHash, repo := setupSubtreeData(t)
-
-	// 		err := repo.SubtreeStore.Del(t.Context(), subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData)
-	// 		require.NoError(t, err)
-
-	// 		// Get the transactions from the repository
-	// 		txMap, err := repo.GetSubtreeTransactions(context.Background(), subtreeHash)
-	// 		require.NoError(t, err)
-	// 		assert.Len(t, txMap, 2)
-
-	// 		for _, txHash := range txns {
-	// 			tx, ok := txMap[txHash]
-	// 			require.True(t, ok, "transaction %s not found in subtree transactions", txHash.String())
-
-	//			assert.Equal(t, txHash, *tx.TxIDChainHash(), "transaction hash mismatch for %s", txHash.String())
-	//		}
-	//	})
+	// the blockStore has been disabled for now because it the transactions in it are not extended
+	// t.Run("GetSubtreeTransactions form block store", func(t *testing.T) {
+	// 	txns, subtreeHash, repo := setupSubtreeData(t)
+	//
+	// 	err := repo.SubtreeStore.Del(t.Context(), subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData)
+	// 	require.NoError(t, err)
+	//
+	// 	// Get the transactions from the repository
+	// 	txMap, err := repo.GetSubtreeTransactions(context.Background(), subtreeHash)
+	// 	require.NoError(t, err)
+	// 	assert.Len(t, txMap, 2)
+	//
+	// 	for _, txHash := range txns {
+	// 		tx, ok := txMap[txHash]
+	// 		require.True(t, ok, "transaction %s not found in subtree transactions", txHash.String())
+	//
+	// 		assert.Equal(t, txHash, *tx.TxIDChainHash(), "transaction hash mismatch for %s", txHash.String())
+	// 	}
+	// })
 }
 
 func TestSubtree(t *testing.T) {

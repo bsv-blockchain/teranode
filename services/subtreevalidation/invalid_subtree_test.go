@@ -192,7 +192,7 @@ func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 	// test case 1: peer cannot provide transactions
 	url := fmt.Sprintf("%s/subtree/%s/txs", baseURL, subtreeHash.String())
 	httpmock.RegisterResponder("POST", url,
-		httpmock.NewErrorResponder(errors.New(errors.ERR_EXTERNAL, "connection refused")))
+		httpmock.NewBytesResponder(http.StatusNotFound, []byte(errors.New(errors.ERR_NOT_FOUND, "not found").Error())))
 
 	ctx := context.Background()
 	missingTxHashes := []utxo.UnresolvedMetaData{
@@ -224,14 +224,14 @@ func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 	kafkaProducer.messages = nil // reset messages
 	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
 	httpmock.RegisterResponder("GET", subtreeURL,
-		httpmock.NewErrorResponder(errors.New(errors.ERR_EXTERNAL, "connection refused")))
+		httpmock.NewBytesResponder(http.StatusNotFound, []byte(errors.New(errors.ERR_NOT_FOUND, "not found").Error())))
 
 	stat := gocore.NewStat("test")
 	_, err = server.getSubtreeTxHashes(ctx, stat, &subtreeHash, baseURL)
 
 	// verify error is returned
 	assert.Error(t, err)
-	assert.True(t, errors.Is(err, errors.ErrExternal))
+	assert.True(t, errors.Is(err, errors.ErrNotFound))
 
 	// verify invalid subtree message was published
 	require.Len(t, kafkaProducer.messages, 1)

@@ -30,6 +30,7 @@ package subtreevalidation
 import (
 	"context"
 
+	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
 )
@@ -80,6 +81,22 @@ type Interface interface {
 	// Returns:
 	//   - error: Any error encountered during validation, nil if successful
 	CheckSubtreeFromBlock(ctx context.Context, hash chainhash.Hash, baseURL string, blockHeight uint32, blockHash, previousBlockHash *chainhash.Hash) error
+
+	// CheckBlockSubtrees validates all subtrees in a block identified by its hash.
+	// This method delegates the validation of all subtrees within a specific block to the subtree validation service.
+	//
+	// The method handles missing transaction retrieval, ancestor validation, and ensures that
+	// all transactions in the subtree can be added to the blockchain at the specified height.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation and tracing
+	//   - blockHash: The hash of the block containing the subtrees to validate
+	//   - blockHeight: The height of the block containing the subtrees
+	//   - baseURL: URL to fetch missing transactions from if needed
+	//
+	// Returns:
+	//   - error: Any error encountered during validation, nil if successful
+	CheckBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error
 }
 
 var _ Interface = &MockSubtreeValidation{}
@@ -103,5 +120,10 @@ func (mv *MockSubtreeValidation) Health(ctx context.Context, checkLiveness bool)
 
 func (mv *MockSubtreeValidation) CheckSubtreeFromBlock(ctx context.Context, hash chainhash.Hash, baseURL string, blockHeight uint32, blockHash, previousBlockHash *chainhash.Hash) error {
 	args := mv.Called(ctx, hash, baseURL, blockHeight, blockHash, previousBlockHash)
+	return args.Error(0)
+}
+
+func (mv *MockSubtreeValidation) CheckBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
+	args := mv.Called(ctx, block, baseURL)
 	return args.Error(0)
 }

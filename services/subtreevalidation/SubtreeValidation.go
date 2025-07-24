@@ -45,6 +45,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
@@ -345,11 +346,18 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 //   - error: Detailed error information if validation fails for any reason
 func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions *validator.Options) (txMeta *meta.Data, err error) {
-	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "getMissingTransaction",
-		tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
-	)
+	start := time.Now()
 
-	defer deferFn()
+	defer func() {
+		prometheusSubtreeValidationBlessMissingTransaction.Observe(time.Since(start).Seconds())
+	}()
+
+	// tracing is too slow for this, too many calls
+	// ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "blessMissingTransaction",
+	// 	tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
+	// )
+	//
+	// defer deferFn()
 
 	if tx == nil {
 		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s] tx is nil", subtreeHash.String())
@@ -532,20 +540,18 @@ type ValidateSubtree struct {
 // This method is typically called by higher-level API handlers after performing
 // necessary authorization and parameter validation.
 func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32,
-	blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
+	blockIds map[uint32]bool, validationOptions ...validator.Option) (subtree *subtreepkg.Subtree, err error) {
 	stat := gocore.NewStat("ValidateSubtreeInternal")
-
 	startTotal := time.Now()
 
 	ctx, _, endSpan := tracing.Tracer("subtreevalidation").Start(ctx, "ValidateSubtreeInternal",
 		tracing.WithHistogram(prometheusSubtreeValidationValidateSubtree),
+		tracing.WithLogMessage(u.logger, "[ValidateSubtreeInternal][%s] called", v.SubtreeHash.String()),
 	)
 
 	defer func() {
 		endSpan(err)
 	}()
-
-	u.logger.Infof("[ValidateSubtreeInternal][%s] called", v.SubtreeHash.String())
 
 	start := gocore.CurrentTime()
 
@@ -558,13 +564,13 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		stat.NewStat("1. subtreeExists").AddTime(start)
 
 		if err != nil {
-			return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to check if subtree exists in store", v.SubtreeHash.String(), err)
+			return nil, errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to check if subtree exists in store", v.SubtreeHash.String(), err)
 		}
 
 		if subtreeExists {
 			// If the subtree is already in the store, it means it is already validated.
 			// Therefore, we finish processing of the subtree.
-			return nil
+			return nil, nil
 		}
 
 		// The function was called by BlockFound, and we had not already blessed the subtree, so we load the subtree from the store to get the hashes
@@ -577,7 +583,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 					u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to get subtree from network (try %d), will retry in %s", v.SubtreeHash.String(), retries, backoff.String())
 					time.Sleep(backoff)
 				} else {
-					return errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String(), err)
+					return nil, errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String(), err)
 				}
 			} else {
 				break
@@ -588,9 +594,9 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// create the empty subtree
 	height := math.Ceil(math.Log2(float64(len(txHashes))))
 
-	subtree, err := subtreepkg.NewTree(int(height))
+	subtree, err = subtreepkg.NewTree(int(height))
 	if err != nil {
-		return errors.NewProcessingError("failed to create new subtree", err)
+		return nil, errors.NewProcessingError("failed to create new subtree", err)
 	}
 
 	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
@@ -606,7 +612,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	subtreeWarmupCountInt32, err := safeconversion.IntToInt32(subtreeWarmupCount)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// TODO document, what is the logic here?
@@ -657,12 +663,12 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			}
 
 			// Don't wrap the error again, processTxMetaUsingCache returns the correctly formatted error.
-			return err
+			return nil, err
 		}
 
 		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
 			// Not recoverable, returning processing error
-			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
+			return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
 		}
 
 		if missed > 0 {
@@ -672,7 +678,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, failFast)
 			if err != nil {
 				// Don't wrap the error again, processTxMetaUsingStore returns the correctly formated error.
-				return err
+				return nil, err
 			}
 		}
 
@@ -710,7 +716,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			if err != nil {
 				// u.logger.Errorf("SAO %s", err)
 				// Don't wrap the error again, processMissingTransactions returns the correctly formatted error.
-				return err
+				return nil, err
 			}
 
 			stat5.AddTime(start)
@@ -730,7 +736,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		if idx == 0 && txHash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
 			err = subtree.AddCoinbaseNode()
 			if err != nil {
-				return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add coinbase placeholder node to subtree", v.SubtreeHash.String(), err)
+				return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add coinbase placeholder node to subtree", v.SubtreeHash.String(), err)
 			}
 
 			continue
@@ -738,23 +744,23 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 		txMeta = txMetaSlice[idx]
 		if txMeta == nil {
-			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] tx meta not found in txMetaSlice at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
+			return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] tx meta not found in txMetaSlice at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
 		if txMeta.IsCoinbase {
 			// Not recoverable, returning TxInvalid error
-			return errors.NewTxInvalidError("[ValidateSubtreeInternal][%s] invalid subtree index for coinbase tx %d: %s", v.SubtreeHash.String(), idx, txHash.String())
+			return nil, errors.NewTxInvalidError("[ValidateSubtreeInternal][%s] invalid subtree index for coinbase tx %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
 		// finally add the transaction hash and fee to the subtree
 		if err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes); err != nil {
-			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add node to subtree / subtreeMeta", v.SubtreeHash.String(), err)
+			return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add node to subtree / subtreeMeta", v.SubtreeHash.String(), err)
 		}
 
 		// mark the transaction as conflicting if it is
 		if txMeta.Conflicting {
 			if err = subtree.AddConflictingNode(txHash); err != nil {
-				return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add conflicting node to subtree", v.SubtreeHash.String(), err)
+				return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to add conflicting node to subtree", v.SubtreeHash.String(), err)
 			}
 		}
 
@@ -762,7 +768,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		subtreeIdx := subtree.Length() - 1
 
 		if err = subtreeMeta.SetTxInpoints(subtreeIdx, txMeta.TxInpoints); err != nil {
-			return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to set parent tx hash in subtreeMeta", v.SubtreeHash.String(), err)
+			return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to set parent tx hash in subtreeMeta", v.SubtreeHash.String(), err)
 		}
 	}
 
@@ -771,7 +777,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// does the merkle tree give the correct root?
 	merkleRoot := subtree.RootHash()
 	if !merkleRoot.IsEqual(&v.SubtreeHash) {
-		return errors.NewSubtreeInvalidError("subtree root hash does not match", err)
+		return nil, errors.NewSubtreeInvalidError("subtree root hash does not match", err)
 	}
 
 	//
@@ -781,7 +787,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	completeSubtreeMetaBytes, err := subtreeMeta.Serialize()
 	if err != nil {
-		return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree meta", v.SubtreeHash.String(), err)
+		return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree meta", v.SubtreeHash.String(), err)
 	}
 
 	start = gocore.CurrentTime()
@@ -798,7 +804,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
 			u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree meta already exists in store", v.SubtreeHash.String())
 		} else {
-			return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree meta", v.SubtreeHash.String(), err)
+			return nil, errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree meta", v.SubtreeHash.String(), err)
 		}
 	}
 
@@ -809,7 +815,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	completeSubtreeBytes, err := subtree.Serialize()
 	if err != nil {
-		return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree", v.SubtreeHash.String(), err)
+		return nil, errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree", v.SubtreeHash.String(), err)
 	}
 
 	start = gocore.CurrentTime()
@@ -829,7 +835,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
 			u.logger.Warnf("[ValidateSubtreeInternal][%s] subtree already exists in store", v.SubtreeHash.String())
 		} else {
-			return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String(), err)
+			return nil, errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String(), err)
 		}
 	}
 
@@ -838,7 +844,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// only set this on no errors
 	prometheusSubtreeValidationValidateSubtreeDuration.Observe(float64(time.Since(startTotal).Microseconds()) / 1_000_000)
 
-	return nil
+	return subtree, nil
 }
 
 // getSubtreeTxHashes retrieves transaction hashes for a subtree from a remote source.
@@ -858,11 +864,11 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	if err != nil {
 		// check whether this is a 404 error
 		if errors.Is(err, errors.ErrNotFound) {
+			// Peer cannot provide subtree data - report as invalid subtree
+			u.publishInvalidSubtree(spanCtx, subtreeHash.String(), baseURL, "peer_cannot_provide_subtree")
+
 			return nil, errors.NewSubtreeNotFoundError("[getSubtreeTxHashes][%s] subtree not found on host %s", subtreeHash.String(), baseURL, err)
 		}
-
-		// Peer cannot provide subtree data - report as invalid subtree
-		u.publishInvalidSubtree(spanCtx, subtreeHash.String(), baseURL, "peer_cannot_provide_subtree")
 
 		return nil, errors.NewExternalError("[getSubtreeTxHashes][%s] failed to do http request on host %s", subtreeHash.String(), baseURL, err)
 	}
@@ -970,6 +976,14 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 	// pre-process the validation options into a struct
 	processedValidatorOptions := validator.ProcessOptions(validationOptions...)
 
+	isRunning, err := u.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
+	if err != nil {
+		return errors.NewProcessingError("[validateSubtree][%s] failed to check if blockchain is running: %v", subtreeHash.String(), err)
+	}
+
+	errorsFound := atomic.Uint64{}
+	addedToOrphanage := atomic.Uint64{}
+
 	for level := uint32(0); level <= maxLevel; level++ {
 		g, gCtx := errgroup.WithContext(ctx)
 		util.SafeSetLimit(g, u.settings.SubtreeValidation.SpendBatcherSize*2)
@@ -988,13 +1002,28 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 			g.Go(func() error {
 				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, tx, blockHeight, blockIds, processedValidatorOptions)
 				if err != nil {
+					// Log the error, but do not return it, since we want to process all transactions in the subtree
+					u.logger.Debugf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
+					errorsFound.Add(1)
+
 					// Check if this is a truly invalid transaction (not just policy error)
-					if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
+					if errors.Is(err, errors.ErrTxMissingParent) {
+						// check whether we are in a running state, otherwise we can just ignore the missing parent transactions
+						if isRunning {
+							// add tx to the orphanage
+							u.logger.Debugf("[validateSubtree][%s] transaction %s is missing parent, adding to orphanage", subtreeHash.String(), tx.TxIDChainHash().String())
+							u.orphanage.Set(*tx.TxIDChainHash(), tx)
+							addedToOrphanage.Add(1)
+						}
+					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Report invalid subtree - contains truly invalid transaction
 						u.publishInvalidSubtree(gCtx, subtreeHash.String(), baseURL, "contains_invalid_transaction")
+					} else {
+						// If the error is not a policy error, we log it as a processing error
+						u.logger.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
 					}
 
-					return errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), tx.TxIDChainHash().String(), err)
+					return nil
 				}
 
 				if txMeta == nil {
@@ -1005,7 +1034,10 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 					u.logger.Infof("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), tx.TxIDChainHash().String())
 				} else {
 					if txMetaSlice[txIdx] != nil {
-						return errors.NewProcessingError("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
+						u.logger.Debugf("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
+						errorsFound.Add(1)
+
+						return nil
 					}
 
 					txMetaSlice[txIdx] = txMeta
@@ -1016,9 +1048,13 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 		}
 
 		// wait for each level to process separately
-		if err = g.Wait(); err != nil {
-			return err
-		}
+		// no errors will be returned here, since we want to process all transactions in the subtree
+		_ = g.Wait()
+	}
+
+	if errorsFound.Load() > 0 {
+		// If there are errors found, we return here, so that the caller can handle it
+		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree, added %d to orphanage", subtreeHash.String(), errorsFound.Load(), addedToOrphanage.Load())
 	}
 
 	if missingCount.Load() > 0 {

@@ -598,9 +598,21 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		}
 	}
 
+	useBaseURL := u.lastUsedBaseURL
+	if useBaseURL == "" {
+		_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(ctx, blockHash)
+		if err != nil {
+			return errors.NewServiceError("[setTxMined][%s] failed to get block header from blockchain", blockHash.String(), err)
+		}
+
+		if blockHeaderMeta != nil && blockHeaderMeta.PeerID != "" {
+			useBaseURL = blockHeaderMeta.PeerID
+		}
+	}
+
 	// make sure all the subtrees are loaded in the block
 	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
-		return u.subtreeValidationClient.CheckSubtreeFromBlock(ctx, subtreeHash, u.lastUsedBaseURL, block.Height, block.Hash(), block.Header.HashPrevBlock)
+		return u.subtreeValidationClient.CheckSubtreeFromBlock(ctx, subtreeHash, useBaseURL, block.Height, block.Hash(), block.Header.HashPrevBlock)
 	}
 
 	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore, fallbackGetFunc)
@@ -1359,12 +1371,16 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 //
 // Returns an error if subtree validation fails.
 func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
-	start := gocore.CurrentTime()
-
-	stat := gocore.NewStat("validateBlockSubtrees")
-
 	ctx, span, endSpan := tracing.Tracer("blockvalidation").Start(ctx, "ValidateBlockSubtrees")
 	defer endSpan()
+
+	// let the subtree validation client handle it
+	if u.subtreeValidationClient != nil {
+		return u.subtreeValidationClient.CheckBlockSubtrees(ctx, block, baseURL)
+	}
+
+	start := gocore.CurrentTime()
+	stat := gocore.NewStat("validateBlockSubtrees")
 
 	u.lastUsedBaseURL = baseURL
 
@@ -1428,14 +1444,14 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	// if we did find an error, we must run through all the subtrees again, but this time in order
 	// returning an error if one of them is not validated properly
 	if foundError.Load() {
-		for _, subtreeHash := range block.Subtrees {
+		for subtreeIdx, subtreeHash := range block.Subtrees {
 			subtreeExists, err := u.GetSubtreeExists(ctx, subtreeHash)
 			if err != nil {
-				return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
+				return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check if subtree [%s] (%d) exists in store", block.Hash().String(), subtreeHash.String(), subtreeIdx, err)
 			}
 
 			if !subtreeExists {
-				u.logger.Debugf("[validateBlockSubtrees][%s] checking missing subtree [%s] in series", block.Hash().String(), subtreeHash.String())
+				u.logger.Debugf("[validateBlockSubtrees][%s] checking missing subtree [%s] (%d) in series", block.Hash().String(), subtreeHash.String(), subtreeIdx)
 
 				checkCtx, cancel := context.WithTimeout(ctx, u.settings.BlockValidation.CheckSubtreeFromBlockTimeout)
 
@@ -1443,7 +1459,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 				if err = u.subtreeValidationClient.CheckSubtreeFromBlock(checkCtx, *subtreeHash, baseURL, blockHeight, block.Hash(), block.Header.HashPrevBlock); err != nil {
 					cancel()
 
-					return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check missing subtree", block.Hash().String(), err)
+					return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check missing subtree [%s] (%d)", block.Hash().String(), subtreeHash.String(), subtreeIdx, err)
 				}
 
 				cancel()

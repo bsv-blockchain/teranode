@@ -110,6 +110,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		,b.merkle_root
 		,b.size_in_bytes
 		,b.coinbase_tx
+		,b.peer_id
 		,b.height
 		,b.tx_count
 		,b.chain_work
@@ -137,6 +138,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		&hashMerkleRoot,
 		&blockHeaderMeta.SizeInBytes,
 		&coinbaseBytes,
+		&blockHeaderMeta.PeerID,
 		&blockHeaderMeta.Height,
 		&blockHeaderMeta.TxCount,
 		&blockHeaderMeta.ChainWork,

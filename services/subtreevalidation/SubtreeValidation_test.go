@@ -108,7 +108,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight, nil)
+		_, err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight, nil)
 		require.NoError(t, err)
 	})
 }
@@ -194,7 +194,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	}
 
 	// Call the ValidateSubtreeInternal method
-	err = subtreeValidation.ValidateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight, nil)
+	_, err = subtreeValidation.ValidateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight, nil)
 	require.NoError(t, err)
 }
 
@@ -254,7 +254,7 @@ func TestBlockValidationValidateSubtreeInternalLegacy(t *testing.T) {
 	}
 
 	// Call the ValidateSubtreeInternal method
-	err = subtreeValidation.ValidateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight, nil)
+	_, err = subtreeValidation.ValidateSubtreeInternal(ctx, v, chaincfg.GenesisActivationHeight, nil)
 	require.NoError(t, err)
 }
 
@@ -522,7 +522,7 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v1, 100, nil)
+		_, err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v1, 100, nil)
 		require.NoError(t, err)
 
 		// Verify initial cache state
@@ -546,7 +546,7 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v2, 100, nil)
+		_, err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v2, 100, nil)
 		require.NoError(t, err)
 
 		// Verify final cache state

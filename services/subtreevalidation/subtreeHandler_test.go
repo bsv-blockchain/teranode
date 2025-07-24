@@ -9,6 +9,7 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
@@ -17,9 +18,12 @@ import (
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/jarcoal/httpmock"
+	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -207,14 +211,18 @@ func TestSubtreesHandler(t *testing.T) {
 			logger := ulogger.TestLogger{}
 			subtreeStore := memory.New()
 			utxoStore, _ := nullstore.NewNullStore()
+			blockchainClient := &blockchain.Mock{}
+			blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
 
 			server := &testServer{
 				Server: Server{
-					logger:          logger,
-					settings:        tSettings,
-					subtreeStore:    subtreeStore,
-					utxoStore:       utxoStore,
-					validatorClient: &validator.MockValidator{},
+					logger:           logger,
+					settings:         tSettings,
+					blockchainClient: blockchainClient,
+					subtreeStore:     subtreeStore,
+					utxoStore:        utxoStore,
+					validatorClient:  &validator.MockValidator{},
+					orphanage:        expiringmap.New[chainhash.Hash, *bt.Tx](tSettings.SubtreeValidation.OrphanageTimeout),
 				},
 			}
 

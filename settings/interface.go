@@ -434,6 +434,7 @@ type SubtreeValidationSettings struct {
 	// BlacklistedBaseURLs is a set of base URLs that are not allowed for subtree validation
 	BlacklistedBaseURLs            map[string]struct{}
 	BlockHeightRetentionAdjustment int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
+	OrphanageTimeout               time.Duration
 }
 
 type LegacySettings struct {

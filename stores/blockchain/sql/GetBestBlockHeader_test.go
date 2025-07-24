@@ -38,10 +38,10 @@ func TestSqlGetChainTip(t *testing.T) {
 
 		require.NoError(t, err)
 
-		_, _, err = s.StoreBlock(context.Background(), block1, "")
+		_, _, err = s.StoreBlock(context.Background(), block1, "test_peer")
 		require.NoError(t, err)
 
-		_, _, err = s.StoreBlock(context.Background(), block2, "")
+		_, _, err = s.StoreBlock(context.Background(), block2, "test_peer")
 		require.NoError(t, err)
 
 		tip, meta, err := s.GetBestBlockHeader(context.Background())
@@ -57,6 +57,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		assert.Equal(t, []byte{0xff, 0xff, 0x7f, 0x20}, tip.Bits.CloneBytes())
 		assert.Equal(t, uint32(0x1), tip.Nonce)
 		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000006", hex.EncodeToString(meta.ChainWork))
+		assert.Equal(t, "test_peer", meta.PeerID)
 	})
 
 	t.Run("multiple tips", func(t *testing.T) {
@@ -67,10 +68,10 @@ func TestSqlGetChainTip(t *testing.T) {
 
 		require.NoError(t, err)
 
-		_, _, err = s.StoreBlock(context.Background(), block1, "")
+		_, _, err = s.StoreBlock(context.Background(), block1, "test_peer")
 		require.NoError(t, err)
 
-		_, _, err = s.StoreBlock(context.Background(), block2, "")
+		_, _, err = s.StoreBlock(context.Background(), block2, "test_peer")
 		require.NoError(t, err)
 
 		tip, meta, err := s.GetBestBlockHeader(context.Background())
@@ -81,7 +82,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		assert.Equal(t, "484e58c7bf0208d787314710535ef7be8ca31748bc9fef5e1ee2de67ebda757a", tip.Hash().String())
 
 		// add a block that should not become the new tip
-		_, _, err = s.StoreBlock(context.Background(), blockAlternative2, "")
+		_, _, err = s.StoreBlock(context.Background(), blockAlternative2, "test_peer")
 		require.NoError(t, err)
 
 		tip, meta, err = s.GetBestBlockHeader(context.Background())
@@ -96,5 +97,6 @@ func TestSqlGetChainTip(t *testing.T) {
 		assert.Equal(t, uint32(0x671268cf), tip.Timestamp)
 		assert.Equal(t, []byte{0xff, 0xff, 0x7f, 0x20}, tip.Bits.CloneBytes())
 		assert.Equal(t, uint32(0x1), tip.Nonce)
+		assert.Equal(t, "test_peer", meta.PeerID)
 	})
 }

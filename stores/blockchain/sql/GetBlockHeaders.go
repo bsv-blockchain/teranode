@@ -150,7 +150,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			&blockHeaderMeta.Height,
 			&blockHeaderMeta.TxCount,
 			&blockHeaderMeta.SizeInBytes,
-			&blockHeaderMeta.Miner,
+			&blockHeaderMeta.PeerID,
 			&blockHeaderMeta.BlockTime,
 			&insertedAt,
 			&blockHeaderMeta.ChainWork,

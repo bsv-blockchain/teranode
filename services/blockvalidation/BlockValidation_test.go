@@ -156,6 +156,25 @@ func (m *MockSubtreeValidationClient) CheckSubtreeFromBlock(ctx context.Context,
 	return nil
 }
 
+func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
+	blockBytes, err := block.Bytes()
+	if err != nil {
+		return errors.NewServiceError("failed to serialize block for subtree validation", err)
+	}
+
+	request := subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: baseURL,
+	}
+
+	_, err = m.server.CheckBlockSubtrees(ctx, &request)
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
 // setup prepares a test environment with necessary components for block validation
 // testing. It initializes and configures:
 // - Transaction metadata store
@@ -244,6 +263,8 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+
 	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
 	require.NoError(t, subtree.AddNode(*hash2, 100, 0))
 	require.NoError(t, subtree.AddNode(*hash3, 100, 0))
@@ -251,11 +272,17 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	_, err = utxoStore.Create(context.Background(), tx1, 0)
 	require.NoError(t, err)
 
+	require.NoError(t, subtreeData.AddTx(tx1, 1))
+
 	_, err = utxoStore.Create(context.Background(), tx2, 0)
 	require.NoError(t, err)
 
+	require.NoError(t, subtreeData.AddTx(tx2, 2))
+
 	_, err = utxoStore.Create(context.Background(), tx3, 0)
 	require.NoError(t, err)
+
+	require.NoError(t, subtreeData.AddTx(tx3, 3))
 
 	_, err = utxoStore.Create(context.Background(), tx4, 0)
 	require.NoError(t, err)
@@ -267,6 +294,15 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 		"GET",
 		`=~^/subtree/[a-z0-9]+\z`,
 		httpmock.NewBytesResponder(200, nodeBytes),
+	)
+
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree_data/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, subtreeDataBytes),
 	)
 
 	nBits, _ := model.NewNBitFromString("2000ffff")
@@ -1198,6 +1234,21 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 		},
 	)
 
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	require.NoError(t, subtreeData.AddTx(tx1, 0))
+	require.NoError(t, subtreeData.AddTx(tx2, 1))
+	require.NoError(t, subtreeData.AddTx(tx3, 2))
+	require.NoError(t, subtreeData.AddTx(tx4, 3))
+
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree_data/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, subtreeDataBytes),
+	)
+
 	httpmock.RegisterRegexpMatcherResponder(
 		"POST",
 		regexp.MustCompile("/subtree/[a-fA-F0-9]{64}/txs$"),
@@ -1408,6 +1459,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 		defer deferFunc()
 
 		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+		subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 
@@ -1416,7 +1468,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			Subtrees: make([]*chainhash.Hash, 0),
 		}
 
-		err := blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000")
+		err = blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000")
 		require.NoError(t, err)
 	})
 
@@ -1426,6 +1478,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 
 		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 
@@ -1449,7 +1502,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 
 		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 		// First call - for subtree1 - success
-		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, *subtree1.RootHash(), mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything).
 			Return(nil).
 			Once().
 			Run(func(args mock.Arguments) {
@@ -1459,16 +1512,6 @@ func Test_validateBlockSubtrees(t *testing.T) {
 
 				require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 			})
-
-		// Second call - for subtree2 - fail with ErrSubtreeError
-		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, *subtree2.RootHash(), mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(errors.ErrSubtreeError).
-			Once()
-
-		// Third call - for subtree2 - success (retry in series)
-		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, *subtree2.RootHash(), mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(nil).
-			Once()
 
 		blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, subtreeValidationClient)
 
@@ -1486,7 +1529,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000"))
 
 		// check that the subtree validation was called 3 times
-		assert.Len(t, subtreeValidationClient.Mock.Calls, 3)
+		assert.Len(t, subtreeValidationClient.Mock.Calls, 1)
 	})
 }
 

@@ -252,6 +252,107 @@ func (x *CheckSubtreeFromBlockResponse) GetBlessed() bool {
 	return false
 }
 
+// CheckBlockSubtreesRequest defines the input parameters for checking subtrees in a block.
+type CheckBlockSubtreesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// block_hash identifies the block containing the subtrees to be checked
+	Block []byte `protobuf:"bytes,1,opt,name=block,proto3" json:"block,omitempty"`
+	// base_url specifies the endpoint for retrieving missing transaction data
+	BaseUrl       string `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckBlockSubtreesRequest) Reset() {
+	*x = CheckBlockSubtreesRequest{}
+	mi := &file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckBlockSubtreesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckBlockSubtreesRequest) ProtoMessage() {}
+
+func (x *CheckBlockSubtreesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckBlockSubtreesRequest.ProtoReflect.Descriptor instead.
+func (*CheckBlockSubtreesRequest) Descriptor() ([]byte, []int) {
+	return file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *CheckBlockSubtreesRequest) GetBlock() []byte {
+	if x != nil {
+		return x.Block
+	}
+	return nil
+}
+
+func (x *CheckBlockSubtreesRequest) GetBaseUrl() string {
+	if x != nil {
+		return x.BaseUrl
+	}
+	return ""
+}
+
+// CheckBlockSubtreesResponse contains the validation results for subtrees in a block.
+type CheckBlockSubtreesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// blessed indicates if all subtrees in the block pass validation
+	Blessed       bool `protobuf:"varint,1,opt,name=blessed,proto3" json:"blessed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckBlockSubtreesResponse) Reset() {
+	*x = CheckBlockSubtreesResponse{}
+	mi := &file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckBlockSubtreesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckBlockSubtreesResponse) ProtoMessage() {}
+
+func (x *CheckBlockSubtreesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckBlockSubtreesResponse.ProtoReflect.Descriptor instead.
+func (*CheckBlockSubtreesResponse) Descriptor() ([]byte, []int) {
+	return file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CheckBlockSubtreesResponse) GetBlessed() bool {
+	if x != nil {
+		return x.Blessed
+	}
+	return false
+}
+
 var File_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto protoreflect.FileDescriptor
 
 const file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_rawDesc = "" +
@@ -270,11 +371,17 @@ const file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_ap
 	"block_hash\x18\x04 \x01(\fR\tblockHash\x12.\n" +
 	"\x13previous_block_hash\x18\x05 \x01(\fR\x11previousBlockHash\"9\n" +
 	"\x1dCheckSubtreeFromBlockResponse\x12\x18\n" +
-	"\ablessed\x18\x01 \x01(\bR\ablessed2\xf9\x01\n" +
+	"\ablessed\x18\x01 \x01(\bR\ablessed\"L\n" +
+	"\x19CheckBlockSubtreesRequest\x12\x14\n" +
+	"\x05block\x18\x01 \x01(\fR\x05block\x12\x19\n" +
+	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\"6\n" +
+	"\x1aCheckBlockSubtreesResponse\x12\x18\n" +
+	"\ablessed\x18\x01 \x01(\bR\ablessed2\xf6\x02\n" +
 	"\x14SubtreeValidationAPI\x12Z\n" +
 	"\n" +
 	"HealthGRPC\x12#.subtreevalidation_api.EmptyMessage\x1a%.subtreevalidation_api.HealthResponse\"\x00\x12\x84\x01\n" +
-	"\x15CheckSubtreeFromBlock\x123.subtreevalidation_api.CheckSubtreeFromBlockRequest\x1a4.subtreevalidation_api.CheckSubtreeFromBlockResponse\"\x00B\x1aZ\x18./;subtreevalidation_apib\x06proto3"
+	"\x15CheckSubtreeFromBlock\x123.subtreevalidation_api.CheckSubtreeFromBlockRequest\x1a4.subtreevalidation_api.CheckSubtreeFromBlockResponse\"\x00\x12{\n" +
+	"\x12CheckBlockSubtrees\x120.subtreevalidation_api.CheckBlockSubtreesRequest\x1a1.subtreevalidation_api.CheckBlockSubtreesResponse\"\x00B\x1aZ\x18./;subtreevalidation_apib\x06proto3"
 
 var (
 	file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_rawDescOnce sync.Once
@@ -288,22 +395,26 @@ func file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api
 	return file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_rawDescData
 }
 
-var file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_goTypes = []any{
 	(*EmptyMessage)(nil),                  // 0: subtreevalidation_api.EmptyMessage
 	(*HealthResponse)(nil),                // 1: subtreevalidation_api.HealthResponse
 	(*CheckSubtreeFromBlockRequest)(nil),  // 2: subtreevalidation_api.CheckSubtreeFromBlockRequest
 	(*CheckSubtreeFromBlockResponse)(nil), // 3: subtreevalidation_api.CheckSubtreeFromBlockResponse
-	(*timestamppb.Timestamp)(nil),         // 4: google.protobuf.Timestamp
+	(*CheckBlockSubtreesRequest)(nil),     // 4: subtreevalidation_api.CheckBlockSubtreesRequest
+	(*CheckBlockSubtreesResponse)(nil),    // 5: subtreevalidation_api.CheckBlockSubtreesResponse
+	(*timestamppb.Timestamp)(nil),         // 6: google.protobuf.Timestamp
 }
 var file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_depIdxs = []int32{
-	4, // 0: subtreevalidation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	6, // 0: subtreevalidation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
 	0, // 1: subtreevalidation_api.SubtreeValidationAPI.HealthGRPC:input_type -> subtreevalidation_api.EmptyMessage
 	2, // 2: subtreevalidation_api.SubtreeValidationAPI.CheckSubtreeFromBlock:input_type -> subtreevalidation_api.CheckSubtreeFromBlockRequest
-	1, // 3: subtreevalidation_api.SubtreeValidationAPI.HealthGRPC:output_type -> subtreevalidation_api.HealthResponse
-	3, // 4: subtreevalidation_api.SubtreeValidationAPI.CheckSubtreeFromBlock:output_type -> subtreevalidation_api.CheckSubtreeFromBlockResponse
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
+	4, // 3: subtreevalidation_api.SubtreeValidationAPI.CheckBlockSubtrees:input_type -> subtreevalidation_api.CheckBlockSubtreesRequest
+	1, // 4: subtreevalidation_api.SubtreeValidationAPI.HealthGRPC:output_type -> subtreevalidation_api.HealthResponse
+	3, // 5: subtreevalidation_api.SubtreeValidationAPI.CheckSubtreeFromBlock:output_type -> subtreevalidation_api.CheckSubtreeFromBlockResponse
+	5, // 6: subtreevalidation_api.SubtreeValidationAPI.CheckBlockSubtrees:output_type -> subtreevalidation_api.CheckBlockSubtreesResponse
+	4, // [4:7] is the sub-list for method output_type
+	1, // [1:4] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
@@ -320,7 +431,7 @@ func file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_rawDesc), len(file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

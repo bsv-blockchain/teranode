@@ -325,9 +325,10 @@ message GetBlockHeaderResponse {
   uint64 tx_count = 3;        // Transaction count
   uint64 size_in_bytes = 4;   // Block size
   string miner = 5;           // Miner identifier
-  uint32 block_time = 6;      // Block timestamp
-  uint32 timestamp = 7;       // Processing timestamp
-  bytes chain_work = 8;       // Accumulated chain work
+  string peer_id = 6;       // Peer identifier
+  uint32 block_time = 7;      // Block timestamp
+  uint32 timestamp = 8;       // Processing timestamp
+  bytes chain_work = 9;       // Accumulated chain work
 }
 
 // CheckBlockIsCurrentChainResponse indicates if blocks are in the main chain.

@@ -9,16 +9,16 @@ import "google/protobuf/timestamp.proto";
 // SubtreeValidationAPI provides gRPC services for validating blockchain subtrees.
 // The service exposes endpoints for health monitoring and subtree validation operations.
 service SubtreeValidationAPI {
-
   // HealthGRPC checks the service's health status.
   // It takes an empty request message and returns a response indicating the service's health.
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
-
 
   // CheckSubtreeFromBlock validates a subtree within a specified block in the blockchain.
   // It takes a request containing the subtree's merkle root hash and block details,
   // returning a response indicating the subtree's validity status.
   rpc CheckSubtreeFromBlock (CheckSubtreeFromBlockRequest) returns (CheckSubtreeFromBlockResponse) {};
+
+  rpc CheckBlockSubtrees (CheckBlockSubtreesRequest) returns (CheckBlockSubtreesResponse) {};
 }
 
 // EmptyMessage represents an empty message structure used for health check requests.
@@ -52,5 +52,19 @@ message CheckSubtreeFromBlockRequest {
 // CheckSubtreeFromBlockResponse contains the validation result for a subtree check.
 message CheckSubtreeFromBlockResponse {
   // blessed indicates if the subtree passes all validation criteria
+  bool blessed = 1;
+}
+
+// CheckBlockSubtreesRequest defines the input parameters for checking subtrees in a block.
+message CheckBlockSubtreesRequest {
+  // block_hash identifies the block containing the subtrees to be checked
+  bytes block = 1;
+  // base_url specifies the endpoint for retrieving missing transaction data
+  string base_url = 2;
+}
+
+// CheckBlockSubtreesResponse contains the validation results for subtrees in a block.
+message CheckBlockSubtreesResponse {
+  // blessed indicates if all subtrees in the block pass validation
   bool blessed = 1;
 }

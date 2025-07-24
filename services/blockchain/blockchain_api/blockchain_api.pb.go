@@ -1556,9 +1556,10 @@ type GetBlockHeaderResponse struct {
 	TxCount       uint64                 `protobuf:"varint,3,opt,name=tx_count,json=txCount,proto3" json:"tx_count,omitempty"`               // Transaction count
 	SizeInBytes   uint64                 `protobuf:"varint,4,opt,name=size_in_bytes,json=sizeInBytes,proto3" json:"size_in_bytes,omitempty"` // Block size
 	Miner         string                 `protobuf:"bytes,5,opt,name=miner,proto3" json:"miner,omitempty"`                                   // Miner identifier
-	BlockTime     uint32                 `protobuf:"varint,6,opt,name=block_time,json=blockTime,proto3" json:"block_time,omitempty"`         // Block timestamp
-	Timestamp     uint32                 `protobuf:"varint,7,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                          // Processing timestamp
-	ChainWork     []byte                 `protobuf:"bytes,8,opt,name=chain_work,json=chainWork,proto3" json:"chain_work,omitempty"`          // Accumulated chain work
+	PeerId        string                 `protobuf:"bytes,6,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`                   // Peer identifier
+	BlockTime     uint32                 `protobuf:"varint,7,opt,name=block_time,json=blockTime,proto3" json:"block_time,omitempty"`         // Block timestamp
+	Timestamp     uint32                 `protobuf:"varint,8,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                          // Processing timestamp
+	ChainWork     []byte                 `protobuf:"bytes,9,opt,name=chain_work,json=chainWork,proto3" json:"chain_work,omitempty"`          // Accumulated chain work
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1624,6 +1625,13 @@ func (x *GetBlockHeaderResponse) GetSizeInBytes() uint64 {
 func (x *GetBlockHeaderResponse) GetMiner() string {
 	if x != nil {
 		return x.Miner
+	}
+	return ""
+}
+
+func (x *GetBlockHeaderResponse) GetPeerId() string {
+	if x != nil {
+		return x.PeerId
 	}
 	return ""
 }
@@ -3323,18 +3331,19 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x16InvalidateBlockRequest\x12\x1c\n" +
 	"\tblockHash\x18\x01 \x01(\fR\tblockHash\"6\n" +
 	"\x16RevalidateBlockRequest\x12\x1c\n" +
-	"\tblockHash\x18\x01 \x01(\fR\tblockHash\"\x83\x02\n" +
+	"\tblockHash\x18\x01 \x01(\fR\tblockHash\"\x9c\x02\n" +
 	"\x16GetBlockHeaderResponse\x12 \n" +
 	"\vblockHeader\x18\x01 \x01(\fR\vblockHeader\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x12\x19\n" +
 	"\btx_count\x18\x03 \x01(\x04R\atxCount\x12\"\n" +
 	"\rsize_in_bytes\x18\x04 \x01(\x04R\vsizeInBytes\x12\x14\n" +
-	"\x05miner\x18\x05 \x01(\tR\x05miner\x12\x1d\n" +
+	"\x05miner\x18\x05 \x01(\tR\x05miner\x12\x17\n" +
+	"\apeer_id\x18\x06 \x01(\tR\x06peerId\x12\x1d\n" +
 	"\n" +
-	"block_time\x18\x06 \x01(\rR\tblockTime\x12\x1c\n" +
-	"\ttimestamp\x18\a \x01(\rR\ttimestamp\x12\x1d\n" +
+	"block_time\x18\a \x01(\rR\tblockTime\x12\x1c\n" +
+	"\ttimestamp\x18\b \x01(\rR\ttimestamp\x12\x1d\n" +
 	"\n" +
-	"chain_work\x18\b \x01(\fR\tchainWork\"V\n" +
+	"chain_work\x18\t \x01(\fR\tchainWork\"V\n" +
 	" CheckBlockIsCurrentChainResponse\x122\n" +
 	"\x14isPartOfCurrentChain\x18\x01 \x01(\bR\x14isPartOfCurrentChain\"*\n" +
 	"\x10SubscribeRequest\x12\x16\n" +

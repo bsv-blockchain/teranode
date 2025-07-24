@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -131,6 +132,22 @@ func (s *Client) CheckSubtreeFromBlock(ctx context.Context, subtreeHash chainhas
 
 	_, err := s.apiClient.CheckSubtreeFromBlock(ctx, req)
 	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
+func (s *Client) CheckBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
+	blockBytes, err := block.Bytes()
+	if err != nil {
+		return errors.NewProcessingError("failed to serialize block for subtree validation", err)
+	}
+
+	if _, err = s.apiClient.CheckBlockSubtrees(ctx, &subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: baseURL,
+	}); err != nil {
 		return errors.UnwrapGRPC(err)
 	}
 

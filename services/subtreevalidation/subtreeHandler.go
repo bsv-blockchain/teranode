@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -21,6 +22,15 @@ import (
 // It handles both recoverable and unrecoverable errors appropriately.
 func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
 	return func(msg *kafka.KafkaMessage) error {
+		for {
+			if !u.pauseSubtreeProcessing.Load() {
+				break
+			}
+
+			u.logger.Warnf("[consumerMessageHandler] Subtree processing is paused, waiting to resume...")
+			time.Sleep(100 * time.Millisecond)
+		}
+
 		state, err := u.blockchainClient.GetFSMCurrentState(ctx)
 		if err != nil {
 			return errors.NewProcessingError("[consumerMessageHandler] failed to get FSM current state", err)
@@ -45,7 +55,7 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 			if errors.Is(err, errors.ErrSubtreeExists) {
 				// if the error is subtree exists, then return nil, so that the kafka message is marked as committed.
 				// So the message will not be consumed again.
-				u.logger.Infof("Subtree already exists, marking Kafka message as completed.\n")
+				u.logger.Infof("[consumerMessageHandler] Subtree already exists, marking Kafka message as completed.\n")
 				return nil
 			}
 
@@ -61,13 +71,13 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 			recoverableError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrContextCanceled) || errors.Is(err, errors.ErrExternal)
 
 			if recoverableError && !notFoundError {
-				u.logger.Errorf("Recoverable error (%v) processing kafka message %v for handling subtree, returning error, thus not marking Kafka message as complete.\n", msg, err)
+				u.logger.Errorf("[consumerMessageHandler] Recoverable error processing kafka message, returning error, not marking Kafka message as complete: %v", err)
 				return err
 			}
 
 			// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
 			// kafka message should be committed, so return nil to mark message.
-			u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling subtree, marking Kafka message as completed.\n", msg, err)
+			u.logger.Errorf("[consumerMessageHandler] Unrecoverable error processing kafka message, marking Kafka message as completed: %v", err)
 
 			return nil
 		case <-ctx.Done():
@@ -86,7 +96,11 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 			prometheusSubtreeValidationValidateSubtreeHandler.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 		}()
 
-		var kafkaMsg kafkamessage.KafkaSubtreeTopicMessage
+		var (
+			kafkaMsg kafkamessage.KafkaSubtreeTopicMessage
+			subtree  *subtreepkg.Subtree
+		)
+
 		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
 			u.logger.Errorf("Failed to unmarshal kafka message: %v", err)
 			return err
@@ -131,9 +145,13 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 			AllowFailFast: true,
 		}
 
-		if err = u.ValidateSubtreeInternal(ctx, v, 0, nil); err != nil {
-			u.logger.Errorf("Failed to validate subtree %s: %v", hash.String(), err)
+		if subtree, err = u.ValidateSubtreeInternal(ctx, v, 0, nil); err != nil {
 			return err
+		}
+
+		// if no error was thrown, remove all the transactions from this subtree from the orphanage
+		for _, node := range subtree.Nodes {
+			u.orphanage.Delete(node.Hash)
 		}
 	}
 

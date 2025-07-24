@@ -588,6 +588,7 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 		TxCount:     resp.TxCount,
 		SizeInBytes: resp.SizeInBytes,
 		Miner:       resp.Miner,
+		PeerID:      resp.PeerId,
 		BlockTime:   resp.BlockTime,
 		Timestamp:   resp.Timestamp,
 	}

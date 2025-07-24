@@ -22,6 +22,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	SubtreeValidationAPI_HealthGRPC_FullMethodName            = "/subtreevalidation_api.SubtreeValidationAPI/HealthGRPC"
 	SubtreeValidationAPI_CheckSubtreeFromBlock_FullMethodName = "/subtreevalidation_api.SubtreeValidationAPI/CheckSubtreeFromBlock"
+	SubtreeValidationAPI_CheckBlockSubtrees_FullMethodName    = "/subtreevalidation_api.SubtreeValidationAPI/CheckBlockSubtrees"
 )
 
 // SubtreeValidationAPIClient is the client API for SubtreeValidationAPI service.
@@ -38,6 +39,7 @@ type SubtreeValidationAPIClient interface {
 	// It takes a request containing the subtree's merkle root hash and block details,
 	// returning a response indicating the subtree's validity status.
 	CheckSubtreeFromBlock(ctx context.Context, in *CheckSubtreeFromBlockRequest, opts ...grpc.CallOption) (*CheckSubtreeFromBlockResponse, error)
+	CheckBlockSubtrees(ctx context.Context, in *CheckBlockSubtreesRequest, opts ...grpc.CallOption) (*CheckBlockSubtreesResponse, error)
 }
 
 type subtreeValidationAPIClient struct {
@@ -68,6 +70,16 @@ func (c *subtreeValidationAPIClient) CheckSubtreeFromBlock(ctx context.Context, 
 	return out, nil
 }
 
+func (c *subtreeValidationAPIClient) CheckBlockSubtrees(ctx context.Context, in *CheckBlockSubtreesRequest, opts ...grpc.CallOption) (*CheckBlockSubtreesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckBlockSubtreesResponse)
+	err := c.cc.Invoke(ctx, SubtreeValidationAPI_CheckBlockSubtrees_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SubtreeValidationAPIServer is the server API for SubtreeValidationAPI service.
 // All implementations must embed UnimplementedSubtreeValidationAPIServer
 // for forward compatibility.
@@ -82,6 +94,7 @@ type SubtreeValidationAPIServer interface {
 	// It takes a request containing the subtree's merkle root hash and block details,
 	// returning a response indicating the subtree's validity status.
 	CheckSubtreeFromBlock(context.Context, *CheckSubtreeFromBlockRequest) (*CheckSubtreeFromBlockResponse, error)
+	CheckBlockSubtrees(context.Context, *CheckBlockSubtreesRequest) (*CheckBlockSubtreesResponse, error)
 	mustEmbedUnimplementedSubtreeValidationAPIServer()
 }
 
@@ -97,6 +110,9 @@ func (UnimplementedSubtreeValidationAPIServer) HealthGRPC(context.Context, *Empt
 }
 func (UnimplementedSubtreeValidationAPIServer) CheckSubtreeFromBlock(context.Context, *CheckSubtreeFromBlockRequest) (*CheckSubtreeFromBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CheckSubtreeFromBlock not implemented")
+}
+func (UnimplementedSubtreeValidationAPIServer) CheckBlockSubtrees(context.Context, *CheckBlockSubtreesRequest) (*CheckBlockSubtreesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CheckBlockSubtrees not implemented")
 }
 func (UnimplementedSubtreeValidationAPIServer) mustEmbedUnimplementedSubtreeValidationAPIServer() {}
 func (UnimplementedSubtreeValidationAPIServer) testEmbeddedByValue()                              {}
@@ -155,6 +171,24 @@ func _SubtreeValidationAPI_CheckSubtreeFromBlock_Handler(srv interface{}, ctx co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SubtreeValidationAPI_CheckBlockSubtrees_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckBlockSubtreesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SubtreeValidationAPIServer).CheckBlockSubtrees(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SubtreeValidationAPI_CheckBlockSubtrees_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SubtreeValidationAPIServer).CheckBlockSubtrees(ctx, req.(*CheckBlockSubtreesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SubtreeValidationAPI_ServiceDesc is the grpc.ServiceDesc for SubtreeValidationAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -169,6 +203,10 @@ var SubtreeValidationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CheckSubtreeFromBlock",
 			Handler:    _SubtreeValidationAPI_CheckSubtreeFromBlock_Handler,
+		},
+		{
+			MethodName: "CheckBlockSubtrees",
+			Handler:    _SubtreeValidationAPI_CheckBlockSubtrees_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

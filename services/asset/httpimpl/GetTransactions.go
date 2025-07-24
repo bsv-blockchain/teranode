@@ -114,7 +114,9 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 			// read the data from the subtreeData file and create a map of transaction hashes to transactions
 			transactionFromSubtreeData, err = h.repository.GetSubtreeTransactions(ctx, subtreeHash)
 			if err != nil {
-				h.logger.Errorf("[Asset_http:GetTransactions][%s] error getting transactions from subtree data: %s", subtreeHash.String(), err.Error())
+				// this should not be an ERROR, but a warning, because it is not critical if the subtree data is not available
+				// it just means that the transactions will be fetched from the utxo store
+				h.logger.Debugf("[Asset_http:GetTransactions][%s] error getting transactions from subtree data: %s", subtreeHash.String(), err.Error())
 			}
 		}
 

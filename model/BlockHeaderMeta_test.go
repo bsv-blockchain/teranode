@@ -24,6 +24,7 @@ func TestNewBlockHeaderMetaFromBytes(t *testing.T) {
 			TxCount:     3,
 			SizeInBytes: 4,
 			Miner:       "test_miner",
+			PeerID:      "test_peer",
 			BlockTime:   5,
 			Timestamp:   6,
 			ChainWork:   []byte{7, 8, 9, 10},
@@ -39,6 +40,7 @@ func TestNewBlockHeaderMetaFromBytes(t *testing.T) {
 		require.Equal(t, bhm.TxCount, meta.TxCount)
 		require.Equal(t, bhm.SizeInBytes, meta.SizeInBytes)
 		require.Equal(t, bhm.Miner, meta.Miner)
+		require.Equal(t, bhm.PeerID, meta.PeerID)
 		require.Equal(t, bhm.BlockTime, meta.BlockTime)
 		require.Equal(t, bhm.Timestamp, meta.Timestamp)
 		require.Equal(t, bhm.ChainWork, meta.ChainWork)
@@ -54,6 +56,7 @@ func TestNewBlockHeaderMetaFromBytes(t *testing.T) {
 			TxCount:     3,
 			SizeInBytes: 4,
 			Miner:       "test_miner",
+			PeerID:      "test_peer",
 			BlockTime:   5,
 			Timestamp:   6,
 			ChainWork:   nil, // No chainwork
@@ -69,6 +72,7 @@ func TestNewBlockHeaderMetaFromBytes(t *testing.T) {
 		require.Equal(t, bhm.TxCount, meta.TxCount)
 		require.Equal(t, bhm.SizeInBytes, meta.SizeInBytes)
 		require.Equal(t, bhm.Miner, meta.Miner)
+		require.Equal(t, bhm.PeerID, meta.PeerID)
 		require.Equal(t, bhm.BlockTime, meta.BlockTime)
 		require.Equal(t, bhm.Timestamp, meta.Timestamp)
 		require.Nil(t, meta.ChainWork)

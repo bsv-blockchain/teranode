@@ -217,7 +217,7 @@ func NewServer(
 		logger:            logger,
 		settings:          tSettings,
 		bitcoinProtocolID: "teranode/bitcoin/1.0.0",
-		notificationCh:    make(chan *notificationMsg),
+		notificationCh:    make(chan *notificationMsg, 1_000),
 		blockchainClient:  blockchainClient,
 		banList:           banlist,
 		banChan:           banChan,
@@ -362,132 +362,18 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
 	// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
 	// Therefore, autocommit is set to true.
-	rejectedTxHandler := func(msg *kafka.KafkaMessage) error {
-		var (
-			syncing bool
-			err     error
-		)
-
-		if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
-			return err
-		}
-
-		if syncing {
-			return nil
-		}
-
-		var m kafkamessage.KafkaRejectedTxTopicMessage
-		if err := proto.Unmarshal(msg.Value, &m); err != nil {
-			s.logger.Errorf("[Start] error unmarshalling rejectedTxMessage: %v", err)
-			return err
-		}
-
-		hash, err := chainhash.NewHashFromStr(m.TxHash)
-		if err != nil {
-			s.logger.Errorf("[Start] error getting chainhash from string %s: %v", m.TxHash, err)
-			return err
-		}
-
-		s.logger.Debugf("[Start] Received %s rejected tx notification: %s", hash.String(), m.Reason)
-
-		rejectedTxMessage := RejectedTxMessage{
-			TxID:   hash.String(),
-			Reason: m.Reason,
-			PeerID: s.P2PNode.HostID().String(),
-		}
-
-		msgBytes, err := json.Marshal(rejectedTxMessage)
-		if err != nil {
-			s.logger.Errorf("[Start] json marshal error: %v", err)
-
-			return err
-		}
-
-		s.logger.Debugf("[Start] publishing rejectedTxMessage")
-
-		if err := s.P2PNode.Publish(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
-			s.logger.Errorf("[Start] publish error: %v", err)
-		}
-
-		return nil
-	}
-
-	s.rejectedTxKafkaConsumerClient.Start(ctx, rejectedTxHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
+	s.rejectedTxKafkaConsumerClient.Start(ctx, s.rejectedHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
 
 	// Handler for invalid blocks Kafka messages
 	if s.invalidBlocksKafkaConsumerClient != nil {
-		invalidBlocksHandler := func(msg *kafka.KafkaMessage) error {
-			var (
-				syncing bool
-				err     error
-			)
-
-			if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
-				return err
-			}
-
-			if syncing {
-				return nil
-			}
-
-			var m kafkamessage.KafkaInvalidBlockTopicMessage
-			if err := proto.Unmarshal(msg.Value, &m); err != nil {
-				s.logger.Errorf("[Start] error unmarshalling invalidBlocksMessage: %v", err)
-				return err
-			}
-
-			s.logger.Infof("[Start] Received invalid block notification via Kafka: %s, reason: %s", m.BlockHash, m.Reason)
-
-			// Use the existing ReportInvalidBlock method to handle the invalid block
-			err = s.ReportInvalidBlock(ctx, m.BlockHash, m.Reason)
-			if err != nil {
-				// Don't return error here, as we want to continue processing messages
-				s.logger.Errorf("[Start] Failed to report invalid block from Kafka: %v", err)
-			}
-
-			return nil
-		}
-
 		s.logger.Infof("[Start] Starting invalid blocks Kafka consumer on topic: %s", s.invalidBlocksTopicName)
-		s.invalidBlocksKafkaConsumerClient.Start(ctx, invalidBlocksHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
+		s.invalidBlocksKafkaConsumerClient.Start(ctx, s.invalidBlockHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
 	}
 
 	// Handler for invalid subtrees Kafka messages
 	if s.invalidSubtreeKafkaConsumerClient != nil {
-		invalidSubtreeHandler := func(msg *kafka.KafkaMessage) error {
-			var (
-				syncing bool
-				err     error
-			)
-
-			if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
-				return err
-			}
-
-			if syncing {
-				return nil
-			}
-
-			var m kafkamessage.KafkaInvalidSubtreeTopicMessage
-			if err := proto.Unmarshal(msg.Value, &m); err != nil {
-				s.logger.Errorf("[Start] error unmarshalling invalidSubtreeMessage: %v", err)
-				return err
-			}
-
-			s.logger.Infof("[Start] Received invalid subtree notification via Kafka: %s, reason: %s", m.SubtreeHash, m.Reason)
-
-			// Use the existing ReportInvalidSubtree method to handle the invalid subtree
-			err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.Reason)
-			if err != nil {
-				// Don't return error here, as we want to continue processing messages
-				s.logger.Errorf("[Start] Failed to report invalid subtree from Kafka: %v", err)
-			}
-
-			return nil
-		}
-
 		s.logger.Infof("[Start] Starting invalid subtrees Kafka consumer on topic: %s", s.invalidSubtreeTopicName)
-		s.invalidSubtreeKafkaConsumerClient.Start(ctx, invalidSubtreeHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
+		s.invalidSubtreeKafkaConsumerClient.Start(ctx, s.invalidSubtreeHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
 	}
 
 	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
@@ -589,6 +475,126 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	<-ctx.Done()
 
 	return nil
+}
+
+func (s *Server) invalidSubtreeHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
+	return func(msg *kafka.KafkaMessage) error {
+		var (
+			syncing bool
+			err     error
+		)
+
+		if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
+			return err
+		}
+
+		if syncing {
+			return nil
+		}
+
+		var m kafkamessage.KafkaInvalidSubtreeTopicMessage
+		if err := proto.Unmarshal(msg.Value, &m); err != nil {
+			s.logger.Errorf("[invalidSubtreeHandler] error unmarshalling invalidSubtreeMessage: %v", err)
+			return err
+		}
+
+		s.logger.Infof("[invalidSubtreeHandler] Received invalid subtree notification via Kafka: %s, reason: %s", m.SubtreeHash, m.Reason)
+
+		// Use the existing ReportInvalidSubtree method to handle the invalid subtree
+		err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.Reason)
+		if err != nil {
+			// Don't return error here, as we want to continue processing messages
+			s.logger.Errorf("[invalidSubtreeHandler] Failed to report invalid subtree from Kafka: %v", err)
+		}
+
+		return nil
+	}
+}
+
+func (s *Server) invalidBlockHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
+	return func(msg *kafka.KafkaMessage) error {
+		var (
+			syncing bool
+			err     error
+		)
+
+		if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
+			return err
+		}
+
+		if syncing {
+			return nil
+		}
+
+		var m kafkamessage.KafkaInvalidBlockTopicMessage
+		if err := proto.Unmarshal(msg.Value, &m); err != nil {
+			s.logger.Errorf("[invalidBlockHandler] error unmarshalling invalidBlocksMessage: %v", err)
+			return err
+		}
+
+		s.logger.Infof("[invalidBlockHandler] Received invalid block notification via Kafka: %s, reason: %s", m.BlockHash, m.Reason)
+
+		// Use the existing ReportInvalidBlock method to handle the invalid block
+		err = s.ReportInvalidBlock(ctx, m.BlockHash, m.Reason)
+		if err != nil {
+			// Don't return error here, as we want to continue processing messages
+			s.logger.Errorf("[invalidBlockHandler] Failed to report invalid block from Kafka: %v", err)
+		}
+
+		return nil
+	}
+}
+
+func (s *Server) rejectedHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
+	return func(msg *kafka.KafkaMessage) error {
+		var (
+			syncing bool
+			err     error
+		)
+
+		if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
+			return err
+		}
+
+		if syncing {
+			return nil
+		}
+
+		var m kafkamessage.KafkaRejectedTxTopicMessage
+		if err := proto.Unmarshal(msg.Value, &m); err != nil {
+			s.logger.Errorf("[rejectedHandler] error unmarshalling rejectedTxMessage: %v", err)
+			return err
+		}
+
+		hash, err := chainhash.NewHashFromStr(m.TxHash)
+		if err != nil {
+			s.logger.Errorf("[rejectedHandler] error getting chainhash from string %s: %v", m.TxHash, err)
+			return err
+		}
+
+		s.logger.Debugf("[rejectedHandler] Received %s rejected tx notification: %s", hash.String(), m.Reason)
+
+		rejectedTxMessage := RejectedTxMessage{
+			TxID:   hash.String(),
+			Reason: m.Reason,
+			PeerID: s.P2PNode.HostID().String(),
+		}
+
+		msgBytes, err := json.Marshal(rejectedTxMessage)
+		if err != nil {
+			s.logger.Errorf("[rejectedHandler] json marshal error: %v", err)
+
+			return err
+		}
+
+		s.logger.Debugf("[rejectedHandler] publishing rejectedTxMessage")
+
+		if err := s.P2PNode.Publish(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
+			s.logger.Errorf("[rejectedHandler] publish error: %v", err)
+		}
+
+		return nil
+	}
 }
 
 func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
@@ -1452,8 +1458,20 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 	if s.blocksKafkaProducerClient != nil {
 		hash, err := chainhash.NewHashFromStr(miningOnMessage.Hash)
 		if err != nil {
-			s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] type:version - error getting chainhash from string %s: %v", miningOnMessage.Hash, err)
+			s.logger.Errorf("[handleMiningOnTopic] type:version - error getting chainhash from string %s: %v", miningOnMessage.Hash, err)
 		} else {
+			// check whether the block already exists
+			exists, err := s.blockchainClient.GetBlockExists(ctx, hash)
+			if err != nil {
+				s.logger.Errorf("[handleMiningOnTopic] error checking if block exists for hash %s: %v", miningOnMessage.Hash, err)
+				return
+			}
+
+			if exists {
+				s.logger.Debugf("[handleMiningOnTopic] block %s already exists, skipping publishing to Kafka", miningOnMessage.Hash)
+				return
+			}
+
 			msg := &kafkamessage.KafkaBlockTopicMessage{
 				Hash: hash.String(),
 				URL:  miningOnMessage.DataHubURL,
@@ -1461,7 +1479,7 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 
 			value, err := proto.Marshal(msg)
 			if err != nil {
-				s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] type:version - error marshaling KafkaBlockTopicMessage: %v", err)
+				s.logger.Errorf("[handleMiningOnTopic] type:version - error marshaling KafkaBlockTopicMessage: %v", err)
 			} else {
 				s.blocksKafkaProducerClient.Publish(&kafka.Message{
 					Value: value,

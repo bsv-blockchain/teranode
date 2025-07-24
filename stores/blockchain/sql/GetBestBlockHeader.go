@@ -114,6 +114,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		,b.tx_count
 		,b.size_in_bytes
 		,b.coinbase_tx
+	    ,b.peer_id
 		,b.chain_work
 		,b.inserted_at
 		FROM blocks b
@@ -145,6 +146,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		&blockHeaderMeta.TxCount,
 		&blockHeaderMeta.SizeInBytes,
 		&coinbaseBytes,
+		&blockHeaderMeta.PeerID,
 		&blockHeaderMeta.ChainWork,
 		&insertedAt,
 	); err != nil {
