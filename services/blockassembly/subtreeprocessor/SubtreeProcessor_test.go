@@ -814,7 +814,7 @@ func TestIncompleteSubtreeMoveForwardBlock(t *testing.T) {
 	wg.Wait()
 
 	// this is to make sure the subtrees are added to the chain
-	for stp.txCount.Load() < 16 {
+	for stp.txCount.Load() < uint64(n) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
