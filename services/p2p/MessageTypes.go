@@ -93,15 +93,17 @@ const (
 // The handshake process works as follows:
 //  1. Connecting peer sends a "version" message with their current state
 //  2. Receiving peer responds with a "verack" message to acknowledge
-//  3. Both peers now have each other's capabilities and can begin normal communication
+//  3. Both peers validate the topic prefix to ensure they're on compatible chains
+//  4. Both peers now have each other's capabilities and can begin normal communication
 //
 // Fields are JSON-tagged to support serialization for network transmission.
 type HandshakeMessage struct {
-	Type       MessageType `json:"type"`
-	PeerID     string      `json:"peerID"`
-	BestHeight uint32      `json:"bestHeight"`
-	BestHash   string      `json:"bestHash"`
-	DataHubURL string      `json:"dataHubURL"`
-	UserAgent  string      `json:"userAgent"`
-	Services   uint64      `json:"services"`
+	Type        MessageType `json:"type"`
+	PeerID      string      `json:"peerID"`
+	BestHeight  uint32      `json:"bestHeight"`
+	BestHash    string      `json:"bestHash"`
+	DataHubURL  string      `json:"dataHubURL"`
+	UserAgent   string      `json:"userAgent"`
+	Services    uint64      `json:"services"`
+	TopicPrefix string      `json:"topicPrefix"` // Chain identifier to validate compatibility
 }

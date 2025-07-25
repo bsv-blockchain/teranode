@@ -99,6 +99,7 @@ type Server struct {
 	invalidBlocksTopicName            string   // Kafka topic for invalid blocks
 	invalidSubtreeTopicName           string   // Kafka topic for invalid subtrees
 	handshakeTopicName                string   // pubsub topic for version/verack
+	topicPrefix                       string   // Chain identifier prefix for topic validation
 	blockPeerMap                      sync.Map // Map to track which peer sent each block (hash -> peerID)
 	subtreePeerMap                    sync.Map // Map to track which peer sent each subtree (hash -> peerID)
 }
@@ -235,6 +236,7 @@ func NewServer(
 		invalidBlocksTopicName:            tSettings.Kafka.InvalidBlocks,
 		invalidSubtreeTopicName:           tSettings.Kafka.InvalidSubtrees,
 		handshakeTopicName:                fmt.Sprintf("%s-%s", topicPrefix, htn),
+		topicPrefix:                       topicPrefix,
 	}
 
 	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
@@ -624,13 +626,14 @@ func (s *Server) sendHandshake(ctx context.Context) {
 	}
 
 	msg := HandshakeMessage{
-		Type:       "version",
-		PeerID:     s.P2PNode.HostID().String(),
-		BestHeight: localHeight,
-		BestHash:   bestHash,
-		DataHubURL: s.AssetHTTPAddressURL,
-		UserAgent:  s.bitcoinProtocolID,
-		Services:   0,
+		Type:        "version",
+		PeerID:      s.P2PNode.HostID().String(),
+		BestHeight:  localHeight,
+		BestHash:    bestHash,
+		DataHubURL:  s.AssetHTTPAddressURL,
+		UserAgent:   s.bitcoinProtocolID,
+		Services:    0,
+		TopicPrefix: s.topicPrefix,
 	}
 
 	msgBytes, err := json.Marshal(msg)
@@ -678,13 +681,14 @@ func (s *Server) sendDirectHandshake(ctx context.Context, peerID peer.ID) {
 	}
 
 	msg := HandshakeMessage{
-		Type:       "version",
-		PeerID:     s.P2PNode.HostID().String(),
-		BestHeight: localHeight,
-		BestHash:   bestHash,
-		DataHubURL: s.AssetHTTPAddressURL,
-		UserAgent:  s.bitcoinProtocolID,
-		Services:   0,
+		Type:        "version",
+		PeerID:      s.P2PNode.HostID().String(),
+		BestHeight:  localHeight,
+		BestHash:    bestHash,
+		DataHubURL:  s.AssetHTTPAddressURL,
+		UserAgent:   s.bitcoinProtocolID,
+		Services:    0,
+		TopicPrefix: s.topicPrefix,
 	}
 
 	msgBytes, err := json.Marshal(msg)
@@ -730,13 +734,20 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 		return
 	}
 
-	s.logger.Infof("[handleHandshakeTopic] Parsed handshake: Type=%s, PeerID=%s, BestHeight=%d", hs.Type, hs.PeerID, hs.BestHeight)
+	s.logger.Infof("[handleHandshakeTopic] Parsed handshake: Type=%s, PeerID=%s, BestHeight=%d, TopicPrefix=%s", hs.Type, hs.PeerID, hs.BestHeight, hs.TopicPrefix)
 	s.logger.Infof("[handleHandshakeTopic] Our HostID=%s, Message from=%s, Message PeerID=%s", s.P2PNode.HostID().String(), from, hs.PeerID)
 
 	if hs.PeerID == s.P2PNode.HostID().String() {
 		s.logger.Debugf("[handleHandshakeTopic] Ignoring self handshake (PeerID matches our HostID)")
 		return // ignore self
 	}
+
+	// Validate topic prefix to ensure we're on the same chain
+	if hs.TopicPrefix != s.topicPrefix {
+		s.logger.Warnf("[handleHandshakeTopic] Ignoring peer %s with incompatible topic prefix: got %s, expected %s", hs.PeerID, hs.TopicPrefix, s.topicPrefix)
+		return // ignore peers on different chains
+	}
+	s.logger.Debugf("[handleHandshakeTopic] Topic prefix validation passed for peer %s", hs.PeerID)
 	// update peer height and store starting height if first time seeing this peer
 	if peerID2, err := peer.Decode(hs.PeerID); err == nil {
 		// store starting height if we haven't seen this peer before
@@ -791,13 +802,14 @@ func (s *Server) sendVerack(ctx context.Context, from string, hs HandshakeMessag
 	}
 
 	ack := HandshakeMessage{
-		Type:       "verack",
-		PeerID:     s.P2PNode.HostID().String(),
-		BestHeight: localHeight,
-		BestHash:   bestHash,
-		DataHubURL: s.AssetHTTPAddressURL,
-		UserAgent:  s.bitcoinProtocolID,
-		Services:   0,
+		Type:        "verack",
+		PeerID:      s.P2PNode.HostID().String(),
+		BestHeight:  localHeight,
+		BestHash:    bestHash,
+		DataHubURL:  s.AssetHTTPAddressURL,
+		UserAgent:   s.bitcoinProtocolID,
+		Services:    0,
+		TopicPrefix: s.topicPrefix,
 	}
 
 	ackBytes, err := json.Marshal(ack)

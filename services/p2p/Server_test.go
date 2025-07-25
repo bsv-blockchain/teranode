@@ -1509,15 +1509,17 @@ func TestHandshakeFlow(t *testing.T) {
 			logger:           ulogger.New("test-server"),
 			blockchainClient: mockBlockchainClient,
 			settings:         settings.NewSettings(),
+			topicPrefix:      "testnet", // Add topic prefix for validation
 		}
 
 		// Create a version handshake message
 		versionMsg := HandshakeMessage{
-			Type:       "version",
-			PeerID:     peerIDStr,
-			BestHeight: 100,
-			UserAgent:  "test-agent",
-			Services:   1,
+			Type:        "version",
+			PeerID:      peerIDStr,
+			BestHeight:  100,
+			UserAgent:   "test-agent",
+			Services:    1,
+			TopicPrefix: "testnet", // Use test topic prefix
 		}
 		versionMsgBytes, err := json.Marshal(versionMsg)
 		require.NoError(t, err)
@@ -1600,15 +1602,17 @@ func TestHandshakeFlow(t *testing.T) {
 			gCtx:             ctx,
 			notificationCh:   make(chan *notificationMsg, 10),
 			logger:           ulogger.New("test-server"),
+			topicPrefix:      "testnet", // Add topic prefix for validation
 		}
 
 		// Create a verack handshake message
 		verackMsg := HandshakeMessage{
-			Type:       "verack",
-			PeerID:     peerIDStr,
-			BestHeight: 200,
-			UserAgent:  "test-agent",
-			Services:   1,
+			Type:        "verack",
+			PeerID:      peerIDStr,
+			BestHeight:  200,
+			UserAgent:   "test-agent",
+			Services:    1,
+			TopicPrefix: "testnet", // Use test topic prefix
 		}
 		verackMsgBytes, err := json.Marshal(verackMsg)
 		require.NoError(t, err)
@@ -1618,6 +1622,48 @@ func TestHandshakeFlow(t *testing.T) {
 
 		// Verify UpdatePeerHeight was called with the correct peer ID and height
 		mockP2PNode.AssertCalled(t, "UpdatePeerHeight", senderPeerID, int32(200))
+	})
+
+	t.Run("Test handshake ignores peer with incompatible topic prefix", func(t *testing.T) {
+		// Create a peer ID
+		senderPeerID, _ := peer.Decode("QmSenderPeerID")
+		senderPeerIDStr := senderPeerID.String()
+
+		// Set up mock expectations
+		mockP2PNode := new(MockServerP2PNode)
+		mockP2PNode.On("HostID").Return(peer.ID("QmOurPeerID"))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// Create server with mocks
+		server := &Server{
+			P2PNode:        mockP2PNode,
+			gCtx:           ctx,
+			notificationCh: make(chan *notificationMsg, 10),
+			logger:         ulogger.New("test-server"),
+			topicPrefix:    "mainnet", // Our topic prefix
+		}
+
+		// Create a version handshake message with different topic prefix
+		versionMsg := HandshakeMessage{
+			Type:        "version",
+			PeerID:      senderPeerIDStr,
+			BestHeight:  100,
+			UserAgent:   "test-agent",
+			Services:    1,
+			TopicPrefix: "testnet", // Different topic prefix - should be ignored
+		}
+		versionMsgBytes, err := json.Marshal(versionMsg)
+		require.NoError(t, err)
+
+		// Call the handler method directly - should be ignored due to topic prefix mismatch
+		server.handleHandshakeTopic(ctx, versionMsgBytes, senderPeerIDStr)
+
+		// Verify that no peer operations were called since the peer should be ignored
+		mockP2PNode.AssertNotCalled(t, "UpdatePeerHeight")
+		mockP2PNode.AssertNotCalled(t, "SetPeerStartingHeight")
+		mockP2PNode.AssertNotCalled(t, "GetPeerStartingHeight")
 	})
 }
 
