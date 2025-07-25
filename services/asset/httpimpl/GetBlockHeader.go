@@ -75,13 +75,13 @@ import (
 // Example Usage:
 //
 //	# Get header in JSON format
-//	GET /block/header/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
+//	GET /header/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
 //
 //	# Get header in binary format
-//	GET /block/header/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/raw
+//	GET /header/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/raw
 //
 //	# Get header in hex format
-//	GET /block/header/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/hex
+//	GET /header/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/hex
 //
 // Notes:
 //   - The binary format is exactly 80 bytes following the Bitcoin protocol

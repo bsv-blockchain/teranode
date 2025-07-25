@@ -959,7 +959,7 @@ func (s *Server) P2PNodeConnected(ctx context.Context, peerID peer.ID) {
 func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Hash) error {
 	var msgBytes []byte
 
-	_, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
+	h, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
 	if err != nil {
 		return errors.NewError("error getting block header and meta for BlockMessage: %w", err)
 	}
@@ -969,6 +969,7 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		Height:     meta.Height,
 		DataHubURL: s.AssetHTTPAddressURL,
 		PeerID:     s.P2PNode.HostID().String(),
+		Header:     hex.EncodeToString(h.Bytes()),
 	}
 
 	msgBytes, err = json.Marshal(blockMessage)

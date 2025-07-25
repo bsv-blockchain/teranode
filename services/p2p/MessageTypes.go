@@ -43,6 +43,7 @@ type BlockMessage struct {
 	Height     uint32 // Position of the block in the blockchain
 	DataHubURL string // URL where the complete block data can be retrieved
 	PeerID     string // Identifier of the peer announcing the block
+	Header     string // Hexadecimal representation of the block header
 }
 
 // SubtreeMessage announces the availability of a subtree (transaction batch) to the network.
