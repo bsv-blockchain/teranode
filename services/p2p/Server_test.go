@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
+	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
@@ -1496,6 +1497,8 @@ func TestHandshakeFlow(t *testing.T) {
 			ChainWork:   []byte{},
 		}
 		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(header, meta, nil)
+		fsmState := blockchain.FSMStateRUNNING
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
 
 		// Create server with mocks
 		server := &Server{
@@ -1572,6 +1575,8 @@ func TestHandshakeFlow(t *testing.T) {
 
 		meta := &model.BlockHeaderMeta{Height: 150} // Our height is lower than the peer's
 		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(validHeader, meta, nil)
+		fsmState := blockchain.FSMStateRUNNING
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
 
 		// Setup self peer ID
 		selfPeerIDStr := "12D3KooWJpBNhwgvoZ15EB1JwRTRpxgM9NVaqpDtWZXfTf6CpCQd"
@@ -2097,6 +2102,73 @@ func TestBlacklistBaseURL(t *testing.T) {
 		// But should NOT block different domains
 		assert.False(t, server.isBlacklistedBaseURL("http://good.com"))
 		assert.False(t, server.isBlacklistedBaseURL("http://bad.example.com"))
+	})
+}
+
+func TestServer_SyncHeights(t *testing.T) {
+	tSettings := createBaseTestSettings()
+
+	t.Run("sync in running sync mode", func(t *testing.T) {
+		blockchainClient := new(blockchain.Mock)
+		fsmState := blockchain_api.FSMStateType_RUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+		mockBlocksProducer := kafka.NewKafkaAsyncProducerMock()
+		publishCh := mockBlocksProducer.PublishChannel()
+
+		server := &Server{
+			settings:                  tSettings,
+			logger:                    ulogger.New("test-server"),
+			blockchainClient:          blockchainClient,
+			blocksKafkaProducerClient: mockBlocksProducer,
+		}
+
+		server.SyncHeights(HandshakeMessage{
+			BestHeight: 1111,
+		}, 123)
+
+		msg := <-publishCh
+		assert.NotNil(t, msg)
+
+		// do not send message of BestHeight is less than or equal to the current height
+		server.SyncHeights(HandshakeMessage{
+			BestHeight: 111,
+		}, 123)
+
+		select {
+		case msg = <-publishCh:
+			t.Errorf("Expected no message to be sent, but got: %v", msg)
+		default:
+			// No message received, which is expected
+		}
+	})
+
+	t.Run("do not sync in legacy sync mode", func(t *testing.T) {
+		blockchainClient := new(blockchain.Mock)
+		fsmState := blockchain_api.FSMStateType_LEGACYSYNCING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+		mockBlocksProducer := kafka.NewKafkaAsyncProducerMock()
+		publishCh := mockBlocksProducer.PublishChannel()
+
+		server := &Server{
+			settings:                  tSettings,
+			logger:                    ulogger.New("test-server"),
+			blockchainClient:          blockchainClient,
+			blocksKafkaProducerClient: mockBlocksProducer,
+		}
+
+		server.SyncHeights(HandshakeMessage{
+			BestHeight: 1111,
+		}, 123)
+
+		// make sure not message was sent to the producer
+		select {
+		case msg := <-publishCh:
+			t.Errorf("Expected no message to be sent, but got: %v", msg)
+		default:
+			// No message received, which is expected
+		}
 	})
 }
 

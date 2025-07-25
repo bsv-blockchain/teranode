@@ -829,15 +829,21 @@ func (s *Server) sendVerack(ctx context.Context, from string, hs HandshakeMessag
 }
 
 func (s *Server) SyncHeights(hs HandshakeMessage, localHeight uint32) {
+	if syncing, err := s.isBlockchainSynchingOrCatchingUp(s.gCtx); err != nil || syncing {
+		s.logger.Debugf("[SyncHeights] skipping height sync, blockchain is syncing or catching up: %v", err)
+
+		return
+	}
+
 	if hs.BestHeight > localHeight {
-		s.logger.Infof("[handleHandshakeTopic][p2p-handshake] type:version - peer %s has higher block (%s) at height %d > %d, sending to Kafka",
+		s.logger.Infof("[SyncHeights] peer %s has higher block (%s) at height %d > %d, sending to Kafka",
 			hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 
 		// Send peer's block info to Kafka if we have a producer client
 		if s.blocksKafkaProducerClient != nil {
 			hash, err := chainhash.NewHashFromStr(hs.BestHash)
 			if err != nil {
-				s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] type:version - error getting chainhash from string %s: %v", hs.BestHash, err)
+				s.logger.Errorf("[SyncHeights] error getting chainhash from string %s: %v", hs.BestHash, err)
 			} else {
 				msg := &kafkamessage.KafkaBlockTopicMessage{
 					Hash: hash.String(),
@@ -846,7 +852,7 @@ func (s *Server) SyncHeights(hs HandshakeMessage, localHeight uint32) {
 
 				value, err := proto.Marshal(msg)
 				if err != nil {
-					s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] type:version - error marshaling KafkaBlockTopicMessage: %v", err)
+					s.logger.Errorf("[SyncHeights] error marshaling KafkaBlockTopicMessage: %v", err)
 				} else {
 					s.blocksKafkaProducerClient.Publish(&kafka.Message{
 						Value: value,
@@ -855,7 +861,7 @@ func (s *Server) SyncHeights(hs HandshakeMessage, localHeight uint32) {
 			}
 		}
 	} else if hs.BestHash != "" && hs.BestHeight > 0 {
-		s.logger.Debugf("[handleHandshakeTopic][p2p-handshake] peer %s has block %s at height %d (our height: %d), not requesting",
+		s.logger.Debugf("[SyncHeights] peer %s has block %s at height %d (our height: %d), not requesting",
 			hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 	}
 
