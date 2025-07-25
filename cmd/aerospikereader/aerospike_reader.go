@@ -21,6 +21,9 @@ import (
 	"sort"
 	"strings"
 
+	"math"
+	"time"
+
 	aero "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -144,6 +147,29 @@ func ReadAerospike(logger ulogger.Logger, settings *settings.Settings, txIDStrin
 	}
 }
 
+// formatExpiration formats the Aerospike expiration value into a human-readable string.
+// Parameters:
+//
+//	expiration: The expiration value from the Aerospike record
+//
+// Returns: A formatted string showing the expiration value and its meaning
+func formatExpiration(expiration uint32) string {
+	switch expiration {
+	case 0:
+		return fmt.Sprintf("%d (Never expires)", expiration)
+	case math.MaxUint32:
+		// TTLDontExpire = -1 when cast to int32
+		return fmt.Sprintf("%d (TTLDontExpire)", expiration)
+	case math.MaxUint32 - 1:
+		// TTLDontUpdate = -2 when cast to int32
+		return fmt.Sprintf("%d (TTLDontUpdate)", expiration)
+	default:
+		// Positive values are Unix timestamps
+		expirationTime := time.Unix(int64(expiration), 0).UTC()
+		return fmt.Sprintf("%d (%s)", expiration, expirationTime.Format(time.RFC3339))
+	}
+}
+
 // printAerospikeRecord prints an Aerospike record's details.
 // Parameters:
 //
@@ -194,7 +220,7 @@ func printAerospikeRecord(client *uaerospike.Client, key *aero.Key,
 	// Print the generation and expiration
 	fmt.Println()
 	fmt.Printf("Generation    : %d\n", response.Generation)
-	fmt.Printf("Expiration    : %d\n", response.Expiration)
+	fmt.Printf("Expiration    : %s\n", formatExpiration(response.Expiration))
 	fmt.Println()
 
 	// Loop through and print generation, expiration, and other bins
@@ -205,9 +231,16 @@ func printAerospikeRecord(client *uaerospike.Client, key *aero.Key,
 		case "Generation":
 			fallthrough
 		case "Expiration":
-
+			// These fields are already printed earlier in the function (lines 222-223),
+			// so no additional processing is needed here.
 		case fields.BlockIDs.String():
 			printBlockIDs(response.Bins[fields.BlockIDs.String()], blockchainStore)
+		case fields.Utxos.String():
+			printUtxos(response.Bins[fields.Utxos.String()])
+		case fields.ConflictingChildren.String():
+			printConflictingChildren(response.Bins[fields.ConflictingChildren.String()])
+		case fields.TxID.String():
+			printTxID(response.Bins[fields.TxID.String()])
 
 		default:
 			var b []byte
@@ -256,6 +289,165 @@ func printArray(name string, value interface{}) {
 				fmt.Printf(" %-5d : %x\n", i, b)
 			} else {
 				fmt.Printf("              : %-5d : %x\n", i, b)
+			}
+		} else {
+			if i == 0 {
+				fmt.Printf(" %-5d : %v\n", i, item)
+			} else {
+				fmt.Printf("              : %-5d : %v\n", i, item)
+			}
+		}
+	}
+}
+
+// printUtxos prints UTXO values from an Aerospike record with special formatting.
+// For values > 32 bytes, adds spaces after byte 32 and byte 64.
+// Parameters:
+//
+//	name: bin name
+//	value: interface value (should be []interface{})
+func printUtxos(value interface{}) {
+	fmt.Printf("%-14s:", fields.Utxos.String())
+
+	if value == nil {
+		fmt.Printf(" <nil>\n")
+		return
+	}
+
+	arr, ok := value.([]interface{})
+	if !ok {
+		fmt.Printf(" <not array>\n")
+		return
+	}
+
+	if len(arr) == 0 {
+		fmt.Printf(" <empty>\n")
+		return
+	}
+
+	for i, item := range arr {
+		if b, found := item.([]byte); found {
+			// Format the hex string with spaces after byte 32 and 64
+			hexStr := formatUtxoHex(b)
+			if i == 0 {
+				fmt.Printf(" %-5d : %s\n", i, hexStr)
+			} else {
+				fmt.Printf("              : %-5d : %s\n", i, hexStr)
+			}
+		} else {
+			if i == 0 {
+				fmt.Printf(" %-5d : %v\n", i, item)
+			} else {
+				fmt.Printf("              : %-5d : %v\n", i, item)
+			}
+		}
+	}
+}
+
+// formatUtxoHex formats a byte slice as hex with spaces after positions 32 and 64.
+// For 32-byte values (hashes), it reverses the bytes from little-endian to big-endian.
+func formatUtxoHex(b []byte) string {
+	if len(b) == 32 {
+		// Reverse 32-byte hash from little-endian to big-endian
+		reversed := make([]byte, 32)
+		for i := 0; i < 32; i++ {
+			reversed[i] = b[31-i]
+		}
+		return fmt.Sprintf("%x", reversed)
+	}
+
+	if len(b) < 32 {
+		return fmt.Sprintf("%x", b)
+	}
+
+	// For values > 32 bytes, reverse the first 32 bytes (hash part)
+	reversed := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		reversed[i] = b[31-i]
+	}
+	result := fmt.Sprintf("%x", reversed)
+
+	if len(b) > 32 && len(b) <= 64 {
+		result += " " + fmt.Sprintf("%x", b[32:])
+	} else if len(b) > 64 {
+		result += " " + fmt.Sprintf("%x", b[32:64]) + " " + fmt.Sprintf("%x", b[64:])
+	}
+
+	return result
+}
+
+// printTxID prints a transaction ID in big-endian format (reversed from storage).
+// Parameters:
+//
+//	value: interface value (should be []byte)
+func printTxID(value interface{}) {
+	fmt.Printf("%-14s:", fields.TxID.String())
+
+	if value == nil {
+		fmt.Printf(" <nil>\n")
+		return
+	}
+
+	b, ok := value.([]byte)
+	if !ok {
+		fmt.Printf(" <not bytes>\n")
+		return
+	}
+
+	if len(b) != 32 {
+		fmt.Printf(" %x (invalid length: %d bytes)\n", b, len(b))
+		return
+	}
+
+	// Reverse the 32-byte hash from little-endian to big-endian
+	reversed := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		reversed[i] = b[31-i]
+	}
+	fmt.Printf(" %x\n", reversed)
+}
+
+// printConflictingChildren prints an array of conflicting transaction IDs in big-endian format.
+// Parameters:
+//
+//	value: interface value (should be []interface{} containing []byte)
+func printConflictingChildren(value interface{}) {
+	fmt.Printf("%-14s:", fields.ConflictingChildren.String())
+
+	if value == nil {
+		fmt.Printf(" <nil>\n")
+		return
+	}
+
+	arr, ok := value.([]interface{})
+	if !ok {
+		fmt.Printf(" <not array>\n")
+		return
+	}
+
+	if len(arr) == 0 {
+		fmt.Printf(" <empty>\n")
+		return
+	}
+
+	for i, item := range arr {
+		if b, found := item.([]byte); found {
+			var hexStr string
+			if len(b) == 32 {
+				// Reverse 32-byte hash from little-endian to big-endian
+				reversed := make([]byte, 32)
+				for j := 0; j < 32; j++ {
+					reversed[j] = b[31-j]
+				}
+				hexStr = fmt.Sprintf("%x", reversed)
+			} else {
+				hexStr = fmt.Sprintf("%x (invalid length: %d bytes)", b, len(b))
+			}
+
+			if i == 0 {
+				fmt.Printf(" %-5d : %s\n", i, hexStr)
+			} else {
+				fmt.Printf("              : %-5d : %s\n", i, hexStr)
 			}
 		} else {
 			if i == 0 {

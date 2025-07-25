@@ -425,4 +425,378 @@ func TestPrintArray(t *testing.T) {
 	}
 }
 
+// TestFormatExpiration verifies formatExpiration returns expected string representations.
+func TestFormatExpiration(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    uint32
+		expected string
+	}{
+		{
+			name:     "never expires (0)",
+			input:    0,
+			expected: "0 (Never expires)",
+		},
+		{
+			name:     "TTLDontExpire (MaxUint32)",
+			input:    4294967295, // math.MaxUint32
+			expected: "4294967295 (TTLDontExpire)",
+		},
+		{
+			name:     "TTLDontUpdate (MaxUint32 - 1)",
+			input:    4294967294, // math.MaxUint32 - 1
+			expected: "4294967294 (TTLDontUpdate)",
+		},
+		{
+			name:     "valid timestamp",
+			input:    1234567890,
+			expected: "1234567890 (2009-02-13T23:31:30Z)",
+		},
+		{
+			name:     "future timestamp",
+			input:    2147483647, // Max 32-bit signed int (year 2038)
+			expected: "2147483647 (2038-01-19T03:14:07Z)",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := formatExpiration(tc.input)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// TestFormatUtxoHex verifies formatUtxoHex properly formats byte arrays with spaces and reverses hashes.
+func TestFormatUtxoHex(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    []byte
+		expected string
+	}{
+		{
+			name:     "empty bytes",
+			input:    []byte{},
+			expected: "",
+		},
+		{
+			name: "32 bytes hash (reversed)",
+			input: []byte{
+				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+				0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+				0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+				0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+			},
+			expected: "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100",
+		},
+		{
+			name:     "less than 32 bytes (not reversed)",
+			input:    []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05},
+			expected: "000102030405",
+		},
+		{
+			name: "33 bytes (first 32 reversed, rest unchanged)",
+			input: append([]byte{
+				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+				0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+				0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+				0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+			}, 0xBB),
+			expected: "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100 bb",
+		},
+		{
+			name: "64 bytes (first 32 reversed, rest unchanged)",
+			input: append([]byte{
+				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+				0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+				0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+				0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+			}, bytes.Repeat([]byte{0xCC}, 32)...),
+			expected: "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100 cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		},
+		{
+			name: "65 bytes (first 32 reversed, rest unchanged with two spaces)",
+			input: append([]byte{
+				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+				0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+				0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+				0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+			}, append(bytes.Repeat([]byte{0xDD}, 32), 0xEE)...),
+			expected: "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100 dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd ee",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := formatUtxoHex(tc.input)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// TestPrintUtxos verifies printUtxos prints UTXO values with proper formatting.
+func TestPrintUtxos(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   interface{}
+		expects []string
+	}{
+		{
+			name:    "nil input",
+			input:   nil,
+			expects: []string{"<nil>"},
+		},
+		{
+			name:    "not array",
+			input:   "not an array",
+			expects: []string{"<not array>"},
+		},
+		{
+			name:    "empty array",
+			input:   []interface{}{},
+			expects: []string{"<empty>"},
+		},
+		{
+			name: "array with 32-byte hash (reversed)",
+			input: []interface{}{
+				[]byte{
+					0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+					0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+					0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+					0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+				},
+			},
+			expects: []string{"1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100"},
+		},
+		{
+			name: "array with 65-byte value (first 32 reversed)",
+			input: []interface{}{
+				append([]byte{
+					0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+					0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+					0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+					0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+				}, append(bytes.Repeat([]byte{0xCD}, 32), 0xEF)...),
+			},
+			expects: []string{
+				"1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100 cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd ef",
+			},
+		},
+		{
+			name: "mixed array",
+			input: []interface{}{
+				[]byte{0x01, 0x02, 0x03},
+				"string value",
+				42,
+			},
+			expects: []string{"010203", "string value", "42"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+
+			origStdout := os.Stdout
+
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+
+			os.Stdout = w
+
+			printUtxos(tc.input)
+
+			err = w.Close()
+			require.NoError(t, err)
+
+			os.Stdout = origStdout
+
+			_, err = buf.ReadFrom(r)
+			require.NoError(t, err)
+
+			output := buf.String()
+
+			for _, expect := range tc.expects {
+				assert.Contains(t, output, expect)
+			}
+		})
+	}
+}
+
+// TestPrintTxID verifies printTxID prints transaction IDs in big-endian format.
+func TestPrintTxID(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   interface{}
+		expects []string
+	}{
+		{
+			name:    "nil input",
+			input:   nil,
+			expects: []string{"<nil>"},
+		},
+		{
+			name:    "not bytes",
+			input:   "not bytes",
+			expects: []string{"<not bytes>"},
+		},
+		{
+			name:    "invalid length (not 32 bytes)",
+			input:   []byte{0x01, 0x02, 0x03},
+			expects: []string{"010203 (invalid length: 3 bytes)"},
+		},
+		{
+			name: "valid 32-byte txid (reversed)",
+			input: []byte{
+				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+				0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+				0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+				0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+			},
+			expects: []string{"1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+
+			origStdout := os.Stdout
+
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+
+			os.Stdout = w
+
+			printTxID(tc.input)
+
+			err = w.Close()
+			require.NoError(t, err)
+
+			os.Stdout = origStdout
+
+			_, err = buf.ReadFrom(r)
+			require.NoError(t, err)
+
+			output := buf.String()
+
+			for _, expect := range tc.expects {
+				assert.Contains(t, output, expect)
+			}
+		})
+	}
+}
+
+// TestPrintConflictingChildren verifies printConflictingChildren prints array of txids reversed.
+func TestPrintConflictingChildren(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   interface{}
+		expects []string
+	}{
+		{
+			name:    "nil input",
+			input:   nil,
+			expects: []string{"<nil>"},
+		},
+		{
+			name:    "not array",
+			input:   "not an array",
+			expects: []string{"<not array>"},
+		},
+		{
+			name:    "empty array",
+			input:   []interface{}{},
+			expects: []string{"<empty>"},
+		},
+		{
+			name: "array with single 32-byte txid",
+			input: []interface{}{
+				[]byte{
+					0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+					0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+					0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+					0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+				},
+			},
+			expects: []string{"1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100"},
+		},
+		{
+			name: "array with multiple 32-byte txids",
+			input: []interface{}{
+				[]byte{
+					0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+					0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+					0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+					0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+				},
+				[]byte{
+					0x1f, 0x1e, 0x1d, 0x1c, 0x1b, 0x1a, 0x19, 0x18,
+					0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11, 0x10,
+					0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08,
+					0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00,
+				},
+			},
+			expects: []string{
+				"1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100",
+				"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+			},
+		},
+		{
+			name: "array with invalid length txid",
+			input: []interface{}{
+				[]byte{0x01, 0x02, 0x03},
+			},
+			expects: []string{"010203 (invalid length: 3 bytes)"},
+		},
+		{
+			name: "mixed array",
+			input: []interface{}{
+				[]byte{
+					0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+					0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+					0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+					0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+				},
+				"string value",
+				42,
+			},
+			expects: []string{
+				"1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100",
+				"string value",
+				"42",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+
+			origStdout := os.Stdout
+
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+
+			os.Stdout = w
+
+			printConflictingChildren(tc.input)
+
+			err = w.Close()
+			require.NoError(t, err)
+
+			os.Stdout = origStdout
+
+			_, err = buf.ReadFrom(r)
+			require.NoError(t, err)
+
+			output := buf.String()
+
+			for _, expect := range tc.expects {
+				assert.Contains(t, output, expect)
+			}
+		})
+	}
+}
+
 // TODO - create a test for printAerospikeRecord
