@@ -275,14 +275,14 @@ func TestNewTxConflictingError(t *testing.T) {
 	assert.Nil(t, err.Data(), "error data should be nil when params are provided")
 }
 
-// TestNewTxUnspendableError tests the NewTxUnspendableError function to ensure it creates an error with the correct code and message.
-func TestNewTxUnspendableError(t *testing.T) {
-	message := "test tx unspendable error %s %d"
+// TestNewTxLockedError tests the NewTxLockedError function to ensure it creates an error with the correct code and message.
+func TestNewTxLockedError(t *testing.T) {
+	message := "test tx locked error %s %d"
 	params := []interface{}{"param1", 42}
-	err := NewTxUnspendableError(message, params...)
+	err := NewTxLockedError(message, params...)
 
-	assert.Equal(t, ERR_TX_UN_SPENDABLE, err.Code(), "error code should be ERR_TX_UN_SPENDABLE")
-	assert.Equal(t, "test tx unspendable error param1 42", err.Message(), "error message should match")
+	assert.Equal(t, ERR_TX_LOCKED, err.Code(), "error code should be ERR_TX_LOCKED")
+	assert.Equal(t, "test tx locked error param1 42", err.Message(), "error message should match")
 
 	assert.Nil(t, err.Data(), "error data should be nil when params are provided")
 }

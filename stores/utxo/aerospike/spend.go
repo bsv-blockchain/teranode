@@ -98,7 +98,7 @@ type batchSpend struct {
 	spend             *utxo.Spend // UTXO to spend
 	errCh             chan error  // Channel for completion notification
 	ignoreConflicting bool
-	ignoreUnspendable bool
+	ignoreLocked      bool
 }
 
 // batchIncrement handles record count updates for paginated transactions
@@ -156,7 +156,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 	}()
 
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
-	useIgnoreUnspendable := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreUnspendable
+	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 
 	spends, err := utxo.GetSpends(tx)
 	if err != nil {
@@ -186,7 +186,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 				spend:             spend,
 				errCh:             errCh,
 				ignoreConflicting: useIgnoreConflicting,
-				ignoreUnspendable: useIgnoreUnspendable,
+				ignoreLocked:      useIgnoreLocked,
 			})
 
 			// this waits for the batch to be sent and the response to be received from the batch operation
@@ -270,10 +270,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 	return spends, nil
 }
 
-type keyIgnoreUnspendable struct {
+type keyIgnoreLocked struct {
 	key               *aerospike.Key
 	ignoreConflicting bool
-	ignoreUnspendable bool
+	ignoreLocked      bool
 }
 
 // sendSpendBatchLua processes a batch of spend requests via Lua scripts.
@@ -312,7 +312,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batch))
-	batchRecordKeys := make([]keyIgnoreUnspendable, 0, len(batch))
+	batchRecordKeys := make([]keyIgnoreLocked, 0, len(batch))
 
 	// s.blockHeight is the last mined block, but for the LUA script we are telling it to
 	// evaluate this spend in this block height (i.e. 1 greater)
@@ -329,7 +329,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	// this is to avoid the LUA script being called multiple times for the same transaction
 	// we calculate the key source based on the txid and the vout divided by the utxoBatchSize
 	aeroKeyMap := make(map[string]*aerospike.Key)
-	batchesByKey := make(map[keyIgnoreUnspendable][]aerospike.MapValue, len(batch))
+	batchesByKey := make(map[keyIgnoreLocked][]aerospike.MapValue, len(batch))
 
 	sUtxoBatchSizeUint32, err := safeconversion.IntToUint32(s.utxoBatchSize)
 	if err != nil {
@@ -365,11 +365,11 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			"spendingData": bItem.spend.SpendingData.Bytes(),
 		})
 
-		// we need to group the spends by key and ignoreUnspendable flag
-		useKey := keyIgnoreUnspendable{
+		// we need to group the spends by key and ignoreLocked flag
+		useKey := keyIgnoreLocked{
 			key:               key,
 			ignoreConflicting: bItem.ignoreConflicting,
-			ignoreUnspendable: bItem.ignoreUnspendable,
+			ignoreLocked:      bItem.ignoreLocked,
 		}
 
 		if _, ok = batchesByKey[useKey]; !ok {
@@ -386,7 +386,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, batchKey.key, LuaPackage, "spendMulti",
 			aerospike.NewValue(batchItems),
 			aerospike.NewValue(batchKey.ignoreConflicting),
-			aerospike.NewValue(batchKey.ignoreUnspendable),
+			aerospike.NewValue(batchKey.ignoreLocked),
 			aerospike.NewValue(thisBlockHeight),
 			aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
 		))
@@ -484,10 +484,10 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 							batch[idx].errCh <- errors.NewTxConflictingError("[SPEND_BATCH_LUA][%s] transaction is conflicting, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
 						}
 
-					case LuaUnspendable:
+					case LuaLocked:
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
-							batch[idx].errCh <- errors.NewTxUnspendableError("[SPEND_BATCH_LUA][%s] transaction is unspendable, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
+							batch[idx].errCh <- errors.NewTxLockedError("[SPEND_BATCH_LUA][%s] transaction is locked, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
 						}
 
 					case LuaCoinbaseImmature:

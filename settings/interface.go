@@ -306,36 +306,36 @@ type AdvertisingSettings struct {
 }
 
 type UtxoStoreSettings struct {
-	UtxoStore                        *url.URL
-	BlockHeightRetention             uint32
-	UnminedTxRetention               uint32
-	ParentPreservationBlocks         uint32
-	OutpointBatcherSize              int
-	OutpointBatcherDurationMillis    int
-	SpendBatcherDurationMillis       int
-	SpendBatcherSize                 int
-	StoreBatcherDurationMillis       int
-	StoreBatcherSize                 int
-	UtxoBatchSize                    int
-	IncrementBatcherSize             int
-	IncrementBatcherDurationMillis   int
-	SetDAHBatcherSize                int
-	SetDAHBatcherDurationMillis      int
-	UnspendableBatcherSize           int
-	UnspendableBatcherDurationMillis int
-	GetBatcherSize                   int
-	GetBatcherDurationMillis         int
-	DBTimeout                        time.Duration
-	UseExternalTxCache               bool
-	ExternalizeAllTransactions       bool
-	PostgresMaxIdleConns             int
-	PostgresMaxOpenConns             int
-	VerboseDebug                     bool
-	UpdateTxMinedStatus              bool
-	MaxMinedRoutines                 int
-	MaxMinedBatchSize                int
-	BlockHeightRetentionAdjustment   int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
-	DisableDAHCleaner                bool  // Disable the DAH cleaner process completely
+	UtxoStore                      *url.URL
+	BlockHeightRetention           uint32
+	UnminedTxRetention             uint32
+	ParentPreservationBlocks       uint32
+	OutpointBatcherSize            int
+	OutpointBatcherDurationMillis  int
+	SpendBatcherDurationMillis     int
+	SpendBatcherSize               int
+	StoreBatcherDurationMillis     int
+	StoreBatcherSize               int
+	UtxoBatchSize                  int
+	IncrementBatcherSize           int
+	IncrementBatcherDurationMillis int
+	SetDAHBatcherSize              int
+	SetDAHBatcherDurationMillis    int
+	LockedBatcherSize              int
+	LockedBatcherDurationMillis    int
+	GetBatcherSize                 int
+	GetBatcherDurationMillis       int
+	DBTimeout                      time.Duration
+	UseExternalTxCache             bool
+	ExternalizeAllTransactions     bool
+	PostgresMaxIdleConns           int
+	PostgresMaxOpenConns           int
+	VerboseDebug                   bool
+	UpdateTxMinedStatus            bool
+	MaxMinedRoutines               int
+	MaxMinedBatchSize              int
+	BlockHeightRetentionAdjustment int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
+	DisableDAHCleaner              bool  // Disable the DAH cleaner process completely
 }
 
 type P2PSettings struct {

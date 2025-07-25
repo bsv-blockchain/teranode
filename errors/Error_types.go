@@ -55,7 +55,7 @@ var (
 	ErrTxMissingParent            = New(ERR_TX_MISSING_PARENT, "missing parent tx")
 	ErrTxNotFound                 = New(ERR_TX_NOT_FOUND, "tx not found")
 	ErrTxPolicy                   = New(ERR_TX_POLICY, "tx policy error")
-	ErrTxUnspendable              = New(ERR_TX_UN_SPENDABLE, "tx un-spendable")
+	ErrTxLocked                   = New(ERR_TX_LOCKED, "tx locked")
 	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
 )
 
@@ -183,9 +183,9 @@ func NewTxConflictingError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_CONFLICTING, message, params...)
 }
 
-// NewTxUnspendableError creates a new error with the transaction unspendable error code.
-func NewTxUnspendableError(message string, params ...interface{}) *Error {
-	return New(ERR_TX_UN_SPENDABLE, message, params...)
+// NewTxLockedError creates a new error with the transaction locked error code.
+func NewTxLockedError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_LOCKED, message, params...)
 }
 
 // NewTxCoinbaseImmatureError creates a new error with the transaction coinbase immature error code.

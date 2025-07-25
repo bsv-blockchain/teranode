@@ -4,28 +4,28 @@
 
 For every transaction, a UTXO record is stored in the database. The record contains the following fields:
 
-| **Field Name**           | **Data Type**                        | **Description**                                                                                                    |
-|--------------------------|--------------------------------------|--------------------------------------------------------------------------------------------------------------------|
-| **utxos**                | `Array of Byte[32] or Byte[64]`      | A list of UTXOs, where each UTXO is either 32 bytes (unspent) or 64 bytes (spent).                                 |
-| **utxoSpendableIn**      | `Map<Integer, Integer>`              | A map where the key is the UTXO offset and the value is the block height after which the UTXO is spendable.        |
-| **recordUtxos**          | `Integer`                            | Total number of UTXOs in this record.                                                                              |
-| **spentUtxos**           | `Integer`                            | Number of UTXOs that have been spent in this record.                                                               |
-| **frozen**               | `Boolean`                            | Indicates whether the UTXO or transaction is frozen.                                                               |
-| **unspendable**          | `Boolean`                            | Indicates whether the transaction outputs can be spent. Set to true during initial creation when the transaction is validated. Set to false in two scenarios: (1) immediately after successful addition to block assembly, or (2) when the transaction is mined in a block through the `SetMinedMulti` operation.  |
-| **conflicting**          | `Boolean`                            | Indicates whether this transaction is a double spend.                                                              |
-| **conflictingChildren**  | `Array<chainhash.Hash>`              | List of transaction hashes that spend from this transaction and are also marked as conflicting.                    |
-| **spendingHeight**       | `Integer`                            | If the UTXO is from a coinbase transaction, it stores the block height after which it can be spent.                |
-| **blockIDs**             | `Array<Integer>`                     | List of block IDs that reference this UTXO.                                                                        |
-| **blockHeights**         | `Array<uint32>`                      | List of block heights where this transaction appears. Used by the validator to identify the height at which a UTXO was mined.                                                               |
-| **subtreeIdxs**          | `Array<int>`                         | List of subtree indexes where this transaction appears within blocks.                                        |
-| **external**             | `Boolean`                            | Flag indicating whether the transaction is stored externally (used for fetching external raw transaction data).    |
-| **totalExtraRecs**       | `Integer (Optional)`                 | The number of UTXO records associated with the transaction, used for pagination.                                   |
-| **reassignments**        | `Array<Map>`                         | Tracks UTXO reassignments. Contains maps with keys such as `offset`, `utxoHash`, `newUtxoHash`, and `blockHeight`. |
-| **tx**                   | `bt.Tx Object`                       | Raw transaction data containing inputs, outputs, version, and locktime.                                            |
-| **fee**                  | `Integer`                            | Transaction fee associated with this UTXO.                                                                         |
-| **sizeInBytes**          | `Integer`                            | The size of the transaction in bytes.                                                                              |
-| **txInpoints**           | `TxInpoints`                         | Transaction input outpoints containing parent transaction hashes and their corresponding output indices.           |
-| **isCoinbase**           | `Boolean`                            | Indicates whether this UTXO is from a coinbase transaction.                                                        |
+| **Field Name**          | **Data Type**                        | **Description**                                                                                                    |
+|-------------------------|--------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| **utxos**               | `Array of Byte[32] or Byte[64]`      | A list of UTXOs, where each UTXO is either 32 bytes (unspent) or 64 bytes (spent).                                 |
+| **utxoSpendableIn**     | `Map<Integer, Integer>`              | A map where the key is the UTXO offset and the value is the block height after which the UTXO is spendable.        |
+| **recordUtxos**         | `Integer`                            | Total number of UTXOs in this record.                                                                              |
+| **spentUtxos**          | `Integer`                            | Number of UTXOs that have been spent in this record.                                                               |
+| **frozen**              | `Boolean`                            | Indicates whether the UTXO or transaction is frozen.                                                               |
+| **locked**              | `Boolean`                            | Indicates whether the transaction outputs can be spent. Set to true during initial creation when the transaction is validated. Set to false in two scenarios: (1) immediately after successful addition to block assembly, or (2) when the transaction is mined in a block through the `SetMinedMulti` operation.  |
+| **conflicting**         | `Boolean`                            | Indicates whether this transaction is a double spend.                                                              |
+| **conflictingChildren** | `Array<chainhash.Hash>`              | List of transaction hashes that spend from this transaction and are also marked as conflicting.                    |
+| **spendingHeight**      | `Integer`                            | If the UTXO is from a coinbase transaction, it stores the block height after which it can be spent.                |
+| **blockIDs**            | `Array<Integer>`                     | List of block IDs that reference this UTXO.                                                                        |
+| **blockHeights**        | `Array<uint32>`                      | List of block heights where this transaction appears. Used by the validator to identify the height at which a UTXO was mined.                                                               |
+| **subtreeIdxs**         | `Array<int>`                         | List of subtree indexes where this transaction appears within blocks.                                        |
+| **external**            | `Boolean`                            | Flag indicating whether the transaction is stored externally (used for fetching external raw transaction data).    |
+| **totalExtraRecs**      | `Integer (Optional)`                 | The number of UTXO records associated with the transaction, used for pagination.                                   |
+| **reassignments**       | `Array<Map>`                         | Tracks UTXO reassignments. Contains maps with keys such as `offset`, `utxoHash`, `newUtxoHash`, and `blockHeight`. |
+| **tx**                  | `bt.Tx Object`                       | Raw transaction data containing inputs, outputs, version, and locktime.                                            |
+| **fee**                 | `Integer`                            | Transaction fee associated with this UTXO.                                                                         |
+| **sizeInBytes**         | `Integer`                            | The size of the transaction in bytes.                                                                              |
+| **txInpoints**          | `TxInpoints`                         | Transaction input outpoints containing parent transaction hashes and their corresponding output indices.           |
+| **isCoinbase**          | `Boolean`                            | Indicates whether this UTXO is from a coinbase transaction.                                                        |
 
 
 
@@ -79,7 +79,7 @@ For convenience, the UTXO can be decorated using the `UTXO MetaData` format, wid
 | SubtreeIdxs         | List of subtree indexes where this transaction appears within blocks.                              | Array of Integers                        |
 | LockTime            | The earliest time or block number that this transaction can be included in the blockchain.       | Integer/Timestamp or Block Number        |
 | IsCoinbase          | Indicates whether the transaction is a coinbase transaction.                                     | Boolean                                  |
-| Unspendable         | Flag indicating whether the transaction outputs can be spent. Part of the two-phase commit process for block assembly.   | Boolean                                 |
+| Locked              | Flag indicating whether the transaction outputs can be spent. Part of the two-phase commit process for block assembly.   | Boolean                                 |
 | Conflicting         | Indicates whether this transaction is a double spend.                                            | Boolean                                  |
 | ConflictingChildren | List of transaction hashes that spend from this transaction and are also marked as conflicting.  | Array of Strings/Hexadecimals            |
 

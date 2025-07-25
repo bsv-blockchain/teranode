@@ -7,12 +7,11 @@
 package utxo
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -30,8 +29,8 @@ const (
 	Status_OK Status = 0
 	// Status_SPENT indicates the UTXO has been spent
 	Status_SPENT Status = 1
-	// Status_LOCKED indicates the UTXO is temporarily locked
-	Status_LOCKED Status = 2
+	// Status_IMMATURE indicates the UTXO is a coinbase and is not yet spendable
+	Status_IMMATURE Status = 2
 	// Status_NOT_FOUND indicates the UTXO does not exist
 	Status_NOT_FOUND Status = 3
 	// Status_ALREADY_EXISTS indicates an attempt to create a duplicate UTXO
@@ -40,8 +39,8 @@ const (
 	Status_FROZEN Status = 5
 	// Status_CONFLICTING indicates the UTXO is in conflict with another UTXO and not spendable
 	Status_CONFLICTING Status = 6
-	// Status_UNSPENDABLE indicates the UTXO is not spendable
-	Status_UNSPENDABLE Status = 7
+	// Status_LOCKED indicates the UTXO is locked and not spendable
+	Status_LOCKED Status = 7
 )
 
 // Enum value maps for Status.
@@ -49,22 +48,22 @@ var (
 	Status_name = map[int32]string{
 		0: "OK",
 		1: "SPENT",
-		2: "LOCKED",
+		2: "IMMATURE",
 		3: "NOT_FOUND",
 		4: "ALREADY_EXISTS",
 		5: "FROZEN",
 		6: "CONFLICTING",
-		7: "UNSPENDABLE",
+		7: "LOCKED",
 	}
 	Status_value = map[string]int32{
 		"OK":             0,
 		"SPENT":          1,
-		"LOCKED":         2,
+		"IMMATURE":       2,
 		"NOT_FOUND":      3,
 		"ALREADY_EXISTS": 4,
 		"FROZEN":         5,
 		"CONFLICTING":    6,
-		"UNSPENDABLE":    7,
+		"LOCKED":         7,
 	}
 )
 
@@ -99,18 +98,18 @@ var File_stores_utxo_status_proto protoreflect.FileDescriptor
 
 const file_stores_utxo_status_proto_rawDesc = "" +
 	"\n" +
-	"\x18stores/utxo/status.proto\x12\x03txo*x\n" +
+	"\x18stores/utxo/status.proto\x12\x03txo*u\n" +
 	"\x06Status\x12\x06\n" +
 	"\x02OK\x10\x00\x12\t\n" +
-	"\x05SPENT\x10\x01\x12\n" +
-	"\n" +
-	"\x06LOCKED\x10\x02\x12\r\n" +
+	"\x05SPENT\x10\x01\x12\f\n" +
+	"\bIMMATURE\x10\x02\x12\r\n" +
 	"\tNOT_FOUND\x10\x03\x12\x12\n" +
 	"\x0eALREADY_EXISTS\x10\x04\x12\n" +
 	"\n" +
 	"\x06FROZEN\x10\x05\x12\x0f\n" +
-	"\vCONFLICTING\x10\x06\x12\x0f\n" +
-	"\vUNSPENDABLE\x10\aB,Z*github.com/bitcoin-sv/teranode/stores/utxob\x06proto3"
+	"\vCONFLICTING\x10\x06\x12\n" +
+	"\n" +
+	"\x06LOCKED\x10\aB,Z*github.com/bitcoin-sv/teranode/stores/utxob\x06proto3"
 
 var (
 	file_stores_utxo_status_proto_rawDescOnce sync.Once

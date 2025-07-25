@@ -76,7 +76,7 @@ type Server struct {
 	p2pClient p2pservice.ClientI
 
 	// utxoStore manages UTXO operations, providing the ability to
-	// mark UTXOs as unspendable for blacklisting or whitelisting
+	// mark UTXOs as locked for blacklisting or whitelisting
 	utxoStore utxo.Store
 
 	// blockassemblyClient handles block assembly operations,

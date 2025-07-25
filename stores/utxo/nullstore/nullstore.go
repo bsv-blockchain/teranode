@@ -98,8 +98,8 @@ func (m *NullStore) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opt
 		txMetaData.Conflicting = true
 	}
 
-	if options.Unspendable {
-		txMetaData.Unspendable = true
+	if options.Locked {
+		txMetaData.Locked = true
 	}
 
 	return txMetaData, nil
@@ -109,7 +109,7 @@ func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ig
 	return nil, nil
 }
 
-func (m *NullStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
+func (m *NullStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	return nil
 }
 
@@ -149,7 +149,7 @@ func (m *NullStore) SetConflicting(ctx context.Context, txHashes []chainhash.Has
 	return nil, nil, nil
 }
 
-func (m *NullStore) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
+func (m *NullStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
 }
 

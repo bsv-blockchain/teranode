@@ -184,7 +184,7 @@ When a block is validated, the transactions in the block are marked as mined in 
 
 1. **Updating Transaction Status**: The Block Validation service marks each transaction as mined by setting its block information.
 
-2. **Unsetting the Unspendable Flag**: For any transaction that still has the "unspendable" flag set, the flag is unset during the mined transaction update process.
+2. **Unsetting the Locked Flag**: For any transaction that still has the "locked" flag set, the flag is unset during the mined transaction update process.
 
 3. **Storing Subtree Information**: The service also stores the subtree index in the block where the transaction was located, enabling more efficient transaction lookups.
 

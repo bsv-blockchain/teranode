@@ -89,7 +89,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 			fields.BlockHeights.String(): aerospike.NewValue(blockHeights),
 			fields.SubtreeIdxs.String():  aerospike.NewValue(subtreeIdxs),
 			fields.Conflicting.String():  aerospike.BoolValue(false),
-			fields.Unspendable.String():  aerospike.BoolValue(false),
+			fields.Locked.String():       aerospike.BoolValue(false),
 			fields.TxID.String():         aerospike.BytesValue(tx.TxIDChainHash().CloneBytes()),
 		}
 
@@ -136,7 +136,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		require.True(t, hasUtxos)
 	})
 
-	t.Run("coinbase tx with conflicting and unspendable", func(t *testing.T) {
+	t.Run("coinbase tx with conflicting and locked", func(t *testing.T) {
 		teranodeaerospike.InitPrometheusMetrics()
 
 		// read a hex file from os
@@ -160,7 +160,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 
 		hasCoinbase := false
 		hasConflicting := false
-		hasUnspendable := false
+		hasLocked := false
 
 		for _, bin := range bins[0] {
 			if bin.Name == fields.IsCoinbase.String() {
@@ -171,15 +171,15 @@ func TestStore_GetBinsToStore(t *testing.T) {
 				hasConflicting = true
 				assert.Equal(t, aerospike.BoolValue(true), bin.Value)
 			}
-			if bin.Name == fields.Unspendable.String() {
-				hasUnspendable = true
+			if bin.Name == fields.Locked.String() {
+				hasLocked = true
 				assert.Equal(t, aerospike.BoolValue(true), bin.Value)
 			}
 		}
 
 		assert.True(t, hasCoinbase)
 		assert.True(t, hasConflicting)
-		assert.True(t, hasUnspendable)
+		assert.True(t, hasLocked)
 	})
 }
 

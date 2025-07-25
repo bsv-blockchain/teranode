@@ -32,6 +32,7 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 		,t.fee
 		,t.size_in_bytes
 		,t.inserted_at
+		,t.locked
 		FROM transactions t
 		WHERE t.unmined_since IS NOT NULL
 		  AND t.conflicting = false
@@ -68,9 +69,10 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 		fee         uint64
 		sizeInBytes uint64
 		insertedAt  time.CustomTime
+		locked      bool
 	)
 
-	if err := it.rows.Scan(&id, &txID, &fee, &sizeInBytes, &insertedAt); err != nil {
+	if err := it.rows.Scan(&id, &txID, &fee, &sizeInBytes, &insertedAt, &locked); err != nil {
 		if err := it.Close(); err != nil {
 			it.store.logger.Warnf("failed to close iterator: %v", err)
 		}
@@ -159,6 +161,7 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 		Size:       sizeInBytes,
 		TxInpoints: txInpoints,
 		CreatedAt:  int(insertedAt.UnixMilli()),
+		Locked:     locked,
 	}, nil
 }
 

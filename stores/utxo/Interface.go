@@ -114,12 +114,12 @@ func (s *Spend) Clone() *Spend {
 
 type IgnoreFlags struct {
 	IgnoreConflicting bool
-	IgnoreUnspendable bool
+	IgnoreLocked      bool
 }
 
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
-	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Unspendable}
+	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked}
 	// MetaFieldsWithTx defines the set of metadata fields including the transaction data.
 	MetaFieldsWithTx = append(MetaFields, fields.Tx)
 )
@@ -153,7 +153,7 @@ type CreateOptions struct {
 	IsCoinbase      *bool
 	Frozen          bool
 	Conflicting     bool
-	Unspendable     bool
+	Locked          bool
 }
 
 // WithMinedBlockInfo returns a CreateOption that sets the block IDs for a UTXO.
@@ -196,10 +196,10 @@ func WithConflicting(b bool) CreateOption {
 	}
 }
 
-// WithUnspendable sets the transactions as unspendable on creation
-func WithUnspendable(b bool) CreateOption {
+// WithLocked sets the transactions as locked and not spendable on creation
+func WithLocked(b bool) CreateOption {
 	return func(o *CreateOptions) {
-		o.Unspendable = b
+		o.Locked = b
 	}
 }
 
@@ -240,7 +240,7 @@ type Store interface {
 
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.
-	Unspend(ctx context.Context, spends []*Spend, flagAsUnspendable ...bool) error
+	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 
 	// SetMinedMulti updates the block ID for multiple transactions that have been mined.
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error
@@ -293,8 +293,8 @@ type Store interface {
 	// SetConflicting marks transactions as conflicting or not conflicting and returns the affected spends.
 	SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error)
 
-	// SetUnspendable marks transactions as unspendable or spendable.
-	SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, value bool) error
+	// SetLocked marks transactions as locked for spending.
+	SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error
 
 	// internal state functions
 

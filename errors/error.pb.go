@@ -7,12 +7,11 @@
 package errors
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -61,7 +60,7 @@ const (
 	ERR_TX_MISSING_PARENT       ERR = 34
 	ERR_TX_LOCK_TIME            ERR = 35
 	ERR_TX_CONFLICTING          ERR = 36
-	ERR_TX_UN_SPENDABLE         ERR = 37
+	ERR_TX_LOCKED               ERR = 37
 	ERR_TX_COINBASE_IMMATURE    ERR = 38
 	ERR_TX_POLICY               ERR = 39
 	ERR_TX_CONSENSUS            ERR = 40
@@ -132,7 +131,7 @@ var (
 		34:  "TX_MISSING_PARENT",
 		35:  "TX_LOCK_TIME",
 		36:  "TX_CONFLICTING",
-		37:  "TX_UN_SPENDABLE",
+		37:  "TX_LOCKED",
 		38:  "TX_COINBASE_IMMATURE",
 		39:  "TX_POLICY",
 		40:  "TX_CONSENSUS",
@@ -193,7 +192,7 @@ var (
 		"TX_MISSING_PARENT":             34,
 		"TX_LOCK_TIME":                  35,
 		"TX_CONFLICTING":                36,
-		"TX_UN_SPENDABLE":               37,
+		"TX_LOCKED":                     37,
 		"TX_COINBASE_IMMATURE":          38,
 		"TX_POLICY":                     39,
 		"TX_CONSENSUS":                  40,
@@ -354,7 +353,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\xc2\t\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\xbc\t\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -390,8 +389,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\tTX_EXISTS\x10!\x12\x15\n" +
 	"\x11TX_MISSING_PARENT\x10\"\x12\x10\n" +
 	"\fTX_LOCK_TIME\x10#\x12\x12\n" +
-	"\x0eTX_CONFLICTING\x10$\x12\x13\n" +
-	"\x0fTX_UN_SPENDABLE\x10%\x12\x18\n" +
+	"\x0eTX_CONFLICTING\x10$\x12\r\n" +
+	"\tTX_LOCKED\x10%\x12\x18\n" +
 	"\x14TX_COINBASE_IMMATURE\x10&\x12\r\n" +
 	"\tTX_POLICY\x10'\x12\x10\n" +
 	"\fTX_CONSENSUS\x10(\x12\f\n" +

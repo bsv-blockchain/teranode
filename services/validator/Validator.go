@@ -64,7 +64,7 @@ const (
 
 	// DustLimit defines the minimum output value in satoshis (1 satoshi)
 	// Outputs with less than this value are considered dust unless they are
-	// unspendable (OP_FALSE OP_RETURN).  This applies to outputs after the
+	// not spendable (OP_FALSE OP_RETURN).  This applies to outputs after the
 	// Genesis upgrade.
 	DustLimit = uint64(1)
 )
@@ -472,7 +472,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	)
 
 	// this will reverse the spends if there is an error
-	if spentUtxos, err = v.spendUtxos(decoupledCtx, tx, validationOptions.IgnoreUnspendable); err != nil {
+	if spentUtxos, err = v.spendUtxos(decoupledCtx, tx, validationOptions.IgnoreLocked); err != nil {
 		if errors.Is(err, errors.ErrTxInvalid) {
 			saveAsConflicting := false
 
@@ -547,7 +547,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly
 
 	if !validationOptions.SkipUtxoCreation {
-		// store the transaction in the UTXO store, marking it as unspendable if we are going to add it to the block assembly
+		// store the transaction in the UTXO store, marking it as locked if we are going to add it to the block assembly
 		txMetaData, err = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, false, addToBlockAssembly)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxExists) {
@@ -588,25 +588,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			}
 		}
 
-		// first we send the tx to the block assembler
-		if err = v.sendToBlockAssembler(ctx, &blockassembly.Data{
+		// send the tx to the block assembler
+		if err = v.sendToBlockAssembler(decoupledCtx, &blockassembly.Data{
 			TxIDChainHash: *tx.TxIDChainHash(),
 			Fee:           txMetaData.Fee,
 			Size:          uint64(tx.Size()), // nolint:gosec
 			TxInpoints:    txInpoints,
 		}, spentUtxos); err != nil {
 			err = errors.NewProcessingError("[Validate][%s] error sending tx to block assembler", txID, err)
-
-			if reverseErr := v.reverseTxMetaStore(decoupledCtx, tx.TxIDChainHash()); reverseErr != nil {
-				// add reverseErr to the message, wrap the error
-				err = errors.NewProcessingError("[Validate][%s] error reversing tx meta utxoStore: %v", txID, reverseErr, err)
-			}
-
-			if reverseErr := v.reverseSpends(ctx, spentUtxos); reverseErr != nil {
-				// add reverseErr to the message, wrap the err
-				err = errors.NewProcessingError("[Validate][%s] error reversing utxo spends: %v", txID, reverseErr, err)
-			}
-
 			span.RecordError(err)
 
 			return nil, err
@@ -620,12 +609,12 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	if txMetaData.Unspendable {
-		if err = v.twoPhaseCommitTransaction(ctx, tx, txID); err != nil {
+	if txMetaData.Locked {
+		if err = v.twoPhaseCommitTransaction(decoupledCtx, tx, txID); err != nil {
 			return txMetaData, err
 		}
 
-		txMetaData.Unspendable = false
+		txMetaData.Locked = false
 	}
 
 	return txMetaData, nil
@@ -655,9 +644,9 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 	)
 	defer endSpan()
 
-	// the tx was marked as unspendable on creation, we have added it successfully to block assembly
+	// the tx was marked as locked on creation, we have added it successfully to block assembly
 	// so we can now mark it as spendable again
-	if err := v.utxoStore.SetUnspendable(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false); err != nil {
+	if err := v.utxoStore.SetLocked(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false); err != nil {
 		// this is not a fatal error, since the transaction will we marked as spendable on the next block it's mined into
 		err = errors.NewProcessingError("[Validate][%s] error marking tx as spendable", txID, err)
 		span.RecordError(err)
@@ -765,48 +754,10 @@ func (v *Validator) TriggerBatcher() {
 	// Noop
 }
 
-func (v *Validator) reverseTxMetaStore(ctx context.Context, txHash *chainhash.Hash) (err error) {
-	for retries := uint(0); retries < 3; retries++ {
-		if metaErr := v.utxoStore.Delete(ctx, txHash); metaErr != nil {
-			if retries < 2 {
-				backoff := time.Duration(1<<retries) * time.Second
-				v.logger.Errorf("error deleting tx %s from tx meta utxoStore, retrying in %s: %v", txHash.String(), backoff.String(), metaErr)
-				time.Sleep(backoff)
-			} else {
-				err = errors.NewStorageError("error deleting tx %s from tx meta utxoStore", txHash.String(), metaErr)
-			}
-		} else {
-			break
-		}
-	}
-
-	if v.txmetaKafkaProducerClient != nil { // tests may not set this
-		startKafka := time.Now()
-
-		m := &kafkamessage.KafkaTxMetaTopicMessage{
-			TxHash: txHash.String(),
-			Action: kafkamessage.KafkaTxMetaActionType_DELETE,
-		}
-
-		value, err := proto.Marshal(m)
-		if err != nil {
-			return err
-		}
-
-		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-			Value: value,
-		})
-
-		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
-	}
-
-	return err
-}
-
 // CreateInUtxoStore stores transaction metadata in the UTXO store.
 // Returns transaction metadata and error if storage fails.
 func (v *Validator) CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeight uint32, markAsConflicting bool,
-	markAsUnspendable bool) (*meta.Data, error) {
+	markAsLocked bool) (*meta.Data, error) {
 	ctx, _, deferFn := tracing.Tracer("validator").Start(ctx, "storeTxInUtxoMap",
 		tracing.WithHistogram(prometheusValidatorSetTxMeta),
 	)
@@ -816,8 +767,8 @@ func (v *Validator) CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeigh
 		utxo.WithConflicting(markAsConflicting),
 	}
 
-	if markAsUnspendable {
-		createOptions = append(createOptions, utxo.WithUnspendable(true))
+	if markAsLocked {
+		createOptions = append(createOptions, utxo.WithLocked(true))
 	}
 
 	txMetaData, err := v.utxoStore.Create(ctx, tx, blockHeight, createOptions...)
@@ -860,7 +811,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 
 // spendUtxos attempts to spend the UTXOs referenced by transaction inputs.
 // Returns the spent UTXOs and error if spending fails.
-func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, ignoreUnspendable bool) ([]*utxo.Spend, error) {
+func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, ignoreLocked bool) ([]*utxo.Spend, error) {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "spendUtxos",
 		tracing.WithHistogram(prometheusTransactionSpendUtxos),
 	)
@@ -872,7 +823,7 @@ func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, ignoreUnspendable
 
 	spends, err := v.utxoStore.Spend(ctx, tx, utxo.IgnoreFlags{
 		IgnoreConflicting: false,
-		IgnoreUnspendable: ignoreUnspendable,
+		IgnoreLocked:      ignoreLocked,
 	})
 	if err != nil {
 		span.RecordError(err)

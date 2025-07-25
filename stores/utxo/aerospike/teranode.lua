@@ -19,14 +19,14 @@ local BIN_SPENT_EXTRA_RECS = "spentExtraRecs"
 local BIN_SPENT_UTXOS = "spentUtxos"
 local BIN_SUBTREE_IDXS = "subtreeIdxs"
 local BIN_TOTAL_EXTRA_RECS = "totalExtraRecs"
-local BIN_UNSPENDABLE = "unspendable"
+local BIN_LOCKED = "locked"
 local BIN_UTXOS = "utxos"
 local BIN_UTXO_SPENDABLE_IN = "utxoSpendableIn"
 
 -- Message constants
 local MSG_OK = "OK"
 local MSG_CONFLICTING = "CONFLICTING:TX is conflicting"
-local MSG_UNSPENDABLE = "UNSPENDABLE:TX is unspendable"
+local MSG_LOCKED = "LOCKED:TX is locked and cannot be spent"
 local MSG_FROZEN = "FROZEN:UTXO is frozen"
 local MSG_ALREADY_FROZEN = "FROZEN:UTXO is already frozen"
 local MSG_FROZEN_UNTIL = "FROZEN:UTXO is not spendable until block "
@@ -179,7 +179,7 @@ end
 -- |___/ .__/ \___|_| |_|\__,_|
 --     |_|
 --
-function spend(rec, offset, utxoHash, spendingData, ignoreConflicting, ignoreUnspendable, currentBlockHeight, blockHeightRetention)
+function spend(rec, offset, utxoHash, spendingData, ignoreConflicting, ignoreLocked, currentBlockHeight, blockHeightRetention)
     -- Create a single spend item for spendMulti
     local spend = map()
     spend['offset'] = offset
@@ -189,7 +189,7 @@ function spend(rec, offset, utxoHash, spendingData, ignoreConflicting, ignoreUns
     local spends = list()
     list.append(spends, spend)
 
-    return spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBlockHeight, blockHeightRetention)
+    return spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHeight, blockHeightRetention)
 end
 
 --                           _ __  __       _ _   _ 
@@ -199,7 +199,7 @@ end
 -- |___/ .__/ \___|_| |_|\__,_|_|  |_|\__,_|_|\__|_|
 --     |_|                                          
 --
-function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBlockHeight, blockHeightRetention)
+function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHeight, blockHeightRetention)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
     
     if not ignoreConflicting then
@@ -208,9 +208,9 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreUnspendable, currentBl
         end
     end
     
-    if not ignoreUnspendable then
-        if rec[BIN_UNSPENDABLE] then
-            return MSG_UNSPENDABLE
+    if not ignoreLocked then
+        if rec[BIN_LOCKED] then
+            return MSG_LOCKED
         end
     end
 
@@ -354,9 +354,9 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
 
     rec[BIN_UNMINED_SINCE] = nil
     
-    -- set the record to be spendable again, if it was unspendable, since if was just mined into a block
-    if rec[BIN_UNSPENDABLE] then
-        rec[BIN_UNSPENDABLE] = false
+    -- set the record to not be locked again, if it was locked, since if was just mined into a block
+    if rec[BIN_LOCKED] then
+        rec[BIN_LOCKED] = false
     end
 
     local signal = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
@@ -675,17 +675,16 @@ end
 --   setValue: boolean - The value to set for the 'conflicting' field
 -- Returns:
 --   string - A signal indicating the action taken
---           _   _   _                                _       _     _
---  ___  ___| |_| | | |_ __  ___ _ __   ___ _ __   __| | __ _| |__ | | ___ 
--- / __|/ _ \ __| | | | '_ \/ __| '_ \ / _ \ '_ \ / _` |/ _` | '_ \| |/ _ \
--- \__ \  __/ |_| |_| | | | \__ \ |_) |  __/ | | | (_| | (_| | |_) | |  __/
--- |___/\___|\__|\___/|_| |_|___/ .__/ \___|_| |_|\__,_|\__,_|_.__/|_|\___|
---                              |_|                                        
+--           _   _               _            _
+--  ___  ___| |_| |    ___   ___| | _____  __| |
+-- / __|/ _ \ __| |   / _ \ / __| |/ / _ \/ _` |
+-- \__ \  __/ |_| |__| (_) | (__|   <  __/ (_| |
+-- |___/\___|\__|_____\___/ \___|_|\_\___|\__,_|
 --
-function setUnspendable(rec, setValue)
+function setLocked(rec, setValue)
     if not aerospike:exists(rec) then return ERR_TX_NOT_FOUND end
 
-    local oldUnspendable = rec[BIN_UNSPENDABLE]
+    local oldLocked = rec[BIN_LOCKED]
     local existingDeleteAtHeight = rec[BIN_DELETE_AT_HEIGHT]
     local totalExtraRecs = rec[BIN_TOTAL_EXTRA_RECS]
 
@@ -693,13 +692,13 @@ function setUnspendable(rec, setValue)
         totalExtraRecs = 0
     end
 
-    if oldUnspendable == setValue then
+    if oldLocked == setValue then
         return MSG_OK .. ":" .. totalExtraRecs
     end
 
-    rec[BIN_UNSPENDABLE] = setValue
+    rec[BIN_LOCKED] = setValue
 
-    if rec[BIN_UNSPENDABLE] then
+    if rec[BIN_LOCKED] then
         -- Remove any existing deleteAtHeight
         if existingDeleteAtHeight then
             rec[BIN_DELETE_AT_HEIGHT] = nil

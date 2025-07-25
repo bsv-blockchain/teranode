@@ -4128,7 +4128,7 @@ func TestIsUnspendable(t *testing.T) {
 		expected bool
 	}{
 		{
-			// Unspendable
+			// Locked
 			pkScript: []byte{0x6a, 0x04, 0x74, 0x65, 0x73, 0x74},
 			expected: true,
 		},

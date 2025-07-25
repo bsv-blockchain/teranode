@@ -10,8 +10,8 @@ enum Status {
   OK = 0;
   // Status_SPENT indicates the UTXO has been spent
   SPENT = 1;
-  // Status_LOCKED indicates the UTXO is temporarily locked
-  LOCKED = 2;
+  // Status_IMMATURE indicates the UTXO is a coinbase and is not yet spendable
+  IMMATURE = 2;
   // Status_NOT_FOUND indicates the UTXO does not exist
   NOT_FOUND = 3;
   // Status_ALREADY_EXISTS indicates an attempt to create a duplicate UTXO
@@ -20,6 +20,6 @@ enum Status {
   FROZEN = 5;
   // Status_CONFLICTING indicates the UTXO is in conflict with another UTXO and not spendable
   CONFLICTING = 6;
-  // Status_UNSPENDABLE indicates the UTXO is not spendable
-  UNSPENDABLE = 7;
+  // Status_LOCKED indicates the UTXO is locked and not spendable
+  LOCKED = 7;
 }

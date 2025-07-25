@@ -357,30 +357,14 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, txMetaData)
 
-	// check that nothing has been stored in the utxo store
-	_, err = utxoStore.Get(t.Context(), tx.TxIDChainHash())
-	require.Error(t, err)
-
-	var tErr *errors.Error
-
-	require.True(t, errors.As(err, &tErr))
-	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
-
-	// check the kafka channels
-	require.Equal(t, 1, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should be empty")
-	require.Equal(t, 0, len(rejectedTxKafkaProducerClient.PublishChannel()), "rejectedTxKafkaChan should have 1 message")
-
-	// should have a delete message
-	msg := <-txmetaKafkaProducerClient.PublishChannel()
-	assert.NotNil(t, msg)
-	assert.Equal(t, []byte(nil), msg.Key)
-
-	var m kafkamessage.KafkaTxMetaTopicMessage
-	err = proto.Unmarshal(msg.Value, &m)
+	// the tx should be stored in the utxo store as locked
+	txMeta, err := utxoStore.Get(t.Context(), tx.TxIDChainHash())
 	require.NoError(t, err)
+	assert.Equal(t, true, txMeta.Locked)
 
-	assert.Equal(t, kafkamessage.KafkaTxMetaActionType_DELETE, m.Action)
-	assert.Equal(t, tx.TxIDChainHash().String(), m.TxHash)
+	// check the kafka channels, nothing should have been sent, since the tx never was sent correctly to the block assembly
+	require.Equal(t, 0, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should be empty")
+	require.Equal(t, 0, len(rejectedTxKafkaProducerClient.PublishChannel()), "rejectedTxKafkaChan should have 1 message")
 }
 
 func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3b80(t *testing.T) {
@@ -996,12 +980,12 @@ func TestValidator_TwoPhaseCommitTransaction(t *testing.T) {
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
 
-	_, err = utxoStore.Create(ctx, tx, 100, utxostore.WithUnspendable(true))
+	_, err = utxoStore.Create(ctx, tx, 100, utxostore.WithLocked(true))
 	require.NoError(t, err)
 
 	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
-	require.True(t, meta.Unspendable)
+	require.True(t, meta.Locked)
 
 	v := &Validator{
 		logger:      ulogger.TestLogger{},
@@ -1019,7 +1003,7 @@ func TestValidator_TwoPhaseCommitTransaction(t *testing.T) {
 
 	meta, err = utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
-	assert.False(t, meta.Unspendable)
+	assert.False(t, meta.Locked)
 }
 
 func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
@@ -1040,13 +1024,13 @@ func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
 
-	// Add the tx as spendable (Unspendable == false)
-	_, err = utxoStore.Create(ctx, tx, 100, utxostore.WithUnspendable(false))
+	// Add the tx as spendable (Locked == false)
+	_, err = utxoStore.Create(ctx, tx, 100, utxostore.WithLocked(false))
 	require.NoError(t, err)
 
 	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
-	assert.False(t, meta.Unspendable, "TX should be spendable before 2-phase commit")
+	assert.False(t, meta.Locked, "TX should be spendable before 2-phase commit")
 
 	v := &Validator{
 		logger:      ulogger.TestLogger{},
@@ -1064,14 +1048,14 @@ func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
 
 	meta, err = utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
-	assert.False(t, meta.Unspendable, "TX should remain spendable after 2-phase commit")
+	assert.False(t, meta.Locked, "TX should remain spendable after 2-phase commit")
 }
 
 type FailingUtxoStore struct {
 	*sql.Store
 }
 
-func (f *FailingUtxoStore) SetUnspendable(ctx context.Context, hashes []chainhash.Hash, unspendable bool) error {
+func (f *FailingUtxoStore) SetLocked(ctx context.Context, hashes []chainhash.Hash, locked bool) error {
 	return errors.NewProcessingError("throws error")
 }
 
@@ -1096,7 +1080,7 @@ func NewFailingUtxoStore() *FailingUtxoStore {
 	}
 }
 
-func TestValidator_TwoPhaseCommitTransaction_SetUnspendableFails(t *testing.T) {
+func TestValidator_TwoPhaseCommitTransaction_SetLockedFails(t *testing.T) {
 	tracing.SetupMockTracer()
 
 	ctx := context.Background()
@@ -1105,7 +1089,7 @@ func TestValidator_TwoPhaseCommitTransaction_SetUnspendableFails(t *testing.T) {
 	require.NoError(t, err)
 
 	utxoStore := NewFailingUtxoStore()
-	_, _ = utxoStore.Create(ctx, tx, 100, utxostore.WithUnspendable(true))
+	_, _ = utxoStore.Create(ctx, tx, 100, utxostore.WithLocked(true))
 
 	v := &Validator{
 		logger:      ulogger.TestLogger{},
@@ -1123,10 +1107,10 @@ func TestValidator_TwoPhaseCommitTransaction_SetUnspendableFails(t *testing.T) {
 
 	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
-	require.True(t, meta.Unspendable)
+	require.True(t, meta.Locked)
 }
 
-func TestValidator_UnspendableFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
+func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 	tracing.SetupMockTracer()
 
 	ctx := context.Background()
@@ -1146,7 +1130,7 @@ func TestValidator_UnspendableFlagChangedIfBlockAssemblyStoreSucceeds(t *testing
 		ctx,
 		txs[0],
 		1,
-		utxostore.WithUnspendable(false),
+		utxostore.WithLocked(false),
 	)
 	require.NoError(t, err)
 
@@ -1177,10 +1161,10 @@ func TestValidator_UnspendableFlagChangedIfBlockAssemblyStoreSucceeds(t *testing
 
 	meta, err := utxoStore.GetMeta(ctx, txs[1].TxIDChainHash())
 	require.NoError(t, err)
-	assert.False(t, meta.Unspendable, "Flag should be unset after successful block assembly")
+	assert.False(t, meta.Locked, "Flag should be unset after successful block assembly")
 }
 
-func TestValidator_UnspendableFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T) {
+func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T) {
 	tracing.SetupMockTracer()
 
 	ctx := context.Background()
@@ -1201,11 +1185,11 @@ func TestValidator_UnspendableFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *test
 		ctx,
 		txs[0],
 		1,
-		utxostore.WithUnspendable(false),
+		utxostore.WithLocked(false),
 	)
 	require.NoError(t, err)
 
-	_, err = utxoStore.Create(ctx, txs[1], 2, utxostore.WithUnspendable(true))
+	_, err = utxoStore.Create(ctx, txs[1], 2, utxostore.WithLocked(true))
 	require.NoError(t, err)
 
 	blockAsmMock := blockassembly.NewMock()
@@ -1235,5 +1219,5 @@ func TestValidator_UnspendableFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *test
 
 	meta, err := utxoStore.GetMeta(ctx, txs[1].TxIDChainHash())
 	require.NoError(t, err)
-	assert.True(t, meta.Unspendable, "Flag should be set if block assembly did not store tx")
+	assert.True(t, meta.Locked, "Flag should be set if block assembly did not store tx")
 }

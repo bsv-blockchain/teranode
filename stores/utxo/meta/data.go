@@ -72,8 +72,8 @@ type Data struct {
 	// ConflictingChildren contains the transaction IDs of all transactions that tried to spend this conflicting transaction
 	ConflictingChildren []chainhash.Hash `json:"conflictingChildren"`
 
-	// Unspendable is a flag indicating if the transaction is not spendable
-	Unspendable bool `json:"unspendable"`
+	// Locked is a flag indicating if the transaction is locked and not spendable
+	Locked bool `json:"locked"`
 
 	// SpendingDatas is the transaction ID of the transaction that spent the given tx output idx
 	SpendingDatas []*spendpkg.SpendingData `json:"spendingDatas"`
@@ -86,7 +86,7 @@ type Data struct {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Unspendable)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
 //   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
 //   - [25+]   - 32 bytes for each ParentTxHash
 //
@@ -103,7 +103,7 @@ func NewMetaDataFromBytes(dataBytes []byte, d *Data) (err error) {
 	d.IsCoinbase = (dataBytes[16] & 0b01) == 0b01
 	d.Frozen = (dataBytes[16] & 0b10) == 0b10
 	d.Conflicting = (dataBytes[16] & 0b100) == 0b100
-	d.Unspendable = (dataBytes[16] & 0b1000) == 0b1000
+	d.Locked = (dataBytes[16] & 0b1000) == 0b1000
 
 	d.TxInpoints, err = subtree.NewTxInpointsFromBytes(dataBytes[17:])
 
@@ -117,7 +117,7 @@ func NewMetaDataFromBytes(dataBytes []byte, d *Data) (err error) {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Unspendable)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
 //   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
 //   - [25+]   - 32 bytes for each ParentTxHash
 //   - [...]   - Variable-length transaction data (full transaction)
@@ -149,7 +149,7 @@ func NewDataFromBytes(dataBytes []byte) (d *Data, err error) {
 	d.IsCoinbase = dataBytes[16]&0b01 == 0b01
 	d.Frozen = dataBytes[16]&0b10 == 0b10
 	d.Conflicting = dataBytes[16]&0b100 == 0b100
-	d.Unspendable = dataBytes[16]&0b1000 == 0b1000
+	d.Locked = dataBytes[16]&0b1000 == 0b1000
 
 	buf := bytes.NewReader(dataBytes[17:])
 
@@ -195,7 +195,7 @@ func NewDataFromBytes(dataBytes []byte) (d *Data, err error) {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Unspendable)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
 //   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
 //   - [25+]   - 32 bytes for each ParentTxHash
 //   - [...]   - Variable-length transaction data (full transaction)
@@ -224,7 +224,7 @@ func (d *Data) Bytes() ([]byte, error) {
 		buf[16] |= 0b100
 	}
 
-	if d.Unspendable {
+	if d.Locked {
 		buf[16] |= 0b1000
 	}
 
@@ -257,7 +257,7 @@ func (d *Data) Bytes() ([]byte, error) {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Unspendable)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
 //   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
 //   - [25+]   - 32 bytes for each ParentTxHash
 //
@@ -284,7 +284,7 @@ func (d *Data) MetaBytes() ([]byte, error) {
 		buf[16] |= 0b100
 	}
 
-	if d.Unspendable {
+	if d.Locked {
 		buf[16] |= 0b1000
 	}
 
@@ -310,7 +310,7 @@ func (d *Data) MetaBytes() ([]byte, error) {
 //   - IsCoinbase flag
 //   - BlockIDs where the transaction appears
 //   - Parent transaction hashes
-//   - Status flags (Frozen, Conflicting, Unspendable)
+//   - Status flags (Frozen, Conflicting, Locked)
 //
 // Returns "nil" if the Data object is nil.
 func (d *Data) String() string {
@@ -318,7 +318,7 @@ func (d *Data) String() string {
 		return "nil"
 	}
 
-	return fmt.Sprintf("{TxID: %s, ParentTxHashes: %v, BlockIDs: %v, Fee: %d, SizeInBytes: %d, IsCoinbase: %t, IsFrozen: %t, IsConflicting: %t, IsUnspendable: %t, LockTime: %d}",
+	return fmt.Sprintf("{TxID: %s, ParentTxHashes: %v, BlockIDs: %v, Fee: %d, SizeInBytes: %d, IsCoinbase: %t, IsFrozen: %t, IsConflicting: %t, IsLocked: %t, LockTime: %d}",
 		func() string {
 			if d.Tx == nil {
 				return "nil"
@@ -333,6 +333,6 @@ func (d *Data) String() string {
 		d.IsCoinbase,
 		d.Frozen,
 		d.Conflicting,
-		d.Unspendable,
+		d.Locked,
 		d.LockTime)
 }

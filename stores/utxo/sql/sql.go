@@ -193,8 +193,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		txMeta.Conflicting = true
 	}
 
-	if options.Unspendable {
-		txMeta.Unspendable = true
+	if options.Locked {
+		txMeta.Locked = true
 	}
 
 	var unminedSince interface{} = nil // Use nil for mined transactions
@@ -213,7 +213,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		,coinbase
 		,frozen
 		,conflicting
-		,unspendable
+		,locked
 		,unmined_since
 	  ) VALUES (
 		 $1
@@ -265,7 +265,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		isCoinbase,
 		options.Frozen,
 		options.Conflicting,
-		options.Unspendable,
+		options.Locked,
 		unminedSince,
 	).Scan(&transactionID)
 	if err != nil {
@@ -490,7 +490,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		,coinbase
 		,frozen
 		,conflicting
-		,unspendable
+		,locked
 		,unmined_since
 		FROM transactions
 		WHERE hash = $1
@@ -506,7 +506,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.Fie
 		unminedSince      sql.NullInt64
 	)
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Unspendable, &unminedSince)
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewTxNotFoundError("transaction %s not found", hash, err)
@@ -770,7 +770,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 		,o.spending_data
 		,o.frozen OR t.frozen AS frozen
 		,t.conflicting
-		,t.unspendable
+		,t.locked
 		,o.spendableIn
 		FROM outputs o
 		JOIN transactions t ON o.transaction_id = t.id
@@ -792,7 +792,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 	var errorFound bool
 
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
-	useIgnoreUnspendable := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreUnspendable
+	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 
 	for _, spend := range spends {
 		select {
@@ -811,11 +811,11 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 				spendingDataBytes      []byte
 				frozen                 bool
 				conflicting            bool
-				unspendable            bool
+				locked                 bool
 				spendableIn            *uint32
 			)
 
-			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID, &coinbaseSpendingHeight, &utxoHash, &spendingDataBytes, &frozen, &conflicting, &unspendable, &spendableIn)
+			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID, &coinbaseSpendingHeight, &utxoHash, &spendingDataBytes, &frozen, &conflicting, &locked, &spendableIn)
 			if err != nil {
 				errorFound = true
 
@@ -844,9 +844,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 				continue
 			}
 
-			if unspendable && !useIgnoreUnspendable {
+			if locked && !useIgnoreLocked {
 				errorFound = true
-				spend.Err = errors.NewTxUnspendableError("[Spend] utxo is not spendable for %s:%d", spend.TxID, spend.Vout)
+				spend.Err = errors.NewTxLockedError("[Spend] utxo is not spendable for %s:%d", spend.TxID, spend.Vout)
 
 				continue
 			}
@@ -854,7 +854,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 			if spendableIn != nil {
 				if *spendableIn > 0 && blockHeight < *spendableIn {
 					errorFound = true
-					spend.Err = errors.NewTxUnspendableError("[Spend] utxo %s:%d is not spendable until %d", spend.TxID, spend.Vout, *spendableIn)
+					spend.Err = errors.NewTxLockedError("[Spend] utxo %s:%d is not spendable until %d", spend.TxID, spend.Vout, *spendableIn)
 
 					continue
 				}
@@ -983,7 +983,7 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 // Unspend reverses a previous spend operation, marking UTXOs as unspent.
 // This removes the spending transaction ID and any expiration timestamp.
 // Commonly used during blockchain reorganizations.
-func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
+func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
@@ -1006,15 +1006,15 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 		RETURNING transaction_id
 	`
 
-	unspendable := false
-	if len(flagAsUnspendable) > 0 {
-		unspendable = flagAsUnspendable[0]
+	locked := false
+	if len(flagAsLocked) > 0 {
+		locked = flagAsLocked[0]
 	}
 
 	q2 := `
 		UPDATE transactions
 		SET
-			unspendable = $2
+			locked = $2
 		WHERE id = $1
 	`
 
@@ -1039,7 +1039,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 				return err
 			}
 
-			if _, err = txn.ExecContext(ctx, q2, transactionID, unspendable); err != nil {
+			if _, err = txn.ExecContext(ctx, q2, transactionID, locked); err != nil {
 				return errors.NewStorageError("[Unspend] error removing tombstone for %s:%d", spend.TxID, spend.Vout, err)
 			}
 
@@ -1166,7 +1166,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	q2 := `
 		UPDATE transactions SET
-		 unspendable = false
+		 locked = false
 		,unmined_since = NULL
 		WHERE hash = $1;
 	`
@@ -1180,7 +1180,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	for _, hash := range hashes {
 		if _, err = txn.ExecContext(ctx, q2, hash[:]); err != nil {
-			return errors.NewStorageError("SQL error calling update unspendable on tx %s:%v", hash.String(), err)
+			return errors.NewStorageError("SQL error calling update locked on tx %s:%v", hash.String(), err)
 		}
 	}
 
@@ -1204,7 +1204,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		,o.frozen OR t.frozen AS frozen
 		,o.spendableIn
 		,t.conflicting
-		,t.unspendable
+		,t.locked
 		FROM outputs o
 		JOIN transactions t ON o.transaction_id = t.id
 		WHERE t.hash = $1
@@ -1218,10 +1218,10 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		frozen                 bool
 		spendableIn            *uint32
 		conflicting            bool
-		unspendable            bool
+		locked                 bool
 	)
 
-	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&utxoHash, &coinbaseSpendingHeight, &spendingDataBytes, &frozen, &spendableIn, &conflicting, &unspendable)
+	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&utxoHash, &coinbaseSpendingHeight, &spendingDataBytes, &frozen, &spendableIn, &conflicting, &locked)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewNotFoundError("utxo not found for %s:%d", spend.TxID, spend.Vout)
@@ -1256,8 +1256,13 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		utxoStatus = utxo.Status_CONFLICTING
 	}
 
-	if unspendable || (spendableIn != nil && s.GetBlockHeight() < *spendableIn) {
-		utxoStatus = utxo.Status_UNSPENDABLE
+	if locked {
+		utxoStatus = utxo.Status_LOCKED
+	}
+
+	// spendableIn is set by the alert system to indicate when the UTXO can be spent
+	if spendableIn != nil && s.GetBlockHeight() < *spendableIn {
+		utxoStatus = utxo.Status_IMMATURE
 	}
 
 	return &utxo.SpendResponse{
@@ -1455,17 +1460,17 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 	return affectedParentSpends, spendingTxHashes, nil
 }
 
-func (s *Store) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
+func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	q := `
 			UPDATE transactions
-			SET unspendable = $2
+			SET locked = $2
 			WHERE hash = $1
 		`
 
 	for _, conflictingTxHash := range txHashes {
 		_, err := s.db.ExecContext(ctx, q, conflictingTxHash[:], setValue)
 		if err != nil {
-			return errors.NewStorageError("failed to set unspendable flag for %s", conflictingTxHash, err)
+			return errors.NewStorageError("failed to set locked flag for %s", conflictingTxHash, err)
 		}
 	}
 
@@ -1484,7 +1489,7 @@ func createPostgresSchema(db *usql.DB) error {
 		,coinbase         BOOLEAN DEFAULT FALSE NOT NULL
 		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
         ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
-        ,unspendable      BOOLEAN DEFAULT FALSE NOT NULL
+        ,locked           BOOLEAN DEFAULT FALSE NOT NULL
         ,delete_at_height BIGINT
         ,unmined_since    BIGINT
         ,preserve_until   BIGINT
@@ -1717,7 +1722,7 @@ func createSqliteSchema(db *usql.DB) error {
 		,coinbase         BOOLEAN DEFAULT FALSE NOT NULL
 		,frozen           BOOLEAN DEFAULT FALSE NOT NULL
         ,conflicting      BOOLEAN DEFAULT FALSE NOT NULL
-        ,unspendable      BOOLEAN DEFAULT FALSE NOT NULL
+        ,locked           BOOLEAN DEFAULT FALSE NOT NULL
         ,delete_at_height BIGINT
         ,unmined_since    BIGINT
         ,preserve_until   BIGINT

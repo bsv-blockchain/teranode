@@ -82,7 +82,7 @@ func TestProcessConflictingTransactions(t *testing.T) {
 	mockUtxoStore.On("SetConflicting", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
 	mockUtxoStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockUtxoStore.On("Spend", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
-	mockUtxoStore.On("SetUnspendable", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockUtxoStore.On("SetLocked", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Mock the markConflictingTxsInSubtrees method
 	// This is a complex method that would require extensive mocking, so we'll test it separately

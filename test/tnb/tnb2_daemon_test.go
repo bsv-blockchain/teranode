@@ -70,6 +70,6 @@ func TestUtxoStore(t *testing.T) {
 	require.False(t, utxoMeta.IsCoinbase, "Should not be a coinbase transaction")
 	require.False(t, utxoMeta.Frozen, "Should not be frozen")
 	require.False(t, utxoMeta.Conflicting, "Should not be conflicting")
-	require.False(t, utxoMeta.Unspendable, "Should not be unspendable")
+	require.False(t, utxoMeta.Locked, "Should not be locked")
 	require.Equal(t, uint32(0), utxoMeta.LockTime, "LockTime should be 0")
 }

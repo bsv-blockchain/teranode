@@ -173,8 +173,8 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	var (
 		spendingData *spendpkg.SpendingData
 		spendableIn  int
-		frozen       bool
 		conflicting  bool
+		locked       bool
 	)
 
 	if value != nil {
@@ -228,17 +228,25 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 				return nil, errors.NewProcessingError("invalid conflicting", nil)
 			}
 		}
+
+		lockedBin, found := value.Bins[fields.Locked.String()]
+		if found {
+			locked, ok = lockedBin.(bool)
+			if !ok {
+				return nil, errors.NewProcessingError("invalid locked", nil)
+			}
+		}
 	}
 
 	utxoStatus := utxo.CalculateUtxoStatus2(spendingData)
 
 	// check utxo is spendable
 	if spendableIn != 0 && spendableIn > int(s.blockHeight.Load()) {
-		utxoStatus = utxo.Status_UNSPENDABLE
+		utxoStatus = utxo.Status_IMMATURE
 	}
 
 	// check if frozen
-	if frozen || (spendingData != nil && bytes.Equal(spendingData.Bytes(), frozenUTXOBytes)) {
+	if spendingData != nil && bytes.Equal(spendingData.Bytes(), frozenUTXOBytes) {
 		utxoStatus = utxo.Status_FROZEN
 		// this is needed in for instance conflict resolution where we check the spending data
 		spendingData = spendpkg.NewSpendingData(&subtree.FrozenBytesTxHash, int(spend.Vout))
@@ -246,6 +254,10 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 
 	if conflicting {
 		utxoStatus = utxo.Status_CONFLICTING
+	}
+
+	if locked {
+		utxoStatus = utxo.Status_LOCKED
 	}
 
 	return &utxo.SpendResponse{
@@ -707,15 +719,15 @@ NEXT_BATCH_RECORD:
 
 				items[idx].Data.SpendingDatas = res
 
-			case fields.Unspendable:
-				unspendableBool, ok := bins[key.String()].(bool)
+			case fields.Locked:
+				lockedBool, ok := bins[key.String()].(bool)
 				if !ok {
-					items[idx].Err = errors.NewTxInvalidError("missing unspendable")
+					items[idx].Err = errors.NewTxInvalidError("missing locked")
 
-					continue NEXT_BATCH_RECORD // because there was an error reading the unspendable from the store.
+					continue NEXT_BATCH_RECORD // because there was an error reading the locked from the store.
 				}
 
-				items[idx].Data.Unspendable = unspendableBool
+				items[idx].Data.Locked = lockedBool
 
 			case fields.Conflicting:
 				conflictingBool, ok := bins[key.String()].(bool)

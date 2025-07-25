@@ -347,13 +347,13 @@ func TestAerospike(t *testing.T) {
 
 		wPolicy := util.GetAerospikeWritePolicy(tSettings, 0)
 
-		// function spend(rec, offset, utxoHash, spendingData, ignoreConflicting, ignoreUnspendable, currentBlockHeight, blockHeightRetention)
+		// function spend(rec, offset, utxoHash, spendingData, ignoreConflicting, ignoreLocked, currentBlockHeight, blockHeightRetention)
 		ret, aErr := client.Execute(wPolicy, txKey, teranode_aerospike.LuaPackage, "spend",
 			aerospike.NewIntegerValue(int(spends[0].Vout)),     // Offset
 			aerospike.NewValue(spends[0].UTXOHash[:]),          // UTXO hash
 			aerospike.NewValue(spends[0].SpendingData.Bytes()), // SpendingData
 			aerospike.NewValue(false),                          // Ignore conflicting
-			aerospike.NewValue(false),                          // Ignore unspendable
+			aerospike.NewValue(false),                          // Ignore locked
 			aerospike.NewValue(0),                              // Current height
 			aerospike.NewValue(100),                            // BlockHeightRetention
 		)
@@ -404,7 +404,7 @@ func TestAerospike(t *testing.T) {
 				aerospike.NewValue(s.UTXOHash[:]),
 				aerospike.NewValue(s.SpendingData.Bytes()),
 				aerospike.NewValue(false), // Ignore conflicting
-				aerospike.NewValue(false), // Ignore unspendable
+				aerospike.NewValue(false), // Ignore locked
 				aerospike.NewValue(0),     // Current height
 				aerospike.NewValue(100),   // Block retention
 			)
@@ -435,14 +435,14 @@ func TestAerospike(t *testing.T) {
 
 		wPolicy := util.GetAerospikeWritePolicy(tSettings, 0)
 
-		// function spend(rec, offset, utxoHash, spendingTxID, ignoreConflicting, ignoreUnspendable, currentBlockHeight, blockHeightRetention)
+		// function spend(rec, offset, utxoHash, spendingTxID, ignoreConflicting, ignoreLocked, currentBlockHeight, blockHeightRetention)
 		fakeKey, _ := aerospike.NewKey(aerospikeNamespace, aerospikeSet, []byte{})
 		ret, aErr := client.Execute(wPolicy, fakeKey, teranode_aerospike.LuaPackage, "spend",
 			aerospike.NewIntegerValue(int(spends[0].Vout)),     // offset
 			aerospike.NewValue(spends[0].UTXOHash[:]),          // utxoHash
 			aerospike.NewValue(spends[0].SpendingData.Bytes()), // spendingTxID
 			aerospike.NewValue(false),                          // Ignore conflicting
-			aerospike.NewValue(false),                          // Ignore unspendable
+			aerospike.NewValue(false),                          // Ignore locked
 			aerospike.NewValue(0),                              // Current height
 			aerospike.NewValue(100),                            // Block retention
 		)
@@ -812,14 +812,14 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, tx2.TxIDChainHash().String(), txMeta.ConflictingChildren[0].String())
 	})
 
-	t.Run("aerospike_set_unspendable", func(t *testing.T) {
+	t.Run("aerospike_set_locked", func(t *testing.T) {
 		cleanDB(t, client)
 
 		txMeta, err := store.Create(ctx, tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		err = store.SetUnspendable(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, true)
+		err = store.SetLocked(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, true)
 		require.NoError(t, err)
 
 		tx2 := &bt.Tx{}
@@ -834,9 +834,9 @@ func TestAerospike(t *testing.T) {
 
 		assert.Len(t, txSpends, 1)
 		assert.ErrorAs(t, txSpends[0].Err, &tErr)
-		require.Equal(t, errors.ERR_TX_UN_SPENDABLE, tErr.Code())
+		require.Equal(t, errors.ERR_TX_LOCKED, tErr.Code())
 
-		err = store.SetUnspendable(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false)
+		err = store.SetLocked(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false)
 		require.NoError(t, err)
 
 		txSpends, err = store.Spend(ctx, tx2)
@@ -847,19 +847,19 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, tx2.TxIDChainHash().String(), txSpends[0].SpendingData.TxID.String())
 	})
 
-	t.Run("set mined with unspendable", func(t *testing.T) {
+	t.Run("set mined with locked", func(t *testing.T) {
 		cleanDB(t, client)
 
-		txMeta, err := store.Create(context.Background(), tx, 0, utxo.WithUnspendable(true))
+		txMeta, err := store.Create(context.Background(), tx, 0, utxo.WithLocked(true))
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		assert.True(t, txMeta.Unspendable)
+		assert.True(t, txMeta.Locked)
 
 		txMeta, err = store.Get(context.Background(), tx.TxIDChainHash())
 		require.NoError(t, err)
 
-		assert.True(t, txMeta.Unspendable)
+		assert.True(t, txMeta.Locked)
 	})
 }
 
@@ -1694,7 +1694,7 @@ func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
 	})
 
 	// Create the tx
-	_, err := store.Create(ctx, tx, 0, utxo.WithUnspendable(true))
+	_, err := store.Create(ctx, tx, 0, utxo.WithLocked(true))
 	require.NoError(t, err)
 
 	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
@@ -1705,7 +1705,7 @@ func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotNil(t, response)
-	assert.True(t, response.Bins[fields.Unspendable.String()].(bool))
+	assert.True(t, response.Bins[fields.Locked.String()].(bool))
 
 	// Now try to spend it
 	spendingTx1 := utxo2.GetSpendingTx(tx, 1)
@@ -1713,7 +1713,7 @@ func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
 	spends, err := store.Spend(ctx, spendingTx1)
 	require.Error(t, err)
 	assert.Len(t, spends, 1)
-	assert.ErrorIs(t, err, errors.ErrTxUnspendable)
+	assert.ErrorIs(t, err, errors.ErrTxLocked)
 }
 
 func TestStore_AerospikeSplitTx(t *testing.T) {
@@ -1734,7 +1734,7 @@ func TestStore_AerospikeSplitTx(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create the tx
-	_, err = store.Create(ctx, tx, 0, utxo.WithUnspendable(true))
+	_, err = store.Create(ctx, tx, 0, utxo.WithLocked(true))
 	require.NoError(t, err)
 
 	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
@@ -1744,7 +1744,7 @@ func TestStore_AerospikeSplitTx(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotNil(t, res)
-	assert.True(t, res.Bins[fields.Unspendable.String()].(bool), "Record should be true")
+	assert.True(t, res.Bins[fields.Locked.String()].(bool), "Record should be true")
 
 	extraRecords := res.Bins[fields.TotalExtraRecs.String()].(int)
 	assert.Equal(t, 3, extraRecords)
@@ -1759,10 +1759,10 @@ func TestStore_AerospikeSplitTx(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.NotNil(t, res)
-		assert.True(t, res.Bins[fields.Unspendable.String()].(bool), "Record %d should be true", i)
+		assert.True(t, res.Bins[fields.Locked.String()].(bool), "Record %d should be true", i)
 	}
 
-	err = store.SetUnspendable(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false)
+	err = store.SetLocked(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false)
 	require.NoError(t, err)
 
 	for i := 0; i <= extraRecords; i++ {
@@ -1775,7 +1775,7 @@ func TestStore_AerospikeSplitTx(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.NotNil(t, res)
-		assert.False(t, res.Bins[fields.Unspendable.String()].(bool), "Record %d should be false", i)
+		assert.False(t, res.Bins[fields.Locked.String()].(bool), "Record %d should be false", i)
 	}
 }
 

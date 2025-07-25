@@ -117,7 +117,7 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 
 	// - 2: un-spend txa, marking the input txs as not spendable (txp & txq)
 	if err = s.Unspend(ctx, affectedParentSpends, true); err != nil {
-		return nil, errors.NewTxUnspendableError("error unspending affected parent spends", err)
+		return nil, errors.NewTxLockedError("error unspending affected parent spends", err)
 	}
 
 	// get the unique hashes of the transactions that were marked as not spendable
@@ -137,7 +137,7 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 	for _, tx := range winningTxs {
 		spends, err := s.Spend(ctx, tx, IgnoreFlags{
 			IgnoreConflicting: true,
-			IgnoreUnspendable: true,
+			IgnoreLocked:      true,
 		})
 		if err != nil {
 			if errors.As(err, &tErr) {
@@ -159,7 +159,7 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 	}
 
 	// - 5: mark txp & txq as spendable again
-	if err = s.SetUnspendable(ctx, markedAsNotSpendableHashes, false); err != nil {
+	if err = s.SetLocked(ctx, markedAsNotSpendableHashes, false); err != nil {
 		return nil, err
 	}
 

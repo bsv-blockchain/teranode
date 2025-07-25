@@ -54,8 +54,8 @@ func (m *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...Ign
 	return args.Get(0).([]*Spend), args.Error(1)
 }
 
-func (m *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsUnspendable ...bool) error {
-	args := m.Called(ctx, spends, flagAsUnspendable)
+func (m *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error {
+	args := m.Called(ctx, spends, flagAsLocked)
 	return args.Error(0)
 }
 
@@ -109,7 +109,7 @@ func (m *MockUtxostore) SetConflicting(ctx context.Context, txHashes []chainhash
 	return args.Get(0).([]*Spend), args.Get(1).([]chainhash.Hash), args.Error(2)
 }
 
-func (m *MockUtxostore) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
+func (m *MockUtxostore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
 	args := m.Called(ctx, txHashes, value)
 	return args.Error(0)
 }

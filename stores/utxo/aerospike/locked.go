@@ -15,8 +15,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// batchUnspendable represents a batch operation to set the unspendable flag on a transaction
-type batchUnspendable struct {
+// batchLocked represents a batch operation to set the locked flag on a transaction
+type batchLocked struct {
 	ctx        context.Context
 	txHash     chainhash.Hash
 	childIndex uint32 // This will default to 0 which is the master record
@@ -24,7 +24,7 @@ type batchUnspendable struct {
 	errCh      chan error // Channel for completion notification
 }
 
-func (s *Store) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
+func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	for _, txHash := range txHashes {
@@ -33,7 +33,7 @@ func (s *Store) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, s
 		g.Go(func() error {
 			errCh := make(chan error, 1)
 
-			s.unspendableBatcher.Put(&batchUnspendable{
+			s.lockedBatcher.Put(&batchLocked{
 				ctx:      ctx,
 				txHash:   txHash,
 				setValue: setValue,
@@ -49,14 +49,14 @@ func (s *Store) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, s
 	return g.Wait()
 }
 
-// SetUnsUnspendable sets the unspendable flag on the given transactions in a batch
-func (s *Store) setUnspendableBatch(batch []*batchUnspendable) {
+// setLockedBatch sets the locked flag on the given transactions in a batch
+func (s *Store) setLockedBatch(batch []*batchLocked) {
 	var (
 		batchUDFPolicy = aerospike.NewBatchUDFPolicy()
 		batchRecords   = make([]aerospike.BatchRecordIfc, 0, len(batch))
 	)
 
-	// Go through each batch item and set the tx to be unspendable
+	// Go through each batch item and set the tx to be locked
 	for _, batchItem := range batch {
 		// We will do the master record first...
 		keySource := uaerospike.CalculateKeySource(&batchItem.txHash, batchItem.childIndex)
@@ -73,14 +73,14 @@ func (s *Store) setUnspendableBatch(batch []*batchUnspendable) {
 			batchUDFPolicy,
 			key,
 			LuaPackage,
-			"setUnspendable",
+			"setLocked",
 			aerospike.NewValue(batchItem.setValue),
 		))
 	}
 
 	if err := s.client.BatchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
 		for _, batchItem := range batch {
-			batchItem.errCh <- errors.NewProcessingError("could not batch write unspendable flag", err)
+			batchItem.errCh <- errors.NewProcessingError("could not batch write locked flag", err)
 		}
 
 		return
@@ -89,7 +89,7 @@ func (s *Store) setUnspendableBatch(batch []*batchUnspendable) {
 	// Now we need to get totalRecords and do all the child records if necessary...
 	for idx, batchRecord := range batchRecords {
 		if batchRecord.BatchRec().Err != nil {
-			batch[idx].errCh <- errors.NewProcessingError("could not batch write unspendable flag", batchRecord.BatchRec().Err)
+			batch[idx].errCh <- errors.NewProcessingError("could not batch write locked flag", batchRecord.BatchRec().Err)
 			continue
 		}
 
@@ -128,7 +128,7 @@ func (s *Store) setUnspendableBatch(batch []*batchUnspendable) {
 					g.Go(func() error {
 						errCh := make(chan error, 1)
 
-						s.unspendableBatcher.Put(&batchUnspendable{
+						s.lockedBatcher.Put(&batchLocked{
 							txHash:     batch[idx].txHash,
 							childIndex: uint32(i), // nolint:gosec
 							setValue:   batch[idx].setValue,

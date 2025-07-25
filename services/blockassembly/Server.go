@@ -573,28 +573,76 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 
 // Start begins the BlockAssembly service operation.
 //
+// This method initializes and starts the BlockAssembly service by:
+// 1. Setting up gRPC server in a separate goroutine
+// 2. Starting the block assembler component
+// 3. Waiting for either successful startup or gRPC server termination
+//
+// The function implements a robust startup pattern with proper synchronization
+// to handle both successful initialization and error conditions gracefully.
+//
 // Parameters:
-//   - ctx: Context for cancellation
+//   - ctx: Context for cancellation and timeout control
+//   - readyCh: Channel to signal when the service is ready to accept requests
 //
 // Returns:
-//   - error: Any error encountered during startup
+//   - error: Any error encountered during startup or gRPC server operation
 func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (err error) {
-	var closeOnce sync.Once
+	var (
+		// closeOnce ensures the readyCh is closed exactly once, preventing panics
+		// from multiple close attempts during concurrent startup scenarios
+		closeOnce sync.Once
+
+		// grpcClosed channel receives the result of gRPC server operation
+		// This allows the main goroutine to wait for either successful startup
+		// or server termination, enabling proper error handling and cleanup
+		grpcClosed = make(chan error)
+
+		// grpcReady channel signals when the gRPC server is ready to accept requests
+		grpcReady = make(chan struct{})
+	)
+
+	// Defer closing readyCh to ensure it's always closed, even if startup fails
+	// This prevents callers from waiting indefinitely for service readiness
 	defer closeOnce.Do(func() { close(readyCh) })
 
+	// Start gRPC server in a separate goroutine to avoid blocking the main thread
+	// This allows the service to handle both gRPC requests and internal operations concurrently
+	go func() {
+		// StartGRPCServer blocks until the server shuts down or encounters an error
+		// The server setup includes registering the BlockAssemblyAPI service
+		grpcClosed <- util.StartGRPCServer(ctx, ba.logger, ba.settings, "blockassembly", ba.settings.BlockAssembly.GRPCListenAddress, func(server *grpc.Server) {
+			// Register the BlockAssembly service with the gRPC server
+			// This makes all BlockAssembly API methods available to clients
+			blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
+
+			// Signal that the service is ready to accept requests
+			// This is called once the gRPC server is successfully listening
+			grpcReady <- struct{}{}
+		}, nil)
+	}()
+
+	// Start the block assembler component which handles the core block creation logic
+	// This must succeed for the service to be functional
 	if err = ba.blockAssembler.Start(ctx); err != nil {
 		return errors.NewServiceError("failed to start block assembler", err)
 	}
 
-	// this will block
-	if err = util.StartGRPCServer(ctx, ba.logger, ba.settings, "blockassembly", ba.settings.BlockAssembly.GRPCListenAddress, func(server *grpc.Server) {
-		blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
-		closeOnce.Do(func() { close(readyCh) })
-	}, nil); err != nil {
-		return err
-	}
+	<-grpcReady
+	// Signal that the service is ready to accept requests
+	closeOnce.Do(func() { close(readyCh) })
 
-	return nil
+	// Wait for gRPC server completion or error
+	// This blocks until either:
+	// 1. The gRPC server encounters an error and terminates
+	// 2. The context is cancelled, causing graceful shutdown
+	// 3. The server is explicitly stopped from elsewhere
+	//
+	// The function returns the error from gRPC server operation, which could be:
+	// - nil if server shut down gracefully
+	// - context cancellation error if shutdown was requested
+	// - network or configuration errors if startup failed
+	return <-grpcClosed
 }
 
 // Stop gracefully shuts down the BlockAssembly service.

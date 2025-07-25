@@ -505,19 +505,19 @@ When the Transaction Validator Service identifies an invalid transaction, it emp
 
 The Validator implements a two-phase commit process for transaction creation and addition to block assembly:
 
-1. **Phase 1 - Transaction Creation with Unspendable Flag**:
+1. **Phase 1 - Transaction Creation with Locked Flag**:
 
-    - When a transaction is created, it is initially stored in the UTXO store with an "unspendable" flag set to `true`.
+    - When a transaction is created, it is initially stored in the UTXO store with an "locked" flag set to `true`.
     - This flag prevents the transaction outputs from being spent while it's in the process of being validated and added to block assembly, protecting against potential double-spend attempts.
 
-2. **Phase 2 - Unsetting the Unspendable Flag**:
+2. **Phase 2 - Unsetting the Locked Flag**:
 
-    - The unspendable flag is unset in two key scenarios:
+    - The locked flag is unset in two key scenarios:
 
     a. **After Successful Addition to Block Assembly**:
 
     ```text
-    - When a transaction is successfully validated and added to the block assembly, the Validator service immediately unsets the "unspendable" flag (sets it to `false`).
+    - When a transaction is successfully validated and added to the block assembly, the Validator service immediately unsets the "locked" flag (sets it to `false`).
     - This makes the transaction outputs available for spending in subsequent transactions, even before the transaction is mined in a block.
     ```
 
@@ -525,14 +525,14 @@ The Validator implements a two-phase commit process for transaction creation and
 
     ```text
     - As a fallback mechanism, if the flag hasn't been unset already, it will be unset when the transaction is mined in a block.
-    - When the transaction is mined in a block and that block is processed by the Block Validation service, the "unspendable" flag is unset (set to `false`) during the `SetMinedMulti` operation.
+    - When the transaction is mined in a block and that block is processed by the Block Validation service, the "locked" flag is unset (set to `false`) during the `SetMinedMulti` operation.
     ```
 
-3. **Ignoring Unspendable Flag for Block Transactions**:
+3. **Ignoring Locked Flag for Block Transactions**:
 
-    - When processing transactions that are part of a block (as opposed to new transactions to include in an upcoming block), the validator can be configured to ignore the unspendable flag.
-    - This is necessary because transactions in a block have already been validated by miners and must be accepted regardless of their unspendable status.
-    - The validator uses the `WithIgnoreUnspendable` option to control this behavior during transaction validation.
+    - When processing transactions that are part of a block (as opposed to new transactions to include in an upcoming block), the validator can be configured to ignore the locked flag.
+    - This is necessary because transactions in a block have already been validated by miners and must be accepted regardless of their locked status.
+    - The validator uses the `WithIgnoreLocked` option to control this behavior during transaction validation.
 
 This two-phase commit approach ensures that transactions are only made spendable after they've been successfully added to block assembly, reducing the risk of race conditions and double-spend attempts during the transaction processing lifecycle.
 

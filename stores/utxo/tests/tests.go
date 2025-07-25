@@ -232,7 +232,7 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 
 	resp, err := db.GetSpend(ctx, testSpend1)
 	require.NoError(t, err)
-	require.Equal(t, int(utxostore.Status_UNSPENDABLE), resp.Status)
+	require.Equal(t, int(utxostore.Status_IMMATURE), resp.Status)
 	require.Nil(t, resp.SpendingData)
 
 	// try to spend the old utxo, should fail

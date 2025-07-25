@@ -176,7 +176,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 				continue
 			}
 
-			errs = errors.NewStorageError("aerospike batchRecord error: %s", hashes[idx].String(), errors.Join(errs, err))
+			errs = errors.NewStorageError("aerospike batchRecord error", hashes[idx].String(), errors.Join(errs, err))
 
 			nrErrors++
 		} else {
@@ -187,7 +187,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 					res, err := s.ParseLuaReturnValue(responseMsg)
 					if err != nil {
 						nrErrors++
-						errs = errors.NewError("aerospike batchRecord %s ParseLuaReturnValue error: %s", hashes[idx].String(), errors.Join(errs, err))
+						errs = errors.NewError("aerospike batchRecord %s ParseLuaReturnValue error", hashes[idx].String(), errors.Join(errs, err))
 					} else {
 						switch res.ReturnValue {
 						case LuaOk:
@@ -219,13 +219,13 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 							okUpdates++
 						default:
 							nrErrors++
-							errs = errors.NewError("aerospike batchRecord %s bins[SUCCESS] msg: %s, err: %w", hashes[idx].String(), responseMsg, errors.Join(errs, batchRecord.BatchRec().Err))
+							errs = errors.NewError("aerospike batchRecord %s bins[SUCCESS] msg: %s", hashes[idx].String(), responseMsg, errors.Join(errs, batchRecord.BatchRec().Err))
 						}
 					}
 				}
 			} else {
 				nrErrors++
-				errs = errors.NewError("aerospike batchRecord %s !bins[SUCCESS] err: %w", hashes[idx].String(), errors.Join(errs, batchRecord.BatchRec().Err))
+				errs = errors.NewError("aerospike batchRecord %s !bins[SUCCESS]", hashes[idx].String(), errors.Join(errs, batchRecord.BatchRec().Err))
 			}
 		}
 	}

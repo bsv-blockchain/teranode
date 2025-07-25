@@ -53,6 +53,7 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 		fields.Inputs.String(),
 		fields.CreatedAt.String(),
 		fields.Conflicting.String(),
+		fields.Locked.String(),
 	}
 
 	policy := as.NewQueryPolicy()
@@ -144,12 +145,19 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 		return nil, err
 	}
 
+	locked, err := it.extractLocked(rec.Record.Bins)
+	if err != nil {
+		it.closeWithLogging()
+		return nil, err
+	}
+
 	return &utxo.UnminedTransaction{
 		Hash:       txData.hash,
 		Fee:        txData.fee,
 		Size:       txData.size,
 		TxInpoints: txInpoints,
 		CreatedAt:  createdAt,
+		Locked:     locked,
 	}, nil
 }
 
@@ -262,6 +270,21 @@ func (it *unminedTxIterator) extractCreatedAt(bins map[string]interface{}) (int,
 	}
 
 	return createdAt, nil
+}
+
+// extractLocked extracts the locked status from record bins
+func (it *unminedTxIterator) extractLocked(bins map[string]interface{}) (bool, error) {
+	lockedVal, ok := bins[fields.Locked.String()]
+	if !ok || lockedVal == nil {
+		return false, errors.NewProcessingError("locked not found")
+	}
+
+	locked, ok := lockedVal.(bool)
+	if !ok {
+		return false, errors.NewProcessingError("locked not bool")
+	}
+
+	return locked, nil
 }
 
 // Err returns the first error encountered during iteration, if any.

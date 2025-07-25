@@ -29,7 +29,7 @@
 
 ## 1. Description
 
-The UTXO set represents the current state of ownership of all Satoshi tokens in existence. Except for Coinbase transactions, every other valid transaction spends at least one UTXO and creates zero or more new UTXOs, plus zero or more unspendable outputs. The UTXOs that are being ‘spent’ come from previously successful transactions, and these may be recorded in the current or a previous block. An unspent output may be created and spent in a few milliseconds, or it may remain unspent for decades, meaning that the unspent outputs must persist for as long as they remain unspent.
+The UTXO set represents the current state of ownership of all Satoshi tokens in existence. Except for Coinbase transactions, every other valid transaction spends at least one UTXO and creates zero or more new UTXOs, plus zero or more locked outputs. The UTXOs that are being ‘spent’ come from previously successful transactions, and these may be recorded in the current or a previous block. An unspent output may be created and spent in a few milliseconds, or it may remain unspent for decades, meaning that the unspent outputs must persist for as long as they remain unspent.
 
 The UTXO Store is responsible for tracking spendable UTXOs (the UTXO set), based on the longest _honest_ chain-tip in the network. These are UTXOs that can be used as inputs in new transactions. The UTXO Store is an internal datastore used by some of the services, such as the Asset Server, the TX Validator and the Block Assembly. The main purpose of this store is to maintain the UTXO data on behalf of other micro-services.
 
@@ -607,26 +607,26 @@ The UTXO Store can be configured through the `UtxoStoreSettings` struct which co
 
 The UTXO Store uses batch processing to improve performance. The following settings control the behavior of various batchers:
 
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|--------|
-| `StoreBatcherSize` | int | Batch size for store operations | 256 |
-| `StoreBatcherDurationMillis` | int | Maximum duration in milliseconds for store batching | 10 |
-| `StoreBatcherConcurrency` | int | Number of concurrent store batcher goroutines | 32 |
-| `SpendBatcherSize` | int | Batch size for spend operations | 100 |
-| `SpendBatcherDurationMillis` | int | Maximum duration in milliseconds for spend batching | 100 |
-| `SpendBatcherConcurrency` | int | Number of concurrent spend batcher goroutines | 32 |
-| `OutpointBatcherSize` | int | Batch size for outpoint operations | 100 |
-| `OutpointBatcherDurationMillis` | int | Maximum duration in milliseconds for outpoint batching | 10 |
-| `IncrementBatcherSize` | int | Batch size for increment operations | 256 |
-| `IncrementBatcherDurationMillis` | int | Maximum duration in milliseconds for increment batching | 10 |
-| `SetDAHBatcherSize` | int | Batch size for Delete-At-Height operations | 256 |
-| `SetDAHBatcherDurationMillis` | int | Maximum duration in milliseconds for DAH batching | 10 |
-| `UnspendableBatcherSize` | int | Batch size for unspendable operations | 256 |
-| `UnspendableBatcherDurationMillis` | int | Maximum duration in milliseconds for unspendable batching | 10 |
-| `GetBatcherSize` | int | Batch size for get operations | 1 |
-| `GetBatcherDurationMillis` | int | Maximum duration in milliseconds for get batching | 10 |
+| Parameter | Type | Description                                                               | Default |
+|-----------|------|---------------------------------------------------------------------------|--------|
+| `StoreBatcherSize` | int | Batch size for store operations                                           | 256 |
+| `StoreBatcherDurationMillis` | int | Maximum duration in milliseconds for store batching                       | 10 |
+| `StoreBatcherConcurrency` | int | Number of concurrent store batcher goroutines                             | 32 |
+| `SpendBatcherSize` | int | Batch size for spend operations                                           | 100 |
+| `SpendBatcherDurationMillis` | int | Maximum duration in milliseconds for spend batching                       | 100 |
+| `SpendBatcherConcurrency` | int | Number of concurrent spend batcher goroutines                             | 32 |
+| `OutpointBatcherSize` | int | Batch size for outpoint operations                                        | 100 |
+| `OutpointBatcherDurationMillis` | int | Maximum duration in milliseconds for outpoint batching                    | 10 |
+| `IncrementBatcherSize` | int | Batch size for increment operations                                       | 256 |
+| `IncrementBatcherDurationMillis` | int | Maximum duration in milliseconds for increment batching                   | 10 |
+| `SetDAHBatcherSize` | int | Batch size for Delete-At-Height operations                                | 256 |
+| `SetDAHBatcherDurationMillis` | int | Maximum duration in milliseconds for DAH batching                         | 10 |
+| `LockedBatcherSize` | int | Batch size for locked operations                                          | 256 |
+| `LockedBatcherDurationMillis` | int | Maximum duration in milliseconds for locked batching                      | 10 |
+| `GetBatcherSize` | int | Batch size for get operations                                             | 1 |
+| `GetBatcherDurationMillis` | int | Maximum duration in milliseconds for get batching                         | 10 |
 | `MaxMinedRoutines` | int | Maximum number of concurrent goroutines for processing mined transactions | 128 |
-| `MaxMinedBatchSize` | int | Maximum number of mined transactions processed in a batch | 1024 |
+| `MaxMinedBatchSize` | int | Maximum number of mined transactions processed in a batch                 | 1024 |
 
 
 ### 8.3 Environment Variables

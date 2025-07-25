@@ -93,7 +93,7 @@ const MaxTxSizeInStoreInBytes = 32 * 1024
 
 var (
 	binNames = []fields.FieldName{
-		fields.Unspendable,
+		fields.Locked,
 		fields.Fee,
 		fields.SizeInBytes,
 		fields.LockTime,
@@ -113,28 +113,28 @@ type batcherIfc[T any] interface {
 // Store implements the UTXO store interface using Aerospike.
 // It is thread-safe for concurrent access.
 type Store struct {
-	ctx                context.Context // store the global context for things that run in the background
-	url                *url.URL
-	client             *uaerospike.Client
-	namespace          string
-	setName            string
-	blockHeight        atomic.Uint32
-	medianBlockTime    atomic.Uint32
-	logger             ulogger.Logger
-	settings           *settings.Settings
-	batchID            atomic.Uint64
-	storeBatcher       batcherIfc[BatchStoreItem]
-	getBatcher         batcherIfc[batchGetItem]
-	spendBatcher       batcherIfc[batchSpend]
-	outpointBatcher    batcherIfc[batchOutpoint]
-	incrementBatcher   batcherIfc[batchIncrement]
-	setDAHBatcher      batcherIfc[batchDAH]
-	unspendableBatcher batcherIfc[batchUnspendable]
-	externalStore      blob.Store
-	utxoBatchSize      int
-	externalTxCache    *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
-	indexMutex         sync.Mutex // Mutex for index creation operations
-	indexOnce          sync.Once  // Ensures index creation/wait is only done once per process
+	ctx              context.Context // store the global context for things that run in the background
+	url              *url.URL
+	client           *uaerospike.Client
+	namespace        string
+	setName          string
+	blockHeight      atomic.Uint32
+	medianBlockTime  atomic.Uint32
+	logger           ulogger.Logger
+	settings         *settings.Settings
+	batchID          atomic.Uint64
+	storeBatcher     batcherIfc[BatchStoreItem]
+	getBatcher       batcherIfc[batchGetItem]
+	spendBatcher     batcherIfc[batchSpend]
+	outpointBatcher  batcherIfc[batchOutpoint]
+	incrementBatcher batcherIfc[batchIncrement]
+	setDAHBatcher    batcherIfc[batchDAH]
+	lockedBatcher    batcherIfc[batchLocked]
+	externalStore    blob.Store
+	utxoBatchSize    int
+	externalTxCache  *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	indexMutex       sync.Mutex // Mutex for index creation operations
+	indexOnce        sync.Once  // Ensures index creation/wait is only done once per process
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -282,10 +282,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	setDAHBatchDuration := time.Duration(setDAHBatchDurationStr) * time.Millisecond
 	s.setDAHBatcher = batcher.New(setDAHBatchSize, setDAHBatchDuration, s.sendSetDAHBatch, true)
 
-	unspendableBatcherSize := tSettings.UtxoStore.UnspendableBatcherSize
-	unspendableBatchDurationStr := tSettings.UtxoStore.UnspendableBatcherDurationMillis
-	unspendableBatchDuration := time.Duration(unspendableBatchDurationStr) * time.Millisecond
-	s.unspendableBatcher = batcher.New(unspendableBatcherSize, unspendableBatchDuration, s.setUnspendableBatch, true)
+	lockedBatcherSize := tSettings.UtxoStore.LockedBatcherSize
+	lockedBatchDurationStr := tSettings.UtxoStore.LockedBatcherDurationMillis
+	lockedBatchDuration := time.Duration(lockedBatchDurationStr) * time.Millisecond
+	s.lockedBatcher = batcher.New(lockedBatcherSize, lockedBatchDuration, s.setLockedBatch, true)
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 
@@ -551,6 +551,10 @@ func (s *Store) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeig
 		return nil, errors.NewProcessingError("failed to set filter for unmined transaction query", err)
 	}
 
+	stmt.BinNames = []string{
+		fields.TxID.String(), // We only need the TxID field for cleanup
+	}
+
 	// Use query to get old unmined transactions
 	queryPolicy := aerospike.NewQueryPolicy()
 	queryPolicy.MaxRetries = 3
@@ -563,7 +567,7 @@ func (s *Store) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeig
 	}
 	defer recordset.Close()
 
-	txHashes := make([]chainhash.Hash, 0)
+	txHashes := make([]chainhash.Hash, 0, 1024) // Preallocate for performance
 
 	// Process each unmined transaction
 	for res := range recordset.Results() {

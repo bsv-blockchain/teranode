@@ -132,7 +132,7 @@ func (m *MockStore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ig
 	return nil, nil
 }
 
-func (m *MockStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
+func (m *MockStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	return nil
 }
 
@@ -180,7 +180,7 @@ func (m *MockStore) SetConflicting(ctx context.Context, txHashes []chainhash.Has
 	return nil, nil, nil
 }
 
-func (m *MockStore) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
+func (m *MockStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
 }
 

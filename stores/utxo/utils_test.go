@@ -64,11 +64,11 @@ func TestCalculateUtxoStatus(t *testing.T) {
 
 	// Test case when lockTime is greater than 0 and less than 500000000 and greater than blockHeight
 	status = CalculateUtxoStatus(nil, 400000000, 300000000)
-	assert.Equal(t, Status_LOCKED, status)
+	assert.Equal(t, Status_IMMATURE, status)
 
 	// Test case when lockTime is greater than or equal to 500000000 and greater than current Unix time
 	status = CalculateUtxoStatus(nil, uint32(time.Now().Add(1*time.Hour).Unix()), 0)
-	assert.Equal(t, Status_LOCKED, status)
+	assert.Equal(t, Status_IMMATURE, status)
 
 	// Test case when spendingTxId is nil and lockTime is 0
 	status = CalculateUtxoStatus(nil, 0, 0)

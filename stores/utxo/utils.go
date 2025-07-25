@@ -29,7 +29,7 @@ func CalculateUtxoStatus(spendingData *spend.SpendingData, coinbaseSpendingHeigh
 	if spendingData != nil {
 		status = Status_SPENT
 	} else if coinbaseSpendingHeight > 0 && coinbaseSpendingHeight > blockHeight {
-		status = Status_LOCKED
+		status = Status_IMMATURE
 	}
 
 	return status

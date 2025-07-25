@@ -45,7 +45,7 @@ PC -> UTXO: SetConflicting(conflictingTxHashes, false)
 note right: Mark double-spend as not conflicting
 
 == Phase 5: Cleanup ==
-PC -> UTXO: SetUnspendable(markedAsNotSpendableHashes, false)
+PC -> UTXO: SetLocked(markedAsLockedHashes, false)
 note right: Mark parent UTXOs as spendable again
 
 deactivate PC

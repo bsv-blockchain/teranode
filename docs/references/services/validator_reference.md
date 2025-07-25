@@ -106,7 +106,7 @@ Creates a new `Validator` instance with the provided configuration. It initializ
 - `Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*meta.Data, error)`: Performs comprehensive validation of a transaction. It checks transaction finality, validates inputs and outputs, updates the UTXO set, and optionally adds the transaction to block assembly.
 - `ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (*meta.Data, error)`: Performs comprehensive validation of a transaction with explicit options. This method is the core transaction validation entry point that implements the full Bitcoin validation ruleset.
 - `TriggerBatcher()`: Triggers the batcher (currently a no-op).
-- `CreateInUtxoStore(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32, markAsConflicting bool, markAsUnspendable bool) (*meta.Data, error)`: Stores transaction metadata in the UTXO store. Returns transaction metadata and error if storage fails.
+- `CreateInUtxoStore(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32, markAsConflicting bool, markAsLocked bool) (*meta.Data, error)`: Stores transaction metadata in the UTXO store. Returns transaction metadata and error if storage fails.
 
 ### TxValidator
 
@@ -175,7 +175,7 @@ The validator supports multiple script interpreters through a factory pattern:
 - `validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error)`: Performs the core validation logic for a transaction. This method contains the detailed step-by-step transaction validation workflow and manages the entire lifecycle of a transaction from initial validation through UTXO updates and optional block assembly integration.
 - `validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error`: Performs transaction-level validation checks. Ensures transaction is properly extended and meets all validation rules.
 - `validateTransactionScripts(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error`: Performs script validation for a transaction. Returns error if validation fails.
-- `spendUtxos(traceSpan tracing.Span, tx *bt.Tx, ignoreUnspendable bool) ([]*utxo.Spend, error)`: Attempts to spend the UTXOs referenced by transaction inputs. Returns the spent UTXOs and error if spending fails.
+- `spendUtxos(traceSpan tracing.Span, tx *bt.Tx, ignoreLocked bool) ([]*utxo.Spend, error)`: Attempts to spend the UTXOs referenced by transaction inputs. Returns the spent UTXOs and error if spending fails.
 - `sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error`: Sends validated transaction data to the block assembler. Returns error if block assembly integration fails.
 - `extendTransaction(ctx context.Context, tx *bt.Tx) error`: Adds previous output information to transaction inputs. Returns error if required parent transaction data cannot be found.
 

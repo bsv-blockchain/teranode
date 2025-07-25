@@ -28,8 +28,8 @@ type Options struct {
 	// IgnoreConflicting determines whether to ignore transactions marked as conflicting when spending
 	IgnoreConflicting bool
 
-	// IgnoreUnspendable determines whether to ignore transactions marked as unspendable when spending
-	IgnoreUnspendable bool
+	// IgnoreLocked determines whether to ignore transactions marked as locked when spending
+	IgnoreLocked bool
 }
 
 // Option defines a function type for setting options
@@ -127,15 +127,15 @@ func WithIgnoreConflicting(ignore bool) Option {
 	}
 }
 
-// WithIgnoreUnspendable creates an option to control whether transactions marked as unspendable are spendable
+// WithIgnoreLocked creates an option to control whether the locked flag will be ignored when spending UTXOs
 // Parameters:
-//   - ignoreUnspendable: When true, transactions marked as unspendable are spendable
+//   - ignoreLocked: When true, transactions marked as locked will also be processed
 //
 // Returns:
-//   - Option: Function that sets the ignoreUnspendable option
-func WithIgnoreUnspendable(ignoreUnspendable bool) Option {
+//   - Option: Function that sets the ignoreLocked option
+func WithIgnoreLocked(ignoreLocked bool) Option {
 	return func(o *Options) {
-		o.IgnoreUnspendable = ignoreUnspendable
+		o.IgnoreLocked = ignoreLocked
 	}
 }
 

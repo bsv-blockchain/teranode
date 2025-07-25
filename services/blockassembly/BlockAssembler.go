@@ -156,6 +156,9 @@ type BlockAssembler struct {
 	// cleanupService manages background cleanup tasks
 	cleanupService cleanup.Service
 
+	// cleanupServiceLoaded indicates if the cleanup service has been loaded
+	cleanupServiceLoaded atomic.Bool
+
 	// unminedCleanupTicker manages periodic cleanup of old unmined transactions
 	unminedCleanupTicker *time.Ticker
 	// cachedCandidate stores the cached mining candidate
@@ -547,7 +550,7 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 	// Invalidate cache when block height changes
 	b.invalidateMiningCandidateCache()
 
-	if b.cleanupService != nil && height > 0 {
+	if b.cleanupServiceLoaded.Load() && b.cleanupService != nil && height > 0 {
 		err := b.cleanupService.UpdateBlockHeight(height)
 		if err != nil {
 			b.logger.Errorf("[BlockAssembler] cleanup service error updating block height: %v", err)
@@ -581,7 +584,54 @@ func (b *BlockAssembler) GetCurrentRunningState() State {
 //
 // Returns:
 //   - error: Any error encountered during startup
-func (b *BlockAssembler) Start(ctx context.Context) error {
+func (b *BlockAssembler) Start(ctx context.Context) (err error) {
+	b.initState(ctx)
+
+	// Wait for any pending blocks to be processed before loading unmined transactions
+	if !b.skipWaitForPendingBlocks {
+		if err = b.waitForPendingBlocks(ctx); err != nil {
+			b.logger.Errorf("[BlockAssembler] failed to wait for pending blocks: %v", err)
+			return
+		}
+	}
+
+	// Load unmined transactions (this includes cleanup of old unmined transactions first)
+	if err = b.loadUnminedTransactions(ctx); err != nil {
+		b.logger.Errorf("[BlockAssembler] failed to load un-mined transactions: %v", err)
+		return
+	}
+
+	b.startChannelListeners(ctx)
+
+	// Check if the UTXO store supports cleanup operations
+	if !b.settings.UtxoStore.DisableDAHCleaner {
+		if cleanupServiceProvider, ok := b.utxoStore.(cleanup.CleanupServiceProvider); ok {
+			b.logger.Infof("[BlockAssembler] initialising cleanup service")
+
+			b.cleanupService, err = cleanupServiceProvider.GetCleanupService()
+			if err != nil {
+				return err
+			}
+
+			if b.cleanupService != nil {
+				b.logger.Infof("[BlockAssembler] starting cleanup service")
+				b.cleanupService.Start(ctx)
+			}
+
+			b.cleanupServiceLoaded.Store(true)
+		}
+	}
+
+	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
+
+	// Start background cleanup of unmined transactions every 10 minutes
+	// This is started after initial cleanup and loading is complete
+	b.startUnminedTransactionCleanup(ctx)
+
+	return nil
+}
+
+func (b *BlockAssembler) initState(ctx context.Context) {
 	bestBlockHeader, bestBlockHeight, err := b.GetState(ctx)
 	if err != nil {
 		// TODO what is the best way to handle errors wrapped in grpc rpc errors?
@@ -610,18 +660,6 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 		}
 	}
 
-	// Wait for any pending blocks to be processed before loading unmined transactions
-	if !b.skipWaitForPendingBlocks {
-		if err = b.waitForPendingBlocks(ctx); err != nil {
-			return errors.NewProcessingError("[BlockAssembler] failed to wait for pending blocks", err)
-		}
-	}
-
-	// Load unmined transactions (this includes cleanup of old unmined transactions first)
-	if err = b.loadUnminedTransactions(ctx); err != nil {
-		return errors.NewProcessingError("[BlockAssembler] failed to load un-mined transactions", err)
-	}
-
 	currentDifficulty, err := b.blockchainClient.GetNextWorkRequired(ctx, b.bestBlockHeader.Load().Hash())
 	if err != nil {
 		b.logger.Errorf("[BlockAssembler] error getting next work required: %v", err)
@@ -632,33 +670,6 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 	if err = b.SetState(ctx); err != nil {
 		b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
 	}
-
-	b.startChannelListeners(ctx)
-
-	// Check if the UTXO store supports cleanup operations
-	if !b.settings.UtxoStore.DisableDAHCleaner {
-		if cleanupServiceProvider, ok := b.utxoStore.(cleanup.CleanupServiceProvider); ok {
-			b.logger.Infof("[BlockAssembler] initialising cleanup service")
-
-			b.cleanupService, err = cleanupServiceProvider.GetCleanupService()
-			if err != nil {
-				return err
-			}
-
-			if b.cleanupService != nil {
-				b.logger.Infof("[BlockAssembler] starting cleanup service")
-				b.cleanupService.Start(ctx)
-			}
-		}
-	}
-
-	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
-
-	// Start background cleanup of unmined transactions every 10 minutes
-	// This is started after initial cleanup and loading is complete
-	b.startUnminedTransactionCleanup(ctx)
-
-	return nil
 }
 
 // GetState retrieves the current state of the block assembler from the blockchain.
@@ -1339,6 +1350,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) (err error
 	}
 
 	unminedTransactions := make([]*utxo.UnminedTransaction, 0, 1024*1024) // preallocate a large slice to avoid reallocations
+	lockedTransactions := make([]chainhash.Hash, 0, 1024)
 
 	for {
 		unminedTransaction, err := it.Next(ctx)
@@ -1351,6 +1363,11 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) (err error
 		}
 
 		unminedTransactions = append(unminedTransactions, unminedTransaction)
+
+		if unminedTransaction.Locked {
+			// if the transaction is locked, we need to add it to the locked transactions list, so we can unlock them
+			lockedTransactions = append(lockedTransactions, *unminedTransaction.Hash)
+		}
 	}
 
 	// order the transactions by createdAt
@@ -1368,6 +1385,15 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) (err error
 
 		if err = b.subtreeProcessor.AddDirectly(subtreeNode, unminedTransaction.TxInpoints, true); err != nil {
 			return errors.NewProcessingError("error adding unmined transaction to subtree processor", err)
+		}
+	}
+
+	// unlock any locked transactions
+	if len(lockedTransactions) > 0 {
+		if err = b.utxoStore.SetLocked(ctx, lockedTransactions, false); err != nil {
+			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions: %v", len(lockedTransactions), err)
+		} else {
+			b.logger.Infof("[BlockAssembler] unlocked %d previously locked unmined transactions", len(lockedTransactions))
 		}
 	}
 

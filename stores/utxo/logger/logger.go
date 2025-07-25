@@ -171,7 +171,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 	return spends, err
 }
 
-func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
+func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	err := s.store.Unspend(ctx, spends, false)
 	spendDetails := make([]string, len(spends))
 
@@ -266,9 +266,9 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 	return spends, conflictingHashes, err
 }
 
-func (s *Store) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
-	err := s.store.SetUnspendable(ctx, txHashes, setValue)
-	s.logger.Debugf("[UTXOStore][logger][SetUnspendable] txHashes %v setValue %v err %v : %s", txHashes, setValue, err, caller())
+func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
+	err := s.store.SetLocked(ctx, txHashes, setValue)
+	s.logger.Debugf("[UTXOStore][logger][SetLocked] txHashes %v setValue %v err %v : %s", txHashes, setValue, err, caller())
 
 	return err
 }

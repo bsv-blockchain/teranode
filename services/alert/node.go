@@ -51,7 +51,7 @@ type Node struct {
 	blockchainClient blockchain.ClientI
 
 	// utxoStore manages UTXO operations including blacklisting UTXOs and
-	// managing unspendable flags for confiscation transactions
+	// managing locked flags for confiscation transactions
 	utxoStore utxo.Store
 
 	// blockassemblyClient handles block assembly operations, allowing the

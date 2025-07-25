@@ -98,8 +98,8 @@ import (
 //   - Uses Lua scripts for atomic operations
 //   - Handles concurrent unspend operations
 //   - Coordinates with external storage
-func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) (err error) {
-	return s.unspend(ctx, spends, flagAsUnspendable...)
+func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) (err error) {
+	return s.unspend(ctx, spends, flagAsLocked...)
 }
 
 // unspend implements the core unspend logic.
@@ -108,7 +108,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspend
 //  2. Logs operation details
 //  3. Executes Lua script
 //  4. Handles response
-func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) (err error) {
+func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) (err error) {
 	for i, spend := range spends {
 		select {
 		case <-ctx.Done():

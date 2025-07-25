@@ -80,7 +80,7 @@ end note
 Model -> UTXOStore: SetMinedMulti(ctx, txBatchHashes, blockID)
 activate UTXOStore
 note right of UTXOStore
-  SetMinedMulti also unsets the unspendable flag
+  SetMinedMulti also unsets the locked flag
   (second phase of two-phase commit)
 end note
 UTXOStore --> Model

@@ -331,7 +331,7 @@ func TestSetMinedMulti(t *testing.T) {
 		_ = it.Close()
 	})
 
-	t.Run("single block - with tx set to unspendable", func(t *testing.T) {
+	t.Run("single block - with tx locked for spending", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -340,12 +340,12 @@ func TestSetMinedMulti(t *testing.T) {
 		_, err := utxoStore.Create(ctx, tx, 0)
 		require.NoError(t, err)
 
-		err = utxoStore.SetUnspendable(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, true)
+		err = utxoStore.SetLocked(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, true)
 		require.NoError(t, err)
 
 		meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)
-		assert.True(t, meta.Unspendable)
+		assert.True(t, meta.Locked)
 
 		err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
 			BlockID:     1,
@@ -359,7 +359,7 @@ func TestSetMinedMulti(t *testing.T) {
 
 		assert.Len(t, meta.BlockIDs, 1)
 		assert.Equal(t, uint32(1), meta.BlockIDs[0])
-		assert.False(t, meta.Unspendable)
+		assert.False(t, meta.Locked)
 	})
 }
 

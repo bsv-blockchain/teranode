@@ -111,8 +111,8 @@ type BatchStoreItem struct {
 	// Conflicting indicates if this transaction is conflicting with another transaction
 	conflicting bool
 
-	// Unspendable indicates if this transaction is unspendable
-	unspendable bool
+	// Locked indicates if this transaction is locked for spending
+	locked bool
 
 	// Done is used to signal completion and return errors
 	done chan error
@@ -152,7 +152,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	txMeta.Conflicting = createOptions.Conflicting
 
-	txMeta.Unspendable = createOptions.Unspendable
+	txMeta.Locked = createOptions.Locked
 
 	// when creating conflicting transactions, we must set the conflictingChildren in all the parents
 	// we should do this before we store the transaction, so we are sure the parents have been updated properly
@@ -200,7 +200,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		blockHeights: blockHeights,
 		subtreeIdxs:  subtreeIdxs,
 		conflicting:  createOptions.Conflicting,
-		unspendable:  createOptions.Unspendable,
+		locked:       createOptions.Locked,
 		done:         errCh,
 	}
 
@@ -316,7 +316,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			external = true
 		}
 
-		binsToStore, hasUtxos, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.unspendable) // false is to say this is a normal record, not external.
+		binsToStore, hasUtxos, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked) // false is to say this is a normal record, not external.
 		if err != nil {
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not get bins to store", err))
 
@@ -479,7 +479,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, hasUtxos, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].unspendable) // true is to say this is a big record
+					binsToStore, hasUtxos, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].locked) // true is to say this is a big record
 					if err != nil {
 						utils.SafeSend[error](batch[idx].done, errors.NewProcessingError("could not get bins to store", err))
 						continue
@@ -586,7 +586,7 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 //   - Whether the transaction has UTXOs
 //   - Any error that occurred
 func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHeights []uint32, subtreeIdxs []int, external bool,
-	txHash *chainhash.Hash, isCoinbase bool, isConflicting bool, isUnspendable bool) ([][]*aerospike.Bin, bool, error) {
+	txHash *chainhash.Hash, isCoinbase bool, isConflicting bool, isLocked bool) ([][]*aerospike.Bin, bool, error) {
 	var (
 		fee          uint64
 		utxoHashes   []*chainhash.Hash
@@ -697,8 +697,8 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	// add the conflicting bin to all the records
 	commonBins = append(commonBins, aerospike.NewBin(fields.Conflicting.String(), isConflicting))
 
-	// add the unspendable bin to all the records
-	commonBins = append(commonBins, aerospike.NewBin(fields.Unspendable.String(), isUnspendable))
+	// add the locked bin to all the records
+	commonBins = append(commonBins, aerospike.NewBin(fields.Locked.String(), isLocked))
 
 	// Split utxos into batches
 	batches := s.splitIntoBatches(utxos, commonBins)

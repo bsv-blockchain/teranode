@@ -103,7 +103,7 @@ Options for ignoring certain flags during UTXO operations.
 ```go
 type IgnoreFlags struct {
     IgnoreConflicting bool
-    IgnoreUnspendable bool
+    IgnoreLocked bool
 }
 ```
 
@@ -118,7 +118,7 @@ type CreateOptions struct {
     IsCoinbase      *bool
     Frozen          bool
     Conflicting     bool
-    Unspendable     bool
+    Locked          bool
 }
 ```
 
@@ -157,7 +157,7 @@ type Store interface {
 
     // Unspend reverses a previous spend operation, marking UTXOs as unspent.
     // This is used during blockchain reorganizations.
-    Unspend(ctx context.Context, spends []*Spend, flagAsUnspendable ...bool) error
+    Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 
     // SetMinedMulti updates the block ID for multiple transactions that have been mined.
     SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error
@@ -189,8 +189,8 @@ type Store interface {
     // SetConflicting marks transactions as conflicting or not conflicting and returns the affected spends.
     SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error)
 
-    // SetUnspendable marks transactions as unspendable or spendable.
-    SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, value bool) error
+    // SetLocked marks transactions as locked and not spendable.
+    SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error
 
     // SetBlockHeight updates the current block height in the store.
     SetBlockHeight(height uint32) error
@@ -220,7 +220,7 @@ type Store interface {
 - `Unspend`: Reverses spend operations during blockchain reorganization.
 - `BatchDecorate`: Efficiently fetches metadata for multiple transactions in a single operation.
 - `FreezeUTXOs`/`UnFreezeUTXOs`: Manages frozen status of UTXOs for the alert system.
-- `SetConflicting`/`SetUnspendable`: Controls transaction conflict and spendability status.
+- `SetConflicting`/`SetLocked`: Controls transaction conflict and spendability status.
 - `GetMeta`: Retrieves transaction metadata for a single transaction.
 - `SetMinedMulti`: Updates block information for multiple mined transactions.
 - `PreviousOutputsDecorate`: Fetches information about transaction inputs' previous outputs.
@@ -236,7 +236,7 @@ type Store interface {
 - `WithSetCoinbase`: Sets the coinbase flag for a new UTXO entry.
 - `WithFrozen`: Sets the frozen status for a new UTXO entry.
 - `WithConflicting`: Sets the conflicting status for a new UTXO entry.
-- `WithUnspendable`: Sets the transaction as unspendable on creation.
+- `WithLocked`: Sets the transaction as locked on creation.
 
 ## Constants
 

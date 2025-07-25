@@ -787,12 +787,12 @@ func (t *TxMetaCache) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.
 // Parameters:
 // - ctx: Context for the operation
 // - spends: Array of Spend objects to mark as unspent
-// - flagAsUnspendable: Optional flag to mark the UTXOs as unspendable
+// - flagAsLocked: Optional flag to mark the UTXOs as locked
 //
 // Returns:
 // - Error if the unspend operation fails
-func (t *TxMetaCache) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsUnspendable ...bool) error {
-	return t.utxoStore.Unspend(ctx, spends, flagAsUnspendable...)
+func (t *TxMetaCache) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
+	return t.utxoStore.Unspend(ctx, spends, flagAsLocked...)
 }
 
 // PreviousOutputsDecorate populates previous output information for a list of outpoints.
@@ -808,7 +808,7 @@ func (t *TxMetaCache) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) er
 	return t.utxoStore.PreviousOutputsDecorate(ctx, tx)
 }
 
-// FreezeUTXOs marks UTXOs as frozen (temporarily unspendable) in the underlying store
+// FreezeUTXOs marks UTXOs as frozen and not spendable in the underlying store
 // and removes any related entries from the cache to ensure consistency.
 //
 // Parameters:
@@ -911,17 +911,17 @@ func (t *TxMetaCache) SetConflicting(ctx context.Context, txHashes []chainhash.H
 	return t.utxoStore.SetConflicting(ctx, txHashes, setValue)
 }
 
-// SetUnspendable marks transactions as unspendable or spendable.
+// SetLocked marks transactions as locked and not spendable.
 // This is a stub implementation that currently does nothing.
 //
 // Parameters:
 // - ctx: Context for the operation
-// - txHashes: Array of transaction hashes to mark as unspendable or spendable
-// - setValue: Whether to mark the transactions as unspendable (true) or spendable (false)
+// - txHashes: Array of transaction hashes to mark as locked or not locked
+// - setValue: Whether to mark the transactions as locked (true) or not locked (false)
 //
 // Returns:
 // - Error if the operation fails (currently always returns nil)
-func (t *TxMetaCache) SetUnspendable(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
+func (t *TxMetaCache) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
 }
 

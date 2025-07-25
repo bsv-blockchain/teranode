@@ -73,7 +73,7 @@ import (
 //go:embed teranode.lua
 var teranodeLUA []byte
 
-var LuaPackage = "teranode_v39" // N.B. Do not have any "." in this string
+var LuaPackage = "teranode_v40" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = subtree.FrozenBytes[:]
@@ -181,8 +181,8 @@ const (
 	// LuaConflicting indicates conflicting transaction
 	LuaConflicting LuaReturnValue = "CONFLICTING"
 
-	// LuaUnspendable indicates transaction is unspendable
-	LuaUnspendable LuaReturnValue = "UNSPENDABLE"
+	// LuaLocked indicates transaction is locked
+	LuaLocked LuaReturnValue = "LOCKED"
 
 	// LuaError indicates operation failed
 	LuaError LuaReturnValue = "ERROR"
@@ -199,7 +199,7 @@ var luaReturnValues = map[string]struct{}{
 	"OK":                {},
 	"ERROR":             {},
 	"CONFLICTING":       {},
-	"UNSPENDABLE":       {},
+	"LOCKED":            {},
 	"FROZEN":            {},
 	"COINBASE_IMMATURE": {},
 	"SPENT":             {},

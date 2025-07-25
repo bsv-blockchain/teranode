@@ -51,6 +51,41 @@ func createTestUTXOStore(t *testing.T) utxo.Store {
 	return utxoStore
 }
 
+func TestInvalidBlock(t *testing.T) {
+	// Create a block with an invalid header
+	blockBytes, err := os.ReadFile("testdata/000000000000000013fe95f5780829671cf1b5e62d5fb3fa9672403fdb0d1786.block")
+	require.NoError(t, err)
+
+	block, err := NewBlockFromBytes(blockBytes, nil)
+	require.NoError(t, err)
+
+	_ = block
+
+	subtreeBytes, err := os.ReadFile("testdata/79da80b50f9de16e3cbb0e17fb44f86bb3c7dd37787d85d38cda1acae69245a6.subtree")
+	require.NoError(t, err)
+
+	txHashes := make([]chainhash.Hash, 0, len(subtreeBytes)/chainhash.HashSize)
+
+	lookForHash, _ := chainhash.NewHashFromStr("37d5df021bbb5839d6c9076eb24a7f6e0d68f1aef5b9f95ecea7b76d2589db2c")
+
+	for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
+		var txHash chainhash.Hash
+		copy(txHash[:], subtreeBytes[i:i+chainhash.HashSize])
+		txHashes = append(txHashes, txHash)
+		if txHash.Equal(*lookForHash) {
+			fmt.Println("Found hash:", txHash.String())
+		}
+	}
+
+	assert.Len(t, txHashes, len(subtreeBytes)/chainhash.HashSize)
+	_ = txHashes
+
+	// print out txHashes 1 per line
+	for _, txHash := range txHashes {
+		fmt.Println(txHash.String())
+	}
+}
+
 // TestZeroCoverageFunctions tests functions that currently have 0% coverage
 // These are simplified tests that just call the functions to improve coverage
 func TestZeroCoverageFunctions(t *testing.T) {

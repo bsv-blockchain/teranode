@@ -294,7 +294,7 @@ Technical changes:
 - UTXO Store:
 
     - Clears `spendingTxID` from parent UTXOs
-    - Sets `unspendable = true` on parent UTXOs
+    - Sets `locked = true` on parent UTXOs
     - Removes spend markers from tx_original's outputs
     - Maintains conflict flags and TTLs
 ```
@@ -311,7 +311,7 @@ Technical changes:
 
     - Sets `spendingTxID` to double spend transaction
     - Creates new UTXOs for double spend outputs
-    - Ignores `unspendable` flag during spend
+    - Ignores `locked` flag during spend
     - No TTL set on double spend transaction
 ```
 
@@ -340,7 +340,7 @@ Technical changes:
 
 - UTXO Store:
 
-    - Sets `unspendable = false` on parent UTXOs
+    - Sets `locked = false` on parent UTXOs
 ```
 
 At the end of the process, the original transaction is now marked as conflicting, and the double spend transaction is considered valid. The UTXO set has been successfully transitioned to the new chain.

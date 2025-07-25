@@ -41,10 +41,10 @@ func TestNullStoreGet(t *testing.T) {
 	assert.NotNil(t, data)
 }
 
-func TestNullStoreSetUnspendable(t *testing.T) {
+func TestNullStoreSetLocked(t *testing.T) {
 	store := &NullStore{}
 	ctx := context.Background()
-	err := store.SetUnspendable(ctx, nil, true)
+	err := store.SetLocked(ctx, nil, true)
 
 	assert.NoError(t, err)
 }

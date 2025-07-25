@@ -39,8 +39,8 @@ const (
 	Conflicting FieldName = "conflicting"
 	// ConflictingChildren contains transactions that spend from this conflicting transaction
 	ConflictingChildren FieldName = "conflictingCs" // bin Fieldname can only be max 15 chars in aerospike
-	// Unspendable indicates whether the transaction outputs are marked as unspendable
-	Unspendable FieldName = "unspendable"
+	// Locked indicates whether the transaction outputs are marked as locked, and therefor not spendable
+	Locked FieldName = "locked"
 	// UtxoSpendableIn indicates the number of blocks after which the UTXO becomes spendable
 	UtxoSpendableIn FieldName = "utxoSpendableIn"
 	// SpendingHeight is the block height at which the UTXO was spent
