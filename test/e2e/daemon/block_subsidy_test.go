@@ -9,8 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// How to run:
+// go test -v -run "^TestBlockSubsidy$" ./test/e2e/daemon
 // TestBlockSubsidy verifies that block subsidy is correctly included in the coinbase transaction
 // TNJ4-4
+
 func TestBlockSubsidy(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()

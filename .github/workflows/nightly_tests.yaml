@@ -196,7 +196,7 @@ jobs:
       - name: Run Block Subsidy Tests
         run: |
           go clean -testcache
-          go test -v $TEST_DIR/block_subsidy_test.go
+          go test -v -run "^TestBlockSubsidy$" $TEST_DIR
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
@@ -210,42 +210,71 @@ jobs:
 
       - name: Run Reassign Tests
         run: |
-          go test -v $TEST_DIR/reassign_test.go
+          go test -v -run "^TestShouldAllowReassign$" $TEST_DIR
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
 
       - name: Run Reorg Tests
         run: |
-          go test -v $TEST_DIR/reorg_test.go
+          go test -v -run "^(\
+          TestMoveUp|\
+          TestMoveDownMoveUpWhenNewBlockIsGenerated|\
+          TestMoveDownMoveUpWhenNoNewBlockIsGenerated|\
+          TestTDRestart|\
+          TestDynamicSubtreeSize|\
+          TestInvalidBlockTestBlockValidationCatchup\
+          )$" $TEST_DIR
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
 
       - name: Run RPC Smoke PG Tests
         run: |
-          go test -v $TEST_DIR/rpc_smoke_pg_test.go
+          go test -v -run "^(\
+          TestTracing|\
+          TestSendTxAndCheckState|\
+          TestShouldNotProcessNonFinalTx|\
+          TestShouldRejectOversizedTx|\
+          TestShouldRejectOversizedScript|\
+          TestShouldAllowChainedTransactionsUseRpc|\
+          TestDoubleInput|\
+          TestGetBestBlockHash|\
+          TestGetPeerInfo|\
+          TestGetMiningInfo|\
+          TestVersion|\
+          TestGetBlockVerbosity|\
+          TestGetBlockHeaderVerbose|\
+          TestGetRawTransactionVerbose|\
+          TestGetMiningCandidate|\
+          TestGenerateToAddress|\
+          TestBlockManagement\
+          )$" $TEST_DIR
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
 
       - name: Run Spend UTXO Tests
         run: |
-          go test -v $TEST_DIR/spend_utxo_test.go
+          go test -v -run "^TestShouldAllowSpendAllUtxos$" $TEST_DIR
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
 
       - name: Run UTXO Tests
         run: |
-          go test -v $TEST_DIR/utxo_test.go
+          go test -v -run "^(\
+          TestFreezeAndUnfreezeUtxos|\
+          TestDeleteAtHeightHappyPath|\
+          TestSubtreeBlockHeightRetention|\
+          )$" $TEST_DIR
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
 
       - name: Run TNC1.1 Test
         run: |
-          go test -v $TEST_DIR/tnc1_1_test.go
+          go test -v -run "^TestVerifyMerkleRootCalculation$" $TEST_DIR
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true
@@ -273,7 +302,7 @@ jobs:
 
       - name: Run TNC2.1 Test
         run: |
-          go test -v $TEST_DIR/tnc2_1_test.go
+          go test -v -run "^TestVerifyMerkleRootCalculation|TestConcurrentCandidateIdentifiers$" $TEST_DIR
         env:
           GITHUB_ACTIONS: true
         continue-on-error: true

@@ -3,12 +3,18 @@ package smoke
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/settings"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/stretchr/testify/require"
+)
+
+var (
+	// Reasonable timeout for block synchronization
+	blockWaitTime = 30 * time.Second
 )
 
 func TestNode_DoNotVerifyTransactionsIfAlreadyVerified(t *testing.T) {
@@ -59,13 +65,13 @@ func TestNode_DoNotVerifyTransactionsIfAlreadyVerified(t *testing.T) {
 	_, err := node1.CallRPC(node1.Ctx, "generate", []any{blocks})
 	require.NoError(t, err, "Failed to mine blocks on node1")
 
-	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, blocks, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, blocks, blockWaitTime)
 	require.NoError(t, err)
 
-	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, blocks, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, blocks, blockWaitTime)
 	require.NoError(t, err)
 
-	err = helper.WaitForNodeBlockHeight(t.Context(), node3.BlockchainClient, blocks, blockWait)
+	err = helper.WaitForNodeBlockHeight(t.Context(), node3.BlockchainClient, blocks, blockWaitTime)
 	require.NoError(t, err)
 
 	block1, errblock := node1.BlockchainClient.GetBlockByHeight(ctx, 1)
@@ -102,13 +108,13 @@ func TestNode_DoNotVerifyTransactionsIfAlreadyVerified(t *testing.T) {
 
 		blocks++
 
-		err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, blocks, blockWait)
+		err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, blocks, blockWaitTime)
 		require.NoError(t, err)
 
-		err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, blocks, blockWait)
+		err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, blocks, blockWaitTime)
 		require.NoError(t, err)
 
-		err = helper.WaitForNodeBlockHeight(t.Context(), node3.BlockchainClient, blocks, blockWait)
+		err = helper.WaitForNodeBlockHeight(t.Context(), node3.BlockchainClient, blocks, blockWaitTime)
 		require.NoError(t, err)
 	}
 
