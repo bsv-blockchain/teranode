@@ -11,8 +11,6 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
-	"github.com/bitcoin-sv/teranode/services/blockpersister"
-	"github.com/bitcoin-sv/teranode/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/teranode/settings"
 	memory_blob "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
@@ -43,7 +41,7 @@ var (
 	}
 )
 
-func TestGetLegacyBlockWithBlockStore(t *testing.T) {
+func TestGetLegacyBlockWithSubtreeDataFromStore(t *testing.T) {
 	tracing.SetupMockTracer()
 
 	ctx := setup(t)
@@ -54,17 +52,21 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	blockchainClientMock := ctx.repo.BlockchainClient.(*blockchain.Mock)
 	blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
 
-	// create the block-store .subtreeData file
-	storer, err := filestorer.NewFileStorer(context.Background(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], fileformat.FileTypeSubtreeData)
+	// create the .subtreeData file
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+
+	for i, tx := range params.txs {
+		require.NoError(t, subtreeData.AddTx(tx, i))
+	}
+
+	subtreeDataBytes, err := subtreeData.Serialize()
 	require.NoError(t, err)
 
-	err = blockpersister.WriteTxs(context.Background(), ctx.logger, storer, params.txs, nil)
+	err = ctx.repo.SubtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes)
 	require.NoError(t, err)
 
-	_ = storer.Close(context.Background())
-
-	// should be able to get the block from the block-store (should NOT be looking at subtree-store)
-	r, err := ctx.repo.GetLegacyBlockReader(context.Background(), &chainhash.Hash{})
+	// should be able to get the block from the subtree-store from file
+	r, err := ctx.repo.GetLegacyBlockReader(t.Context(), &chainhash.Hash{})
 	require.NoError(t, err)
 
 	bytes := make([]byte, 4096)

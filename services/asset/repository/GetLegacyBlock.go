@@ -4,6 +4,7 @@
 package repository
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"io"
@@ -44,9 +45,8 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 	r, w := io.Pipe()
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		err := repo.writeLegacyBlockHeader(w, block, returnWireBlock)
-		if err != nil {
+	g.Go(func() (err error) {
+		if err = repo.writeLegacyBlockHeader(w, block, returnWireBlock); err != nil {
 			_ = w.CloseWithError(io.ErrClosedPipe)
 			_ = r.CloseWithError(err)
 
@@ -68,14 +68,66 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 			return nil
 		}
 
-		for _, subtree := range block.Subtrees {
-			if err = repo.writeTransactionsViaBlockStore(gCtx, w, block, subtree); err != nil {
-				// not available via block-store (BlockPersister), maybe this is a timing issue.
-				// try different approach - get the subtree/tx data using the subtree-store and utxo-store
-				err = repo.writeTransactionsViaSubtreeStore(gCtx, w, block, subtree)
+		var (
+			subtreeDataExists bool
+			subtreeDataReader io.ReadCloser
+		)
+
+		for subtreeIdx, subtreeHash := range block.Subtrees {
+			subtreeDataExists, err = repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+			if err == nil && subtreeDataExists {
+				subtreeDataReader, err = repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+				if err != nil {
+					_ = w.CloseWithError(io.ErrClosedPipe)
+					_ = r.CloseWithError(err)
+
+					return errors.NewProcessingError("[GetLegacyBlockReader] error getting subtree %s from store", subtreeHash.String(), err)
+				}
+
+				// make sure we include the coinbase tx in the first subtree
+				if subtreeIdx == 0 && block.CoinbaseTx != nil {
+					// Write the coinbase tx first
+					if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
+						_ = w.CloseWithError(io.ErrClosedPipe)
+						_ = r.CloseWithError(err)
+
+						return errors.NewProcessingError("error writing coinbase transaction to writer: %s", err)
+					}
+				}
+
+				// create a buffered reader to read the subtree data
+				bufferedReader := bufio.NewReaderSize(subtreeDataReader, 2*1024*1024) // 2MB buffer size
+
+				// process the subtree data streaming to the writer
+				for {
+					tx := &bt.Tx{}
+
+					// this will read the extended format transaction into the tx object
+					if _, err = tx.ReadFrom(bufferedReader); err != nil {
+						if err == io.EOF {
+							break
+						}
+
+						return errors.NewProcessingError("error reading transaction: %s", err)
+					}
+
+					// Write the normal transaction bytes to the writer
+					if _, err = w.Write(tx.Bytes()); err != nil {
+						_ = w.CloseWithError(io.ErrClosedPipe)
+						_ = r.CloseWithError(err)
+
+						return errors.NewProcessingError("error writing transaction to writer: %s", err)
+					}
+				}
+
+				// close the subtree data reader after processing all transactions
+				_ = subtreeDataReader.Close()
+
+				// move to the next subtree
+				continue
 			}
 
-			if err != nil {
+			if err = repo.writeTransactionsViaSubtreeStore(gCtx, w, block, subtreeHash); err != nil {
 				_ = w.CloseWithError(io.ErrClosedPipe)
 				_ = r.CloseWithError(err)
 
@@ -143,33 +195,6 @@ func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, 
 	return nil
 }
 
-// writeTransactionsViaBlockStore writes transactions from the block store to the provided writer.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - block: Block containing the transactions
-//   - subtreeHash: Hash of the subtree containing transaction information
-//   - w: Writer to write the transactions to
-//
-// Returns:
-//   - error: Any error encountered during writing
-func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, w *io.PipeWriter, _ *model.Block, subtreeHash *chainhash.Hash) error {
-	if subtreeReader, err := repo.GetSubtreeDataReaderFromBlockPersister(ctx, subtreeHash); err != nil {
-		return err
-	} else {
-		// skip the subtree tx size
-		_, _ = subtreeReader.Read(make([]byte, 4))
-
-		if _, err := io.Copy(w, subtreeReader); err != nil {
-			return err
-		}
-
-		_ = subtreeReader.Close()
-	}
-
-	return nil
-}
-
 // writeTransactionsViaSubtreeStore writes transactions from the subtree store to the provided writer.
 // This is used as a fallback when transactions are not available in the block store.
 //
@@ -196,8 +221,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 
 	subtree := subtreepkg.Subtree{}
 
-	err = subtree.DeserializeFromReader(subtreeReader)
-	if err != nil {
+	if err = subtree.DeserializeFromReader(subtreeReader); err != nil {
 		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error deserializing subtree", err)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )
@@ -22,21 +23,17 @@ import (
 // Returns:
 // - *io.PipeReader: A PipeReader that can be used to read the subtree data.
 // - error: An error if the retrieval fails, or nil if successful.
-func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (*io.PipeReader, error) {
+func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error) {
+	subtreeDataExists, err := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+	if err == nil && subtreeDataExists {
+		return repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+	}
+
 	r, w := io.Pipe()
-
 	g, gCtx := errgroup.WithContext(ctx)
+
 	g.Go(func() error {
-		var err error
-
-		if err = repo.writeTransactionsViaBlockStore(gCtx, w, nil, subtreeHash); err != nil {
-			// not available via block-store (BlockPersister), maybe this is a timing issue.
-			// try different approach - get the subtree/tx data using the subtree-store and utxo-store
-			// TODO optimize by storing the block persister subtree data and returning that, instead of doing this
-			err = repo.writeTransactionsViaSubtreeStore(gCtx, w, nil, subtreeHash)
-		}
-
-		if err != nil {
+		if err := repo.writeTransactionsViaSubtreeStore(gCtx, w, nil, subtreeHash); err != nil {
 			_ = w.CloseWithError(io.ErrClosedPipe)
 			_ = r.CloseWithError(err)
 

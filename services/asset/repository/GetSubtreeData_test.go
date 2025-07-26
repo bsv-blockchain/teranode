@@ -16,11 +16,11 @@ import (
 func TestGetSubtreeDataWithReader(t *testing.T) {
 	tracing.SetupMockTracer()
 
-	t.Run("get subtree from block store", func(t *testing.T) {
+	t.Run("get subtree from subtree store", func(t *testing.T) {
 		ctx, subtree, txs := setupSubtreeReaderTest(t)
 
 		// create the block-store .subtree file
-		storer, err := filestorer.NewFileStorer(t.Context(), ctx.logger, ctx.settings, ctx.repo.BlockPersisterStore, subtree.RootHash()[:], fileformat.FileTypeSubtreeData)
+		storer, err := filestorer.NewFileStorer(t.Context(), ctx.logger, ctx.settings, ctx.repo.SubtreeStore, subtree.RootHash()[:], fileformat.FileTypeSubtreeData)
 		require.NoError(t, err)
 
 		err = blockpersister.WriteTxs(t.Context(), ctx.logger, storer, txs, nil)
@@ -80,7 +80,7 @@ func setupSubtreeReaderTest(t *testing.T) (*testContext, *subtreepkg.Subtree, []
 	return ctx, subtree, txs
 }
 
-func checkSubtreeTransactions(t *testing.T, r *io.PipeReader, includeCoinbase bool) {
+func checkSubtreeTransactions(t *testing.T, r io.ReadCloser, includeCoinbase bool) {
 	// read the transactions from the subtree data
 	txCount := 0
 

@@ -82,7 +82,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 			g.Go(func() error {
 				u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i+1, len(block.Subtrees), subtreeHash.String())
 
-				return u.ProcessSubtree(gCtx, *subtreeHash, block.CoinbaseTx, utxoDiff)
+				return u.ProcessSubtree(gCtx, *subtreeHash, block.CoinbaseTx)
 			})
 		}
 
@@ -106,8 +106,6 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	if err != nil {
 		return errors.NewStorageError("error creating block file", err)
 	}
-
-	// TODO Write header extra
 
 	if _, err = storer.Write(blockBytes); err != nil {
 		return errors.NewStorageError("error writing block to disk", err)

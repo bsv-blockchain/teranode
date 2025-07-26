@@ -189,7 +189,7 @@ func (m *Mock) GetSubtreeDataReaderFromBlockPersister(_ context.Context, hash *c
 	return args.Get(0).(io.ReadCloser), args.Error(1)
 }
 
-func (m *Mock) GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (*io.PipeReader, error) {
+func (m *Mock) GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error) {
 	args := m.Called(ctx, subtreeHash)
 
 	if args.Error(1) != nil {

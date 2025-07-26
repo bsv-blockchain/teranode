@@ -203,9 +203,13 @@ func (m *MockStore) ProcessExpiredPreservations(ctx context.Context, currentHeig
 func TestBlock(t *testing.T) {
 	block, blockBytes, _, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
 
+	// remove the subtree data file if it exists, since we want to test the persistence
+	err := subtreeStore.Del(t.Context(), mockUTXOStore.subtrees[0].RootHash()[:], fileformat.FileTypeSubtreeData)
+	require.NoError(t, err)
+
 	persister := New(context.Background(), ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStore, blockchainClient)
 
-	err := persister.persistBlock(context.Background(), mockUTXOStore.subtrees[0].RootHash(), blockBytes)
+	err = persister.persistBlock(context.Background(), mockUTXOStore.subtrees[0].RootHash(), blockBytes)
 	require.NoError(t, err)
 
 	newBlockBytes, err := blockStore.Get(context.Background(), mockUTXOStore.subtrees[0].RootHash()[:], fileformat.FileTypeBlock)
@@ -269,6 +273,9 @@ func TestBlockMissingTxMeta(t *testing.T) {
 
 	// use a mock store that has missing txs
 	mockUTXOStoreWithMissingTxs, err := newMockStore(extendedTxs[1:])
+	require.NoError(t, err)
+
+	err = subtreeStore.Del(t.Context(), mockUTXOStore.subtrees[0].RootHash()[:], fileformat.FileTypeSubtreeData)
 	require.NoError(t, err)
 
 	persister := New(context.Background(), ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStoreWithMissingTxs, blockchainClient)

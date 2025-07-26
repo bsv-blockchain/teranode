@@ -4,7 +4,6 @@ package blockpersister
 
 import (
 	"context"
-	"encoding/binary"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
@@ -37,19 +36,36 @@ import (
 //   - pCtx: Parent context for the operation, used for cancellation and tracing
 //   - subtreeHash: Hash identifier of the subtree to process
 //   - coinbaseTx: The coinbase transaction for the block containing this subtree
-//   - utxoDiff: UTXO set difference tracker to record all changes resulting from processing
 //
 // Returns an error if any part of the subtree processing fails. Errors are wrapped with
 // appropriate context to identify the specific failure point (storage, processing, etc.).
 //
 // Note: Processing is not atomic across multiple subtrees - each subtree is processed individually,
 // allowing partial block processing to succeed even if some subtrees fail.
-func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error {
+func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx) error {
 	ctx, _, deferFn := tracing.Tracer("blockpersister").Start(pCtx, "ProcessSubtree",
 		tracing.WithHistogram(prometheusBlockPersisterValidateSubtree),
 		tracing.WithDebugLogMessage(u.logger, "[ProcessSubtree] called for subtree %s", subtreeHash.String()),
 	)
 	defer deferFn()
+
+	// check whether the subtreeData already exists in the store
+	// If it does, then persist the file
+	subtreeDataExists, err := u.subtreeStore.Exists(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData)
+	if err != nil {
+		return errors.NewStorageError("[BlockPersister] error checking if subtree data exists for %s", subtreeHash.String(), err)
+	}
+
+	if subtreeDataExists {
+		u.logger.Debugf("[BlockPersister] Subtree data for %s already exists, skipping processing, but persisting", subtreeHash.String())
+		err = u.subtreeStore.SetDAH(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData, 0)
+		if err != nil {
+			return errors.NewStorageError("[BlockPersister] error setting subtree data DAH for %s", subtreeHash.String(), err)
+		}
+
+		// no more processing needed, just return
+		return nil
+	}
 
 	// 1. get the subtree from the subtree store
 	subtree, err := u.readSubtree(ctx, subtreeHash)
@@ -57,43 +73,27 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 		return err
 	}
 
-	txHashes := make([]chainhash.Hash, len(subtree.Nodes))
-
-	for i := 0; i < len(subtree.Nodes); i++ {
-		txHashes[i] = subtree.Nodes[i].Hash
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	if subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+		if err = subtreeData.AddTx(coinbaseTx, 0); err != nil {
+			return errors.NewProcessingError("[BlockPersister] error adding coinbase tx to subtree data", err)
+		}
 	}
-
-	// txMetaSlice will be populated with the txMeta data for each txHash
-	txs := make([]*bt.Tx, len(txHashes))
-
-	if txHashes[0].Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-		txs[0] = coinbaseTx
-	}
-
-	batched := u.settings.Block.BatchMissingTransactions
 
 	// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
-	missed, err := u.processTxMetaUsingStore(ctx, txHashes, txs, batched)
-	if err != nil {
+	if err = u.processTxMetaUsingStore(ctx, subtree, subtreeData); err != nil {
 		return errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String(), err)
 	}
 
-	if missed > 0 {
-		for i := 0; i < len(txHashes); i++ {
-			u.logger.Errorf("[ValidateSubtreeInternal][%s] failed to get tx meta from store for tx %s", subtreeHash.String(), txHashes[i].String())
-		}
-
-		return errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get %d of %d tx meta from store", subtreeHash.String(), missed, len(txHashes))
-	}
-
-	storer, err := filestorer.NewFileStorer(ctx, u.logger, u.settings, u.blockStore, subtreeHash[:], fileformat.FileTypeSubtreeData)
+	// add support for writing the subtree data from a reader
+	subtreeDataBytes, err := subtreeData.Serialize()
 	if err != nil {
-		return errors.NewStorageError("error creating subtree file", err)
+		return errors.NewProcessingError("[BlockPersister] error serializing subtree data for %s", subtreeHash.String(), err)
 	}
-	defer storer.Close(ctx)
 
-	if err = WriteTxs(ctx, u.logger, storer, txs, utxoDiff); err != nil {
-		return errors.NewProcessingError("[BlockPersister] error writing txs", err)
+	err = u.subtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData, subtreeDataBytes)
+	if err != nil {
+		return errors.NewStorageError("[BlockPersister] error storing subtree data for %s", subtreeHash.String(), err)
 	}
 
 	return nil
@@ -219,19 +219,13 @@ func (u *Server) readSubtree(ctx context.Context, subtreeHash chainhash.Hash) (*
 // The operation is not fully atomic - some transactions may be written successfully even if
 // others fail. The caller should handle partial success scenarios appropriately.
 func WriteTxs(_ context.Context, logger ulogger.Logger, writer *filestorer.FileStorer, txs []*bt.Tx, utxoDiff *utxopersister.UTXOSet) error {
-	// Write the number of txs in the subtree
-	//      this makes it impossible to stream directly from S3 to the client
-	if err := binary.Write(writer, binary.LittleEndian, uint32(len(txs))); err != nil {
-		return errors.NewProcessingError("error writing number of txs", err)
-	}
-
 	for i, tx := range txs {
 		if tx == nil {
 			logger.Errorf("[WriteTxs] txMeta.Tx is nil at index %d", i)
 			continue
 		}
 
-		if _, err := writer.Write(tx.Bytes()); err != nil {
+		if _, err := writer.Write(tx.ExtendedBytes()); err != nil {
 			return errors.NewProcessingError("error writing tx", err)
 		}
 

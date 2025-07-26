@@ -45,7 +45,7 @@ type Interface interface {
 	GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
 	GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
-	GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (*io.PipeReader, error)
+	GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error)
 	GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.SubtreeData, error)
 	GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error)
@@ -544,21 +544,7 @@ func (repo *Repository) GetSubtreeData(ctx context.Context, hash *chainhash.Hash
 
 	r, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeData)
 	if err != nil {
-		// the blockStore does not have extended transactions, which other Teranode expect
-		// if errors.Is(err, errors.ErrNotFound) {
-		// 	// try to get the subtree data from the block persister store
-		// 	if r, err = repo.BlockPersisterStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeData); err != nil {
-		// 		return nil, errors.NewServiceError("[GetSubtreeData][%s] error in GetSubtreeData Get method", hash.String(), err)
-		// 	}
-		//
-		// 	// the blockstore stores the number of transactions as the first 4 bytes in the subtree data file
-		// 	// we need to read this value before passing the reader to the subtree.NewSubtreeDataFromReader method
-		// 	if _, err = r.Read(make([]byte, 4)); err != nil {
-		// 		return nil, errors.NewServiceError("[GetSubtreeData][%s] error reading number of transactions from subtree data file", hash.String(), err)
-		// 	}
-		// } else {
 		return nil, errors.NewServiceError("[GetSubtreeData][%s] error in GetSubtreeData Get method", hash.String(), err)
-		// }
 	}
 
 	defer func() {

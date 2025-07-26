@@ -5,16 +5,13 @@ package blockpersister
 import (
 	"context"
 	"runtime"
-	"sync/atomic"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
-	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/go-subtree"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -50,111 +47,55 @@ import (
 // The function handles special cases like coinbase transactions, which are placeholders not
 // present in the store. It also accounts for context cancellation to support clean shutdowns.
 // Concurrent access to shared state is protected using atomic operations to ensure thread safety.
-func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txs []*bt.Tx, batched bool) (int, error) {
-	if len(txHashes) != len(txs) {
-		return 0, errors.NewInvalidArgumentError("txHashes and txMetaSlice must be the same length")
-	}
-
+func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.SubtreeData) error {
 	ctx, _, deferFn := tracing.Tracer("blockpersister").Start(ctx, "processTxMetaUsingStore")
 	defer deferFn()
 
 	batchSize := u.settings.Block.ProcessTxMetaUsingStoreBatchSize
-	validateSubtreeInternalConcurrency := subtree.Max(4, runtime.NumCPU()/2)
+	validateSubtreeInternalConcurrency := subtreepkg.Max(4, runtime.NumCPU()/2)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, validateSubtreeInternalConcurrency)
 
-	var missed atomic.Int32
+	var (
+		subtreeLen = subtree.Length()
+	)
 
-	if batched {
-		for i := 0; i < len(txHashes); i += batchSize {
+	if u.settings.Block.BatchMissingTransactions {
+		for i := 0; i < subtreeLen; i += batchSize {
 			i := i // capture range variable for goroutine
 
 			g.Go(func() error {
-				end := subtree.Min(i+batchSize, len(txHashes))
+				end := subtreepkg.Min(i+batchSize, subtreeLen)
 
 				missingTxHashesCompacted := make([]*utxo.UnresolvedMetaData, 0, end-i)
 
-				for j := 0; j < subtree.Min(batchSize, len(txHashes)-i); j++ {
-					select {
-					case <-gCtx.Done(): // Listen for cancellation signal
-						return gCtx.Err() // Return the error that caused the cancellation
+				for j := 0; j < subtreepkg.Min(batchSize, subtreeLen-i); j++ {
+					if subtree.Nodes[i+j].Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+						// coinbase placeholder is not in the store
+						continue
+					}
 
-					default:
-						if txHashes[i+j].Equal(*subtree.CoinbasePlaceholderHash) {
-							// coinbase placeholder is not in the store
-							continue
-						}
-
-						if txs[i+j] == nil {
-							missingTxHashesCompacted = append(missingTxHashesCompacted, &utxo.UnresolvedMetaData{
-								Hash: txHashes[i+j],
-								Idx:  i + j,
-							})
-						}
+					if subtreeData.Txs[i+j] == nil {
+						missingTxHashesCompacted = append(missingTxHashesCompacted, &utxo.UnresolvedMetaData{
+							Hash: subtree.Nodes[i+j].Hash,
+							Idx:  i + j,
+						})
 					}
 				}
 
+				// get the missing transactions in a batch from the store
 				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, fields.Tx); err != nil {
 					return err
 				}
 
-				select {
-				case <-gCtx.Done(): // Listen for cancellation signal
-					return gCtx.Err() // Return the error that caused the cancellation
-
-				default:
-					for _, data := range missingTxHashesCompacted {
-						if data.Data == nil || data.Err != nil {
-							missed.Add(1)
-							continue
-						}
-
-						txs[data.Idx] = data.Data.Tx
+				for _, data := range missingTxHashesCompacted {
+					if data.Data == nil || data.Err != nil {
+						return errors.NewProcessingError("[processTxMetaUsingStore] failed to retrieve transaction metadata for hash %s", data.Hash, data.Err)
 					}
 
-					return nil
-				}
-			})
-		}
-
-		if err := g.Wait(); err != nil {
-			return int(missed.Load()), err
-		}
-
-		return int(missed.Load()), nil
-	} else {
-		for i := 0; i < len(txHashes); i += batchSize {
-			i := i
-
-			g.Go(func() error {
-				// cycle through the batch size, making sure not to go over the length of the txHashes
-				for j := 0; j < subtree.Min(batchSize, len(txHashes)-i); j++ {
-					select {
-					case <-gCtx.Done(): // Listen for cancellation signal
-						return gCtx.Err() // Return the error that caused the cancellation
-
-					default:
-						txHash := txHashes[i+j]
-
-						if txHash.Equal(*subtree.CoinbasePlaceholderHash) {
-							// coinbase placeholder is not in the store
-							continue
-						}
-
-						if txs[i+j] == nil {
-							txMeta, err := u.utxoStore.Get(gCtx, &txHash, fields.Tx)
-							if err != nil {
-								return err
-							}
-
-							if txMeta != nil {
-								txs[i+j] = txMeta.Tx
-								continue
-							}
-						}
-
-						missed.Add(1)
+					if err := subtreeData.AddTx(data.Data.Tx, data.Idx); err != nil {
+						return errors.NewProcessingError("[processTxMetaUsingStore] failed to add transaction metadata for hash %s: %v", data.Hash, err)
 					}
 				}
 
@@ -163,9 +104,48 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 		}
 
 		if err := g.Wait(); err != nil {
-			return int(missed.Load()), err
+			return err
 		}
 
-		return int(missed.Load()), nil
+		return nil
+	} else {
+		for i := 0; i < subtreeLen; i += batchSize {
+			i := i
+
+			g.Go(func() error {
+				// cycle through the batch size, making sure not to go over the length of the txHashes
+				for j := 0; j < subtreepkg.Min(batchSize, subtreeLen-i); j++ {
+					txHash := subtree.Nodes[i+j].Hash
+
+					if txHash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+						// coinbase placeholder is not in the store
+						continue
+					}
+
+					if subtreeData.Txs[i+j] == nil {
+						txMeta, err := u.utxoStore.Get(gCtx, &txHash, fields.Tx)
+						if err != nil {
+							return err
+						}
+
+						if txMeta == nil || txMeta.Tx == nil {
+							return errors.NewProcessingError("[processTxMetaUsingStore] failed to retrieve transaction metadata for hash %s", txHash)
+						}
+
+						if err = subtreeData.AddTx(txMeta.Tx, i+j); err != nil {
+							return errors.NewProcessingError("[processTxMetaUsingStore] failed to add transaction metadata for hash %s: %v", txHash, err)
+						}
+					}
+				}
+
+				return nil
+			})
+		}
+
+		if err := g.Wait(); err != nil {
+			return err
+		}
+
+		return nil
 	}
 }
