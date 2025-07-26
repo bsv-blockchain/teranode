@@ -30,7 +30,7 @@ services:
     network_mode: "host"
     build:
       context: ..
-      dockerfile: local.Dockerfile
+      dockerfile: Dockerfile
       args:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:build-latest
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:run-latest

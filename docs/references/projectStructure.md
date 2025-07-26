@@ -15,7 +15,6 @@ teranode/
 ├── settings_local.conf           # Developer-specific and deployment-specific settings. Overrides settings.conf. Not tracked in source control.
 │
 ├── Dockerfile                    # Main Dockerfile for containerization
-├── local.Dockerfile              # Dockerfile for local development
 ├── docker-compose.yml            # Docker Compose configuration
 │
 ├── cmd/                          # Directory containing command-line tools and utilities
