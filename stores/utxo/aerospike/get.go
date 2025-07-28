@@ -720,14 +720,15 @@ NEXT_BATCH_RECORD:
 				items[idx].Data.SpendingDatas = res
 
 			case fields.Locked:
+				// NOTE: not all records will have the locked field, so we need to check if it exists
+				// for instance seeded nodes will not have the locked field for all records.
 				lockedBool, ok := bins[key.String()].(bool)
-				if !ok {
-					items[idx].Err = errors.NewTxInvalidError("missing locked")
-
-					continue NEXT_BATCH_RECORD // because there was an error reading the locked from the store.
+				if ok {
+					items[idx].Data.Locked = lockedBool
+				} else {
+					// if the locked field is not present, we assume it is not locked
+					items[idx].Data.Locked = false
 				}
-
-				items[idx].Data.Locked = lockedBool
 
 			case fields.Conflicting:
 				conflictingBool, ok := bins[key.String()].(bool)
