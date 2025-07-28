@@ -133,11 +133,18 @@ func TestImprovedCache_GetSetMultiKeysSingleValue(t *testing.T) {
 
 func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 	// We test appending performance, so we will use unallocated cache
+	cacheSize := 256 * 1024 * 1024
 	cache, _ := txmetacache.New(256*1024*1024, txmetacache.Unallocated)
 	allKeys := make([][]byte, 0)
 	key := make([]byte, 32)
 	numberOfKeys := 2_000 * txmetacache.BucketsCount
 	var err error
+
+	bucketSize := cacheSize / txmetacache.BucketsCount
+	numberOfChunksPerBucket := bucketSize / txmetacache.ChunkSize
+	keysPerChunk := txmetacache.ChunkSize / 68 // (size of the key-value pair)
+
+	fmt.Println("cacheSize:", cacheSize, "BucketsCount:", txmetacache.BucketsCount, "bucketSize:", bucketSize, "\nchunkSize:", txmetacache.ChunkSize, "numberOfChunksPerBucket:", numberOfChunksPerBucket, "\nkeysPerChunk:", keysPerChunk, "numberOfKeys:", numberOfKeys)
 
 	for i := 0; i < numberOfKeys; i++ {
 		_, err := rand.Read(key)
@@ -163,28 +170,20 @@ func TestImprovedCache_GetSetMultiKeyAppended(t *testing.T) {
 }
 
 func TestImprovedCache_SetMulti(t *testing.T) {
-	cache, _ := txmetacache.New(128*1024*1024, txmetacache.Trimmed)
+	cacheSize := 128 * 1024 * 1024
+	cache, _ := txmetacache.New(cacheSize, txmetacache.Unallocated)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	t.Logf("0) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
-	numberOfKeys := 1_000 * txmetacache.BucketsCount
 
-	// cache size : 128 * 1024 * 1024 bytes -> 128 MB
-	// number of buckets: 8
-	// bucket size: 128 MB / 8 = 16 MB per bucket
-	// chunk size: 4 KB
-	// 16 MB / 4 KB = 4096 chunks per bucket
+	bucketSize := cacheSize / txmetacache.BucketsCount
+	theoreticalMaxKeysPerBucket := bucketSize / 68 // 68 bytes is the size of a key-value pair
+	keysPerBucket := int(float64(theoreticalMaxKeysPerBucket) * 0.7)
+	numberOfKeys := keysPerBucket * txmetacache.BucketsCount
 
-	fmt.Println("BucketsCount:", txmetacache.BucketsCount, ", numberOfKeys:", numberOfKeys)
-
-	// f, err := os.Create("mem.prof")
-	// if err != nil {
-	//	t.Fatalf("could not create memory profile: %v", err)
-	// }
-	// defer f.Close()
+	fmt.Println("BucketsCount:", txmetacache.BucketsCount, ", bucketSize:", bucketSize, ", theoreticalMaxKeysPerBucket:", theoreticalMaxKeysPerBucket, ", keysPerBucket:", keysPerBucket, ", numberOfKeys:", numberOfKeys)
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -197,16 +196,11 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	}
 
 	runtime.ReadMemStats(&m)
-	t.Logf("1) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 
-	startTime := time.Now()
 	err = cache.SetMulti(allKeys, allValues)
 	require.NoError(t, err)
-	t.Log("SetMulti took:", time.Since(startTime))
 
-	// var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	t.Logf("2) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 
 	for i, key := range allKeys {
 		dst := make([]byte, 0)
@@ -225,18 +219,10 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 		require.Equal(t, allValues[i], dst)
 	}
 
-	// err = pprof.WriteHeapProfile(f)
-	// if err != nil {
-	//	t.Fatalf("could not write memory profile: %v", err)
-	// }
-
-	// var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	t.Logf("2) Total memory used: %v kilobytes", m.Alloc/(1024*1024))
 
 	s := &txmetacache.Stats{}
 	cache.UpdateStats(s)
-	fmt.Println("Stats, total map size:", s.TotalMapSize)
 }
 
 func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {

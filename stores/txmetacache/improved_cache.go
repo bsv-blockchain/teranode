@@ -197,8 +197,8 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 		return nil, errors.NewProcessingError("failed to convert maxBytes", err)
 	}
 
-	if maxBucketBytes < chunkSize {
-		maxBucketBytes = chunkSize * 8
+	if maxBucketBytes < ChunkSize {
+		maxBucketBytes = ChunkSize * 8
 	}
 
 	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 2)
@@ -545,7 +545,7 @@ type bucketTrimmed struct {
 	gen uint64
 
 	// free chunks per bucket.
-	freeChunks []*[chunkSize]byte
+	freeChunks []*[ChunkSize]byte
 
 	elementsAdded int
 
@@ -564,7 +564,7 @@ func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
 	}
 
-	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
+	maxChunks := (maxBytes + ChunkSize - 1) / ChunkSize
 	b.chunks = make([][]byte, maxChunks)
 	b.m = txmap.NewSplitSwissLockFreeMapUint64(1024)
 	b.overWriting = false
@@ -651,14 +651,10 @@ func (b *bucketTrimmed) SetMulti(keys [][]byte, values [][]byte) {
 
 	var hash uint64
 
-	var prevValue []byte
-
 	for i, key := range keys {
-		prevValue = values[i]
 		hash = xxhash.Sum64(key)
-		// b.Get(&prevValue, key, hash, true, true)
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
-		_ = b.Set(key, prevValue, hash, true)
+		_ = b.Set(key, values[i], hash, true)
 	}
 }
 
@@ -678,10 +674,10 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
 
 	kvLen := uint64(len(kvLenBuf) + len(k) + len(v)) // nolint:gosec
-	if kvLen >= chunkSize {
+	if kvLen >= ChunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, chunkSize)
+		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
 	}
 
 	chunks := b.chunks
@@ -697,8 +693,8 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	// the new k-v pair must be in the same chunk.
 	idx := b.idx
 	idxNew := idx + kvLen
-	chunkIdx := idx / chunkSize
-	chunkIdxNew := idxNew / chunkSize
+	chunkIdx := idx / ChunkSize
+	chunkIdxNew := idxNew / ChunkSize
 
 	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
@@ -719,7 +715,7 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 			needClean = true
 		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
 			// calculate the index as byte offset
-			idx = chunkIdxNew * chunkSize
+			idx = chunkIdxNew * ChunkSize
 			idxNew = idx + kvLen
 			chunkIdx = chunkIdxNew
 		}
@@ -785,16 +781,16 @@ func (b *bucketTrimmed) Get(dst *[]byte, k []byte, h uint64, returnDst bool, ski
 		idx := v & ((1 << bucketSizeBits) - 1)
 
 		if gen == bGen && idx < b.idx || gen+1 == bGen && idx >= b.idx || gen == maxGen && bGen == 1 && idx >= b.idx {
-			chunkIdx := idx / chunkSize
+			chunkIdx := idx / ChunkSize
 			if chunkIdx >= uint64(len(chunks)) {
 				// Corrupted data during the load from file. Just skip it.
 				goto end
 			}
 
 			chunk := chunks[chunkIdx]
-			idx %= chunkSize
+			idx %= ChunkSize
 
-			if idx+4 >= chunkSize {
+			if idx+4 >= ChunkSize {
 				// Corrupted data during the load from file. Just skip it.
 				goto end
 			}
@@ -804,7 +800,7 @@ func (b *bucketTrimmed) Get(dst *[]byte, k []byte, h uint64, returnDst bool, ski
 			valLen := (uint64(kvLenBuf[2]) << 8) | uint64(kvLenBuf[3])
 			idx += 4
 
-			if idx+keyLen+valLen >= chunkSize {
+			if idx+keyLen+valLen >= ChunkSize {
 				// Corrupted data during the load from file. Just skip it.
 				goto end
 			}
@@ -845,15 +841,15 @@ func (b *bucketTrimmed) getChunk() ([]byte, error) {
 	if len(b.freeChunks) == 0 {
 		// Allocate offheap memory, so GOGC won't take into account cache size.
 		// This should reduce free memory waste.
-		data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+		data, err := unix.Mmap(-1, 0, ChunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 		if err != nil {
-			return nil, errors.NewProcessingError("cannot allocate %d bytes via mmap", chunkSize*chunksPerAlloc, err)
+			return nil, errors.NewProcessingError("cannot allocate %d bytes via mmap", ChunkSize*chunksPerAlloc, err)
 		}
 
 		for len(data) > 0 {
-			p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
+			p := (*[ChunkSize]byte)(unsafe.Pointer(&data[0]))
 			b.freeChunks = append(b.freeChunks, p)
-			data = data[chunkSize:]
+			data = data[ChunkSize:]
 		}
 	}
 
@@ -870,8 +866,8 @@ func (b *bucketTrimmed) putChunk(chunk []byte) {
 		return
 	}
 
-	chunk = chunk[:chunkSize]
-	p := (*[chunkSize]byte)(unsafe.Pointer(&chunk[0]))
+	chunk = chunk[:ChunkSize]
+	p := (*[ChunkSize]byte)(unsafe.Pointer(&chunk[0]))
 
 	b.freeChunks = append(b.freeChunks, p)
 }
@@ -928,9 +924,9 @@ func (b *bucketPreallocated) Init(maxBytes uint64, trimRatio int) error {
 	}
 
 	for len(data) > 0 {
-		p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
+		p := (*[ChunkSize]byte)(unsafe.Pointer(&data[0]))
 		b.chunks = append(b.chunks, p[:])
-		data = data[chunkSize:]
+		data = data[ChunkSize:]
 	}
 
 	b.m = make(map[uint64]uint64)
@@ -1030,10 +1026,10 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
 
 	kvLen := uint64(len(kvLenBuf) + len(k) + len(v)) // nolint: gosec
-	if kvLen >= chunkSize {
+	if kvLen >= ChunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, chunkSize)
+		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
 	}
 
 	chunks := b.chunks
@@ -1048,8 +1044,8 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	// the new k-v pair must be in the same chunk.
 	idx := b.idx
 	idxNew := idx + kvLen
-	chunkIdx := idx / chunkSize
-	chunkIdxNew := idxNew / chunkSize
+	chunkIdx := idx / ChunkSize
+	chunkIdxNew := idxNew / ChunkSize
 
 	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
@@ -1065,20 +1061,20 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 
 			// Clear the rest of the chunks
 			for i := numOfChunksToKeep; i < len(chunks); i++ {
-				chunks[i] = make([]byte, chunkSize)
+				chunks[i] = make([]byte, ChunkSize)
 			}
 
 			// writing needs to start form the end of the kept chunks.
-			idx = chunkSize * uint64(numOfChunksToKeep) // nolint: gosec
+			idx = ChunkSize * uint64(numOfChunksToKeep) // nolint: gosec
 			idxNew = idx + kvLen
 			// calculate the where the next write should occur based on new index
-			chunkIdx = idx / chunkSize
+			chunkIdx = idx / ChunkSize
 
-			b.cleanLockedMap(numOfChunksToRemove * chunkSize)
+			b.cleanLockedMap(numOfChunksToRemove * ChunkSize)
 		} else {
 			// if the new item doesn't overflow the chunks, we need to allocate a new chunk
 			// calculate the index as byte offset
-			idx = chunkIdxNew * chunkSize
+			idx = chunkIdxNew * ChunkSize
 			idxNew = idx + kvLen
 			chunkIdx = chunkIdxNew
 		}
@@ -1091,7 +1087,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	}
 
 	data := append(append(kvLenBuf[:], k...), v...)
-	copy(chunk[idx%chunkSize:], data)
+	copy(chunk[idx%ChunkSize:], data)
 
 	chunks[chunkIdx] = chunk
 	b.m[h] = idx | (b.gen << bucketSizeBits)
@@ -1119,16 +1115,16 @@ func (b *bucketPreallocated) Get(dst *[]byte, k []byte, h uint64, returnDst bool
 		idx := v & ((1 << bucketSizeBits) - 1)
 
 		if gen == bGen && idx < b.idx || gen+1 == bGen && idx >= b.idx || gen == maxGen && bGen == 1 && idx >= b.idx {
-			chunkIdx := idx / chunkSize
+			chunkIdx := idx / ChunkSize
 			if chunkIdx >= uint64(len(chunks)) {
 				// Corrupted data during the load from file. Just skip it.
 				goto end
 			}
 
 			chunk := chunks[chunkIdx]
-			idx %= chunkSize
+			idx %= ChunkSize
 
-			if idx+4 >= chunkSize {
+			if idx+4 >= ChunkSize {
 				// Corrupted data during the load from file. Just skip it.
 				goto end
 			}
@@ -1138,7 +1134,7 @@ func (b *bucketPreallocated) Get(dst *[]byte, k []byte, h uint64, returnDst bool
 			valLen := (uint64(kvLenBuf[2]) << 8) | uint64(kvLenBuf[3])
 			idx += 4
 
-			if idx+keyLen+valLen >= chunkSize {
+			if idx+keyLen+valLen >= ChunkSize {
 				// Corrupted data during the load from file. Just skip it.
 				goto end
 			}
@@ -1182,7 +1178,7 @@ type bucketUnallocated struct {
 	gen uint64
 
 	// free chunks per bucket
-	freeChunks []*[chunkSize]byte
+	freeChunks []*[ChunkSize]byte
 }
 
 func (b *bucketUnallocated) Init(maxBytes uint64, _ int) error {
@@ -1194,7 +1190,7 @@ func (b *bucketUnallocated) Init(maxBytes uint64, _ int) error {
 		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
 	}
 
-	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
+	maxChunks := (maxBytes + ChunkSize - 1) / ChunkSize
 	b.chunks = make([][]byte, maxChunks)
 	b.m = make(map[uint64]uint64)
 
@@ -1271,14 +1267,10 @@ func (b *bucketUnallocated) SetMulti(keys [][]byte, values [][]byte) {
 
 	var hash uint64
 
-	var prevValue []byte
-
 	for i, key := range keys {
-		prevValue = values[i]
 		hash = xxhash.Sum64(key)
-		b.Get(&prevValue, key, hash, true, true)
 		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
-		_ = b.Set(key, prevValue, hash, true)
+		_ = b.Set(key, values[i], hash, true)
 	}
 }
 
@@ -1298,10 +1290,10 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
 
 	kvLen := uint64(len(kvLenBuf) + len(k) + len(v)) // nolint: gosec
-	if kvLen >= chunkSize {
+	if kvLen >= ChunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, chunkSize)
+		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
 	}
 
 	chunks := b.chunks
@@ -1317,8 +1309,8 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	// the new k-v pair must be in the same chunk.
 	idx := b.idx
 	idxNew := idx + kvLen
-	chunkIdx := idx / chunkSize
-	chunkIdxNew := idxNew / chunkSize
+	chunkIdx := idx / ChunkSize
+	chunkIdxNew := idxNew / ChunkSize
 	// check if we are crossing the chunk boundary, we need to allocate a new chunk
 	if chunkIdxNew > chunkIdx {
 		// if there are no more chunks to allocate, we need to reset the bucket
@@ -1338,7 +1330,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 			needClean = true
 		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
 			// calculate the index as byte offset
-			idx = chunkIdxNew * chunkSize
+			idx = chunkIdxNew * ChunkSize
 			idxNew = idx + kvLen
 			chunkIdx = chunkIdxNew
 		}
@@ -1390,16 +1382,16 @@ func (b *bucketUnallocated) Get(dst *[]byte, k []byte, h uint64, returnDst bool,
 		idx := v & ((1 << bucketSizeBits) - 1)
 
 		if gen == bGen && idx < b.idx || gen+1 == bGen && idx >= b.idx || gen == maxGen && bGen == 1 && idx >= b.idx {
-			chunkIdx := idx / chunkSize
+			chunkIdx := idx / ChunkSize
 			if chunkIdx >= uint64(len(chunks)) {
 				// Corrupted data during the load from file. Just skip it.
 				goto end
 			}
 
 			chunk := chunks[chunkIdx]
-			idx %= chunkSize
+			idx %= ChunkSize
 
-			if idx+4 >= chunkSize {
+			if idx+4 >= ChunkSize {
 				// Corrupted data during the load from file. Just skip it.
 				goto end
 			}
@@ -1410,7 +1402,7 @@ func (b *bucketUnallocated) Get(dst *[]byte, k []byte, h uint64, returnDst bool,
 
 			idx += 4
 
-			if idx+keyLen+valLen >= chunkSize {
+			if idx+keyLen+valLen >= ChunkSize {
 				// Corrupted data during the load from file. Just skip it.
 				goto end
 			}
@@ -1451,15 +1443,15 @@ func (b *bucketUnallocated) getChunk() ([]byte, error) {
 	if len(b.freeChunks) == 0 {
 		// Allocate offheap memory, so GOGC won't take into account cache size.
 		// This should reduce free memory waste.
-		data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+		data, err := unix.Mmap(-1, 0, ChunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 		if err != nil {
-			return nil, errors.NewProcessingError("cannot allocate %d bytes via mmap", chunkSize*chunksPerAlloc, err)
+			return nil, errors.NewProcessingError("cannot allocate %d bytes via mmap", ChunkSize*chunksPerAlloc, err)
 		}
 
 		for len(data) > 0 {
-			p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
+			p := (*[ChunkSize]byte)(unsafe.Pointer(&data[0]))
 			b.freeChunks = append(b.freeChunks, p)
-			data = data[chunkSize:]
+			data = data[ChunkSize:]
 		}
 	}
 
@@ -1476,8 +1468,8 @@ func (b *bucketUnallocated) putChunk(chunk []byte) {
 		return
 	}
 
-	chunk = chunk[:chunkSize]
-	p := (*[chunkSize]byte)(unsafe.Pointer(&chunk[0]))
+	chunk = chunk[:ChunkSize]
+	p := (*[ChunkSize]byte)(unsafe.Pointer(&chunk[0]))
 	b.freeChunks = append(b.freeChunks, p)
 }
 
