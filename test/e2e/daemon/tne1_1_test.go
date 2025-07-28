@@ -14,7 +14,7 @@ import (
 
 var (
 	// Reasonable timeout for block synchronization
-	blockWaitTime = 30 * time.Second
+	blockWaitTime = 10 * time.Second
 )
 
 func TestNode_DoNotVerifyTransactionsIfAlreadyVerified(t *testing.T) {
@@ -59,10 +59,23 @@ func TestNode_DoNotVerifyTransactionsIfAlreadyVerified(t *testing.T) {
 
 	defer node3.Stop(t)
 
+	node1.ConnectToPeer(t, node2)
+	node2.ConnectToPeer(t, node3)
+	node3.ConnectToPeer(t, node1)
+
 	blocks := uint32(101)
 
+	peers1, err := node1.CallRPC(node3.Ctx, "getpeerinfo", nil)
+	t.Logf("Node1 peers: %v (err: %v)", peers1, err)
+
+	peers2, err := node2.CallRPC(node3.Ctx, "getpeerinfo", nil)
+	t.Logf("Node2 peers: %v (err: %v)", peers2, err)
+
+	peers3, err := node3.CallRPC(node3.Ctx, "getpeerinfo", nil)
+	t.Logf("Node3 peers: %v (err: %v)", peers3, err)
+
 	// Generate blocks
-	_, err := node1.CallRPC(node1.Ctx, "generate", []any{blocks})
+	_, err = node1.CallRPC(node1.Ctx, "generate", []any{blocks})
 	require.NoError(t, err, "Failed to mine blocks on node1")
 
 	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, blocks, blockWaitTime)
