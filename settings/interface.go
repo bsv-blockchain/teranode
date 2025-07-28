@@ -29,6 +29,7 @@ type Settings struct {
 	Logger                     string
 	LogLevel                   string
 	PrettyLogs                 bool
+	JSONLogging                bool
 	ProfilerAddr               string
 	StatsPrefix                string
 	PrometheusEndpoint         string

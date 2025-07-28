@@ -15,9 +15,10 @@ import (
 
 type ZLoggerWrapper struct {
 	zerolog.Logger
-	service   string
-	w         io.Writer
-	skipFrame int
+	service    string
+	w          io.Writer
+	skipFrame  int
+	jsonLogger *zerolog.Logger // Additional JSON logger when dual output is enabled
 }
 
 func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
@@ -30,18 +31,32 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 		o(opts)
 	}
 
+	// Check if JSON logging is enabled via gocore config
+	jsonLoggingEnabled := gocore.Config().GetBool("jsonLogging", false)
+
 	var z *ZLoggerWrapper
 	if gocore.Config().GetBool("PRETTY_LOGS", true) {
-		z = prettyZeroLogger(service, opts)
+		z = prettyZeroLogger(service, opts, jsonLoggingEnabled)
 	} else {
 		z = &ZLoggerWrapper{
 			zerolog.New(opts.writer).With().
-				CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + 2).
+				CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + opts.skip).
 				Timestamp().
 				Logger(),
 			service,
 			opts.writer,
 			opts.skip,
+			nil, // No JSON logger for non-pretty logs
+		}
+
+		// Add JSON logger if enabled
+		if jsonLoggingEnabled {
+			// JSON logger writes to a separate file to avoid interleaved output with the pretty logger
+			jsonLogger := zerolog.New(opts.writer).With().
+				CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + opts.skip).
+				Timestamp().
+				Logger()
+			z.jsonLogger = &jsonLogger
 		}
 	}
 
@@ -51,7 +66,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 	return z
 }
 
-func prettyZeroLogger(service string, opts *Options) *ZLoggerWrapper {
+func prettyZeroLogger(service string, opts *Options, jsonLoggingEnabled bool) *ZLoggerWrapper {
 	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
 	output := zerolog.ConsoleWriter{
 		Out:        os.Stdout,
@@ -137,14 +152,25 @@ func prettyZeroLogger(service string, opts *Options) *ZLoggerWrapper {
 		return c
 	}
 
+	var jsonLogger *zerolog.Logger
+	if jsonLoggingEnabled {
+		// JSON logger writes to a separate file to avoid interleaved output with the pretty logger
+		jsonOutput := zerolog.New(opts.writer).With().
+			CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + opts.skip).
+			Timestamp().
+			Logger()
+		jsonLogger = &jsonOutput
+	}
+
 	return &ZLoggerWrapper{
 		zerolog.New(output).With().
-			CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + 1).
+			CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + opts.skip).
 			Timestamp().
 			Logger(),
 		service,
 		opts.writer,
 		opts.skip,
+		jsonLogger,
 	}
 }
 
@@ -169,7 +195,7 @@ func (z *ZLoggerWrapper) New(service string, options ...Option) Logger {
 }
 
 func (z *ZLoggerWrapper) Duplicate(options ...Option) Logger {
-	newLogger := &ZLoggerWrapper{z.Logger, z.service, z.w, z.skipFrame}
+	newLogger := &ZLoggerWrapper{z.Logger, z.service, z.w, z.skipFrame, z.jsonLogger}
 
 	defaultOpts := DefaultOptions()
 	opts := DefaultOptions()
@@ -227,27 +253,52 @@ func (z *ZLoggerWrapper) LogLevel() int {
 
 func (z *ZLoggerWrapper) Debugf(format string, args ...interface{}) {
 	z.Logger.Debug().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
+
+	// Also log to JSON logger if enabled
+	if z.jsonLogger != nil {
+		z.jsonLogger.Debug().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
+	}
 }
 
 func (z *ZLoggerWrapper) Infof(format string, args ...interface{}) {
 	z.Logger.Info().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
+
+	// Also log to JSON logger if enabled
+	if z.jsonLogger != nil {
+		z.jsonLogger.Info().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
+	}
 }
 
 func (z *ZLoggerWrapper) Warnf(format string, args ...interface{}) {
 	z.Logger.Warn().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
+
+	// Also log to JSON logger if enabled
+	if z.jsonLogger != nil {
+		z.jsonLogger.Warn().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
+	}
 }
 
 func (z *ZLoggerWrapper) Errorf(format string, args ...interface{}) {
 	z.Logger.Error().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
+
+	// Also log to JSON logger if enabled
+	if z.jsonLogger != nil {
+		z.jsonLogger.Error().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
+	}
 }
 
 func (z *ZLoggerWrapper) Fatalf(format string, args ...interface{}) {
 	z.Logger.Fatal().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
+
+	// Also log to JSON logger if enabled
+	if z.jsonLogger != nil {
+		z.jsonLogger.Fatal().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
+	}
 }
 
 // Output duplicates the current logger and sets w as its output.
 func (z *ZLoggerWrapper) Output(w io.Writer) *ZLoggerWrapper {
-	return &ZLoggerWrapper{z.Logger.Output(w), z.service, w, z.skipFrame}
+	return &ZLoggerWrapper{z.Logger.Output(w), z.service, w, z.skipFrame, z.jsonLogger}
 }
 
 // With creates a child logger with the field added to its context.

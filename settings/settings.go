@@ -49,6 +49,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		Logger:                     getString("logger", "", alternativeContext...),
 		LogLevel:                   getString("logLevel", "INFO", alternativeContext...),
 		PrettyLogs:                 getBool("prettyLogs", true, alternativeContext...),
+		JSONLogging:                getBool("jsonLogging", false, alternativeContext...),
 		ProfilerAddr:               getString("profilerAddr", "", alternativeContext...),
 		StatsPrefix:                getString("stats_prefix", "gocore", alternativeContext...),
 		PrometheusEndpoint:         getString("prometheusEndpoint", "", alternativeContext...),
