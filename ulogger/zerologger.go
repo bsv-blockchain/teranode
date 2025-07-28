@@ -51,8 +51,9 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 
 		// Add JSON logger if enabled
 		if jsonLoggingEnabled {
-			// JSON logger writes to a separate file to avoid interleaved output with the pretty logger
-			jsonLogger := zerolog.New(opts.writer).With().
+			// JSON logger writes raw JSON directly to stdout (not through ConsoleWriter)
+			// This allows interleaved output while keeping JSON structure intact
+			jsonLogger := zerolog.New(os.Stdout).With().
 				CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + opts.skip).
 				Timestamp().
 				Logger()
@@ -154,8 +155,8 @@ func prettyZeroLogger(service string, opts *Options, jsonLoggingEnabled bool) *Z
 
 	var jsonLogger *zerolog.Logger
 	if jsonLoggingEnabled {
-		// JSON logger writes to a separate file to avoid interleaved output with the pretty logger
-		jsonOutput := zerolog.New(opts.writer).With().
+		// JSON logger writes raw JSON directly to stdout.
+		jsonOutput := zerolog.New(os.Stdout).With().
 			CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + opts.skip).
 			Timestamp().
 			Logger()
