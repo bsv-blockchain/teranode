@@ -277,11 +277,11 @@ Core alert data structure containing:
 
 - **Alert ID**: Unique identifier for each alert
 - **Alert Type**: Type of alert operation
-  - UTXO freeze
-  - UTXO unfreeze
-  - UTXO reassignment
-  - Peer ban/unban
-  - Block invalidation
+    - UTXO freeze
+    - UTXO unfreeze
+    - UTXO reassignment
+    - Peer ban/unban
+    - Block invalidation
 - **Timestamp**: When the alert was created/received
 - **Status**: Alert processing status (pending, processed, failed)
 - **Payload**: Alert-specific data payload
@@ -292,9 +292,8 @@ Core alert data structure containing:
 For UTXO freeze, unfreeze, and reassignment operations:
 
 - **UTXO Identifiers**:
-
-  - Transaction hashes (txid)
-  - Output indices (vout)
+    - Transaction hashes (txid)
+    - Output indices (vout)
 - **Block Height**: Target block height for UTXO operations
 - **Operation Type**: Freeze, unfreeze, or reassign
 - **New Address**: For UTXO reassignment operations (destination address)
