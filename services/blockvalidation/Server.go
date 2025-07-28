@@ -270,11 +270,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 	// process blocks found from channel
 	go func() {
-		var err error
-
-	CATCHUPLOOP:
 		for {
-			_, _, ctx1 := tracing.NewStatFromContext(ctx, "catchupCh", u.stats, false)
 			select {
 			case <-ctx.Done():
 				u.logger.Infof("[Init] closing block found channel")
@@ -282,62 +278,55 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 			case c := <-u.catchupCh:
 				{
-					// stop mining
-					if err = u.blockchainClient.CatchUpBlocks(ctx); err != nil {
-						u.logger.Errorf("[BlockValidation Init] failed to send CATCHUPBLOCKS event [%v]", err)
-
-						continue
-					}
-
-					u.logger.Infof("[BlockValidation Init] processing catchup on channel [%s] [%d]", c.block.Hash().String(), c.block.Height)
-
-					retries := 0
-
-					for {
-						if err = u.catchup(ctx1, c.block, c.baseURL); err != nil {
-							u.logger.Errorf("[BlockValidation Init] failed to catchup from [%s] - will retry [%v]", c.block.Hash().String(), err)
-
-							if retries >= 3 {
-								u.logger.Errorf("[BlockValidation Init] failed to catchup from [%s] - too many retries", c.block.Hash().String())
-								break
-							}
-
-							retries++
-
-							continue CATCHUPLOOP
-						}
-
-						break
-					}
-
-					u.logger.Infof("[BlockValidation Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
-					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
-
-					state, err := u.blockchainClient.GetFSMCurrentState(ctx)
-					if err != nil {
-						u.logger.Errorf("[BlockValidation Init] failed to get FSM current state [%v]", err)
-
-						continue
-					}
-
-					if err == nil && *state == blockchain.FSMStateCATCHINGBLOCKS {
-						u.logger.Infof("[BlockValidation Init] catch up complete, ready to mine, sending RUN event")
-
-						if err = u.blockchainClient.Run(ctx1, "blockvalidation/Server"); err != nil {
-							u.logger.Errorf("[BlockValidation Init] failed to send RUN event [%v]", err)
-						}
+					if err := u.processCatchupChannel(ctx, c); err != nil {
+						u.logger.Errorf("[Init] failed to process catchup signal for block [%s] [%v]", c.block.Hash().String(), err)
 					}
 				}
 
 			case blockFound := <-u.blockFoundCh:
 				{
-					if err = u.processBlockFoundChannel(ctx, blockFound); err != nil {
+					if err := u.processBlockFoundChannel(ctx, blockFound); err != nil {
 						u.logger.Errorf("[Init] failed to process block found [%s] [%v]", blockFound.hash.String(), err)
 					}
 				}
 			}
 		}
 	}()
+
+	return nil
+}
+
+func (u *Server) processCatchupChannel(ctx context.Context, c processBlockCatchup) (err error) {
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processCatchupChannel",
+		tracing.WithParentStat(u.stats),
+		tracing.WithHistogram(prometheusBlockValidationCatchup),
+		tracing.WithDebugLogMessage(u.logger, "[processCatchupChannel][%s] processing catchup on channel", c.block.String()),
+	)
+
+	defer func() {
+		state, err := u.blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			u.logger.Errorf("[processCatchupChannel] failed to get FSM current state: %v", err)
+		} else if state != nil && *state == blockchain.FSMStateCATCHINGBLOCKS {
+			u.logger.Infof("[processCatchupChannel][%s] catch up complete, ready to mine, sending RUN event", c.block.String())
+
+			// start mining again, we are caught up
+			if err = u.blockchainClient.Run(ctx, "blockvalidation/Server"); err != nil {
+				u.logger.Errorf("[processCatchupChannel][%s] failed to send RUN event: %v", c.block.String(), err)
+			}
+		}
+
+		deferFn()
+	}()
+
+	// stop mining while we are catching up
+	if err = u.blockchainClient.CatchUpBlocks(ctx); err != nil {
+		return errors.NewProcessingError("[processCatchupChannel][%s] failed to send CATCHUPBLOCKS event", c.block.String(), err)
+	}
+
+	if err = u.catchup(ctx, c.block, c.baseURL); err != nil {
+		return errors.NewProcessingError("[processCatchupChannel][%s] failed to catchup", c.block.String(), err)
+	}
 
 	return nil
 }
