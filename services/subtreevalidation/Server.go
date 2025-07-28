@@ -599,11 +599,6 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to parse block hash from request", err)
 	}
 
-	block, err := u.blockchainClient.GetBlock(ctx, blockHash)
-	if err != nil {
-		return false, errors.NewProcessingError("[CheckSubtree] Failed to get block from blockchain client", err)
-	}
-
 	previousBlockHash, err = chainhash.NewHash(request.PreviousBlockHash)
 	if err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to parse previous block hash from request", err)
@@ -726,7 +721,14 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 	}
 
-	u.processOrphans(ctx, block, blockIds)
+	if subtree != nil {
+		// remove all transactions that are part of the subtree from the orphanage
+		for _, node := range subtree.Nodes {
+			u.orphanage.Delete(node.Hash)
+		}
+	}
+
+	u.processOrphans(ctx, *blockHash, request.BlockHeight, blockIds)
 
 	u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
@@ -892,14 +894,14 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		}
 	}
 
-	u.processOrphans(ctx, block, blockIds)
+	u.processOrphans(ctx, *block.Header.Hash(), block.Height, blockIds)
 
 	return &subtreevalidation_api.CheckBlockSubtreesResponse{
 		Blessed: true,
 	}, nil
 }
 
-func (u *Server) processOrphans(ctx context.Context, block *model.Block, blockIds map[uint32]bool) {
+func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, blockHeight uint32, blockIds map[uint32]bool) {
 	u.orphanageLock.Lock()
 	defer u.orphanageLock.Unlock()
 
@@ -908,10 +910,10 @@ func (u *Server) processOrphans(ctx context.Context, block *model.Block, blockId
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processOrphans",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
-		tracing.WithLogMessage(u.logger, "[processOrphans] Processing orphans for block %s at block height %d", block.Header.Hash().String(), block.Height),
+		tracing.WithLogMessage(u.logger, "[processOrphans] Processing orphans for block %s at block height %d", blockHash.String(), blockHeight),
 	)
 	defer func() {
-		u.logger.Infof("[processOrphans] Finished processing orphans for block %s at block height %d, initial orphanage length: %d, final orphanage length: %d", block.Header.Hash().String(), block.Height, initialLength, u.orphanage.Len())
+		u.logger.Infof("[processOrphans] Finished processing orphans for block %s at block height %d, initial orphanage length: %d, final orphanage length: %d", blockHash.String(), blockHeight, initialLength, u.orphanage.Len())
 		deferFn()
 	}()
 
@@ -943,7 +945,7 @@ func (u *Server) processOrphans(ctx context.Context, block *model.Block, blockId
 				tx := mTx.tx
 
 				g.Go(func() error {
-					txMeta, txErr := u.blessMissingTransaction(gCtx, *block.Header.Hash(), tx, block.Height+1, blockIds, processedValidatorOptions)
+					txMeta, txErr := u.blessMissingTransaction(gCtx, blockHash, tx, blockHeight+1, blockIds, processedValidatorOptions)
 					if txErr == nil && txMeta != nil {
 						// transaction was successfully blessed, now remove it from the orphanage
 						u.orphanage.Delete(*tx.TxIDChainHash())
