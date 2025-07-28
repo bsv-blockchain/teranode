@@ -274,17 +274,13 @@ func (it *unminedTxIterator) extractCreatedAt(bins map[string]interface{}) (int,
 
 // extractLocked extracts the locked status from record bins
 func (it *unminedTxIterator) extractLocked(bins map[string]interface{}) (bool, error) {
-	lockedVal, ok := bins[fields.Locked.String()]
-	if !ok || lockedVal == nil {
-		return false, errors.NewProcessingError("locked not found")
+	// Locked status is optional, so we check if it exists
+	lockedVal, ok := bins[fields.Locked.String()].(bool)
+	if ok {
+		return lockedVal, nil
 	}
 
-	locked, ok := lockedVal.(bool)
-	if !ok {
-		return false, errors.NewProcessingError("locked not bool")
-	}
-
-	return locked, nil
+	return false, nil
 }
 
 // Err returns the first error encountered during iteration, if any.
