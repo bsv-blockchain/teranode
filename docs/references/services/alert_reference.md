@@ -122,6 +122,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 ```
 
 Starts the Alert Service by:
+
 1. Creating genesis alert in database
 2. Verifying RPC connection (unless disabled)
 3. Creating and starting P2P server

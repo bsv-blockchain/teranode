@@ -38,6 +38,9 @@ type BlockAssembly struct {
 
     // blockSubmissionChan handles block submission requests
     blockSubmissionChan chan *BlockSubmissionRequest
+
+    // skipWaitForPendingBlocks stores the flag value for tests
+    skipWaitForPendingBlocks bool
 }
 ```
 
@@ -77,9 +80,6 @@ type BlockAssembler struct {
     // bestBlockHeight atomically stores the current best block height
     bestBlockHeight atomic.Uint32
 
-    // currentChain stores the current blockchain state
-    currentChain []*model.BlockHeader
-
     // currentChainMap maps block hashes to their heights
     currentChainMap map[chainhash.Hash]uint32
 
@@ -112,6 +112,15 @@ type BlockAssembler struct {
 
     // cleanupService manages background cleanup tasks
     cleanupService cleanup.Service
+
+    // unminedCleanupTicker manages periodic cleanup of old unmined transactions
+    unminedCleanupTicker *time.Ticker
+
+    // cachedCandidate stores the cached mining candidate
+    cachedCandidate *CachedMiningCandidate
+
+    // skipWaitForPendingBlocks allows tests to skip waiting for pending blocks during startup
+    skipWaitForPendingBlocks bool
 }
 ```
 

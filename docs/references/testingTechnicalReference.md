@@ -292,20 +292,21 @@ func (n *TeranodeTestClient) CreateAndSendTxsConcurrently(t *testing.T, ctx cont
 ### Framework Methods
 ```go
 // Core Framework Methods
-func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework
-func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error
-func (b *BitcoinTestFramework) GetClientHandles() error
-func (b *BitcoinTestFramework) StopNodes() error
-func (b *BitcoinTestFramework) RestartNodes(m map[string]string) error
-func (b *BitcoinTestFramework) StartNode(nodeName string) error
-func (b *BitcoinTestFramework) StopNode(nodeName string) error
-func (b *BitcoinTestFramework) GetMappedPort(nodeName string, port nat.Port) (nat.Port, error)
+func NewTeraNodeTestEnv(c tconfig.TConfig) *TeranodeTestEnv
+func (t *TeranodeTestEnv) SetupDockerNodes() error
+func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error
+func (t *TeranodeTestEnv) StopDockerNodes() error
+func (t *TeranodeTestEnv) RestartDockerNodes(envSettings map[string]string) error
+func (t *TeranodeTestEnv) StartNode(nodeName string) error
+func (t *TeranodeTestEnv) StopNode(nodeName string) error
+func (t *TeranodeTestEnv) GetMappedPort(nodeName string, port nat.Port) (nat.Port, error)
+func (t *TeranodeTestEnv) GetContainerIPAddress(node *TeranodeTestClient) error
+func (t *TeranodeTestEnv) GetLegacyContainerIPAddress(node *SVNodeTestClient) error
 
-// Test Suite Methods
-func (suite *BitcoinTestSuite) SetupTest()
-func (suite *BitcoinTestSuite) SetupTestWithCustomSettings(settingsMap map[string]string)
-func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap map[string]string, composeFiles []string)
-func (suite *BitcoinTestSuite) TearDownTest()
+// Transaction Utility Methods
+func (n *TeranodeTestClient) CreateAndSendTx(t *testing.T, ctx context.Context, parentTx *bt.Tx) (*bt.Tx, error)
+func (n *TeranodeTestClient) CreateAndSendTxs(t *testing.T, ctx context.Context, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error)
+func (n *TeranodeTestClient) CreateAndSendTxsConcurrently(t *testing.T, ctx context.Context, parentTx *bt.Tx, count int) ([]*bt.Tx, []*chainhash.Hash, error)
 ```
 
 ### Client Interfaces

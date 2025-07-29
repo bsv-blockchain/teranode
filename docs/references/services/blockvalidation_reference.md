@@ -32,10 +32,6 @@ type Server struct {
     // tracking available outputs for transaction validation
     utxoStore            utxo.Store
 
-    // validatorClient handles transaction validation operations,
-    // ensuring each transaction follows network rules
-    validatorClient      validator.Interface
-
     // blockFoundCh receives notifications of newly discovered blocks
     // that need validation. This channel buffers requests when high load occurs.
     blockFoundCh         chan processBlockFound
@@ -88,13 +84,10 @@ type BlockValidation struct {
     utxoStore                     utxo.Store
 
     // recentBlocksBloomFilters maintains bloom filters for recent blocks
-    recentBlocksBloomFilters      *util.SyncedMap[chainhash.Hash, *model.BlockBloomFilter]
+    recentBlocksBloomFilters      *txmap.SyncedMap[chainhash.Hash, *model.BlockBloomFilter]
 
     // bloomFilterRetentionSize defines the number of blocks to keep the bloom filter for
     bloomFilterRetentionSize      uint32
-
-    // validatorClient handles transaction validation operations
-    validatorClient               validator.Interface
 
     // subtreeValidationClient manages subtree validation processes
     subtreeValidationClient       subtreevalidation.Interface
@@ -115,10 +108,28 @@ type BlockValidation struct {
     subtreeCount                  atomic.Int32
 
     // blockHashesCurrentlyValidated tracks blocks in validation process
-    blockHashesCurrentlyValidated *util.SwissMap
+    blockHashesCurrentlyValidated *txmap.SwissMap
 
     // blockBloomFiltersBeingCreated tracks bloom filters being generated
-    blockBloomFiltersBeingCreated *util.SwissMap
+    blockBloomFiltersBeingCreated *txmap.SwissMap
+
+    // bloomFilterStats collects statistics about bloom filter operations
+    bloomFilterStats              *model.BloomStats
+
+    // setMinedChan receives block hashes that need to be marked as mined
+    setMinedChan                  chan *chainhash.Hash
+
+    // revalidateBlockChan receives blocks that need revalidation
+    revalidateBlockChan           chan revalidateBlockData
+
+    // stats tracks operational metrics for monitoring
+    stats                         *gocore.Stat
+
+    // lastUsedBaseURL stores the most recent source URL used for retrievals
+    lastUsedBaseURL               string
+
+    // invalidBlockKafkaProducer publishes invalid block events to Kafka
+    invalidBlockKafkaProducer     kafka.KafkaAsyncProducerI
 
     // bloomFilterStats collects statistics about bloom filter operations
     bloomFilterStats              *model.BloomStats

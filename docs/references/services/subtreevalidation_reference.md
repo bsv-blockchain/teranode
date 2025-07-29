@@ -63,6 +63,15 @@ type Server struct {
     // txmetaConsumerClient consumes transaction metadata Kafka messages
     // Processes transaction metadata updates from other services
     txmetaConsumerClient kafka.KafkaConsumerGroupI
+
+    // invalidSubtreeKafkaProducer publishes invalid subtree events to Kafka
+    invalidSubtreeKafkaProducer kafka.KafkaAsyncProducerI
+
+    // invalidSubtreeLock is used to synchronize access to the invalid subtree producer
+    invalidSubtreeLock sync.Mutex
+
+    // invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages
+    invalidSubtreeDeDuplicateMap *expiringmap.ExpiringMap[string, struct{}]
 }
 ```
 

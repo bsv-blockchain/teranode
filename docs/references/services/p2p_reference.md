@@ -13,27 +13,33 @@ The P2P Server is implemented through the Server struct, which coordinates all p
 ```go
 type Server struct {
     p2p_api.UnimplementedPeerServiceServer
-    P2PNode                       P2PNodeI                  // The P2P network node interface
-    logger                        ulogger.Logger            // Logger instance for the server
-    settings                      *settings.Settings        // Configuration settings
-    bitcoinProtocolID             string                    // Bitcoin protocol identifier
-    blockchainClient              blockchain.ClientI        // Client for blockchain interactions
-    blockValidationClient         blockvalidation.Interface // Client for block validation
-    AssetHTTPAddressURL           string                    // HTTP address URL for assets
-    e                             *echo.Echo                // Echo server instance
-    notificationCh                chan *notificationMsg     // Channel for notifications
-    rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
-    subtreeKafkaProducerClient    kafka.KafkaAsyncProducerI // Kafka producer for subtrees
-    blocksKafkaProducerClient     kafka.KafkaAsyncProducerI // Kafka producer for blocks
-    banList                       BanListI                  // Interface for banned peers
-    banChan                       chan BanEvent             // Channel for ban events
-    banManager                    *PeerBanManager           // Manager for peer banning
-    gCtx                          context.Context           // Context for the server
-    blockTopicName                string                    // Name of the block topic
-    subtreeTopicName              string                    // Name of the subtree topic
-    miningOnTopicName             string                    // Name of the mining-on topic
-    rejectedTxTopicName           string                    // Name of the rejected tx topic
-    handshakeTopicName            string                    // Name of the handshake topic
+    P2PNode                           P2PNodeI           // The P2P network node instance - using interface instead of concrete type
+    logger                            ulogger.Logger     // Logger instance for the server
+    settings                          *settings.Settings // Configuration settings
+    bitcoinProtocolID                 string             // Bitcoin protocol identifier
+    blockchainClient                  blockchain.ClientI // Client for blockchain interactions
+    blockValidationClient             blockvalidation.Interface
+    AssetHTTPAddressURL               string                    // HTTP address URL for assets
+    e                                 *echo.Echo                // Echo server instance
+    notificationCh                    chan *notificationMsg     // Channel for notifications
+    rejectedTxKafkaConsumerClient     kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
+    invalidBlocksKafkaConsumerClient  kafka.KafkaConsumerGroupI // Kafka consumer for invalid blocks
+    invalidSubtreeKafkaConsumerClient kafka.KafkaConsumerGroupI // Kafka consumer for invalid subtrees
+    subtreeKafkaProducerClient        kafka.KafkaAsyncProducerI // Kafka producer for subtrees
+    blocksKafkaProducerClient         kafka.KafkaAsyncProducerI // Kafka producer for blocks
+    banList                           BanListI                  // List of banned peers
+    banChan                           chan BanEvent             // Channel for ban events
+    banManager                        *PeerBanManager           // Manager for peer banning
+    gCtx                              context.Context
+    blockTopicName                    string
+    subtreeTopicName                  string
+    miningOnTopicName                 string
+    rejectedTxTopicName               string
+    invalidBlocksTopicName            string   // Kafka topic for invalid blocks
+    invalidSubtreeTopicName           string   // Kafka topic for invalid subtrees
+    handshakeTopicName                string   // pubsub topic for version/verack
+    blockPeerMap                      sync.Map // Map to track which peer sent each block (hash -> peerID)
+    subtreePeerMap                    sync.Map // Map to track which peer sent each subtree (hash -> peerID)
 }
 ```
 

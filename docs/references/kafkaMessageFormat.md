@@ -15,12 +15,35 @@ This document provides comprehensive information about the message formats used 
     - [Code Examples](#code-examples)
         - [Sending Messages](#sending-messages)
         - [Receiving Messages](#receiving-messages)
+- [Invalid Block Notification Message Format](#invalid-block-notification-message-format)
+    - [Invalid Block Topic](#invalid-block-topic)
+    - [Message Structure](#message-structure)
+    - [Field Specifications](#field-specifications)
+        - [blockHash](#blockhash)
+        - [reason](#reason)
+    - [Example](#example)
+    - [Code Examples](#code-examples)
+        - [Sending Messages](#sending-messages)
+        - [Receiving Messages](#receiving-messages)
+    - [Error Cases](#error-cases)
 - [Subtree Notification Message Format](#subtree-notification-message-format)
     - [Subtree Topic](#subtree-topic)
     - [Message Structure](#message-structure)
     - [Field Specifications](#field-specifications)
         - [hash](#hash)
         - [URL](#url)
+    - [Example](#example)
+    - [Code Examples](#code-examples)
+        - [Sending Messages](#sending-messages)
+        - [Receiving Messages](#receiving-messages)
+    - [Error Cases](#error-cases)
+- [Invalid Subtree Notification Message Format](#invalid-subtree-notification-message-format)
+    - [Invalid Subtree Topic](#invalid-subtree-topic)
+    - [Message Structure](#message-structure)
+    - [Field Specifications](#field-specifications)
+        - [subtreeHash](#subtreehash)
+        - [peerUrl](#peerurl)
+        - [reason](#reason)
     - [Example](#example)
     - [Code Examples](#code-examples)
         - [Sending Messages](#sending-messages)
@@ -206,6 +229,109 @@ func handleBlockMessage(msg *kafka.Message) error {
 
 ---
 
+## Invalid Block Notification Message Format
+
+### Invalid Block Topic
+
+`kafka_invalidBlockConfig` is the Kafka topic used for broadcasting invalid block notifications. This topic allows services to notify other components when a block has been determined to be invalid.
+
+### Message Structure
+
+The invalid block message is defined in protobuf as `KafkaInvalidBlockTopicMessage`:
+
+```protobuf
+message KafkaInvalidBlockTopicMessage {
+  string blockHash = 1;
+  string reason = 2;
+}
+```
+
+### Field Specifications
+
+#### blockHash
+
+- Type: string
+- Description: Hexadecimal string representation of the invalid BSV block hash
+- Required: Yes
+- Format: 64-character hexadecimal string (256-bit hash)
+- Example: `"00000000000000000007abd8d2a16a69c1c45a1c3b0d1a6b2e0c8b4e8f9a1b2c3"`
+
+#### reason
+
+- Type: string
+- Description: Human-readable explanation of why the block was determined to be invalid
+- Required: Yes
+- Example: `"Block contains invalid transaction"`
+
+### Example
+
+```json
+{
+  "blockHash": "00000000000000000007abd8d2a16a69c1c45a1c3b0d1a6b2e0c8b4e8f9a1b2c3",
+  "reason": "Block contains invalid transaction"
+}
+```
+
+### Code Examples
+
+#### Sending Messages
+
+```go
+// Create invalid block message
+invalidBlockMessage := &kafkamessage.KafkaInvalidBlockTopicMessage{
+    BlockHash: blockHash.String(),
+    Reason:    "Block validation failed: invalid merkle root",
+}
+
+// Serialize to protobuf
+data, err := proto.Marshal(invalidBlockMessage)
+if err != nil {
+    return fmt.Errorf("failed to marshal invalid block message: %w", err)
+}
+
+// Send to Kafka
+producerMessage := &sarama.ProducerMessage{
+    Topic: "kafka_invalidBlock",
+    Value: sarama.ByteEncoder(data),
+}
+
+partition, offset, err := producer.SendMessage(producerMessage)
+if err != nil {
+    return fmt.Errorf("failed to send invalid block message: %w", err)
+}
+```
+
+#### Receiving Messages
+
+```go
+// Handle incoming invalid block message
+func handleInvalidBlockMessage(msg *kafka.Message) error {
+    if msg == nil {
+        return nil
+    }
+
+    var invalidBlockMessage kafkamessage.KafkaInvalidBlockTopicMessage
+    if err := proto.Unmarshal(msg.Value, &invalidBlockMessage); err != nil {
+        return fmt.Errorf("failed to unmarshal invalid block message: %w", err)
+    }
+
+    blockHash := invalidBlockMessage.BlockHash
+    reason := invalidBlockMessage.Reason
+
+    // Process the invalid block notification...
+    log.Printf("Block %s marked as invalid: %s", blockHash, reason)
+    return nil
+}
+```
+
+### Error Cases
+
+- Invalid message format: Message cannot be unmarshaled to KafkaInvalidBlockTopicMessage
+- Empty or malformed blockHash: Hash is not a valid hexadecimal string representation of a block hash
+- Empty reason: Reason field is empty or not provided
+
+---
+
 ## Subtree Notification Message Format
 
 ### Subtree Topic
@@ -310,6 +436,122 @@ func handleSubtreeMessage(msg *kafka.Message) error {
 - Invalid message format: Message cannot be unmarshaled to KafkaSubtreeTopicMessage
 - Empty or malformed hash: Hash is not a valid hexadecimal string representation of a subtree hash
 - Invalid URL: DataHub URL is empty or not properly formatted
+
+---
+
+## Invalid Subtree Notification Message Format
+
+### Invalid Subtree Topic
+
+`kafka_invalidSubtreeConfig` is the Kafka topic used for broadcasting invalid subtree notifications. This topic allows services to notify other components when a subtree has been determined to be invalid.
+
+### Message Structure
+
+The invalid subtree message is defined in protobuf as `KafkaInvalidSubtreeTopicMessage`:
+
+```protobuf
+message KafkaInvalidSubtreeTopicMessage {
+  string subtreeHash = 1;
+  string peerUrl = 2;
+  string reason = 3;
+}
+```
+
+### Field Specifications
+
+#### subtreeHash
+
+- Type: string
+- Description: Hexadecimal string representation of the invalid subtree hash
+- Required: Yes
+- Format: 64-character hexadecimal string (256-bit hash)
+- Example: `"a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456"`
+
+#### peerUrl
+
+- Type: string
+- Description: URL of the peer that provided the invalid subtree
+- Required: Yes
+- Format: Valid URL string
+- Example: `"http://peer1.example.com:8080"`
+
+#### reason
+
+- Type: string
+- Description: Human-readable explanation of why the subtree was determined to be invalid
+- Required: Yes
+- Example: `"Subtree contains invalid transaction merkle proof"`
+
+### Example
+
+```json
+{
+  "subtreeHash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+  "peerUrl": "http://peer1.example.com:8080",
+  "reason": "Subtree contains invalid transaction merkle proof"
+}
+```
+
+### Code Examples
+
+#### Sending Messages
+
+```go
+// Create invalid subtree message
+invalidSubtreeMessage := &kafkamessage.KafkaInvalidSubtreeTopicMessage{
+    SubtreeHash: subtreeHash.String(),
+    PeerUrl:     "http://peer1.example.com:8080",
+    Reason:      "Subtree validation failed: invalid merkle proof",
+}
+
+// Serialize to protobuf
+data, err := proto.Marshal(invalidSubtreeMessage)
+if err != nil {
+    return fmt.Errorf("failed to marshal invalid subtree message: %w", err)
+}
+
+// Send to Kafka
+producerMessage := &sarama.ProducerMessage{
+    Topic: "kafka_invalidSubtree",
+    Value: sarama.ByteEncoder(data),
+}
+
+partition, offset, err := producer.SendMessage(producerMessage)
+if err != nil {
+    return fmt.Errorf("failed to send invalid subtree message: %w", err)
+}
+```
+
+#### Receiving Messages
+
+```go
+// Handle incoming invalid subtree message
+func handleInvalidSubtreeMessage(msg *kafka.Message) error {
+    if msg == nil {
+        return nil
+    }
+
+    var invalidSubtreeMessage kafkamessage.KafkaInvalidSubtreeTopicMessage
+    if err := proto.Unmarshal(msg.Value, &invalidSubtreeMessage); err != nil {
+        return fmt.Errorf("failed to unmarshal invalid subtree message: %w", err)
+    }
+
+    subtreeHash := invalidSubtreeMessage.SubtreeHash
+    peerUrl := invalidSubtreeMessage.PeerUrl
+    reason := invalidSubtreeMessage.Reason
+
+    // Process the invalid subtree notification...
+    log.Printf("Subtree %s from peer %s marked as invalid: %s", subtreeHash, peerUrl, reason)
+    return nil
+}
+```
+
+### Error Cases
+
+- Invalid message format: Message cannot be unmarshaled to KafkaInvalidSubtreeTopicMessage
+- Empty or malformed subtreeHash: Hash is not a valid hexadecimal string representation of a subtree hash
+- Invalid peerUrl: URL is empty or not properly formatted
+- Empty reason: Reason field is empty or not provided
 
 ---
 

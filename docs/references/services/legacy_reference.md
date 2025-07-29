@@ -12,20 +12,57 @@ The Server implements the peer service interface and manages connections with le
 
 ```go
 type Server struct {
+    // UnimplementedPeerServiceServer is embedded to satisfy the gRPC interface
     peer_api.UnimplementedPeerServiceServer
-    logger               ulogger.Logger
-    settings            *settings.Settings
-    stats               *gocore.Stat
-    server              *server
-    lastHash            *chainhash.Hash
-    height              uint32
-    blockchainClient    blockchain.ClientI
-    validationClient    validator.Interface
-    subtreeStore        blob.Store
-    tempStore           blob.Store
-    utxoStore           utxo.Store
-    subtreeValidation   subtreevalidation.Interface
-    blockValidation     blockvalidation.Interface
+
+    // logger provides logging functionality
+    logger ulogger.Logger
+
+    // settings contains the configuration settings for the server
+    settings *settings.Settings
+
+    // stats tracks server statistics
+    stats *gocore.Stat
+
+    // server is the internal server implementation
+    server *server
+
+    // lastHash stores the most recent block hash
+    lastHash *chainhash.Hash
+
+    // height represents the current blockchain height
+    height uint32
+
+    // blockchainClient handles blockchain operations
+    // Used for querying blockchain state and submitting new blocks
+    blockchainClient blockchain.ClientI
+
+    // validationClient handles transaction validation
+    // Used to validate incoming transactions before relay
+    validationClient validator.Interface
+
+    // subtreeStore provides storage for merkle subtrees
+    // Used in block validation and merkle proof verification
+    subtreeStore blob.Store
+
+    // tempStore provides temporary storage
+    // Used for ephemeral data storage during processing
+    tempStore blob.Store
+
+    // utxoStore manages the UTXO set
+    // Used for transaction validation and UTXO queries
+    utxoStore utxo.Store
+
+    // subtreeValidation handles merkle subtree validation
+    // Used to verify merkle proofs and validate block structure
+    subtreeValidation subtreevalidation.Interface
+
+    // blockValidation handles block validation
+    // Used to validate incoming blocks before acceptance
+    blockValidation blockvalidation.Interface
+
+    // blockAssemblyClient handles block assembly operations
+    // Used for mining and block template generation
     blockAssemblyClient *blockassembly.Client
 }
 ```

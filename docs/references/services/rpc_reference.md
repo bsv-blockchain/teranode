@@ -34,7 +34,7 @@
     - [getpeerinfo](#getpeerinfo) - Returns data about each connected network node
     - [getrawtransaction](#getrawtransaction) - Returns raw transaction data
     - [getminingcandidate](#getminingcandidate) - Returns mining candidate information for generating a new block
-    - help - Lists all available commands or gets help on a specific command
+    - [help](#help) - Lists all available commands or gets help on a specific command
     - [invalidateblock](#invalidateblock) - Permanently marks a block as invalid
     - [isbanned](#isbanned) - Checks if an IP/subnet is banned
     - [listbanned](#listbanned) - Lists all banned IPs/subnets
@@ -67,28 +67,89 @@ The RPC Service provides a JSON-RPC interface for interacting with the Bitcoin S
 
 ```go
 type RPCServer struct {
-   settings               *settings.Settings
-   started                int32
-   shutdown               int32
-   authsha                [sha256.Size]byte
-   limitauthsha           [sha256.Size]byte
-   numClients             int32
-   statusLines            map[int]string
-   statusLock             sync.RWMutex
-   wg                     sync.WaitGroup
-   requestProcessShutdown chan struct{}
-   quit                   chan int
-   logger                 ulogger.Logger
-   rpcMaxClients          int
-   rpcQuirks              bool
-   listeners              []net.Listener
-   blockchainClient       blockchain.ClientI
-   blockAssemblyClient    *blockassembly.Client
-   peerClient             peer.ClientI
-   p2pClient              p2p.ClientI
-   assetHTTPURL           *url.URL
-   helpCacher             *helpCacher
-   utxoStore              utxo.Store
+    // settings contains the configuration parameters for the RPC server including
+    // authentication credentials, network binding options, and service parameters
+    settings *settings.Settings
+
+    // started indicates whether the server has been started (1) or not (0)
+    // This uses atomic operations for thread-safe access
+    started int32
+
+    // shutdown indicates whether the server is in the process of shutting down (1) or not (0)
+    // This uses atomic operations for thread-safe access
+    shutdown int32
+
+    // authsha contains the SHA256 hash of the HTTP basic auth string for admin-level access
+    // This is used for authenticating clients with full administrative privileges
+    authsha [sha256.Size]byte
+
+    // limitauthsha contains the SHA256 hash of the HTTP basic auth string for limited-level access
+    // This is used for authenticating clients with restricted access (read-only operations)
+    limitauthsha [sha256.Size]byte
+
+    // numClients tracks the number of connected RPC clients for connection limiting
+    // This uses atomic operations for thread-safe access
+    numClients int32
+
+    // statusLines maps HTTP status codes to their corresponding status text lines
+    // Used for proper HTTP response generation
+    statusLines map[int]string
+
+    // statusLock protects concurrent access to the status lines map
+    statusLock sync.RWMutex
+
+    // wg is used to wait for all goroutines to exit during shutdown
+    wg sync.WaitGroup
+
+    // requestProcessShutdown is closed when an authorized RPC client requests a shutdown
+    // This channel is used to notify the main process that a shutdown has been requested
+    requestProcessShutdown chan struct{}
+
+    // quit is used to signal the server to shut down
+    // All long-running goroutines should monitor this channel for termination signals
+    quit chan int
+
+    // logger provides structured logging capabilities for operational and debugging messages
+    logger ulogger.Logger
+
+    // rpcMaxClients is the maximum number of concurrent RPC clients allowed
+    // This setting helps prevent resource exhaustion from too many simultaneous connections
+    rpcMaxClients int
+
+    // rpcQuirks enables backwards-compatible quirks in the RPC server when true
+    // This improves compatibility with clients expecting legacy Bitcoin Core behavior
+    rpcQuirks bool
+
+    // listeners contains the network listeners for the RPC server
+    // Multiple listeners may be active for different IP addresses and ports
+    listeners []net.Listener
+
+    // blockchainClient provides access to blockchain data and operations
+    // Used for retrieving block information, chain state, and blockchain operations
+    blockchainClient blockchain.ClientI
+
+    // blockAssemblyClient provides access to block assembly and mining services
+    // Used for mining-related RPC commands like getminingcandidate and generate
+    blockAssemblyClient *blockassembly.Client
+
+    // peerClient provides access to legacy peer network services
+    // Used for peer management and information retrieval
+    peerClient peer.ClientI
+
+    // p2pClient provides access to the P2P network services
+    // Used for modern peer management and network operations
+    p2pClient p2p.ClientI
+
+    // assetHTTPURL is the URL where assets (e.g., for HTTP UI) are served from
+    assetHTTPURL *url.URL
+
+    // helpCacher caches help text for RPC commands to improve performance
+    // Prevents regenerating help text for each request
+    helpCacher *helpCacher
+
+    // utxoStore provides access to the UTXO (Unspent Transaction Output) database
+    // Used for transaction validation and UTXO queries
+    utxoStore utxo.Store
 }
 ```
 
@@ -268,13 +329,13 @@ Some key handlers include:
 
     **Authentication Settings:**
 
-    - **`rpc_user` and `rpc_pass`**: Credentials for RPC authentication with full admin privileges  
+    - **`rpc_user` and `rpc_pass`**: Credentials for RPC authentication with full admin privileges
     - **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only operations)
 
     **Connection Settings:**
 
-    - **`rpc_max_clients`**: Maximum number of concurrent RPC clients (default: 1000)   
-    - **`rpc_listener_url`**: URL for the RPC listener (default: "http://localhost:8332")           
+    - **`rpc_max_clients`**: Maximum number of concurrent RPC clients (default: 1000)
+    - **`rpc_listener_url`**: URL for the RPC listener (default: "http://localhost:8332")
     - **`rpc_listeners`**: List of URLs for multiple RPC listeners (overrides rpc_listener_url if set)
 
     **Security Settings:**
@@ -290,7 +351,6 @@ Some key handlers include:
 
 
 !!! warning "Production Warnings"
-
     - **`rpc_disable_auth`**: Disables authentication (NOT recommended for production)
     - **`rpc_cross_origin`**: Allows cross-origin requests (NOT recommended for production)
 

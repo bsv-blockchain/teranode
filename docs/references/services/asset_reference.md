@@ -174,7 +174,7 @@ Retrieves a sequence of block headers starting from a specific hash.
 #### GetBlockHeadersToCommonAncestor
 
 ```go
-func (repo *Repository) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+func (repo *Repository) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 ```
 
 Retrieves block headers from the target hash back to the common ancestor with the provided block locator.
@@ -587,6 +587,7 @@ Error responses include a JSON object with an error message:
     - Parameters:
 
         - `limit` (optional): Maximum number of blocks to retrieve
+
     - Returns: Array of invalid block information
 
 ### Finite State Machine (FSM) Endpoints
