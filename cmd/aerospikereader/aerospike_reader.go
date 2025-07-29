@@ -17,11 +17,10 @@ package aerospikereader
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
-
-	"math"
 	"time"
 
 	aero "github.com/aerospike/aerospike-client-go/v8"

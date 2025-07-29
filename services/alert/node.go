@@ -25,11 +25,11 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bn/models"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	"github.com/libsv/go-bn/models"
 )
 
 // Node implements the config.NodeInterface for interacting with the Bitcoin network.
@@ -265,7 +265,7 @@ func (n *Node) UnbanPeer(ctx context.Context, peer string) error {
 // Returns:
 //   - *models.BlacklistResponse: Response containing processed and unprocessed funds with status
 //   - error: Any error encountered during the overall blacklisting process
-func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund) (*models.BlacklistResponse, error) {
+func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund) (*models.AddToConsensusBlacklistResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("alert").Start(ctx, "AddToConsensusBlacklist",
 		tracing.WithDebugLogMessage(n.logger, "[AddToConsensusBlacklist] called for %d funds", len(funds)),
 	)
@@ -276,33 +276,33 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 	}
 
 	// create a response object
-	response := &models.BlacklistResponse{}
+	response := &models.AddToConsensusBlacklistResponse{}
 
 	// freeze one-by-one, getting the errors message for each one
 	for _, fund := range funds {
 		txHash, err := chainhash.NewHashFromStr(fund.TxOut.TxId)
 		if err != nil {
-			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
 		}
 
 		// get the parent tx, to get the utxo hash of the spend
 		parentTxMeta, err := n.utxoStore.Get(ctx, txHash, fields.Tx)
 		if err != nil {
-			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
 		}
 
 		vout, err := safeconversion.IntToUint32(fund.TxOut.Vout)
 		if err != nil {
-			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
 		}
 
 		// calculate the utxo hash from the output script
 		utxoHash, err := util.UTXOHashFromOutput(parentTxMeta.Tx.TxIDChainHash(), parentTxMeta.Tx.Outputs[fund.TxOut.Vout], vout)
 		if err != nil {
-			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
 		}
 
@@ -317,12 +317,12 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 		if len(fund.EnforceAtHeight) > 0 && fund.EnforceAtHeight[0].Stop < int(n.utxoStore.GetBlockHeight()) {
 			// unfreeze
 			if err = n.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			}
 		} else {
 			// freeze
 			if err = n.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err))
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			}
 		}
 	}
@@ -340,13 +340,15 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 //
 // Returns:
 //   - models.BlacklistNotProcessed: A structured response object containing the fund and error details
-func (n *Node) getAddToConsensusBlacklistResponse(fund models.Fund, err error) models.BlacklistNotProcessed {
-	return models.BlacklistNotProcessed{
-		TxOut: models.TxOut{
-			TxId: fund.TxOut.TxId,
-			Vout: fund.TxOut.Vout,
+func (n *Node) getAddToConsensusBlacklistResponse(fund models.Fund, err error) models.AddToConsensusBlacklistNotProcessed {
+	return models.AddToConsensusBlacklistNotProcessed{
+		{
+			TxOut: models.TxOut{
+				TxId: fund.TxOut.TxId,
+				Vout: fund.TxOut.Vout,
+			},
+			Reason: err.Error(),
 		},
-		Reason: err.Error(),
 	}
 }
 
@@ -387,7 +389,7 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 	for _, txDetails := range txs {
 		tx, err := bt.NewTxFromString(txDetails.ConfiscationTransaction.Hex)
 		if err != nil {
-			response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse("", err))
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse("", err)...)
 			continue
 		}
 
@@ -396,20 +398,20 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 			// get the parent tx, to get the utxo hash of the spend
 			parentTxMeta, err := n.utxoStore.Get(ctx, txIn.PreviousTxIDChainHash(), fields.Tx)
 			if err != nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err))
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
 				continue
 			}
 
 			// check the satoshis are equal of the new input and the parent output
 			if txIn.PreviousTxSatoshis > parentTxMeta.Tx.Outputs[txIn.PreviousTxOutIndex].Satoshis {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), errors.NewError("new input satoshis are greater than parent output satoshis")))
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), errors.NewError("new input satoshis are greater than parent output satoshis"))...)
 				continue
 			}
 
 			// calculate the original utxo hash from the parent output script
 			oldUtxoHash, err := util.UTXOHashFromOutput(txIn.PreviousTxIDChainHash(), parentTxMeta.Tx.Outputs[txIn.PreviousTxOutIndex], txIn.PreviousTxOutIndex)
 			if err != nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err))
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
 				continue
 			}
 
@@ -425,14 +427,14 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 			// get the public key of the new input unlocking script
 			publicKey, err := extractPublicKey(txIn.UnlockingScript.Bytes())
 			if err != nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err))
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
 				continue
 			}
 
 			// create a new locking script from the public key
 			newLockingScript, err := bscript.NewP2PKHFromPubKeyBytes(publicKey)
 			if err != nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err))
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
 				continue
 			}
 
@@ -445,7 +447,7 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 			// the new utxo hash allows the original output to be spent by the confiscation transaction
 			newUtxoHash, err := util.UTXOHashFromOutput(txIn.PreviousTxIDChainHash(), amendedOutputScript, txIn.PreviousTxOutIndex)
 			if err != nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err))
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
 				continue
 			}
 
@@ -457,7 +459,7 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 
 			// re-assign the utxo
 			if err = n.utxoStore.ReAssignUTXO(ctx, oldUtxo, newUtxo, n.settings); err != nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err))
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
 			}
 		}
 	}
@@ -475,12 +477,14 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 //
 // Returns:
 //   - models.WhitelistNotProcessed: A structured response object containing the transaction ID and error details
-func (n *Node) getAddToConfiscationTransactionWhitelistResponse(txID string, err error) models.WhitelistNotProcessed {
-	return models.WhitelistNotProcessed{
-		ConfiscationTransaction: models.WhitelistConfiscationTransaction{
-			TxId: txID,
+func (n *Node) getAddToConfiscationTransactionWhitelistResponse(txID string, err error) models.AddToConfiscationTransactionWhitelistNotProcessed {
+	return models.AddToConfiscationTransactionWhitelistNotProcessed{
+		{
+			ConfiscationTransaction: models.WhitelistConfiscationTransaction{
+				TxId: txID,
+			},
+			Reason: err.Error(),
 		},
-		Reason: err.Error(),
 	}
 }
 

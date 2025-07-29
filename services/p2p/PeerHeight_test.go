@@ -9,6 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bsv-blockchain/go-p2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -195,12 +196,12 @@ func TestHaveAllPeersReachedMinHeight(t *testing.T) {
 		peerHeight := setupPeerHeightForTest(t, 2, 10*time.Second)
 
 		// Add peer heights, both above minimum height
-		peerHeight.lastMsgByPeerID.Store("peer1", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer1", p2p.BlockMessage{
 			Height:     100,
 			PeerID:     "peer1",
 			DataHubURL: "test-datahub1",
 		})
-		peerHeight.lastMsgByPeerID.Store("peer2", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer2", p2p.BlockMessage{
 			Height:     150,
 			PeerID:     "peer2",
 			DataHubURL: "test-datahub2",
@@ -218,12 +219,12 @@ func TestHaveAllPeersReachedMinHeight(t *testing.T) {
 		peerHeight := setupPeerHeightForTest(t, 2, 10*time.Second)
 
 		// Add peer heights, one below minimum height
-		peerHeight.lastMsgByPeerID.Store("peer1", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer1", p2p.BlockMessage{
 			Height:     100,
 			PeerID:     "peer1",
 			DataHubURL: "test-datahub1",
 		})
-		peerHeight.lastMsgByPeerID.Store("peer2", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer2", p2p.BlockMessage{
 			Height:     40, // Below target height of 50
 			PeerID:     "peer2",
 			DataHubURL: "test-datahub2",
@@ -241,7 +242,7 @@ func TestHaveAllPeersReachedMinHeight(t *testing.T) {
 		peerHeight := setupPeerHeightForTest(t, 2, 10*time.Second)
 
 		// Add peer heights for only one peer (not enough peers)
-		peerHeight.lastMsgByPeerID.Store("peer1", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer1", p2p.BlockMessage{
 			Height:     100,
 			PeerID:     "peer1",
 			DataHubURL: "test-datahub1",
@@ -259,12 +260,12 @@ func TestHaveAllPeersReachedMinHeight(t *testing.T) {
 		peerHeight := setupPeerHeightForTest(t, 2, 10*time.Second)
 
 		// Add peer heights, one below minimum height
-		peerHeight.lastMsgByPeerID.Store("peer1", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer1", p2p.BlockMessage{
 			Height:     100,
 			PeerID:     "peer1",
 			DataHubURL: "test-datahub1",
 		})
-		peerHeight.lastMsgByPeerID.Store("peer2", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer2", p2p.BlockMessage{
 			Height:     40, // Below target height of 50
 			PeerID:     "peer2",
 			DataHubURL: "test-datahub2",
@@ -285,12 +286,12 @@ func TestPeerHeightWaitForAllPeers(t *testing.T) {
 		peerHeight := setupPeerHeightForTest(t, 2, 10*time.Second)
 
 		// Add peer heights
-		peerHeight.lastMsgByPeerID.Store("peer1", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer1", p2p.BlockMessage{
 			Height:     100,
 			PeerID:     "peer1",
 			DataHubURL: "test-datahub1",
 		})
-		peerHeight.lastMsgByPeerID.Store("peer2", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer2", p2p.BlockMessage{
 			Height:     150,
 			PeerID:     "peer2",
 			DataHubURL: "test-datahub2",
@@ -308,7 +309,7 @@ func TestPeerHeightWaitForAllPeers(t *testing.T) {
 		peerHeight := setupPeerHeightForTest(t, 2, 10*time.Second)
 
 		// Add peer heights for one peer only initially
-		peerHeight.lastMsgByPeerID.Store("peer1", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer1", p2p.BlockMessage{
 			Height:     100,
 			PeerID:     "peer1",
 			DataHubURL: "test-datahub1",
@@ -317,7 +318,7 @@ func TestPeerHeightWaitForAllPeers(t *testing.T) {
 		// Start a goroutine to update the second peer's height after a short delay
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			peerHeight.lastMsgByPeerID.Store("peer2", BlockMessage{
+			peerHeight.lastMsgByPeerID.Store("peer2", p2p.BlockMessage{
 				Height:     150,
 				PeerID:     "peer2",
 				DataHubURL: "test-datahub2",
@@ -339,7 +340,7 @@ func TestPeerHeightWaitForAllPeers(t *testing.T) {
 		peerHeight := setupPeerHeightForTest(t, 2, 1*time.Second)
 
 		// Add peer heights for one peer only (insufficient peers)
-		peerHeight.lastMsgByPeerID.Store("peer1", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer1", p2p.BlockMessage{
 			Height:     100,
 			PeerID:     "peer1",
 			DataHubURL: "test-datahub1",
@@ -362,12 +363,12 @@ func TestPeerHeightWaitForAllPeers(t *testing.T) {
 		peerHeight := setupPeerHeightForTest(t, 2, 200*time.Millisecond)
 
 		// Add peer heights where one is below the required height
-		peerHeight.lastMsgByPeerID.Store("peer1", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer1", p2p.BlockMessage{
 			Height:     100,
 			PeerID:     "peer1",
 			DataHubURL: "test-datahub1",
 		})
-		peerHeight.lastMsgByPeerID.Store("peer2", BlockMessage{
+		peerHeight.lastMsgByPeerID.Store("peer2", p2p.BlockMessage{
 			Height:     50, // Below target height of 75
 			PeerID:     "peer2",
 			DataHubURL: "test-datahub2",
@@ -460,7 +461,7 @@ func TestPeerHeightBlockHandlerReal(t *testing.T) {
 		value, exists := peerHeight.lastMsgByPeerID.Load("peer1")
 		require.True(t, exists, "Message for peer1 should be stored")
 
-		blockMsg, ok := value.(BlockMessage)
+		blockMsg, ok := value.(p2p.BlockMessage)
 		require.True(t, ok, "Stored value should be a BlockMessage")
 		assert.Equal(t, uint32(100), blockMsg.Height, "Height should be 100")
 		assert.Equal(t, "test-datahub1", blockMsg.DataHubURL, "DataHubURL should be test-datahub1")
@@ -482,7 +483,7 @@ func TestPeerHeightBlockHandlerReal(t *testing.T) {
 		value, exists = peerHeight.lastMsgByPeerID.Load("peer1")
 		require.True(t, exists, "Message for peer1 should still exist")
 
-		blockMsg, ok = value.(BlockMessage)
+		blockMsg, ok = value.(p2p.BlockMessage)
 		require.True(t, ok, "Stored value should be a BlockMessage")
 		assert.Equal(t, uint32(100), blockMsg.Height, "Height should still be 100, not overwritten by older height")
 
@@ -494,7 +495,7 @@ func TestPeerHeightBlockHandlerReal(t *testing.T) {
 		value, exists = peerHeight.lastMsgByPeerID.Load("peer1")
 		require.True(t, exists, "Message for peer1 should still exist")
 
-		blockMsg, ok = value.(BlockMessage)
+		blockMsg, ok = value.(p2p.BlockMessage)
 		require.True(t, ok, "Stored value should be a BlockMessage")
 		assert.Equal(t, uint32(200), blockMsg.Height, "Height should be updated to 200")
 

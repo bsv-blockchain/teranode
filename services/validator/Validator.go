@@ -910,7 +910,6 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	tx.SetExtended(true)
-
 	return nil
 }
 

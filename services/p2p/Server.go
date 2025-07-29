@@ -44,9 +44,11 @@ import (
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/servicemanager"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-p2p"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
@@ -57,7 +59,8 @@ import (
 )
 
 const (
-	banActionAdd = "add" // Action constant for adding a ban
+	banActionAdd  = "add" // Action constant for adding a ban
+	privateKeyKey = "p2p.privateKey"
 )
 
 // Server represents the P2P server instance and implements the P2P service functionality.
@@ -74,7 +77,7 @@ const (
 // - Ban management is thread-safe across connections
 type Server struct {
 	p2p_api.UnimplementedPeerServiceServer
-	P2PNode                           P2PNodeI           // The P2P network node instance - using interface instead of concrete type
+	P2PNode                           p2p.NodeI          // The P2P network node instance - using interface instead of concrete type
 	logger                            ulogger.Logger     // Logger instance for the server
 	settings                          *settings.Settings // Configuration settings
 	bitcoinProtocolID                 string             // Bitcoin protocol identifier
@@ -195,7 +198,25 @@ func NewServer(
 	staticPeers := tSettings.P2P.StaticPeers
 	privateKey := tSettings.P2P.PrivateKey
 
-	config := P2PConfig{
+	// Attempt to read the private key from the blockchain service if not provided in settings
+	var pk *crypto.PrivKey
+	if privateKey == "" {
+		pk, err = readPrivateKey(ctx, blockchainClient)
+		if err != nil {
+			logger.Debugf("error reading private key: %v; will generate a new key instead", err)
+		}
+	}
+	// if found private key, encode it to hex and put it in config
+	if pk != nil {
+		var raw []byte
+		raw, err = (*pk).Raw()
+		if err != nil {
+			return nil, errors.NewServiceError("error getting raw private key", err)
+		}
+		privateKey = hex.EncodeToString(raw)
+	}
+
+	config := p2p.Config{
 		ProcessName:        "peer",
 		ListenAddresses:    listenAddresses,
 		AdvertiseAddresses: tSettings.P2P.AdvertiseAddresses,
@@ -206,9 +227,11 @@ func NewServer(
 		OptimiseRetries:    optimiseRetries,
 		Advertise:          true,
 		StaticPeers:        staticPeers,
+		BootstrapAddresses: tSettings.P2P.BootstrapAddresses,
+		DHTProtocolID:      tSettings.P2P.DHTProtocolID,
 	}
 
-	p2pNode, err := NewP2PNode(ctx, logger, tSettings, config, blockchainClient)
+	p2pNode, err := p2p.NewNode(ctx, logger, config)
 	if err != nil {
 		return nil, errors.NewServiceError("Error creating P2PNode", err)
 	}
@@ -576,7 +599,7 @@ func (s *Server) rejectedHandler(ctx context.Context) func(msg *kafka.KafkaMessa
 
 		s.logger.Debugf("[rejectedHandler] Received %s rejected tx notification: %s", hash.String(), m.Reason)
 
-		rejectedTxMessage := RejectedTxMessage{
+		rejectedTxMessage := p2p.RejectedTxMessage{
 			TxID:   hash.String(),
 			Reason: m.Reason,
 			PeerID: s.P2PNode.HostID().String(),
@@ -625,7 +648,7 @@ func (s *Server) sendHandshake(ctx context.Context) {
 		bestHash = header.Hash().String()
 	}
 
-	msg := HandshakeMessage{
+	msg := p2p.HandshakeMessage{
 		Type:        "version",
 		PeerID:      s.P2PNode.HostID().String(),
 		BestHeight:  localHeight,
@@ -680,7 +703,7 @@ func (s *Server) sendDirectHandshake(ctx context.Context, peerID peer.ID) {
 		bestHash = header.Hash().String()
 	}
 
-	msg := HandshakeMessage{
+	msg := p2p.HandshakeMessage{
 		Type:        "version",
 		PeerID:      s.P2PNode.HostID().String(),
 		BestHeight:  localHeight,
@@ -728,7 +751,7 @@ func (s *Server) sendHandshakeToPeer(ctx context.Context, peerID peer.ID, msgByt
 func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string) {
 	s.logger.Infof("[handleHandshakeTopic] Received handshake from %s, message: %s", from, string(m))
 
-	var hs HandshakeMessage
+	var hs p2p.HandshakeMessage
 	if err := json.Unmarshal(m, &hs); err != nil {
 		s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] json unmarshal error: %v", err)
 		return
@@ -792,7 +815,7 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 	}
 }
 
-func (s *Server) sendVerack(ctx context.Context, from string, hs HandshakeMessage) error {
+func (s *Server) sendVerack(ctx context.Context, from string, hs p2p.HandshakeMessage) error {
 	localHeight := uint32(0)
 	bestHash := ""
 
@@ -801,7 +824,7 @@ func (s *Server) sendVerack(ctx context.Context, from string, hs HandshakeMessag
 		bestHash = header.Hash().String()
 	}
 
-	ack := HandshakeMessage{
+	ack := p2p.HandshakeMessage{
 		Type:        "verack",
 		PeerID:      s.P2PNode.HostID().String(),
 		BestHeight:  localHeight,
@@ -840,7 +863,7 @@ func (s *Server) sendVerack(ctx context.Context, from string, hs HandshakeMessag
 	return nil
 }
 
-func (s *Server) SyncHeights(hs HandshakeMessage, localHeight uint32) {
+func (s *Server) SyncHeights(hs p2p.HandshakeMessage, localHeight uint32) {
 	if syncing, err := s.isBlockchainSynchingOrCatchingUp(s.gCtx); err != nil || syncing {
 		s.logger.Debugf("[SyncHeights] skipping height sync, blockchain is syncing or catching up: %v", err)
 
@@ -964,7 +987,7 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("error getting block header and meta for BlockMessage: %w", err)
 	}
 
-	blockMessage := BlockMessage{
+	blockMessage := p2p.BlockMessage{
 		Hash:       hash.String(),
 		Height:     meta.Height,
 		DataHubURL: s.AssetHTTPAddressURL,
@@ -992,7 +1015,7 @@ func (s *Server) handleMiningOnNotification(ctx context.Context) error {
 		return errors.NewError("error getting block header for MiningOnMessage: %w", err)
 	}
 
-	miningOnMessage := MiningOnMessage{
+	miningOnMessage := p2p.MiningOnMessage{
 		Hash:         header.Hash().String(),
 		PreviousHash: header.HashPrevBlock.String(),
 		DataHubURL:   s.AssetHTTPAddressURL,
@@ -1034,7 +1057,7 @@ func (s *Server) handleMiningOnNotification(ctx context.Context) error {
 func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.Hash) error {
 	var msgBytes []byte
 
-	subtreeMessage := SubtreeMessage{
+	subtreeMessage := p2p.SubtreeMessage{
 		Hash:       hash.String(),
 		DataHubURL: s.AssetHTTPAddressURL,
 		PeerID:     s.P2PNode.HostID().String(),
@@ -1227,13 +1250,13 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 	s.logger.Debugf("[handleBlockTopic] got p2p block notification")
 
 	var (
-		blockMessage BlockMessage
+		blockMessage p2p.BlockMessage
 		hash         *chainhash.Hash
 		err          error
 	)
 
 	// decode request
-	blockMessage = BlockMessage{}
+	blockMessage = p2p.BlockMessage{}
 
 	err = json.Unmarshal(m, &blockMessage)
 	if err != nil {
@@ -1297,13 +1320,13 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 
 func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) {
 	var (
-		subtreeMessage SubtreeMessage
+		subtreeMessage p2p.SubtreeMessage
 		hash           *chainhash.Hash
 		err            error
 	)
 
 	// decode request
-	subtreeMessage = SubtreeMessage{}
+	subtreeMessage = p2p.SubtreeMessage{}
 
 	err = json.Unmarshal(m, &subtreeMessage)
 	if err != nil {
@@ -1426,12 +1449,12 @@ func (s *Server) extractHost(urlStr string) string {
 
 func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string) {
 	var (
-		miningOnMessage MiningOnMessage
+		miningOnMessage p2p.MiningOnMessage
 		err             error
 	)
 
 	// decode request
-	miningOnMessage = MiningOnMessage{}
+	miningOnMessage = p2p.MiningOnMessage{}
 
 	err = json.Unmarshal(m, &miningOnMessage)
 	if err != nil {
@@ -2179,4 +2202,39 @@ func (s *Server) isBlockchainSynchingOrCatchingUp(ctx context.Context) (bool, er
 	}
 
 	return false, nil
+}
+
+// readPrivateKey retrieves a previously stored Ed25519 private key from the blockchain state store.
+// This function loads the node's persistent cryptographic identity from storage, allowing
+// the node to maintain the same peer ID across restarts. If no key is found in storage,
+// it indicates this is a fresh node that needs key generation.
+//
+// The function attempts to read the key from the blockchain client's state store using
+// a predefined key identifier. The retrieved key bytes are unmarshaled back into a
+// usable private key object for libp2p operations.
+//
+// Parameters:
+//   - ctx: Context for the operation, used for state store operations
+//   - blockchainClient: Client for accessing persistent key storage
+//
+// Returns:
+//   - Pointer to the retrieved private key, or nil if no key exists
+//   - Error if storage access fails or key unmarshaling fails
+func readPrivateKey(ctx context.Context, blockchainClient blockchain.ClientI) (*crypto.PrivKey, error) {
+	// Read private key from the state store
+	if blockchainClient == nil {
+		return nil, errors.NewServiceError("error reading private key", nil)
+	}
+
+	privBytes, err := blockchainClient.GetState(ctx, privateKeyKey)
+	if err != nil {
+		return nil, err
+	}
+	// Unmarshal the private key bytes into a key
+	priv, err := crypto.UnmarshalPrivateKey(privBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return &priv, nil
 }

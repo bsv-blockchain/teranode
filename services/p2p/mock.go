@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	"github.com/bsv-blockchain/go-p2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -43,7 +44,7 @@ func (m *MockServerP2PNode) Stop(ctx context.Context) error {
 	return args.Error(0)
 }
 
-func (m *MockServerP2PNode) SetTopicHandler(ctx context.Context, topicName string, handler Handler) error {
+func (m *MockServerP2PNode) SetTopicHandler(ctx context.Context, topicName string, handler p2p.Handler) error {
 	args := m.Called(ctx, topicName, handler)
 	return args.Error(0)
 }
@@ -72,16 +73,16 @@ func (m *MockServerP2PNode) HostID() peer.ID {
 	return args.Get(0).(peer.ID)
 }
 
-func (m *MockServerP2PNode) ConnectedPeers() []PeerInfo {
+func (m *MockServerP2PNode) ConnectedPeers() []p2p.PeerInfo {
 	args := m.Called()
-	return args.Get(0).([]PeerInfo)
+	return args.Get(0).([]p2p.PeerInfo)
 }
 
-func (m *MockServerP2PNode) CurrentlyConnectedPeers() []PeerInfo {
+func (m *MockServerP2PNode) CurrentlyConnectedPeers() []p2p.PeerInfo {
 	// args := m.Called()
 	// return args.Get(0).([]PeerInfo)
-	peers := []PeerInfo{}
-	peers = append(peers, PeerInfo{})
+	peers := []p2p.PeerInfo{}
+	peers = append(peers, p2p.PeerInfo{})
 
 	return peers
 }

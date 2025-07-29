@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-p2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -267,7 +268,7 @@ func TestServerHandlers(t *testing.T) {
 		assert.Equal(t, testSender, blockTopicSender, "Sender should be passed correctly")
 	})
 
-	t.Run("Test sendHandshakeMessage behaviour", func(t *testing.T) {
+	t.Run("Test sendp2p.HandshakeMessage behaviour", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -319,11 +320,11 @@ func TestServerHandlers(t *testing.T) {
 			t.Fatal("Publish was not called")
 		}
 
-		var hs HandshakeMessage
+		var hs p2p.HandshakeMessage
 
 		err := json.Unmarshal(publishedMsg, &hs)
 		assert.NoError(t, err)
-		assert.Equal(t, MessageType("version"), hs.Type)
+		assert.Equal(t, p2p.MessageType("version"), hs.Type)
 		assert.Equal(t, pid.String(), hs.PeerID)
 		assert.Equal(t, uint32(123), hs.BestHeight)
 		assert.NotEmpty(t, hs.BestHash)
@@ -933,13 +934,13 @@ func TestGetPeers(t *testing.T) {
 		addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/8333", validIP))
 		require.NoError(t, err)
 
-		peerInfo := PeerInfo{
+		peerInfo := p2p.PeerInfo{
 			ID:    peerID,
 			Addrs: []ma.Multiaddr{addr},
 		}
 
 		// Setup mock to return our test peer
-		mockP2PNode.On("ConnectedPeers").Return([]PeerInfo{peerInfo})
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{peerInfo})
 		mockP2PNode.On("HostID").Return(peer.ID("QmServerID"))
 
 		// Create a real ban manager for testing
@@ -987,7 +988,7 @@ func TestGetPeers(t *testing.T) {
 		mockP2PNode := new(MockServerP2PNode)
 
 		// Setup mock to return empty peer list
-		mockP2PNode.On("ConnectedPeers").Return([]PeerInfo{})
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{})
 		mockP2PNode.On("HostID").Return(peer.ID("QmServerID"))
 
 		// Create a real ban manager for testing
@@ -1039,13 +1040,13 @@ func TestGetPeers(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create a peer with nil addresses instead of empty slice to match implementation behaviour
-		peerInfo := PeerInfo{
+		peerInfo := p2p.PeerInfo{
 			ID:    peerID,
 			Addrs: nil, // Using nil instead of empty slice
 		}
 
 		// Setup mock to return our test peer
-		mockP2PNode.On("ConnectedPeers").Return([]PeerInfo{peerInfo})
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{peerInfo})
 		mockP2PNode.On("HostID").Return(peer.ID("QmServerID"))
 
 		// Create a real ban manager for testing
@@ -1104,7 +1105,7 @@ func TestGetPeers(t *testing.T) {
 		addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/8333", validIP))
 		require.NoError(t, err)
 
-		peerInfo := PeerInfo{
+		peerInfo := p2p.PeerInfo{
 			ID:            peerID,
 			Addrs:         []ma.Multiaddr{addr},
 			CurrentHeight: 12345,
@@ -1112,7 +1113,7 @@ func TestGetPeers(t *testing.T) {
 		}
 
 		// Setup mock to return our test peer
-		mockP2PNode.On("ConnectedPeers").Return([]PeerInfo{peerInfo})
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{peerInfo})
 		mockP2PNode.On("HostID").Return(peer.ID("QmServerID"))
 
 		// Create a real ban manager for testing
@@ -1175,7 +1176,7 @@ func TestGetPeers(t *testing.T) {
 		addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/8333", validIP))
 		require.NoError(t, err)
 
-		peerInfo := PeerInfo{
+		peerInfo := p2p.PeerInfo{
 			ID:            peerID,
 			Addrs:         []ma.Multiaddr{addr},
 			CurrentHeight: 12345,
@@ -1183,7 +1184,7 @@ func TestGetPeers(t *testing.T) {
 		}
 
 		// Setup mock to return our test peer
-		mockP2PNode.On("ConnectedPeers").Return([]PeerInfo{peerInfo})
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{peerInfo})
 		mockP2PNode.On("HostID").Return(peer.ID("QmServerID"))
 
 		// Create a real ban manager for testing
@@ -1356,13 +1357,13 @@ func TestHandleBanEvent(t *testing.T) {
 		addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/8333", validIP))
 		require.NoError(t, err)
 
-		peerInfo := PeerInfo{
+		peerInfo := p2p.PeerInfo{
 			ID:    peerID,
 			Addrs: []ma.Multiaddr{addr},
 		}
 
 		// Setup mocks
-		mockP2PNode.On("ConnectedPeers").Return([]PeerInfo{peerInfo})
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{peerInfo})
 
 		// For IP matching, we need DisconnectPeer to be called
 		mockP2PNode.On("DisconnectPeer", mock.Anything, peerID).Return(nil)
@@ -1410,18 +1411,18 @@ func TestHandleBanEvent(t *testing.T) {
 		peerOutsideSubnetAddr, err := ma.NewMultiaddr("/ip4/10.0.0.50/tcp/8333")
 		require.NoError(t, err)
 
-		peerInSubnet := PeerInfo{
+		peerInSubnet := p2p.PeerInfo{
 			ID:    peerID1,
 			Addrs: []ma.Multiaddr{peerInSubnetAddr},
 		}
 
-		peerOutsideSubnet := PeerInfo{
+		peerOutsideSubnet := p2p.PeerInfo{
 			ID:    peer.ID(""),
 			Addrs: []ma.Multiaddr{peerOutsideSubnetAddr},
 		}
 
 		// Setup mocks
-		mockP2PNode.On("ConnectedPeers").Return([]PeerInfo{peerInSubnet, peerOutsideSubnet})
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{peerInSubnet, peerOutsideSubnet})
 
 		// Add mock for DisconnectPeer for the peer in subnet
 		mockP2PNode.On("DisconnectPeer", mock.Anything, peerID1).Return(nil)
@@ -1513,7 +1514,7 @@ func TestHandshakeFlow(t *testing.T) {
 		}
 
 		// Create a version handshake message
-		versionMsg := HandshakeMessage{
+		versionMsg := p2p.HandshakeMessage{
 			Type:        "version",
 			PeerID:      peerIDStr,
 			BestHeight:  100,
@@ -1531,7 +1532,7 @@ func TestHandshakeFlow(t *testing.T) {
 			responseBytes := args.Get(2).([]byte)
 			t.Logf("Response message: %s", string(responseBytes))
 
-			var response HandshakeMessage
+			var response p2p.HandshakeMessage
 			err := json.Unmarshal(responseBytes, &response)
 			require.NoError(t, err)
 
@@ -1542,7 +1543,7 @@ func TestHandshakeFlow(t *testing.T) {
 			t.Logf("Response UserAgent: %s", response.UserAgent)
 
 			// Verify it's a verack message with the correct fields
-			assert.Equal(t, MessageType("verack"), response.Type)
+			assert.Equal(t, p2p.MessageType("verack"), response.Type)
 			assert.Equal(t, selfPeerIDStr, response.PeerID)
 			assert.NotZero(t, response.BestHeight)
 			// assert.NotEmpty(t, response.UserAgent)
@@ -1606,7 +1607,7 @@ func TestHandshakeFlow(t *testing.T) {
 		}
 
 		// Create a verack handshake message
-		verackMsg := HandshakeMessage{
+		verackMsg := p2p.HandshakeMessage{
 			Type:        "verack",
 			PeerID:      peerIDStr,
 			BestHeight:  200,
@@ -1646,7 +1647,7 @@ func TestHandshakeFlow(t *testing.T) {
 		}
 
 		// Create a version handshake message with different topic prefix
-		versionMsg := HandshakeMessage{
+		versionMsg := p2p.HandshakeMessage{
 			Type:        "version",
 			PeerID:      senderPeerIDStr,
 			BestHeight:  100,
@@ -2169,7 +2170,7 @@ func TestServer_SyncHeights(t *testing.T) {
 			blocksKafkaProducerClient: mockBlocksProducer,
 		}
 
-		server.SyncHeights(HandshakeMessage{
+		server.SyncHeights(p2p.HandshakeMessage{
 			BestHeight: 1111,
 		}, 123)
 
@@ -2177,7 +2178,7 @@ func TestServer_SyncHeights(t *testing.T) {
 		assert.NotNil(t, msg)
 
 		// do not send message of BestHeight is less than or equal to the current height
-		server.SyncHeights(HandshakeMessage{
+		server.SyncHeights(p2p.HandshakeMessage{
 			BestHeight: 111,
 		}, 123)
 
@@ -2204,7 +2205,7 @@ func TestServer_SyncHeights(t *testing.T) {
 			blocksKafkaProducerClient: mockBlocksProducer,
 		}
 
-		server.SyncHeights(HandshakeMessage{
+		server.SyncHeights(p2p.HandshakeMessage{
 			BestHeight: 1111,
 		}, 123)
 

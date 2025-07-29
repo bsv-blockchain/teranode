@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bsv-blockchain/go-p2p"
 )
 
 // PeerHeight manages peer height tracking and synchronization in the P2P network.
@@ -28,7 +29,7 @@ import (
 type PeerHeight struct {
 	logger                ulogger.Logger     // Logger instance for peer height operations
 	settings              *settings.Settings // Global Teranode configuration settings
-	P2PNode               P2PNode            // P2P node instance for network communication
+	P2PNode               p2p.Node           // P2P node instance for network communication
 	numberOfExpectedPeers int                // Expected number of peers for synchronization operations
 	lastMsgByPeerID       sync.Map           // Thread-safe map of last messages received from each peer
 	defaultTimeout        time.Duration      // Default timeout for synchronization operations
@@ -69,19 +70,21 @@ func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processN
 
 	optimiseRetries := tSettings.P2P.OptimiseRetries
 
-	config := P2PConfig{
-		ProcessName:     processName,
-		ListenAddresses: p2pListenAddresses,
-		Port:            p2pPort,
-		PrivateKey:      privateKey,
-		SharedKey:       sharedKey,
-		UsePrivateDHT:   usePrivateDht,
-		OptimiseRetries: optimiseRetries,
-		Advertise:       false, // no one need to discover or connect to us, we just listen
-		StaticPeers:     staticPeers,
+	config := p2p.Config{
+		ProcessName:        processName,
+		ListenAddresses:    p2pListenAddresses,
+		Port:               p2pPort,
+		PrivateKey:         privateKey,
+		SharedKey:          sharedKey,
+		UsePrivateDHT:      usePrivateDht,
+		OptimiseRetries:    optimiseRetries,
+		Advertise:          false, // no one need to discover or connect to us, we just listen
+		StaticPeers:        staticPeers,
+		BootstrapAddresses: tSettings.P2P.BootstrapAddresses,
+		DHTProtocolID:      tSettings.P2P.DHTProtocolID,
 	}
 
-	peerConnection, err := NewP2PNode(context.Background(), logger, tSettings, config, nil)
+	peerConnection, err := p2p.NewNode(context.Background(), logger, config)
 	if err != nil {
 		return nil, errors.NewServiceError("[PeerHeight] Error creating P2PNode", err)
 	}
@@ -135,7 +138,7 @@ func (p *PeerHeight) Stop(ctx context.Context) error {
 
 // blockHandler processes incoming block messages from peers.
 func (p *PeerHeight) blockHandler(ctx context.Context, msg []byte, from string) {
-	blockMessage := BlockMessage{}
+	blockMessage := p2p.BlockMessage{}
 
 	err := json.Unmarshal(msg, &blockMessage)
 	if err != nil {
@@ -152,8 +155,8 @@ func (p *PeerHeight) blockHandler(ctx context.Context, msg []byte, from string) 
 	})
 
 	previousBlockMessage, ok := p.lastMsgByPeerID.Load(blockMessage.PeerID)
-	if ok && previousBlockMessage.(BlockMessage).Height > blockMessage.Height {
-		p.logger.Debugf("[PeerHeight] Ignoring block message from %s for block height %d as we are already at %d", from, blockMessage.Height, previousBlockMessage.(BlockMessage).Height)
+	if ok && previousBlockMessage.(p2p.BlockMessage).Height > blockMessage.Height {
+		p.logger.Debugf("[PeerHeight] Ignoring block message from %s for block height %d as we are already at %d", from, blockMessage.Height, previousBlockMessage.(p2p.BlockMessage).Height)
 	} else {
 		p.lastMsgByPeerID.Store(blockMessage.PeerID, blockMessage)
 	}
@@ -185,7 +188,7 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 		if first {
 			p.logger.Infof("[PeerHeight] Not enough peers to check if at same block height %d/%d", size, p.numberOfExpectedPeers)
 			p.lastMsgByPeerID.Range(func(key, value interface{}) bool {
-				block := value.(BlockMessage)
+				block := value.(p2p.BlockMessage)
 				p.logger.Infof("[PeerHeight] peer=%s %s=%d", block.PeerID, block.DataHubURL, block.Height)
 
 				return true
@@ -198,7 +201,7 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 	result := true
 
 	p.lastMsgByPeerID.Range(func(key, value interface{}) bool {
-		block := value.(BlockMessage)
+		block := value.(p2p.BlockMessage)
 
 		/* we need the other nodes to be at least at the same height as us, it's ok if they are ahead */
 		if height > block.Height {
