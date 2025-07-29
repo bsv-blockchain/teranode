@@ -135,12 +135,21 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
     - Returns: JSON object with fork data
 
+- GET `/api/v1/block/:hash/subtrees/json`
+    - Description: Retrieves subtree information for a specific block
+    - Parameters:
+
+        - `hash`: Block hash (hex string)
+
+    - Returns: JSON object with block subtree information including subtree hashes and metadata
+
 - GET `/api/v1/blocks`
     - Description: Retrieves a paginated list of blocks
     - Parameters:
 
-        - `offset` (optional): Page offset
-        - `limit` (optional): Page size limit
+        - `offset` (optional): Number of blocks to skip from the tip (default: 0)
+        - `limit` (optional): Maximum number of blocks to return (default: 20, max: 100)
+        - `includeOrphans` (optional): Whether to include orphaned blocks (default: false)
 
     - Returns: JSON array of block data
 
@@ -164,9 +173,8 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `n` (optional): Number of blocks to retrieve (default: 10)
-        - `includeorphans` (optional): Whether to include orphaned blocks (default: false)
-        - `height` (optional): Start retrieval from this specific height instead of the latest height
-        - `offset` (optional): Skip this many blocks before starting to return blocks
+        - `fromHeight` (optional): Starting block height for retrieval (default: 0)
+        - `includeOrphans` (optional): Whether to include orphaned blocks (default: false)
 
     - Response Format:
 
@@ -184,7 +192,6 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 - GET `/api/v1/blockstats`
     - Description: Retrieves statistical information about the blockchain
     - Parameters:
-
         None
 
     - Returns: JSON object with block statistics
@@ -272,7 +279,6 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 - GET `/api/v1/bestblockheader`
     - Description: Retrieves the current best block header
     - Parameters:
-
         None
 
     - Returns: Best block header in binary format
@@ -415,7 +421,6 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 - GET `/api/v1/fsm/state`
     - Description: Returns current blockchain FSM state
     - Parameters:
-
         None
 
     - Returns: JSON object with current state information including:
@@ -443,6 +448,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         JSON object with event details
+
         - `event` (string, required): The event name to trigger
         - `data` (object, optional): Additional data for the event
 
@@ -462,7 +468,6 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 - GET `/api/v1/fsm/events`
     - Description: Lists all possible FSM events
     - Parameters:
-
         None
 
     - Returns: JSON array of available events with descriptions
@@ -489,7 +494,6 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 - GET `/api/v1/fsm/states`
     - Description: Lists all possible FSM states
     - Parameters:
-
         None
 
     - Returns: JSON array of available states with descriptions

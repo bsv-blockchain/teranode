@@ -203,6 +203,32 @@ URL /rpc
     Result
       @BlockHeader
 
+  Method getchaintips // Returns information about all known tips in the block tree.
+    Params
+      []
+    Result
+      [
+        {
+          "height": 680000, // Block height of this chain tip
+          "hash": "000000000000000000035c80f3a4414b6da66e9ef98f8122e89691d8c6d2cbe0", // Block hash of this chain tip
+          "branchlen": 0, // Zero for main chain, otherwise length of branch connecting the tip to the main chain
+          "status": "active" // Status of the chain (active, valid-fork, valid-headers, headers-only, invalid)
+        },
+        {
+          "height": 679999, // Block height of this chain tip
+          "hash": "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054", // Block hash of this chain tip
+          "branchlen": 1, // Length of branch connecting this tip to the main chain
+          "status": "valid-fork" // Status indicating this is a valid fork of the main chain
+        }
+      ]
+    // Note: Returns information about all known tips in the block tree including the main chain and any side chains
+    // Possible status values:
+    // - "invalid": This branch contains at least one invalid block
+    // - "headers-only": Not all blocks for this branch are available, but the headers are valid
+    // - "valid-headers": All blocks are available for this branch, but they were never fully validated
+    // - "valid-fork": This branch is not part of the active chain, but is fully validated
+    // - "active": This is the tip of the active main chain, which is certainly valid
+
   # Transaction Commands
 
   Method createrawtransaction // Creates a raw transaction without signing it.
@@ -249,6 +275,36 @@ URL /rpc
       // OR
       "0200000001a0962f8bb905715ddb0b3232c7f82f5ef9f2311b900ba1443c6edbdb0769e60a0000000000ffffffff0140420f00000000001976a914ae56cbe296ec9035fc4a284b6a42555abb27cb5a88ac00000000" // When verbose=false
     // Note: Retrieves transactions from both mempool and blockchain. Returns error if transaction not found.
+
+  Method getrawmempool // Returns information about unconfirmed transactions in the mempool.
+    Params
+      [
+        false // Verbose output (true=detailed info, false=txid array), default=false
+      ]
+    Result
+      [
+        "b4749f017444b051c44dfd2720e88f314ff94f3dd6d56d40ef65854fcd7fff6b", // Transaction ID
+        "e7db1cff44f298de8b637d9e63e2841a8b2e4b2e3e8e4e4e4e4e4e4e4e4e4e4e" // Transaction ID
+      ] // When verbose=false
+      // OR
+      {
+        "b4749f017444b051c44dfd2720e88f314ff94f3dd6d56d40ef65854fcd7fff6b": {
+          "size": 225, // Transaction size in bytes
+          "fee": 0.00000678, // Transaction fee in BSV
+          "modifiedfee": 0.00000678, // Modified fee (includes fee deltas from prioritisetransaction)
+          "time": 1621500000, // Local time transaction entered pool in seconds since epoch
+          "height": 700001, // Block height when transaction entered the pool
+          "descendantcount": 1, // Number of in-mempool descendant transactions (including this one)
+          "descendantsize": 225, // Virtual transaction size of in-mempool descendants (including this one)
+          "descendantfees": 678, // Modified fees (see above) of in-mempool descendants (including this one)
+          "ancestorcount": 1, // Number of in-mempool ancestor transactions (including this one)
+          "ancestorsize": 225, // Virtual transaction size of in-mempool ancestors (including this one)
+          "ancestorfees": 678 // Modified fees (see above) of in-mempool ancestors (including this one)
+        }
+      } // When verbose=true
+    // Note: Returns all transaction IDs in mempool as a json array of string transaction IDs
+    // When verbose=true, returns a json object with transaction details for each mempool transaction
+    // In Teranode, this reflects transactions across all active subtrees rather than a single mempool
 
   # Mining Commands
 

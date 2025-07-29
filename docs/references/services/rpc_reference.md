@@ -4,50 +4,50 @@
 
 - [Overview](#overview)
 - [Types](#types)
-  - [RPCServer](#rpcserver)
+    - [RPCServer](#rpcserver)
 - [Functions](#functions)
-  - [NewServer](#newserver)
+    - [NewServer](#newserver)
 - [Methods](#methods)
-  - [Start](#start)
-  - [Stop](#stop)
-  - [Init](#init)
-  - [Health](#health)
-  - [checkAuth](#checkauth)
-  - [jsonRPCRead](#jsonrpcread)
+    - [Start](#start)
+    - [Stop](#stop)
+    - [Init](#init)
+    - [Health](#health)
+    - [checkAuth](#checkauth)
+    - [jsonRPCRead](#jsonrpcread)
 - [RPC Handlers](#rpc-handlers)
 - [Configuration](#configuration)
 - [Authentication](#authentication)
 - [General Format](#general-format)
 - [Supported RPC Commands](#supported-rpc-commands)
-  - [createrawtransaction](#createrawtransaction) - Creates a raw transaction without signing it
-  - [generate](#generate) - Mine blocks (for regression testing)
-  - [generatetoaddress](#generatetoaddress) - Mine blocks to a specified address
-  - [getbestblockhash](#getbestblockhash) - Returns the hash of the best (most recent) block in the longest blockchain
-  - [getblock](#getblock) - Returns information about a block
-  - [getblockbyheight](#getblockbyheight) - Returns information about a block at the specified height
-  - [getblockhash](#getblockhash) - Returns the hash of a block at the specified height
-  - [getblockheader](#getblockheader) - Returns information about a block header
-  - [getblockchaininfo](#getblockchaininfo) - Returns blockchain state information
-  - [getdifficulty](#getdifficulty) - Returns the proof-of-work difficulty
-  - [getinfo](#getinfo) - Returns general information about the node
-  - [getmininginfo](#getmininginfo) - Returns mining-related information
-  - [getpeerinfo](#getpeerinfo) - Returns data about each connected network node
-  - [getrawtransaction](#getrawtransaction) - Returns raw transaction data
-  - [getminingcandidate](#getminingcandidate) - Returns mining candidate information for generating a new block
-  - help - Lists all available commands or gets help on a specific command
-  - [invalidateblock](#invalidateblock) - Permanently marks a block as invalid
-  - [isbanned](#isbanned) - Checks if an IP/subnet is banned
-  - [listbanned](#listbanned) - Lists all banned IPs/subnets
-  - [clearbanned](#clearbanned) - Clears all banned IPs
-  - [reconsiderblock](#reconsiderblock) - Removes invalidity status from a block
-  - [sendrawtransaction](#sendrawtransaction) - Submits a raw transaction to the network
-  - [setban](#setban) - Attempts to add or remove an IP/subnet from the banned list
-  - [stop](#stop) - Stops the server
-  - [submitminingsolution](#submitminingsolution) - Submits a mining solution to the network
-  - [version](#version) - Returns the server version information
-  - [freeze](#freeze) - Freezes specified UTXOs or OUTPUTs
-  - [unfreeze](#unfreeze) - Unfreezes specified UTXOs or OUTPUTs
-  - [reassign](#reassign) - Reassigns specified frozen UTXOs to a new address
+    - [createrawtransaction](#createrawtransaction) - Creates a raw transaction without signing it
+    - [generate](#generate) - Mine blocks (for regression testing)
+    - [generatetoaddress](#generatetoaddress) - Mine blocks to a specified address
+    - [getbestblockhash](#getbestblockhash) - Returns the hash of the best (most recent) block in the longest blockchain
+    - [getblock](#getblock) - Returns information about a block
+    - [getblockbyheight](#getblockbyheight) - Returns information about a block at the specified height
+    - [getblockhash](#getblockhash) - Returns the hash of a block at the specified height
+    - [getblockheader](#getblockheader) - Returns information about a block header
+    - [getblockchaininfo](#getblockchaininfo) - Returns blockchain state information
+    - [getdifficulty](#getdifficulty) - Returns the proof-of-work difficulty
+    - [getinfo](#getinfo) - Returns general information about the node
+    - [getmininginfo](#getmininginfo) - Returns mining-related information
+    - [getpeerinfo](#getpeerinfo) - Returns data about each connected network node
+    - [getrawtransaction](#getrawtransaction) - Returns raw transaction data
+    - [getminingcandidate](#getminingcandidate) - Returns mining candidate information for generating a new block
+    - help - Lists all available commands or gets help on a specific command
+    - [invalidateblock](#invalidateblock) - Permanently marks a block as invalid
+    - [isbanned](#isbanned) - Checks if an IP/subnet is banned
+    - [listbanned](#listbanned) - Lists all banned IPs/subnets
+    - [clearbanned](#clearbanned) - Clears all banned IPs
+    - [reconsiderblock](#reconsiderblock) - Removes invalidity status from a block
+    - [sendrawtransaction](#sendrawtransaction) - Submits a raw transaction to the network
+    - [setban](#setban) - Attempts to add or remove an IP/subnet from the banned list
+    - [stop](#stop) - Stops the server
+    - [submitminingsolution](#submitminingsolution) - Submits a mining solution to the network
+    - [version](#version) - Returns the server version information
+    - [freeze](#freeze) - Freezes specified UTXOs or OUTPUTs
+    - [unfreeze](#unfreeze) - Unfreezes specified UTXOs or OUTPUTs
+    - [reassign](#reassign) - Reassigns specified frozen UTXOs to a new address
 - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
 - [Error Handling](#error-handling)
 - [Rate Limiting](#rate-limiting)
@@ -268,26 +268,31 @@ Some key handlers include:
 
     **Authentication Settings:**
 
-- **`rpc_user` and `rpc_pass`**: Credentials for RPC authentication with full admin privileges
-- **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only operations)
+    - **`rpc_user` and `rpc_pass`**: Credentials for RPC authentication with full admin privileges  
+    - **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only operations)
 
     **Connection Settings:**
-- **`rpc_max_clients`**: Maximum number of concurrent RPC clients (default: 1000)
-- **`rpc_listener_url`**: URL for the RPC listener (default: "<http://localhost:8332>")
-- **`rpc_listeners`**: List of URLs for multiple RPC listeners (overrides rpc_listener_url if set)
+
+    - **`rpc_max_clients`**: Maximum number of concurrent RPC clients (default: 1000)   
+    - **`rpc_listener_url`**: URL for the RPC listener (default: "http://localhost:8332")           
+    - **`rpc_listeners`**: List of URLs for multiple RPC listeners (overrides rpc_listener_url if set)
 
     **Security Settings:**
-- **`rpc_tls_enabled`**: Enables TLS for secure RPC connections (default: false)
-- **`rpc_tls_cert_file`**: Path to TLS certificate file
-- **`rpc_tls_key_file`**: Path to TLS private key file
-- **`rpc_auth_timeouts_seconds`**: Timeout for authentication in seconds (default: 10)
+
+    - **`rpc_tls_enabled`**: Enables TLS for secure RPC connections (default: false)
+    - **`rpc_tls_cert_file`**: Path to TLS certificate file
+    - **`rpc_tls_key_file`**: Path to TLS private key file
+    - **`rpc_auth_timeouts_seconds`**: Timeout for authentication in seconds (default: 10)
 
     **Compatibility Settings:**
-- **`rpc_quirks`**: Enables compatibility quirks for legacy clients (default: false)
 
-    !!! warning "Production Warnings"
-        - **`rpc_disable_auth`**: Disables authentication (NOT recommended for production)
-        - **`rpc_cross_origin`**: Allows cross-origin requests (NOT recommended for production)
+    - **`rpc_quirks`**: Enables compatibility quirks for legacy clients (default: false)
+
+
+!!! warning "Production Warnings"
+
+    - **`rpc_disable_auth`**: Disables authentication (NOT recommended for production)
+    - **`rpc_cross_origin`**: Allows cross-origin requests (NOT recommended for production)
 
 Configuration values can be provided through the configuration file, environment variables, or command-line flags, with precedence in that order.
 
@@ -1117,6 +1122,67 @@ Removes invalidity status of a block and its descendants, reconsidering them for
 }
 ```
 
+### getrawmempool
+
+Returns information about unconfirmed transactions in the mempool.
+
+**Parameters:**
+
+1. `verbose` (boolean, optional, default=false) - If true, returns detailed transaction information
+
+**Returns:**
+
+- If verbose=false: Array of transaction IDs (txids) in the mempool
+- If verbose=true: Object with transaction IDs as keys and detailed transaction information as values
+
+**Example Request:**
+
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getrawmempool",
+    "params": [false]
+}
+```
+
+**Example Response (verbose=false):**
+
+```json
+{
+    "result": [
+        "b4749f017444b051c44dfd2720e88f314ff94f3dd6d56d40ef65854fcd7fff6b",
+        "e7db1cff44f298de8b637d9e63e2841a8b2e4b2e3e8e4e4e4e4e4e4e4e4e4e4e"
+    ],
+    "error": null,
+    "id": "curltest"
+}
+```
+
+**Example Response (verbose=true):**
+
+```json
+{
+    "result": {
+        "b4749f017444b051c44dfd2720e88f314ff94f3dd6d56d40ef65854fcd7fff6b": {
+            "size": 225,
+            "fee": 0.00000678,
+            "modifiedfee": 0.00000678,
+            "time": 1621500000,
+            "height": 700001,
+            "descendantcount": 1,
+            "descendantsize": 225,
+            "descendantfees": 678,
+            "ancestorcount": 1,
+            "ancestorsize": 225,
+            "ancestorfees": 678
+        }
+    },
+    "error": null,
+    "id": "curltest"
+}
+```
+
 ### setban
 
 Attempts to add or remove an IP/Subnet from the banned list.
@@ -1268,6 +1334,55 @@ Returns the server version information.
     "version": "string",      // Server version string
     "subversion": "string",   // User agent string
     "protocolversion": number // Protocol version number
+}
+```
+
+### getchaintips
+
+Returns information about all known chain tips in the block tree, including the main chain as well as orphaned branches.
+
+**Parameters:** none
+
+**Returns:**
+
+- `array` - Array of chain tip objects, each containing:
+
+  - `height` (number) - Height of the chain tip
+  - `hash` (string) - Block hash of the chain tip
+  - `branchlen` (number) - Zero for main chain, otherwise length of branch connecting the tip to the main chain
+  - `status` (string) - Status of the chain tip ("active" for main chain, "valid-fork", "valid-headers", "headers-only", "invalid")
+
+**Example Request:**
+
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getchaintips",
+    "params": []
+}
+```
+
+**Example Response:**
+
+```json
+{
+    "result": [
+        {
+            "height": 700001,
+            "hash": "000000000000000004a1b6d6fdfa0d0a...",
+            "branchlen": 0,
+            "status": "active"
+        },
+        {
+            "height": 700000,
+            "hash": "000000000000000003f2c4e5b8d9a1b2...",
+            "branchlen": 1,
+            "status": "valid-fork"
+        }
+    ],
+    "error": null,
+    "id": "curltest"
 }
 ```
 
@@ -1649,7 +1764,6 @@ Additionally, the following node-related commands are recognized but return ErrR
 - `getmempoolinfo` - Returns mempool information
 - `getnettotals` - Returns network traffic statistics
 - `getnetworkhashps` - Returns estimated network hashrate
-- `getrawmempool` - Returns mempool transaction data
 - `gettxout` - Returns transaction output information
 - `gettxoutproof` - Returns proof that transaction was included in a block
 - `node` - Attempts to add or remove a peer node
