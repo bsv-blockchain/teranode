@@ -450,7 +450,15 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		s.logger.Warnf("[Server] Some P2P topic handlers failed to register: %v", err)
 	}
 
-	go s.blockchainSubscriptionListener(ctx)
+	// Start blockchain subscription before marking service as ready
+	// This ensures we don't miss any block notifications
+	blockchainSubscription, err := s.blockchainClient.Subscribe(ctx, "p2pServer")
+	if err != nil {
+		return errors.NewServiceError("error subscribing to blockchain service", err)
+	}
+
+	// Now start the listener goroutine with the established subscription
+	go s.blockchainSubscriptionListener(ctx, blockchainSubscription)
 
 	go s.listenForBanEvents(ctx)
 
@@ -1098,13 +1106,7 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 	return nil // For unhandled types, not an error that stops the listener
 }
 
-func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
-	// Subscribe to the blockchain service
-	blockchainSubscription, err := s.blockchainClient.Subscribe(ctx, "p2pServer")
-	if err != nil {
-		s.logger.Errorf("[blockchainSubscriptionListener] error subscribing to blockchain service: %v", err)
-		return
-	}
+func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainSubscription <-chan *blockchain.Notification) {
 
 	// define vars here to prevent too many allocs
 	var notification *blockchain.Notification
