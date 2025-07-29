@@ -9,7 +9,6 @@
 | Gauge      | A metric that represents a single numerical value that can arbitrarily go up and down. <br/>Used for measured values like items in a channel or queue.                                                                                                    |
 | Histogram  | Samples observations (such as duration or size) and counts them in configurable buckets. <br/>Also provides a sum of all observed values and count of observations. <br/>Used for measuring distributions of values (e.g., request durations, response sizes). |
 
-
 ## Alert Service Metrics
 
 | Metric Name             | Type    | Description                            |
@@ -57,7 +56,6 @@
 | `teranode_blockassembly_generate_blocks`                      | Histogram | Histogram of generating blocks in block assembler                                |
 | `teranode_blockassembly_current_state`                       | Gauge     | Current state of the block assembly process                                     |
 
-
 ## Block Service Metrics
 
 | Metric Name                                          | Type      | Description                                     |
@@ -87,6 +85,7 @@
 | `teranode_blockchain_get_block_exists`                  | Histogram | Histogram of GetBlockExists calls to the blockchain service             |
 | `teranode_blockchain_get_get_best_block_header`         | Histogram | Histogram of GetBestBlockHeader calls to the blockchain service         |
 | `teranode_blockchain_check_block_is_in_current_chain`   | Histogram | Histogram of CheckBlockIsInCurrentChain calls to the blockchain service |
+| `teranode_blockchain_get_chain_tips`                    | Histogram | Histogram of GetChainTips calls to the blockchain service               |
 | `teranode_blockchain_get_get_block_header`              | Histogram | Histogram of GetBlockHeader calls to the blockchain service             |
 | `teranode_blockchain_get_get_block_headers`             | Histogram | Histogram of GetBlockHeaders calls to the blockchain service            |
 | `teranode_blockchain_get_get_block_headers_from_height` | Histogram | Histogram of GetBlockHeadersFromHeight calls to the blockchain service  |
@@ -134,13 +133,9 @@
 | `teranode_blockvalidation_catchup_ch`                  | Gauge     | Number of catchups buffered in the catchup channel                |
 | `teranode_blockvalidation_catchup`                     | Histogram | Histogram of catchup events                                       |
 | `teranode_blockvalidation_process_block_found`         | Histogram | Histogram of process block found                                  |
-| `teranode_blockvalidation_set_tx_meta_queue_ch`        | Gauge     | Number of tx meta queue buffered in the set tx meta queue channel |
 | `teranode_blockvalidation_validate_block`              | Histogram | Histogram of calls to ValidateBlock method                        |
 | `teranode_blockvalidation_revalidate_block`            | Histogram | Histogram of re-validate block                                    |
 | `teranode_blockvalidation_revalidate_block_err`        | Histogram | Number of blocks revalidated with error                           |
-| `teranode_blockvalidation_set_tx_meta_cache`           | Counter   | Number of tx meta cache sets                                      |
-| `teranode_blockvalidation_del_tx_meta_cache`           | Counter   | Number of tx meta cache deletes                                   |
-| `teranode_blockvalidation_set_tx_mined_multi`          | Counter   | Number of tx mined multi sets                                     |
 | `teranode_blockvalidation_last_validated_blocks_cache` | Gauge     | Number of blocks in the last validated blocks cache               |
 | `teranode_blockvalidation_block_exists_cache`          | Gauge     | Number of blocks in the block exists cache                        |
 | `teranode_blockvalidation_subtree_exists_cache`        | Gauge     | Number of subtrees in the subtree exists cache                    |
@@ -169,7 +164,6 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_legacy_peer_server_OnRead`       | Histogram | The time taken to handle OnRead       |
 | `teranode_legacy_peer_server_OnWrite`      | Histogram | The time taken to handle OnWrite      |
 
-
 ## Legacy NetSync Service Metrics
 
 | Metric Name                                                 | Type      | Description                                               |
@@ -194,24 +188,17 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_legacy_netsync_orphans`                           | Gauge     | The number of orphan transactions                         |
 | `teranode_legacy_netsync_orphan_time`                       | Histogram | The time taken to process an orphan transaction           |
 
-
 ## Propagation Service Metrics
 
 | Metric Name                                      | Type      | Description                                                           |
 |--------------------------------------------------|-----------|-----------------------------------------------------------------------|
-| `teranode_propagation_health`                    | Histogram | Histogram of calls to the health endpoint of the propagation service  |
-| `teranode_propagation_transactions`              | Histogram | Histogram of transaction processing by the propagation service        |
-| `teranode_propagation_internal_tx_count`         | Counter   | Count of internal transactions processed by the propagation service   |
-| `teranode_propagation_transaction_notifications` | Histogram | Histogram of transaction notifications by the propagation service     |
-| `teranode_propagation_submit_subtree`            | Histogram | Histogram of subtree submissions by the propagation service          |
-| `teranode_propagation_reject_tx`                 | Counter   | Count of rejected transactions by the propagation service             |
-| `teranode_propagation_tx_rejected`               | Counter   | Count of transactions rejected by the propagation service             |
-| `teranode_propagation_peer_stats`                | Gauge     | Gauge of peer statistics for the propagation service                   |
-| `teranode_propagation_peer_latency`              | Histogram | Histogram of peer latency for the propagation service                |
-| `teranode_propagation_current_state`             | Gauge     | Gauge of the current state of the propagation service                |
-| `teranode_propagation_transactions_batch`   | Histogram | Histogram of transaction processing by the propagation service       |
-| `teranode_propagation_transactions_size`    | Histogram | Size of transactions processed by the propagation service            |
-| `teranode_propagation_invalid_transactions` | Counter   | Number of transactions found invalid by the propagation service      |
+| `teranode_propagation_health`                    | Histogram | Histogram of calls to the health endpoint of the propagation service                    |
+| `teranode_propagation_transactions`              | Histogram | Histogram of transaction processing by the propagation service                           |
+| `teranode_propagation_transactions_batch`        | Histogram | Histogram of transaction processing by the propagation service                           |
+| `teranode_propagation_handle_single_tx`          | Histogram | Histogram of transaction processing by the propagation service using HTTP                |
+| `teranode_propagation_handle_multiple_tx`        | Histogram | Histogram of multiple transaction processing by the propagation service using HTTP       |
+| `teranode_propagation_transactions_size`         | Histogram | Size of transactions processed by the propagation service                                |
+| `teranode_propagation_invalid_transactions`      | Counter   | Number of transactions found invalid by the propagation service                          |
 
 ## RPC Service Metrics
 
@@ -244,7 +231,6 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_rpc_freeze`                 | Histogram | Histogram of calls to handleFreeze in the rpc service               |
 | `teranode_rpc_unfreeze`               | Histogram | Histogram of calls to handleUnfreeze in the rpc service             |
 | `teranode_rpc_reassign`               | Histogram | Histogram of calls to handleReassign in the rpc service             |
-
 
 ## Subtree Validation Service Metrics
 
@@ -293,6 +279,7 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_tx_meta_cache_trims`                | Gauge | Number of trim operations in the tx meta cache               |
 | `teranode_tx_meta_cache_map_size`             | Gauge | Number of total elements in the improved cache's bucket maps |
 | `teranode_tx_meta_cache_total_elements_added` | Gauge | Number of total number of elements added to the txmetacache  |
+| `teranode_tx_meta_cache_hit_old_tx`           | Gauge | Number of hits on old txs in the tx meta cache              |
 
 ## Aerospike Service Metrics
 
@@ -332,7 +319,6 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_sql_utxo_errors` | CounterVec | Number of utxo errors                   |
 | `teranode_sql_utxo_get_counter_conflicting` | Counter | Counter of conflicting UTXO GET operations using SQL |
 | `teranode_sql_utxo_get_conflicting` | Histogram | Histogram of conflicting UTXO GET operations using SQL |
-
 
 ## Subtree Processor Service Metrics
 
