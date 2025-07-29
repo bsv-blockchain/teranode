@@ -59,47 +59,6 @@ func TestReAssignUTXOBasic(t *testing.T) {
 	assert.Equal(t, oldUtxo.Vout, newUtxo.Vout)
 }
 
-func TestParseLuaReturnValueBasic(t *testing.T) {
-	store := &Store{}
-
-	tests := []struct {
-		name        string
-		input       string
-		expectError bool
-	}{
-		{
-			name:        "valid OK response",
-			input:       "OK:success",
-			expectError: false,
-		},
-		{
-			name:        "valid ERROR response",
-			input:       "ERROR:failure",
-			expectError: false,
-		},
-		{
-			name:        "empty string",
-			input:       "",
-			expectError: true,
-		},
-		{
-			name:        "invalid format",
-			input:       "INVALID",
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := store.ParseLuaReturnValue(tt.input)
-			if tt.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
 
 // Test constants are accessible
 func TestLuaConstants(t *testing.T) {

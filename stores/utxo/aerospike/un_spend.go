@@ -141,8 +141,8 @@ func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 //  5. Manages external storage
 //
 // Lua Return Values:
-//   - OK:NOTALLSPENT - Success, some UTXOs still unspent
-//   - ERROR:* - Various error conditions
+//   - Map response with status="OK" and optional signal
+//   - Map response with status="ERROR" and message field
 //
 // Metrics:
 //   - prometheusUtxoMapReset: Successful unspends
@@ -176,21 +176,15 @@ func (s *Store) unspendLua(spend *utxo.Spend) error {
 		return errors.NewStorageError("error in aerospike unspend record", aErr)
 	}
 
-	responseMsg, ok := ret.(string)
-	if !ok {
-		prometheusUtxoMapErrors.WithLabelValues("Reset", "response not string").Inc()
-		return errors.NewStorageError("error in aerospike unspend record", aErr)
-	}
-
-	res, err := s.ParseLuaReturnValue(responseMsg)
+	res, err := s.ParseLuaMapResponse(ret)
 	if err != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error parsing response").Inc()
-		return errors.NewProcessingError("error parsing response %s", responseMsg, err)
+		return errors.NewProcessingError("error parsing response", err)
 	}
 
-	switch res.ReturnValue {
-	case LuaOk:
-		if res.Signal == LuaNotAllSpent {
+	if res.Status == LuaStatusOK {
+		// Handle signal if present
+		if res.Signal == LuaSignalNotAllSpent {
 			if err := s.SetDAHForChildRecords(spend.TxID, res.ChildCount, 0); err != nil {
 				return err
 			}
@@ -199,14 +193,9 @@ func (s *Store) unspendLua(spend *utxo.Spend) error {
 				return err
 			}
 		}
-
-	case LuaError:
+	} else if res.Status == LuaStatusError {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error response").Inc()
-		return errors.NewStorageError("error in aerospike unspend record: %s", responseMsg)
-
-	default:
-		prometheusUtxoMapErrors.WithLabelValues("Reset", "default response").Inc()
-		return errors.NewStorageError("error in aerospike unspend record: %s", responseMsg)
+		return errors.NewStorageError("error in aerospike unspend record: %s", res.Message)
 	}
 
 	prometheusUtxoMapReset.Inc()

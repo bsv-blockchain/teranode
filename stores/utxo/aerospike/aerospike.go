@@ -655,44 +655,34 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 		}
 
 		response := batchRecord.Record
-		if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
-			responseMsg, ok := response.Bins["SUCCESS"].(string)
-			if ok {
-				res, err := s.ParseLuaReturnValue(responseMsg)
-				if err != nil {
-					s.logger.Errorf("[PreserveTransactions] Failed to parse response for tx %s: %v",
-						txIDs[i].String(), err)
-					continue
+		if response != nil && response.Bins != nil && response.Bins[LuaSuccess.String()] != nil {
+			res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
+			if err != nil {
+				s.logger.Errorf("[PreserveTransactions] Failed to parse response for tx %s: %v",
+					txIDs[i].String(), err)
+				continue
+			}
+
+			switch res.Status {
+			case LuaStatusOK:
+				if res.Signal == LuaSignalPreserve {
+					// Handle external transaction preservation
+					if err := s.preserveUntilExternalTransaction(ctx, &txIDs[i], preserveUntilHeight); err != nil {
+						s.logger.Errorf("[PreserveTransactions] Failed to preserve external files for tx %s: %v",
+							txIDs[i].String(), err)
+						continue
+					}
 				}
 
-				switch res.ReturnValue {
-				case LuaOk:
-					if res.Signal == LuaPreserve {
-						// Handle external transaction preservation
-						if err := s.preserveUntilExternalTransaction(ctx, &txIDs[i], preserveUntilHeight); err != nil {
-							s.logger.Errorf("[PreserveTransactions] Failed to preserve external files for tx %s: %v",
-								txIDs[i].String(), err)
-							continue
-						}
-					}
-
-					preservedCount++
-
-				case LuaError:
-					if res.Signal == LuaTxNotFound {
-						s.logger.Warnf("[PreserveTransactions] Transaction not found for tx %s: %s",
-							txIDs[i].String(), responseMsg)
-					} else {
-						s.logger.Errorf("[PreserveTransactions] Error preserving tx %s: %s",
-							txIDs[i].String(), responseMsg)
-					}
-
-				default:
-					s.logger.Errorf("[PreserveTransactions] Unexpected response for tx %s: %s",
-						txIDs[i].String(), responseMsg)
+				preservedCount++
+			case LuaStatusError:
+				if res.ErrorCode == LuaErrorCodeTxNotFound {
+					s.logger.Warnf("[PreserveTransactions] Transaction not found for tx %s",
+						txIDs[i].String())
+				} else {
+					s.logger.Errorf("[PreserveTransactions] Error preserving tx %s: %s",
+						txIDs[i].String(), res.Message)
 				}
-			} else {
-				s.logger.Errorf("[PreserveTransactions] Could not parse response for tx %s", txIDs[i].String())
 			}
 		} else {
 			s.logger.Errorf("[PreserveTransactions] No response received for tx %s", txIDs[i].String())

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
@@ -94,53 +92,45 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 		}
 
 		response := batchRecord.BatchRec().Record
-		if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
-			responseMsg, ok := response.Bins["SUCCESS"].(string)
-			if ok {
-				parts := strings.Split(responseMsg, ":")
-				if len(parts) != 2 {
-					batch[idx].errCh <- errors.NewProcessingError("could not parse response", responseMsg)
-					continue
-				}
-
-				if parts[0] != "OK" {
-					batch[idx].errCh <- errors.NewProcessingError("could not parse response", responseMsg)
-					continue
-				}
-
-				extraRecords, err := strconv.Atoi(parts[1])
-				if err != nil {
-					batch[idx].errCh <- errors.NewProcessingError("could not parse response", responseMsg)
-					continue
-				}
-
-				if extraRecords == 0 {
-					batch[idx].errCh <- nil
-					continue
-				}
-
-				// We need to do the child records...
-				g, _ := errgroup.WithContext(batch[idx].ctx)
-
-				for i := 1; i <= extraRecords; i++ {
-					i := i
-
-					g.Go(func() error {
-						errCh := make(chan error, 1)
-
-						s.lockedBatcher.Put(&batchLocked{
-							txHash:     batch[idx].txHash,
-							childIndex: uint32(i), // nolint:gosec
-							setValue:   batch[idx].setValue,
-							errCh:      errCh,
-						})
-
-						return <-errCh
-					})
-				}
-
-				batch[idx].errCh <- g.Wait()
+		if response != nil && response.Bins != nil && response.Bins[LuaSuccess.String()] != nil {
+			res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
+			if err != nil {
+				batch[idx].errCh <- errors.NewProcessingError("could not parse response", err)
+				continue
 			}
+
+			if res.Status != LuaStatusOK {
+				batch[idx].errCh <- errors.NewProcessingError("error from setLocked: %s", res.Message)
+				continue
+			}
+
+			extraRecords := res.ChildCount
+			if extraRecords == 0 {
+				batch[idx].errCh <- nil
+				continue
+			}
+
+			// We need to do the child records...
+			g, _ := errgroup.WithContext(batch[idx].ctx)
+
+			for i := 1; i <= extraRecords; i++ {
+				i := i
+
+				g.Go(func() error {
+					errCh := make(chan error, 1)
+
+					s.lockedBatcher.Put(&batchLocked{
+						txHash:     batch[idx].txHash,
+						childIndex: uint32(i), // nolint:gosec
+						setValue:   batch[idx].setValue,
+						errCh:      errCh,
+					})
+
+					return <-errCh
+				})
+			}
+
+			batch[idx].errCh <- g.Wait()
 		}
 	}
 }

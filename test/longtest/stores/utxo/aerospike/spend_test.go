@@ -199,14 +199,10 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
-		r, ok := res.(string)
-		require.True(t, ok)
-
-		ret, err := store.ParseLuaReturnValue(r)
+		ret, err := store.ParseLuaMapResponse(res)
 		require.NoError(t, err)
-		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
-		assert.Equal(t, teranode_aerospike.LuaReturnValue(""), ret.Signal)
-		assert.Nil(t, ret.SpendingData)
+		assert.Equal(t, teranode_aerospike.LuaStatusOK, ret.Status)
+		assert.Equal(t, teranode_aerospike.LuaSignal(""), ret.Signal)
 
 		// Verify the increment
 		resp, err := client.Get(nil, txKey)
@@ -220,14 +216,10 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
-		r, ok = res.(string)
-		require.True(t, ok)
-
-		ret, err = store.ParseLuaReturnValue(r)
+		ret, err = store.ParseLuaMapResponse(res)
 		require.NoError(t, err)
-		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
-		assert.Equal(t, teranode_aerospike.LuaReturnValue(""), ret.Signal)
-		assert.Nil(t, ret.SpendingData)
+		assert.Equal(t, teranode_aerospike.LuaStatusOK, ret.Status)
+		assert.Equal(t, teranode_aerospike.LuaSignal(""), ret.Signal)
 
 		// Verify the decrement
 		resp, err = client.Get(nil, txKey)
@@ -270,13 +262,10 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
-		r, ok := res.(string)
-		require.True(t, ok)
-
-		ret, err := store.ParseLuaReturnValue(r)
+		ret, err := store.ParseLuaMapResponse(res)
 		require.NoError(t, err)
-		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
-		assert.Equal(t, teranode_aerospike.LuaReturnValue(""), ret.Signal)
+		assert.Equal(t, teranode_aerospike.LuaStatusOK, ret.Status)
+		assert.Equal(t, teranode_aerospike.LuaSignal(""), ret.Signal)
 
 		rec, aErr = client.Get(nil, key)
 		require.NoError(t, aErr)
@@ -300,13 +289,11 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 		assert.Equal(t, 2, rec.Bins[fields.SpentExtraRecs.String()])
 		assert.Equal(t, []interface{}{101}, rec.Bins[fields.BlockIDs.String()])
 
-		r, ok = res.(string)
-		require.True(t, ok)
-
-		ret, err = store.ParseLuaReturnValue(r)
+		ret, err = store.ParseLuaMapResponse(res)
 		require.NoError(t, err)
-		assert.Equal(t, teranode_aerospike.LuaOk, ret.ReturnValue)
-		assert.Equal(t, teranode_aerospike.LuaReturnValue("DAHSET"), ret.Signal)
+		assert.Equal(t, teranode_aerospike.LuaStatusOK, ret.Status)
+		assert.Equal(t, teranode_aerospike.LuaSignalDAHSet, ret.Signal)
+		assert.Equal(t, 2, ret.ChildCount)
 	})
 
 	t.Run("Increment totalExtraRecs - multi", func(t *testing.T) {

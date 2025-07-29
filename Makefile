@@ -142,7 +142,7 @@ test:
 # run tests in the test/longtest directory
 .PHONY: longtest
 longtest:
-	SETTINGS_CONTEXT=test go test -v -race -tags "testtxmetacache" -count=1 -timeout=2m -parallel 1 -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
+	SETTINGS_CONTEXT=test go test -v -race -tags "testtxmetacache" -count=1 -timeout=5m -parallel 1 -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
 
 # run tests in the test/sequentialtest directory in order, one by one
 .PHONY: sequentialtest

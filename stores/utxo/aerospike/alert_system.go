@@ -56,11 +56,13 @@ package aerospike
 
 import (
 	"context"
+	"strings"
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
@@ -122,18 +124,19 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 		} else {
 			// check the return value of the batch operation
 			response := record.BatchRec().Record
-			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
-				responseMsg, ok := response.Bins["SUCCESS"].(string)
-				if ok {
-					responseMsgParts, err := s.ParseLuaReturnValue(responseMsg)
-
-					switch {
-					case err != nil:
-						errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to batch freeze %d aerospike utxos", batchID, len(spends), err))
-					case responseMsgParts.ReturnValue == LuaError:
-						errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo: %s", batchID, responseMsgParts.Signal))
-					case responseMsgParts.ReturnValue == LuaSpent:
-						errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo because it's already SPENT by %v", batchID, responseMsgParts.SpendingData))
+			if response != nil && response.Bins != nil && response.Bins[LuaSuccess.String()] != nil {
+				res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
+				if err != nil {
+					errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to parse response", batchID, err))
+				} else if res.Status == LuaStatusError {
+					if res.ErrorCode == LuaErrorCodeSpent {
+						// Extract spending data from error message
+						hexData := strings.TrimPrefix(res.Message, "SPENT:")
+						if spendingData, parseErr := spend.NewSpendingDataFromString(hexData); parseErr == nil {
+							errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo because it's already SPENT by %v", batchID, spendingData))
+						} else {
+							errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo: %s", batchID, res.Message))
+						}
 					}
 				}
 			}
@@ -202,15 +205,12 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 		} else {
 			// check the return value of the batch operation
 			response := record.BatchRec().Record
-			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
-				responseMsg, ok := response.Bins["SUCCESS"].(string)
-				if ok {
-					responseMsgParts, err := s.ParseLuaReturnValue(responseMsg)
-					if err != nil {
-						errorsThrown = append(errorsThrown, errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to batch unfreeze %d aerospike utxos", batchID, len(spends), err))
-					} else if responseMsgParts.ReturnValue == LuaError {
-						errorsThrown = append(errorsThrown, errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to unfreeze aerospike utxo: %s", batchID, responseMsgParts.Signal))
-					}
+			if response != nil && response.Bins != nil && response.Bins[LuaSuccess.String()] != nil {
+				res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
+				if err != nil {
+					errorsThrown = append(errorsThrown, errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to parse response", batchID, err))
+				} else if res.Status == LuaStatusError {
+					errorsThrown = append(errorsThrown, errors.NewStorageError("[UNFREEZE_BATCH_LUA][%d] failed to unfreeze aerospike utxo: %s", batchID, res.Message))
 				}
 			}
 		}
@@ -278,15 +278,12 @@ func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *ut
 
 	// check the return value of the batch operation
 	response := batchRecords[0].BatchRec().Record
-	if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
-		responseMsg, ok := response.Bins["SUCCESS"].(string)
-		if ok {
-			responseMsgParts, err := s.ParseLuaReturnValue(responseMsg)
-			if err != nil {
-				return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to reassign aerospike utxo: %s", err)
-			} else if responseMsgParts.ReturnValue == LuaError {
-				return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to reassign aerospike utxo: %s", responseMsgParts.Signal)
-			}
+	if response != nil && response.Bins != nil && response.Bins[LuaSuccess.String()] != nil {
+		res, err := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
+		if err != nil {
+			return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to parse response: %s", err)
+		} else if res.Status == LuaStatusError {
+			return errors.NewStorageError("[REASSIGN_BATCH_LUA] failed to reassign aerospike utxo: %s", res.Message)
 		}
 	}
 

@@ -57,14 +57,11 @@ package aerospike
 
 import (
 	_ "embed"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/aerospike/aerospike-client-go/v8/types"
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/bsv-blockchain/go-subtree"
@@ -73,7 +70,7 @@ import (
 //go:embed teranode.lua
 var teranodeLUA []byte
 
-var LuaPackage = "teranode_v40" // N.B. Do not have any "." in this string
+var LuaPackage = "teranode_v41" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = subtree.FrozenBytes[:]
@@ -81,79 +78,20 @@ var frozenUTXOBytes = subtree.FrozenBytes[:]
 // LuaReturnValue represents the status code returned from Lua scripts.
 type LuaReturnValue string
 
+func (lr LuaReturnValue) String() string {
+	return string(lr)
+}
+
 // GetFrozenUTXOBytes exposes frozenUTXOBytes to public for testing
 func GetFrozenUTXOBytes() []byte {
 	return frozenUTXOBytes
 }
 
-func (l *LuaReturnValue) ToString() string {
-	if l == nil {
-		return ""
-	}
-
-	return string(*l)
-}
-
-// LuaReturnMessage encapsulates the complete response from a Lua script,
-// including status, additional signals, and transaction details.
-type LuaReturnMessage struct {
-	// ReturnValue indicates the primary operation result
-	ReturnValue LuaReturnValue
-
-	// Signal provides additional operation context
-	Signal LuaReturnValue
-
-	// SpendingData contains the spending data if relevant
-	SpendingData *spend.SpendingData
-
-	ChildCount int
-
-	BlockIDs []int
-}
-
-func (l *LuaReturnMessage) String() string {
-	if l == nil {
-		return "<nil>"
-	}
-
-	sb := strings.Builder{}
-
-	sb.WriteString(string(l.ReturnValue))
-
-	if len(l.BlockIDs) > 0 {
-		sb.WriteString(":[")
-
-		for i, blockID := range l.BlockIDs {
-			if i > 0 {
-				sb.WriteString(",")
-			}
-
-			sb.WriteString(strconv.Itoa(blockID))
-		}
-
-		sb.WriteString("]")
-	}
-
-	if len(l.Signal) > 0 {
-		sb.WriteString(":")
-		sb.WriteString(string(l.Signal))
-	}
-
-	if l.SpendingData != nil {
-		sb.WriteString(":")
-		sb.WriteString(l.SpendingData.String())
-	}
-
-	if l.ChildCount > 0 {
-		sb.WriteString(":")
-		sb.WriteString(strconv.Itoa(l.ChildCount))
-	}
-
-	return sb.String()
-}
-
 // Lua Return Values
 const (
+	// LuaSuccess indicates successful operation
+	LuaSuccess LuaReturnValue = "SUCCESS"
+
 	// LuaOk indicates successful operation
 	LuaOk LuaReturnValue = "OK"
 
@@ -193,17 +131,6 @@ const (
 	// LuaPreserve indicates external files need preservation
 	LuaPreserve LuaReturnValue = "PRESERVE"
 )
-
-// LuaReturnValues are the valid return values from Lua scripts
-var luaReturnValues = map[string]struct{}{
-	"OK":                {},
-	"ERROR":             {},
-	"CONFLICTING":       {},
-	"LOCKED":            {},
-	"FROZEN":            {},
-	"COINBASE_IMMATURE": {},
-	"SPENT":             {},
-}
 
 // registerLuaIfNecessary ensures required Lua scripts are registered with Aerospike.
 // It checks for existing scripts and registers new ones if needed.
@@ -282,92 +209,163 @@ func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, fu
 	return nil
 }
 
-// ParseLuaReturnValue parses the colon-delimited response from Lua scripts.
-// Format: "ReturnValue:Signal:External"
-// Special case: If Signal is 64 chars, it's treated as a transaction hash.
-//
-// Example responses:
-//
-//	"OK:[]:ALLSPENT"
-//	"OK:[1,2,3]:ALLSPENT"
-//	"OK:[]:DAHSET:n"
-//	"OK:[3,4]:DAHUNSET:n"
-//	"SPENT:1234...5678" (where 1234...5678 is a 72-char (36 bytes) spending data)
-//	"ERROR:TX not found"
-//
-// Parameters:
-//   - returnValue: Raw response string from Lua
-//
-// Returns:
-//   - Parsed LuaReturnMessage
-//   - Error if parsing fails
-func (s *Store) ParseLuaReturnValue(returnValue string) (LuaReturnMessage, error) {
-	var err error
+// LuaStatus represents the status values in LuaMapResponse
+type LuaStatus string
 
-	rets := LuaReturnMessage{}
+// Status constants for LuaMapResponse
+const (
+	LuaStatusOK    LuaStatus = "OK"
+	LuaStatusError LuaStatus = "ERROR"
+)
 
-	r := strings.Split(returnValue, ":")
+// LuaSignal represents the signal values in LuaMapResponse
+type LuaSignal string
 
-	if len(r) > 0 {
-		if err = checkReturnValue(r[0]); err != nil {
-			return rets, err
-		}
+// Signal constants for LuaMapResponse
+const (
+	LuaSignalDAHSet      LuaSignal = "DAHSET"
+	LuaSignalDAHUnset    LuaSignal = "DAHUNSET"
+	LuaSignalAllSpent    LuaSignal = "ALLSPENT"
+	LuaSignalNotAllSpent LuaSignal = "NOTALLSPENT"
+	LuaSignalPreserve    LuaSignal = "PRESERVE"
+)
 
-		rets.ReturnValue = LuaReturnValue(r[0])
+// LuaErrorCode represents the error code values in LuaMapResponse
+type LuaErrorCode string
 
-		if rets.ReturnValue == LuaOk && len(r) > 1 && r[1][0] == '[' && r[1][len(r[1])-1] == ']' {
-			// Assuming blockIDs are comma-separated in r[1]
-			blockIDs := strings.Split(r[1][1:len(r[1])-1], ",")
+// Error code constants for LuaMapResponse
+const (
+	LuaErrorCodeTxNotFound       LuaErrorCode = "TX_NOT_FOUND"
+	LuaErrorCodeConflicting      LuaErrorCode = "CONFLICTING"
+	LuaErrorCodeLocked           LuaErrorCode = "LOCKED"
+	LuaErrorCodeFrozen           LuaErrorCode = "FROZEN"
+	LuaErrorCodeAlreadyFrozen    LuaErrorCode = "ALREADY_FROZEN"
+	LuaErrorCodeFrozenUntil      LuaErrorCode = "FROZEN_UNTIL"
+	LuaErrorCodeCoinbaseImmature LuaErrorCode = "COINBASE_IMMATURE"
+	LuaErrorCodeSpent            LuaErrorCode = "SPENT"
+	LuaErrorCodeUtxosNotFound    LuaErrorCode = "UTXOS_NOT_FOUND"
+	LuaErrorCodeUtxoNotFound     LuaErrorCode = "UTXO_NOT_FOUND"
+	LuaErrorCodeUtxoInvalidSize  LuaErrorCode = "UTXO_INVALID_SIZE"
+	LuaErrorCodeUtxoHashMismatch LuaErrorCode = "UTXO_HASH_MISMATCH"
+	LuaErrorCodeUtxoNotFrozen    LuaErrorCode = "UTXO_NOT_FROZEN"
+	LuaErrorCodeInvalidParameter LuaErrorCode = "INVALID_PARAMETER"
+)
 
-			// Check if blockIDs is empty and skip the loop if it is
-			if len(blockIDs) > 0 && blockIDs[0] != "" {
-				// Process blockIDs as needed
-				for _, blockID := range blockIDs {
-					id, err := strconv.Atoi(blockID)
-					if err != nil {
-						return rets, errors.NewProcessingError("error parsing blockID %s", blockID, err)
-					}
-
-					rets.BlockIDs = append(rets.BlockIDs, id)
-				}
-			}
-
-			// Remove r[1] from the slice
-			r = append(r[:1], r[2:]...)
-		}
-	}
-
-	if len(r) > 1 {
-		if len(r[1]) == 72 {
-			rets.SpendingData, err = spend.NewSpendingDataFromString(r[1])
-			if err != nil {
-				return rets, err
-			}
-		} else {
-			rets.Signal = LuaReturnValue(r[1])
-		}
-	}
-
-	if len(r) > 2 {
-		rets.ChildCount, err = strconv.Atoi(r[2])
-		if err != nil {
-			return rets, errors.NewProcessingError("error parsing child count %s", r[2], err)
-		}
-	}
-
-	return rets, nil
+// LuaErrorInfo represents an individual error from Lua functions
+type LuaErrorInfo struct {
+	ErrorCode    LuaErrorCode `json:"errorCode"`
+	Message      string       `json:"message"`
+	SpendingData string       `json:"spendingData,omitempty"`
 }
 
-// checkReturnValue validates the return value from a Lua script and returns an appropriate error if needed.
-func checkReturnValue(val string) error {
-	if len(val) == 0 {
-		return errors.NewProcessingError("empty return value")
+// LuaMapResponse represents the structured response from Lua functions
+type LuaMapResponse struct {
+	Status     LuaStatus            `json:"status"`
+	ErrorCode  LuaErrorCode         `json:"errorCode,omitempty"`
+	Message    string               `json:"message,omitempty"`
+	Signal     LuaSignal            `json:"signal,omitempty"`
+	BlockIDs   []int                `json:"blockIDs,omitempty"`
+	Errors     map[int]LuaErrorInfo `json:"errors,omitempty"`
+	ChildCount int                  `json:"childCount,omitempty"`
+}
+
+// ParseLuaMapResponse parses the map response from Lua scripts.
+// This handles the new structured response format where Lua returns a map.
+func (s *Store) ParseLuaMapResponse(response interface{}) (*LuaMapResponse, error) {
+	// Handle the expected map response
+	respMap, ok := response.(map[interface{}]interface{})
+	if !ok {
+		return nil, errors.NewProcessingError("expected map response but got %T", response)
 	}
 
-	// Check if the value is in the map of valid return values
-	if _, exists := luaReturnValues[val]; exists {
-		return nil
+	result := &LuaMapResponse{}
+
+	// Parse status
+	if status, ok := respMap["status"].(string); ok {
+		result.Status = LuaStatus(status)
+	} else {
+		return nil, errors.NewProcessingError("missing or invalid status in response")
 	}
 
-	return errors.NewProcessingError("unknown return value: %s", val)
+	// Parse optional fields
+	if errorCode, ok := respMap["errorCode"].(string); ok {
+		result.ErrorCode = LuaErrorCode(errorCode)
+	}
+
+	if msg, ok := respMap["message"].(string); ok {
+		result.Message = msg
+	}
+
+	if signal, ok := respMap["signal"].(string); ok {
+		result.Signal = LuaSignal(signal)
+	}
+
+	// Parse blockIDs (can be list or []interface{})
+	if blockIDs, ok := respMap["blockIDs"]; ok {
+		switch v := blockIDs.(type) {
+		case []interface{}:
+			result.BlockIDs = make([]int, len(v))
+			for i, id := range v {
+				if idInt, ok := id.(int); ok {
+					result.BlockIDs[i] = idInt
+				} else {
+					return nil, errors.NewProcessingError("invalid blockID at index %d", i)
+				}
+			}
+		default:
+			return nil, errors.NewProcessingError("invalid blockIDs type: %T", blockIDs)
+		}
+	}
+
+	// Parse errors map for spendMulti
+	if errorsField, ok := respMap["errors"]; ok {
+		errMap, ok := errorsField.(map[interface{}]interface{})
+		if !ok {
+			return nil, errors.NewProcessingError("invalid errors type: %T", errorsField)
+		}
+
+		result.Errors = make(map[int]LuaErrorInfo)
+		for k, v := range errMap {
+			offset, ok := k.(int)
+			if !ok {
+				return nil, errors.NewProcessingError("invalid error offset type: %T", k)
+			}
+
+			errorObj, ok := v.(map[interface{}]interface{})
+			if !ok {
+				return nil, errors.NewProcessingError("invalid error object type: %T", v)
+			}
+
+			errorCode, ok := errorObj["errorCode"].(string)
+			if !ok {
+				return nil, errors.NewProcessingError("invalid errorCode type in error object")
+			}
+
+			errorMessage, ok := errorObj["message"].(string)
+			if !ok {
+				return nil, errors.NewProcessingError("invalid message type in error object")
+			}
+
+			errorInfo := LuaErrorInfo{
+				ErrorCode: LuaErrorCode(errorCode),
+				Message:   errorMessage,
+			}
+
+			// Parse optional spendingData field
+			if spendingData, ok := errorObj["spendingData"].(string); ok {
+				errorInfo.SpendingData = spendingData
+			}
+
+			result.Errors[offset] = errorInfo
+		}
+	}
+
+	// Parse childCount
+	if childCount, ok := respMap["childCount"]; ok {
+		if count, ok := childCount.(int); ok {
+			result.ChildCount = count
+		}
+	}
+
+	return result, nil
 }

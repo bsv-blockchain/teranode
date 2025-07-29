@@ -358,7 +358,12 @@ func TestAerospike(t *testing.T) {
 			aerospike.NewValue(100),                            // BlockHeightRetention
 		)
 		require.NoError(t, aErr)
-		assert.Equal(t, teranode_aerospike.LuaOk+":[]", teranode_aerospike.LuaReturnValue(ret.(string)))
+
+		// Parse the map response using the store's parser
+		res, err := store.ParseLuaMapResponse(ret)
+		require.NoError(t, err)
+		assert.Equal(t, teranode_aerospike.LuaStatusOK, res.Status)
+		assert.Empty(t, res.BlockIDs)
 
 		_ = spendTx.Inputs[0].PreviousTxIDAdd(tx.TxIDChainHash())
 
@@ -409,7 +414,11 @@ func TestAerospike(t *testing.T) {
 				aerospike.NewValue(100),   // Block retention
 			)
 			require.NoError(t, aErr)
-			assert.Equal(t, teranode_aerospike.LuaOk+":[]", teranode_aerospike.LuaReturnValue(ret.(string)))
+
+			// Parse the map response using the store's parser
+			res, err := store.ParseLuaMapResponse(ret)
+			require.NoError(t, err)
+			assert.Equal(t, teranode_aerospike.LuaStatusOK, res.Status)
 		}
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
@@ -447,7 +456,12 @@ func TestAerospike(t *testing.T) {
 			aerospike.NewValue(100),                            // Block retention
 		)
 		require.NoError(t, aErr)
-		assert.Equal(t, "ERROR:TX not found", ret)
+
+		// Parse the map response using the store's parser
+		res, err := store.ParseLuaMapResponse(ret)
+		require.NoError(t, err)
+		assert.Equal(t, teranode_aerospike.LuaStatusError, res.Status)
+		assert.Equal(t, "TX not found", res.Message)
 	})
 
 	t.Run("aerospike_1_record_spend_1_and_not_expire_no_blockIDs", func(t *testing.T) {
@@ -1090,8 +1104,14 @@ func TestIncrementSpentRecords(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 0, totalExtraRecs)
 
-	_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), 1)
-	require.Error(t, err)
+	res, err := store.IncrementSpentRecords(tx.TxIDChainHash(), 1)
+	require.NoError(t, err) // IncrementSpentRecords doesn't return error directly
+
+	// Parse the response to check for error
+	parsedRes, err := store.ParseLuaMapResponse(res)
+	require.NoError(t, err)
+	assert.Equal(t, teranode_aerospike.LuaStatusError, parsedRes.Status)
+	assert.Contains(t, parsedRes.Message, "spentExtraRecs cannot be greater than totalExtraRecs")
 }
 
 func TestStoreDecorate(t *testing.T) {
