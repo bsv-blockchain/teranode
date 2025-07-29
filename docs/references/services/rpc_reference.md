@@ -179,8 +179,8 @@ This method implements the standard Teranode health checking interface used acro
 !!! success "Health Check Types"
     It provides both readiness and liveness checking capabilities to support different operational scenarios:
 
-  - **Readiness**: Indicates whether the service is ready to accept requests (listeners are bound and core dependencies are available)
-  - **Liveness**: Indicates whether the service is functioning correctly (listeners are still working and not in a hung state)
+- **Readiness**: Indicates whether the service is ready to accept requests (listeners are bound and core dependencies are available)
+- **Liveness**: Indicates whether the service is functioning correctly (listeners are still working and not in a hung state)
 
 **Health Check Components:**
 
@@ -205,10 +205,11 @@ Implements the two-tier HTTP Basic authentication system for RPC clients. It val
     4. **Distinguishes between admin users** (who can perform state-changing operations) and limited users (who can only perform read-only operations)
 
 !!! warning "Security Considerations"
-  - **Uses SHA256** for credential hashing
-  - **Implements constant-time comparison** to prevent timing attacks
-  - **Properly handles missing** or malformed authentication headers
-  - **Can be configured** to require or not require authentication based on settings
+
+- **Uses SHA256** for credential hashing
+- **Implements constant-time comparison** to prevent timing attacks
+- **Properly handles missing** or malformed authentication headers
+- **Can be configured** to require or not require authentication based on settings
 
 **Returns:**
 
@@ -266,22 +267,23 @@ Some key handlers include:
     The RPC Service uses various configuration values:
 
     **Authentication Settings:**
-  - **`rpc_user` and `rpc_pass`**: Credentials for RPC authentication with full admin privileges
-  - **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only operations)
+
+- **`rpc_user` and `rpc_pass`**: Credentials for RPC authentication with full admin privileges
+- **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only operations)
 
     **Connection Settings:**
-  - **`rpc_max_clients`**: Maximum number of concurrent RPC clients (default: 1000)
-  - **`rpc_listener_url`**: URL for the RPC listener (default: "http://localhost:8332")
-  - **`rpc_listeners`**: List of URLs for multiple RPC listeners (overrides rpc_listener_url if set)
+- **`rpc_max_clients`**: Maximum number of concurrent RPC clients (default: 1000)
+- **`rpc_listener_url`**: URL for the RPC listener (default: "<http://localhost:8332>")
+- **`rpc_listeners`**: List of URLs for multiple RPC listeners (overrides rpc_listener_url if set)
 
     **Security Settings:**
-  - **`rpc_tls_enabled`**: Enables TLS for secure RPC connections (default: false)
-  - **`rpc_tls_cert_file`**: Path to TLS certificate file
-  - **`rpc_tls_key_file`**: Path to TLS private key file
-  - **`rpc_auth_timeouts_seconds`**: Timeout for authentication in seconds (default: 10)
+- **`rpc_tls_enabled`**: Enables TLS for secure RPC connections (default: false)
+- **`rpc_tls_cert_file`**: Path to TLS certificate file
+- **`rpc_tls_key_file`**: Path to TLS private key file
+- **`rpc_auth_timeouts_seconds`**: Timeout for authentication in seconds (default: 10)
 
     **Compatibility Settings:**
-  - **`rpc_quirks`**: Enables compatibility quirks for legacy clients (default: false)
+- **`rpc_quirks`**: Enables compatibility quirks for legacy clients (default: false)
 
     !!! warning "Production Warnings"
         - **`rpc_disable_auth`**: Disables authentication (NOT recommended for production)
@@ -304,6 +306,18 @@ Authentication is performed using HTTP Basic Auth.
 - **Username and password** in the HTTP header
 - **Cookie-based authentication**
 - **Configuration file settings**
+
+### GRPC API Key Authentication
+
+For GRPC services, certain administrative operations require additional API key authentication:
+
+- **Protected Methods**: `BanPeer` and `UnbanPeer` operations in both P2P and Legacy GRPC services require API key authentication
+- **Configuration**: Set via `grpc_admin_api_key` setting in the configuration file
+- **Auto-generation**: If no API key is configured, the system generates a random 32-byte key at startup
+- **Usage**: API key must be included in GRPC requests as metadata with the key `x-api-key`
+
+!!! warning "Security Note"
+    The API key provides administrative access to ban/unban operations. Ensure it is properly secured and not exposed in logs or configuration files in production environments.
 
 ## General Format
 
@@ -330,7 +344,9 @@ The following RPC commands are fully implemented and supported in the current ve
 Creates a raw Bitcoin transaction without signing it.
 
 **Parameters:**
+
 1. `inputs` (array, required):
+
    ```json
    [
      {
@@ -339,7 +355,9 @@ Creates a raw Bitcoin transaction without signing it.
      }
    ]
    ```
+
 2. `outputs` (object, required):
+
    ```json
    {
      "address": x.xxx,            // Bitcoin address:amount pairs
@@ -799,6 +817,7 @@ Submits a solved block to the network.
 **Parameters:**
 
 1. `solution` (object, required):
+
    ```json
    {
        "id": "string",          // Mining candidate ID
@@ -810,6 +829,7 @@ Submits a solved block to the network.
    ```
 
 **Returns:**
+
 - `boolean` - True if accepted, false if rejected
 
 **Example Request:**
@@ -1109,7 +1129,10 @@ Attempts to add or remove an IP/Subnet from the banned list.
 4. `absolute` (boolean, optional) - If set, the bantime must be an absolute timestamp in seconds since epoch
 
 **Returns:**
+
 - `null` on success
+
+**Note:** This command internally uses GRPC `BanPeer` and `UnbanPeer` methods which require API key authentication. The RPC command handles this authentication automatically.
 
 **Example Request:**
 
@@ -1139,6 +1162,7 @@ Returns list of all banned IP addresses/subnets.
 **Parameters:** none
 
 **Returns:**
+
 - Array of objects with banned addresses and details
 
 **Example Request:**
@@ -1176,6 +1200,7 @@ Removes all IP address bans.
 **Parameters:** none
 
 **Returns:**
+
 - `null` on success
 
 **Example Request:**
@@ -1282,6 +1307,8 @@ Checks if a network address is currently banned.
 **Returns:**
 
 - `boolean` - True if the address is banned, false otherwise
+
+**Note:** This command accesses GRPC ban status methods which require API key authentication when accessed directly. The RPC command handles this authentication automatically.
 
 **Example Request:**
 
@@ -1459,10 +1486,12 @@ Mines blocks immediately to a specified address (for testing only).
 Returns raw transaction data for a specific transaction.
 
 **Parameters:**
+
 1. `txid` (string, required) - The transaction id
 2. `verbose` (boolean, optional, default=false) - If false, returns a string that is serialized, hex-encoded data for the transaction. If true, returns a JSON object with transaction information.
 
 **Returns:**
+
 - If verbose=false: `string` - Serialized, hex-encoded data for the transaction
 - If verbose=true: `object` - A JSON object with transaction information
 

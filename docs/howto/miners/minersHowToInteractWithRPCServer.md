@@ -259,7 +259,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `absolute` (boolean, optional): If set to true, the bantime is interpreted as an absolute timestamp
 
     - Returns: null on success
-    - Note: Successfully executes across both P2P and legacy peer services
+    - Note: Successfully executes across both P2P and legacy peer services. The underlying GRPC operations require API key authentication, which is handled automatically by the RPC server.
 
 4. `isbanned`: Checks if a network address is currently banned
     - Parameters:
@@ -267,6 +267,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `subnet` (string, required): The IP/Subnet to check
 
     - Returns: Boolean `true` if the address is banned, `false` otherwise
+    - Note: This command accesses GRPC ban status methods which require API key authentication when accessed directly. The RPC command handles this authentication automatically.
 
 5. `listbanned`: Returns list of all banned IP addresses/subnets
     - Parameters:
@@ -358,6 +359,15 @@ The RPC server uses HTTP Basic Authentication. Credentials are configured in the
 
 1. Admin access: Full access to all RPC methods.
 2. Limited access: Access to a subset of RPC methods defined in `rpcLimited`.
+
+### GRPC API Key Authentication
+
+For direct GRPC service access, certain administrative operations require additional API key authentication:
+
+- **Protected Operations**: `BanPeer` and `UnbanPeer` methods in both P2P and Legacy GRPC services
+- **Usage**: API key must be included in GRPC requests as metadata with the key `x-api-key`
+
+**Note**: When using RPC commands like `setban` and `isbanned`, the API key authentication is handled automatically by the RPC server. Direct GRPC access requires manual API key inclusion.
 
 ## Request Format
 
