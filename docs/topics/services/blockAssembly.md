@@ -120,7 +120,6 @@ The Job Store is a temporary in-memory map that tracks information about the can
 - The Block Assembly client then delegates to the Server, which adds the transactions to the Subtree Processor.
 - At a later stage, the Subtree Processor will group the transactions into subtrees, which will be used to create mining candidates.
 
-
 ### 2.3. Grouping Transactions into Subtrees
 
 ![block_assembly_add_tx_to_subtree.svg](img/plantuml/blockassembly/block_assembly_add_tx_to_subtree.svg)
@@ -235,10 +234,10 @@ The service needs to "move up" the block. By this, we mean the process to identi
     **Step 3: Create Transaction Map** (`createTransactionMapIfNeeded`):
 
     - **For blocks from other nodes**: Retrieves subtree data from the Subtree Store for each subtree in the block
-    - Deserializes subtree data and creates a comprehensive transaction map
-    - Extracts conflicting nodes that may cause transaction conflicts
+        - Deserializes subtree data and creates a comprehensive transaction map
+        - Extracts conflicting nodes that may cause transaction conflicts
     - **For blocks from own mining**: Uses existing chained subtrees without store retrieval
-    - Implements error handling for subtree retrieval failures
+        - Implements error handling for subtree retrieval failures
 
     **Step 4: Process Conflicting Transactions** (`processConflictingTransactions`):
 
@@ -335,6 +334,7 @@ The service automatically manages chain selection through:
         - If the reorganization involves more than 5 blocks in either direction
         - And the current chain height is greater than 1000
         - The block assembler will reset rather than attempt the reorganization
+
     - Block validation and transaction verification are handled by other services, not the Block Assembly
 
 3. **Chain Switching Process**:
