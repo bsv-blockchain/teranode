@@ -1,6 +1,6 @@
 # How to Install Teranode with Docker Compose
 
-Last modified: 26-May-2025
+Last modified: 28-Jul-2025
 
 ## Index
 
@@ -10,14 +10,14 @@ Last modified: 26-May-2025
 - [Software Requirements](#software-requirements)
 - [Network Considerations](#network-considerations)
 - [Installation Process](#installation-process)
-  - [Teranode Initial Block Synchronization](#teranode-initial-block-synchronization)
-    - [Full P2P Download](#full-p2p-download)
-    - [Initial Data Set Installation](#initial-data-set-installation)
-  - [Teranode Installation Types](#teranode-installation-types)
-    - [Pre-built Binaries](#pre-built-binaries)
-    - [Docker Container](#docker-container)
-    - [Docker Compose](#docker-compose)
-  - [Installing Teranode with Docker Compose](#installing-teranode-with-docker-compose)
+    - [Teranode Initial Block Synchronization](#teranode-initial-block-synchronization)
+        - [Full P2P Download](#full-p2p-download)
+        - [Initial Data Set Installation](#initial-data-set-installation)
+    - [Teranode Installation Types](#teranode-installation-types)
+        - [Pre-built Binaries](#pre-built-binaries)
+        - [Docker Container](#docker-container)
+        - [Docker Compose](#docker-compose)
+    - [Installing Teranode with Docker Compose](#installing-teranode-with-docker-compose)
 - [Reference Settings](#settings-reference)
 
 ## Introduction
@@ -187,10 +187,15 @@ Note: The Docker Compose method is recommended for testing in single node enviro
 
 - A stable internet connection
 
-**Step 1: Create Repository**
+#### Step 1: Create Repository
 
-1. Open a terminal or command prompt.
-2. Clone the Teranode repository:
+##### Open Terminal
+
+Open a terminal or command prompt.
+
+##### Clone Repository
+
+Clone the Teranode repository:
 
 ```bash
 cd $YOUR_WORKING_DIR
@@ -198,27 +203,41 @@ git clone git@github.com:bsv-blockchain/teranode.git
 cd teranode
 ```
 
-**Step 2: Configure Environment Settings Context [Optional]**
+#### Step 2: Configure Environment Settings Context [Optional]
 
-1. Create a `.env` file in the root directory of the project.
-2. While not required (your docker compose file will be preconfigured), the following line can be used to set the context:
+##### Create Environment File
 
-   ```
-   SETTINGS_CONTEXT_1=docker.m
-   ```
+Create a `.env` file in the root directory of the project.
 
-3. Authenticate with AWS ECR (please check with your Teranode team for the latest credentials).
+##### Set Context (Optional)
+
+While not required (your docker compose file will be preconfigured), the following line can be used to set the context:
+
+```bash
+SETTINGS_CONTEXT_1=docker.m
+```
+
+##### Authenticate with AWS ECR
+
+Authenticate with AWS ECR (please check with your Teranode team for the latest credentials).
 
 This step is not mandatory, but useful if you want to create settings variants for specific contexts.
 
-**Step 3: Prepare Local Settings**
+#### Step 3: Prepare Local Settings
 
-1. You can see the current settings under the `$YOUR_WORKING_DIR/teranode/settings.conf` file. You can override any settings here.
-2. For a list of settings, and their default values, please refer to the reference at the end of this document.
+##### Review Settings File
 
-**Step 4: Pull Docker Images**
+You can see the current settings under the `$YOUR_WORKING_DIR/teranode/settings.conf` file. You can override any settings here.
 
-1. Go to either the testnet Docker compose folder:
+##### Settings Reference
+
+For a list of settings, and their default values, please refer to the reference at the end of this document.
+
+#### Step 4: Pull Docker Images
+
+##### Navigate to Docker Compose Directory
+
+Go to either the testnet Docker compose folder:
 
 ```bash
 cd $YOUR_WORKING_DIR/teranode/deploy/docker/testnet
@@ -230,19 +249,21 @@ Or to the mainnet Docker compose folder:
 cd $YOUR_WORKING_DIR/teranode/deploy/docker/mainnet
 ```
 
-2. Pull the required Docker images:
+##### Pull Docker Images
 
-   ```
-   docker-compose pull
-   ```
+Pull the required Docker images:
 
-**Step 5: Start the Teranode Stack**
+```bash
+docker-compose pull
+```
+
+#### Step 5: Start the Teranode Stack
 
 1. When running on a box without a public IP, you should enable `legacy_config_Upnp` (in your settings file), so you don't get banned by the SV Nodes.
 
 2. Launch the entire Teranode stack using Docker Compose:
 
-   ```
+   ```bash
    docker-compose up -d
    ```
 
@@ -264,13 +285,15 @@ You can verify the current state with:
 docker exec -it blockchain teranode-cli getfsmstate
 ```
 
-**Step 6: Verify Services**
+#### Step 6: Verify Services
 
-1. Check if all services are running correctly:
+##### Check Service Status
 
-   ```
-   docker-compose ps
-   ```
+Check if all services are running correctly:
+
+```bash
+docker-compose ps
+```
 
 Example output:
 
@@ -291,9 +314,11 @@ Example output:
 | rpc | ghcr.io/bsv-blockchain/teranode:v0.5.50 | `/app/entrypoint.sh …` | rpc | 2 minutes ago | Up 2 minutes | 0/tcp, 3005/tcp, 8098/tcp, 0.0.0.0:9292->9292/tcp, :::9292->9292/tcp, 0.0.0.0:32770->4040/tcp, [::]:32770->4040/tcp, 0.0.0.0:32773->8000/tcp, [::]:32773->8000/tcp, 0.0.0.0:32780->9091/tcp, [::]:32780->9091/tcp                                                                                                                                                           |
 | subtreevalidation | ghcr.io/bsv-blockchain/teranode:v0.5.50 | `/app/entrypoint.sh …` | subtreevalidation | 2 minutes ago | Up 2 minutes (healthy) | 0/tcp, 3005/tcp, 8098/tcp, 9292/tcp, 0.0.0.0:32789->4040/tcp, [::]:32789->4040/tcp, 0.0.0.0:32791->8000/tcp, [::]:32791->8000/tcp, 0.0.0.0:32793->8086/tcp, [::]:32793->8086/tcp, 0.0.0.0:32795->9091/tcp, [::]:32795->9091/tcp                                                                                                                                             |
 
-2. Ensure all services show a status of "Up" or "Healthy".
+##### Verify Service Health
 
-**Step 7: Access Monitoring Tools**
+Ensure all services show a status of "Up" or "Healthy".
+
+#### Step 7: Access Monitoring Tools
 
 1. **Grafana**: Access the Grafana dashboard at `http://localhost:3005`
     - Default credentials are `admin/admin`
@@ -310,7 +335,7 @@ Example output:
 
 Note: You must set the setting `dashboard_enabled` as true in order to see the viewer.
 
-**Step 8: Interact with Teranode**
+#### Step 8: Interact with Teranode
 
 - The various Teranode services expose different ports for interaction:
 
@@ -322,27 +347,31 @@ Note: You must set the setting `dashboard_enabled` as true in order to see the v
 
 Notice that those ports might be mapped to random ports on your host machine. You can check the mapping by running `docker-compose ps`.
 
-**Step 9: Logging and Troubleshooting**
+#### Step 9: Logging and Troubleshooting
 
-1. View logs for all services:
+##### View All Service Logs
 
-   ```
-   docker-compose logs
-   ```
+View logs for all services:
 
-2. View logs for a specific service (e.g., teranode-blockchain):
+```bash
+docker-compose logs
+```
 
-   ```
-    docker-compose logs -f legacy
-    docker-compose logs -f blockchain
-    docker-compose logs -f asset
-   ```
+##### View Specific Service Logs
 
-**Step 10: Docker Log Rotation**
+View logs for a specific service (e.g., teranode-blockchain):
+
+```bash
+docker-compose logs -f legacy
+docker-compose logs -f blockchain
+docker-compose logs -f asset
+```
+
+#### Step 10: Docker Log Rotation
 
 Teranode is very verbose and will output a lot of information, especially with logLevel=DEBUG. To avoid running out of disk space, you can specify logging options directly in your docker-compose.yml file for each service.
 
-```
+```yaml
 services:
   [servicename]:
     logging:
@@ -351,11 +380,11 @@ services:
         max-file: "3"
 ```
 
-**Step 11: Stopping the Stack**
+#### Step 11: Stopping the Stack
 
 1. To stop all services:
 
-   ```
+   ```bash
    docker-compose down
    ```
 
@@ -368,7 +397,6 @@ Additional Notes:
 ## Optimizations
 
 If you have local access to SV Nodes, you can use them to speed up the initial block synchronization too. You can set `legacy_connect_peers: "172.x.x.x:8333|10.x.x.x:8333"` in your `docker-compose.yml` to force the legacy service to only connect to those peers.
-
 
 ## Aerospike Operations and Configuration
 
@@ -435,11 +463,13 @@ services:
 Teranode offers two network connectivity options:
 
 ### SVNode P2P Network
+
 - **Description**: All data transmitted over P2P connections (via `legacy` service)
 - **Use Case**: Traditional Bitcoin SV network connectivity
 - **Characteristics**: Compatible with existing SV Node infrastructure
 
 ### Teranode P2P Network
+
 - **Description**: Only small messages over P2P, with bulk data downloaded via HTTP(S) (via `peer` and `asset` services)
 - **Use Case**: Enhanced performance and stability
 - **Characteristics**: Significant performance advantages over traditional SV Node network
@@ -508,7 +538,7 @@ docker exec -it blockchain teranode-cli
 
 Running `teranode-cli` without arguments will show a list of all available commands:
 
-```
+```bash
 Usage: teranode-cli <command> [options]
 
 Available Commands:
@@ -528,16 +558,19 @@ Use 'teranode-cli <command> --help' for more information about a command
 ### Common CLI Operations
 
 **Check FSM State**:
+
 ```bash
 docker exec -it blockchain teranode-cli getfsmstate
 ```
 
 **Set FSM State to Legacy Syncing**:
+
 ```bash
 docker exec -it blockchain teranode-cli setfsmstate --fsmstate LEGACYSYNCING
 ```
 
 **Set FSM State to Running**:
+
 ```bash
 docker exec -it blockchain teranode-cli setfsmstate --fsmstate RUNNING
 ```
@@ -620,7 +653,7 @@ docker run -it \
   -v /mnt/teranode/seed:/mnt/teranode/seed \
   --entrypoint="" \
   434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.8.12 \
-  /app/teranode-cli bitcoin2utxoset -bitcoinDir=/home/ubuntu/bitcoin-data -outputDir=/mnt/teranode/seed/export
+  /app/teranode-cli bitcointoutxoset -bitcoinDir=/home/ubuntu/bitcoin-data -outputDir=/mnt/teranode/seed/export
 ```
 
 This script assumes your `bitcoin-data` directory is located in `/home/ubuntu/bitcoin-data` and contains the `blocks` and `chainstate` directories. It will generate `${blockhash}.utxo-headers` and `${blockhash}.utxo-set` files.
@@ -738,6 +771,7 @@ x-teranode-settings: &teranode-settings
 ### Network-Specific Settings
 
 **Testnet Configuration**:
+
 ```yaml
 environment:
 
@@ -746,6 +780,7 @@ environment:
 ```
 
 **Mainnet Configuration**:
+
 ```yaml
 environment:
 
@@ -759,6 +794,7 @@ environment:
 
 **Issue**: Container fails to start with permission errors
 **Solution**: Ensure proper file permissions on data directories:
+
 ```bash
 sudo chown -R 1000:1000 ./data/
 ```
@@ -793,4 +829,4 @@ docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
 ## Settings Reference
 
-You can find the pre-configured settings file [here](https://github.com/bsv-blockchain/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+You can find the pre-configured [settings file](https://github.com/bsv-blockchain/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.

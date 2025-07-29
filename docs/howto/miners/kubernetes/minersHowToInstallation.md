@@ -1,20 +1,20 @@
 # How to Install Teranode with Kubernetes Helm
 
-Last modified: 27-May-2025
+Last modified: 28-Jul-2025
 
-# Index
+## Index
 
 - [Introduction](#introduction)
 - [Prerequisites](#prerequisites)
 - [Deployment with Minikube](#deployment-with-minikube)
-    1. [Start Minikube](#1-start-minikube)
-    2. [Deploy Dependencies](#2-deploy-dependencies)
-    3. [Create persistent volume provider](#3-create-persistent-volume-provider)
-    4. [Load Teranode Images](#4-load-teranode-images)
-    5. [Deploy Teranode](#5-deploy-teranode)
-    - [Verifying the Deployment](#verifying-the-deployment)
-    - [Production Considerations](#production-considerations)
-    - [Other Resources](#other-resources)
+    - [Start Minikube](#start-minikube)
+    - [Deploy Dependencies](#deploy-dependencies)
+    - [Create Persistent Volume Provider](#create-persistent-volume-provider)
+    - [Load Teranode Images](#load-teranode-images)
+    - [Deploy Teranode](#deploy-teranode)
+- [Verifying the Deployment](#verifying-the-deployment)
+- [Production Considerations](#production-considerations)
+- [Other Resources](#other-resources)
 
 ## Introduction
 
@@ -42,7 +42,9 @@ Minikube creates a local Kubernetes cluster on your machine. For running Teranod
 
 ![KubernetesOperatorInstallationSteps.svg](img/mermaid/KubernetesOperatorInstallationSteps.svg)
 
-### 1. Start Minikube
+### Start Minikube
+
+Start minikube with recommended resources and verify its status:
 
 ```bash
 # Start minikube with recommended resources
@@ -52,15 +54,23 @@ minikube start --cpus=4 --memory=8192 --disk-size=20gb
 minikube status
 ```
 
-### 2. Deploy Dependencies
+### Deploy Dependencies
 
 Teranode requires several backing services. While these services should be deployed separately in production, for local development we'll deploy them within the same cluster.
 
-```bash
-# Create namespace for deployment
-kubectl create namespace teranode-operator
+#### Create Namespace
 
-# Deploy all dependencies in the teranode namespace
+Create a namespace for the deployment:
+
+```bash
+kubectl create namespace teranode-operator
+```
+
+#### Deploy Backing Services
+
+Deploy all dependencies in the teranode namespace:
+
+```bash
 kubectl apply -f deploy/kubernetes/aerospike/ -n teranode-operator
 kubectl apply -f deploy/kubernetes/postgres/ -n teranode-operator
 kubectl apply -f deploy/kubernetes/kafka/ -n teranode-operator
@@ -68,9 +78,11 @@ kubectl apply -f deploy/kubernetes/kafka/ -n teranode-operator
 
 To know more, please refer to the [Third Party Reference Documentation](../../../references/thirdPartySoftwareRequirements.md)
 
-### 3. Create persistent volume provider
+### Create Persistent Volume Provider
 
 For this example, we will create a local folder and expose it to Minikube via a docker based NFS server.
+
+#### Standard x86/x64 Systems
 
 ```bash
 docker volume create nfs-volume
@@ -90,7 +102,9 @@ docker network connect minikube nfs-server
 kubectl apply -f deploy/kubernetes/nfs/
 ```
 
-Note, for arm based systems, you can use this variant:
+#### ARM-based Systems
+
+For arm based systems, you can use this variant:
 
 ```bash
 docker volume create nfs-volume
@@ -116,24 +130,33 @@ docker network connect minikube nfs-server
 kubectl apply -f deploy/kubernetes/nfs/
 ```
 
-### 4. Load Teranode Images
+### Load Teranode Images
 
 Pull and load the required Teranode images into Minikube:
 
-```bash
+#### Identify Available Versions
 
+```bash
 # Identify the latest available Teranode version
 aws ecr list-images \
   --repository-name teranode-public \
   --region eu-north-1 \
   --query 'imageIds[*].imageTag' \
   --output text
+```
 
+#### Set Image Versions
+
+```bash
 # Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)
 export OPERATOR_VERSION=v0.5.3
 export TERANODE_VERSION=v0.9.27
 export ECR_REGISTRY=ghcr.io/bsv-blockchain/teranode
+```
 
+#### Load Images into Minikube
+
+```bash
 # Load Teranode Operator
 docker pull $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
 minikube image load $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
@@ -143,9 +166,11 @@ docker pull $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
 minikube image load $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
 ```
 
-### 5. Deploy Teranode
+### Deploy Teranode
 
 The Teranode Operator manages the lifecycle of Teranode instances:
+
+#### Install Teranode Operator
 
 ```bash
 # Install operator
@@ -154,12 +179,16 @@ helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/teranode/t
     -f deploy/kubernetes/teranode/teranode-operator.yaml
 ```
 
+#### Apply Teranode Configuration
+
 Apply the Teranode configuration and custom resources:
 
 ```bash
 kubectl apply -f deploy/kubernetes/teranode/teranode-configmap.yaml -n teranode-operator
 kubectl apply -f deploy/kubernetes/teranode/teranode-cr.yaml -n teranode-operator
 ```
+
+#### Start Syncing Process
 
 A fresh Teranode starts up in IDLE state by default. To start syncing from the legacy network, you can run:
 
