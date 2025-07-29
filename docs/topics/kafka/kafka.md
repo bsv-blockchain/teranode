@@ -99,7 +99,9 @@ To maintain system integrity, Teranode is designed to pause operations when Kafk
 
 ### Kafka URL Format
 
-Kafka configuration in Teranode is primarily specified through URLs. Each Kafka topic has its own URL with parameters that control its behavior. The URL format is:
+Kafka configuration in Teranode is primarily specified through URLs. Each Kafka topic has its own URL with parameters that control its behavior. The URL format supports both production Kafka and in-memory testing:
+
+#### Production Kafka URL Format
 
 ```text
 kafka://host1,host2,.../topic?param1=value1&param2=value2&...
@@ -115,8 +117,28 @@ Components of the URL:
 Example:
 
 ```text
-kafka://localhost:9092/blocks?partitions=4&replication=3&flush_frequency=5s
+kafka://localhost:9092/blocks?partitions=4&consumer_ratio=2&replication=3
 ```
+
+#### In-Memory Kafka URL Format (Testing)
+
+```text
+memory://topic?param1=value1&param2=value2&...
+```
+
+Components of the URL:
+
+- **Scheme**: Always `memory://`
+- **Topic**: The in-memory topic name (specified as the path component)
+- **Parameters**: Same query parameters as production Kafka
+
+Example:
+
+```text
+memory://test_blocks?partitions=2&consumer_ratio=1
+```
+
+**Usage**: The memory scheme is automatically detected by the Kafka utilities and enables in-memory message passing for unit tests and development environments. This eliminates the need for a running Kafka cluster during testing.
 
 ### URL Parameters
 
@@ -134,86 +156,220 @@ The following parameters can be specified in Kafka URLs:
     - **Description**: Replication factor for the topic
     - **Impact**: Higher values improve fault tolerance but increase storage requirements
 
-3. **`retention`**
+3. **`consumer_ratio`**
+    - **Type**: Integer
+    - **Default**: 1
+    - **Description**: Ratio of consumers to partitions for load balancing
+    - **Impact**: Higher values increase consumer parallelism and throughput
+    - **Usage**: Found in Block Assembly and other high-throughput services
+
+4. **`retention`**
     - **Type**: String (milliseconds)
     - **Default**: "600000" (10 minutes)
     - **Description**: How long messages are retained
     - **Impact**: Longer retention increases storage requirements
 
-4. **`segment_bytes`**
+5. **`segment_bytes`**
     - **Type**: String
     - **Default**: "1073741824" (1GB)
     - **Description**: Maximum size of a single log segment file
     - **Impact**: Smaller values create more files but allow more granular cleanup
 
-5. **`flush_bytes`**
+6. **`flush_bytes`**
     - **Type**: Integer
     - **Default**: 1048576 (1MB)
     - **Description**: Number of bytes to accumulate before forcing a flush
     - **Impact**: Larger values improve throughput but increase risk of data loss
 
-6. **`flush_messages`**
+7. **`flush_messages`**
     - **Type**: Integer
     - **Default**: 50000
     - **Description**: Number of messages to accumulate before forcing a flush
     - **Impact**: Larger values improve throughput but increase risk of data loss
 
-7. **`flush_frequency`**
+8. **`flush_frequency`**
     - **Type**: Duration (e.g., "5s")
     - **Default**: "10s" (10 seconds)
     - **Description**: Maximum time between flushes
     - **Impact**: Longer durations improve throughput but increase risk of data loss
 
-8. **`consumer_ratio`**
+9. **`consumer_ratio`**
     - **Type**: Integer
     - **Default**: 1
     - **Description**: Ratio of partitions to consumers
     - **Impact**: Determines how many consumer instances process messages
 
-9. **`replay`**
+10. **`replay`**
     - **Type**: Integer (boolean: 0 or 1)
     - **Default**: 1 (true)
     - **Description**: Whether to replay messages from the beginning for new consumer groups
     - **Impact**: Controls initial behavior of new consumers
 
+### Auto-Commit Behavior by Topic
+
+Teranode implements different auto-commit strategies based on message criticality and service requirements:
+
+#### Critical Topics (Auto-Commit: false)
+
+These topics require guaranteed message processing and cannot tolerate message loss:
+
+- **`kafka_blocksConfig`**: Block distribution for validation
+    - **Reason**: Missing blocks would break blockchain validation
+    - **Consumer Behavior**: Manual commit after successful processing
+    - **Failure Handling**: Message redelivery on processing failure
+
+- **`kafka_blocksFinalConfig`**: Finalized blocks for storage
+    - **Reason**: Missing finalized blocks would corrupt blockchain state
+    - **Consumer Behavior**: Manual commit after successful storage
+    - **Failure Handling**: Message redelivery on storage failure
+
+#### Non-Critical Topics (Auto-Commit: true)
+
+These topics can tolerate occasional message loss for performance:
+
+- **`kafka_validatortxsConfig`**: New transactions from propagation
+    - **Reason**: Transactions will be re-propagated if lost
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Message loss acceptable
+
+- **`kafka_txmetaConfig`**: Transaction metadata for caching
+    - **Reason**: Cache can be rebuilt from other sources
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Cache miss acceptable
+
+- **`kafka_rejectedTxConfig`**: Invalid transaction notifications
+    - **Reason**: Rejection notifications are not critical for consensus
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Message loss acceptable
+
+- **`kafka_subtreesConfig`**: Subtree distribution for validation
+    - **Reason**: Subtrees will be re-propagated if lost
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Message loss acceptable
+
+- **`kafka_invalidBlocksConfig`**: Invalid block notifications
+    - **Reason**: Invalid block notifications are not critical for consensus
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Message loss acceptable
+
+- **`kafka_invalidSubtreesConfig`**: Invalid subtree notifications
+    - **Reason**: Invalid subtree notifications are not critical for consensus
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Message loss acceptable
+
+**Implementation Note**: This auto-commit behavior is hardcoded in the Kafka consumer creation logic and cannot be overridden via URL parameters. The decision is based on the specific topic's role in maintaining blockchain consistency.
+
 ### General Kafka Settings
 
 These settings define the Kafka endpoints used across the Teranode system:
 
-- **`kafka_txsConfig`**: Kafka URL - Used in Block Assembly and Validator services
-    - **Critical Impact**: Handles valid transaction flow to Block Assembly
-    - **Required**: Yes
+#### Core Topic Configuration URLs
 
 - **`kafka_validatortxsConfig`**: Kafka URL - Used in Propagation and Validator services
+    - **Environment Variable**: `kafka_validatortxsConfig`
+    - **Settings Path**: `settings.Kafka.ValidatorTxsConfig`
     - **Critical Impact**: Manages new transaction flow from Propagation to Validator
+    - **Auto-Commit**: true (can tolerate message loss)
     - **Required**: Yes
 
 - **`kafka_txmetaConfig`**: Kafka URL - Used in Subtree Validation and Validator services
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.TxMetaConfig`
     - **Critical Impact**: Carries transaction metadata for subtree construction
+    - **Auto-Commit**: true (cache population, can tolerate loss)
     - **Required**: Yes
 
 - **`kafka_rejectedTxConfig`**: Kafka URL - Used in P2P and Validator services
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.RejectedTxConfig`
     - **Critical Impact**: Notifies network about invalid transactions
+    - **Auto-Commit**: true (can tolerate message loss)
     - **Required**: Yes
 
 - **`kafka_blocksConfig`**: Kafka URL - Used in Block Validation and P2P services
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.BlocksConfig`
     - **Critical Impact**: Distributes new blocks for validation
+    - **Auto-Commit**: false (critical - cannot miss blocks)
     - **Required**: Yes
 
 - **`kafka_subtreesConfig`**: Kafka URL - Used in Subtree Validation and P2P services
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.SubtreesConfig`
     - **Critical Impact**: Distributes subtrees for validation
+    - **Auto-Commit**: true (can tolerate message loss)
     - **Required**: Yes
 
 - **`kafka_blocksFinalConfig`**: Kafka URL - Used in Blockchain and Blockpersister services
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.BlocksFinalConfig`
     - **Critical Impact**: Finalizes validated blocks for permanent storage
+    - **Auto-Commit**: false (critical - cannot miss finalized blocks)
     - **Required**: Yes
 
-- **`kafka_hosts`**: String - Kafka broker hosts configuration
-    - **Critical Impact**: Defines the Kafka broker endpoints for connection
+- **`kafka_invalidBlocksConfig`**: Kafka URL - Used in Block Validation and P2P services
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.InvalidBlocksConfig`
+    - **Critical Impact**: Notifies network about invalid blocks
+    - **Auto-Commit**: true (can tolerate message loss)
     - **Required**: Yes
+
+- **`kafka_invalidSubtreesConfig`**: Kafka URL - Used in Subtree Validation and P2P services
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.InvalidSubtreesConfig`
+    - **Critical Impact**: Notifies network about invalid subtrees
+    - **Auto-Commit**: true (can tolerate message loss)
+    - **Required**: Yes
+
+#### TLS/Security Configuration
+
+- **`kafka_enableTLS`**: Boolean - Enable TLS encryption for Kafka connections
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.EnableTLS`
+    - **Default Value**: false
+    - **Impact**: High - Secure Kafka communication
+    - **Required**: No (recommended for production)
+
+- **`kafka_tlsSkipVerify`**: Boolean - Skip TLS certificate verification
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.TLSSkipVerify`
+    - **Default Value**: false
+    - **Impact**: Security - Certificate validation bypass
+    - **Required**: No (development only)
+
+- **`kafka_tlsCAFile`**: String - Path to TLS Certificate Authority file
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.TLSCAFile`
+    - **Default Value**: "" (empty)
+    - **Impact**: Security - Certificate authority validation
+    - **Required**: No (required if EnableTLS=true)
+
+- **`kafka_tlsCertFile`**: String - Path to TLS client certificate file
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.TLSCertFile`
+    - **Default Value**: "" (empty)
+    - **Impact**: Security - Client certificate authentication
+    - **Required**: No (required for mutual TLS)
+
+- **`kafka_tlsKeyFile`**: String - Path to TLS client private key file
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.TLSKeyFile`
+    - **Default Value**: "" (empty)
+    - **Impact**: Security - Client private key authentication
+    - **Required**: No (required for mutual TLS)
+
+#### Legacy Configuration (Backward Compatibility)
+
+- **`kafka_hosts`**: String - Kafka broker hosts configuration
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.Hosts`
+    - **Critical Impact**: Defines the Kafka broker endpoints for connection
+    - **Required**: Yes (legacy format)
     - **Format**: Comma-separated list of host:port pairs (e.g., "localhost:9092,broker2:9092")
 
 - **`kafka_unitTest`**: String - Unit test topic configuration
+    - **Environment Variable**: Not directly mapped (configured via settings)
+    - **Settings Path**: `settings.Kafka.UnitTest`
     - **Critical Impact**: Defines Kafka topic used during unit testing
     - **Required**: No (testing only)
     - **Usage**: Used by test suites to isolate test messages from production topics

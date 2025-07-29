@@ -186,7 +186,6 @@ The Alert Service initializes the necessary components and services to start pro
 
 3. **Database Technologies:**
     - Supports both SQLite and PostgreSQL:
-
         - SQLite for development and lightweight deployments.
         - PostgreSQL for production environments.
     - GORM ORM is used for database operations, with a custom logger (`gorm_logger.go`).
@@ -279,18 +278,19 @@ The Alert Service can be configured using various settings that control its beha
 
 - **Protocol ID (`alert_protocol_id`)**: Protocol identifier for the P2P alert network.
     - Type: `string`
-    - Default: Internal default if not specified
+    - Default: "/bitcoin/alert-system/1.0.0"
     - Impact: Determines which P2P protocol group the service will join
     - Example: `alert_protocol_id = "/bsv/alert/1.0.0"`
 
 - **Topic Name (`alert_topic_name`)**: P2P topic name for alert propagation.
     - Type: `string`
-    - Default: Internal default if not specified
+    - Default: "bitcoin_alert_system"
     - Note: Automatically prefixed with network name if not on mainnet
     - Example: `alert_topic_name = "bitcoin_alert_system"`
 
 - **P2P Port (`alert_p2p_port`)**: Port number for P2P communication.
     - Type: `int`
+    - Default: 9908
     - Impact: **Required** - Service will not start without a valid port
     - Example: `alert_p2p_port = 4001`
 
@@ -308,7 +308,6 @@ The SQLite database will be stored in the `DataFolder` directory specified in th
 
 - **Parameters**: None
 - **Connection Pool Settings (hardcoded)**:
-
     - Max Idle Connections: 1
     - Max Open Connections: 1
 - **Table Prefix**: Uses the database name as prefix
@@ -321,9 +320,9 @@ sqlitememory:///database_name
 
 - **Parameters**: None
 - **Connection Pool Settings (hardcoded)**:
-
     - Max Idle Connections: 1
     - Max Open Connections: 1
+- **Storage**: In-memory only
 - **Table Prefix**: Uses the database name as prefix
 
 #### 6.2.3 PostgreSQL
@@ -333,10 +332,8 @@ postgres://username:password@host:port/database?param1=value1&param2=value2
 ```
 
 - **Parameters**:
-
     - `sslmode`: SSL mode for the connection (default: `disable`)
 - **Connection Pool Settings (hardcoded)**:
-
     - Max Idle Connections: 2
     - Max Open Connections: 5
     - Max Connection Idle Time: 20 seconds
@@ -351,7 +348,6 @@ mysql://username:password@host:port/database?param1=value1&param2=value2
 ```
 
 - **Parameters**:
-
     - `sslmode`: SSL mode for the connection (default: `disable`)
 - **Connection Pool Settings (hardcoded)**: Same as PostgreSQL
 - **Table Prefix**: "alert_system"
@@ -361,6 +357,7 @@ mysql://username:password@host:port/database?param1=value1&param2=value2
 The following settings are hardcoded in the service and cannot be configured externally:
 
 **Core Processing Settings:**
+
 - **Alert Processing Interval**: 5 minutes
     - Controls how frequently alerts are processed
 
@@ -380,6 +377,7 @@ The following settings are hardcoded in the service and cannot be configured ext
     - Controls how frequently peers are discovered
 
 **Database Settings:**
+
 - **Table Prefix**: "alert_system" for PostgreSQL/MySQL, database name for SQLite
     - Prefix used for database tables
 
@@ -388,6 +386,7 @@ The following settings are hardcoded in the service and cannot be configured ext
 The Alert Service depends on several other Teranode services:
 
 #### Required Dependencies
+
 | Dependency | Purpose | Configuration Impact | Failure Impact |
 |------------|---------|---------------------|----------------|
 | **Blockchain Client** | Block invalidation, chain state queries | Requires blockchain service to be properly configured and running | `InvalidateBlock` functionality unavailable |
@@ -397,6 +396,7 @@ The Alert Service depends on several other Teranode services:
 | **P2P Client** | Modern P2P alert distribution and peer management | Requires P2P service configuration | Alert distribution and modern peer management unavailable |
 
 #### Configuration Interdependencies
+
 1. **Network Configuration**: The Alert service inherits network configuration from global Teranode settings, affecting topic naming and protocol selection
 2. **Logging Integration**: Uses the global Teranode logging configuration for consistent log formatting and output
 3. **Metrics Integration**: Integrates with Teranode's Prometheus metrics system using global metrics configuration
@@ -471,12 +471,14 @@ alert_p2p_port = 4001
 #### Common Configuration Errors
 
 **Genesis Keys Errors:**
+
 ```text
 Error: ErrNoGenesisKeys
 Cause: No genesis keys provided in configuration
 ```
 
 **P2P Configuration Errors:**
+
 ```text
 Error: ErrNoP2PIP
 Cause: P2P IP address validation failed (less than 5 characters)
@@ -486,6 +488,7 @@ Cause: P2P port validation failed (less than 2 characters when converted to stri
 ```
 
 **Database Connection Errors:**
+
 ```text
 Error: ErrDatastoreUnsupported
 Cause: Unsupported database scheme in alert_store URL
