@@ -19,19 +19,12 @@ var (
 )
 
 func TestMoveUp(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
-	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
-	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
-
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC: true,
 		EnableP2P: true,
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode2.daemon",
 	})
-
 	defer node2.Stop(t)
 
 	_, err := node2.CallRPC(node2.Ctx, "generate", []any{1})
@@ -43,7 +36,6 @@ func TestMoveUp(t *testing.T) {
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode1.daemon",
 	})
-
 	defer node1.Stop(t)
 
 	// connect node2 to node1 via p2p
@@ -71,9 +63,6 @@ func TestMoveUp(t *testing.T) {
 }
 
 func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableP2P:       true,
@@ -84,6 +73,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
 	})
+	defer node2.Stop(t)
 
 	// mine 3 blocks on node2
 	_, err := node2.CallRPC(node2.Ctx, "generate", []any{3})
@@ -92,9 +82,6 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 	// verify blockheight on node2
 	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 3, blockWait)
 	require.NoError(t, err)
-
-	// stop node 2 so that it doesn't sync with node 1
-	node2.Stop(t)
 
 	// mine 2 blocks on node1
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -107,6 +94,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
 	})
+	defer node1.Stop(t)
 
 	_, err = node1.CallRPC(node1.Ctx, "generate", []any{2})
 	require.NoError(t, err)
@@ -115,19 +103,8 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 2, blockWait)
 	require.NoError(t, err)
 
-	// restart node 2 (which is at height 3)
-	node2 = daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         true,
-		EnableValidator:   true,
-		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
-		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode2.daemon",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.BlockValidation.SecretMiningThreshold = 9999
-		},
-	})
-
+	// connect both nodes, node 2 (which is at height 3) and node 1 (height 2)
+	// this will sync node 1 to height 3
 	node2.ConnectToPeer(t, node1)
 
 	// Wait for node2 to have at least one peer (node1)
@@ -136,14 +113,6 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 
 	_, err = node2.CallRPC(node2.Ctx, "generate", []any{1})
 	require.NoError(t, err)
-
-	defer func() {
-		node1.Stop(t)
-		node2.Stop(t)
-	}()
-
-	// connect node2 to node1 via p2p
-	node2.ConnectToPeer(t, node1)
 
 	// verify blockheight on node2
 	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 4, blockWait)
@@ -156,9 +125,6 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 }
 
 func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableP2P:       true,
@@ -168,13 +134,11 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
 	})
+	defer node2.Stop(t)
 
 	// mine 3 blocks on node2
 	_, err := node2.CallRPC(node2.Ctx, "generate", []any{3})
 	require.NoError(t, err)
-
-	// stop node 2 so that it doesn't sync with node 1
-	node2.Stop(t)
 
 	// mine 2 blocks on node1
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -187,34 +151,19 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 		},
 	})
+	defer node1.Stop(t)
 
 	_, err = node1.CallRPC(node1.Ctx, "generate", []any{2})
 	require.NoError(t, err)
 
-	// restart node 2 (which is at height 3)
-	node2 = daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         true,
-		EnableValidator:   true,
-		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
-		// EnableFullLogging:            true,
-		SettingsContext: "docker.host.teranode2.daemon",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.BlockValidation.SecretMiningThreshold = 9999
-		},
-	})
-
-	// connect node2 to node1 via p2p
+	// connect nodes
+	//	node 2 (which is at height 3) and node 1 (height 2)
+	// this will sync node 1 to height 3
 	node2.ConnectToPeer(t, node1)
 
 	// Wait for node2 to have at least one peer (node1)
 	err = helper.WaitForNodePeerCount(t.Context(), node2, 1, blockWait)
 	require.NoError(t, err)
-
-	defer func() {
-		node1.Stop(t)
-		node2.Stop(t)
-	}()
 
 	// verify blockheight on node2
 	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 3, blockWait)
@@ -226,12 +175,6 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 }
 
 func TestTDRestart(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
-	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
-	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableP2P:       false,
@@ -310,9 +253,6 @@ func checkSubtrees(t *testing.T, td *daemon.TestDaemon, expectedTxCount int) {
 
 func TestDynamicSubtreeSize(t *testing.T) {
 	t.Skip("Skipping dynamic subtree size test")
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
@@ -383,17 +323,10 @@ func TestDynamicSubtreeSize(t *testing.T) {
 }
 
 func TestInvalidBlock(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
-	// dependencies := daemon.StartDaemonDependencies(t.Context(), t, true)
-	// defer daemon.StopDaemonDependencies(t.Context(), dependencies)
-
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "docker.host.teranode1.daemon",
 	})
-
 	defer node1.Stop(t)
 
 	_, err := node1.CallRPC(node1.Ctx, "generate", []any{3})
@@ -415,9 +348,6 @@ func TestInvalidBlock(t *testing.T) {
 }
 
 func TestBlockValidationCatchup(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	// Start node2
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
@@ -430,6 +360,7 @@ func TestBlockValidationCatchup(t *testing.T) {
 			s.BlockValidation.SecretMiningThreshold = 99999
 		},
 	})
+	defer node2.Stop(t)
 
 	// Start node1 and generate 100 blocks
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -468,25 +399,8 @@ func TestBlockValidationCatchup(t *testing.T) {
 	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 100, blockWait)
 	require.NoError(t, err)
 
-	// stop node2
-	node2.Stop(t)
-
-	node2.ResetServiceManagerContext(t)
-	// start node2 again with p2p disabled
-	node2 = daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         false,
-		EnableValidator:   true,
-		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
-		SettingsContext:   "docker.host.teranode2.daemon",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.Asset.HTTPPort = 28090
-			s.GlobalBlockHeightRetention = 99999
-			s.BlockValidation.SecretMiningThreshold = 99999
-		},
-	})
-
-	defer node2.Stop(t)
+	// disconnect node2 from node1
+	node2.DisconnectFromPeer(t, node1)
 
 	const extraBlocks = 1000
 
@@ -503,25 +417,7 @@ func TestBlockValidationCatchup(t *testing.T) {
 	// 0 -> 1 ... 100
 	//                \ 100b -> ... -> 101b (node1 longer chain)
 
-	// Now enable P2P on node2 to trigger reorg
-	node2.Stop(t)
-	node2.ResetServiceManagerContext(t)
-
-	node2 = daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         true, // Enable P2P to trigger reorg
-		EnableValidator:   true,
-		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
-		SettingsContext:   "docker.host.teranode2.daemon",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.Asset.HTTPPort = 28090
-			s.GlobalBlockHeightRetention = 99999
-			s.BlockValidation.SecretMiningThreshold = 99999
-		},
-	})
-	defer node2.Stop(t)
-
-	// connect node2 to node1 via p2p
+	// Now reconnect node2 to trigger reorg
 	node2.ConnectToPeer(t, node1)
 
 	// _, err = node2.CallRPC("generate", []any{1})
