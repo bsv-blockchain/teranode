@@ -10,6 +10,14 @@ README.md
 
 # Test files and directories - excluded to reduce context size
 test/
+# Those files needed for nightly tests
+!test/utils/
+!test/utils/cmd/
+!test/utils/cmd/blob/
+!test/utils/cmd/blob/server/
+!test/utils/cmd/blob/server/**
+!test/utils/cmd/tstore/
+!test/utils/cmd/tstore/**
 *_test.go
 *.test
 coverage.out

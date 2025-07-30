@@ -1,15 +1,13 @@
 // How to run tests:
 //
 // Run all tests in the suite:
-// go test -v -tags test_tnb ./test/tnb
+// go test -v  ./test/tnb
 //
 // Run a specific test:
-// go test -v -run "^TestTNB1TestSuite$/TestReceiveExtendedFormatTx$" -tags test_tnb ./test/tnb/tnb1_test.go
-// go test -v -run "^TestTNB1TestSuite$/TestNoReformattingRequired$" -tags test_tnb ./test/tnb/tnb1_test.go
-// go test -v -run "^TestTNB1TestSuite$/TestSendTxsInBatch$" -tags test_tnb ./test/tnb/tnb1_test.go
+// go test -v -run "^TestTNB1TestSuite$/TestSendTxsInBatch$" ./test/tnb/tnb1_test.go
 
 // Run with test coverage:
-// go test -v -tags test_tnb -coverprofile=coverage.out ./test/tnb
+// go test -v -coverprofile=coverage.out ./test/tnb
 // go tool cover -html=coverage.out
 
 //Settings:
@@ -66,12 +64,16 @@ func (suite *TNB1TestSuite) TestSendTxsInBatch() {
 	blockchainNode0 := node1.BlockchainClient
 	logger := testEnv.Logger
 
-	blockchainSubscription, err := blockchainNode0.Subscribe(ctx, "test-tnb1")
+	require.Eventually(t, func() bool {
+		_, _, err := blockchainNode0.GetBestBlockHeader(ctx)
+		if err != nil {
+			logger.Infof("Waiting for blockchain service: %v", err)
+		}
+		return err == nil
+	}, 15*time.Second, 500*time.Millisecond, "Blockchain service not ready in time")
 
-	if err != nil {
-		t.Errorf("error subscribing to blockchain service: %v", err)
-		return
-	}
+	blockchainSubscription, err := blockchainNode0.Subscribe(ctx, "test-tnb1")
+	require.NoError(t, err, "error subscribing to blockchain service")
 
 	subtreeReady := make(chan []chainhash.Hash, 1)
 
