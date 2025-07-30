@@ -40,7 +40,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 	} else {
 		z = &ZLoggerWrapper{
 			zerolog.New(opts.writer).With().
-				CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + opts.skip).
+				CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + 2).
 				Timestamp().
 				Logger(),
 			service,
@@ -54,7 +54,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 			// JSON logger writes raw JSON directly to stdout (not through ConsoleWriter)
 			// This allows interleaved output while keeping JSON structure intact
 			jsonLogger := zerolog.New(os.Stdout).With().
-				CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + opts.skip).
+				CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + 2).
 				Timestamp().
 				Logger()
 			z.jsonLogger = &jsonLogger
@@ -157,7 +157,7 @@ func prettyZeroLogger(service string, opts *Options, jsonLoggingEnabled bool) *Z
 	if jsonLoggingEnabled {
 		// JSON logger writes raw JSON directly to stdout.
 		jsonOutput := zerolog.New(os.Stdout).With().
-			CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + opts.skip).
+			CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + 1).
 			Timestamp().
 			Logger()
 		jsonLogger = &jsonOutput
@@ -165,7 +165,7 @@ func prettyZeroLogger(service string, opts *Options, jsonLoggingEnabled bool) *Z
 
 	return &ZLoggerWrapper{
 		zerolog.New(output).With().
-			CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + opts.skip).
+			CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + 1).
 			Timestamp().
 			Logger(),
 		service,

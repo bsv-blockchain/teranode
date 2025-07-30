@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/ordishs/gocore"
 )
@@ -392,4 +393,193 @@ func TestJSONLoggingLevels(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCallerInformation(t *testing.T) {
+	t.Run("BasicCallerInformation", func(t *testing.T) {
+		// Create settings like real services do
+		tSettings := &settings.Settings{
+			LogLevel: "DEBUG",
+		}
+
+		// Capture the console output from InitLogger
+		output := captureStdout(func() {
+			// Initialize logger exactly like main.go and services do
+			logger := ulogger.InitLogger("test", tSettings)
+
+			// Use logger exactly like real services do through helper function
+			testLogFromThisFunction(logger)
+		})
+
+		// Should NOT show zerologger.go as caller
+		if strings.Contains(output, "zerologger.go") {
+			t.Errorf("CALLER FIX FAILED: Log output incorrectly shows zerologger.go as caller:\n%s", output)
+		}
+
+		// Should show this test file (proving the caller fix works)
+		if !strings.Contains(output, "ulogger_test.go") {
+			t.Errorf("Log output should contain ulogger_test.go but doesn't:\n%s", output)
+		}
+
+		// Should show the helper function name (proving function-level caller detection works)
+		if !strings.Contains(output, "testLogFromThisFunction") {
+			t.Errorf("Log output should contain testLogFromThisFunction but doesn't:\n%s", output)
+		}
+
+		// Verify we have some output
+		if strings.TrimSpace(output) == "" {
+			t.Errorf("Expected some log output, got empty string")
+		}
+
+		t.Logf("BasicCallerInformation test output:\n%s", output)
+	})
+
+	t.Run("JSONLogging", func(t *testing.T) {
+		// Save original config
+		originalConfig := gocore.Config().GetBool("jsonLogging", false)
+		defer func() {
+			if originalConfig {
+				gocore.Config().Set("jsonLogging", "true")
+			} else {
+				gocore.Config().Set("jsonLogging", "false")
+			}
+		}()
+
+		// Enable JSON logging
+		gocore.Config().Set("jsonLogging", "true")
+
+		// Create settings like real services do
+		tSettings := &settings.Settings{
+			LogLevel: "DEBUG",
+		}
+
+		// Capture the console output from InitLogger with JSON enabled
+		output := captureStdout(func() {
+			// Initialize logger exactly like main.go and services do
+			logger := ulogger.InitLogger("test", tSettings)
+
+			// Use logger exactly like real services do through helper function
+			testLogFromThisFunction(logger)
+		})
+
+		// Should NOT show zerologger.go as caller
+		if strings.Contains(output, "zerologger.go") {
+			t.Errorf("JSON logging shows zerologger.go as caller (fix failed):\n%s", output)
+		}
+
+		// Should show this test file in both console and JSON output
+		if !strings.Contains(output, "ulogger_test.go") {
+			t.Errorf("JSON logging should contain ulogger_test.go but doesn't:\n%s", output)
+		}
+
+		// Should show the helper function name in the output
+		if !strings.Contains(output, "testLogFromThisFunction") {
+			t.Errorf("JSON logging should contain testLogFromThisFunction but doesn't:\n%s", output)
+		}
+
+		// Should contain JSON format (since JSON logging is enabled)
+		if !strings.Contains(output, `"caller":`) {
+			t.Errorf("JSON logging should contain JSON caller field but doesn't:\n%s", output)
+		}
+
+		t.Logf("JSONLogging test output:\n%s", output)
+	})
+
+	t.Run("PrettyLogs", func(t *testing.T) {
+		// Save original config
+		originalPretty := gocore.Config().GetBool("PRETTY_LOGS", true)
+		defer func() {
+			if originalPretty {
+				gocore.Config().Set("PRETTY_LOGS", "true")
+			} else {
+				gocore.Config().Set("PRETTY_LOGS", "false")
+			}
+		}()
+
+		// Enable pretty logs
+		gocore.Config().Set("PRETTY_LOGS", "true")
+
+		// Create settings like real services do
+		tSettings := &settings.Settings{
+			LogLevel: "DEBUG",
+		}
+
+		// Capture the console output from InitLogger with pretty logs
+		output := captureStdout(func() {
+			// Initialize logger exactly like main.go and services do
+			logger := ulogger.InitLogger("test", tSettings)
+
+			// Use logger exactly like real services do through helper function
+			testLogFromThisFunction(logger)
+		})
+
+		// Should NOT show zerologger.go as caller
+		if strings.Contains(output, "zerologger.go") {
+			t.Errorf("Pretty logs show zerologger.go as caller (fix failed):\n%s", output)
+		}
+
+		// Should show this test file (proving the caller fix works)
+		if !strings.Contains(output, "ulogger_test.go") {
+			t.Errorf("Pretty logs should contain ulogger_test.go but doesn't:\n%s", output)
+		}
+
+		// Should show the helper function name in the output
+		if !strings.Contains(output, "testLogFromThisFunction") {
+			t.Errorf("Pretty logs should contain testLogFromThisFunction but doesn't:\n%s", output)
+		}
+
+		// Should contain pretty format markers (| symbols for columns)
+		if !strings.Contains(output, "|") {
+			t.Errorf("Pretty logs should contain column separators but doesn't:\n%s", output)
+		}
+
+		t.Logf("PrettyLogs test output:\n%s", output)
+	})
+
+	t.Run("MultiLevelCaller", func(t *testing.T) {
+		// Create settings like real services do
+		tSettings := &settings.Settings{
+			LogLevel: "DEBUG",
+		}
+
+		// Capture the console output from InitLogger with multi-level calls
+		output := captureStdout(func() {
+			// Initialize logger exactly like main.go and services do
+			logger := ulogger.InitLogger("test", tSettings)
+
+			// Test through multiple wrapper levels
+			wrapperFunction1(logger)
+		})
+
+		// Should NOT show zerologger.go as caller
+		if strings.Contains(output, "zerologger.go") {
+			t.Errorf("Multi-level caller shows zerologger.go as caller (fix failed):\n%s", output)
+		}
+
+		// Should show wrapperFunction2 as the actual caller (proving multi-level caller detection works)
+		if !strings.Contains(output, "wrapperFunction2") {
+			t.Errorf("Multi-level caller should show wrapperFunction2 but doesn't:\n%s", output)
+		}
+
+		// Should show this test file
+		if !strings.Contains(output, "ulogger_test.go") {
+			t.Errorf("Multi-level caller should contain ulogger_test.go but doesn't:\n%s", output)
+		}
+
+		t.Logf("MultiLevelCaller test output:\n%s", output)
+	})
+}
+
+// Helper functions for testing
+func testLogFromThisFunction(logger ulogger.Logger) {
+	logger.Infof("Test log message from testLogFromThisFunction")
+	logger.Errorf("Test error message from testLogFromThisFunction")
+}
+
+func wrapperFunction1(logger ulogger.Logger) {
+	wrapperFunction2(logger)
+}
+
+func wrapperFunction2(logger ulogger.Logger) {
+	logger.Infof("Test message from wrapperFunction2")
 }
