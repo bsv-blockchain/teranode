@@ -623,7 +623,7 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 
 	sm.peerStates.Set(peer, &peerSyncState{
 		syncCandidate:   isSyncCandidate,
-		requestQueue:    txmap.NewSyncedSlice[wire.InvVect](wire.MaxInvPerMsg),
+		requestQueue:    txmap.NewSyncedSlice[wire.InvVect](maxRequestedBlocks),
 		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second), // allow the node 10 seconds to respond to the tx request
 		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Minute), // allow the node 1 hour to respond to the requested blocks, needed for legacy sync/checkpoints
 	})
@@ -1309,18 +1309,22 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		}
 
 		if !haveInv {
-			peerState, _ := sm.peerStates.Get(sm.syncPeer)
+			if err = getDataMessage.AddInvVect(iv); err != nil {
+				sm.logger.Warnf("Unexpected failure when adding inventory to getdata message: %v", err)
+				break
+			}
 
 			sm.requestedBlocks.Set(*node.hash, struct{}{})
+			peerState, _ := sm.peerStates.Get(sm.syncPeer)
 			peerState.requestedBlocks.Set(*node.hash, struct{}{})
 
-			_ = getDataMessage.AddInvVect(iv)
 			numRequested++
 		}
 
 		sm.startHeader = e.Next()
 
-		if numRequested >= wire.MaxInvPerMsg {
+		if numRequested >= maxRequestedBlocks {
+			sm.logger.Debugf("[fetchHeaderBlocks] Limiting to %d block(s) from %s", numRequested, sm.syncPeer)
 			break
 		}
 	}
@@ -1593,6 +1597,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	numRequested := 0
 	gdmsg := wire.NewMsgGetData()
 
+outside:
 	for state.requestQueue.Length() != 0 {
 		// shift the first items from the request queue until we have enough to send in a single message
 		iv, found := state.requestQueue.Shift()
@@ -1604,25 +1609,34 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		case wire.InvTypeBlock:
 			// Request the block if there is not already a pending request.
 			if _, exists = sm.requestedBlocks.Get(iv.Hash); !exists {
+				if err = gdmsg.AddInvVect(iv); err != nil {
+					sm.logger.Warnf("Unexpected failure when adding inventory to getdata message: %v", err)
+					break outside
+				}
+
 				sm.requestedBlocks.Set(iv.Hash, struct{}{})
 				state.requestedBlocks.Set(iv.Hash, struct{}{})
 
-				_ = gdmsg.AddInvVect(iv)
 				numRequested++
 			}
 
 		case wire.InvTypeTx:
 			// Request the transaction if there is not already a pending request.
 			if _, exists = sm.requestedTxns.Get(iv.Hash); !exists {
+				if err = gdmsg.AddInvVect(iv); err != nil {
+					sm.logger.Warnf("Unexpected failure when adding inventory to getdata message: %v", err)
+					break outside
+				}
+
 				sm.requestedTxns.Set(iv.Hash, struct{}{})
 				state.requestedTxns.Set(iv.Hash, struct{}{})
 
-				_ = gdmsg.AddInvVect(iv)
 				numRequested++
 			}
 		}
 
-		if numRequested >= wire.MaxInvPerMsg {
+		if numRequested >= maxRequestedBlocks {
+			sm.logger.Debugf("[handleInvMsg] Limiting to %d item(s) from %s", numRequested, peer)
 			break
 		}
 	}
