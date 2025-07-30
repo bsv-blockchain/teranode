@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ui/dashboard"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -350,7 +351,13 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 		mode = "HTTP"
 	}
 
-	h.logger.Infof("Asset %s service listening on %s", mode, addr)
+	// Get listener using util.GetListener
+	listener, address, _, err := util.GetListener(h.settings.Context, "asset", "http://", addr)
+	if err != nil {
+		return errors.NewServiceError("[Asset] failed to get listener", err)
+	}
+
+	defer util.RemoveListener(h.settings.Context, "asset", "http://")
 
 	go func() {
 		<-ctx.Done()
@@ -363,16 +370,12 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 		}
 	}()
 
-	// err := h.e.Start(addr)
-	// if err != nil && !errors.Is(err, http.ErrServerClosed) {
-	// 	return err
-	// }
-
-	var err error
+	// Set the listener on the Echo server
+	h.e.Listener = listener
 
 	if mode == "HTTP" {
-		servicemanager.AddListenerInfo(fmt.Sprintf("Asset HTTP listening on %s", addr))
-		err = h.e.Start(addr)
+		servicemanager.AddListenerInfo(fmt.Sprintf("Asset HTTP listening on %s", address))
+		err = h.e.Start(address)
 	} else {
 		certFile := h.settings.ServerCertFile
 		if certFile == "" {
@@ -384,8 +387,8 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 			return errors.NewConfigurationError("server_keyFile is required for HTTPS")
 		}
 
-		servicemanager.AddListenerInfo(fmt.Sprintf("Asset HTTPS listening on %s", addr))
-		err = h.e.StartTLS(addr, certFile, keyFile)
+		servicemanager.AddListenerInfo(fmt.Sprintf("Asset HTTPS listening on %s", address))
+		err = h.e.StartTLS(address, certFile, keyFile)
 	}
 
 	if !errors.Is(err, http.ErrServerClosed) {

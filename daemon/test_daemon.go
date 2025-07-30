@@ -54,23 +54,6 @@ import (
 	otelprop "go.opentelemetry.io/otel/propagation"
 )
 
-// getFreePort asks the kernel for a free open port that is ready to use.
-func getFreePort() (int, error) {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
-	if err != nil {
-		return 0, err
-	}
-
-	l, err := net.ListenTCP("tcp", addr)
-	if err != nil {
-		return 0, err
-	}
-
-	defer func() { _ = l.Close() }()
-
-	return l.Addr().(*net.TCPAddr).Port, nil
-}
-
 const (
 	blockHashMismatch         = "Block hash mismatch at height %d"
 	failedGettingSubtree      = "Failed to get subtree"
@@ -149,96 +132,124 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	var (
 		listenAddr string
 		clientAddr string
-		port       int
+		err        error
 	)
 
 	// RPC
-	listenAddr, _, _ = allocatePort("")
-	listenURL, err := url.Parse("http://" + listenAddr)
+	_, _, clientAddr, err = util.GetListener(appSettings.Context, "rpc", "http://", ":0")
+	require.NoError(t, err)
+	listenURL, err := url.Parse(clientAddr)
 	require.NoError(t, err)
 
 	appSettings.RPC.RPCListenerURL = listenURL
 
 	// Legacy
-	listenAddr, clientAddr, _ = allocatePort("")
-	appSettings.Legacy.GRPCListenAddress = listenAddr
-	appSettings.Legacy.GRPCAddress = clientAddr
+	if opts.EnableLegacy {
+		_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "legacy", "", ":0")
+		require.NoError(t, err)
+		appSettings.Legacy.GRPCListenAddress = listenAddr
+		appSettings.Legacy.GRPCAddress = clientAddr
+	}
 
 	// Propagation
-	listenAddr, clientAddr, _ = allocatePort("")
+	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "propagation", "", ":0")
+	require.NoError(t, err)
 	appSettings.Propagation.GRPCListenAddress = listenAddr
 	appSettings.Propagation.GRPCAddresses = []string{clientAddr}
 
-	listenAddr, clientAddr, _ = allocatePort("http://")
+	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "propagation", "http://", ":0")
+	require.NoError(t, err)
 	appSettings.Propagation.HTTPListenAddress = listenAddr
 	appSettings.Propagation.HTTPAddresses = []string{clientAddr}
 
-	// Coinbase
+	// Coinbase - check the services list to see if coinbase is included
 	listenAddr, clientAddr, _ = allocatePort("")
 	appSettings.Coinbase.GRPCListenAddress = listenAddr
 	appSettings.Coinbase.GRPCAddress = clientAddr
 
-	// BlockChain
-	listenAddr, clientAddr, _ = allocatePort("")
+	// BlockChain - always enabled since it's a core service
+	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "blockchain", "", ":0")
+	require.NoError(t, err)
 	appSettings.BlockChain.GRPCListenAddress = listenAddr
 	appSettings.BlockChain.GRPCAddress = clientAddr
 
-	listenAddr, _, _ = allocatePort("http://")
+	_, listenAddr, _, err = util.GetListener(appSettings.Context, "blockchain", "http://", ":0")
+	require.NoError(t, err)
 	appSettings.BlockChain.HTTPListenAddress = listenAddr
 
-	// BlockAssembly
-	listenAddr, clientAddr, _ = allocatePort("")
+	// BlockAssembly - always started by default
+	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "blockassembly", "", ":0")
+	require.NoError(t, err)
 	appSettings.BlockAssembly.GRPCListenAddress = listenAddr
 	appSettings.BlockAssembly.GRPCAddress = clientAddr
 
-	// BlockValidation
-	listenAddr, clientAddr, _ = allocatePort("")
+	// BlockPersister
+	_, listenAddr, _, err = util.GetListener(appSettings.Context, "blockpersister", "", ":0")
+	require.NoError(t, err)
+	appSettings.Block.PersisterHTTPListenAddress = listenAddr
+
+	// BlockValidation - always started by default
+	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "blockvalidation", "", ":0")
+	require.NoError(t, err)
 	appSettings.BlockValidation.GRPCListenAddress = listenAddr
 	appSettings.BlockValidation.GRPCAddress = clientAddr
 
 	// Validator
-	listenAddr, clientAddr, _ = allocatePort("")
-	appSettings.Validator.GRPCListenAddress = listenAddr
-	appSettings.Validator.GRPCAddress = clientAddr
+	if opts.EnableValidator {
+		_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "validator", "", ":0")
+		require.NoError(t, err)
+		appSettings.Validator.GRPCListenAddress = listenAddr
+		appSettings.Validator.GRPCAddress = clientAddr
+	}
 
-	listenAddr, clientAddr, _ = allocatePort("http://")
+	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "validator", "http://", ":0")
+	require.NoError(t, err)
 	appSettings.Validator.HTTPListenAddress = listenAddr
 	appSettings.Validator.HTTPAddress, _ = url.Parse(clientAddr)
 
 	// P2P
-	_, _, p2pPort := allocatePort("")
+	_, _, p2pPort := allocatePort("") // libp2p doesn't support pre-created listeners
 	appSettings.P2P.BootstrapAddresses = []string{}
 	appSettings.P2P.StaticPeers = nil
 	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
 	appSettings.P2P.Port = p2pPort
 
-	listenAddr, clientAddr, _ = allocatePort("")
-	appSettings.P2P.GRPCListenAddress = listenAddr
-	appSettings.P2P.GRPCAddress = clientAddr
+	if opts.EnableP2P {
+		_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "p2p", "", ":0")
+		require.NoError(t, err)
+		appSettings.P2P.GRPCListenAddress = listenAddr
+		appSettings.P2P.GRPCAddress = clientAddr
+	}
 
-	listenAddr, clientAddr, _ = allocatePort("http://")
+	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "p2p", "http://", ":0")
+	require.NoError(t, err)
 	appSettings.P2P.HTTPListenAddress = listenAddr
 	appSettings.P2P.HTTPAddress = clientAddr
 
-	// SubtreeValidation
-	listenAddr, clientAddr, _ = allocatePort("")
+	// SubtreeValidation - always started by default
+	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "subtreevalidation", "", ":0")
+	require.NoError(t, err)
 	appSettings.SubtreeValidation.GRPCListenAddress = listenAddr
 	appSettings.SubtreeValidation.GRPCAddress = clientAddr
 
 	// Asset
-	listenAddr, clientAddr, port = allocatePort("http://")
+	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "asset", "http://", ":0")
+	require.NoError(t, err)
 	appSettings.Asset.HTTPListenAddress = listenAddr
 	appSettings.Asset.HTTPAddress = clientAddr + appSettings.Asset.APIPrefix
 	appSettings.Asset.HTTPPublicAddress = clientAddr + appSettings.Asset.APIPrefix
+	port := getPortFromString(listenAddr)
 	appSettings.Asset.HTTPPort = port
 
 	// Faucet
-	listenAddr, _, _ = allocatePort("http://")
+	_, listenAddr, _, err = util.GetListener(appSettings.Context, "faucet", "http://", ":0")
+	require.NoError(t, err)
 	appSettings.Faucet.HTTPListenAddress = listenAddr
 
 	// Health Check
-	_, _, port = allocatePort("http://")
-	appSettings.HealthCheckPort = port
+	_, listenAddr, _, err = util.GetListener(appSettings.Context, "health", "http://", ":0")
+	require.NoError(t, err)
+	appSettings.HealthCheckHTTPListenAddress = listenAddr
 
 	path := filepath.Join("data", appSettings.ClientName)
 	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
@@ -339,8 +350,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		services = append(services, "-legacy=1")
 	}
 
-	WaitForPortsFree(t, ctx, appSettings)
-
 	go d.Start(logger, services, appSettings, readyCh)
 
 	select {
@@ -351,7 +360,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		t.Fatalf("Daemon %s failed to start within 30s. Waiting on: %v", appSettings.ClientName, servicesNotReady)
 	}
 
-	ports := []int{appSettings.HealthCheckPort}
+	ports := []int{getPortFromString(appSettings.HealthCheckHTTPListenAddress)}
 	require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
 
 	var blockchainClient blockchain.ClientI
@@ -409,7 +418,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	assert.NotNil(t, distributorClient)
 
 	return &TestDaemon{
-		AssetURL:              fmt.Sprintf("http://localhost:%d", appSettings.Asset.HTTPPort),
+		AssetURL:              fmt.Sprintf("http://127.0.0.1:%d", appSettings.Asset.HTTPPort),
 		BlockAssemblyClient:   blockAssemblyClient,
 		BlockValidationClient: blockValidationClient,
 		BlockchainClient:      blockchainClient,
@@ -435,9 +444,16 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 		t.Errorf("Failed to stop daemon %s: %v", td.Settings.ClientName, err)
 	}
 
+	// Cancel context first to trigger HTTP server shutdowns
+	td.ctxCancel()
+
 	WaitForPortsFree(t, td.Ctx, td.Settings)
 
-	td.ctxCancel()
+	// cleanup remaining listeners that were never used
+	keys := util.CleanupListeners(td.Settings.Context)
+	if len(keys) > 0 {
+		t.Logf("Listener cleanup removed: %v", keys)
+	}
 
 	t.Logf("Daemon %s stopped successfully", td.Settings.ClientName)
 }
@@ -492,6 +508,23 @@ func removeZeros(ports []int) []int {
 	}
 
 	return result
+}
+
+// getFreePort asks the kernel for a free open port that is ready to use.
+func getFreePort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		return 0, err
+	}
+
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, err
+	}
+
+	defer func() { _ = l.Close() }()
+
+	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
 // getPortFromString extracts the port number from a string address.

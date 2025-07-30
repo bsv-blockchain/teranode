@@ -67,6 +67,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/ordishs/gocore"
 	"go.opentelemetry.io/otel"
@@ -1435,7 +1436,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		return nil, errors.NewConfigurationError("rpc_listener_url not set in config")
 	}
 
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", rpcListenerURL.Port()))
+	listener, _, _, err := util.GetListener(tSettings.Context, "rpc", "http://", rpcListenerURL.Host)
 	if err != nil {
 		logger.Errorf("Error listening: %v", err)
 		os.Exit(1)

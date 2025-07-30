@@ -328,6 +328,10 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 		t.Fatal("Timeout waiting for daemon and its services to be ready")
 	}
 
+	// additional sleep for alert service
+	// TODO - improve this - alert service should use a readyCh like all the other services
+	time.Sleep(5 * time.Second)
+
 	// Stop the daemon
 	err = d.Stop()
 	assert.NoError(t, err, "Daemon Stop should not return an error")

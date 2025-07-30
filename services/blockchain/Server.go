@@ -390,6 +390,14 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 		return errors.NewConfigurationError("[Miner] No blockchain_httpListenAddress specified")
 	}
 
+	// Get listener using util.GetListener
+	listener, address, _, err := util.GetListener(b.settings.Context, "blockchain", "http://", httpAddress)
+	if err != nil {
+		return errors.NewServiceError("[Blockchain] failed to get HTTP listener", err)
+	}
+
+	b.logger.Infof("[Blockchain] HTTP server listening on %s", address)
+
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -414,13 +422,17 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 	}()
 
 	go func() {
-		if err := e.Start(httpAddress); err != nil {
+		// Use the pre-created listener
+		e.Listener = listener
+		if err := e.Server.Serve(listener); err != nil {
 			if err == http.ErrServerClosed {
 				b.logger.Infof("http server shutdown")
 			} else {
 				b.logger.Errorf("failed to start http server: %v", err)
 			}
 		}
+		// Clean up the listener when server stops
+		util.RemoveListener(b.settings.Context, "blockchain", "http://")
 	}()
 
 	return nil

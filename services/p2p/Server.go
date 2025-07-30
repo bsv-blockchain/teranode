@@ -1153,7 +1153,14 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 		return errors.NewConfigurationError("p2p HTTP listen address is not set")
 	}
 
-	s.logger.Infof("[StartHTTP] p2p service listening on %s", addr)
+	// Get listener using util.GetListener
+	listener, address, _, err := util.GetListener(s.settings.Context, "p2p", "http://", addr)
+	if err != nil {
+		return errors.NewServiceError("[StartHTTP] failed to get listener", err)
+	}
+
+	s.logger.Infof("[StartHTTP] p2p service listening on %s", address)
+	s.e.Listener = listener
 
 	go func() {
 		<-ctx.Done()
@@ -1164,29 +1171,33 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 		}
 	}()
 
-	var err error
+	go func() {
+		defer util.RemoveListener(s.settings.Context, "p2p", "http://")
 
-	if s.settings.SecurityLevelHTTP == 0 {
-		servicemanager.AddListenerInfo(fmt.Sprintf("[StartHTTP] p2p HTTP listening on %s", addr))
-		err = s.e.Start(addr)
-	} else {
-		certFile := s.settings.ServerCertFile
-		if certFile == "" {
-			return errors.NewConfigurationError("server_certFile is required for HTTPS")
+		if s.settings.SecurityLevelHTTP == 0 {
+			servicemanager.AddListenerInfo(fmt.Sprintf("[StartHTTP] p2p HTTP listening on %s", address))
+			err = s.e.Server.Serve(listener)
+		} else {
+			certFile := s.settings.ServerCertFile
+			if certFile == "" {
+				s.logger.Errorf("server_certFile is required for HTTPS")
+				return
+			}
+
+			keyFile := s.settings.ServerKeyFile
+			if keyFile == "" {
+				s.logger.Errorf("server_keyFile is required for HTTPS")
+				return
+			}
+
+			servicemanager.AddListenerInfo(fmt.Sprintf("[StartHTTP] p2p HTTPS listening on %s", address))
+			err = s.e.Server.ServeTLS(listener, certFile, keyFile)
 		}
 
-		keyFile := s.settings.ServerKeyFile
-		if keyFile == "" {
-			return errors.NewConfigurationError("server_keyFile is required for HTTPS")
+		if err != nil && err != http.ErrServerClosed {
+			s.logger.Errorf("[StartHTTP] server error: %v", err)
 		}
-
-		servicemanager.AddListenerInfo(fmt.Sprintf("[StartHTTP] p2p HTTPS listening on %s", addr))
-		err = s.e.StartTLS(addr, certFile, keyFile)
-	}
-
-	if err != http.ErrServerClosed {
-		return err
-	}
+	}()
 
 	return nil
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -281,19 +282,50 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	blockPersisterHTTPListenAddress := u.settings.Block.PersisterHTTPListenAddress
 
-	if blockPersisterHTTPListenAddress == "" {
+	if blockPersisterHTTPListenAddress != "" {
 		blockStoreURL := u.settings.Block.BlockStore
 		if blockStoreURL == nil {
 			return errors.NewConfigurationError("blockstore setting error")
 		}
+
+		// Get listener using util.GetListener
+		listener, address, _, err := util.GetListener(u.settings.Context, "blockpersister", "http://", blockPersisterHTTPListenAddress)
+		if err != nil {
+			return errors.NewServiceError("failed to get HTTP listener for block persister", err)
+		}
+
+		u.logger.Infof("[BlockPersister] HTTP server listening on %s", address)
 
 		blobStoreServer, err := blob.NewHTTPBlobServer(u.logger, blockStoreURL)
 		if err != nil {
 			return errors.NewServiceError("failed to create blob store server", err)
 		}
 
+		srv := &http.Server{
+			Handler:      blobStoreServer,
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 15 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+
 		go func() {
-			u.logger.Warnf("blockStoreServer ended: %v", blobStoreServer.Start(ctx, blockPersisterHTTPListenAddress))
+			if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+				u.logger.Warnf("blockStoreServer ended: %v", err)
+			}
+
+			// Clean up the listener when server stops
+			util.RemoveListener(u.settings.Context, "blockpersister", "http://")
+		}()
+
+		// Handle shutdown
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := srv.Shutdown(shutdownCtx); err != nil {
+				u.logger.Errorf("HTTP blob server shutdown error: %v", err)
+			}
 		}()
 	}
 

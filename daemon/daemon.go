@@ -333,10 +333,13 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		healthRegistered.Store(true)
 	}
 
-	port := appSettings.HealthCheckPort
+	// Get listener using util.GetListener
+	listener, listenAddress, _, err := util.GetListener(appSettings.Context, "health", "http://", appSettings.HealthCheckHTTPListenAddress)
+	if err != nil {
+		logger.Fatalf("Failed to get health check listener: %v", err)
+	}
 
 	server := &http.Server{
-		Addr:              fmt.Sprintf(":%d", port),
 		Handler:           mux,
 		ReadHeaderTimeout: 20 * time.Second,  // Prevent Slowloris attacks
 		ReadTimeout:       60 * time.Second,  // Maximum duration for reading the entire request
@@ -349,12 +352,14 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	d.serverMu.Unlock()
 
 	go func() {
-		if localErr := server.ListenAndServe(); localErr != nil && !errors.Is(localErr, http.ErrServerClosed) {
+		if localErr := server.Serve(listener); localErr != nil && !errors.Is(localErr, http.ErrServerClosed) {
 			logger.Fatalf("Error starting server: %v", localErr)
 		}
+		// Clean up the listener when server stops
+		util.RemoveListener(appSettings.Context, "health", "http://")
 	}()
 
-	logger.Infof("Health check endpoint listening on http://localhost:%d/health", port)
+	logger.Infof("Health check endpoint listening on %s", listenAddress)
 
 	// Create a channel to receive the wait result
 	waitErr := make(chan error, 1)

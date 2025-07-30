@@ -853,15 +853,27 @@ func (v *Server) startHTTPServer(ctx context.Context, httpAddresses string) erro
 //   - ctx: Context for server lifecycle management, cancellation signals shutdown
 //   - httpAddresses: Comma-separated list of address:port combinations to listen on
 func (v *Server) startAndMonitorHTTPServer(ctx context.Context, httpAddresses string) {
+	// Get listener using util.GetListener
+	listener, address, _, err := util.GetListener(v.settings.Context, "validator", "http://", httpAddresses)
+	if err != nil {
+		v.logger.Errorf("failed to get listener: %v", err)
+		return
+	}
+
+	v.logger.Infof("[Validator] HTTP server listening on %s", address)
+	v.httpServer.Listener = listener
+
 	// Start the server
 	go func() {
-		if err := v.httpServer.Start(httpAddresses); err != nil {
+		if err := v.httpServer.Server.Serve(listener); err != nil {
 			if err == http.ErrServerClosed {
 				v.logger.Infof("http server shutdown")
 			} else {
 				v.logger.Errorf("failed to start http server: %v", err)
 			}
 		}
+		// Clean up the listener when server stops
+		util.RemoveListener(v.settings.Context, "validator", "http://")
 	}()
 
 	// Monitor for context cancellation

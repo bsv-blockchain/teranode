@@ -617,15 +617,29 @@ func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses 
 //   - ctx: Context for server lifecycle monitoring and shutdown signals
 //   - httpAddresses: Address configuration for HTTP server bindings
 func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, httpAddresses string) {
-	// Start the server
+	// Get listener using util.GetListener - use "propagation" to match the test setup
+	listener, address, _, err := util.GetListener(ps.settings.Context, "propagation", "http://", httpAddresses)
+	if err != nil {
+		ps.logger.Errorf("failed to get listener: %v", err)
+		return
+	}
+
+	ps.logger.Infof("Propagation HTTP server listening on %s", address)
+
+	ps.httpServer.Listener = listener
+
+	// Start the server with the pre-created listener
 	go func() {
-		if err := ps.httpServer.Start(httpAddresses); err != nil {
+		// Use the Listener method instead of Start to use our pre-created listener
+		if err := ps.httpServer.Server.Serve(listener); err != nil {
 			if err == http.ErrServerClosed {
 				ps.logger.Infof("http server shutdown")
 			} else {
 				ps.logger.Errorf("failed to start http server: %v", err)
 			}
 		}
+		// Clean up the listener when server stops
+		util.RemoveListener(ps.settings.Context, "propagation", "http://")
 	}()
 
 	// Monitor for context cancellation

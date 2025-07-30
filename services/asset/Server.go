@@ -247,6 +247,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	if v.httpServer != nil {
 		g.Go(func() error {
+			v.logger.Infof("[Asset] Starting HTTP server on %s", v.httpAddr)
 			err := v.httpServer.Start(ctx, v.httpAddr)
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				v.logger.Errorf("[Asset] error in http server: %v", err)
