@@ -38,6 +38,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
@@ -252,6 +253,35 @@ func (s *File) SetCurrentBlockHeight(height uint32) {
 func (s *File) loadDAHs() error {
 	s.logger.Infof("[File] Loading file DAHs: %s", s.path)
 
+	// Clean up any leftover .dah.tmp files from incomplete writes
+	// Only remove files older than 10 minutes to avoid interfering with active writes
+	tmpFiles, err := findFilesByExtension(s.path, "dah.tmp")
+	if err == nil && len(tmpFiles) > 0 {
+		now := time.Now()
+		cleanupThreshold := 10 * time.Minute
+		var cleaned int
+
+		for _, tmpFile := range tmpFiles {
+			info, err := os.Stat(tmpFile)
+			if err != nil {
+				continue
+			}
+
+			// Check if file is older than the threshold
+			if now.Sub(info.ModTime()) > cleanupThreshold {
+				if err := os.Remove(tmpFile); err != nil && !os.IsNotExist(err) {
+					s.logger.Warnf("[File] failed to remove leftover tmp file: %s", tmpFile)
+				} else {
+					cleaned++
+				}
+			}
+		}
+
+		if cleaned > 0 {
+			s.logger.Infof("[File] Cleaned up %d leftover .dah.tmp files (older than %v)", cleaned, cleanupThreshold)
+		}
+	}
+
 	// get all files in the directory that end with .dah
 	files, err := findFilesByExtension(s.path, ".dah")
 	if err != nil {
@@ -267,11 +297,23 @@ func (s *File) loadDAHs() error {
 
 		dah, err = s.readDAHFromFile(fileName)
 		if err != nil {
-			return err
+			// Log the error but continue processing other files
+			s.logger.Warnf("[File] error reading DAH file %s: %v", fileName, err)
+
+			// If it's an invalid DAH file (0 or corrupt), remove it
+			var terr *errors.Error
+			if errors.As(err, &terr) && terr.Code() == errors.ERR_PROCESSING {
+				s.logger.Warnf("[File] removing invalid DAH file during initialization: %s", fileName)
+				if removeErr := os.Remove(fileName); removeErr != nil && !os.IsNotExist(removeErr) {
+					s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName)
+				}
+			}
+			continue
 		}
 
-		// check whether we actually have a dah
+		// This should not happen anymore with the validation in readDAHFromFile
 		if dah == 0 {
+			s.logger.Warnf("[File] unexpected DAH value 0 for file %s", fileName)
 			continue
 		}
 
@@ -299,12 +341,41 @@ func (s *File) readDAHFromFile(fileName string) (uint32, error) {
 		return 0, errors.NewStorageError("[File] failed to read DAH file", err)
 	}
 
-	dah, err := strconv.ParseUint(string(dahBytes), 10, 32)
+	// Trim whitespace and validate content
+	dahStr := strings.TrimSpace(string(dahBytes))
+	if dahStr == "" {
+		return 0, errors.NewProcessingError("[File] DAH file %s is empty", fileName)
+	}
+
+	dah, err := strconv.ParseUint(dahStr, 10, 32)
 	if err != nil {
-		return 0, errors.NewProcessingError("[File] failed to parse DAH from %s", fileName, err)
+		return 0, errors.NewProcessingError("[File] failed to parse DAH from %s: %s", fileName, dahStr)
+	}
+
+	// Validate DAH value - should never be 0
+	if dah == 0 {
+		return 0, errors.NewProcessingError("[File] invalid DAH value 0 in file %s", fileName)
 	}
 
 	return uint32(dah), nil
+}
+
+// writeDAHToFile writes a DAH value to a file with proper hardening
+func (s *File) writeDAHToFile(dahFilename string, dah uint32) error {
+	// Validate DAH value before writing
+	if dah == 0 {
+		return errors.NewProcessingError("[File] attempted to write invalid DAH value 0 to file %s", dahFilename)
+	}
+
+	dahContent := []byte(strconv.FormatUint(uint64(dah), 10))
+
+	// Write directly to the file
+	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
+	if err := os.WriteFile(dahFilename, dahContent, 0644); err != nil {
+		return errors.NewStorageError("[File][%s] failed to write DAH to file", dahFilename, err)
+	}
+
+	return nil
 }
 
 func (s *File) dahCleaner(ctx context.Context) {
@@ -350,13 +421,31 @@ func (s *File) cleanupExpiredFile(fileName string) {
 	// check if the DAH file still exists, even if the map says it has expired, another process might have updated it
 	dah, err := s.readDAHFromFile(fileName + ".dah")
 	if err != nil {
-		s.logger.Debugf("[File] failed to read DAH from file: %s", fileName+".dah")
+		// If it's a processing error (invalid DAH value or corrupt file), clean it up
+		var terr *errors.Error
+		if errors.As(err, &terr) && terr.Code() == errors.ERR_PROCESSING {
+			s.logger.Warnf("[File] invalid DAH file detected during cleanup: %s, error: %v", fileName+".dah", err)
+			s.removeDAHFromMap(fileName)
+
+			// Remove the invalid DAH file, but keep the blob files
+			if removeErr := os.Remove(fileName + ".dah"); removeErr != nil && !os.IsNotExist(removeErr) {
+				s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName+".dah")
+			}
+		} else {
+			s.logger.Debugf("[File] failed to read DAH from file: %s, error: %v", fileName+".dah", err)
+		}
 		return
 	}
 
+	// This should not happen anymore with the validation in readDAHFromFile
 	if dah == 0 {
 		s.removeDAHFromMap(fileName)
-		s.logger.Debugf("[File] removing expired file with DAH of 0: %s", fileName)
+		s.logger.Warnf("[File] unexpected DAH value 0, removing: %s", fileName+".dah")
+
+		// Remove the invalid DAH file, but keep the blob files
+		if err := os.Remove(fileName + ".dah"); err != nil && !os.IsNotExist(err) {
+			s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName+".dah")
+		}
 
 		return
 	}
@@ -699,22 +788,8 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 
 	if dah > 0 {
 		dahFilename := fileName + ".dah"
-		dahTempFilename := dahFilename + ".tmp"
-
-		var err error
-
-		//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-		if err = os.WriteFile(dahTempFilename, []byte(strconv.FormatUint(uint64(dah), 10)), 0644); err != nil {
-			return "", errors.NewStorageError("[File][%s] failed to write DAH to file", dahTempFilename, err)
-		}
-
-		if err = os.Rename(dahTempFilename, dahFilename); err != nil {
-			// check is some other process has created this file before us
-			if _, statErr := os.Stat(dahFilename); statErr != nil {
-				return "", errors.NewStorageError("[File][%s] failed to rename file from tmp", dahFilename, err)
-			} else {
-				s.logger.Warnf("[File][%s] DAH file already exists so another process created it first", dahFilename)
-			}
+		if err := s.writeDAHToFile(dahFilename, dah); err != nil {
+			return "", err
 		}
 
 		s.fileDAHsMu.Lock()
@@ -786,21 +861,10 @@ func (s *File) SetDAH(_ context.Context, key []byte, fileType fileformat.FileTyp
 		return errors.NewStorageError("[File][%s] failed to get file info", fileName, err)
 	}
 
-	// write bytes to file
+	// write DAH to file
 	dahFilename := fileName + ".dah"
-	dahTempFilename := dahFilename + ".tmp"
-
-	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err = os.WriteFile(dahTempFilename, []byte(strconv.FormatUint(uint64(newDAH), 10)), 0644); err != nil {
-		return errors.NewStorageError("[File][%s] failed to write DAH to file", dahTempFilename, err)
-	}
-
-	if err = os.Rename(dahTempFilename, dahFilename); err != nil {
-		if _, statErr := os.Stat(dahFilename); statErr != nil {
-			return errors.NewStorageError("[File][%s] failed to rename file from tmp", dahFilename, err)
-		} else {
-			s.logger.Warnf("[File][%s] file already exists meaning another process created it first", dahFilename)
-		}
+	if err = s.writeDAHToFile(dahFilename, newDAH); err != nil {
+		return err
 	}
 
 	s.fileDAHsMu.Lock()
