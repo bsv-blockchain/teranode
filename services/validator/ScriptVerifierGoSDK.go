@@ -7,7 +7,6 @@ script validation using the Bitcoin SV Go-SDK library implementation.
 package validator
 
 import (
-	"log"
 	"strings"
 
 	"github.com/bitcoin-sv/go-sdk/chainhash"
@@ -25,8 +24,6 @@ import (
 // This is called automatically when the package is imported
 func init() {
 	TxScriptInterpreterFactory[TxInterpreterGoSDK] = newScriptVerifierGoSDK
-
-	log.Println("Registered scriptVerifierGoSDK")
 }
 
 // newScriptVerifierGoSDK creates a new Go-SDK script verifier instance

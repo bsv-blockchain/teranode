@@ -9,7 +9,6 @@ package validator
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 
@@ -33,8 +32,6 @@ const (
 // This is called automatically when the package is imported with the 'bdk' build tag
 func init() {
 	TxScriptInterpreterFactory[TxInterpreterGoBDK] = newScriptVerifierGoBDK
-
-	log.Println("Registered scriptVerifierGoBDK")
 }
 
 // uint2int helper to convert array of []uint32 to []int32

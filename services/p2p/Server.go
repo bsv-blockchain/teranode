@@ -240,7 +240,7 @@ func NewServer(
 		P2PNode:           p2pNode,
 		logger:            logger,
 		settings:          tSettings,
-		bitcoinProtocolID: "teranode/bitcoin/1.0.0",
+		bitcoinProtocolID: fmt.Sprintf("teranode/bitcoin/%s", tSettings.Version),
 		notificationCh:    make(chan *notificationMsg, 1_000),
 		blockchainClient:  blockchainClient,
 		banList:           banlist,

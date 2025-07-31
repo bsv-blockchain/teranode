@@ -366,7 +366,7 @@ func TestServerStart(t *testing.T) {
 				blocksKafkaProducerClient:     mockBlocksProducer,
 				notificationCh:                make(chan *notificationMsg),
 				banChan:                       make(chan BanEvent),
-				bitcoinProtocolID:             "teranode/bitcoin/1.0.0",
+				bitcoinProtocolID:             fmt.Sprintf("teranode/bitcoin/%s", emptySettings.Version),
 				gCtx:                          ctx,
 			}
 
@@ -414,7 +414,7 @@ func TestServerStart(t *testing.T) {
 				blocksKafkaProducerClient:     mockBlocksProducer,
 				notificationCh:                make(chan *notificationMsg),
 				banChan:                       make(chan BanEvent),
-				bitcoinProtocolID:             "teranode/bitcoin/1.0.0",
+				bitcoinProtocolID:             fmt.Sprintf("teranode/bitcoin/%s", partialSettings.Version),
 				gCtx:                          ctx,
 			}
 
@@ -461,7 +461,7 @@ func TestServerStart(t *testing.T) {
 				logger:            logger,
 				settings:          completeSettings,
 				blockchainClient:  mockBlockchainClient,
-				bitcoinProtocolID: "teranode/bitcoin/1.0.0",
+				bitcoinProtocolID: fmt.Sprintf("teranode/bitcoin/%s", completeSettings.Version),
 				gCtx:              mockCtx,
 				notificationCh:    make(chan *notificationMsg),
 				banChan:           make(chan BanEvent),

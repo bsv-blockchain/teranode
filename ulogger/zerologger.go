@@ -62,7 +62,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 	}
 
 	z.SetLogLevel(opts.logLevel)
-	z.Logger.Debug().Msgf("Zerolog logger initialized with level %s", opts.logLevel)
+	// z.Logger.Debug().Msgf("Zerolog logger initialized with level %s", opts.logLevel)
 
 	return z
 }

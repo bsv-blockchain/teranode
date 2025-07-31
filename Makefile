@@ -5,6 +5,20 @@ TXMETA_TAG=
 SETTINGS_CONTEXT_DEFAULT := docker.ci
 LOCAL_TEST_START_FROM_STATE ?=
 
+# Get version from git tag if it matches vX.X.X pattern, otherwise use pseudo-version
+GIT_TAG := $(shell git describe --tags --exact-match 2>/dev/null || echo "")
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_TIMESTAMP := $(shell git show -s --format=%cd --date=format:%Y%m%d%H%M%S HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
+
+# Generate version: use tag if available, otherwise pseudo-version
+ifeq ($(GIT_TAG),)
+  GIT_VERSION := v0.0.0-$(GIT_TIMESTAMP)-$(GIT_COMMIT)
+else ifneq ($(filter v%,$(GIT_TAG)),)
+  GIT_VERSION := $(GIT_TAG)
+else
+  GIT_VERSION := v0.0.0-$(GIT_TIMESTAMP)-$(GIT_COMMIT)
+endif
+
 .PHONY: set_debug_flags
 set_debug_flags:
 ifeq ($(DEBUG),true)
@@ -76,19 +90,19 @@ clean_backup:
 
 .PHONY: build-teranode-with-dashboard
 build-teranode-with-dashboard: set_debug_flags set_txmetacache_flag build-dashboard
-	go build -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	go build -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=$(or ${GITHUB_SHA},${GIT_COMMIT}) -X main.version=${GIT_VERSION} -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-teranode
 build-teranode: set_debug_flags set_txmetacache_flag
-	go build -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	go build -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=$(or ${GITHUB_SHA},${GIT_COMMIT}) -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-teranode-no-debug
 build-teranode-no-debug: set_txmetacache_flag
-	go build -a -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -s -w" -gcflags "-l -B" -o teranode_no_debug.run .
+	go build -a -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=$(or ${GITHUB_SHA},${GIT_COMMIT}) -X main.version=${GIT_VERSION} -s -w" -gcflags "-l -B" -o teranode_no_debug.run .
 
 .PHONY: build-teranode-ci
 build-teranode-ci: set_debug_flags set_txmetacache_flag
-	go build -race -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	go build -race -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=$(or ${GITHUB_SHA},${GIT_COMMIT}) -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags
@@ -96,7 +110,7 @@ build-chainintegrity: set_debug_flags
 
 .PHONY: build-tx-blaster
 build-tx-blaster: set_debug_flags
-	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
+	go build --trimpath -ldflags="-X main.commit=$(or ${GITHUB_SHA},${GIT_COMMIT}) -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
 
 .PHONY: build-teranode-cli
 build-teranode-cli:

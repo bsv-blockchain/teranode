@@ -8,7 +8,6 @@ typically used as the default script interpreter.
 package validator
 
 import (
-	"log"
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -24,8 +23,6 @@ import (
 // the Go-BT implementation as an available script verifier
 func init() {
 	TxScriptInterpreterFactory[TxInterpreterGoBT] = newScriptVerifierGoBt
-
-	log.Println("Registered scriptVerifierGoBt")
 }
 
 func newScriptVerifierGoBt(l ulogger.Logger, po *settings.PolicySettings, pa *chaincfg.Params) TxScriptInterpreter {

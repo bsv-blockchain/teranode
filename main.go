@@ -1,14 +1,10 @@
 package main
 
 import (
-	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
+	"fmt"
 	"os"
 
-	"github.com/bitcoin-sv/teranode/daemon"
-	"github.com/bitcoin-sv/teranode/settings"
-	"github.com/bitcoin-sv/teranode/ulogger"
-	"github.com/bitcoin-sv/teranode/util"
-	"github.com/ordishs/gocore"
+	"github.com/bitcoin-sv/teranode/cmd/teranode"
 )
 
 // Name used by build script for the binaries. (Please keep on single line)
@@ -18,28 +14,15 @@ const progname = "teranode"
 var version string
 var commit string
 
-func init() {
-	gocore.SetInfo(progname, version, commit)
-
-	// Call the gocore.Log function to initialize the logger and start the Unix domain socket that allows us to configure settings at runtime.
-	gocore.Log(progname)
-
-	gocore.AddAppPayloadFn("CONFIG", func() interface{} {
-		return gocore.Config().GetAll()
-	})
-}
-
 func main() {
-	tSettings := settings.NewSettings()
+	// Check for --version flag before any initialization
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" || arg == "-v" {
+			fmt.Printf("%s version %s (commit: %s)\n", progname, version, commit)
+			os.Exit(0)
+		}
+	}
 
-	logger := ulogger.InitLogger(progname, tSettings)
-
-	util.InitGRPCResolver(logger, tSettings.GRPCResolver)
-
-	stats := gocore.Config().Stats()
-	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
-
-	daemon.New(daemon.WithLoggerFactory(func(serviceName string) ulogger.Logger {
-		return ulogger.New(serviceName, ulogger.WithLevel(tSettings.LogLevel))
-	})).Start(logger, os.Args[1:], tSettings)
+	// If not showing version, run the daemon
+	teranode.RunDaemon(progname, version, commit)
 }
