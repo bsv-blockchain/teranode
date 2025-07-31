@@ -62,7 +62,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
-	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
@@ -132,7 +132,7 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 					if res.ErrorCode == LuaErrorCodeSpent {
 						// Extract spending data from error message
 						hexData := strings.TrimPrefix(res.Message, "SPENT:")
-						if spendingData, parseErr := spend.NewSpendingDataFromString(hexData); parseErr == nil {
+						if spendingData, parseErr := spendpkg.NewSpendingDataFromString(hexData); parseErr == nil {
 							errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo because it's already SPENT by %v", batchID, spendingData))
 						} else {
 							errorsThrown = append(errorsThrown, errors.NewStorageError("[FREEZE_BATCH_LUA][%d] failed to freeze aerospike utxo: %s", batchID, res.Message))

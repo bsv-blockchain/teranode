@@ -7,7 +7,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
-	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -106,7 +106,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 				TxID:         input.PreviousTxIDChainHash(),
 				Vout:         input.PreviousTxOutIndex,
 				UTXOHash:     utxoHash,
-				SpendingData: spend.NewSpendingData(tx.TxIDChainHash(), i),
+				SpendingData: spendpkg.NewSpendingData(tx.TxIDChainHash(), i),
 			}
 
 			affectedParentSpends = append(affectedParentSpends, spend)

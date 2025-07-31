@@ -1,5 +1,3 @@
-// //go:build aerospike
-
 // Package aerospike provides an Aerospike-based implementation of the UTXO store interface.
 // It offers high performance, distributed storage capabilities with support for large-scale
 // UTXO sets and complex operations like freezing, reassignment, and batch processing.
@@ -68,7 +66,7 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
-	"github.com/bitcoin-sv/teranode/stores/utxo/spend"
+	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
@@ -618,7 +616,7 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 	switch errMsg.ErrorCode {
 	case LuaErrorCodeSpent:
 		if errMsg.SpendingData != "" {
-			spendingData, parseErr := spend.NewSpendingDataFromString(errMsg.SpendingData)
+			spendingData, parseErr := spendpkg.NewSpendingDataFromString(errMsg.SpendingData)
 			if parseErr != nil {
 				return errors.NewStorageError("[SPEND_BATCH_LUA][%s] invalid spending data in error: %s", txID.String(), errMsg.SpendingData)
 			}

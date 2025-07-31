@@ -1,4 +1,4 @@
-package aerospike
+package aerospike_test
 
 import (
 	"context"
