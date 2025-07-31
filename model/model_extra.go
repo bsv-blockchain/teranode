@@ -47,8 +47,16 @@ func (ms *MiningSolution) Stringify(long bool) string {
 		sb.WriteString("Mining Solution\n\t")
 		sb.WriteString(fmt.Sprintf("Job ID:         %s\n\t", utils.ReverseAndHexEncodeSlice(ms.Id)))
 		sb.WriteString(fmt.Sprintf("Nonce:          %d\n\t", ms.Nonce))
-		sb.WriteString(fmt.Sprintf("Time:           %d\n\t", *ms.Time))
-		sb.WriteString(fmt.Sprintf("Version:        %d\n\t", *ms.Version))
+		if ms.Time != nil {
+			sb.WriteString(fmt.Sprintf("Time:           %d\n\t", *ms.Time))
+		} else {
+			sb.WriteString("Time:           <nil>\n\t")
+		}
+		if ms.Version != nil {
+			sb.WriteString(fmt.Sprintf("Version:        %d\n\t", *ms.Version))
+		} else {
+			sb.WriteString("Version:        <nil>\n\t")
+		}
 		sb.WriteString(fmt.Sprintf("CoinbaseTX:     %x\n\n", ms.Coinbase))
 	}
 
