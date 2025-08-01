@@ -924,7 +924,7 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, _ ui
 		blockLocatorStr += locatorHash.String()
 	}
 
-	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers_to_common_ancestor/%s?block_locator_hashes=%s", baseURL, hash.String(), blockLocatorStr))
+	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers_to_common_ancestor/%s?block_locator_hashes=%s&n=1000", baseURL, hash.String(), blockLocatorStr))
 	if err != nil {
 		return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to get block headers from peer", hash.String(), err)
 	}
