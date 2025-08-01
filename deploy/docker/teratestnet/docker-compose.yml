@@ -1,0 +1,106 @@
+x-teranode-settings:
+  &teranode-settings
+  environment:
+    network: "teratestnet"
+    p2p_bootstrapAddresses: "/dns4/teranode-bootstrap-stage.bsvb.tech/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
+    # logLevel: "DEBUG"
+    # enable this when using your laptop or a server without a public ip
+    # someOtherSetting: "value"
+
+networks:
+  teranode-network:
+    name: my-teranode-network
+    # if your docker setup supports IPv6, you can enable it here
+    # enable_ipv6: true
+
+services:
+  # Teranode micro-services
+  blockchain:
+    extends:
+      file: ../base/docker-teranode.yml
+      service: blockchain
+    <<: *teranode-settings
+
+  asset:
+    extends:
+      file: ../base/docker-teranode.yml
+      service: asset
+    <<: *teranode-settings
+
+  asset-cache:
+    extends:
+      file: ../base/docker-services.yml
+      service: asset-cache
+
+  rpc:
+    extends:
+      file: ../base/docker-teranode.yml
+      service: rpc
+    <<: *teranode-settings
+
+  subtreevalidation:
+    extends:
+      file: ../base/docker-teranode.yml
+      service: subtreevalidation
+    <<: *teranode-settings
+
+  blockvalidation:
+    extends:
+      file: ../base/docker-teranode.yml
+      service: blockvalidation
+    <<: *teranode-settings
+
+  blockassembly:
+    extends:
+      file: ../base/docker-teranode.yml
+      service: blockassembly
+    <<: *teranode-settings
+
+  peer:
+    extends:
+      file: ../base/docker-teranode.yml
+      service: peer
+    <<: *teranode-settings
+
+  # uses lots of disk space
+  #  blockpersister:
+  #    extends:
+  #      file: ../base/docker-teranode.yml
+  #      service: blockpersister
+  #    <<: *teranode-settings
+
+  # shared services
+  postgres:
+    extends:
+      file: ../base/docker-services.yml
+      service: postgres
+
+  kafka-shared:
+    extends:
+      file: ../base/docker-services.yml
+      service: kafka-shared
+
+  kafka-console-shared:
+    extends:
+      file: ../base/docker-services.yml
+      service: kafka-console-shared
+
+  aerospike:
+    extends:
+      file: ../base/docker-services.yml
+      service: aerospike
+
+  aerospike-exporter:
+    extends:
+      file: ../base/docker-services.yml
+      service: aerospike-exporter
+
+  prometheus:
+    extends:
+      file: ../base/docker-services.yml
+      service: prometheus
+
+  grafana:
+    extends:
+      file: ../base/docker-services.yml
+      service: grafana
