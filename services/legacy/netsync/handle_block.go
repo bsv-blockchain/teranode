@@ -167,9 +167,9 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 		return blockAssemblyStatus.CurrentHeight, nil
 	},
-		retry.WithRetryCount(20),
-		retry.WithBackoffDurationType(50*time.Millisecond),
-		retry.WithBackoffMultiplier(10),
+		retry.WithRetryCount(100),
+		retry.WithBackoffDurationType(time.Millisecond),
+		retry.WithBackoffMultiplier(5),
 		retry.WithMessage(fmt.Sprintf("[HandleBlockDirect][%s %d] block assembly is behind, retrying", block.Hash().String(), blockHeight)),
 	)
 	if err != nil {
