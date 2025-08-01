@@ -5,18 +5,16 @@ TXMETA_TAG=
 SETTINGS_CONTEXT_DEFAULT := docker.ci
 LOCAL_TEST_START_FROM_STATE ?=
 
-# Get version from git tag if it matches vX.X.X pattern, otherwise use pseudo-version
-GIT_TAG := $(shell git describe --tags --exact-match 2>/dev/null || echo "")
-GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-GIT_TIMESTAMP := $(shell git show -s --format=%cd --date=format:%Y%m%d%H%M%S HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
-
-# Generate version: use tag if available, otherwise pseudo-version
-ifeq ($(GIT_TAG),)
-  GIT_VERSION := v0.0.0-$(GIT_TIMESTAMP)-$(GIT_COMMIT)
-else ifneq ($(filter v%,$(GIT_TAG)),)
-  GIT_VERSION := $(GIT_TAG)
-else
-  GIT_VERSION := v0.0.0-$(GIT_TIMESTAMP)-$(GIT_COMMIT)
+# Get version from git using the shared script
+# Use environment variables if set, otherwise use the script
+ifndef GIT_VERSION
+  # Get all git version variables from the script in one call
+  GIT_VARS := $(shell ./scripts/determine-git-version.sh --makefile)
+  GIT_VERSION := $(shell echo '$(GIT_VARS)' | grep "^GIT_VERSION=" | cut -d'=' -f2)
+  GIT_COMMIT := $(shell echo '$(GIT_VARS)' | grep "^GIT_COMMIT=" | cut -d'=' -f2)
+  GIT_SHA := $(shell echo '$(GIT_VARS)' | grep "^GIT_SHA=" | cut -d'=' -f2)
+  GIT_TAG := $(shell echo '$(GIT_VARS)' | grep "^GIT_TAG=" | cut -d'=' -f2)
+  GIT_TIMESTAMP := $(shell echo '$(GIT_VARS)' | grep "^GIT_TIMESTAMP=" | cut -d'=' -f2)
 endif
 
 .PHONY: set_debug_flags

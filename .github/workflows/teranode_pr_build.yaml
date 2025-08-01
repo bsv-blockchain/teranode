@@ -17,8 +17,25 @@ jobs:
     uses: ./.github/workflows/teranode_pr_tests.yaml
     secrets: inherit
 
+  # Calculate version information
+  calculate-version:
+    runs-on: ubuntu-latest
+    outputs:
+      git_version: ${{ steps.version.outputs.git_version }}
+      git_commit: ${{ steps.version.outputs.git_commit }}
+      git_sha: ${{ steps.version.outputs.git_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for tags
+      - name: Calculate version
+        id: version
+        run: ./scripts/determine-git-version.sh
+
   # Run remote build and deploy workflow
   build-and-deploy:
+    needs: calculate-version
     uses: bitcoin-sv/.github/.github/workflows/build_and_deploy.yaml@main
     permissions:
       contents: read
@@ -29,6 +46,9 @@ jobs:
       tag_latest: false
       build_args: |
         DEBUG=true
+        GIT_VERSION=${{ needs.calculate-version.outputs.git_version }}
+        GIT_COMMIT=${{ needs.calculate-version.outputs.git_commit }}
+        GIT_SHA=${{ needs.calculate-version.outputs.git_sha }}
       use_packages: true
       use_ecr: true
       ecr_region: "eu-north-1"

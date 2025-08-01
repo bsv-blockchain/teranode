@@ -4,7 +4,9 @@ ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:run-late
 
 # Enter the build environment
 FROM ${BASE_IMG}
-ARG GITHUB_SHA
+ARG GIT_VERSION
+ARG GIT_COMMIT
+ARG GIT_SHA
 ARG TARGETOS
 ARG TARGETARCH
 ARG BUILD_JOBS=32
@@ -31,17 +33,17 @@ COPY . /app
 ENV CGO_ENABLED=1
 
 # Display the Git SHA for the build (if any)
-RUN echo "Building Git SHA: ${GITHUB_SHA}"
+RUN echo "Building Git SHA: ${GIT_SHA}"
 
 # Build with $BUILD_JOBS parallel jobs
 RUN if [ "$TXMETA_SMALL_TAG" = "true" ]; then \
-      TXMETA_SMALL_TAG=true make build -j ${BUILD_JOBS}; \
+      TXMETA_SMALL_TAG=true GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
     else \
-      make build -j ${BUILD_JOBS}; \
+      GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
     fi
 
 # Build teranode-cli
-RUN make build-teranode-cli
+RUN GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build-teranode-cli
 
 # This could be run in the ${BASE_IMG} so we don't have to do it on every build, but it's not a big deal and this is pretty quick
 ENV GOPATH=/go
