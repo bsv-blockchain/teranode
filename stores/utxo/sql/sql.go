@@ -2053,20 +2053,19 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	}
 
 	// Build placeholders for IN clause
-	placeholders := make([]string, len(txIDs))
-	args := make([]interface{}, len(txIDs)+1)
+	placeholders := make([]string, 0, len(txIDs))
+	args := make([]interface{}, 0, len(txIDs))
 
-	for i, txID := range txIDs {
-		placeholders[i] = "?"
-		args[i] = txID[:]
+	for _, txID := range txIDs {
+		placeholders = append(placeholders, "?")
+		args = append(args, txID[:])
 	}
-
-	args[len(txIDs)] = preserveUntilHeight
+	args = append([]interface{}{preserveUntilHeight}, args...)
 
 	query := fmt.Sprintf(`
-		UPDATE transactions 
-		SET preserve_until = ?, delete_at_height = NULL 
-		WHERE hash IN (%s)
+    UPDATE transactions 
+    SET preserve_until = ?, delete_at_height = NULL 
+    WHERE hash IN (%s)
 	`, strings.Join(placeholders, ","))
 
 	result, err := s.db.ExecContext(ctx, query, args...)
@@ -2109,4 +2108,9 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	}
 
 	return nil
+}
+
+// RawDB returns the underlying *usql.DB connection. For test/debug use only.
+func (s *Store) RawDB() *usql.DB {
+	return s.db
 }
