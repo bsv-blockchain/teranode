@@ -20,7 +20,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/util"
-	"github.com/bitcoin-sv/teranode/util/retry"
+	"github.com/bitcoin-sv/teranode/util/blockassemblyutil"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -150,29 +150,8 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		deferFn(err)
 	}()
 
-	// var maxBlocksBehind uint32 = uint32(sm.chainParams.CoinbaseMaturity)
-	var maxBlocksBehind uint32 = 1
-
-	// check that block assembly is not more than maxBlocksBehind blocks behind
-	// this is to make sure all the coinbases have been processed in the block assembly
-	_, err = retry.Retry(ctx, sm.logger, func() (uint32, error) {
-		blockAssemblyStatus, err := sm.blockAssembly.GetBlockAssemblyState(ctx)
-		if err != nil {
-			return 0, errors.NewProcessingError("failed to get block assembly state", err)
-		}
-
-		if blockAssemblyStatus.CurrentHeight+maxBlocksBehind < blockHeight {
-			return 0, errors.NewProcessingError("block assembly is behind, block height %d, block assembly height %d", blockHeight, blockAssemblyStatus.CurrentHeight)
-		}
-
-		return blockAssemblyStatus.CurrentHeight, nil
-	},
-		retry.WithRetryCount(100),
-		retry.WithBackoffDurationType(time.Millisecond),
-		retry.WithBackoffMultiplier(5),
-		retry.WithMessage(fmt.Sprintf("[HandleBlockDirect][%s %d] block assembly is behind, retrying", block.Hash().String(), blockHeight)),
-	)
-	if err != nil {
+	// Wait for block assembly to be ready
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight); err != nil {
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}

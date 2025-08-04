@@ -728,6 +728,14 @@ func (d *Daemon) startValidationService(
 			return err
 		}
 
+		// Create the block assembly client for the BlockValidation service
+		var blockAssemblyClient blockassembly.ClientI
+
+		blockAssemblyClient, err = blockassembly.NewClient(ctx, createLogger(loggerBlockAssembly), appSettings)
+		if err != nil {
+			return err
+		}
+
 		// Create the BlockValidation service
 		d.blockValidationSrv = blockvalidation.New(
 			createLogger(loggerBlockValidation),
@@ -738,6 +746,7 @@ func (d *Daemon) startValidationService(
 			validatorClient,
 			blockchainClient,
 			kafkaConsumerClient,
+			blockAssemblyClient,
 		)
 
 		// Add the BlockValidation service to the ServiceManager

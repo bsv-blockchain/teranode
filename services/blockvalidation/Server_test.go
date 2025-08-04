@@ -17,7 +17,9 @@ package blockvalidation
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"testing"
 	"time"
@@ -28,6 +30,7 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/teranode/services/blockvalidation/blockvalidation_api"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
@@ -39,14 +42,41 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-subtree"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
+	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
+
+// mockBlockValidationInterface is a mock implementation of the Interface interface
+type mockBlockValidationInterface struct {
+	mock.Mock
+}
+
+func (m *mockBlockValidationInterface) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	args := m.Called(ctx, checkLiveness)
+	return args.Int(0), args.String(1), args.Error(2)
+}
+
+func (m *mockBlockValidationInterface) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseURL string, waitToComplete bool) error {
+	args := m.Called(ctx, blockHash, baseURL, waitToComplete)
+	return args.Error(0)
+}
+
+func (m *mockBlockValidationInterface) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32) error {
+	args := m.Called(ctx, block, blockHeight)
+	return args.Error(0)
+}
+
+func (m *mockBlockValidationInterface) ValidateBlock(ctx context.Context, block *model.Block) error {
+	args := m.Called(ctx, block)
+	return args.Error(0)
+}
 
 var (
 	coinbaseTx, _ = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff08044c86041b020602ffffffff0100f2052a010000004341041b0e8c2567c12536aa13357b79a073dc4444acb83c4ec7a0e2f99dd7457516c5817242da796924ca4e99947d087fedf9ce467cb9f7c6287078f801df276fdf84ac00000000")
@@ -363,7 +393,7 @@ func Test_Server_processBlockFound(t *testing.T) {
 	subtreeStore := memory.New()
 	tSettings.GlobalBlockHeightRetention = uint32(1)
 
-	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient)
+	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient, nil)
 	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil)
 
 	err = s.processBlockFound(context.Background(), block.Hash(), "legacy", block)
@@ -656,7 +686,7 @@ func Test_checkSecretMining(t *testing.T) {
 
 		blockchainClient := &blockchain.Mock{}
 
-		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil)
+		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
 
 		block := &model.Block{Height: 110}
 
@@ -700,7 +730,7 @@ func Test_checkSecretMining(t *testing.T) {
 		blockBytes, err := hex.DecodeString("0000002006226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f1633819a69afbd7ce1f1a01c3b786fcbb023274f3b15172b24feadd4c80e6c6a8b491267ffff7f20040000000102000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
 		require.NoError(t, err)
 
-		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil)
+		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
 
 		block, err := model.NewBlockFromBytes(blockBytes, nil)
 		require.NoError(t, err)
@@ -734,7 +764,7 @@ func Test_checkSecretMining_blockchainClientError(t *testing.T) {
 		errExpected := errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found")
 		blockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errExpected).Once()
 
-		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil)
+		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
 
 		secretMining, err := server.checkSecretMining(t.Context(), &chainhash.Hash{})
 		assert.Error(t, err)
@@ -1235,10 +1265,903 @@ func TestProcessBlockFoundChannelCatchup(t *testing.T) {
 	require.True(t, gotBlocks["http://peer2"])
 }
 
+func Test_HealthLiveness(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Create a minimal server with just enough setup for health checks
+	server := &Server{
+		logger:              logger,
+		settings:            tSettings,
+		kafkaConsumerClient: nil, // Tests may not set this
+		blockchainClient:    nil,
+		subtreeStore:        nil,
+		txStore:             nil,
+		utxoStore:           nil,
+	}
+
+	status, msg, err := server.Health(ctx, true)
+	require.Equal(t, http.StatusOK, status)
+	require.NoError(t, err)
+	require.Equal(t, "OK", msg)
+}
+
+func Test_HealthReadiness(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Use actual in-memory stores that have proper health methods
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	// Create mock blockchain client
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
+	// Mock FSM state check
+	fsmState := blockchain_api.FSMStateType_RUNNING
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+	server := &Server{
+		logger:              logger,
+		settings:            tSettings,
+		kafkaConsumerClient: nil, // Tests may not set this
+		blockchainClient:    mockBlockchainClient,
+		subtreeStore:        subtreeStore,
+		txStore:             txStore,
+		utxoStore:           utxoStore,
+	}
+
+	status, msg, err := server.Health(ctx, false)
+	require.Equal(t, http.StatusOK, status)
+	require.NoError(t, err)
+
+	// Parse and validate JSON response
+	var jsonMsg map[string]interface{}
+	err = json.Unmarshal([]byte(msg), &jsonMsg)
+	require.NoError(t, err, "Message should be valid JSON")
+	require.Contains(t, jsonMsg, "status", "JSON should contain 'status' field")
+	require.Contains(t, jsonMsg, "dependencies", "JSON should contain 'dependencies' field")
+}
+
+func Test_HealthReadiness_UnhealthyDependency(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Use actual in-memory stores that have proper health methods
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	// Create mock dependencies with one unhealthy
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusServiceUnavailable, "Blockchain service unavailable", nil)
+	// Mock FSM state check
+	fsmState := blockchain_api.FSMStateType_RUNNING
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+	server := &Server{
+		logger:              logger,
+		settings:            tSettings,
+		kafkaConsumerClient: nil,
+		blockchainClient:    mockBlockchainClient,
+		subtreeStore:        subtreeStore,
+		txStore:             txStore,
+		utxoStore:           utxoStore,
+	}
+
+	status, msg, err := server.Health(ctx, false)
+	require.Equal(t, http.StatusServiceUnavailable, status)
+	require.NoError(t, err)
+	require.Contains(t, msg, "Blockchain service unavailable")
+}
+
+func Test_HealthGRPC(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Use actual in-memory stores that have proper health methods
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	// Create mock dependencies
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
+	// Mock FSM state check
+	fsmState := blockchain_api.FSMStateType_RUNNING
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+	server := &Server{
+		logger:              logger,
+		settings:            tSettings,
+		kafkaConsumerClient: nil,
+		blockchainClient:    mockBlockchainClient,
+		subtreeStore:        subtreeStore,
+		txStore:             txStore,
+		utxoStore:           utxoStore,
+	}
+
+	response, err := server.HealthGRPC(ctx, &blockvalidation_api.EmptyMessage{})
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	require.True(t, response.Ok)
+	require.NotNil(t, response.Timestamp)
+
+	// Validate details contain JSON
+	var details map[string]interface{}
+	err = json.Unmarshal([]byte(response.Details), &details)
+	require.NoError(t, err)
+	require.Contains(t, details, "status")
+	require.Contains(t, details, "dependencies")
+}
+
+func Test_HealthGRPC_Unhealthy(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Use actual in-memory stores that have proper health methods
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	// Create mock dependencies with one unhealthy
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusServiceUnavailable, "Blockchain service unavailable", nil)
+	// Mock FSM state check
+	fsmState := blockchain_api.FSMStateType_RUNNING
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+	server := &Server{
+		logger:              logger,
+		settings:            tSettings,
+		kafkaConsumerClient: nil,
+		blockchainClient:    mockBlockchainClient,
+		subtreeStore:        subtreeStore,
+		txStore:             txStore,
+		utxoStore:           utxoStore,
+	}
+
+	response, err := server.HealthGRPC(ctx, &blockvalidation_api.EmptyMessage{})
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	require.False(t, response.Ok)
+	require.NotNil(t, response.Timestamp)
+	require.Contains(t, response.Details, "Blockchain service unavailable")
+}
+
+// Mock kafka consumer for testing
+type mockKafkaConsumer struct {
+	mock.Mock
+}
+
+func (m *mockKafkaConsumer) Start(ctx context.Context, consumerFn func(message *kafka.KafkaMessage) error, opts ...kafka.ConsumerOption) {
+	m.Called(ctx, consumerFn, opts)
+}
+
+func (m *mockKafkaConsumer) BrokersURL() []string {
+	args := m.Called()
+	return args.Get(0).([]string)
+}
+
+func (m *mockKafkaConsumer) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+func Test_Start(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Use actual in-memory stores
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	// Create mock blockchain client
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(nil)
+
+	// Create mock kafka consumer
+	mockKafkaConsumer := &mockKafkaConsumer{}
+	mockKafkaConsumer.On("Start", mock.Anything, mock.Anything, mock.Anything).Return()
+
+	server := &Server{
+		logger:               logger,
+		settings:             tSettings,
+		kafkaConsumerClient:  mockKafkaConsumer,
+		blockchainClient:     mockBlockchainClient,
+		subtreeStore:         subtreeStore,
+		txStore:              txStore,
+		utxoStore:            utxoStore,
+		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
+	}
+
+	// Create a context with quick timeout since Start() blocks on GRPC server
+	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+
+	readyCh := make(chan struct{})
+	err := server.Start(ctx, readyCh)
+
+	// The error might be nil if the context cancels quickly before the GRPC server fully starts
+	// or an error if port binding fails
+	if err != nil {
+		// If we get an error, it should be context related or port binding
+		assert.Contains(t, err.Error(), "context")
+	}
+	mockBlockchainClient.AssertExpectations(t)
+}
+
+func Test_Start_FSMTransitionError(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Create mock blockchain client that returns error
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(errors.New(errors.ERR_BLOCK_NOT_FOUND, "FSM not ready"))
+
+	server := &Server{
+		logger:           logger,
+		settings:         tSettings,
+		blockchainClient: mockBlockchainClient,
+	}
+
+	readyCh := make(chan struct{})
+	err := server.Start(ctx, readyCh)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "FSM not ready")
+	mockBlockchainClient.AssertExpectations(t)
+}
+
+func Test_Stop(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Create mock kafka consumer
+	mockKafkaConsumer := &mockKafkaConsumer{}
+	mockKafkaConsumer.On("Close").Return(nil)
+
+	server := &Server{
+		logger:               logger,
+		settings:             tSettings,
+		kafkaConsumerClient:  mockKafkaConsumer,
+		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
+	}
+
+	// Start the ttl cache so we can stop it
+	go server.processSubtreeNotify.Start()
+	time.Sleep(10 * time.Millisecond) // Give it time to start
+
+	err := server.Stop(ctx)
+	require.NoError(t, err)
+	mockKafkaConsumer.AssertExpectations(t)
+}
+
+func Test_Stop_KafkaCloseError(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Create mock kafka consumer that returns error
+	mockKafkaConsumer := &mockKafkaConsumer{}
+	mockKafkaConsumer.On("Close").Return(errors.New(errors.ERR_NETWORK_ERROR, "failed to close kafka"))
+
+	server := &Server{
+		logger:               logger,
+		settings:             tSettings,
+		kafkaConsumerClient:  mockKafkaConsumer,
+		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
+	}
+
+	// Start the ttl cache so we can stop it
+	go server.processSubtreeNotify.Start()
+	time.Sleep(10 * time.Millisecond) // Give it time to start
+
+	err := server.Stop(ctx)
+	require.NoError(t, err) // Stop doesn't return the kafka error
+	mockKafkaConsumer.AssertExpectations(t)
+}
+
+func Test_BlockFound(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Create test hash
+	hash := chainhash.HashH([]byte("test block"))
+	hashBytes := hash.CloneBytes()
+
+	t.Run("block already exists", func(t *testing.T) {
+		bv := &BlockValidation{
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		}
+
+		// Mark block as existing
+		err := bv.SetBlockExists(&hash)
+		require.NoError(t, err)
+
+		server := &Server{
+			logger:          logger,
+			settings:        tSettings,
+			blockValidation: bv,
+			stats:           gocore.NewStat("test"),
+		}
+
+		req := &blockvalidation_api.BlockFoundRequest{
+			Hash:    hashBytes,
+			BaseUrl: "http://test.com",
+		}
+
+		resp, err := server.BlockFound(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+	})
+
+	t.Run("new block without wait", func(t *testing.T) {
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, &hash).Return(false, nil)
+
+		bv := &BlockValidation{
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockchainClient:              mockBlockchainClient,
+		}
+
+		server := &Server{
+			logger:          logger,
+			settings:        tSettings,
+			blockValidation: bv,
+			blockFoundCh:    make(chan processBlockFound, 10),
+			stats:           gocore.NewStat("test"),
+		}
+
+		req := &blockvalidation_api.BlockFoundRequest{
+			Hash:           hashBytes,
+			BaseUrl:        "http://test.com",
+			WaitToComplete: false,
+		}
+
+		resp, err := server.BlockFound(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+
+		// Give the goroutine time to add to the channel
+		time.Sleep(10 * time.Millisecond)
+
+		// Check that block was queued
+		require.Equal(t, 1, len(server.blockFoundCh))
+		blockFound := <-server.blockFoundCh
+		require.Equal(t, hash.String(), blockFound.hash.String())
+		require.Equal(t, "http://test.com", blockFound.baseURL)
+		require.Nil(t, blockFound.errCh)
+	})
+
+	t.Run("new block with wait - success", func(t *testing.T) {
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, &hash).Return(false, nil)
+
+		bv := &BlockValidation{
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockchainClient:              mockBlockchainClient,
+		}
+
+		server := &Server{
+			logger:          logger,
+			settings:        tSettings,
+			blockValidation: bv,
+			blockFoundCh:    make(chan processBlockFound, 10),
+			stats:           gocore.NewStat("test"),
+		}
+
+		req := &blockvalidation_api.BlockFoundRequest{
+			Hash:           hashBytes,
+			BaseUrl:        "http://test.com",
+			WaitToComplete: true,
+		}
+
+		// Process the block in a goroutine
+		go func() {
+			time.Sleep(10 * time.Millisecond) // Small delay
+			blockFound := <-server.blockFoundCh
+			require.NotNil(t, blockFound.errCh)
+			blockFound.errCh <- nil // Signal success
+		}()
+
+		resp, err := server.BlockFound(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+	})
+
+	t.Run("new block with wait - error", func(t *testing.T) {
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, &hash).Return(false, nil)
+
+		bv := &BlockValidation{
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockchainClient:              mockBlockchainClient,
+		}
+
+		server := &Server{
+			logger:          logger,
+			settings:        tSettings,
+			blockValidation: bv,
+			blockFoundCh:    make(chan processBlockFound, 10),
+			stats:           gocore.NewStat("test"),
+		}
+
+		req := &blockvalidation_api.BlockFoundRequest{
+			Hash:           hashBytes,
+			BaseUrl:        "http://test.com",
+			WaitToComplete: true,
+		}
+
+		// Process the block in a goroutine
+		go func() {
+			time.Sleep(10 * time.Millisecond) // Small delay
+			blockFound := <-server.blockFoundCh
+			require.NotNil(t, blockFound.errCh)
+			blockFound.errCh <- errors.New(errors.ERR_BLOCK_NOT_FOUND, "validation failed")
+		}()
+
+		resp, err := server.BlockFound(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Contains(t, err.Error(), "validation failed")
+	})
+
+	t.Run("invalid hash", func(t *testing.T) {
+		server := &Server{
+			logger:   logger,
+			settings: tSettings,
+			stats:    gocore.NewStat("test"),
+		}
+
+		req := &blockvalidation_api.BlockFoundRequest{
+			Hash:    []byte("invalid"), // Too short to be a valid hash
+			BaseUrl: "http://test.com",
+		}
+
+		resp, err := server.BlockFound(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Contains(t, err.Error(), "failed to create hash from bytes")
+	})
+}
+
+func Test_ProcessBlock(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Create a test block
+	block := createTestBlock(t)
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	t.Run("success with height provided", func(t *testing.T) {
+		// Use actual in-memory stores
+		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+		defer deferFunc()
+
+		mockBlockchainClient := &blockchain.Mock{}
+
+		bv := &BlockValidation{
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			logger:                        logger,
+			settings:                      tSettings,
+			blockchainClient:              mockBlockchainClient,
+			subtreeStore:                  subtreeStore,
+			txStore:                       txStore,
+			utxoStore:                     utxoStore,
+			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
+			stats:                         gocore.NewStat("test"),
+		}
+
+		server := &Server{
+			logger:               logger,
+			settings:             tSettings,
+			blockValidation:      bv,
+			blockchainClient:     mockBlockchainClient,
+			stats:                gocore.NewStat("test"),
+			processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
+		}
+
+		// Mock the blockchain client methods
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+
+		req := &blockvalidation_api.ProcessBlockRequest{
+			Block:  blockBytes,
+			Height: 100,
+		}
+
+		resp, err := server.ProcessBlock(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+	})
+
+	t.Run("success with height from previous block", func(t *testing.T) {
+		// Use actual in-memory stores
+		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+		defer deferFunc()
+
+		mockBlockchainClient := &blockchain.Mock{}
+
+		bv := &BlockValidation{
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			logger:                        logger,
+			settings:                      tSettings,
+			blockchainClient:              mockBlockchainClient,
+			subtreeStore:                  subtreeStore,
+			txStore:                       txStore,
+			utxoStore:                     utxoStore,
+			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
+			stats:                         gocore.NewStat("test"),
+		}
+
+		server := &Server{
+			logger:               logger,
+			settings:             tSettings,
+			blockValidation:      bv,
+			blockchainClient:     mockBlockchainClient,
+			stats:                gocore.NewStat("test"),
+			processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
+		}
+
+		// Mock getting previous block header
+		prevBlockHeader := &model.BlockHeader{}
+		prevBlockMeta := &model.BlockHeaderMeta{Height: 99}
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(prevBlockHeader, prevBlockMeta, nil)
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+
+		req := &blockvalidation_api.ProcessBlockRequest{
+			Block:  blockBytes,
+			Height: 0, // No height provided, should fetch from previous block
+		}
+
+		resp, err := server.ProcessBlock(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+	})
+
+	t.Run("invalid block bytes", func(t *testing.T) {
+		server := &Server{
+			logger:   logger,
+			settings: tSettings,
+			stats:    gocore.NewStat("test"),
+		}
+
+		req := &blockvalidation_api.ProcessBlockRequest{
+			Block:  []byte("invalid block"),
+			Height: 100,
+		}
+
+		resp, err := server.ProcessBlock(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Contains(t, err.Error(), "failed to create block from bytes")
+	})
+
+	t.Run("invalid height after lookup", func(t *testing.T) {
+		mockBlockchainClient := &blockchain.Mock{}
+
+		server := &Server{
+			logger:           logger,
+			settings:         tSettings,
+			blockchainClient: mockBlockchainClient,
+			stats:            gocore.NewStat("test"),
+		}
+
+		// Mock getting previous block header returns error
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found"))
+
+		req := &blockvalidation_api.ProcessBlockRequest{
+			Block:  blockBytes,
+			Height: 0,
+		}
+
+		resp, err := server.ProcessBlock(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Contains(t, err.Error(), "failed to get previous block header")
+	})
+}
+
+func Test_ValidateBlock(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	// Create a test block
+	block := createTestBlock(t)
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	t.Run("success", func(t *testing.T) {
+		// Use actual in-memory stores
+		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+		defer deferFunc()
+
+		mockBlockchainClient := &blockchain.Mock{}
+
+		bv := &BlockValidation{
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			logger:                        logger,
+			settings:                      tSettings,
+			blockchainClient:              mockBlockchainClient,
+			subtreeStore:                  subtreeStore,
+			txStore:                       txStore,
+			utxoStore:                     utxoStore,
+			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
+			stats:                         gocore.NewStat("test"),
+		}
+
+		server := &Server{
+			logger:           logger,
+			settings:         tSettings,
+			blockValidation:  bv,
+			blockchainClient: mockBlockchainClient,
+			stats:            gocore.NewStat("test"),
+		}
+
+		// Mock blockchain client calls
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+
+		// Mock GetBestBlockHeader
+		bestBlockHeader := &model.BlockHeader{}
+		bestBlockMeta := &model.BlockHeaderMeta{Height: 100}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestBlockHeader, bestBlockMeta, nil)
+
+		// Mock GetBlockHeaders - return empty list since there's no previous block
+		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+
+		req := &blockvalidation_api.ValidateBlockRequest{
+			Block:  blockBytes,
+			Height: 100,
+		}
+
+		resp, err := server.ValidateBlock(ctx, req)
+		require.Error(t, err) // ValidateBlock now returns error for invalid blocks
+		require.Nil(t, resp)
+		require.Contains(t, err.Error(), "block is not valid")
+	})
+
+	t.Run("invalid block bytes", func(t *testing.T) {
+		server := &Server{
+			logger:   logger,
+			settings: tSettings,
+			stats:    gocore.NewStat("test"),
+		}
+
+		req := &blockvalidation_api.ValidateBlockRequest{
+			Block:  []byte("invalid block"),
+			Height: 100,
+		}
+
+		resp, err := server.ValidateBlock(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Contains(t, err.Error(), "failed to create block from bytes")
+	})
+
+	t.Run("validation failure", func(t *testing.T) {
+		// Use actual in-memory stores
+		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+		defer deferFunc()
+
+		mockBlockchainClient := &blockchain.Mock{}
+
+		bv := &BlockValidation{
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			logger:                        logger,
+			settings:                      tSettings,
+			blockchainClient:              mockBlockchainClient,
+			subtreeStore:                  subtreeStore,
+			txStore:                       txStore,
+			utxoStore:                     utxoStore,
+			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
+			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
+			stats:                         gocore.NewStat("test"),
+		}
+
+		server := &Server{
+			logger:           logger,
+			settings:         tSettings,
+			blockValidation:  bv,
+			blockchainClient: mockBlockchainClient,
+			stats:            gocore.NewStat("test"),
+		}
+
+		// Mock blockchain client to return error
+		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found"))
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+
+		// Mock GetBlockHeaders
+		blockHeaders := []*model.BlockHeader{block.Header}
+		blockMetas := []*model.BlockHeaderMeta{{Height: 99}}
+		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockMetas, nil)
+
+		req := &blockvalidation_api.ValidateBlockRequest{
+			Block:  blockBytes,
+			Height: 100,
+		}
+
+		resp, err := server.ValidateBlock(ctx, req)
+		require.Error(t, err) // ValidateBlock now returns error for bloom filter collection failures
+		require.Nil(t, resp)
+		require.Contains(t, err.Error(), "failed to collect necessary bloom filters")
+	})
+}
+
+func Test_consumerMessageHandler(t *testing.T) {
+	initPrometheusMetrics()
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings()
+
+	hashStr := "8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87"
+	url := "http://test.com"
+
+	t.Run("successful message handling", func(t *testing.T) {
+		// Create mock blockchain client
+		mockBlockchainClient := &blockchain.Mock{}
+		hash, _ := chainhash.NewHashFromStr(hashStr)
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, hash).Return(false, nil)
+
+		// Create minimal BlockValidation
+		bv := &BlockValidation{
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockchainClient:              mockBlockchainClient,
+			logger:                        logger,
+		}
+
+		server := &Server{
+			logger:          logger,
+			settings:        tSettings,
+			blockFoundCh:    make(chan processBlockFound, 10),
+			blockValidation: bv,
+			stats:           gocore.NewStat("test"),
+		}
+
+		// Set up a mock for blockHandler
+		kafkaMsg := &kafkamessage.KafkaBlockTopicMessage{
+			Hash: hashStr,
+			URL:  url,
+		}
+		msgBytes, err := proto.Marshal(kafkaMsg)
+		require.NoError(t, err)
+
+		msg := &kafka.KafkaMessage{
+			ConsumerMessage: sarama.ConsumerMessage{
+				Value: msgBytes,
+			},
+		}
+
+		handler := server.consumerMessageHandler(ctx)
+
+		// Process the message in a goroutine to handle the blockFoundCh
+		go func() {
+			blockFound := <-server.blockFoundCh
+			require.NotNil(t, blockFound)
+			if blockFound.errCh != nil {
+				blockFound.errCh <- nil
+			}
+		}()
+
+		err = handler(msg)
+		require.NoError(t, err)
+	})
+
+	t.Run("recoverable error", func(t *testing.T) {
+		// Create mock blockchain client
+		mockBlockchainClient := &blockchain.Mock{}
+
+		// Create minimal BlockValidation
+		bv := &BlockValidation{
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockchainClient:              mockBlockchainClient,
+			logger:                        logger,
+		}
+
+		server := &Server{
+			logger:          logger,
+			settings:        tSettings,
+			blockValidation: bv,
+			stats:           gocore.NewStat("test"),
+		}
+
+		// Invalid message that will cause a parsing error
+		msg := &kafka.KafkaMessage{
+			ConsumerMessage: sarama.ConsumerMessage{
+				Value: []byte("invalid protobuf"),
+			},
+		}
+
+		handler := server.consumerMessageHandler(ctx)
+		err := handler(msg)
+		// blockHandler will return a non-recoverable error for invalid protobuf
+		require.NoError(t, err) // Non-recoverable errors return nil to commit the message
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		// Create mock blockchain client
+		mockBlockchainClient := &blockchain.Mock{}
+		hash, _ := chainhash.NewHashFromStr(hashStr)
+		mockBlockchainClient.On("GetBlockExists", mock.Anything, hash).Return(false, nil).Maybe()
+
+		// Create minimal BlockValidation
+		bv := &BlockValidation{
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockchainClient:              mockBlockchainClient,
+			logger:                        logger,
+		}
+
+		server := &Server{
+			logger:          logger,
+			settings:        tSettings,
+			blockFoundCh:    make(chan processBlockFound, 10),
+			blockValidation: bv,
+			stats:           gocore.NewStat("test"),
+		}
+
+		// Create a cancellable context
+		ctx, cancel := context.WithCancel(context.Background())
+
+		kafkaMsg := &kafkamessage.KafkaBlockTopicMessage{
+			Hash: hashStr,
+			URL:  url,
+		}
+		msgBytes, err := proto.Marshal(kafkaMsg)
+		require.NoError(t, err)
+
+		msg := &kafka.KafkaMessage{
+			ConsumerMessage: sarama.ConsumerMessage{
+				Value: msgBytes,
+			},
+		}
+
+		handler := server.consumerMessageHandler(ctx)
+
+		// Cancel the context immediately
+		cancel()
+
+		err = handler(msg)
+		require.Error(t, err)
+		require.Equal(t, context.Canceled, err)
+	})
+}
+
 func TestCatchup(t *testing.T) {
 	initPrometheusMetrics()
 	// Initialize stores
-	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup()
+	txMetaStore, _, _, _, _, deferFunc := setup()
 	defer deferFunc()
 
 	// Configure test settings
@@ -1251,13 +2174,16 @@ func TestCatchup(t *testing.T) {
 
 	// Create mock blockchain client
 	mockBlockchainClient := &blockchain.Mock{}
-	mockBlockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
-	mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
-	mockBlockchainClient.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
-	mockBlockchainClient.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
 
-	// Mock GetBestBlockHeader once for all test cases
-	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(blocks[1].Header, &model.BlockHeaderMeta{Height: 1}, nil)
+	// Create a minimal BlockValidation instance without starting background goroutines
+	bv := &BlockValidation{
+		logger:                        ulogger.TestLogger{},
+		settings:                      tSettings,
+		blockchainClient:              mockBlockchainClient,
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		bloomFilterStats:              model.NewBloomStats(),
+	}
 
 	// Create server instance
 	server := &Server{
@@ -1265,10 +2191,8 @@ func TestCatchup(t *testing.T) {
 		settings:             tSettings,
 		blockFoundCh:         make(chan processBlockFound, 10),
 		catchupCh:            make(chan processBlockCatchup, 10),
-		blockValidation:      NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchainClient, subtreeStore, txStore, txMetaStore, subtreeValidationClient),
+		blockValidation:      bv,
 		blockchainClient:     mockBlockchainClient,
-		subtreeStore:         subtreeStore,
-		txStore:              txStore,
 		utxoStore:            txMetaStore,
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		stats:                gocore.NewStat("test"),

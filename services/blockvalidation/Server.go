@@ -28,6 +28,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation/blockvalidation_api"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
@@ -37,6 +38,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
+	"github.com/bitcoin-sv/teranode/util/blockassemblyutil"
 	"github.com/bitcoin-sv/teranode/util/health"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
@@ -113,6 +115,10 @@ type Server struct {
 	// tracking available outputs for transaction validation
 	utxoStore utxo.Store
 
+	// blockAssemblyClient provides access to the block assembly service
+	// for checking if coinbase transactions have been processed
+	blockAssemblyClient blockassembly.ClientI
+
 	// blockFoundCh receives notifications of newly discovered blocks
 	// that need validation. This channel buffers requests when high load occurs.
 	blockFoundCh chan processBlockFound
@@ -156,6 +162,7 @@ func New(
 	validatorClient validator.Interface,
 	blockchainClient blockchain.ClientI,
 	kafkaConsumerClient kafka.KafkaConsumerGroupI,
+	blockAssemblyClient blockassembly.ClientI,
 ) *Server {
 	initPrometheusMetrics()
 
@@ -170,6 +177,7 @@ func New(
 		blockchainClient:     blockchainClient,
 		txStore:              txStore,
 		utxoStore:            utxoStore,
+		blockAssemblyClient:  blockAssemblyClient,
 		blockFoundCh:         make(chan processBlockFound, tSettings.BlockValidation.BlockFoundChBufferSize),
 		catchupCh:            make(chan processBlockCatchup, tSettings.BlockValidation.CatchupChBufferSize),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
@@ -677,6 +685,12 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 	)
 	defer deferFn()
 
+	// Wait for block assembly to be ready before processing the block
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height); err != nil {
+		// block-assembly is still behind, so we cannot process this block
+		return nil, errors.WrapGRPC(err)
+	}
+
 	blockHeaders, blockHeadersMeta, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, u.settings.BlockValidation.PreviousBlockHeaderCount)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err))
@@ -758,6 +772,12 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 		}()
 
 		return nil
+	}
+
+	// Wait for block assembly to be ready before processing the block
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height); err != nil {
+		// block-assembly is still behind, so we cannot process this block
+		return err
 	}
 
 	// validate the block
@@ -1037,6 +1057,12 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 	for block := range validateBlocksChan {
 		i++
 		u.logger.Infof("[catchup][%s] validating block %d/%d", block.Hash().String(), i, size.Load())
+
+		// Wait for block assembly to be ready before processing the block
+		if err := blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height); err != nil {
+			// block-assembly is still behind, so we cannot process this block
+			return err
+		}
 
 		// error is returned from validate block:
 
