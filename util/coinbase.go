@@ -3,10 +3,16 @@ package util
 import (
 	"encoding/binary"
 	"strings"
+	"unicode"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+)
+
+const (
+	// minerSlashTruncationCount defines the number of slashes after which to truncate miner tags
+	minerSlashTruncationCount = 2
 )
 
 func ExtractCoinbaseHeight(coinbaseTx *bt.Tx) (uint32, error) {
@@ -30,14 +36,10 @@ func extractCoinbaseHeightAndText(sigScript bscript.Script) (uint32, string, err
 
 	serializedLen := int(sigScript[0])
 
-	// This first byte is an OP_PUSH3 opcode, which means the next 3 bytes are the block height
-	// This will be the case for blocks with height >= 2^16 (65536) and < 2^24 (16777216) which will
-	// be the case for the next 100 years or so.
-
-	// Therefore, if this first byte is not 03, then we will assume that the block height is not encoded
-	// in the coinbase script, and we will return 0 for the height and an error.
-	if serializedLen != 3 {
-		return 0, "", errors.NewBlockCoinbaseMissingHeightError("the coinbase signature script must start with the length of the serialized block height (0x03)")
+	// Support both 2-byte and 3-byte height encodings for compatibility
+	// Most blocks use 3-byte encoding, but some CPU miners use 2-byte
+	if serializedLen != 2 && serializedLen != 3 {
+		return 0, "", errors.NewBlockCoinbaseMissingHeightError("the coinbase signature script must start with the length of the serialized block height (0x02 or 0x03)")
 	}
 
 	if len(sigScript[1:]) < serializedLen {
@@ -59,19 +61,49 @@ func extractCoinbaseHeightAndText(sigScript bscript.Script) (uint32, string, err
 	return uint32(serializedHeight), extractMiner(arbitraryText), nil
 }
 
-func extractMiner(str string) string {
-	str = strings.ToValidUTF8(str, "?")
-
-	// Split the arbitrary text by "/"
-	parts := strings.Split(str, "/")
-	if len(parts) == 1 {
-		return str
+func extractMiner(data string) string {
+	if len(data) == 0 {
+		return ""
 	}
 
-	// Join all the parts except the last one
-	str = strings.Join(parts[:len(parts)-1], "/")
+	// Simple approach: keep only printable UTF-8 characters
+	// This preserves human-readable text while removing binary data
+	var result strings.Builder
 
-	return str + "/"
+	for _, r := range data {
+		// Keep printable characters that are valid UTF-8
+		if unicode.IsPrint(r) && r != 0xFFFD { // 0xFFFD is the Unicode replacement character
+			result.WriteRune(r)
+		}
+	}
+
+	// Trim any leading/trailing spaces and quotes
+	cleaned := strings.TrimSpace(result.String())
+	cleaned = strings.Trim(cleaned, "\"")
+
+	// Find the first slash
+	firstSlash := strings.Index(cleaned, "/")
+	if firstSlash == -1 {
+		// No slashes, return as is
+		return cleaned
+	}
+
+	// Remove everything before the first slash
+	cleaned = cleaned[firstSlash:]
+
+	// If it has 2 slashes, remove everything after the 2nd slash
+	slashCount := 0
+	for i, r := range cleaned {
+		if r == '/' {
+			slashCount++
+			if slashCount == minerSlashTruncationCount {
+				// Truncate after this slash (the 2nd slash)
+				return cleaned[:i+1]
+			}
+		}
+	}
+
+	return cleaned
 }
 
 // func extractCoinbaseHeightAndText(coinbaseTx *bt.Tx) (uint32, string, error) {
