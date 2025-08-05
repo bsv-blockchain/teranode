@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-p2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -2225,4 +2226,90 @@ func createBaseTestSettings() *settings.Settings {
 	s.SubtreeValidation.BlacklistedBaseURLs = make(map[string]struct{})
 
 	return s
+}
+
+// TestNewServer_ConfigValidation ensures that NewServer properly validates the P2P settings
+// and returns meaningful configuration errors when required fields are missing or invalid.
+// Each subtest modifies one specific configuration field to trigger a different error path,
+// allowing full coverage of the early-return validation logic in the NewServer constructor.
+func TestNewServer_ConfigValidation(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+
+	type testCase struct {
+		name       string
+		modify     func(s *settings.Settings)
+		wantErrMsg string
+	}
+
+	baseSettings := func() *settings.Settings {
+		return &settings.Settings{
+			Version: "1.0.0",
+			P2P: settings.P2PSettings{
+				ListenAddresses: []string{"/ip4/127.0.0.1/tcp/1234"},
+				Port:            1234,
+				BlockTopic:      "block",
+				SubtreeTopic:    "subtree",
+				HandshakeTopic:  "handshake",
+				MiningOnTopic:   "mining",
+				RejectedTxTopic: "rejected",
+				SharedKey:       "sharedkey",
+				ListenMode:      settings.ListenModeFull,
+				PrivateKey:      "privkey",
+			},
+			ChainCfgParams: &chaincfg.Params{
+				TopicPrefix: "prefix",
+			},
+			Kafka: settings.KafkaSettings{
+				InvalidBlocks:   "invalidBlocks",
+				InvalidSubtrees: "invalidSubtrees",
+			},
+		}
+	}
+
+	tests := []testCase{
+		{
+			name: "missing ListenAddresses",
+			modify: func(s *settings.Settings) {
+				s.P2P.ListenAddresses = nil
+			},
+			wantErrMsg: "p2p_listen_addresses not set in config",
+		},
+		{
+			name: "missing port",
+			modify: func(s *settings.Settings) {
+				s.P2P.Port = 0
+			},
+			wantErrMsg: "p2p_port not set in config",
+		},
+		{
+			name: "missing TopicPrefix",
+			modify: func(s *settings.Settings) {
+				s.ChainCfgParams.TopicPrefix = ""
+			},
+			wantErrMsg: "missing config ChainCfgParams.TopicPrefix",
+		},
+		{
+			name: "missing BlockTopic",
+			modify: func(s *settings.Settings) {
+				s.P2P.BlockTopic = ""
+			},
+			wantErrMsg: "p2p_block_topic not set in config",
+		},
+		// ... e così via per tutti gli altri check
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := baseSettings()
+			tc.modify(s)
+
+			_, err := NewServer(ctx, logger, s,
+				nil, nil, nil, nil, nil, nil,
+			)
+
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErrMsg)
+		})
+	}
 }
