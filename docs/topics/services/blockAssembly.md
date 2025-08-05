@@ -16,7 +16,7 @@
     - [2.6.3. The block received is a new block, but it represents a fork.](#263-the-block-received-is-a-new-block-but-it-represents-a-fork)
     - [Fork Detection and Assessment](#fork-detection-and-assessment)
     - [Chain Selection and Reorganization Process](#chain-selection-and-reorganization-process)
-    - [2.7. Resetting the Block Assembly](#27-resetting-the-block-assembly)
+    - [2.8. Resetting the Block Assembly](#28-resetting-the-block-assembly)
 3. [Data Model](#3-data-model)
 4. [gRPC Protobuf Definitions](#4-grpc-protobuf-definitions)
 5. [Technology](#5-technology)
@@ -111,6 +111,26 @@ The Block Assembly service initialisation involves setting up internal communica
 The SubTree Processor is the component that groups transactions into subtrees.
 
 The Job Store is a temporary in-memory map that tracks information about the candidate blocks that the miners are attempting to find a solution for.
+
+#### 2.1.1. Loading Unmined Transactions on Startup
+
+When the Block Assembly service starts, it automatically recovers unmined transactions from the UTXO store to ensure continuity across service restarts. This functionality is crucial for maintaining transaction processing reliability.
+
+![block_assembly_unmined_loading.svg](img/plantuml/blockassembly/block_assembly_unmined_loading.svg)
+
+**Process Overview:**
+
+1. **Wait for Pending Blocks**: The service first ensures all pending blocks are processed to avoid conflicts
+2. **Load Unmined Transactions**: Uses the `UnminedTxIterator` to retrieve all transactions marked with the `unminedSince` flag
+3. **Order by Creation Time**: Transactions are sorted topologically by their `createdAt` timestamp to maintain proper dependencies
+4. **Re-add to Processing**: Each unmined transaction is added back to the subtree processor using `AddDirectly()`
+5. **Unlock Transactions**: Previously locked transactions are unlocked to allow processing
+
+This recovery mechanism ensures that:
+
+- Transactions accepted but not yet mined persist across restarts
+- Network participants don't need to resubmit transactions after node restarts
+- The transaction processing pipeline maintains continuity
 
 ### 2.2. Receiving Transactions from the TX Validator Service
 
@@ -350,27 +370,48 @@ The following diagram illustrates how the Block Assembly service handles a chain
 
 - `err = b.handleReorg(ctx, bestBlockchainBlockHeader)`:
 
-    - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
-    - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
-    - **Getting Reorg Blocks**:
+  - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
+  - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
+  - **Getting Reorg Blocks**:
 
-        - `moveBackBlocks, moveForwardBlocks, err := b.getReorgBlocks(ctx, header)`:
+    - `moveBackBlocks, moveForwardBlocks, err := b.getReorgBlocks(ctx, header)`:
 
-            - Calls `getReorgBlocks` to determine the blocks to move down (to revert) and move up (to apply) for aligning with the network's consensus chain.
-            - `header` is the new block header that triggered the reorg.
-            - This step involves finding the common ancestor and getting the blocks from the current chain (move down) and the new chain (move up).
+      - Calls `getReorgBlocks` to determine the blocks to move down (to revert) and move up (to apply) for aligning with the network's consensus chain.
+      - `header` is the new block header that triggered the reorg.
+      - This step involves finding the common ancestor and getting the blocks from the current chain (move down) and the new chain (move up).
 
-    - **Performing Reorg in Subtree Processor**:
+  - **Performing Reorg in Subtree Processor**:
 
-        - `b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks)`:
+    - `b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks)`:
 
-            - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
-            - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
-            - This step involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
+      - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
+      - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
+      - This step involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
 
 Note: If other nodes propose blocks containing a transaction that Teranode has identified as a double-spend (based on the First-Seen rule), Teranode will only build on top of such blocks when the network has reached consensus on which transaction to accept, even if it differs from Teranode's initial first-seen assessment. For more information, please review the [Double Spend Detection documentation](../architecture/understandingDoubleSpends.md).
 
-### 2.7. Resetting the Block Assembly
+### 2.7. Unmined Transaction Cleanup
+
+The Block Assembly service periodically cleans up old unmined transactions to prevent unbounded growth of the UTXO store. This cleanup process is essential for maintaining system performance and preventing resource exhaustion.
+
+![unmined_cleanup_process.svg](img/plantuml/blockassembly/unmined_cleanup_process.svg)
+
+**Cleanup Process:**
+
+1. **Periodic Trigger**: A background ticker (`unminedCleanupTicker`) runs at configured intervals
+2. **Age-Based Selection**: Identifies unmined transactions older than the retention period using `QueryOldUnminedTransactions`
+3. **Parent Preservation**: Protects parent transactions of younger unmined transactions from deletion
+4. **Batch Deletion**: Removes eligible transactions in batches to minimize performance impact
+
+**Configuration:**
+
+- **Retention Period**: Configured via `UnminedTxRetention` settings
+- **Cleanup Interval**: Controlled by the cleanup ticker configuration
+- **Parent Protection**: Uses `PreserveTransactions` to mark parents that should be retained
+
+This cleanup mechanism ensures the UTXO store remains performant while preserving transaction dependencies.
+
+### 2.8. Resetting the Block Assembly
 
 The Block Assembly service can be reset to the best block by calling the `ResetBlockAssembly` gRPC method.
 

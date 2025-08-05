@@ -1,0 +1,59 @@
+@startuml unmined_transaction_lifecycle
+!theme plain
+title Unmined Transaction Lifecycle
+
+state "Transaction Received" as received
+state "Validated & Stored" as validated {
+    state "unminedSince = currentBlockHeight" as unmined_flag
+    state "locked = true" as locked_flag
+}
+state "Added to Block Assembly" as assembly {
+    state "locked = false" as unlocked_flag
+    state "In Subtree Processing" as processing
+}
+state "Included in Block" as mined {
+    state "unminedSince = nil" as mined_flag
+    state "blockIDs = [blockHash]" as block_ref
+}
+state "Conflicting" as conflict {
+    state "conflicting = true" as conflict_flag
+    state "TTL set for cleanup" as ttl_set
+}
+state "Cleaned Up" as cleanup
+
+[*] --> received : New transaction
+
+received --> validated : Validation successful
+note on link : Transaction validated\nand stored in UTXO store
+
+validated --> assembly : AddTx() to Block Assembly
+note on link : Transaction unlocked\nand ready for mining
+
+assembly --> mined : Mined in block
+note on link : SetMinedMulti() called\nunminedSince cleared
+
+assembly --> conflict : Double-spend detected
+note on link : Transaction conflicts\nwith mined transaction
+
+assembly --> assembly : Service restart
+note on link : loadUnminedTransactions()\nrestores from UTXO store
+
+assembly --> cleanup : Retention period expired
+note on link : Old unmined transactions\ncleaned up periodically
+
+conflict --> cleanup : TTL expires
+mined --> [*] : Transaction finalized
+
+note right of validated
+  Unmined flag tracks
+  transactions not yet
+  included in blocks
+end note
+
+note right of assembly
+  Unmined transactions
+  are loaded on startup
+  for recovery
+end note
+
+@enduml

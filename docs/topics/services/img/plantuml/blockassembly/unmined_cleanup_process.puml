@@ -1,0 +1,59 @@
+@startuml unmined_cleanup_process
+!theme plain
+title Unmined Transaction Cleanup Process
+
+participant "CleanupTicker" as CT
+participant "BlockAssembler" as BA
+participant "UTXO Store" as US
+participant "Cleanup Service" as CS
+
+activate CT
+
+CT -> BA: Periodic trigger
+note right: unminedCleanupTicker fires
+
+BA -> BA: cleanupOldUnminedTransactions()
+activate BA
+
+BA -> US: QueryOldUnminedTransactions(cutoffHeight)
+note right: Find unmined txs older than\nretention period
+US --> BA: oldTxHashes[]
+
+group Identify parent dependencies
+    BA -> BA: collectParentHashes(oldTxHashes)
+    note right: Find all parent txs\nof old unmined txs
+
+    BA -> US: QueryOldUnminedTransactions(cutoffHeight)
+    note right: Get all unmined txs again\nto check dependencies
+    US --> BA: allUnminedTxs[]
+
+    BA -> BA: findParentsToPreserve()
+    note right: Identify parents of\nyounger unmined txs
+end
+
+group Preserve necessary parents
+    alt if parentsToPreserve exist
+        BA -> US: PreserveTransactions(parentHashes, preserveUntilHeight)
+        note right: Mark parents to be\nkept until specified height
+        US --> BA: preserved
+    end
+end
+
+group Delete old transactions
+    loop batch processing
+        BA -> CS: DeleteTransactions(batch)
+        CS -> US: Delete transactions
+        US --> CS: deleted
+        CS --> BA: batch complete
+    end
+end
+
+BA -> US: ProcessExpiredPreservations(currentHeight)
+note right: Clean up expired\npreservation markers
+US --> BA: processed
+
+deactivate BA
+
+CT -> CT: Wait for next interval
+
+@enduml

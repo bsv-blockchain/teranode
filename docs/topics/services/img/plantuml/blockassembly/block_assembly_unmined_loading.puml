@@ -1,0 +1,59 @@
+@startuml block_assembly_unmined_loading
+!theme plain
+title Block Assembly - Loading Unmined Transactions on Startup
+
+participant "BlockAssembler" as BA
+participant "UTXO Store" as US
+participant "UnminedTxIterator" as UI
+participant "SubtreeProcessor" as SP
+participant "UTXOCache" as UC
+
+activate BA
+
+BA -> BA: Start()
+note right: Service initialization
+
+BA -> BA: waitForPendingBlocks()
+note right: Ensure all pending blocks\nare processed first
+
+BA -> BA: loadUnminedTransactions()
+activate BA
+
+BA -> US: GetUnminedTxIterator()
+US --> BA: iterator
+BA -> UI: create iterator
+
+group Load all unmined transactions
+    loop while transactions exist
+        BA -> UI: Next()
+        UI -> US: query unmined tx\n(where unminedSince != nil)
+        US --> UI: UnminedTransaction
+        UI --> BA: tx data
+        BA -> BA: add to slice
+    end
+end
+
+BA -> UI: Close()
+deactivate UI
+
+BA -> BA: sort by CreatedAt
+note right: Topological ordering\nto maintain dependencies
+
+group Re-add transactions to processing
+    loop for each unmined tx
+        BA -> SP: AddDirectly(tx)
+        note right: Bypass normal validation\nsince already validated
+
+        alt if tx was locked
+            BA -> UC: unlock transaction
+            UC --> BA: unlocked
+        end
+    end
+end
+
+deactivate BA
+
+BA --> BA: startup complete
+note left: Unmined transactions\nrestored to pipeline
+
+@enduml

@@ -200,21 +200,24 @@ Re-assigns UTXOs to confiscation transactions, allowing them to be spent.
 The Alert Service uses a configuration structure (`config.Config`) that includes:
 
 ### Core Settings
+
 - Alert processing interval (default: 5 minutes)
 - Request logging
 - Genesis keys (required)
 
 ### Datastore Configuration
+
 - Auto-migration settings
 - Support for:
 
-    - SQLite (including in-memory)
-    - PostgreSQL
-    - MySQL
+  - SQLite (including in-memory)
+  - PostgreSQL
+  - MySQL
 - Connection pooling options
 - Debug settings
 
 ### P2P Configuration
+
 - IP and port settings
 - DHT mode
 - Protocol ID (defaults to system default if not specified)
@@ -223,6 +226,7 @@ The Alert Service uses a configuration structure (`config.Config`) that includes
 - Peer discovery interval
 
 ### Error Types
+
 Common configuration errors include:
 
 - `ErrNoGenesisKeys`: No genesis keys provided
@@ -231,15 +235,16 @@ Common configuration errors include:
 - `ErrDatastoreUnsupported`: Unsupported datastore type
 
 ### Health Checks
+
 The service implements comprehensive health checks:
 
 - Liveness check: Basic service health
 - Readiness check: Dependency health including:
 
-    - Blockchain client
-    - FSM status
-    - Blockassembly client
-    - UTXO store
+  - Blockchain client
+  - FSM status
+  - Blockassembly client
+  - UTXO store
 
 The health checks return appropriate HTTP status codes:
 
@@ -278,11 +283,11 @@ Core alert data structure containing:
 
 - **Alert ID**: Unique identifier for each alert
 - **Alert Type**: Type of alert operation
-    - UTXO freeze
-    - UTXO unfreeze
-    - UTXO reassignment
-    - Peer ban/unban
-    - Block invalidation
+  - UTXO freeze
+  - UTXO unfreeze
+  - UTXO reassignment
+  - Peer ban/unban
+  - Block invalidation
 - **Timestamp**: When the alert was created/received
 - **Status**: Alert processing status (pending, processed, failed)
 - **Payload**: Alert-specific data payload
@@ -293,8 +298,9 @@ Core alert data structure containing:
 For UTXO freeze, unfreeze, and reassignment operations:
 
 - **UTXO Identifiers**:
-    - Transaction hashes (txid)
-    - Output indices (vout)
+
+  - Transaction hashes (txid)
+  - Output indices (vout)
 - **Block Height**: Target block height for UTXO operations
 - **Operation Type**: Freeze, unfreeze, or reassign
 - **New Address**: For UTXO reassignment operations (destination address)

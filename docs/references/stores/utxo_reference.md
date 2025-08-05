@@ -96,6 +96,42 @@ type UnresolvedMetaData struct {
 }
 ```
 
+### UnminedTransaction
+
+Represents an unmined transaction in the UTXO store.
+
+```go
+type UnminedTransaction struct {
+    // Hash is the transaction hash
+    Hash       *chainhash.Hash
+    // Fee is the transaction fee in satoshis
+    Fee        uint64
+    // Size is the serialized size of the transaction in bytes
+    Size       uint64
+    // TxInpoints contains the transaction inpoints
+    TxInpoints subtree.TxInpoints
+    // CreatedAt is the timestamp when the unmined transaction was first added
+    CreatedAt  int
+    // Locked indicates whether the transaction outputs are marked as locked
+    Locked     bool
+}
+```
+
+### UnminedTxIterator
+
+Provides an interface to iterate over unmined transactions efficiently.
+
+```go
+type UnminedTxIterator interface {
+    // Next advances the iterator and returns the next unmined transaction, or nil if iteration is done
+    Next(ctx context.Context) (*UnminedTransaction, error)
+    // Err returns the first error encountered during iteration
+    Err() error
+    // Close releases any resources held by the iterator
+    Close() error
+}
+```
+
 ### IgnoreFlags
 
 Options for ignoring certain flags during UTXO operations.
@@ -204,6 +240,22 @@ type Store interface {
     // GetMedianBlockTime returns the current median block time from the store.
     GetMedianBlockTime() uint32
 
+    // GetUnminedTxIterator returns an iterator for all unmined transactions in the store.
+    // This is used by the Block Assembly service to recover transactions on startup.
+    GetUnminedTxIterator() (UnminedTxIterator, error)
+
+    // QueryOldUnminedTransactions returns transaction hashes for unmined transactions older than the cutoff height.
+    // This method is used by the store-agnostic cleanup implementation to identify transactions for removal.
+    QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error)
+
+    // PreserveTransactions marks transactions to be preserved from deletion until a specific block height.
+    // This clears any existing DeleteAtHeight and sets PreserveUntil to the specified height.
+    // Used to protect parent transactions when cleaning up unmined transactions.
+    PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error
+
+    // ProcessExpiredPreservations handles transactions whose preservation period has expired.
+    ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error
+
     // Close closes the UTXO store and releases resources.
     Close(ctx context.Context) error
 }
@@ -227,6 +279,10 @@ type Store interface {
 - `ReAssignUTXO`: Reassigns a UTXO to a new transaction output with safety measures.
 - `GetCounterConflicting`/`GetConflictingChildren`: Manages conflict relationships between transactions.
 - `SetBlockHeight`/`GetBlockHeight`/`SetMedianBlockTime`/`GetMedianBlockTime`: Manages blockchain state.
+- `GetUnminedTxIterator`: Returns an iterator for efficiently accessing all unmined transactions.
+- `QueryOldUnminedTransactions`: Identifies unmined transactions older than a specified block height for cleanup.
+- `PreserveTransactions`: Protects transactions from deletion by setting a preservation period.
+- `ProcessExpiredPreservations`: Handles cleanup of expired preservation markers.
 - `Close`: Properly closes the UTXO store and releases associated resources.
 
 ## Create Options

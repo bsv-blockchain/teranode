@@ -17,6 +17,7 @@
     - [4.6. Transaction Validator](#46-transaction-validator)
     - [4.7. UTXO Batch Processing and External Storage mode](#47-utxo-batch-processing-and-external-storage-mode)
     - [4.8. Alert System and UTXO Management](#48-alert-system-and-utxo-management)
+    - [4.9. Unmined Transaction Management](#49-unmined-transaction-management)
 5. [Technology](#5-technology)
     - [5.1. Language and Libraries](#51-language-and-libraries)
     - [5.2. Data Stores](#52-data-stores)
@@ -35,15 +36,15 @@ The UTXO Store is responsible for tracking spendable UTXOs (the UTXO set), based
 
 It handles the core functionalities of the UTXO Store:
 
-* **Health**: Check the health status of the UTXO store service.
-* **Get**: Retrieve a specific UTXO.
-* **GetMeta**: Retrieve a specific UTXO meta data.
-* **Create**: Add new UTXOs to the store.
-* **Spend/Unspend**: Mark UTXOs as spent or reverse such markings, respectively.
-* **Delete**: Remove UTXOs from the store.
-* **Block Height Management**: Set and retrieve the current blockchain height, which can be crucial for determining the spendability of certain UTXOs based on locktime conditions.
-* **FreezeUTXOs / UnFreezeUTXOs**: Mark UTXOs as frozen or unfrozen, in scenarios involving alert systems or temporary holds on specific UTXOs.
-* **ReAssignUTXO**: Reassign a UTXO to a different owner.
+- **Health**: Check the health status of the UTXO store service.
+- **Get**: Retrieve a specific UTXO.
+- **GetMeta**: Retrieve a specific UTXO meta data.
+- **Create**: Add new UTXOs to the store.
+- **Spend/Unspend**: Mark UTXOs as spent or reverse such markings, respectively.
+- **Delete**: Remove UTXOs from the store.
+- **Block Height Management**: Set and retrieve the current blockchain height, which can be crucial for determining the spendability of certain UTXOs based on locktime conditions.
+- **FreezeUTXOs / UnFreezeUTXOs**: Mark UTXOs as frozen or unfrozen, in scenarios involving alert systems or temporary holds on specific UTXOs.
+- **ReAssignUTXO**: Reassign a UTXO to a different owner.
 
 **Principles**:
 
@@ -62,12 +63,9 @@ The UTXO Store includes functionality to **freeze** and **unfreeze** UTXOs, as w
 
 The UTXO Store is a micro-service that is used by other micro-services to retrieve or store / modify UTXOs.
 
-
 ![UTXO_Store_Container_Context_Diagram.png](../services/img/UTXO_Store_Container_Context_Diagram.png)
 
-
 The UTXO Store uses a number of different datastores, either in-memory or persistent, to store the UTXOs.
-
 
 ![UTXO_Store_Component_Context_Diagram.png](../services/img/UTXO_Store_Component_Context_Diagram.png)
 
@@ -76,23 +74,23 @@ The UTXO store implementation is consistent within a Teranode node (every servic
 ```go
 
 func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interface {
-	if utxoStore != nil {
-		return utxoStore
-	}
+ if utxoStore != nil {
+  return utxoStore
+ }
 
-	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no utxostore setting found")
-	}
-	utxoStore, err = utxo_factory.NewStore(ctx, logger, utxoStoreURL, "main")
-	if err != nil {
-		panic(err)
-	}
+ utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
+ if err != nil {
+  panic(err)
+ }
+ if !found {
+  panic("no utxostore setting found")
+ }
+ utxoStore, err = utxo_factory.NewStore(ctx, logger, utxoStoreURL, "main")
+ if err != nil {
+  panic(err)
+ }
 
-	return utxoStore
+ return utxoStore
 }
 ```
 
@@ -110,7 +108,6 @@ Notice how SqlLite and the In-Memory store are in-memory, while Aerospike and Po
 
 More details about the specific stores can be found in the [Technology](#5-technology) section.
 
-
 ## 3. UTXO: Data Model
 
 ### 3.1. What is an UTXO?
@@ -123,8 +120,8 @@ Under the external library `github.com/ordishs/go-bt/output.go`, we can see the 
 
 ```go
 type Output struct {
-	Satoshis      uint64          `json:"satoshis"`
-	LockingScript *bscript.Script `json:"locking_script"`
+ Satoshis      uint64          `json:"satoshis"`
+ LockingScript *bscript.Script `json:"locking_script"`
 }
 ```
 
@@ -141,14 +138,14 @@ Components of the `Output` struct:
     - The `LockingScript`, often referred to as the "scriptPubKey" in Bitcoin's technical documentation, is a script written in Bitcoin's scripting language.
     - This script contains cryptographic conditions to unlock the funds.
 
-
 Equally, we can see how a list of outputs is part of a transaction (`github.com/ordishs/go-bt/tx.go`):
+
 ```go
 type Tx struct {
-	Inputs   []*Input  `json:"inputs"`
-	Outputs  []*Output `json:"outputs"`
-	Version  uint32    `json:"version"`
-	LockTime uint32    `json:"locktime"`
+ Inputs   []*Input  `json:"inputs"`
+ Outputs  []*Output `json:"outputs"`
+ Version  uint32    `json:"version"`
+ LockTime uint32    `json:"locktime"`
 }
 ```
 
@@ -164,7 +161,7 @@ Independent UTXOs can be processed in parallel, potentially improving the effici
 
 UTXOs now have an additional state: frozen. A frozen UTXO cannot be spent until it is unfrozen.
 
-To know more about UTXOs, please check https://protocol.bsvblockchain.org/transaction-lifecycle/transaction-inputs-and-outputs.
+To know more about UTXOs, please check <https://protocol.bsvblockchain.org/transaction-lifecycle/transaction-inputs-and-outputs>.
 
 ### 3.2. How are UTXOs stored?
 
@@ -192,37 +189,35 @@ When storing the UTXOs (Unspent Transaction Outputs) associated to a given Tx in
 
 These bins collectively store the necessary data to track the transaction's inputs, outputs, and its state within the blockchain.
 
-
 Once the UTXO is spent, the spending tx_id will be saved.
 
 - To compute the hash of the key, the caller must know the complete data and calculate the hash before calling the API.
-
 
 - The hashing logic can be found in `UTXOHash.go`:
 
 ```go
 func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript []byte, satoshis uint64) (*chainhash.Hash, error) {
-	if len(lockingScript) == 0 {
-		return nil, fmt.Errorf("locking script is nil")
-	}
+ if len(lockingScript) == 0 {
+  return nil, fmt.Errorf("locking script is nil")
+ }
 
-	if satoshis == 0 {
-		return nil, fmt.Errorf("satoshis is 0")
-	}
+ if satoshis == 0 {
+  return nil, fmt.Errorf("satoshis is 0")
+ }
 
-	utxoHash := make([]byte, 0, 256)
-	utxoHash = append(utxoHash, previousTxid.CloneBytes()...)
-	utxoHash = append(utxoHash, bt.VarInt(index).Bytes()...)
-	utxoHash = append(utxoHash, lockingScript...)
-	utxoHash = append(utxoHash, bt.VarInt(satoshis).Bytes()...)
+ utxoHash := make([]byte, 0, 256)
+ utxoHash = append(utxoHash, previousTxid.CloneBytes()...)
+ utxoHash = append(utxoHash, bt.VarInt(index).Bytes()...)
+ utxoHash = append(utxoHash, lockingScript...)
+ utxoHash = append(utxoHash, bt.VarInt(satoshis).Bytes()...)
 
-	hash := crypto.Sha256(utxoHash)
-	chHash, err := chainhash.NewHash(hash)
-	if err != nil {
-		return nil, err
-	}
+ hash := crypto.Sha256(utxoHash)
+ chHash, err := chainhash.NewHash(hash)
+ if err != nil {
+  return nil, err
+ }
 
-	return chHash, nil
+ return chHash, nil
 }
 ```
 
@@ -234,13 +229,13 @@ The `Data` struct (`stores/utxo/meta/data.go`), referred moving forward as `UTXO
 
 ```go
 type Data struct {
-	Tx             *bt.Tx           `json:"tx"`
-	ParentTxHashes []chainhash.Hash `json:"parentTxHashes"`
-	BlockIDs       []uint32         `json:"blockIDs"`
-	Fee            uint64           `json:"fee"`
-	SizeInBytes    uint64           `json:"sizeInBytes"`
-	IsCoinbase     bool             `json:"isCoinbase"`
-	LockTime       uint32           `json:"lockTime"` // lock time can be different from the transaction lock time, for instance in coinbase transactions
+ Tx             *bt.Tx           `json:"tx"`
+ ParentTxHashes []chainhash.Hash `json:"parentTxHashes"`
+ BlockIDs       []uint32         `json:"blockIDs"`
+ Fee            uint64           `json:"fee"`
+ SizeInBytes    uint64           `json:"sizeInBytes"`
+ IsCoinbase     bool             `json:"isCoinbase"`
+ LockTime       uint32           `json:"lockTime"` // lock time can be different from the transaction lock time, for instance in coinbase transactions
 }
 ```
 
@@ -271,9 +266,7 @@ To know more about the AssetService, please check its specific service documenta
 
 2. Depending on the settings Block Persister operates under, the persister will request the utxo meta data in batches or one by one. In general, and depending on the specific UTXO store implementation, the batched processing is more efficient.
 
-
 ### 4.3. Block Assembly
-
 
 ![utxo_block_assembly.svg](../services/img/plantuml/utxo/utxo_block_assembly.svg)
 
@@ -304,7 +297,6 @@ To know more about the Block Assembly, please check its specific service documen
 ![utxo_subtree_validation_service_diagram.svg](../services/img/plantuml/utxo/utxo_subtree_validation_service_diagram.svg)
 
 In order to validate subtrees, the Subtree Validation service will retrieve the UTXO meta data for each tx in the subtree. This is done by sending a request to the UTXO Store, either in batches or one by one, depending on the settings.
-
 
 ### 4.6. Transaction Validator
 
@@ -339,7 +331,6 @@ In such cases, the full transaction data is stored externally, while metadata an
 
 When the UTXO data is needed, the system will first check the Aerospike record. If the `external flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.
 
-
 ### 4.8. Alert System and UTXO Management
 
 The UTXO Store supports advanced UTXO management features, which can be utilized by an alert system.
@@ -362,6 +353,32 @@ The UTXO Store supports advanced UTXO management features, which can be utilized
     - Updates the UTXO hash to the new value
     - Sets spendable block height to current + ReAssignedUtxoSpendableAfterBlocks
     - Logs the reassignment for audit purposes
+
+### 4.9. Unmined Transaction Management
+
+The UTXO Store tracks unmined transactions to support transaction recovery and continuity across service restarts. This functionality is crucial for maintaining a reliable transaction processing pipeline.
+
+![unmined_transaction_lifecycle.svg](../services/img/plantuml/utxo/unmined_transaction_lifecycle.svg)
+
+**Key Components:**
+
+- **`unminedSince` Field**: A block height field in the UTXO store that, when set, indicates the transaction is unmined and tracks when it was first stored
+- **`createdAt` Field**: Timestamp tracking when the unmined transaction was added, used for ordering during recovery
+- **`preserveUntil` Field**: Protects parent transactions from deletion when they have unmined children
+
+**Functionality:**
+
+1. **Transaction Tracking**: When a transaction is validated but not yet mined, it's marked with the `unminedSince` field containing the current block height
+2. **Recovery Interface**: The `UnminedTxIterator` provides efficient iteration over all unmined transactions, enabling the Block Assembly service to reload them on startup
+3. **Automatic Cleanup**: Old unmined transactions are periodically cleaned up based on retention settings through `QueryOldUnminedTransactions`
+4. **Parent Protection**: During cleanup, parent transactions of younger unmined transactions are protected using `PreserveTransactions`
+
+**Benefits:**
+
+- **Service Resilience**: Transactions persist across service restarts without requiring resubmission
+- **State Management**: Clear separation between mined and unmined transactions
+- **Resource Management**: Automatic cleanup prevents unbounded growth while preserving transaction dependencies
+- **Conflict Detection**: Helps identify transactions that conflict with mined blocks
 
 ## 5. Technology
 
@@ -386,8 +403,7 @@ The following datastores are supported (either in development / experimental or 
     - Aerospike is the reference datastore. Teranode has been guaranteed to process 1 million tps with Aerospike.
     - Aerospike records can contain up to 1024 bytes.
    ![AerospikeRecord.png](../services/img/AerospikeRecord.png)
-    - For more information, please refer to the official Aerospike documentation: https://aerospike.com.
-
+    - For more information, please refer to the official Aerospike documentation: <https://aerospike.com>.
 
 2. **Memory (In-Memory Store)**:
 
@@ -476,9 +492,7 @@ UTXO Store Package Structure (stores/utxo)
 └── utils_test.go                   # Tests for utility functions
 ```
 
-
 ## 7. Running the Store Locally
-
 
 ### How to run
 
@@ -505,6 +519,7 @@ aerosike://host:port/namespace?param1=value1&param2=value2
 ```
 
 Example:
+
 ```
 utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.teranode.dev:3000/teranode-store?set=txmeta&externalStore=blob://blobserver:8080/utxo
 ```
@@ -519,31 +534,37 @@ utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.teranode.dev:3000/tera
 #### 8.1.2 SQL (PostgreSQL/SQLite)
 
 **PostgreSQL:**
+
 ```
 postgres://username:password@host:port/dbname?param1=value1&param2=value2
 ```
 
 Example:
+
 ```
 utxostore.dev.[YOUR_USERNAME]=postgres://miner1:miner1@postgresserver.teranode.dev:5432/teranode-store?expiration=24h
 ```
 
 **SQLite:**
+
 ```
 sqlite:///path/to/file.sqlite?param1=value1&param2=value2
 ```
 
 Example:
+
 ```
 utxostore.dev.[YOUR_USERNAME]=sqlite:///data/utxo.sqlite?expiration=24h
 ```
 
 **In-memory SQLite:**
+
 ```
 sqlitememory:///name?param1=value1&param2=value2
 ```
 
 Example:
+
 ```
 utxostore.dev.[YOUR_USERNAME]=sqlitememory:///utxo?expiration=24h
 ```
@@ -560,11 +581,13 @@ memory://host:port/mode
 ```
 
 Example:
+
 ```
 utxostore.dev.[YOUR_USERNAME]=memory://localhost:${UTXO_STORE_GRPC_PORT}/splitbyhash
 ```
 
 **Modes:**
+
 - `splitbyhash`: Distributes UTXOs based on hash
 - `all`: Stores all UTXOs in memory
 
@@ -575,6 +598,7 @@ null:///
 ```
 
 Example:
+
 ```
 utxostore.dev.[YOUR_USERNAME]=null:///
 ```
@@ -628,7 +652,6 @@ The UTXO Store uses batch processing to improve performance. The following setti
 | `MaxMinedRoutines` | int | Maximum number of concurrent goroutines for processing mined transactions | 128 |
 | `MaxMinedBatchSize` | int | Maximum number of mined transactions processed in a batch                 | 1024 |
 
-
 ### 8.3 Environment Variables
 
 Many of the settings can also be configured through environment variables. The variables follow the pattern of uppercasing the parameter name with underscores, prefixed with `TERANODE_`.
@@ -648,6 +671,7 @@ Batch processing significantly improves performance by reducing the number of da
 - Shorter batch durations decrease latency but may reduce throughput
 
 **Recommendations:**
+
 - For high-throughput environments, increase batch sizes and durations
 - For low-latency requirements, decrease batch durations
 - Balance `StoreBatcherSize`, `GetBatcherSize`, and `SpendBatcherSize` according to your workload characteristics
@@ -666,6 +690,7 @@ For SQL backends (PostgreSQL), the `PostgresMaxIdleConns` and `PostgresMaxOpenCo
 - `PostgresMaxIdleConns`: Controls how many idle connections are maintained in the pool
 
 **Recommendations:**
+
 - Set `PostgresMaxOpenConns` based on your database server capacity and expected load
 - Set `PostgresMaxIdleConns` to a value that balances connection reuse with server resource usage
 

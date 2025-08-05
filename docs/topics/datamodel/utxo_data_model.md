@@ -14,6 +14,9 @@ For every transaction, a UTXO record is stored in the database. The record conta
 | **locked**              | `Boolean`                            | Indicates whether the transaction outputs can be spent. Set to true during initial creation when the transaction is validated. Set to false in two scenarios: (1) immediately after successful addition to block assembly, or (2) when the transaction is mined in a block through the `SetMinedMulti` operation.  |
 | **conflicting**         | `Boolean`                            | Indicates whether this transaction is a double spend.                                                              |
 | **conflictingChildren** | `Array<chainhash.Hash>`              | List of transaction hashes that spend from this transaction and are also marked as conflicting.                    |
+| **unminedSince**        | `Integer (Block Height)`             | When set to a block height value, indicates the transaction is unmined and tracks when it was first stored. When nil/not set, indicates the transaction has been mined. This field enables transaction recovery after service restarts. |
+| **createdAt**           | `Integer (Timestamp)`                | The timestamp when the unmined transaction was first added to the store. Used for ordering transactions during recovery. |
+| **preserveUntil**       | `Integer (Block Height)`             | Specifies a block height until which a transaction should be preserved from deletion. Used to protect parent transactions of unmined transactions from being deleted during cleanup operations. |
 | **spendingHeight**      | `Integer`                            | If the UTXO is from a coinbase transaction, it stores the block height after which it can be spent.                |
 | **blockIDs**            | `Array<Integer>`                     | List of block IDs that reference this UTXO.                                                                        |
 | **blockHeights**        | `Array<uint32>`                      | List of block heights where this transaction appears. Used by the validator to identify the height at which a UTXO was mined.                                                               |
@@ -27,8 +30,6 @@ For every transaction, a UTXO record is stored in the database. The record conta
 | **txInpoints**          | `TxInpoints`                         | Transaction input outpoints containing parent transaction hashes and their corresponding output indices.           |
 | **isCoinbase**          | `Boolean`                            | Indicates whether this UTXO is from a coinbase transaction.                                                        |
 
-
-
 Within it, each UTXO in the `utxos` array has the following fields:
 
 | **Field Name**            | **Data Type**                       | **Description**                                                                                                    |
@@ -37,7 +38,6 @@ Within it, each UTXO in the `utxos` array has the following fields:
 | **spendingTxID**          | `Byte[32]`                          | 32-byte little-endian hash representing the transaction ID that spent this UTXO (only present for spent UTXOs).    |
 | **existingUTXOHash**      | `Byte[32]`                          | Extracted from a UTXO to validate that the UTXO matches the provided `utxoHash`.                                   |
 | **existingSpendingTxID**  | `Byte[32]`                          | If the UTXO has been spent, this field stores the spending transaction ID.                                         |
-
 
 Additionally, note how the raw transaction data (**tx (bt.Tx Object)**) is stored in the record. This includes:
 
@@ -60,8 +60,7 @@ If storing in Aerospike, the UTXO record is stored as a bin in the Aerospike dat
 
 ![AerospikeRecord.png](../services/img/AerospikeRecord.png)
 
-For more information, please refer to the official Aerospike documentation: https://aerospike.com.
-
+For more information, please refer to the official Aerospike documentation: <https://aerospike.com>.
 
 ## UTXO MetaData
 
@@ -124,6 +123,7 @@ For a transaction consuming:
 - Output 1 of transaction B
 
 The TxInpoints structure would contain:
+
 ```
 ParentTxHashes: [hashA, hashB]
 Idxs: [[0, 2], [1]]
@@ -135,12 +135,10 @@ Note:
 
 - **Blocks**: 1 or more block hashes. Each block represents a block that mined the transaction.
 
-
 - Typically, a tx should only belong to one block. i.e. a) a tx is created (and its meta is stored in the UTXO store) and b) the tx is mined, and the mined block hash is tracked in the UTXO store for the given transaction.
-
 
 - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the UTXO store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
 
 - **Block Heights and Subtree Indexes**: These fields track the exact location of transactions within the blockchain.
-    - The block heights array is particularly important for validation, as it gives visibility on what height a UTXO was mined. While most UTXOs are mined at the same height across parallel chains or forks, this is not always the case. Storing this information enables the validator to efficiently determine the height of UTXOs being spent without performing expensive lookups. Block heights indicate how deep in the chain a transaction is, which is important for maturity checks.
-    - The subtree indexes are primarily informational, allowing for future features that might need to locate exactly where a transaction was placed within a block's structure, enabling potential parallel processing and efficient lookups.
+  - The block heights array is particularly important for validation, as it gives visibility on what height a UTXO was mined. While most UTXOs are mined at the same height across parallel chains or forks, this is not always the case. Storing this information enables the validator to efficiently determine the height of UTXOs being spent without performing expensive lookups. Block heights indicate how deep in the chain a transaction is, which is important for maturity checks.
+  - The subtree indexes are primarily informational, allowing for future features that might need to locate exactly where a transaction was placed within a block's structure, enabling potential parallel processing and efficient lookups.
