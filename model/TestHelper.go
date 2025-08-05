@@ -89,6 +89,9 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 
 	_ = subtree.AddCoinbaseNode()
 
+	// Create subtree metadata alongside the subtree
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+
 	var (
 		subtreeFile             *os.File
 		subtreeFileMerkleHashes *os.File
@@ -124,6 +127,18 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 			return nil, err
 		}
 
+		// Create synthetic parent transaction reference for synthetic transactions
+		var parentTxID [32]byte
+		binary.LittleEndian.PutUint64(parentTxID[:], uint64(i-1)) // Reference the previous transaction as parent
+		parentHash := chainhash.Hash(parentTxID)
+
+		if err = subtreeMeta.SetTxInpoints(len(subtree.Nodes)-1, subtreepkg.TxInpoints{
+			ParentTxHashes: []chainhash.Hash{parentHash},
+			Idxs:           [][]uint32{{0}}, // Reference output 0 of parent transaction
+		}); err != nil {
+			return nil, err
+		}
+
 		n, err = WriteTxMeta(txMetastoreWriter, hash, uint64(i), uint64(i)) // nolint:gosec
 		if err != nil {
 			return nil, err
@@ -145,6 +160,26 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 				return nil, err
 			}
 
+			// Create and store subtree metadata file
+			subtreeMetaBytes, err := subtreeMeta.Serialize()
+			if err != nil {
+				return nil, err
+			}
+
+			subtreeMetaFileName := fmt.Sprintf(TestFileNameTemplate+".meta", subtreeCount)
+			subtreeMetaFile, err := os.Create(subtreeMetaFileName)
+			if err != nil {
+				return nil, err
+			}
+
+			if _, err = subtreeMetaFile.Write(subtreeMetaBytes); err != nil {
+				return nil, err
+			}
+
+			if err = subtreeMetaFile.Close(); err != nil {
+				return nil, err
+			}
+
 			subtreeHashes = append(subtreeHashes, subtree.RootHash())
 
 			if err = subtreeFile.Close(); err != nil {
@@ -157,11 +192,12 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 				return nil, err
 			}
 
-			// create new tree
+			// create new tree and metadata
 			subtree, err = subtreepkg.NewTreeByLeafCount(TestSubtreeSize)
 			if err != nil {
 				return nil, err
 			}
+			subtreeMeta = subtreepkg.NewSubtreeMeta(subtree)
 		}
 	}
 
@@ -174,6 +210,26 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 		}
 
 		if _, err = subtreeFile.Write(subtreeBytes); err != nil {
+			return nil, err
+		}
+
+		// Create and store subtree metadata file for the last subtree
+		subtreeMetaBytes, err := subtreeMeta.Serialize()
+		if err != nil {
+			return nil, err
+		}
+
+		subtreeMetaFileName := fmt.Sprintf(TestFileNameTemplate+".meta", subtreeCount)
+		subtreeMetaFile, err := os.Create(subtreeMetaFileName)
+		if err != nil {
+			return nil, err
+		}
+
+		if _, err = subtreeMetaFile.Write(subtreeMetaBytes); err != nil {
+			return nil, err
+		}
+
+		if err = subtreeMetaFile.Close(); err != nil {
 			return nil, err
 		}
 
@@ -483,7 +539,14 @@ func (l TestLocalSubtreeStore) Get(ctx context.Context, key []byte, fileType fil
 		return nil, errors.NewProcessingError("file not found")
 	}
 
-	subtreeBytes, err := os.ReadFile(fmt.Sprintf(TestFileNameTemplate, file))
+	var fileName string
+	if fileType == fileformat.FileTypeSubtreeMeta {
+		fileName = fmt.Sprintf(TestFileNameTemplate+".meta", file)
+	} else {
+		fileName = fmt.Sprintf(TestFileNameTemplate, file)
+	}
+
+	subtreeBytes, err := os.ReadFile(fileName)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +560,14 @@ func (l TestLocalSubtreeStore) GetIoReader(_ context.Context, key []byte, fileTy
 		return nil, errors.NewProcessingError("file not found")
 	}
 
-	subtreeFile, err := os.Open(fmt.Sprintf(TestFileNameTemplate, file))
+	var fileName string
+	if fileType == fileformat.FileTypeSubtreeMeta {
+		fileName = fmt.Sprintf(TestFileNameTemplate+".meta", file)
+	} else {
+		fileName = fmt.Sprintf(TestFileNameTemplate, file)
+	}
+
+	subtreeFile, err := os.Open(fileName)
 	if err != nil {
 		return nil, err
 	}
