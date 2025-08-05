@@ -2276,7 +2276,7 @@ func TestNewServer_ConfigValidation(t *testing.T) {
 			wantErrMsg: "p2p_listen_addresses not set in config",
 		},
 		{
-			name: "missing port",
+			name: "missing Port",
 			modify: func(s *settings.Settings) {
 				s.P2P.Port = 0
 			},
@@ -2296,7 +2296,48 @@ func TestNewServer_ConfigValidation(t *testing.T) {
 			},
 			wantErrMsg: "p2p_block_topic not set in config",
 		},
-		// ... e così via per tutti gli altri check
+		{
+			name: "missing SubtreeTopic",
+			modify: func(s *settings.Settings) {
+				s.P2P.SubtreeTopic = ""
+			},
+			wantErrMsg: "p2p_subtree_topic not set in config",
+		},
+		{
+			name: "missing HandshakeTopic",
+			modify: func(s *settings.Settings) {
+				s.P2P.HandshakeTopic = ""
+			},
+			wantErrMsg: "p2p_handshake_topic not set in config",
+		},
+		{
+			name: "missing MiningOnTopic",
+			modify: func(s *settings.Settings) {
+				s.P2P.MiningOnTopic = ""
+			},
+			wantErrMsg: "p2p_mining_on_topic not set in config",
+		},
+		{
+			name: "missing RejectedTxTopic",
+			modify: func(s *settings.Settings) {
+				s.P2P.RejectedTxTopic = ""
+			},
+			wantErrMsg: "p2p_rejected_tx_topic not set in config",
+		},
+		{
+			name: "missing SharedKey",
+			modify: func(s *settings.Settings) {
+				s.P2P.SharedKey = ""
+			},
+			wantErrMsg: "error getting p2p_shared_key",
+		},
+		{
+			name: "invalid ListenMode",
+			modify: func(s *settings.Settings) {
+				s.P2P.ListenMode = "invalid_mode"
+			},
+			wantErrMsg: "listen_mode must be either",
+		},
 	}
 
 	for _, tc := range tests {
