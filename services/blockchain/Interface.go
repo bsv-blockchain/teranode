@@ -668,6 +668,22 @@ type ClientI interface {
 	// - Error if the wait operation fails or times out
 	WaitUntilFSMTransitionFromIdleState(ctx context.Context) error
 
+	// IsFullyReady checks if the blockchain service is fully operational.
+	//
+	// This method verifies that the blockchain service is ready for normal operations,
+	// which includes both the FSM being in a non-IDLE state and the subscription
+	// infrastructure being fully initialized. Services should use this method to
+	// determine if they can safely proceed with blockchain operations and establish
+	// reliable subscriptions.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	//
+	// Returns:
+	// - Boolean indicating whether the blockchain service is fully ready (true) or not (false)
+	// - Error if the readiness check fails
+	IsFullyReady(ctx context.Context) (bool, error)
+
 	// Run initiates the normal operation of the blockchain service.
 	//
 	// This method starts the blockchain service in its standard operational mode,

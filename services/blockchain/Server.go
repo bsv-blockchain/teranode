@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -99,6 +100,7 @@ type Blockchain struct {
 	stateChangeTimestamp          time.Time                            // Timestamp of last state change
 	AppCtx                        context.Context                      // Application context
 	localTestStartState           string                               // Initial state for testing
+	subscriptionManagerReady      atomic.Bool                          // Flag indicating subscription manager is ready
 }
 
 // New creates a new Blockchain instance with the provided dependencies.
@@ -146,6 +148,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		AppCtx:                        ctx,
 		blocksFinalKafkaAsyncProducer: blocksFinalKafkaAsyncProducer,
 	}
+
+	// Initialize subscription manager as not ready
+	b.subscriptionManagerReady.Store(false)
 
 	if len(localTestStartFromState) >= 1 && localTestStartFromState[0] != "" {
 		// Convert the string state to FSMStateType using the map
@@ -546,6 +551,10 @@ func (b *Blockchain) startKafka() {
 //
 // Note: This method must be started as a goroutine unless running in a test environment.
 func (b *Blockchain) startSubscriptions() {
+	// Signal that subscription manager is now ready to handle subscriptions
+	b.subscriptionManagerReady.Store(true)
+	b.logger.Infof("[Blockchain][startSubscriptions] Subscription manager is now ready")
+
 	for {
 		select {
 		case <-b.AppCtx.Done():
@@ -1928,7 +1937,16 @@ func (b *Blockchain) GetFSMCurrentState(_ context.Context, _ *emptypb.Empty) (*b
 	}
 
 	// Get the current state of the FSM
-	state = b.finiteStateMachine.Current()
+	actualState := b.finiteStateMachine.Current()
+
+	// If subscription manager is not ready, always return IDLE regardless of actual FSM state
+	// This prevents services from proceeding until the blockchain service is fully operational
+	if !b.subscriptionManagerReady.Load() {
+		b.logger.Debugf("[Blockchain] GetFSMCurrentState: Subscription manager not ready, returning IDLE (actual state: %s)", actualState)
+		state = blockchain_api.FSMStateType_IDLE.String()
+	} else {
+		state = actualState
+	}
 
 	// Convert the string state to FSMStateType using the map
 	enumState, ok := blockchain_api.FSMStateType_value[state]
@@ -1960,20 +1978,50 @@ func (b *Blockchain) WaitForFSMtoTransitionToGivenState(ctx context.Context, tar
 
 // WaitUntilFSMTransitionFromIdleState waits for the FSM to transition from the IDLE state.
 func (b *Blockchain) WaitUntilFSMTransitionFromIdleState(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	// If the FSM is not initialized, we need to wait
-	// or if the FSM is in the IDLE state, we need to wait
-	for b.finiteStateMachine.Current() == "" || b.finiteStateMachine.Current() == blockchain_api.FSMStateType_IDLE.String() {
+	// Wait until:
+	// 1. FSM is initialized and not in IDLE state
+	// 2. Subscription manager is ready to handle subscriptions
+	// This ensures services don't proceed until the blockchain service is fully operational
+	for b.finiteStateMachine.Current() == "" ||
+		b.finiteStateMachine.Current() == blockchain_api.FSMStateType_IDLE.String() ||
+		!b.subscriptionManagerReady.Load() {
+
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
 
-		b.logger.Debugf("Waiting 1 second for FSM to transition from IDLE state, currently at: %v", b.finiteStateMachine.Current())
+		actualState := b.finiteStateMachine.Current()
+		subscriptionReady := b.subscriptionManagerReady.Load()
+		b.logger.Debugf("Waiting for full readiness - FSM state: %v, Subscription ready: %v", actualState, subscriptionReady)
 		time.Sleep(1 * time.Second) // Wait and check again in 1 second
 	}
 
+	b.logger.Infof("[Blockchain] Service is now fully ready - FSM: %v, Subscriptions: ready", b.finiteStateMachine.Current())
 	return &emptypb.Empty{}, nil
+}
+
+// IsFullyReady checks if the blockchain service is fully operational.
+// This includes both FSM being in a non-IDLE state and subscription infrastructure being ready.
+// Services should use this method to determine if they can safely proceed with blockchain operations.
+func (b *Blockchain) IsFullyReady(ctx context.Context) (bool, error) {
+	if b.finiteStateMachine == nil {
+		return false, nil
+	}
+
+	actualState := b.finiteStateMachine.Current()
+	subscriptionReady := b.subscriptionManagerReady.Load()
+
+	// Service is fully ready if:
+	// 1. FSM is initialized and not in IDLE state
+	// 2. Subscription manager is ready
+	isReady := actualState != "" &&
+		actualState != blockchain_api.FSMStateType_IDLE.String() &&
+		subscriptionReady
+
+	b.logger.Debugf("[Blockchain] IsFullyReady check - FSM: %v, Subscription ready: %v, Result: %v", actualState, subscriptionReady, isReady)
+	return isReady, nil
 }
 
 // SendFSMEvent sends an event to the finite state machine.
@@ -2364,4 +2412,10 @@ func (b *Blockchain) SetBlockProcessedAt(ctx context.Context, req *blockchain_ap
 	}
 
 	return &emptypb.Empty{}, nil
+}
+
+// SetSubscriptionManagerReadyForTesting sets the subscription manager ready flag for testing purposes.
+// This method should only be used in tests to simulate subscription manager readiness.
+func (b *Blockchain) SetSubscriptionManagerReadyForTesting(ready bool) {
+	b.subscriptionManagerReady.Store(ready)
 }

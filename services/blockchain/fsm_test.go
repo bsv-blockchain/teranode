@@ -63,6 +63,9 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 	err = blockchainClient.Init(ctx)
 	require.NoError(t, err)
 
+	// Set subscription manager as ready for testing to allow FSM state to be visible
+	blockchainClient.SetSubscriptionManagerReadyForTesting(true)
+
 	resp, err := blockchainClient.GetFSMCurrentState(ctx, &emptypb.Empty{})
 	require.NoError(t, err)
 	require.Equal(t, "IDLE", resp.State.String())

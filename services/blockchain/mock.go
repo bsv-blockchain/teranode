@@ -381,6 +381,12 @@ func (m *Mock) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error {
 	return args.Error(0)
 }
 
+// IsFullyReady mocks the IsFullyReady method
+func (m *Mock) IsFullyReady(ctx context.Context) (bool, error) {
+	args := m.Called(ctx)
+	return args.Bool(0), args.Error(1)
+}
+
 // GetFSMCurrentStateForE2ETestMode mocks the GetFSMCurrentStateForE2ETestMode method
 func (m *Mock) GetFSMCurrentStateForE2ETestMode() FSMStateType {
 	args := m.Called()

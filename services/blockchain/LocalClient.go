@@ -266,6 +266,13 @@ func (c LocalClient) WaitUntilFSMTransitionFromIdleState(_ context.Context) erro
 	return nil
 }
 
+func (c LocalClient) IsFullyReady(_ context.Context) (bool, error) {
+	// LocalClient is always ready since it doesn't depend on remote services
+	// and has direct store access without subscription infrastructure
+	c.logger.Debugf("[LocalClient] IsFullyReady check - Always ready (direct store access)")
+	return true, nil
+}
+
 func (c LocalClient) GetFSMCurrentStateForE2ETestMode() FSMStateType {
 	// TODO: Fix me, this is a temporary solution
 	return FSMStateRUNNING

@@ -1385,6 +1385,26 @@ func (c *Client) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error 
 	return nil
 }
 
+// IsFullyReady checks if the blockchain service is fully operational.
+// This method verifies that the blockchain service is ready for normal operations,
+// which includes both the FSM being in a non-IDLE state and the subscription
+// infrastructure being fully initialized.
+func (c *Client) IsFullyReady(ctx context.Context) (bool, error) {
+	// Get the current FSM state using our existing method
+	// This already considers subscription readiness on the server side
+	currentState, err := c.GetFSMCurrentState(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	// Service is ready if FSM is not in IDLE state
+	// (The server-side GetFSMCurrentState already ensures subscription readiness)
+	isReady := currentState != nil && *currentState != FSMStateIDLE
+
+	c.logger.Debugf("[Blockchain Client] IsFullyReady check - State: %v, Ready: %v", currentState, isReady)
+	return isReady, nil
+}
+
 // GetFSMCurrentStateForE2ETestMode retrieves the current FSM state for end-to-end testing.
 func (c *Client) GetFSMCurrentStateForE2ETestMode() FSMStateType {
 	ctx := context.Background()
