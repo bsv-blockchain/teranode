@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
+	"github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	utxofactory "github.com/bitcoin-sv/teranode/stores/utxo/factory"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
@@ -361,4 +362,22 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 	}
 
 	return d.mainBlockPersisterStore, nil
+}
+
+// Cleanup resets all singleton stores. This is particularly important for tests
+// where stores may persist between test runs.
+func (d *Stores) Cleanup() {
+	d.mainBlockPersisterStore = nil
+	d.mainBlockStore = nil
+	d.mainBlockValidationClient = nil
+	d.mainSubtreeStore = nil
+	d.mainSubtreeValidationClient = nil
+	d.mainTempStore = nil
+	d.mainTxStore = nil
+	d.mainUtxoStore = nil
+	d.mainValidatorClient = nil
+
+	// Reset the Aerospike cleanup service singleton if it exists
+	// This prevents state leakage between test runs
+	aerospike.ResetCleanupServiceForTests()
 }

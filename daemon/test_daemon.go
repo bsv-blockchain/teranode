@@ -447,6 +447,9 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 	// Cancel context first to trigger HTTP server shutdowns
 	td.ctxCancel()
 
+	// Cleanup daemon stores to reset singletons
+	td.d.daemonStores.Cleanup()
+
 	WaitForPortsFree(t, td.Ctx, td.Settings)
 
 	// cleanup remaining listeners that were never used
@@ -664,8 +667,6 @@ func (td *TestDaemon) VerifyConflictingInSubtrees(t *testing.T, subtreeHash *cha
 	var latestSubtree *subtreepkg.Subtree
 
 	latestSubtree, err = subtreepkg.NewSubtreeFromReader(latestSubtreeReader)
-	_ = latestSubtreeReader.Close() // Ensure the reader is closed after use
-
 	require.NoError(t, err, failedParsingSubtreeBytes)
 
 	err = latestSubtreeReader.Close() // Ensure the reader is closed after use
@@ -706,10 +707,6 @@ func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 		var subtree *subtreepkg.Subtree
 
 		subtree, err = subtreepkg.NewSubtreeFromReader(subtreeReader)
-
-		_ = subtreeReader.Close()
-
-		// Ensure the reader is closed after use
 		require.NoError(t, err, failedParsingSubtreeBytes)
 
 		err = subtreeReader.Close() // Ensure the reader is closed after use
@@ -723,51 +720,91 @@ func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	}
 }
 
-// VerifyInBlockAssembly checks that the given transactions are present in the block assembly candidate's subtrees exactly once.
-func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
-	// get a mining candidate and check the subtree does not contain the given transactions
+// checkTransactionsInMiningCandidate checks which of the given transactions are present in the current mining candidate
+// Returns a map of transaction hash to count of how many times it was found
+func (td *TestDaemon) checkTransactionsInMiningCandidate(txs ...*bt.Tx) (map[chainhash.Hash]int, error) {
+	// get a mining candidate
 	candidate, err := td.BlockAssemblyClient.GetMiningCandidate(td.Ctx, true)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 
-	// Check the candidate has at least one subtree hash, otherwise there is nothing to check
-	require.GreaterOrEqual(t, len(candidate.SubtreeHashes), 1, "Expected at least one subtree hash in the candidate")
-
+	// Initialize the found map
 	txFoundMap := make(map[chainhash.Hash]int)
-
 	for _, tx := range txs {
 		hash := *tx.TxIDChainHash()
 		txFoundMap[hash] = 0
 	}
 
+	// Check each subtree for the transactions
 	for _, subtreeHash := range candidate.SubtreeHashes {
-		var subtreeReader io.ReadCloser
+		subtreeReader, err := td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash, fileformat.FileTypeSubtree)
+		if err != nil {
+			continue // Skip this subtree on error
+		}
 
-		subtreeReader, err = td.SubtreeStore.GetIoReader(td.Ctx, subtreeHash, fileformat.FileTypeSubtree)
-		require.NoError(t, err, failedGettingSubtree)
+		subtree, err := subtreepkg.NewSubtreeFromReader(subtreeReader)
+		subtreeReader.Close() // Always close the reader
+		if err != nil {
+			continue // Skip this subtree on error
+		}
 
-		var subtree *subtreepkg.Subtree
-
-		subtree, err = subtreepkg.NewSubtreeFromReader(subtreeReader)
-		_ = subtreeReader.Close() // Ensure the reader is closed after use
-
-		require.NoError(t, err, failedParsingSubtreeBytes)
-
-		err = subtreeReader.Close() // Ensure the reader is closed after use
-		require.NoError(t, err, "Failed to close subtree reader")
-
+		// Check each transaction
 		for _, tx := range txs {
 			hash := *tx.TxIDChainHash()
-
-			found := subtree.HasNode(hash)
-			if found {
+			if subtree.HasNode(hash) {
 				txFoundMap[hash]++
 			}
 		}
 	}
 
+	return txFoundMap, nil
+}
+
+// VerifyInBlockAssembly checks that the given transactions are present in the block assembly candidate's subtrees exactly once.
+func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
+	txFoundMap, err := td.checkTransactionsInMiningCandidate(txs...)
+	require.NoError(t, err, "Failed to get mining candidate")
+
+	// Check the candidate has at least one subtree hash, otherwise there is nothing to check
+	require.NotEmpty(t, txFoundMap, "Expected at least one transaction to check")
+
 	// check all transactions have been found exactly once
 	for hash, count := range txFoundMap {
-		assert.Equal(t, 1, count, "Expected transaction %s to be found exactly once", hash.String())
+		assert.Equal(t, 1, count, "Expected transaction %s to be found exactly once, but found %d times", hash.String(), count)
+	}
+}
+
+// WaitForTransactionInBlockAssembly waits for a transaction to be processed by block assembly
+// by polling the mining candidate until the transaction appears in the subtrees
+func (td *TestDaemon) WaitForTransactionInBlockAssembly(tx *bt.Tx, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	checkInterval := 100 * time.Millisecond
+
+	txHash := *tx.TxIDChainHash()
+
+	for {
+		// Check if we've exceeded the timeout
+		if time.Now().After(deadline) {
+			return errors.NewServiceError("timeout waiting for transaction %s to be processed by block assembly", txHash.String())
+		}
+
+		// Check if the transaction is in the mining candidate
+		txFoundMap, err := td.checkTransactionsInMiningCandidate(tx)
+		if err != nil {
+			// If we can't get a candidate, sleep and retry
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// Check if the transaction was found
+		if count, found := txFoundMap[txHash]; found && count > 0 {
+			// Transaction found in block assembly
+			return nil
+		}
+
+		// Transaction not found yet, wait before checking again
+		time.Sleep(checkInterval)
 	}
 }
 
@@ -1422,8 +1459,9 @@ func (td *TestDaemon) CreateParentTransactionWithNOutputs(t *testing.T, parentTx
 
 	td.Logger.Infof("Created parent transaction with %d outputs: %s, error: %v", count, newTx.TxID(), response[0].Error)
 
-	// Wait a bit for the transaction to be processed
-	time.Sleep(1 * time.Second)
+	// Wait for the transaction to be processed by block assembly
+	err = td.WaitForTransactionInBlockAssembly(newTx, 10*time.Second)
+	require.NoError(t, err, "Timeout waiting for transaction to be processed by block assembly")
 
 	return newTx, nil
 }

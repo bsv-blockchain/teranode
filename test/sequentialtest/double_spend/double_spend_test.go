@@ -23,8 +23,7 @@ func init() {
 }
 
 var (
-	// DEBUG DEBUG DEBUG
-	blockWait = 5000 * time.Second
+	blockWait = 5 * time.Second
 )
 
 // TestDoubleSpendScenarios tests various double-spend scenarios in a blockchain.
@@ -186,7 +185,7 @@ func TestDoubleSpendAerospike(t *testing.T) {
 //   - Child tx becomes non-conflicting (winning chain)
 func testSingleDoubleSpend(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
+	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore, 1)
 	defer func() {
 		td.Stop(t)
 	}()
@@ -259,7 +258,7 @@ func testSingleDoubleSpend(t *testing.T, utxoStore string) {
 // 2. The txB0 is in block 103 which means the block is invalid
 func testDoubleSpendInSubsequentBlock(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, _, txB0, block102, _ := setupDoubleSpendTest(t, utxoStore)
+	td, _, _, txB0, block102, _ := setupDoubleSpendTest(t, utxoStore, 5)
 	defer td.Stop(t)
 
 	// Step 1: Create and validate block with double spend transaction
@@ -284,7 +283,7 @@ func testMarkAsConflictingMultipleSameBlock(t *testing.T, utxoStore string) {
 // 3. All conflicting transactions should be marked as conflicting
 func testMarkAsConflictingMultiple(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, coinbaseTx1, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
+	td, coinbaseTx1, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore, 10)
 	defer td.Stop(t)
 
 	// 0 -> 1 ... 101 -> 102a
@@ -334,7 +333,7 @@ func testMarkAsConflictingMultiple(t *testing.T, utxoStore string) {
 // 2. All transactions in both chains should be marked as conflicting
 func testMarkAsConflictingChains(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, txA0, _, block102a, _ := setupDoubleSpendTest(t, utxoStore)
+	td, _, txA0, _, block102a, _ := setupDoubleSpendTest(t, utxoStore, 15)
 	defer td.Stop(t)
 
 	// 0 -> 1 ... 101 -> 102a
@@ -414,7 +413,7 @@ func testMarkAsConflictingChains(t *testing.T, utxoStore string) {
 // 3. Verify transactions in losing chain are marked as conflicting
 func testDoubleSpendFork(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
+	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore, 20)
 	defer td.Stop(t)
 
 	// Create chain A transactions
@@ -573,7 +572,7 @@ func createFork(t *testing.T, td *daemon.TestDaemon, originalBlock *model.Block,
 // 4. Verify all transactions in losing chains are marked as conflicting
 func testTripleForkedChain(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
+	td, coinbaseTx1, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore, 25)
 	defer td.Stop(t)
 
 	// Create chain A transactions
@@ -621,10 +620,11 @@ func testTripleForkedChain(t *testing.T, utxoStore string) {
 
 	// Create chain C (triple spend chain)
 	// Create a new transaction that spends the same UTXO as txA0 and txB0
-	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
-	require.NoError(t, err)
+	// txC0 should spend from the same coinbase as txA0 and txB0 to create a triple conflict
+	// Use the same coinbase from block 25 that was used in setup
+	coinbaseTx25 := coinbaseTx1 // This is from block 25 as setup uses block offset 25
 
-	txC0 := td.CreateTransaction(t, block1.CoinbaseTx)
+	txC0 := td.CreateTransaction(t, coinbaseTx25, 0) // Same output as txA0 and txB0
 	txC1 := td.CreateTransaction(t, txC0)
 	txC2 := td.CreateTransaction(t, txC1)
 
@@ -1036,7 +1036,7 @@ func testDoubleSpendForkWithNestedTXs(t *testing.T, utxoStore string) {
 
 func testSingleDoubleSpendFrozenTx(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore)
+	td, _, txA0, txB0, block102a, _ := setupDoubleSpendTest(t, utxoStore, 45)
 	defer func() {
 		td.Stop(t)
 	}()
@@ -1074,7 +1074,7 @@ func testSingleDoubleSpendFrozenTx(t *testing.T, utxoStore string) {
 // block assembly before the double spend transaction was processed
 func testSingleDoubleSpendNotMinedForLong(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, _, txA0, _, _, _ := setupDoubleSpendTest(t, utxoStore)
+	td, _, txA0, _, _, _ := setupDoubleSpendTest(t, utxoStore, 50)
 	defer td.Stop(t)
 
 	txA1 := td.CreateTransaction(t, txA0)

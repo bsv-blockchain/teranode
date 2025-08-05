@@ -1,6 +1,7 @@
 package aerospike
 
 import (
+	"context"
 	"sync"
 
 	"github.com/bitcoin-sv/teranode/stores/cleanup"
@@ -16,6 +17,27 @@ var (
 	cleanupServiceMutex    sync.Mutex
 	cleanupServiceError    error
 )
+
+// ResetCleanupServiceForTests resets the cleanup service singleton.
+// This should only be called in tests to ensure clean state between test runs.
+func ResetCleanupServiceForTests() {
+	cleanupServiceMutex.Lock()
+	defer cleanupServiceMutex.Unlock()
+
+	// Stop the existing service if it exists
+	if cleanupServiceInstance != nil {
+		// Try to stop it gracefully if it's an aerospike cleanup service
+		if aerospikeService, ok := cleanupServiceInstance.(*aerocleanup.Service); ok {
+			if err := aerospikeService.Stop(context.Background()); err != nil {
+				// Log but don't fail - tests need to continue
+				_ = err
+			}
+		}
+	}
+
+	cleanupServiceInstance = nil
+	cleanupServiceError = nil
+}
 
 // GetCleanupService returns a cleanup service for the Aerospike store.
 // This implements the cleanup.CleanupProvider interface.

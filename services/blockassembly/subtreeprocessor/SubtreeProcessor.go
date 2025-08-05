@@ -1344,7 +1344,6 @@ func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlo
 }
 
 // reorgBlocks adds all transactions that are in the block given to the current subtrees
-// TODO handle conflicting transactions
 func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block) error {
 	if moveBackBlocks == nil {
 		return errors.NewProcessingError("you must pass in blocks to move down the chain")
@@ -1355,6 +1354,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	}
 
 	stp.logger.Infof("reorgBlocks with %d moveBackBlocks and %d moveForwardBlocks", len(moveBackBlocks), len(moveForwardBlocks))
+
+	// During a reorg, we need to ensure proper handling of conflicting transactions
+	// When moving back, transactions that were in the winning chain need to have their
+	// UTXO spends reverted so they can be properly detected as conflicts when moving forward
 
 	for _, block := range moveBackBlocks {
 		err := stp.moveBackBlock(ctx, block)
@@ -1501,6 +1504,13 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 
 			// TODO add metrics about how many txs we are reading per second
 			subtreesNodes[idx] = subtree.Nodes
+
+			if subtreeHash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
+				// Skip coinbase placeholder subtree
+				stp.logger.Debugf("[moveBackBlock][%s] skipping coinbase placeholder subtree %s", block.String(), subtreeHash.String())
+				subtreeMetaTxInpoints[idx] = make([]subtreepkg.TxInpoints, len(subtree.Nodes))
+				return nil
+			}
 
 			subtreeMetaReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 			if err != nil {
@@ -1726,6 +1736,13 @@ func (stp *SubtreeProcessor) fetchSingleSubtree(ctx context.Context, block *mode
 	}
 
 	subtreesNodes[idx] = subtree.Nodes
+
+	if subtreeHash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
+		// Skip subtree with only coinbase placeholder
+		stp.logger.Debugf("[moveBackBlock][%s] skipping subtree meta for coinbase placeholder hash %s", block.String(), subtreeHash.String())
+		subtreeMetaParents[idx] = make([]subtreepkg.TxInpoints, len(subtree.Nodes))
+		return nil
+	}
 
 	subtreeMetaReader, err := stp.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 	if err != nil {

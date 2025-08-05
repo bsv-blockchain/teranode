@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *daemon.TestDaemon, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block, tx *bt.Tx) {
+func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string, blockOffset ...uint32) (td *daemon.TestDaemon, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block, tx *bt.Tx) {
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
 		SettingsContext: "dev.system.test",
 		SettingsOverrideFunc: func(tSettings *settings.Settings) {
@@ -29,14 +29,20 @@ func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *daemon.Te
 	err = td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 101})
 	require.NoError(t, err)
 
-	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	// Use different block heights for different tests to avoid UTXO conflicts
+	blockHeight := uint32(1)
+	if len(blockOffset) > 0 && blockOffset[0] > 0 && blockOffset[0] <= 100 {
+		blockHeight = blockOffset[0]
+	}
+
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, blockHeight)
 	require.NoError(t, err)
 
 	coinbaseTx1 = block1.CoinbaseTx
 	// t.Logf("Coinbase has %d outputs", len(coinbaseTx.Outputs))
 
-	txOriginal = td.CreateTransaction(t, coinbaseTx1)
-	txDoubleSpend = td.CreateTransaction(t, coinbaseTx1)
+	txOriginal = td.CreateTransaction(t, coinbaseTx1, 0)
+	txDoubleSpend = td.CreateTransaction(t, coinbaseTx1, 0)
 
 	err1 := td.PropagationClient.ProcessTransaction(td.Ctx, txOriginal)
 	require.NoError(t, err1)
@@ -56,11 +62,16 @@ func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string) (td *daemon.Te
 
 	require.Equal(t, uint64(2), block102.TransactionCount)
 
-	// Create another transaction from block2
-	block2, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 2)
+	// Create another transaction from a different block
+	// Use blockHeight+1 to ensure we're using a different block
+	block2Height := blockHeight + 1
+	if block2Height > 100 {
+		block2Height = 2
+	}
+	block2, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, block2Height)
 	require.NoError(t, err)
 
-	tx2 := td.CreateTransaction(t, block2.CoinbaseTx)
+	tx2 := td.CreateTransaction(t, block2.CoinbaseTx, 0)
 
 	err = td.PropagationClient.ProcessTransaction(td.Ctx, tx2)
 	require.NoError(t, err)
