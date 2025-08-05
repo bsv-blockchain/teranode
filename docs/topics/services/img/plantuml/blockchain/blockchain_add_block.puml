@@ -62,23 +62,18 @@ activate TxStore
 TxStore --> BlockServer: Coinbase Transaction stored
 deactivate TxStore
 
-BlockServer -> UTXOStore: Create(cntxt, block.CoinbaseTx)
-activate UTXOStore
-UTXOStore --> BlockServer: Coinbase Metadata stored
-deactivate UTXOStore
-
 BlockServer -> BlockchainClient: AddBlock(cntxt, block, "")
 activate BlockchainClient
 BlockchainClient -> BlockServer: Block added to the local Blockchain
 deactivate BlockchainClient
 
-BlockServer -> BlockServer: removeSubtreesTTL(gCtx, block)
+BlockServer -> BlockServer: removeSubtreesDAH(gCtx, block)
 activate BlockServer
 
 alt [for each subtree]
-    BlockServer -> SubtreeStore: SetTTL(setCtx, subtreeHashBytes, 0) # 0 means delete the subtree
+    BlockServer -> SubtreeStore: SetDAH(gCtx, subtreeHashBytes, fileformat.FileTypeSubtree, 0) # 0 means delete the subtree
     activate SubtreeStore
-    SubtreeStore --> BlockServer: Subtree TTL updated
+    SubtreeStore --> BlockServer: Subtree DAH updated
     deactivate SubtreeStore
 end
 

@@ -35,14 +35,21 @@ Server -> HTTP: Setup HTTP handlers
 activate HTTP
 
 loop HTTP Request Handling
-    Client -> HTTP: POST /tx
-    activate Client
-    HTTP -> Server: handleStream(w, r)
-    activate Server
-
-    loop for each transaction in stream
-        Server -> Server: Read transaction data
+    alt POST /tx (single transaction)
+        Client -> HTTP: POST /tx
+        activate Client
+        HTTP -> Server: handleSingleTx(w, r)
+        activate Server
+        Server -> Server: Read transaction from body
         Server -> Server: ProcessTransaction(ctx, tx)
+    else POST /txs (multiple transactions)
+        Client -> HTTP: POST /txs
+        HTTP -> Server: handleMultipleTx(w, r)
+        Server -> Server: Read all transactions from body
+        loop for each transaction
+            Server -> Server: ProcessTransactionInternal(ctx, tx)
+        end
+    end
 
         Server -> TxStore: storeTransaction(ctx, tx)
         activate TxStore
@@ -60,12 +67,11 @@ loop HTTP Request Handling
             ValidationService --> Server: ValidationResult
             deactivate ValidationService
         end
-    end
 
-    Server --> HTTP: Transactions processed
-    deactivate Server
-    HTTP -> Client: Response (implicit, as it's a stream)
-    deactivate Client
+        Server --> HTTP: Transactions processed
+        deactivate Server
+        HTTP -> Client: Response (implicit, as it's a stream)
+        deactivate Client
 end
 
 deactivate HTTP

@@ -22,7 +22,8 @@ skinparam participant {
 
 
 participant "Propagation \n(services/propagation/Server.go)" as Propagation
-participant "SubtreeValidation \n(services/SubtreeValidation/Server.go)" as SubtreeValidation
+participant "SubtreeValidation \n(services/subtreevalidation/Server.go)" as SubtreeValidation
+participant "Kafka" as Kafka
 participant "Validator Server \n(services/validator/Server.go)" as ValidatorServer
 entity "Validator \n(services/validator/Validator.go)" as Validator
 database "UTXO Store" as UTXOStore
@@ -31,36 +32,38 @@ participant "Block Assembly" as BlockAssembly
 == Transaction Propagation ==
 Propagation -> Propagation: ProcessTransaction()
 activate Propagation
-Propagation -> ValidatorServer: ValidateTransaction(ctx, req)
-activate ValidatorServer
-ValidatorServer -> Validator: Validate(ctx, tx, blockHeight)
+alt Large Transaction (>Kafka limit)
+    Propagation -> ValidatorServer: HTTP POST /tx
+else Normal Transaction with Kafka
+    Propagation -> Kafka: Send to validator topic
+else No Kafka configured
+    Propagation -> Validator: Validate(ctx, tx, blockHeight)
+end
 activate Validator
 Validator -> UTXOStore: spendUtxos()
-Validator -> UTXOStore: storeTxInUtxoMap()
-alt if !blockAssemblyDisabled
+Validator -> UTXOStore: CreateInUtxoStore()
+alt if blockAssemblyEnabled && addToBlockAssembly
     Validator -> BlockAssembly: Store()
 end
-Validator --> ValidatorServer: Return result
+Validator --> Propagation: Return validation result
 deactivate Validator
-ValidatorServer --> Propagation: Return ValidateTransactionResponse
-deactivate ValidatorServer
 deactivate Propagation
 
 == Block Validation ==
-SubtreeValidation -> SubtreeValidation: validateMissingTransactions()
+SubtreeValidation -> SubtreeValidation: processMissingTransactions()
 activate SubtreeValidation
-SubtreeValidation -> ValidatorServer: ValidateTransaction(ctx, req)
+SubtreeValidation -> ValidatorServer: ValidateWithOptions(ctx, tx, blockHeight, options)
 activate ValidatorServer
-ValidatorServer -> Validator: Validate(ctx, tx, blockHeight)
+ValidatorServer -> Validator: Validate(ctx, tx, blockHeight, options)
 activate Validator
 Validator -> UTXOStore: spendUtxos()
-Validator -> UTXOStore: storeTxInUtxoMap()
-alt if !blockAssemblyDisabled
+Validator -> UTXOStore: CreateInUtxoStore()
+alt if blockAssemblyEnabled && addToBlockAssembly
     Validator -> BlockAssembly: Store()
 end
-Validator --> ValidatorServer: Return result
+Validator --> ValidatorServer: Return txMeta
 deactivate Validator
-ValidatorServer --> SubtreeValidation: Return ValidateTransactionResponse
+ValidatorServer --> SubtreeValidation: Return txMeta
 deactivate ValidatorServer
 deactivate SubtreeValidation
 

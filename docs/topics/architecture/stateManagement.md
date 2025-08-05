@@ -19,7 +19,7 @@ Last Modified: 3-February-2025
     - [3.4.1. FSM Event: Legacy Sync](#341-fsm-event-legacy-sync)
     - [3.4.2. FSM Event: Run](#342-fsm-event-run)
     - [3.4.3. FSM Event: Catch up Blocks](#343-fsm-event-catch-up-blocks)
-    - [3.4.4. FSM Event: Idle](#344-fsm-event-idle)
+    - [3.4.4. FSM Event: Stop](#344-fsm-event-stop)
     - [3.5. Waiting on State Machine Transitions](#35-waiting-on-state-machine-transitions)
 
 ## 1. Introduction
@@ -65,7 +65,7 @@ The FSM handles the following state **transitions**:
 * **CatchupBlocks**: Transitions to _CatchingBlocks_ from _Running_
 * **Stop**: Transitions to _Idle_ from _LegacySyncing_, _Running_, or _CatchingBlocks_
 
-Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command `go run fsm_visualizer/main.go`. The generated `docs/state-machine.diagram.md` can be visualized using https://mermaid.live/.
+Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command `go run services/blockchain/fsm_visualizer/main.go`. The generated `docs/state-machine.diagram.md` can be visualized using https://mermaid.live/.
 fsm_visualizer main.go.
 
 
@@ -107,7 +107,6 @@ These HTTP endpoints provide the same functionality as the CLI and gRPC methods 
 The Blockchain service also exposes the following gRPC methods to interact with the FSM programmatically:
 
 * **GetFSMCurrentState** - Returns the current state of the FSM
-* **WaitForFSMtoTransitionToGivenState** - Waits for the FSM to transition to a specific state
 * **SendFSMEvent** - Sends an event to the FSM to trigger a state transition
 
 * **LegacySync** - Transitions the FSM to the LegacySyncing state (delegates on the SendFSMEvent method)
@@ -227,16 +226,16 @@ The gRPC `CatchUpBlocks` method triggers the FSM to transition to the `CatchingB
 ![fsm_catchup_blocks.svg](img/plantuml/fsm_catchup_blocks.svg)
 
 
-#### 3.4.4. FSM Event: Idle
+#### 3.4.4. FSM Event: Stop
 
-The gRPC `Idle` method triggers the FSM to transition to the `Idle` state. This event is used to stop the node from participating in the network and halt all operations.
+The gRPC `Idle` method sends a `Stop` event to the FSM, which triggers a transition to the `Idle` state. This event is used to stop the node from participating in the network and halt all operations.
 
 This method is not currently used.
 
 
 ### 3.5. Waiting on State Machine Transitions
 
-Through the Blockchain gRPC method `WaitForFSMtoTransitionToGivenState`, services can wait for the FSM to transition to a specific state before proceeding with their operations. This method is used by various services to ensure that the node is in the correct state before starting their activities.
+Through internal helper methods, services can wait for the FSM to transition to a specific state before proceeding with their operations. This method is used by various services to ensure that the node is in the correct state before starting their activities.
 
 The method blocks until the FSM transitions to the specified state or until a timeout occurs. This ensures that services are synchronized with the node's state changes and can respond accordingly.
 

@@ -50,7 +50,7 @@ To execute a given test suite (e.g., TNA, TNC, TNJ), use the following standard 
 
 ```bash
 cd /teranode/test/<test-suite-selected>
-    SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -tags <tnXtests>
+go test -v -tags <tnXtests>
 ```
 
 Where X should be replaced with the letter corresponding to the desired suite. For example:
@@ -95,7 +95,7 @@ For example:
     - **Implementation**: The test configures three Teranode nodes and sets up notification listeners on two receiving nodes. It sends transactions to the first node, mines a block containing these transactions, and then verifies that all receiving nodes get block notifications with the correct block hash. It also confirms that each node successfully stores the block in its blockchain database, proving complete block propagation across the network.
 
 - TNA-5: `Teranode must only accept the block if all transactions in it are valid and not already spent`
-    - **Implementation**: This requirement is covered extensively by the `test/double_spend/double_spend_test.go` file, which contains comprehensive tests for double-spend detection and handling across multiple storage backends (SQLite, Postgres, and Aerospike). These tests verify:
+    - **Implementation**: This requirement is covered extensively by the `test/sequentialtest/double_spend/double_spend_test.go` file, which contains comprehensive tests for double-spend detection and handling across multiple storage backends (SQLite, Postgres, and Aerospike). These tests verify:
       1. **Single Double-Spend Detection**: Tests that Teranode can detect and properly handle simple double-spend attempts.
       2. **Multiple Conflicting Transactions**: Verifies detection of multiple transactions conflicting with each other across different blocks.
       3. **Transaction Chain Conflicts**: Tests handling of entire chains of transactions that conflict with each other.
@@ -418,7 +418,7 @@ The naming convention for files in this folder is as follows:
 
 ### Additional Chain Reorganization Tests
 
-In addition to the dedicated TNF tests, the `test/smoke/withdaemon/reorg_test.go` file provides more comprehensive smoke tests for blockchain reorganization handling, which is a key aspect of keeping track of the longest honest chain:
+In addition to the dedicated TNF tests, the `test/e2e/daemon/reorg_test.go` file provides more comprehensive e2e tests for blockchain reorganization handling, which is a key aspect of keeping track of the longest honest chain:
 
 - **TestMoveUp**: Tests block propagation between nodes and verifies that a newly generated block is properly propagated through the network.
 
@@ -447,16 +447,13 @@ go test -v -run "^TestTNFTestSuite$/TestInvalidateBlock$" -tags test_tnf
 
 As outlined in the Functional Requirements for Teranode reference document, the tests in the `/test/tnj` folder verify that Teranode correctly implements and enforces the standard consensus rules of the Bitcoin SV protocol.
 
-The naming convention for files in this folder follows either:
-
-- `tnj_<number>_test.go` corresponds to the TNJ-<number> test in the Functional Requirements for Teranode document.
-- Descriptive names like `locktime_test.go` that indicate the specific consensus rule being tested.
+The naming convention for files in this folder is descriptive, using names like `locktime_test.go` that indicate the specific consensus rule being tested. Some TNJ tests may also be found in other directories (e.g., `test/e2e/daemon/`) when they require full daemon integration.
 
 ### Consensus Rules Test Description
 
 #### TNJ-4: Coinbase Transaction Maturity
 
-`tnj_4_test.go` covers TNJ-4: Coinbase transactions must not be spent until they have matured (reached 100 blocks of confirmation).
+`block_subsidy_test.go` (located in `test/e2e/daemon/`) covers TNJ-4: Coinbase transactions must not be spent until they have matured (reached 100 blocks of confirmation).
 
 - **Implementation**: The test establishes a multi-node Teranode network to verify coinbase transaction maturity rules. It creates a block with a coinbase transaction, then attempts to spend the outputs from that coinbase transaction immediately. The test verifies that this transaction is not included in subsequent blocks, demonstrating that Teranode correctly enforces the coinbase maturity rule. After generating 100 blocks to ensure maturity, it then confirms that the transaction spending from the mature coinbase can now be included in a block. This test ensures that Teranode enforces one of the fundamental consensus rules regarding coinbase outputs.
 
@@ -483,8 +480,8 @@ go test -v -tags test_tnj
 #### Running Specific TNJ Tests
 
 ```bash
-cd /teranode/test/tnj
-go test -v -run "^TestTNJ4TestSuite$/TestBlockSubsidy$" -tags test_tnj
+cd /teranode/test/e2e/daemon
+go test -v -run "^TestBlockSubsidy$"
 ```
 
 ```bash

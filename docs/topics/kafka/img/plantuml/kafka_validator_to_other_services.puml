@@ -28,7 +28,7 @@ participant "Block Assembly" as BA
 participant P2P
 
 P -> V: New Transaction\n(kafka_validatortxsConfig)
-V -> BA: New Transaction\n(kafka_txsConfig)
+V -> BA: New Transaction\n(Direct gRPC - blockAssembler.Store())
 V -> SV: New UTXO Meta Data\n(kafka_txmetaConfig)
 V -> P2P: Rejected Transaction\n(kafka_rejectedTxConfig)
 

@@ -22,34 +22,29 @@ skinparam participant {
 
 
 
-participant "Node (Peer 1)" as Node1
-queue "LibP2P Host" as LibP2P
+participant "Blockchain Service" as Blockchain
+participant "P2P Server" as P2PServer
+participant "Kafka" as Kafka
 queue "PubSub System" as PubSub
-participant "Peer 2" as Peer2
+participant "Remote Peer" as RemotePeer
 
-Node1 -> Node1: Start()
-activate Node1
-Node1 -> Node1: s.sendBestBlockMessage(ctx)
-activate Node1
-Node1 -> PubSub: s.topics[bestBlockTopicName].Publish(ctx, msgBytes)
-deactivate Node1
+Blockchain -> P2PServer: Block notification
+activate P2PServer
+P2PServer -> P2PServer: processBlockchainNotification()
+P2PServer -> P2PServer: handleBlockNotification()
+activate P2PServer
+P2PServer -> PubSub: s.topics[blockTopicName].Publish(ctx, BlockMessage)
+P2PServer -> Kafka: Produce KafkaBlockTopicMessage
+deactivate P2PServer
+deactivate P2PServer
 
-PubSub ->  Peer2: s.handleBestBlockTopic(ctx)
-activate Peer2
+PubSub -> RemotePeer: Propagate block message
+activate RemotePeer
+RemotePeer -> RemotePeer: handleBlockTopic()
+RemotePeer -> Kafka: Produce KafkaBlockTopicMessage
+deactivate RemotePeer
 
-
-Peer2 -> Peer2: s.P2PNode.SendToPeer(ctx, peer, msgBytes)
-Peer2 -> LibP2P: s.host.NewStream(ctx, peer.ID, protocol.ID(s.bitcoinProtocolId))
-deactivate Peer2
-
-activate LibP2P
-
-LibP2P -> Node1: s.streamHandler(stream)
-deactivate LibP2P
-
-activate Node1
-Node1 -> Node1: Log the received message \n(no action)
-deactivate Node1
+note over P2PServer: No separate bestBlockTopic\nBlock info shared via handshakes
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 

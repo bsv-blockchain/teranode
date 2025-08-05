@@ -39,38 +39,40 @@ else using BlockchainClient
     Server -> BlockchainClient : GetBestBlockHeader()
 end
 
-alt current height is more than 100 blocks behind
+Server -> Server : maxHeight = bestBlockMeta.Height - 100
+
+alt s.lastHeight >= maxHeight
+    Server -> Server : Wait for 100 confirmations\n(return 1 minute delay)
+else s.lastHeight < maxHeight
     alt using BlockchainStore
-        Server -> BlockchainStore : GetBlockHeadersFromHeight()
+        Server -> BlockchainStore : GetBlockHeadersFromHeight(s.lastHeight + 1)
     else using BlockchainClient
-        Server -> BlockchainClient : GetBlockHeadersFromHeight()
+        Server -> BlockchainClient : GetBlockHeadersFromHeight(s.lastHeight + 1)
     end
 
     Server -> Server : verifyLastSet()
-    Server -> Server : New Consolidator()
-    Server -> Consolidator : ConsolidateBlockRange()
+    Server -> Server : consolidator = NewConsolidator()
+    Server -> consolidator : ConsolidateBlockRange(startBlock, endBlock)
+    activate consolidator
+    loop for each block in range
+        consolidator -> BlockStore : GetUTXODeletionsReader(blockID)
+        consolidator -> BlockStore : GetUTXOAdditionsReader(blockID)
+        consolidator -> consolidator : Process deletions and additions
+    end
+    consolidator --> Server : Return consolidated data
+    deactivate consolidator
 
-    Server -> UTXOSet : GetUTXOSetWithDeletionsMap()
+    Server -> UTXOSet : CreateUTXOSet(consolidator, baseHash)
     activate UTXOSet
-    UTXOSet -> BlockStore : Get UTXO deletions
-    BlockStore --> UTXOSet : UTXO deletions
-    UTXOSet --> Server : Return UTXOSet with deletions map
-    deactivate UTXOSet
-
-    Server -> UTXOSet : CreateUTXOSet()
-    activate UTXOSet
-    UTXOSet -> BlockStore : Get previous block's UTXO set
-    BlockStore --> UTXOSet : Previous block's UTXO set
-    UTXOSet -> UTXOSet : Apply deletions and additions
+    UTXOSet -> BlockStore : GetUTXOSetReader(baseHash)
+    UTXOSet -> UTXOSet : Apply consolidator changes
     UTXOSet -> BlockStore : Write new UTXO set
     UTXOSet --> Server : UTXO set created
     deactivate UTXOSet
 
-    Server -> BlockStore : Delete previous block's UTXOSet (if not skipped)
-    Server -> Server : writeLastHeight()
+    Server -> BlockStore : Delete previous block's UTXOSet\n(if skipDeletePreviousBlock is false)
+    Server -> Server : writeLastHeight(s.lastHeight)
     Server -> Server : Trigger next block processing
-else current height is less than 100 blocks behind
-    Server -> Server : Wait for more confirmations
 end
 
 deactivate Server

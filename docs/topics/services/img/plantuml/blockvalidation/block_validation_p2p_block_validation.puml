@@ -84,13 +84,6 @@ alt Not Exists - Start the Validation process
     BC --> BVVB: block headers
     deactivate BC
 
-    BVVB -> BVVB: storeCoinbaseTx(ctx, block)
-    activate BVVB
-    BVVB -> UTXOStore: Create(ctx, block.CoinbaseTx)
-    activate UTXOStore
-    UTXOStore -> BVVB
-    deactivate UTXOStore
-    deactivate BVVB
 
 
     BVVB -> Block: Valid(ctx, subtreeStore, UTXOStore, blockHeaders)
@@ -125,12 +118,12 @@ alt Not Exists - Start the Validation process
     deactivate Block
 
 
-    BVVB -> BVVB: updateSubtreesTTL(ctx, block)
+    BVVB -> BVVB: updateSubtreesDAH(ctx, block)
     activate BVVB
     loop For each Subtree in the Block
-        BVVB -> SubtreeStore: SetTTL(ctx, subtreeHash, 0)
+        BVVB -> SubtreeStore: SetDAH(ctx, subtreeHash, fileformat.FileTypeSubtree, 0)
         activate SubtreeStore
-        SubtreeStore --> BVVB: TTL set to 0 for the subtree
+        SubtreeStore --> BVVB: DAH set to 0 for the subtree
         deactivate SubtreeStore
     end
     BVVB -> BC: SetBlockSubtreesSet(ctx, block.Header.Hash())

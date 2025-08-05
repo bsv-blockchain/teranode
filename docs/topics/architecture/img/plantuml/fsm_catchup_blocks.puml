@@ -24,13 +24,15 @@ skinparam participant {
 !define RECTANGLE class
 
 participant "P2P Network" as P2P
+participant "Kafka" as K
 participant "BlockValidation Service" as BlockValidation
 participant "Blockchain Service" as BlockchainService
 participant "FSM" as FSM
 
 
 == Block Reception and Validation ==
-P2P -> BlockValidation : New Block
+P2P -> K : Publish Block\n(KafkaBlockTopicMessage)
+K -> BlockValidation : Consume Block Message
 activate BlockValidation
 BlockValidation -> BlockValidation : Validate Block
 

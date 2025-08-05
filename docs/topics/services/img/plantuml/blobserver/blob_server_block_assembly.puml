@@ -49,8 +49,8 @@ activate TxStore
 TxStore --> BlockAssemblyServer: err
 deactivate TxStore
 
-== Remove Subtree TTL ==
-BlockAssemblyServer -> SubtreeStore: SetTTL(ctx, subtreeHash, 0, options...)
+== Remove Subtree DAH ==
+BlockAssemblyServer -> SubtreeStore: SetDAH(ctx, subtreeHash, 0, options...)
 activate SubtreeStore
 SubtreeStore --> BlockAssemblyServer: err
 deactivate SubtreeStore

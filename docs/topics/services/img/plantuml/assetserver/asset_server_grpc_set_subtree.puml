@@ -45,18 +45,18 @@ deactivate AssetClient
 RemoteTTL --> BlockAssemblyServer
 deactivate RemoteTTL
 
-== Clear Subtree TTL Scenario ==
+== Clear Subtree DAH Scenario ==
 BlockAssemblyServer -> BlockAssemblyServer : submitMiningSolution(ctx, block)
 activate BlockAssemblyServer
-BlockAssemblyServer -> BlockAssemblyServer : removeSubtreesTTL(ctx, Block)
+BlockAssemblyServer -> BlockAssemblyServer : removeSubtreesDAH(ctx, Block)
 loop For Each Subtree in the Block
-    BlockAssemblyServer -> RemoteTTL : SetTTL(ctx, ttl)
+    BlockAssemblyServer -> RemoteTTL : SetDAH(ctx, dah)
     activate RemoteTTL
-    RemoteTTL -> AssetClient : SetTTL(ctx, ttl)
+    RemoteTTL -> AssetClient : SetDAH(ctx, dah)
     activate AssetClient
-    AssetClient -> AssetServer : SetTTL(ctx, ttl)
+    AssetClient -> AssetServer : SetDAH(ctx, dah)
     activate AssetServer
-    AssetServer -> BlobStore : SetTTL(ctx, ttl)
+    AssetServer -> BlobStore : SetDAH(ctx, dah)
     activate BlobStore
     BlobStore --> AssetServer
     deactivate BlobStore

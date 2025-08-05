@@ -56,10 +56,10 @@ BlockchainClient --> Server : Block added to the local Blockchain
 
 Server -> Server : UpdateBestBlock(ctx)
 
-Server -> Server : Go routine: removeSubtreesTTL(ctx, block)
+Server -> Server : Go routine: removeSubtreesDAH(ctx, block)
 activate Server
 loop for each subtree
-    Server -> SubtreeStore : SetTTL(ctx, subtreeHashBytes, 0)
+    Server -> SubtreeStore : SetDAH(ctx, subtreeHashBytes, 0)
 end
 Server -> BlockchainClient : SetBlockSubtreesSet(ctx, blockHash)
 deactivate Server

@@ -73,7 +73,7 @@ If UTXO processing is not skipped:
 The Seeder works with the following key data structures:
 
 1. **Block Header**:
-   Represented by `utxopersister.UTXOHeader`, containing:
+   Represented by `utxopersister.BlockIndex`, containing:
 
     - Block header information
     - Transaction count
@@ -120,7 +120,7 @@ The service reads these structures from input files and converts them to the for
 ```text
 ./cmd/seeder/
 │
-├── main.go
+├── seeder.go
 │   Entry point for the Seeder command-line tool.
 │
 ├── seeder/
@@ -137,7 +137,7 @@ The service reads these structures from input files and converts them to the for
 To run the Seeder command, use the following command:
 
 ```shell
-seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs]
+teranode-cli seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs]
 ```
 
 Options:

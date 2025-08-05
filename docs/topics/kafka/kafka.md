@@ -53,7 +53,7 @@ After initial sanity check tests, the propagation service endorses transactions 
 
 ### Validator Component
 
-![kafka_validator_to_other_services.svg](img/plantuml/kafka_validator_to_other_services2.svg)
+![kafka_validator_to_other_services.svg](img/plantuml/kafka_validator_to_other_services.svg)
 
 This diagram illustrates the central role of the Validator in processing new transactions, and how it uses Kafka:
 
@@ -377,36 +377,43 @@ These settings define the Kafka endpoints used across the Teranode system:
 
 ### Service-Specific Settings
 
-#### Block Assembly
+#### Block Settings
 
-- **`blockassembly_kafkaWorkers`**
+- **`block_kafkaWorkers`**
     - **Type**: Integer
-    - **Default**: 100
-    - **Description**: Number of worker goroutines processing Kafka messages
-    - **Impact**: Higher values increase throughput but consume more resources
+    - **Default**: 0
+    - **Description**: Number of worker goroutines processing Kafka messages (currently unused)
+    - **Impact**: This setting is defined but not currently implemented
 
 #### Block Validation
 
-- **`blockvalidation_kafkaBlockConcurrency`**
+- **`blockvalidation_kafkaWorkers`**
     - **Type**: Integer
-    - **Default**: max(4, runtime.NumCPU()-16)
-    - **Description**: Number of concurrent block validations
-    - **Impact**: Higher values increase throughput but may cause resource contention
+    - **Default**: 0
+    - **Description**: Number of worker goroutines processing Kafka messages (currently unused)
+    - **Impact**: This setting is defined but not currently implemented
 
-#### Subtree Validation
+#### Processing Concurrency (Non-Kafka)
 
-- **`subtreevalidation_kafkaSubtreeConcurrency`**
-    - **Type**: Integer
-    - **Default**: max(4, runtime.NumCPU()-16)
-    - **Description**: Number of concurrent subtree validations
-    - **Impact**: Higher values increase throughput but may cause resource contention
+These settings control internal processing concurrency, not Kafka consumer counts:
+
+- **Block Validation Processing**:
+
+    - `blockvalidation_processTxMetaUsingStoreBatchSize`: max(4, runtime.NumCPU()/2)
+    - `blockvalidation_validateBlockSubtreesConcurrency`: max(4, runtime.NumCPU()/2)
+    - `blockvalidation_catchupConcurrency`: max(4, runtime.NumCPU()/2)
+
+- **Subtree Validation Processing**:
+
+    - `subtreevalidation_getMissingTransactions`: max(4, runtime.NumCPU()/2)
 
 #### Validator
 
-- **`validator_kafkaWorkers`**: Number of concurrent Kafka processing workers
-    - **Purpose**: Controls parallel transaction processing capacity
-    - **Tuning**: Should match CPU cores and expected transaction volume
-    - **Integration**: Works with Block Assembly via direct gRPC (not Kafka)
+- **`validator_kafkaWorkers`**
+    - **Type**: Integer
+    - **Default**: 0
+    - **Description**: Number of worker goroutines processing Kafka messages (currently unused)
+    - **Impact**: This setting is defined but not currently implemented
 - **`validator_kafka_maxMessageBytes`**
     - **Type**: Integer
     - **Default**: 1048576 (1MB)
@@ -588,6 +595,19 @@ These services require exactly-once processing guarantees:
     - Rationale: Block processing affects consensus
     - Manual commit prevents duplicate processing
 
+### Kafka Consumer Concurrency
+
+**Important**: Unlike what the service-specific `kafkaWorkers` settings might suggest, Kafka consumer concurrency in Teranode is actually controlled through the `consumer_ratio` URL parameter for each topic. The actual number of consumers is calculated as:
+
+```
+consumerCount = partitions / consumer_ratio
+```
+
+Common consumer ratios in use:
+
+- `consumer_ratio=1`: One consumer per partition (maximum parallelism)
+- `consumer_ratio=4`: One consumer per 4 partitions (balanced approach)
+
 ### Service-Specific Performance Settings
 
 #### Propagation Service Settings
@@ -606,9 +626,12 @@ These services require exactly-once processing guarantees:
 
 #### Block Validation Service Settings
 
-- **`blockvalidation_kafkaWorkers`**: Number of concurrent block processing workers
-    - **Purpose**: Controls parallel block validation capacity
-    - **Tuning**: Balance with system resources and block arrival rate
+**Note**: Kafka consumer concurrency is actually controlled via the `consumer_ratio` URL parameter, not through service-specific worker settings. The formula is:
+```
+consumerCount = partitions / consumer_ratio
+```
+
+For example, with 8 partitions and `consumer_ratio=4`, you get 2 consumers.
 
 ### Configuration Examples by Service
 

@@ -324,13 +324,13 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 
 Retrieves the current state of the finite state machine.
 
-### WaitForFSMtoTransitionToGivenState
+### WaitForFSMtoTransitionToGivenState (Internal Method)
 
 ```go
 func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targetState blockchain_api.FSMStateType) error
 ```
 
-Waits for the FSM to transition to a given state.
+Waits for the FSM to transition to a given state. **Note: This is an internal helper method and is not exposed as a gRPC endpoint.**
 
 ### SendFSMEvent
 

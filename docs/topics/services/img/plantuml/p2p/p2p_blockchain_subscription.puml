@@ -64,7 +64,7 @@ end
 PubSub -> Node2: s.topics[subtreeTopicName]
 activate Node2
 Node2 -> Node2: handleSubtreeTopic(ctx)
-Node2 -> SubtreeValidationClient: s.subtreeValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl)
+Node2 -> Kafka: Send subtree over kafka_subtreesConfig topic (hash, subtreeMessage.DataHubUrl)
 Node2 -> notificationChannel: notify subtreeMessage to s.notificationCh
 deactivate Node2
 

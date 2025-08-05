@@ -43,7 +43,10 @@ loop Processing Loop
         BlockPersister -> FileStorage: Store Block File (.block)
 
         loop for each Subtree in the Block
-            BlockPersister -> FileStorage: Store Subtree File (.subtree)
+            BlockPersister -> FileStorage: Read Subtree File (.subtree)
+            BlockPersister -> BlockPersister: Process Subtree
+            BlockPersister -> FileStorage: Write Subtree Data File (.subtreeData)
+            BlockPersister -> FileStorage: Update Subtree DAH (Delete-At-Height)
         end
 
         BlockPersister -> FileStorage: Store UTXO Files\n(.utxo-additions, .utxo-deletions)

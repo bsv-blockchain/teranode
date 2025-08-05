@@ -23,49 +23,50 @@ skinparam participant {
 
 participant Client
 participant "RPC Server" as RPC
-participant "Hex Decoder" as Decoder
-participant "Transaction Parser" as Parser
 participant "Distributor" as Distributor
+participant "Propagation Service(s)" as Propagation
 
-Client -> RPC : SendRawTransactionCmd(HexTx)
+Client -> RPC : SendRawTransactionCmd(HexTx, AllowHighFees)
 activate RPC
 
-RPC -> Decoder : Decode hex string
-activate Decoder
-Decoder -> RPC : return bytes or error
-deactivate Decoder
+RPC -> RPC : Prepend "0" if odd length
+RPC -> RPC : hex.DecodeString(hexStr)
 
 alt If Hex Decoding Fails
     RPC -> Client : Return rpcDecodeHexError
 else If Hex Decoding Succeeds
-    RPC -> Parser : Parse transaction from bytes
-    activate Parser
-    Parser -> RPC : return transaction object or error
-    deactivate Parser
+    RPC -> RPC : bt.NewTxFromBytes(serializedTx)
 
     alt If Parsing Fails
         RPC -> Client : Return ErrRPCDeserialization
     else If Parsing Succeeds
-        RPC -> Distributor : Initialize Distributor
+        RPC -> Distributor : NewDistributor(ctx, logger, settings)
         activate Distributor
         Distributor -> RPC : return distributor instance or error
         deactivate Distributor
 
-        alt If Distributor Initialization Fails
-            RPC -> Client : Return initialization error
-        else If Initialization Succeeds
-            RPC -> Distributor : SendTransaction(context, tx)
+        alt If Distributor Creation Fails
+            RPC -> Client : Return ServiceError
+        else If Creation Succeeds
+            RPC -> Distributor : SendTransaction(ctx, tx)
             activate Distributor
-            Distributor -> RPC : return result or broadcasting error
+            loop for each Propagation server
+                Distributor -> Propagation : ProcessTransaction(ctx, tx) via gRPC
+                note right: Concurrent calls\nwith retry logic
+            end
+            Distributor -> RPC : return ResponseWrapper[] or error
             deactivate Distributor
 
-            alt If Broadcasting Fails
+            alt If Too Many Servers Fail
                 RPC -> Client : Return ErrRPCInvalidParameter
-            else If Broadcasting Succeeds
-                RPC -> Client : Return transaction result
+            else If Success Threshold Met
+                RPC -> Client : Return ResponseWrapper[]
                 note right
-                Response fields:
-                - Returns transaction ID of broadcast transaction
+                Response contains:
+                - Server addresses
+                - Durations
+                - Retry counts
+                - Any errors
                 end note
             end
         end
