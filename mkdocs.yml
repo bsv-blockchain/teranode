@@ -54,6 +54,7 @@ nav:
               - Docker: howto/miners/docker/minersHowToTroubleshooting.md
               - Kubernetes: howto/miners/kubernetes/minersHowToTroubleshooting.md
           - Additional:
+              - CPU Mining Setup: howto/miners/minersHowToCPUMiner.md
               - Reset Teranode: howto/miners/minersHowToResetTeranode.md
               - Sync the Node: howto/miners/minersHowToSyncTheNode.md
               - Teranode CLI: howto/miners/minersHowToTeranodeCLI.md

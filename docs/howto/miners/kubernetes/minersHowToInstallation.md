@@ -174,7 +174,7 @@ The Teranode Operator manages the lifecycle of Teranode instances:
 
 ```bash
 # Install operator
-helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/teranode/teranode-operator \
+helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/teranode-operator \
     -n teranode-operator \
     -f deploy/kubernetes/teranode/teranode-operator.yaml
 ```

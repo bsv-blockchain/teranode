@@ -44,7 +44,7 @@ minikube image load $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
 
 ```bash
 # Update operator
-helm upgrade teranode-operator oci://ghcr.io/bsv-blockchain/teranode/teranode-operator \
+helm upgrade teranode-operator oci://ghcr.io/bsv-blockchain/teranode-operator \
     -n teranode-operator \
     -f kubernetes/teranode/teranode-operator.yaml
 ```

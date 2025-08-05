@@ -708,30 +708,13 @@ docker compose up -d
 docker exec -it blockchain teranode-cli setfsmstate --fsmstate LEGACYSYNCING
 ```
 
-## CPU Miner Setup
+## CPU Mining
 
-Teranode provides a basic CPU miner that can be used for testing purposes. When using the Docker setup described here, you need to make sure to run it as part of your defined Docker network.
+For CPU mining setup with Teranode, please refer to the dedicated guide:
 
-### Basic CPU Miner Configuration
+- **[CPU Mining Guide](../minersHowToCPUMiner.md)** - Complete setup instructions for CPU mining with Teranode
 
-```bash
-docker run -it \
-  --entrypoint="" --network my-teranode-network \
-  434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.7.4 \
-  /app/miner.run -rpcconnect rpc -rpcuser bitcoin -rpcpassword bitcoin -rpcport 9292 \
-  -coinbase-addr mgqipciCS56nCYSjB1vTcDGskN82yxfo1G -coinbase-sig "/Your miner tag/" \
-  -cpus 2
-```
-
-### Miner Configuration Parameters
-
-- **-rpcconnect**: RPC server hostname (use container name for Docker networks)
-- **-rpcuser**: RPC username (default: bitcoin)
-- **-rpcpassword**: RPC password (default: bitcoin)
-- **-rpcport**: RPC port (default: 9292)
-- **-coinbase-addr**: Address to receive mining rewards
-- **-coinbase-sig**: Custom signature for mined blocks
-- **-cpus**: Number of CPU cores to use for mining
+This guide covers the BSV CPU miner configuration, parameters, troubleshooting, and usage examples.
 
 > **Note**: The example address used here is a testnet address, linked to the [BSV Faucet](https://bsvfaucet.org/). For mainnet mining, use a valid mainnet address.
 

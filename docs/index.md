@@ -74,14 +74,15 @@
 
 #### Common Tasks
 
-1. [Interacting with Asset Server](./howto/miners/minersHowToInteractWithAssetServer.md)
-2. [Interacting with RPC Service](./howto/miners/minersHowToInteractWithRPCServer.md)
-3. [Interacting with the FSM via RPC](./howto/miners/minersHowToInteractWithFSM.md)
-4. [Interacting with the Teranode CLI](./howto/miners/minersHowToTeranodeCLI.md)
-5. [Managing Disk Space](./howto/miners/minersManagingDiskSpace.md)
-6. [Aerospike Configuration Considerations](./howto/miners/minersHowToAerospikeTuning.md)
-7. [How To Reset Teranode](./howto/miners/minersHowToResetTeranode.md)
-8. [Blockchain Synchronization](./howto/miners/minersHowToSyncTheNode.md)
+1. [CPU Mining Setup](./howto/miners/minersHowToCPUMiner.md)
+2. [Interacting with Asset Server](./howto/miners/minersHowToInteractWithAssetServer.md)
+3. [Interacting with RPC Service](./howto/miners/minersHowToInteractWithRPCServer.md)
+4. [Interacting with the FSM via RPC](./howto/miners/minersHowToInteractWithFSM.md)
+5. [Interacting with the Teranode CLI](./howto/miners/minersHowToTeranodeCLI.md)
+6. [Managing Disk Space](./howto/miners/minersManagingDiskSpace.md)
+7. [Aerospike Configuration Considerations](./howto/miners/minersHowToAerospikeTuning.md)
+8. [How To Reset Teranode](./howto/miners/minersHowToResetTeranode.md)
+9. [Blockchain Synchronization](./howto/miners/minersHowToSyncTheNode.md)
 
 -----
 
