@@ -868,7 +868,11 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 
 	b.cachedCandidate.generating = false
 
-	close(b.cachedCandidate.generationChan)
+	// Only close the channel if it's not nil
+	if b.cachedCandidate.generationChan != nil {
+		close(b.cachedCandidate.generationChan)
+		b.cachedCandidate.generationChan = nil
+	}
 	b.cachedCandidate.mu.Unlock()
 
 	// Record total generation time
