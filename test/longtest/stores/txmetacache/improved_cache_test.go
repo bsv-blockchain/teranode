@@ -305,7 +305,7 @@ func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 	err = cache.SetCache(&hash, &meta.Data{})
 	require.NoError(t, err)
 
-	txmetaLatest, err := cache.Get(ctx, &hash)
+	txmetaLatest, err := cache.GetMeta(ctx, &hash)
 	require.NoError(t, err)
 	require.NotNil(t, txmetaLatest)
 }
