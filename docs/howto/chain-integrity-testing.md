@@ -18,6 +18,7 @@ Before running the chain integrity tests, ensure you have:
 - `jq` command-line JSON processor installed
 - `curl` command-line tool installed
 - Sufficient system resources (recommended: 8GB RAM, 4 CPU cores)
+- AWS CLI installed and configured (for ECR access)
 
 ## Available Make Jobs
 
@@ -66,7 +67,19 @@ This displays the hash analysis results from a previous chain integrity test:
 - Provides clear success/failure indicators
 - Can be run independently after a test completes
 
-### 5. Clean Up
+### 5. AWS ECR Login
+
+```bash
+make ecr-login
+```
+
+This logs into AWS ECR to enable pulling required Docker images:
+- Authenticates with AWS ECR in eu-north-1 region
+- Enables pulling teranode-commands and teranode-coinbase images
+- Required before running tests if ECR images are needed
+- Automatically handled during chain integrity tests
+
+### 6. Clean Up
 
 ```bash
 make clean-chain-integrity
@@ -145,6 +158,12 @@ The hash comparison helps verify that nodes are maintaining consistent blockchai
    - Increase `MAX_ATTEMPTS` or decrease `REQUIRED_HEIGHT`
    - Check system resources (CPU, memory, disk space)
    - Verify Docker containers are running: `docker ps`
+
+2. **ECR login issues**
+   - Ensure AWS CLI is installed and configured
+   - Check AWS credentials: `aws sts get-caller-identity`
+   - Verify ECR access permissions
+   - Run `make ecr-login` manually if needed
 
 2. **Nodes not responding**
    - Check container logs: `docker compose -f compose/docker-compose-3blasters.yml logs teranode1`

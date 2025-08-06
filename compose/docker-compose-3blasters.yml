@@ -55,7 +55,7 @@ services:
       - COLLECTOR_ZIPKIN_HOST_PORT=:9411
 
   postgres:
-    container_name: postgres
+    container_name: postgres_for_chain_integrity
     image: postgres:latest
     networks:
       - teranode-network
