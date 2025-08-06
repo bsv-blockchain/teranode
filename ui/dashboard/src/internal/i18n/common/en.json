@@ -98,6 +98,24 @@
           "base_url": "From",
           "receivedAt": "Received at"
         }
+      },
+      "node_status": {
+        "title": "Node Status",
+        "fields": {
+          "age": "Age",
+          "base_url": "Node",
+          "version": "Version",
+          "commit_hash": "Commit",
+          "best_block_hash": "Best Block Hash",
+          "best_height": "Best Height",
+          "tx_count_in_assembly": "TX in Assembly",
+          "fsm_state": "FSM State",
+          "start_time": "Started",
+          "uptime": "Uptime",
+          "miner_name": "Miner",
+          "listen_mode": "Mode",
+          "receivedAt": "Received at"
+        }
       }
     },
     "toolbar": {
@@ -333,13 +351,19 @@
         "title": "Connected Nodes",
         "fields": {
           "base_url": "Address",
+          "version": "Version",
+          "fsm_state": "State",
           "height": "Height",
+          "tx_assembly": "TX Assembly",
+          "uptime": "Uptime",
           "tx_count": "TX Count",
           "size_in_bytes": "Size",
           "miner": "Miner",
+          "listen_mode": "Mode",
           "hash": "Latest hash",
           "previousblockhash": "Previous hash",
-          "receivedAt": "Last seen"
+          "receivedAt": "Last seen",
+          "last_update": "Last Update"
         }
       }
     },

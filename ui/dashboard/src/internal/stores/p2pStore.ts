@@ -9,7 +9,7 @@ export const error: Writable<any> = writable(null)
 export const sock: Writable<any> = writable(null)
 export const connectionAttempts: Writable<number> = writable(0)
 
-const maxMessages = 100
+const maxMessages = 500
 const MAX_RECONNECT_ATTEMPTS = 5
 const BASE_RECONNECT_DELAY = 2000 // Start with 2 seconds
 
@@ -95,6 +95,16 @@ export async function connectToP2PServer() {
               receivedAt: new Date()
             }
             miningNodes.set(miningNodeSet)
+          } else if (jsonData.type === 'node_status') {
+            // Handle node_status messages - these provide comprehensive node information
+            miningNodeSet[baseUrl] = {
+              ...miningNodeSet[baseUrl],
+              ...jsonData,
+              base_url: baseUrl,
+              receivedAt: new Date()
+            }
+            miningNodes.set(miningNodeSet)
+            // Don't return here - let it fall through to add to messages array
           } else if (jsonData.type === 'block') {
             if (!miningNodeSet[baseUrl]) {
               miningNodeSet[baseUrl] = { base_url: baseUrl }
@@ -121,10 +131,11 @@ export async function connectToP2PServer() {
           }
 
 
-          let m: any = get(messages)
-          m = [jsonData, ...m].slice(0, maxMessages)
-
-          messages.set(m)
+          // Use update to modify the existing array instead of replacing it
+          messages.update(currentMessages => {
+            // Add new message at the beginning and keep only maxMessages
+            return [jsonData, ...currentMessages].slice(0, maxMessages)
+          })
         } catch (error) {
           console.error('p2pWS: Error parsing WebSocket data:', error)
         }

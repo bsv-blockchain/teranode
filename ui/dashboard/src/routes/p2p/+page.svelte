@@ -4,7 +4,7 @@
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import MessageBox from '$internal/components/msgbox/index.svelte'
   import Typo from '$internal/components/typo/index.svelte'
-  import { Button, Switch, TextInput } from '$lib/components'
+  import { Button, Switch, TextInput, Dropdown } from '$lib/components'
   import { contentLeft } from '$internal/stores/nav'
   import { MessageType } from '$internal/components/msgbox/types'
 
@@ -59,6 +59,9 @@
   })
 
   let collapseMsgContent = false
+  
+  // In by-peer mode, always collapse messages for compact view
+  $: actualCollapseState = byPeer ? true : collapseMsgContent
 
   let byPeer = false
   let filter = ''
@@ -66,6 +69,22 @@
   let groupedMessages: any = {}
   let filteredMessages: any[] = []
   let peers: string[] = []
+
+  // Message type filter
+  let messageTypeSet = new Set(['All'])
+  let messageTypeOptions: string[] = ['All']
+  let selectedMessageType = 'All'
+
+  // Function to process message types
+  function processMessageType(messageType: string) {
+    if (messageType && !messageTypeSet.has(messageType)) {
+      messageTypeSet.add(messageType)
+      // Rebuild options array only when a new type is discovered
+      messageTypeOptions = ['All', ...Array.from(messageTypeSet)
+        .filter(t => t !== 'All')
+        .sort()]
+    }
+  }
 
   let dataSnapshot: any = null
 
@@ -99,14 +118,35 @@
         }
         return true
       })
-      .map((item) => ({ ...item, type: item.type.toLowerCase() }))
+      .map((item) => {
+        // Process message type for dropdown
+        const lowerType = item.type?.toLowerCase()
+        processMessageType(lowerType)
+        return { ...item, type: lowerType }
+      })
+
+    // Apply message type filter
+    if (selectedMessageType !== 'All') {
+      filteredMessages = filteredMessages.filter(msg => msg.type === selectedMessageType)
+    }
 
     if (filter.length > 0) {
       const f = filter.toLowerCase()
 
       filteredMessages = filteredMessages.filter((message) => {
-        const search = JSON.stringify(message).toLowerCase()
-        return search.includes(f)
+        // More targeted search - check specific fields instead of entire JSON
+        return (
+          message.type?.toLowerCase().includes(f) ||
+          message.hash?.toLowerCase().includes(f) ||
+          message.base_url?.toLowerCase().includes(f) ||
+          message.miner?.toLowerCase().includes(f) ||
+          message.miner_name?.toLowerCase().includes(f) ||
+          message.peer_id?.toLowerCase().includes(f) ||
+          message.peerID?.toLowerCase().includes(f) ||
+          message.peer?.toLowerCase().includes(f) ||
+          message.fsm_state?.toLowerCase().includes(f) ||
+          message.version?.toLowerCase().includes(f)
+        )
       })
     }
 
@@ -156,7 +196,12 @@
 <PageWithMenu>
   <div class="tools-container">
     <div class="tools">
-      <div class="title">{t(`${pageKey}.title`)}</div>
+      <div class="title">
+        {t(`${pageKey}.title`)}
+        {#if $connectionAttempts > 0 && !connected}
+          <span class="connection-error">P2P connection failed. Attempt {$connectionAttempts}/5</span>
+        {/if}
+      </div>
       <div class="filters">
         <Switch
           size="small"
@@ -176,12 +221,21 @@
           labelAlignment="center"
         />
 
-        <TextInput
-          size="small"
-          name="filter"
-          placeholder={t(`${pageKey}.filter`)}
-          bind:value={filter}
-        />
+        <div class="filter-group">
+          <span class="filter-label">Filter:</span>
+          <Dropdown
+            size="small"
+            name="messageType"
+            bind:value={selectedMessageType}
+            items={messageTypeOptions.map(type => ({ value: type, label: type }))}
+          />
+          <TextInput
+            size="small"
+            name="filter"
+            placeholder="Search..."
+            bind:value={filter}
+          />
+        </div>
 
         <Button
           size="small"
@@ -194,11 +248,6 @@
         </Button>
       </div>
     </div>
-    {#if $connectionAttempts > 0 && !connected}
-      <div class="connection-status">
-        <span class="error">P2P connection failed. Attempt {$connectionAttempts}/5</span>
-      </div>
-    {/if}
   </div>
 
   {#if byPeer}
@@ -215,8 +264,8 @@
             />
           </div>
           <div class="msg-contaienr">
-            {#each groupedMessages[peer] as message}
-              <MessageBox {message} source="p2p" collapse={collapseMsgContent} />
+            {#each groupedMessages[peer] as message (message.hash + message.receivedAt)}
+              <MessageBox {message} source="p2p" collapse={actualCollapseState} titleMinW={actualCollapseState ? "auto" : "80px"} hidePeer={true} />
             {/each}
           </div>
         </div>
@@ -224,10 +273,10 @@
     </div>
   {:else}
     <div class="container">
-      <div class="column">
+      <div class="column column-full">
         <div class="msg-contaienr">
-          {#each filteredMessages as message}
-            <MessageBox {message} source="p2p" collapse={collapseMsgContent} />
+          {#each filteredMessages as message (message.hash + message.receivedAt)}
+            <MessageBox {message} source="p2p" collapse={actualCollapseState} titleMinW={actualCollapseState ? "auto" : "120px"} />
           {/each}
         </div>
       </div>
@@ -265,6 +314,15 @@
     letter-spacing: 0.44px;
 
     margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .connection-error {
+    color: #ff6b6b;
+    font-size: 14px;
+    font-weight: 400;
   }
   .tools .filters {
     display: flex;
@@ -276,15 +334,16 @@
     margin-top: 8px;
   }
 
-  .connection-status {
-    margin-top: 10px;
-    padding: 5px 10px;
-    border-radius: 4px;
-    font-size: 14px;
+  .filter-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
-  .connection-status .error {
-    color: #ff6b6b;
+  .filter-label {
+    color: rgba(255, 255, 255, 0.88);
+    font-size: 14px;
+    font-weight: 500;
   }
 
   .peer {
@@ -317,8 +376,24 @@
   }
 
   .column {
+    flex: 0 0 auto;
+    min-width: 280px;
+    max-width: 350px;
+  }
+  
+  .column-full {
     flex: 1;
-    min-width: 200px;
+    min-width: unset;
+    max-width: unset;
+  }
+  
+  .column .peer {
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    text-align: center;
+    font-weight: 600;
   }
 
   * {

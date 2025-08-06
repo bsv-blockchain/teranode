@@ -4,6 +4,7 @@ export enum MessageType {
   subtree = 'subtree',
   ping = 'ping',
   getminingcandidate = 'getminingcandidate',
+  node_status = 'node_status',
 }
 
 interface P2PMessageBase {
@@ -38,7 +39,21 @@ export interface PingMessage {
   receivedAt: Date
 }
 
-export type P2PMessage = BlockMessage | MiningOnMessage | SubtreeMessage | PingMessage
+export interface NodeStatusMessage extends P2PMessageBase {
+  type: MessageType.node_status
+  version: string
+  commit_hash: string
+  best_block_hash: string
+  best_height: number
+  tx_count_in_assembly: number
+  fsm_state: string
+  start_time: number
+  uptime: number
+  miner_name: string
+  listen_mode: string
+}
+
+export type P2PMessage = BlockMessage | MiningOnMessage | SubtreeMessage | PingMessage | NodeStatusMessage
 
 export interface StatusMessage {
   timestamp: string

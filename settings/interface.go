@@ -369,6 +369,7 @@ type P2PSettings struct {
 	HandshakeTopic        string // new pubsub topic for version/verack handshake
 	HandshakeTopicSize    int
 	HandshakeTopicTimeout time.Duration
+	NodeStatusTopic       string // pubsub topic for node status messages
 
 	DHTProtocolID   string
 	DHTUsePrivate   bool

@@ -99,12 +99,14 @@ type Server struct {
 	subtreeTopicName                  string
 	miningOnTopicName                 string
 	rejectedTxTopicName               string
-	invalidBlocksTopicName            string   // Kafka topic for invalid blocks
-	invalidSubtreeTopicName           string   // Kafka topic for invalid subtrees
-	handshakeTopicName                string   // pubsub topic for version/verack
-	topicPrefix                       string   // Chain identifier prefix for topic validation
-	blockPeerMap                      sync.Map // Map to track which peer sent each block (hash -> peerID)
-	subtreePeerMap                    sync.Map // Map to track which peer sent each subtree (hash -> peerID)
+	invalidBlocksTopicName            string    // Kafka topic for invalid blocks
+	invalidSubtreeTopicName           string    // Kafka topic for invalid subtrees
+	handshakeTopicName                string    // pubsub topic for version/verack
+	nodeStatusTopicName               string    // pubsub topic for node status messages
+	topicPrefix                       string    // Chain identifier prefix for topic validation
+	blockPeerMap                      sync.Map  // Map to track which peer sent each block (hash -> peerID)
+	subtreePeerMap                    sync.Map  // Map to track which peer sent each subtree (hash -> peerID)
+	startTime                         time.Time // Server start time for uptime calculation
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -175,6 +177,11 @@ func NewServer(
 	rtn := tSettings.P2P.RejectedTxTopic
 	if rtn == "" {
 		return nil, errors.NewConfigurationError("p2p_rejected_tx_topic not set in config")
+	}
+
+	nstn := tSettings.P2P.NodeStatusTopic
+	if nstn == "" {
+		nstn = "node_status" // Default value for backward compatibility
 	}
 
 	sharedKey := tSettings.P2P.SharedKey
@@ -286,7 +293,9 @@ func NewServer(
 		invalidBlocksTopicName:            tSettings.Kafka.InvalidBlocks,
 		invalidSubtreeTopicName:           tSettings.Kafka.InvalidSubtrees,
 		handshakeTopicName:                fmt.Sprintf("%s-%s", topicPrefix, htn),
+		nodeStatusTopicName:               fmt.Sprintf("%s-%s", topicPrefix, nstn),
 		topicPrefix:                       topicPrefix,
+		startTime:                         time.Now(),
 	}
 
 	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
@@ -458,6 +467,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		s.subtreeTopicName,
 		s.miningOnTopicName,
 		s.rejectedTxTopicName,
+		s.nodeStatusTopicName,
 	)
 	if err != nil {
 		return errors.NewServiceError("error starting p2p node", err)
@@ -502,6 +512,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Send initial handshake (version)
 	s.sendHandshake(ctx)
+
+	// Start node status publisher
+	go s.publishNodeStatus(ctx)
 
 	apiKey := s.settings.GRPCAdminAPIKey
 	if apiKey == "" {
@@ -783,6 +796,63 @@ func (s *Server) sendHandshakeToPeer(ctx context.Context, peerID peer.ID, msgByt
 	return s.P2PNode.SendToPeer(ctx, peerID, msgBytes)
 }
 
+// NodeStatusMessage represents a node status update message
+type NodeStatusMessage struct {
+	Type              string  `json:"type"`
+	BaseURL           string  `json:"base_url"`
+	PeerID            string  `json:"peer_id"`
+	Version           string  `json:"version"`
+	CommitHash        string  `json:"commit_hash"`
+	BestBlockHash     string  `json:"best_block_hash"`
+	BestHeight        uint32  `json:"best_height"`
+	TxCountInAssembly int     `json:"tx_count_in_assembly"`
+	FSMState          string  `json:"fsm_state"`
+	StartTime         int64   `json:"start_time"`
+	Uptime            float64 `json:"uptime"`
+	MinerName         string  `json:"miner_name"`
+	ListenMode        string  `json:"listen_mode"`
+}
+
+func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from string) {
+	var nodeStatusMessage NodeStatusMessage
+	if err := json.Unmarshal(m, &nodeStatusMessage); err != nil {
+		s.logger.Errorf("[handleNodeStatusTopic] json unmarshal error: %v", err)
+		return
+	}
+
+	s.logger.Debugf("[handleNodeStatusTopic] got p2p node status from %s (peer_id: %s)", from, nodeStatusMessage.PeerID)
+
+	// Send to notification channel for WebSocket clients
+	s.notificationCh <- &notificationMsg{
+		Timestamp:         time.Now().UTC().Format(isoFormat),
+		Type:              "node_status",
+		BaseURL:           nodeStatusMessage.BaseURL,
+		PeerID:            nodeStatusMessage.PeerID,
+		Version:           nodeStatusMessage.Version,
+		CommitHash:        nodeStatusMessage.CommitHash,
+		BestBlockHash:     nodeStatusMessage.BestBlockHash,
+		BestHeight:        nodeStatusMessage.BestHeight,
+		TxCountInAssembly: nodeStatusMessage.TxCountInAssembly,
+		FSMState:          nodeStatusMessage.FSMState,
+		StartTime:         nodeStatusMessage.StartTime,
+		Uptime:            nodeStatusMessage.Uptime,
+		MinerName:         nodeStatusMessage.MinerName,
+		ListenMode:        nodeStatusMessage.ListenMode,
+	}
+
+	// Skip further processing for our own messages
+	if from == s.P2PNode.HostID().String() {
+		return
+	}
+
+	// Update peer height if provided
+	if nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
+		if peerID, err := peer.Decode(nodeStatusMessage.PeerID); err == nil {
+			s.P2PNode.UpdatePeerHeight(peerID, int32(nodeStatusMessage.BestHeight)) //nolint:gosec
+		}
+	}
+}
+
 func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string) {
 	s.logger.Infof("[handleHandshakeTopic] Received handshake from %s, message: %s", from, string(m))
 
@@ -1039,6 +1109,12 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("blockMessage - publish error: %w", err)
 	}
 
+	// Also send a node_status update when best block changes
+	if err := s.handleNodeStatusNotification(ctx); err != nil {
+		// Log the error but don't fail the block notification
+		s.logger.Warnf("[handleBlockNotification] error sending node status update: %v", err)
+	}
+
 	return nil
 }
 
@@ -1084,6 +1160,132 @@ func (s *Server) handleMiningOnNotification(ctx context.Context) error {
 		Miner:        miningOnMessage.Miner,
 		SizeInBytes:  miningOnMessage.SizeInBytes,
 		TxCount:      miningOnMessage.TxCount,
+	}
+
+	// Also send a node_status update when mining starts on a new block
+	if err := s.handleNodeStatusNotification(ctx); err != nil {
+		// Log the error but don't fail the mining notification
+		s.logger.Warnf("[handleMiningOnNotification] error sending node status update: %v", err)
+	}
+
+	return nil
+}
+
+func (s *Server) publishNodeStatus(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	// Publish initial status immediately
+	if err := s.handleNodeStatusNotification(ctx); err != nil {
+		s.logger.Errorf("[publishNodeStatus] error sending initial node status: %v", err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Infof("[publishNodeStatus] node status publisher shutting down")
+			return
+		case <-ticker.C:
+			if err := s.handleNodeStatusNotification(ctx); err != nil {
+				s.logger.Errorf("[publishNodeStatus] error sending node status: %v", err)
+			}
+		}
+	}
+}
+
+func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
+	// Get best block info
+	var bestBlockHeader *model.BlockHeader
+	var bestBlockMeta *model.BlockHeaderMeta
+	var err error
+
+	if s.blockchainClient != nil {
+		bestBlockHeader, bestBlockMeta, err = s.blockchainClient.GetBestBlockHeader(ctx)
+	}
+	if err != nil {
+		s.logger.Errorf("[handleNodeStatusNotification] error getting best block header: %s", err)
+		// Provide empty values if we can't get the best block
+		bestBlockHeader = &model.BlockHeader{}
+		bestBlockMeta = &model.BlockHeaderMeta{}
+	}
+
+	// Calculate uptime
+	uptime := time.Since(s.startTime).Seconds()
+
+	// Get FSM state from blockchain client
+	fsmState := "UNKNOWN"
+	if s.blockchainClient != nil {
+		currentState, err := s.blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			s.logger.Warnf("[handleNodeStatusNotification] error getting FSM state: %s", err)
+		} else if currentState != nil {
+			// Convert FSMStateType to string
+			fsmState = currentState.String()
+		}
+	}
+
+	// TODO: Get actual tx count from block assembly service when API is available
+	txCountInAssembly := 0
+	minerName := s.settings.Coinbase.ArbitraryText // Get miner name from coinbase configuration
+
+	// Get block hash string
+	blockHashStr := ""
+	if bestBlockHeader != nil {
+		hash := bestBlockHeader.Hash()
+		if hash != nil {
+			blockHashStr = hash.String()
+		}
+	}
+
+	// Get height
+	height := uint32(0)
+	if bestBlockMeta != nil {
+		height = bestBlockMeta.Height
+	}
+
+	// Create node status message
+	nodeStatusMessage := NodeStatusMessage{
+		Type:              "node_status",
+		BaseURL:           s.AssetHTTPAddressURL,
+		PeerID:            s.P2PNode.HostID().String(),
+		Version:           s.settings.Version,
+		CommitHash:        s.settings.Commit,
+		BestBlockHash:     blockHashStr,
+		BestHeight:        height,
+		TxCountInAssembly: txCountInAssembly,
+		FSMState:          fsmState,
+		StartTime:         s.startTime.Unix(),
+		Uptime:            uptime,
+		MinerName:         minerName,
+		ListenMode:        s.settings.P2P.ListenMode,
+	}
+
+	msgBytes, err := json.Marshal(nodeStatusMessage)
+	if err != nil {
+		return errors.NewError("nodeStatusMessage - json marshal error: %w", err)
+	}
+
+	s.logger.Debugf("[handleNodeStatusNotification] P2P publishing nodeStatusMessage")
+	if err = s.P2PNode.Publish(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
+		return errors.NewError("nodeStatusMessage - publish error: %w", err)
+	}
+
+	// Also send to local WebSocket clients
+	s.notificationCh <- &notificationMsg{
+		Timestamp:         time.Now().UTC().Format(isoFormat),
+		Type:              "node_status",
+		BaseURL:           nodeStatusMessage.BaseURL,
+		PeerID:            nodeStatusMessage.PeerID,
+		Version:           nodeStatusMessage.Version,
+		CommitHash:        nodeStatusMessage.CommitHash,
+		BestBlockHash:     nodeStatusMessage.BestBlockHash,
+		BestHeight:        nodeStatusMessage.BestHeight,
+		TxCountInAssembly: nodeStatusMessage.TxCountInAssembly,
+		FSMState:          nodeStatusMessage.FSMState,
+		StartTime:         nodeStatusMessage.StartTime,
+		Uptime:            nodeStatusMessage.Uptime,
+		MinerName:         nodeStatusMessage.MinerName,
+		ListenMode:        nodeStatusMessage.ListenMode,
 	}
 
 	return nil
@@ -1777,6 +1979,13 @@ func (s *Server) registerRemainingHandlers(ctx context.Context) error {
 		registerErrors = append(registerErrors, fmt.Sprintf("handshake:%v", err))
 	} else {
 		s.logger.Debugf("[Server] Successfully registered handshake topic handler")
+	}
+	// register node-status topic handler
+	if err := s.P2PNode.SetTopicHandler(ctx, s.nodeStatusTopicName, s.handleNodeStatusTopic); err != nil {
+		s.logger.Errorf("[Server] Error setting node-status topic handler: %v", err)
+		registerErrors = append(registerErrors, fmt.Sprintf("node-status:%v", err))
+	} else {
+		s.logger.Debugf("[Server] Successfully registered node-status topic handler")
 	}
 
 	// if any errors occurred, return them as a combined error

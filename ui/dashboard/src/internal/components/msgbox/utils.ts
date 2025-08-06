@@ -6,8 +6,10 @@ import type {
   MiningOnMessage,
   SubtreeMessage,
   MessageSource, PingMessage,
+  NodeStatusMessage,
 } from './types'
 import i18n from '../../i18n'
+import { humanTime } from '$internal/utils/format'
 
 const baseKey = 'comp.msgbox'
 
@@ -16,7 +18,7 @@ i18n.subscribe((value) => {
   t = value.t
 })
 
-export const getMessageFields = (source: MessageSource, data: Message, age: string) => {
+export const getMessageFields = (source: MessageSource, data: Message, age: string, hidePeer: boolean = false) => {
   const fields: msg.MsgDisplayField[] = []
   let key = `${baseKey}.${data.type}.fields`
   if (source === 'p2p') {
@@ -28,7 +30,9 @@ export const getMessageFields = (source: MessageSource, data: Message, age: stri
         fields.push({ label: t(`${key}.receivedAt`), value: blockMsg.receivedAt })
         fields.push({ label: t(`${key}.hash`), value: blockMsg.hash })
         fields.push({ label: t(`${key}.base_url`), value: blockMsg.base_url })
-        fields.push({ label: t(`${key}.peer_id`), value: blockMsg.peer_id })
+        if (!hidePeer) {
+          fields.push({ label: t(`${key}.peer_id`), value: blockMsg.peer_id })
+        }
         break
       case msg.MessageType.mining_on:
         const miningOnMsg = data as MiningOnMessage
@@ -36,7 +40,9 @@ export const getMessageFields = (source: MessageSource, data: Message, age: stri
         fields.push({ label: t(`${key}.hash`), value: miningOnMsg.hash })
         fields.push({ label: t(`${key}.previousblockhash`), value: miningOnMsg.previousblockhash })
         fields.push({ label: t(`${key}.base_url`), value: miningOnMsg.base_url })
-        fields.push({ label: t(`${key}.peer_id`), value: miningOnMsg.peer_id })
+        if (!hidePeer) {
+          fields.push({ label: t(`${key}.peer_id`), value: miningOnMsg.peer_id })
+        }
         fields.push({ label: t(`${key}.tx_count`), value: miningOnMsg.tx_count })
         fields.push({ label: t(`${key}.size_in_bytes`), value: miningOnMsg.size_in_bytes })
         fields.push({ label: t(`${key}.height`), value: miningOnMsg.height })
@@ -47,12 +53,56 @@ export const getMessageFields = (source: MessageSource, data: Message, age: stri
         fields.push({ label: t(`${key}.age`), value: age })
         fields.push({ label: t(`${key}.hash`), value: subtreeMsh.hash })
         fields.push({ label: t(`${key}.base_url`), value: subtreeMsh.base_url })
-        fields.push({ label: t(`${key}.peer_id`), value: subtreeMsh.peer_id })
+        if (!hidePeer) {
+          fields.push({ label: t(`${key}.peer_id`), value: subtreeMsh.peer_id })
+        }
         break
       case msg.MessageType.ping:
         const pingMsg = data as PingMessage
         fields.push({ label: t(`${key}.age`), value: age })
         fields.push({ label: t(`${key}.base_url`), value: pingMsg.base_url })
+        break
+      case msg.MessageType.node_status:
+        const nodeStatusMsg = data as NodeStatusMessage
+        
+        // Format UTC datetime consistently
+        const formatUTCDateTime = (date: Date) => {
+          const pad = (n: number) => n.toString().padStart(2, '0')
+          return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ` +
+                 `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`
+        }
+        
+        // Calculate uptime using humanTime
+        const startTime = nodeStatusMsg.start_time * 1000 // Convert to milliseconds
+        const uptimeStr = humanTime(startTime) + ' ago'
+        
+        // Static data at the top
+        const fromWithMiner = nodeStatusMsg.miner_name 
+          ? `${nodeStatusMsg.base_url} (${nodeStatusMsg.miner_name})`
+          : nodeStatusMsg.base_url
+        
+        fields.push({ label: t(`${key}.base_url`), value: fromWithMiner })
+        fields.push({ label: t(`${key}.commit_hash`), value: nodeStatusMsg.commit_hash })
+        fields.push({ label: t(`${key}.version`), value: nodeStatusMsg.version })
+        
+        const startTimeStr = formatUTCDateTime(new Date(nodeStatusMsg.start_time * 1000))
+        fields.push({ label: t(`${key}.start_time`), value: `${startTimeStr} (${uptimeStr})` })
+        
+        // Dynamic data
+        fields.push({ label: t(`${key}.best_height`), value: nodeStatusMsg.best_height })
+        fields.push({ label: t(`${key}.best_block_hash`), value: nodeStatusMsg.best_block_hash })
+        fields.push({ label: t(`${key}.tx_count_in_assembly`), value: nodeStatusMsg.tx_count_in_assembly })
+        fields.push({ label: t(`${key}.fsm_state`), value: nodeStatusMsg.fsm_state })
+        fields.push({ label: t(`${key}.listen_mode`), value: nodeStatusMsg.listen_mode })
+        
+        // Add peer_id if not hidden
+        if (!hidePeer && nodeStatusMsg.peer_id) {
+          fields.push({ label: t(`${key}.peer_id`), value: nodeStatusMsg.peer_id })
+        }
+        
+        // Received at with age
+        const receivedStr = formatUTCDateTime(nodeStatusMsg.receivedAt)
+        fields.push({ label: t(`${key}.receivedAt`), value: `${receivedStr} (${age})` })
         break
     }
   } else if (source === 'status') {

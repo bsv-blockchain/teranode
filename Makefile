@@ -8,13 +8,12 @@ LOCAL_TEST_START_FROM_STATE ?=
 # Get version from git using the shared script
 # Use environment variables if set, otherwise use the script
 ifndef GIT_VERSION
-  # Get all git version variables from the script in one call
-  GIT_VARS := $(shell ./scripts/determine-git-version.sh --makefile)
-  GIT_VERSION := $(shell echo '$(GIT_VARS)' | grep "^GIT_VERSION=" | cut -d'=' -f2)
-  GIT_COMMIT := $(shell echo '$(GIT_VARS)' | grep "^GIT_COMMIT=" | cut -d'=' -f2)
-  GIT_SHA := $(shell echo '$(GIT_VARS)' | grep "^GIT_SHA=" | cut -d'=' -f2)
-  GIT_TAG := $(shell echo '$(GIT_VARS)' | grep "^GIT_TAG=" | cut -d'=' -f2)
-  GIT_TIMESTAMP := $(shell echo '$(GIT_VARS)' | grep "^GIT_TIMESTAMP=" | cut -d'=' -f2)
+  # Get git version variables directly from the script
+  GIT_VERSION := $(shell ./scripts/determine-git-version.sh --makefile | grep "^GIT_VERSION=" | cut -d'=' -f2)
+  GIT_COMMIT := $(shell ./scripts/determine-git-version.sh --makefile | grep "^GIT_COMMIT=" | cut -d'=' -f2)
+  GIT_SHA := $(shell ./scripts/determine-git-version.sh --makefile | grep "^GIT_SHA=" | cut -d'=' -f2)
+  GIT_TAG := $(shell ./scripts/determine-git-version.sh --makefile | grep "^GIT_TAG=" | cut -d'=' -f2)
+  GIT_TIMESTAMP := $(shell ./scripts/determine-git-version.sh --makefile | grep "^GIT_TIMESTAMP=" | cut -d'=' -f2)
 endif
 
 .PHONY: set_debug_flags
@@ -88,19 +87,19 @@ clean_backup:
 
 .PHONY: build-teranode-with-dashboard
 build-teranode-with-dashboard: set_debug_flags set_txmetacache_flag build-dashboard
-	go build -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=$(or ${GITHUB_SHA},${GIT_COMMIT}) -X main.version=${GIT_VERSION} -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	go build -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-teranode
 build-teranode: set_debug_flags set_txmetacache_flag
-	go build -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=$(or ${GITHUB_SHA},${GIT_COMMIT}) -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	go build -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-teranode-no-debug
 build-teranode-no-debug: set_txmetacache_flag
-	go build -a -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=$(or ${GITHUB_SHA},${GIT_COMMIT}) -X main.version=${GIT_VERSION} -s -w" -gcflags "-l -B" -o teranode_no_debug.run .
+	go build -a -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -s -w" -gcflags "-l -B" -o teranode_no_debug.run .
 
 .PHONY: build-teranode-ci
 build-teranode-ci: set_debug_flags set_txmetacache_flag
-	go build -race -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=$(or ${GITHUB_SHA},${GIT_COMMIT}) -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	go build -race -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags
@@ -108,7 +107,7 @@ build-chainintegrity: set_debug_flags
 
 .PHONY: build-tx-blaster
 build-tx-blaster: set_debug_flags
-	go build --trimpath -ldflags="-X main.commit=$(or ${GITHUB_SHA},${GIT_COMMIT}) -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
+	go build --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
 
 .PHONY: build-teranode-cli
 build-teranode-cli:

@@ -10,6 +10,7 @@
   export let message: Message
   export let collapse = false
   export let titleMinW = '120px'
+  export let hidePeer = false
 
   let age = ''
   let fields: MsgDisplayField[] = []
@@ -30,7 +31,7 @@
   onMount(() => {
     let millis: number | null = getMsgDateMillis(source, message)
     age = millis ? humanTime(millis) : ''
-    fields = getMessageFields(source, message, `${age} ago`)
+    fields = getMessageFields(source, message, `${age} ago`, hidePeer)
 
     const interval = setInterval(() => {
       millis = getMsgDateMillis(source, message)
@@ -40,7 +41,7 @@
     return () => clearInterval(interval)
   })
 
-  $: updatedFields = getMessageFields(source, message, `${age} ago`)
+  $: updatedFields = getMessageFields(source, message, `${age} ago`, hidePeer)
   $: baseKey = `comp.msgbox.${message.type.toLowerCase()}`
 
   $: title =
@@ -51,9 +52,7 @@
 
 <div
   class="msgbox"
-  style:--border-color={`var(--msgbox-${
-    MessageType[message.type.toLowerCase()] ? message.type.toLowerCase() : 'default'
-  }-border-color)`}
+  style:--border-color={`var(--msgbox-${message.type.toLowerCase()}-border-color, var(--msgbox-default-border-color))`}
   style:--title-min-width={titleMinW}
   class:collapse
 >
@@ -79,24 +78,35 @@
 
     display: flex;
     align-items: flex-start;
+    gap: 16px;
 
     width: 100%;
     min-height: 40px;
     padding: 12px 16px;
 
     border-radius: 12px;
-    border: 1px solid var(--border-color);
+    border: 2px solid var(--border-color);
     background: var(--msgbox-bg-color);
   }
   .msgbox.collapse {
     flex-direction: column;
-    gap: 8px;
+    gap: 0;
+  }
+  .msgbox.collapse .title {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    flex: initial;
+    min-width: auto;
+  }
+  .msgbox.collapse .content {
+    margin-top: 0;
+    padding-top: 0;
   }
 
   .title {
     box-sizing: var(--box-sizing);
 
-    flex: 0;
+    flex: 0 0 var(--title-min-width);
     min-width: var(--title-min-width);
     word-wrap: break-word;
 
@@ -110,6 +120,7 @@
   }
 
   .content {
+    flex: 1;
     display: flex;
     flex-direction: column;
     align-items: flex-start;

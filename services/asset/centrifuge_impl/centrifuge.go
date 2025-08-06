@@ -79,6 +79,11 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		httpServer: httpServer,
 	}
 
+	// Only set blockchainClient if repo is not nil
+	if repo != nil {
+		c.blockchainClient = repo.BlockchainClient
+	}
+
 	return c, nil
 }
 
@@ -113,10 +118,11 @@ func (c *Centrifuge) Init(ctx context.Context) (err error) {
 	c.centrifugeNode.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
 			Subscriptions: map[string]centrifuge.SubscribeOptions{
-				"ping":      {},
-				"block":     {},
-				"subtree":   {},
-				"mining_on": {},
+				"ping":        {},
+				"block":       {},
+				"subtree":     {},
+				"mining_on":   {},
+				"node_status": {},
 			},
 		}, nil
 	})
@@ -501,6 +507,12 @@ func handleSubscribe(node *centrifuge.Node) http.HandlerFunc {
 		}
 
 		err = node.Subscribe("42", "mining_on", centrifuge.WithSubscribeClient(clientID))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		err = node.Subscribe("42", "node_status", centrifuge.WithSubscribeClient(clientID))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return

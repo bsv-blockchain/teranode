@@ -25,10 +25,11 @@ const (
 type Type int32
 
 const (
-	Type_PING     Type = 0
-	Type_Subtree  Type = 1
-	Type_Block    Type = 2
-	Type_MiningOn Type = 3
+	Type_PING       Type = 0
+	Type_Subtree    Type = 1
+	Type_Block      Type = 2
+	Type_MiningOn   Type = 3
+	Type_NodeStatus Type = 4
 )
 
 // Enum value maps for Type.
@@ -38,12 +39,14 @@ var (
 		1: "Subtree",
 		2: "Block",
 		3: "MiningOn",
+		4: "NodeStatus",
 	}
 	Type_value = map[string]int32{
-		"PING":     0,
-		"Subtree":  1,
-		"Block":    2,
-		"MiningOn": 3,
+		"PING":       0,
+		"Subtree":    1,
+		"Block":      2,
+		"MiningOn":   3,
+		"NodeStatus": 4,
 	}
 )
 
@@ -78,12 +81,14 @@ var File_services_asset_asset_api_asset_api_proto protoreflect.FileDescriptor
 
 const file_services_asset_asset_api_asset_api_proto_rawDesc = "" +
 	"\n" +
-	"(services/asset/asset_api/asset_api.proto\x12\tasset_api*6\n" +
+	"(services/asset/asset_api/asset_api.proto\x12\tasset_api*F\n" +
 	"\x04Type\x12\b\n" +
 	"\x04PING\x10\x00\x12\v\n" +
 	"\aSubtree\x10\x01\x12\t\n" +
 	"\x05Block\x10\x02\x12\f\n" +
-	"\bMiningOn\x10\x03B\x0eZ\f./;asset_apib\x06proto3"
+	"\bMiningOn\x10\x03\x12\x0e\n" +
+	"\n" +
+	"NodeStatus\x10\x04B\x0eZ\f./;asset_apib\x06proto3"
 
 var (
 	file_services_asset_asset_api_asset_api_proto_rawDescOnce sync.Once

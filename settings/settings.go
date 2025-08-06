@@ -354,6 +354,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			HandshakeTopic:        getString("p2p_handshake_topic", "", alternativeContext...),
 			HandshakeTopicSize:    getInt("p2p_handshake_topic_size", 1, alternativeContext...),
 			HandshakeTopicTimeout: getDuration("p2p_handshake_topic_timeout", 5*time.Second),
+			NodeStatusTopic:       getString("p2p_node_status_topic", "", alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                          getString("coinbaseDB", "", alternativeContext...),

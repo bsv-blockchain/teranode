@@ -10,4 +10,5 @@ enum Type {
   Subtree = 1;
   Block = 2;
   MiningOn = 3;
+  NodeStatus = 4;
 }

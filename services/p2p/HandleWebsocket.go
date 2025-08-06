@@ -33,6 +33,17 @@ type notificationMsg struct {
 	Height       uint32 `json:"height,omitempty"`            // Block height in the blockchain
 	SizeInBytes  uint64 `json:"size_in_bytes,omitempty"`     // Size of the block or data in bytes
 	Miner        string `json:"miner,omitempty"`             // Miner identifier for mining-related notifications
+	// Node status fields
+	Version           string  `json:"version,omitempty"`         // Node version
+	CommitHash        string  `json:"commit_hash,omitempty"`     // Git commit hash
+	BestBlockHash     string  `json:"best_block_hash,omitempty"` // Best block hash
+	BestHeight        uint32  `json:"best_height,omitempty"`     // Best block height
+	TxCountInAssembly int     `json:"tx_count_in_assembly"`      // Transaction count in block assembly
+	FSMState          string  `json:"fsm_state,omitempty"`       // FSM state
+	StartTime         int64   `json:"start_time,omitempty"`      // Node start time
+	Uptime            float64 `json:"uptime,omitempty"`          // Node uptime in seconds
+	MinerName         string  `json:"miner_name,omitempty"`      // Miner name
+	ListenMode        string  `json:"listen_mode,omitempty"`     // Listen mode
 }
 
 // clientChannelMap manages a thread-safe collection of WebSocket client channels.
