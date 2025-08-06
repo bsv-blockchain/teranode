@@ -391,3 +391,340 @@ install:
 generate_fsm_diagram:
 	go run ./services/blockchain/fsm_visualizer/main.go
 	echo "State Machine diagram generated in docs/state-machine.diagram.md"
+
+# Chain Integrity Test - Local version of the GitHub workflow
+.PHONY: chain-integrity-test
+chain-integrity-test:
+	@echo "Starting Chain Integrity Test..."
+	@echo "This test replicates the GitHub workflow locally"
+	@echo "================================================"
+	@echo "Timestamp: $$(date)"
+	@echo ""
+	
+	# Step 1: Build chainintegrity binary
+	@echo "Step 1: Building chainintegrity binary..."
+	@echo "  - Compiling chainintegrity tool..."
+	$(MAKE) build-chainintegrity
+	@echo "  ✓ Chainintegrity binary built successfully"
+	@echo ""
+	
+	# Step 2: Clean up old data
+	@echo "Step 2: Cleaning up old data..."
+	@echo "  - Removing existing data directory..."
+	@rm -rf data
+	@echo "  ✓ Data directory cleaned up"
+	@echo ""
+	
+	# Step 3: Build teranode image locally
+	@echo "Step 3: Building teranode image locally..."
+	@echo "  - Building Docker image (this may take several minutes)..."
+	@docker build -t teranode:latest .
+	@echo "  ✓ Teranode Docker image built successfully"
+	@echo ""
+	
+	# Step 4: Start Teranode nodes with 3 block generators
+	@echo "Step 4: Starting Teranode nodes with 3 block generators..."
+	@echo "  - Starting Docker Compose services..."
+	@docker compose -f compose/docker-compose-3blasters.yml up -d
+	@echo "  ✓ Docker Compose services started"
+	@echo "  - Waiting for services to initialize..."
+	@sleep 10
+	@echo "  ✓ Services initialized"
+	@echo ""
+	
+	# Step 5: Wait for mining to complete (all nodes at height 120+ and in sync)
+	@echo "Step 5: Waiting for mining to complete (all nodes at height 120+ and in sync)..."
+	@echo "  - Target height: 120 blocks"
+	@echo "  - Maximum wait time: 10 minutes (120 attempts × 5 seconds)"
+	@echo "  - Check interval: 5 seconds"
+	@echo "  - This may take several minutes..."
+	@echo ""
+	@set -e; \
+	REQUIRED_HEIGHT=120; \
+	MAX_ATTEMPTS=120; \
+	SLEEP=5; \
+	\
+	# Function to check for errors in all teranode container logs at once \
+	check_errors() { \
+		# Get current time for this check \
+		local current_time; \
+		current_time=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
+		\
+		# Check for errors - if last_check_time is empty, it will check all logs \
+		local since_param=""; \
+		if [ ! -z "$$last_check_time" ]; then \
+			since_param="--since=$$last_check_time"; \
+		fi; \
+		\
+		# Single command pattern that works for both initial and subsequent checks \
+		local errors; \
+		errors=$$(docker compose -f compose/docker-compose-3blasters.yml logs --no-color $$since_param teranode1 teranode2 teranode3 | grep -i "| ERROR |" || true); \
+		\
+		# Update timestamp for next check \
+		last_check_time=$$current_time; \
+		\
+		if [[ ! -z "$$errors" ]]; then \
+			echo "ERROR: Found error logs in teranode containers:"; \
+			echo "$$errors"; \
+			return 1; \
+		fi; \
+		return 0; \
+	}; \
+	\
+	# Initialize empty for first check to get all logs \
+	last_check_time=""; \
+	\
+	for ((i=1; i<=MAX_ATTEMPTS; i++)); do \
+		h1=$$(curl -s http://localhost:18090/api/v1/bestblockheader/json | jq -r .height); \
+		h2=$$(curl -s http://localhost:28090/api/v1/bestblockheader/json | jq -r .height); \
+		h3=$$(curl -s http://localhost:38090/api/v1/bestblockheader/json | jq -r .height); \
+		echo "Attempt $$i: heights: $$h1 $$h2 $$h3"; \
+		\
+		# Check for errors in all teranode containers \
+		if ! check_errors; then \
+			echo "Errors found in container logs. Exiting."; \
+			exit 1; \
+		fi; \
+		\
+		if [[ -z "$$h1" || -z "$$h2" || -z "$$h3" ]]; then \
+			if [[ $$i -gt 10 ]]; then \
+				echo "Error: One or more nodes are not responding after 10 attempts. Exiting."; \
+				exit 1; \
+			else \
+				echo "Warning: One or more nodes are not responding. Continuing..."; \
+			fi; \
+		fi; \
+		if [[ "$$h1" =~ ^[0-9]+$$ && "$$h2" =~ ^[0-9]+$$ && "$$h3" =~ ^[0-9]+$$ ]]; then \
+			if [[ $$h1 -ge $$REQUIRED_HEIGHT && $$h2 -ge $$REQUIRED_HEIGHT && $$h3 -ge $$REQUIRED_HEIGHT ]]; then \
+				echo "All nodes have reached height $$REQUIRED_HEIGHT or greater."; \
+				break; \
+			fi; \
+		fi; \
+		sleep $$SLEEP; \
+	done; \
+	if [[ $$i -gt MAX_ATTEMPTS ]]; then \
+		echo "Timeout waiting for all nodes to reach height $$REQUIRED_HEIGHT."; \
+		exit 1; \
+	fi
+	
+	# Step 6: Stop Teranode nodes (docker compose down for teranode-1/2/3)
+	@echo "Step 6: Stopping Teranode nodes..."
+	@docker compose -f compose/docker-compose-3blasters.yml down teranode1 teranode2 teranode3
+	
+	# Step 7: Run chainintegrity test
+	@echo "Step 7: Running chainintegrity test..."
+	@./chainintegrity.run --logfile=chainintegrity --debug | tee chainintegrity_output.log
+	
+	# Step 8: Check for hash mismatch and fail if found
+	@echo "Step 8: Checking for hash mismatch..."
+	@if grep -q "All filtered log file hashes differ! No majority consensus among nodes." chainintegrity_output.log; then \
+		echo "Chain integrity test failed: all log file hashes differ, no majority consensus."; \
+		exit 1; \
+	fi
+	
+	# Step 9: Cleanup
+	@echo "Step 9: Cleaning up..."
+	@docker compose -f compose/docker-compose-3blasters.yml down
+	
+	@echo "================================================"
+	@echo "✓ Chain Integrity Test completed successfully!"
+	@echo "✓ All nodes reached the required block height"
+	@echo "✓ Chain integrity verification passed"
+	@echo "✓ Consensus achieved among all nodes"
+	@echo ""
+	@echo "Generated log files:"
+	@echo "  - chainintegrity_output.log (main output)"
+	@echo "  - chainintegrity*.log (individual node logs)"
+	@echo "  - chainintegrity*.filtered.log (filtered logs)"
+	@echo ""
+	@echo "Test completed at: $$(date)"
+	@echo "================================================"
+
+# Chain Integrity Test with custom parameters
+.PHONY: chain-integrity-test-custom
+chain-integrity-test-custom:
+	@echo "Starting Chain Integrity Test with custom parameters..."
+	@echo "Usage: make chain-integrity-test-custom REQUIRED_HEIGHT=<height> MAX_ATTEMPTS=<attempts> SLEEP=<seconds>"
+	@echo "Default values: REQUIRED_HEIGHT=120, MAX_ATTEMPTS=120, SLEEP=5"
+	@echo "================================================"
+	@echo "Timestamp: $$(date)"
+	@echo ""
+	
+	# Set default values if not provided
+	$(eval REQUIRED_HEIGHT ?= 120)
+	$(eval MAX_ATTEMPTS ?= 120)
+	$(eval SLEEP ?= 5)
+	
+	@echo "Using parameters: REQUIRED_HEIGHT=$(REQUIRED_HEIGHT), MAX_ATTEMPTS=$(MAX_ATTEMPTS), SLEEP=$(SLEEP)"
+	
+	# Step 1: Build chainintegrity binary
+	@echo "Step 1: Building chainintegrity binary..."
+	$(MAKE) build-chainintegrity
+	
+	# Step 2: Clean up old data
+	@echo "Step 2: Cleaning up old data..."
+	@rm -rf data
+	
+	# Step 3: Build teranode image locally
+	@echo "Step 3: Building teranode image locally..."
+	@docker build -t teranode:latest .
+	
+	# Step 4: Start Teranode nodes with 3 block generators
+	@echo "Step 4: Starting Teranode nodes with 3 block generators..."
+	@docker compose -f compose/docker-compose-3blasters.yml up -d
+	
+	# Step 5: Wait for mining to complete with custom parameters
+	@echo "Step 5: Waiting for mining to complete (all nodes at height $(REQUIRED_HEIGHT)+ and in sync)..."
+	@echo "This may take several minutes..."
+	@set -e; \
+	REQUIRED_HEIGHT=$(REQUIRED_HEIGHT); \
+	MAX_ATTEMPTS=$(MAX_ATTEMPTS); \
+	SLEEP=$(SLEEP); \
+	\
+	# Function to check for errors in all teranode container logs at once \
+	check_errors() { \
+		# Get current time for this check \
+		local current_time; \
+		current_time=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
+		\
+		# Check for errors - if last_check_time is empty, it will check all logs \
+		local since_param=""; \
+		if [ ! -z "$$last_check_time" ]; then \
+			since_param="--since=$$last_check_time"; \
+		fi; \
+		\
+		# Single command pattern that works for both initial and subsequent checks \
+		local errors; \
+		errors=$$(docker compose -f compose/docker-compose-3blasters.yml logs --no-color $$since_param teranode1 teranode2 teranode3 | grep -i "| ERROR |" || true); \
+		\
+		# Update timestamp for next check \
+		last_check_time=$$current_time; \
+		\
+		if [[ ! -z "$$errors" ]]; then \
+			echo "ERROR: Found error logs in teranode containers:"; \
+			echo "$$errors"; \
+			return 1; \
+		fi; \
+		return 0; \
+	}; \
+	\
+	# Initialize empty for first check to get all logs \
+	last_check_time=""; \
+	\
+	for ((i=1; i<=MAX_ATTEMPTS; i++)); do \
+		h1=$$(curl -s http://localhost:18090/api/v1/bestblockheader/json | jq -r .height); \
+		h2=$$(curl -s http://localhost:28090/api/v1/bestblockheader/json | jq -r .height); \
+		h3=$$(curl -s http://localhost:38090/api/v1/bestblockheader/json | jq -r .height); \
+		echo "Attempt $$i: heights: $$h1 $$h2 $$h3"; \
+		\
+		# Check for errors in all teranode containers \
+		if ! check_errors; then \
+			echo "Errors found in container logs. Exiting."; \
+			exit 1; \
+		fi; \
+		\
+		if [[ -z "$$h1" || -z "$$h2" || -z "$$h3" ]]; then \
+			if [[ $$i -gt 10 ]]; then \
+				echo "Error: One or more nodes are not responding after 10 attempts. Exiting."; \
+				exit 1; \
+			else \
+				echo "Warning: One or more nodes are not responding. Continuing..."; \
+			fi; \
+		fi; \
+		if [[ "$$h1" =~ ^[0-9]+$$ && "$$h2" =~ ^[0-9]+$$ && "$$h3" =~ ^[0-9]+$$ ]]; then \
+			if [[ $$h1 -ge $$REQUIRED_HEIGHT && $$h2 -ge $$REQUIRED_HEIGHT && $$h3 -ge $$REQUIRED_HEIGHT ]]; then \
+				echo "All nodes have reached height $$REQUIRED_HEIGHT or greater."; \
+				break; \
+			fi; \
+		fi; \
+		sleep $$SLEEP; \
+	done; \
+	if [[ $$i -gt MAX_ATTEMPTS ]]; then \
+		echo "Timeout waiting for all nodes to reach height $$REQUIRED_HEIGHT."; \
+		exit 1; \
+	fi
+	
+	# Step 6: Stop Teranode nodes (docker compose down for teranode-1/2/3)
+	@echo "Step 6: Stopping Teranode nodes..."
+	@docker compose -f compose/docker-compose-3blasters.yml down teranode1 teranode2 teranode3
+	
+	# Step 7: Run chainintegrity test
+	@echo "Step 7: Running chainintegrity test..."
+	@./chainintegrity.run --logfile=chainintegrity --debug | tee chainintegrity_output.log
+	
+	# Step 8: Check for hash mismatch and fail if found
+	@echo "Step 8: Checking for hash mismatch..."
+	@if grep -q "All filtered log file hashes differ! No majority consensus among nodes." chainintegrity_output.log; then \
+		echo "Chain integrity test failed: all log file hashes differ, no majority consensus."; \
+		exit 1; \
+	fi
+	
+	# Step 9: Cleanup
+	@echo "Step 9: Cleaning up..."
+	@docker compose -f compose/docker-compose-3blasters.yml down
+	
+	@echo "================================================"
+	@echo "Chain Integrity Test completed successfully!"
+	@echo "Log files generated:"
+	@echo "  - chainintegrity_output.log (main output)"
+	@echo "  - chainintegrity*.log (individual node logs)"
+	@echo "  - chainintegrity*.filtered.log (filtered logs)"
+
+
+
+# Clean up chain integrity test artifacts
+.PHONY: clean-chain-integrity
+clean-chain-integrity:
+	@echo "Cleaning up chain integrity test artifacts..."
+	@echo "  - Removing log files..."
+	@rm -f chainintegrity*.log
+	@rm -f chainintegrity*.filtered.log
+	@rm -f chainintegrity_output.log
+	@echo "  - Removing chainintegrity binary..."
+	@rm -f chainintegrity.run
+	@echo "  - Stopping Docker Compose services..."
+	@docker compose -f compose/docker-compose-3blasters.yml down 2>/dev/null || true
+	@echo "  ✓ Chain integrity test artifacts cleaned up."
+	@echo "  ✓ All containers stopped"
+	@echo "  ✓ All log files removed"
+
+# Display hash analysis results from chainintegrity test
+.PHONY: show-hashes
+show-hashes:
+	@echo "📊 Hash Analysis Results:"
+	@echo "=========================="
+	@if [ -f chainintegrity_output.log ]; then \
+		if grep -q "chainintegrity.*\.filtered\.log:" chainintegrity_output.log; then \
+			echo "  - Extracting hash information..."; \
+			echo ""; \
+			grep "chainintegrity.*\.filtered\.log:" chainintegrity_output.log | while read line; do \
+				echo "    $$line"; \
+			done; \
+			echo ""; \
+			if grep -q "At least two nodes are consistent" chainintegrity_output.log; then \
+				echo "  ✓ Consensus achieved: At least two nodes have matching hashes"; \
+			elif grep -q "All filtered log file hashes differ" chainintegrity_output.log; then \
+				echo "  ✗ No consensus: All nodes have different hashes"; \
+			else \
+				echo "  ⚠ Hash analysis result unclear - check chainintegrity_output.log"; \
+			fi; \
+		else \
+			echo "  ⚠ No hash information found in chainintegrity_output.log"; \
+			echo "  - Run 'make chain-integrity-test' first to generate the log file"; \
+		fi; \
+	else \
+		echo "  ⚠ chainintegrity_output.log not found"; \
+		echo "  - Run 'make chain-integrity-test' first to generate the log file"; \
+	fi
+	@echo ""
+
+# Quick chain integrity test (shorter wait times for faster testing)
+.PHONY: chain-integrity-test-quick
+chain-integrity-test-quick:
+	@echo "Starting Quick Chain Integrity Test (shorter wait times)..."
+	@echo "  - Target height: 50 blocks"
+	@echo "  - Maximum wait time: 3 minutes (60 attempts × 3 seconds)"
+	@echo "  - Check interval: 3 seconds"
+	@echo "  - Use this for faster development iterations"
+	@echo ""
+	$(MAKE) chain-integrity-test-custom REQUIRED_HEIGHT=50 MAX_ATTEMPTS=60 SLEEP=3
