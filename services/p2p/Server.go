@@ -208,12 +208,32 @@ func NewServer(
 	}
 	// if found private key, encode it to hex and put it in config
 	if pk != nil {
-		var raw []byte
-		raw, err = (*pk).Raw()
+		// Get the raw private key bytes (32 bytes) and public key bytes (32 bytes)
+		// to create the 64-byte Ed25519 format expected by the p2p library
+		rawPriv, err := (*pk).Raw()
 		if err != nil {
-			return nil, errors.NewServiceError("error getting raw private key", err)
+			return nil, errors.NewServiceError("error getting raw private key bytes", err)
 		}
-		privateKey = hex.EncodeToString(raw)
+
+		// Get the public key and its raw bytes
+		pubKey := (*pk).GetPublic()
+		rawPub, err := pubKey.Raw()
+		if err != nil {
+			return nil, errors.NewServiceError("error getting raw public key bytes", err)
+		}
+
+		// Combine private (32 bytes) + public (32 bytes) = 64 bytes total
+		ed25519Key := append(rawPriv, rawPub...)
+		privateKey = hex.EncodeToString(ed25519Key)
+		logger.Infof("loaded existing P2P private key from database")
+	}
+
+	// If still no private key (not in settings and not in database), generate and store a new one
+	if privateKey == "" {
+		privateKey, err = generateAndStorePrivateKey(ctx, blockchainClient, logger)
+		if err != nil {
+			return nil, errors.NewServiceError("failed to generate and store private key", err)
+		}
 	}
 
 	config := p2p.Config{
@@ -2250,4 +2270,61 @@ func readPrivateKey(ctx context.Context, blockchainClient blockchain.ClientI) (*
 	}
 
 	return &priv, nil
+}
+
+// generateAndStorePrivateKey generates a new Ed25519 private key and stores it to the blockchain state store.
+// This function creates a new cryptographic identity for the P2P node when no existing key is found.
+// The generated key is persisted to ensure the node maintains the same peer ID across restarts.
+//
+// Parameters:
+//   - ctx: Context for the operation, used for state store operations
+//   - blockchainClient: Client for accessing persistent key storage
+//   - logger: Logger for recording key generation events
+//
+// Returns:
+//   - Hex-encoded private key string ready for use in p2p.Config
+//   - Error if key generation or storage fails
+func generateAndStorePrivateKey(ctx context.Context, blockchainClient blockchain.ClientI, logger ulogger.Logger) (string, error) {
+	if blockchainClient == nil {
+		return "", errors.NewServiceError("blockchain client is nil, cannot store private key", nil)
+	}
+
+	// generate new Ed25519 private key
+	privateKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	if err != nil {
+		return "", errors.NewServiceError("failed to generate Ed25519 private key", err)
+	}
+
+	// marshal the private key to bytes for storage
+	keyBytes, err := crypto.MarshalPrivateKey(privateKey)
+	if err != nil {
+		return "", errors.NewServiceError("failed to marshal private key", err)
+	}
+
+	// store the private key in the blockchain state store
+	err = blockchainClient.SetState(ctx, privateKeyKey, keyBytes)
+	if err != nil {
+		return "", errors.NewServiceError("failed to store private key in database", err)
+	}
+
+	// Get the raw private key bytes (32 bytes) and public key bytes (32 bytes)
+	// to create the 64-byte Ed25519 format expected by the p2p library
+	rawPriv, err := privateKey.Raw()
+	if err != nil {
+		return "", errors.NewServiceError("failed to get raw private key bytes", err)
+	}
+
+	// Get the public key and its raw bytes
+	pubKey := privateKey.GetPublic()
+	rawPub, err := pubKey.Raw()
+	if err != nil {
+		return "", errors.NewServiceError("failed to get raw public key bytes", err)
+	}
+
+	// Combine private (32 bytes) + public (32 bytes) = 64 bytes total
+	ed25519Key := append(rawPriv, rawPub...)
+	hexKey := hex.EncodeToString(ed25519Key)
+	logger.Infof("generated and stored new P2P private key")
+
+	return hexKey, nil
 }
