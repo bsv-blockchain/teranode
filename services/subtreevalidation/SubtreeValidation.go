@@ -352,13 +352,6 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainh
 		prometheusSubtreeValidationBlessMissingTransaction.Observe(time.Since(start).Seconds())
 	}()
 
-	// tracing is too slow for this, too many calls
-	// ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "blessMissingTransaction",
-	// 	tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
-	// )
-	//
-	// defer deferFn()
-
 	if tx == nil {
 		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s] tx is nil", subtreeHash.String())
 	}
@@ -546,7 +539,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	ctx, _, endSpan := tracing.Tracer("subtreevalidation").Start(ctx, "ValidateSubtreeInternal",
 		tracing.WithHistogram(prometheusSubtreeValidationValidateSubtree),
-		tracing.WithLogMessage(u.logger, "[ValidateSubtreeInternal][%s] called", v.SubtreeHash.String()),
+		tracing.WithDebugLogMessage(u.logger, "[ValidateSubtreeInternal][%s] called", v.SubtreeHash.String()),
 	)
 
 	defer func() {
@@ -638,7 +631,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			logMsg = fmt.Sprintf("[ValidateSubtreeInternal][%s] [attempt #%d] (fail fast=%v) process %d txs from subtree", v.SubtreeHash.String(), attempt, failFast, len(txHashes))
 		}
 
-		u.logger.Infof(logMsg)
+		u.logger.Debugf(logMsg)
 
 		// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
@@ -699,7 +692,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 				}
 			}
 
-			u.logger.Infof("[ValidateSubtreeInternal][%s] [attempt #%d] processing %d missing tx for subtree instance", v.SubtreeHash.String(), attempt, len(missingTxHashesCompacted))
+			u.logger.Debugf("[ValidateSubtreeInternal][%s] [attempt #%d] processing %d missing tx for subtree instance", v.SubtreeHash.String(), attempt, len(missingTxHashesCompacted))
 
 			err = u.processMissingTransactions(
 				ctx5,
@@ -729,7 +722,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	var txMeta *meta.Data
 
-	u.logger.Infof("[ValidateSubtreeInternal][%s] adding %d nodes to subtree instance", v.SubtreeHash.String(), len(txHashes))
+	u.logger.Debugf("[ValidateSubtreeInternal][%s] adding %d nodes to subtree instance", v.SubtreeHash.String(), len(txHashes))
 
 	for idx, txHash := range txHashes {
 		// if placeholder just add it and continue
@@ -855,9 +848,29 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 	start := gocore.CurrentTime()
 
+	txHashes := make([]chainhash.Hash, 0, u.settings.BlockAssembly.InitialMerkleItemsPerSubtree)
+
+	// check whether we have a subtreeToCheck file and use that instead of doing a network request
+	subtreeToCheckBytes, err := u.subtreeStore.Get(spanCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+	if err == nil && subtreeToCheckBytes != nil {
+		u.logger.Debugf("[getSubtreeTxHashes][%s] found subtreeToCheck file in store, using it instead of network request", subtreeHash.String())
+
+		subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeToCheckBytes)
+		if err != nil {
+			return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] failed to create subtree from subtreeToCheck bytes", subtreeHash.String(), err)
+		}
+
+		// return the transaction hashes from the subtree
+		for _, node := range subtree.Nodes {
+			txHashes = append(txHashes, node.Hash)
+		}
+
+		return txHashes, nil
+	}
+
 	// do http request to baseUrl + subtreeHash.String()
 	url := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
-	u.logger.Infof("[getSubtreeTxHashes][%s] getting subtree from %s", subtreeHash.String(), url)
+	u.logger.Debugf("[getSubtreeTxHashes][%s] getting subtree from %s", subtreeHash.String(), url)
 
 	// TODO add the metric for how long this takes
 	body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
@@ -877,7 +890,6 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	stat.NewStat("2. http fetch subtree").AddTime(start)
 
 	start = gocore.CurrentTime()
-	txHashes := make([]chainhash.Hash, 0, u.settings.BlockAssembly.InitialMerkleItemsPerSubtree)
 	buffer := make([]byte, chainhash.HashSize)
 	bufferedReader := bufio.NewReaderSize(body, 1024*1024*4) // 4MB buffer
 
@@ -947,18 +959,24 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 	blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "SubtreeValidation:processMissingTransactions",
 		tracing.WithDebugLogMessage(u.logger, "[processMissingTransactions][%s] processing %d missing txs", subtreeHash.String(), len(missingTxHashes)),
+		tracing.WithNewRoot(), // decouple tracing from the parent context, otherwise it will explode with too many spans
 	)
 
 	defer func() {
 		deferFn(err)
 	}()
 
+	isRunning, err := u.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
+	if err != nil {
+		return errors.NewProcessingError("[validateSubtree][%s] failed to check if blockchain is running: %v", subtreeHash.String(), err)
+	}
+
 	missingTxs, err := u.getSubtreeMissingTxs(ctx, subtreeHash, subtree, missingTxHashes, allTxs, baseURL)
 	if err != nil {
 		return err
 	}
 
-	u.logger.Infof("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
+	u.logger.Debugf("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
 
 	var (
 		mTx          missingTx
@@ -969,20 +987,22 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 	missedMu := sync.Mutex{}
 
 	// process the transactions in parallel, based on the number of parents in the list
-	maxLevel, txsPerLevel := u.prepareTxsPerLevel(ctx, missingTxs)
+	maxLevel, txsPerLevel, err := u.prepareTxsPerLevel(ctx, missingTxs)
+	if err != nil {
+		return errors.NewProcessingError("[processMissingTransactions][%s] failed to prepare transactions per level: %v", subtreeHash.String(), err)
+	}
 
 	u.logger.Debugf("[processMissingTransactions][%s] maxLevel: %d", subtreeHash.String(), maxLevel)
 
 	// pre-process the validation options into a struct
 	processedValidatorOptions := validator.ProcessOptions(validationOptions...)
 
-	isRunning, err := u.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
-	if err != nil {
-		return errors.NewProcessingError("[validateSubtree][%s] failed to check if blockchain is running: %v", subtreeHash.String(), err)
-	}
-
-	errorsFound := atomic.Uint64{}
-	addedToOrphanage := atomic.Uint64{}
+	var (
+		errorsFound      = atomic.Uint64{}
+		addedToOrphanage = atomic.Uint64{}
+		lastError        error
+		lastErrorMu      sync.Mutex
+	)
 
 	for level := uint32(0); level <= maxLevel; level++ {
 		g, gCtx := errgroup.WithContext(ctx)
@@ -1005,6 +1025,12 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 					// Log the error, but do not return it, since we want to process all transactions in the subtree
 					u.logger.Debugf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
 					errorsFound.Add(1)
+
+					lastErrorMu.Lock()
+					lastError = errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
+					lastErrorMu.Unlock()
+
+					// TODO handle storage and service errors differently
 
 					// Check if this is a truly invalid transaction (not just policy error)
 					if errors.Is(err, errors.ErrTxMissingParent) {
@@ -1037,6 +1063,10 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 						u.logger.Debugf("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
 						errorsFound.Add(1)
 
+						lastErrorMu.Lock()
+						lastError = errors.NewProcessingError("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
+						lastErrorMu.Unlock()
+
 						return nil
 					}
 
@@ -1054,7 +1084,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 
 	if errorsFound.Load() > 0 {
 		// If there are errors found, we return here, so that the caller can handle it
-		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree, added %d to orphanage", subtreeHash.String(), errorsFound.Load(), addedToOrphanage.Load())
+		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree, added %d to orphanage", subtreeHash.String(), errorsFound.Load(), addedToOrphanage.Load(), lastError)
 	}
 
 	if missingCount.Load() > 0 {
@@ -1140,14 +1170,14 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 	var missingTxs []missingTx
 
 	if subtreeDataExists {
-		u.logger.Infof("[validateSubtree][%s] fetching %d missing txs from subtreeData file", subtreeHash.String(), len(missingTxHashes))
+		u.logger.Debugf("[validateSubtree][%s] fetching %d missing txs from subtreeData file", subtreeHash.String(), len(missingTxHashes))
 
 		missingTxs, err = u.getMissingTransactionsFromFile(ctx, subtreeHash, missingTxHashes, allTxs)
 		if err != nil {
 			return nil, errors.NewProcessingError("[validateSubtree][%s] failed to get missing transactions from subtreeData", subtreeHash.String(), err)
 		}
 	} else {
-		u.logger.Infof("[validateSubtree][%s] fetching %d missing txs", subtreeHash.String(), len(missingTxHashes))
+		u.logger.Debugf("[validateSubtree][%s] fetching %d missing txs", subtreeHash.String(), len(missingTxHashes))
 
 		missingTxs, err = u.getMissingTransactionsFromPeer(ctx, subtreeHash, missingTxHashes, baseURL)
 		if err != nil {
@@ -1207,72 +1237,115 @@ type txMapWrapper struct {
 // Returns:
 //   - uint32: The maximum dependency level found
 //   - map[uint32][]missingTx: Map of dependency levels to transactions at that level
-
-func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, map[uint32][]missingTx) {
+//   - error: Any error encountered during the processing
+func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, map[uint32][]missingTx, error) {
 	_, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "prepareTxsPerLevel",
 		tracing.WithDebugLogMessage(u.logger, "[prepareTxsPerLevel] preparing %d transactions per level", len(transactions)),
 	)
 
 	defer deferFn()
 
-	// create a map of transactions for easy lookup when determining parents
+	// Build dependency graph with adjacency lists for efficient lookups
 	txMap := make(map[chainhash.Hash]*txMapWrapper)
+	inDegree := make(map[chainhash.Hash]int)
+	// Adjacency list: parentHash -> []childHashes
+	children := make(map[chainhash.Hash][]chainhash.Hash)
 
+	// First pass: create all nodes and initialize structures
 	for _, mTx := range transactions {
-		txHash := *mTx.tx.TxIDChainHash()
-		// don't add the coinbase to the txMap, we cannot process it anyway
 		if !mTx.tx.IsCoinbase() {
-			txMap[txHash] = &txMapWrapper{missingTx: mTx}
-
-			for _, input := range mTx.tx.Inputs {
-				prevTxHash := *input.PreviousTxIDChainHash()
-				if _, found := txMap[prevTxHash]; found {
-					txMap[txHash].someParentsInBlock = true
-				}
+			hash := *mTx.tx.TxIDChainHash()
+			txMap[hash] = &txMapWrapper{
+				missingTx:         mTx,
+				childLevelInBlock: 0,
 			}
+			inDegree[hash] = 0
+		}
+	}
+
+	// Second pass: build dependency graph
+	for hash, wrapper := range txMap {
+		for _, input := range wrapper.missingTx.tx.Inputs {
+			parentHash := *input.PreviousTxIDChainHash()
+
+			if _, exists := txMap[parentHash]; exists {
+				inDegree[hash]++
+				wrapper.someParentsInBlock = true
+				// Add this transaction as a child of its parent
+				children[parentHash] = append(children[parentHash], hash)
+			}
+		}
+	}
+
+	// Kahn's algorithm for topological sort with levels
+	queue := []chainhash.Hash{}
+	for hash, degree := range inDegree {
+		if degree == 0 {
+			queue = append(queue, hash)
 		}
 	}
 
 	maxLevel := uint32(0)
-	sizePerLevel := make(map[uint32]uint64)
-	blockTxsPerLevel := make(map[uint32][]missingTx)
+	processed := 0
 
-	// determine the level of each transaction in the block, based on the number of parents in the block
-	for _, mTx := range transactions {
-		txHash := *mTx.tx.TxIDChainHash()
-		if _, found := txMap[txHash]; found {
-			if txMap[txHash].someParentsInBlock {
-				for _, input := range txMap[txHash].missingTx.tx.Inputs {
-					parentTxHash := *input.PreviousTxIDChainHash()
-					if parentTxWrapper, found := txMap[parentTxHash]; found {
-						// if the parent from this input is at the same level or higher,
-						// we need to increase the child level of this transaction
-						if parentTxWrapper.childLevelInBlock >= txMap[txHash].childLevelInBlock {
-							txMap[txHash].childLevelInBlock = parentTxWrapper.childLevelInBlock + 1
-						}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		processed++
 
-						if txMap[txHash].childLevelInBlock > maxLevel {
-							maxLevel = txMap[txHash].childLevelInBlock
-						}
+		currentLevel := txMap[current].childLevelInBlock
+
+		// Process only direct children using adjacency list
+		if childHashes, exists := children[current]; exists {
+			for _, childHash := range childHashes {
+				inDegree[childHash]--
+
+				// Update child's level
+				wrapper := txMap[childHash]
+				newLevel := currentLevel + 1
+				if newLevel > wrapper.childLevelInBlock {
+					wrapper.childLevelInBlock = newLevel
+					if newLevel > maxLevel {
+						maxLevel = newLevel
 					}
 				}
-			}
 
-			sizePerLevel[txMap[txHash].childLevelInBlock] += 1
+				// Add to queue if all dependencies processed
+				if inDegree[childHash] == 0 {
+					queue = append(queue, childHash)
+				}
+			}
 		}
 	}
 
-	// pre-allocation of the blockTxsPerLevel map
-	for i := uint32(0); i <= maxLevel; i++ {
-		blockTxsPerLevel[i] = make([]missingTx, 0, sizePerLevel[i])
+	// Check for cycles
+	if processed != len(txMap) {
+		u.logger.Errorf("[prepareTxsPerLevel] Circular dependency detected! Processed %d of %d transactions",
+			processed, len(txMap))
+		return 0, nil, errors.NewProcessingError("[prepareTxsPerLevel] Circular dependency detected! Processed %d of %d transactions",
+			processed, len(txMap))
 	}
 
-	// put all transactions in a map per level for processing
-	for _, txWrapper := range txMap {
-		blockTxsPerLevel[txWrapper.childLevelInBlock] = append(blockTxsPerLevel[txWrapper.childLevelInBlock], txWrapper.missingTx)
+	// Pre-allocate result slices for better performance
+	sizePerLevel := make(map[uint32]int)
+	for _, wrapper := range txMap {
+		sizePerLevel[wrapper.childLevelInBlock]++
 	}
 
-	return maxLevel, blockTxsPerLevel
+	blockTxsPerLevel := make(map[uint32][]missingTx)
+	for level := uint32(0); level <= maxLevel; level++ {
+		if size, exists := sizePerLevel[level]; exists {
+			blockTxsPerLevel[level] = make([]missingTx, 0, size)
+		}
+	}
+
+	// Build result map with pre-allocated slices
+	for _, wrapper := range txMap {
+		level := wrapper.childLevelInBlock
+		blockTxsPerLevel[level] = append(blockTxsPerLevel[level], wrapper.missingTx)
+	}
+
+	return maxLevel, blockTxsPerLevel, nil
 }
 
 // getMissingTransactionsFromPeer retrieves missing transactions from either the network or local store.

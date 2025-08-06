@@ -5,7 +5,6 @@ package subtreevalidation
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -735,172 +734,6 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	return true, nil
 }
 
-func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest) (*subtreevalidation_api.CheckBlockSubtreesResponse, error) {
-	block, err := model.NewBlockFromBytes(request.Block, nil)
-	if err != nil {
-		return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to get block from blockchain client", err)
-	}
-
-	// stop processing subtrees until this is done
-	u.pauseSubtreeProcessing.Store(true)
-
-	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "CheckBlockSubtrees",
-		tracing.WithParentStat(u.stats),
-		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
-		tracing.WithLogMessage(u.logger, "[CheckBlockSubtrees] called for block %s at height %d", block.Hash().String(), block.Height),
-	)
-	defer func() {
-		u.pauseSubtreeProcessing.Store(false)
-		deferFn()
-	}()
-
-	// validate all the subtrees in the block
-	missingSubtrees := make([]chainhash.Hash, 0, len(block.Subtrees))
-	for _, subtreeHash := range block.Subtrees {
-		subtreeExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
-		if err != nil {
-			return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to check if subtree exists in store", err)
-		}
-
-		if !subtreeExists {
-			missingSubtrees = append(missingSubtrees, *subtreeHash)
-		}
-	}
-
-	if len(missingSubtrees) == 0 {
-		return &subtreevalidation_api.CheckBlockSubtreesResponse{
-			Blessed: true,
-		}, nil
-	}
-
-	txHashes := make([][]chainhash.Hash, len(missingSubtrees))
-
-	// get all the subtrees that are missing from the peer in parallel
-	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, 32)
-
-	for missingSubtreeIdx, subtreeHash := range missingSubtrees {
-		missingSubtreeIdx := missingSubtreeIdx
-		subtreeHash := subtreeHash
-
-		g.Go(func() (err error) {
-			var (
-				subtreeBytes []byte
-				subtree      *subtreepkg.Subtree
-			)
-
-			// first check whether we have a subtreeToCheck file for this subtree, we can use that to get the tx hashes
-			subtreeBytes, err = u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-			if err == nil && len(subtreeBytes) > 0 {
-				subtree, err = subtreepkg.NewSubtreeFromBytes(subtreeBytes)
-				if err != nil {
-					u.logger.Errorf("[CheckBlockSubtrees] Failed to unmarshal subtree from bytes: %s", err.Error())
-				}
-
-				if subtree != nil {
-					txHashes[missingSubtreeIdx] = make([]chainhash.Hash, subtree.Length())
-
-					for i := 0; i < subtree.Length(); i++ {
-						txHashes[missingSubtreeIdx][i] = subtree.Nodes[i].Hash
-					}
-
-				}
-			}
-
-			if len(txHashes[missingSubtreeIdx]) == 0 {
-				// try to get the tx hashes from the peer
-				if txHashes[missingSubtreeIdx], err = u.getSubtreeTxHashes(gCtx, u.stats, &subtreeHash, request.BaseUrl); err != nil {
-					return err
-				}
-			}
-
-			subtreeDataExists, err := u.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeData)
-			if err != nil {
-				return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to check if subtree data exists in store: %v", subtreeHash.String(), err)
-			}
-
-			if !subtreeDataExists {
-				// get the subtree data from the peer
-				// get the whole subtree from the other peer
-				url := fmt.Sprintf("%s/subtree_data/%s", request.BaseUrl, subtreeHash.String())
-
-				body, subtreeDataErr := util.DoHTTPRequestBodyReader(gCtx, url)
-				if subtreeDataErr != nil {
-					return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s: %v", subtreeHash.String(), url, subtreeDataErr)
-				} else {
-					if subtreeDataErr = u.subtreeStore.SetFromReader(gCtx,
-						subtreeHash[:],
-						fileformat.FileTypeSubtreeData,
-						body,
-					); subtreeDataErr != nil {
-						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to store subtree data: %v", subtreeHash.String(), subtreeDataErr)
-					}
-
-					_ = body.Close()
-				}
-			}
-
-			return nil
-		})
-	}
-
-	if err = g.Wait(); err != nil {
-		return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to get subtree tx hashes", err)
-	}
-
-	// get the previous block headers on this chain and pass into the validation
-	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()))
-	if err != nil {
-		return nil, errors.NewProcessingError("[CheckSubtree] Failed to get block headers from blockchain client", err)
-	}
-
-	blockIds := make(map[uint32]bool, len(blockHeaderIDs))
-
-	for _, blockID := range blockHeaderIDs {
-		blockIds[blockID] = true
-	}
-
-	var (
-		subtree *subtreepkg.Subtree
-	)
-
-	// TODO try to validate as many transactions as possible in parallel,
-	// processing them in levels taking into account the parent dependencies
-	for i, subtreeHash := range missingSubtrees {
-		txHashesForSubtree := txHashes[i]
-
-		v := ValidateSubtree{
-			SubtreeHash:   subtreeHash,
-			BaseURL:       request.BaseUrl,
-			TxHashes:      txHashesForSubtree,
-			AllowFailFast: false,
-		}
-
-		if subtree, err = u.ValidateSubtreeInternal(
-			ctx,
-			v,
-			block.Height,
-			blockIds,
-			validator.WithSkipPolicyChecks(true),
-			validator.WithCreateConflicting(true),
-			validator.WithIgnoreLocked(true),
-		); err != nil {
-			return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to validate subtree %s: %v", subtreeHash.String(), err)
-		}
-
-		// remove all transactions that are part of the subtree from the orphanage
-		for _, node := range subtree.Nodes {
-			u.orphanage.Delete(node.Hash)
-		}
-	}
-
-	u.processOrphans(ctx, *block.Header.Hash(), block.Height, blockIds)
-
-	return &subtreevalidation_api.CheckBlockSubtreesResponse{
-		Blessed: true,
-	}, nil
-}
-
 func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, blockHeight uint32, blockIds map[uint32]bool) {
 	u.orphanageLock.Lock()
 	defer u.orphanageLock.Unlock()
@@ -934,7 +767,11 @@ func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, b
 			})
 		}
 
-		maxLevel, txsPerLevel := u.prepareTxsPerLevel(ctx, orphanMissingTxs)
+		maxLevel, txsPerLevel, err := u.prepareTxsPerLevel(ctx, orphanMissingTxs)
+		if err != nil {
+			u.logger.Errorf("[CheckSubtreeFromBlock] Failed to prepare transactions per level: %v", err)
+			return
+		}
 
 		for level := uint32(0); level <= maxLevel; level++ {
 			// we process each level of transactions in parallel

@@ -114,6 +114,13 @@ func WithDebugLogMessage(logger ulogger.Logger, message string, args ...interfac
 	}
 }
 
+// WithNewRoot creates a new root span for the trace.
+func WithNewRoot() Options {
+	return func(s *TraceOptions) {
+		s.SpanStartOptions = append(s.SpanStartOptions, trace.WithNewRoot())
+	}
+}
+
 // UTracer provides a unified tracing interface that combines OpenTelemetry spans
 // with gocore.Stat for consistent tracing and performance monitoring.
 type UTracer struct {

@@ -1139,12 +1139,11 @@ LOOP:
 
 		for i, blockHeader := range blockHeaders {
 			// check if parent block is currently being validated, then wait for it to finish. If the parent block was being validated, when the for loop is done, GetBlockExists will return true.
-			exists := u.parentExistsAndIsValidated(ctx, blockHeader, blockUpTo)
-			if exists {
+			if u.parentExistsAndIsValidated(ctx, blockHeader, blockUpTo) {
 				break LOOP
 			}
 
-			u.logger.Warnf("[catchup][%s] [%d/%d] parent block does not exist [%s]", blockUpTo.Hash().String(), i, blockHeadersLength, blockHeader.String())
+			u.logger.Debugf("[catchup][%s] [%d/%d] parent block does not exist [%s]", blockUpTo.Hash().String(), i, blockHeadersLength, blockHeader.String())
 
 			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
 

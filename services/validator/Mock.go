@@ -23,6 +23,7 @@ package validator
 
 import (
 	"context"
+	"sync"
 
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -33,6 +34,7 @@ type MockValidatorClient struct {
 	BlockHeight     uint32
 	MedianBlockTime uint32
 	Errors          []error
+	ErrorsMu        sync.Mutex
 	UtxoStore       utxo.Store
 }
 
@@ -64,6 +66,9 @@ func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight
 }
 
 func (m *MockValidatorClient) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
+	m.ErrorsMu.Lock()
+	defer m.ErrorsMu.Unlock()
+
 	if len(m.Errors) > 0 {
 		// return error and pop of stack
 		err = m.Errors[0]

@@ -22,13 +22,21 @@ import (
 // It handles both recoverable and unrecoverable errors appropriately.
 func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
 	return func(msg *kafka.KafkaMessage) error {
+	WAITFORPAUSE:
 		for {
-			if !u.pauseSubtreeProcessing.Load() {
-				break
-			}
+			select {
+			case <-ctx.Done():
+				u.logger.Warnf("[consumerMessageHandler] Context done, stopping processing: %v", ctx.Err())
+				return ctx.Err()
+			default:
+				// continue processing
+				if !u.pauseSubtreeProcessing.Load() {
+					break WAITFORPAUSE
+				}
 
-			u.logger.Warnf("[consumerMessageHandler] Subtree processing is paused, waiting to resume...")
-			time.Sleep(100 * time.Millisecond)
+				u.logger.Warnf("[consumerMessageHandler] Subtree processing is paused, waiting to resume...")
+				time.Sleep(1 * time.Second)
+			}
 		}
 
 		state, err := u.blockchainClient.GetFSMCurrentState(ctx)

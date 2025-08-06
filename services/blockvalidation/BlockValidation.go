@@ -1369,103 +1369,11 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 //
 // Returns an error if subtree validation fails.
 func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
-	ctx, span, endSpan := tracing.Tracer("blockvalidation").Start(ctx, "ValidateBlockSubtrees")
-	defer endSpan()
-
-	// let the subtree validation client handle it
-	if u.subtreeValidationClient != nil {
-		return u.subtreeValidationClient.CheckBlockSubtrees(ctx, block, baseURL)
+	if len(block.Subtrees) == 0 {
+		return nil
 	}
 
-	start := gocore.CurrentTime()
-	stat := gocore.NewStat("validateBlockSubtrees")
-
-	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, u.settings.BlockValidation.ValidateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
-
-	blockHeight := block.Height
-	if blockHeight == 0 && block.Header.Version > 1 {
-		var err error
-
-		blockHeight, err = block.ExtractCoinbaseHeight()
-		if err != nil {
-			err = errors.NewProcessingError("[validateBlockSubtrees][%s] failed to extract coinbase height", block.Hash().String(), err)
-			span.RecordError(err)
-
-			return err
-		}
-	}
-
-	foundError := atomic.Bool{}
-
-	for _, subtreeHash := range block.Subtrees {
-		subtreeHash := subtreeHash // Create a new variable for each iteration to avoid data race
-
-		g.Go(func() error {
-			select {
-			case <-gCtx.Done():
-				return gCtx.Err()
-			default:
-				subtreeExists, err := u.GetSubtreeExists(gCtx, subtreeHash)
-				if err != nil {
-					// this error will stop all further processing
-					return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
-				}
-
-				if !subtreeExists {
-					u.logger.Debugf("[validateBlockSubtrees][%s] checking missing subtree [%s] in parallel", block.Hash().String(), subtreeHash.String())
-
-					checkCtx, cancel := context.WithTimeout(gCtx, u.settings.BlockValidation.CheckSubtreeFromBlockTimeout)
-					defer cancel()
-
-					// note: the subtree validation client will handle retries internally
-					if err = u.subtreeValidationClient.CheckSubtreeFromBlock(checkCtx, *subtreeHash, baseURL, blockHeight, block.Hash(), block.Header.HashPrevBlock); err != nil {
-						// mark an error as found, which will trigger a re-validation of all subtrees in order
-						foundError.Store(true)
-						u.logger.Errorf("[validateBlockSubtrees][%s] failed to check missing subtree [%s], will retry in series: %s", block.Hash().String(), subtreeHash.String(), err)
-					}
-				}
-
-				return nil
-			}
-		})
-	}
-
-	// an error is only thrown if the existence of a subtree cannot be checked, which implies a service error
-	if err := g.Wait(); err != nil {
-		span.RecordError(err)
-		return err
-	}
-
-	// if we did find an error, we must run through all the subtrees again, but this time in order
-	// returning an error if one of them is not validated properly
-	if foundError.Load() {
-		for subtreeIdx, subtreeHash := range block.Subtrees {
-			subtreeExists, err := u.GetSubtreeExists(ctx, subtreeHash)
-			if err != nil {
-				return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check if subtree [%s] (%d) exists in store", block.Hash().String(), subtreeHash.String(), subtreeIdx, err)
-			}
-
-			if !subtreeExists {
-				u.logger.Debugf("[validateBlockSubtrees][%s] checking missing subtree [%s] (%d) in series", block.Hash().String(), subtreeHash.String(), subtreeIdx)
-
-				checkCtx, cancel := context.WithTimeout(ctx, u.settings.BlockValidation.CheckSubtreeFromBlockTimeout)
-
-				// note: the subtree validation client will handle retries internally
-				if err = u.subtreeValidationClient.CheckSubtreeFromBlock(checkCtx, *subtreeHash, baseURL, blockHeight, block.Hash(), block.Header.HashPrevBlock); err != nil {
-					cancel()
-
-					return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check missing subtree [%s] (%d)", block.Hash().String(), subtreeHash.String(), subtreeIdx, err)
-				}
-
-				cancel()
-			}
-		}
-	}
-
-	stat.NewStat("1. validateBlockSubtrees").AddTime(start)
-
-	return nil
+	return u.subtreeValidationClient.CheckBlockSubtrees(ctx, block, baseURL)
 }
 
 // checkOldBlockIDs verifies that referenced blocks are in the current chain.

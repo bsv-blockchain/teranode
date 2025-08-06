@@ -56,7 +56,7 @@ advertisingURL=
 clientName=M1
 asset_grpcAddress=blob-service.blob-service.svc.cluster.local:8091
 asset_grpcListenAddress=:8091
-asset_httpAddress=https://m1.scaling.ubsv.dev
+asset_httpAddress=https://m1.scaling.teranode.network
 asset_httpListenAddress=:8090
 ...
 ```
