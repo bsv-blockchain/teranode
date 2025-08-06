@@ -196,6 +196,13 @@ func NewServer(
 	optimiseRetries := tSettings.P2P.OptimiseRetries
 
 	staticPeers := tSettings.P2P.StaticPeers
+
+	// Merge bootstrap addresses into static peers if persistent bootstrap is enabled
+	if tSettings.P2P.BootstrapPersistent {
+		logger.Infof("Bootstrap persistent mode enabled - adding %d bootstrap addresses to static peers", len(tSettings.P2P.BootstrapAddresses))
+		staticPeers = append(staticPeers, tSettings.P2P.BootstrapAddresses...)
+	}
+
 	privateKey := tSettings.P2P.PrivateKey
 
 	// Attempt to read the private key from the blockchain service if not provided in settings

@@ -340,9 +340,10 @@ type UtxoStoreSettings struct {
 }
 
 type P2PSettings struct {
-	BestBlockTopic     string
-	BlockTopic         string
-	BootstrapAddresses []string
+	BestBlockTopic      string
+	BlockTopic          string
+	BootstrapAddresses  []string
+	BootstrapPersistent bool
 
 	GRPCAddress       string
 	GRPCListenAddress string

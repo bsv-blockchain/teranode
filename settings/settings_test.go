@@ -49,6 +49,30 @@ func TestGenesisActivationHeight(t *testing.T) {
 	}
 }
 
+func TestBootstrapPersistentSetting(t *testing.T) {
+	tests := []struct {
+		name         string
+		envValue     string
+		expectedBool bool
+	}{
+		{"Default false", "", false},
+		{"Explicit false", "false", false},
+		{"Explicit true", "true", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set environment variable for testing
+			if tt.envValue != "" {
+				t.Setenv("p2p_bootstrap_persistent", tt.envValue)
+			}
+
+			tSettings := NewSettings()
+			require.Equal(t, tt.expectedBool, tSettings.P2P.BootstrapPersistent)
+		})
+	}
+}
+
 func TestBlockHeightRetentionAdjustments(t *testing.T) {
 	t.Run("DefaultAdjustmentValues", func(t *testing.T) {
 		tSettings := NewSettings()

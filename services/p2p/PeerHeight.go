@@ -70,6 +70,12 @@ func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processN
 
 	optimiseRetries := tSettings.P2P.OptimiseRetries
 
+	// Merge bootstrap addresses into static peers if persistent bootstrap is enabled
+	if tSettings.P2P.BootstrapPersistent {
+		logger.Infof("Bootstrap persistent mode enabled - adding %d bootstrap addresses to static peers", len(tSettings.P2P.BootstrapAddresses))
+		staticPeers = append(staticPeers, tSettings.P2P.BootstrapAddresses...)
+	}
+
 	config := p2p.Config{
 		ProcessName:        processName,
 		ListenAddresses:    p2pListenAddresses,

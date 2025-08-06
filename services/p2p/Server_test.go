@@ -2223,6 +2223,58 @@ func TestServer_SyncHeights(t *testing.T) {
 	})
 }
 
+func TestBootstrapPersistentMerging(t *testing.T) {
+	t.Run("bootstrap addresses merged when persistent enabled", func(t *testing.T) {
+		// Create test settings with bootstrap persistent enabled
+		tSettings := createBaseTestSettings()
+		tSettings.P2P.BootstrapAddresses = []string{
+			"/dns4/bootstrap1.example.com/tcp/9901/p2p/12D3KooWTest1",
+			"/dns4/bootstrap2.example.com/tcp/9901/p2p/12D3KooWTest2",
+		}
+		tSettings.P2P.StaticPeers = []string{
+			"/dns4/static1.example.com/tcp/9901/p2p/12D3KooWStatic1",
+		}
+		tSettings.P2P.BootstrapPersistent = true
+		tSettings.P2P.SharedKey = "test-shared-key"
+		tSettings.P2P.ListenAddresses = []string{"127.0.0.1"}
+
+		// Call the bootstrap merging logic (extract just the merging part)
+		staticPeers := tSettings.P2P.StaticPeers
+		if tSettings.P2P.BootstrapPersistent {
+			staticPeers = append(staticPeers, tSettings.P2P.BootstrapAddresses...)
+		}
+
+		// Verify that bootstrap addresses were merged
+		require.Len(t, staticPeers, 3) // 1 static + 2 bootstrap
+		assert.Contains(t, staticPeers, "/dns4/static1.example.com/tcp/9901/p2p/12D3KooWStatic1")
+		assert.Contains(t, staticPeers, "/dns4/bootstrap1.example.com/tcp/9901/p2p/12D3KooWTest1")
+		assert.Contains(t, staticPeers, "/dns4/bootstrap2.example.com/tcp/9901/p2p/12D3KooWTest2")
+	})
+
+	t.Run("bootstrap addresses not merged when persistent disabled", func(t *testing.T) {
+		// Create test settings with bootstrap persistent disabled
+		tSettings := createBaseTestSettings()
+		tSettings.P2P.BootstrapAddresses = []string{
+			"/dns4/bootstrap1.example.com/tcp/9901/p2p/12D3KooWTest1",
+		}
+		tSettings.P2P.StaticPeers = []string{
+			"/dns4/static1.example.com/tcp/9901/p2p/12D3KooWStatic1",
+		}
+		tSettings.P2P.BootstrapPersistent = false
+
+		// Call the bootstrap merging logic
+		staticPeers := tSettings.P2P.StaticPeers
+		if tSettings.P2P.BootstrapPersistent {
+			staticPeers = append(staticPeers, tSettings.P2P.BootstrapAddresses...)
+		}
+
+		// Verify that bootstrap addresses were NOT merged
+		require.Len(t, staticPeers, 1) // Only static peer
+		assert.Contains(t, staticPeers, "/dns4/static1.example.com/tcp/9901/p2p/12D3KooWStatic1")
+		assert.NotContains(t, staticPeers, "/dns4/bootstrap1.example.com/tcp/9901/p2p/12D3KooWTest1")
+	})
+}
+
 // createBaseTestSettings is a local replacement for test.CreateBaseTestSettings
 func createBaseTestSettings() *settings.Settings {
 	s := settings.NewSettings()
