@@ -7,6 +7,7 @@ import (
 
 	"github.com/jellydator/ttlcache/v3"
 	v1 "k8s.io/api/core/v1"
+	discovery "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -64,16 +65,22 @@ func (s *serviceClient) Resolve(ctx context.Context, host string, port string) (
 
 	eps := make([]string, 0)
 
-	ep, err := s.k8s.CoreV1().Endpoints(s.namespace).Get(ctx, host, metav1.GetOptions{})
+	slices, err := s.k8s.DiscoveryV1().EndpointSlices(s.namespace).List(ctx,
+		metav1.ListOptions{LabelSelector: discovery.LabelServiceName + "=" + host},
+	)
 	if err != nil {
 		return eps, fmt.Errorf("k8s resolver: failed to fetch service endpoint %s: %s", host, err)
 	}
 
-	for _, v := range ep.Subsets {
-		for _, addr := range v.Addresses {
-			eps = append(eps, fmt.Sprintf("%s:%s", addr.IP, port))
+	for _, v := range slices.Items {
+		for _, endpoint := range v.Endpoints {
+			for _, address := range endpoint.Addresses {
+				eps = append(eps, fmt.Sprintf("%s:%s", address, port))
+			}
 		}
 	}
+
+	s.logger.Debugf("[k8s] Found %d endpoints for service %s: %v", len(eps), host, eps)
 
 	if resolveTTL > 0 {
 		_ = s.resolveCache.Set(cacheKey, eps, resolveTTL)
