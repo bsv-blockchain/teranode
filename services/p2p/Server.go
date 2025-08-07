@@ -263,6 +263,11 @@ func NewServer(
 		StaticPeers:        staticPeers,
 		BootstrapAddresses: tSettings.P2P.BootstrapAddresses,
 		DHTProtocolID:      tSettings.P2P.DHTProtocolID,
+		// libp2p feature toggles
+		EnableNATService:   tSettings.P2P.EnableNATService,
+		EnableHolePunching: tSettings.P2P.EnableHolePunching,
+		EnableRelay:        tSettings.P2P.EnableRelay,
+		EnableNATPortMap:   tSettings.P2P.EnableNATPortMap,
 	}
 
 	p2pNode, err := p2p.NewNode(ctx, logger, config)

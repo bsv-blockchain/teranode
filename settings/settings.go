@@ -349,6 +349,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DHTProtocolID:         getString("p2p_dht_protocol_id", "", alternativeContext...),
 			DHTUsePrivate:         getBool("p2p_dht_use_private", false, alternativeContext...),
 			OptimiseRetries:       getBool("p2p_optimise_retries", false, alternativeContext...),
+			// libp2p feature toggles
+			EnableNATService:      getBool("p2p_enable_nat_service", false, alternativeContext...),
+			EnableHolePunching:    getBool("p2p_enable_hole_punching", false, alternativeContext...),
+			EnableRelay:           getBool("p2p_enable_relay", false, alternativeContext...),
+			EnableNATPortMap:      getBool("p2p_enable_nat_port_map", false, alternativeContext...),
 			BanThreshold:          getInt("p2p_ban_threshold", 100, alternativeContext...),
 			BanDuration:           getDuration("p2p_ban_duration", 24*time.Hour),
 			HandshakeTopic:        getString("p2p_handshake_topic", "", alternativeContext...),

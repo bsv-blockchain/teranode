@@ -375,6 +375,12 @@ type P2PSettings struct {
 	DHTUsePrivate   bool
 	OptimiseRetries bool
 
+	// libp2p feature toggles
+	EnableNATService   bool
+	EnableHolePunching bool
+	EnableRelay        bool
+	EnableNATPortMap   bool
+
 	BanThreshold int
 	BanDuration  time.Duration
 }
