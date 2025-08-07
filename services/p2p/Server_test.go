@@ -2792,7 +2792,8 @@ func TestServer_Start(t *testing.T) {
 	ps, err := pubsub.NewGossipSub(ctx, host)
 	require.NoError(t, err)
 
-	topic, err := ps.Join("bitcoin/regtest-handshake")
+	// Create topic
+	topic, err := ps.Join("test-prefix-handshake")
 	require.NoError(t, err)
 
 	// Create ready channel
@@ -2866,7 +2867,7 @@ func TestServer_Start(t *testing.T) {
 
 	server.P2PNode = mockP2PNode
 	mockP2PNode.On("SetTopicHandler", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockP2PNode.On("GetTopic", "bitcoin/regtest-handshake").Return(topic)
+	mockP2PNode.On("GetTopic", mock.Anything).Return(topic)
 	mockP2PNode.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	server.blockValidationClient = mockValidation
