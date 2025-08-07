@@ -954,11 +954,8 @@ func (td *TestDaemon) MineAndWait(t *testing.T, blockCount uint32) *model.Block 
 
 // CreateTestBlock creates a test block with the given previous block, nonce, and transactions.
 func (td *TestDaemon) CreateTestBlock(t *testing.T, previousBlock *model.Block, nonce uint32, txs ...*bt.Tx) (*subtreepkg.Subtree, *model.Block) {
-	// Create and save the subtree with the double spend tx
-	subtree, err := createAndSaveSubtrees(td.Ctx, td.SubtreeStore, txs)
-	require.NoError(t, err)
-
 	var address *bscript.Address
+	var err error
 
 	address, err = bscript.NewAddressFromPublicKey(td.privKey.PubKey(), true)
 	require.NoError(t, err)
@@ -969,15 +966,39 @@ func (td *TestDaemon) CreateTestBlock(t *testing.T, previousBlock *model.Block, 
 	require.NoError(t, err)
 
 	var merkleRoot *chainhash.Hash
+	var subtree *subtreepkg.Subtree
+	var subtrees []*chainhash.Hash
 
-	merkleRoot, err = subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) // nolint:gosec
-	require.NoError(t, err)
+	// Calculate the total size and transaction count
+	transactionCount := uint64(len(txs) + 1) // +1 for coinbase
+	sizeInBytes := uint64(coinbaseTx.Size())
+	for _, tx := range txs {
+		sizeInBytes += uint64(tx.Size())
+	}
+
+	// Handle blocks with only coinbase (empty blocks)
+	if len(txs) == 0 {
+		// For blocks with only coinbase, use coinbase hash as merkle root and empty subtrees
+		merkleRoot = coinbaseTx.TxIDChainHash()
+		subtrees = []*chainhash.Hash{} // Empty subtrees for coinbase-only blocks
+	} else {
+		// Create and save the subtree with the transactions
+		subtree, err = createAndSaveSubtrees(td.Ctx, td.SubtreeStore, txs)
+		require.NoError(t, err)
+
+		merkleRoot, err = subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) // nolint:gosec
+		require.NoError(t, err)
+
+		subtrees = []*chainhash.Hash{
+			subtree.RootHash(),
+		}
+	}
 
 	block := &model.Block{
-		Subtrees: []*chainhash.Hash{
-			subtree.RootHash(),
-		},
-		CoinbaseTx: coinbaseTx,
+		Subtrees:         subtrees,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: transactionCount,
+		SizeInBytes:      sizeInBytes,
 		Header: &model.BlockHeader{
 			HashPrevBlock:  previousBlock.Header.Hash(),
 			HashMerkleRoot: merkleRoot,
