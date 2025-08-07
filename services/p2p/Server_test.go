@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -17,12 +19,15 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/teranode/services/blockvalidation"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-p2p"
+	"github.com/libp2p/go-libp2p"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -2632,4 +2637,250 @@ func TestGenerateAndStorePrivateKey(t *testing.T) {
 
 		mockClient.AssertExpectations(t)
 	})
+}
+
+func TestServer_Health(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("liveness check returns OK", func(t *testing.T) {
+		s := &Server{}
+		code, msg, err := s.Health(ctx, true)
+		require.Equal(t, http.StatusOK, code)
+		require.Equal(t, "OK", msg)
+		require.NoError(t, err)
+	})
+
+	t.Run("readiness_check_without_dependencies", func(t *testing.T) {
+		s := &Server{}
+		code, msg, err := s.Health(ctx, false)
+
+		require.Equal(t, http.StatusOK, code)
+		require.NoError(t, err)
+		require.Contains(t, msg, `"Kafka"`)
+	})
+
+	t.Run("readiness_with_blockchain_client", func(t *testing.T) {
+		mockBlockchain := new(blockchain.Mock)
+		mockBlockchain.On("Health", mock.Anything, false).Return(200, "OK", nil)
+		state := blockchain_api.FSMStateType_RUNNING
+		mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+		mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return([]byte("ok"), nil)
+
+		s := &Server{
+			blockchainClient: mockBlockchain,
+		}
+
+		code, msg, err := s.Health(ctx, false)
+
+		require.Equal(t, http.StatusOK, code)
+		require.NoError(t, err)
+		require.Contains(t, msg, `"BlockchainClient"`)
+	})
+
+	t.Run("readiness with kafka consumer client", func(t *testing.T) {
+		mockBlockchain := new(blockchain.Mock)
+		state := blockchain_api.FSMStateType_RUNNING
+		mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+		mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return([]byte("ok"), nil)
+		mockBlockchain.On("Health", mock.Anything, mock.Anything).Return(http.StatusOK, "OK", nil)
+
+		mockInvalidBlocksKafka := new(MockKafkaConsumerGroup)
+		mockInvalidBlocksKafka.On("BrokersURL").Return([]string{"localhost:9092"})
+		mockInvalidBlocksKafka.On("Health", mock.Anything, mock.Anything).Return(http.StatusOK, "OK", nil)
+
+		mockInvalidSubtreeKafka := new(MockKafkaConsumerGroup)
+		mockInvalidSubtreeKafka.On("BrokersURL").Return([]string{"localhost:9092"})
+		mockInvalidSubtreeKafka.On("Health", mock.Anything, mock.Anything).Return(http.StatusOK, "OK", nil)
+
+		s := &Server{
+			blockchainClient:                  mockBlockchain,
+			invalidBlocksKafkaConsumerClient:  mockInvalidBlocksKafka,
+			invalidSubtreeKafkaConsumerClient: mockInvalidSubtreeKafka,
+		}
+
+		code, msg, err := s.Health(context.Background(), false)
+		t.Logf("Health result: %d %s", code, msg)
+		require.Equal(t, http.StatusOK, code)
+		require.NoError(t, err)
+	})
+
+}
+
+func TestServer_Init_HTTPPublicAddressSet(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	settings := createBaseTestSettings()
+	settings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	settings.Asset.HTTPPublicAddress = "http://public.example.com"
+	settings.Asset.HTTPAddress = "http://fallback.example.com"
+	settings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "http://public.example.com", server.AssetHTTPAddressURL)
+}
+
+func TestServer_Init_HTTPPublicAddressEmpty(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	settings := createBaseTestSettings()
+	settings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	settings.Asset.HTTPPublicAddress = ""
+	settings.Asset.HTTPAddress = "http://fallback.example.com"
+	settings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "http://fallback.example.com", server.AssetHTTPAddressURL)
+}
+
+func TestServer_setupHTTPServer(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-logger")
+	mockClient := &blockchain.Mock{}
+
+	settings := createBaseTestSettings()
+	settings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	settings.Asset.HTTPAddress = "http://localhost:8080"
+	settings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+
+	// Set notification channel (required by HandleWebSocket)
+	server.notificationCh = make(chan *notificationMsg)
+
+	e := server.setupHTTPServer()
+	require.NotNil(t, e)
+
+	// Simulate a test HTTP request to /health
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "OK", rec.Body.String())
+}
+
+func TestServer_Start(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	host, err := libp2p.New()
+	require.NoError(t, err)
+
+	ps, err := pubsub.NewGossipSub(ctx, host)
+	require.NoError(t, err)
+
+	topic, err := ps.Join("bitcoin/regtest-handshake")
+	require.NoError(t, err)
+
+	// Create ready channel
+	readyCh := make(chan struct{})
+
+	// Mocks
+	mockP2PNode := new(MockServerP2PNode)
+	mockBlockchain := new(blockchain.Mock)
+	mockBlockchain.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(nil)
+	prevHash := chainhash.DoubleHashB([]byte("prev block"))
+	merkleRoot := chainhash.DoubleHashB([]byte("merkle root"))
+
+	var hashPrev, hashMerkle chainhash.Hash
+	copy(hashPrev[:], prevHash)
+	copy(hashMerkle[:], merkleRoot)
+
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(
+		&model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &hashPrev,
+			HashMerkleRoot: &hashMerkle,
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+			Nonce:          0,
+		},
+		&model.BlockHeaderMeta{Height: 0},
+		nil,
+	)
+
+	subChan := make(chan *blockchain_api.Notification)
+	close(subChan)
+
+	mockBlockchain.On("Subscribe", mock.Anything, "p2pServer").
+		Return(subChan, nil)
+
+	state := blockchain_api.FSMStateType_RUNNING
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+	mockRejectedKafka := new(MockKafkaConsumerGroup)
+	mockRejectedKafka.On("Start", mock.Anything, mock.Anything, mock.Anything).Return()
+
+	mockInvalidBlocksKafka := new(MockKafkaConsumerGroup)
+	mockInvalidBlocksKafka.On("Start", mock.Anything, mock.Anything, mock.Anything).Return()
+
+	mockInvalidSubtreeKafka := new(MockKafkaConsumerGroup)
+	mockInvalidSubtreeKafka.On("Start", mock.Anything, mock.Anything, mock.Anything).Return()
+
+	mockSubtreeProducer := new(MockKafkaProducer)
+	mockSubtreeProducer.On("Start", mock.Anything, mock.Anything).Return()
+
+	mockBlocksProducer := new(MockKafkaProducer)
+	mockBlocksProducer.On("Start", mock.Anything, mock.Anything).Return()
+
+	mockP2PNode.On("Start", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockP2PNode.On("SetPeerConnectedCallback", mock.Anything).Return()
+	mockP2PNode.On("HostID").Return(peer.ID("mock-peer-id"))
+	mockValidation := new(blockvalidation.MockBlockValidation)
+	logger := ulogger.New("test")
+	settings := createBaseTestSettings()
+	settings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	settings.BlockChain.StoreURL = &url.URL{Scheme: "sqlitememory"}
+
+	server, err := NewServer(ctx, logger, settings, mockBlockchain, nil, nil, mockRejectedKafka, mockBlocksProducer, mockSubtreeProducer)
+	require.NoError(t, err)
+
+	server.rejectedTxKafkaConsumerClient = mockRejectedKafka
+	server.invalidBlocksKafkaConsumerClient = mockInvalidBlocksKafka
+	server.invalidSubtreeKafkaConsumerClient = mockInvalidSubtreeKafka
+	server.subtreeKafkaProducerClient = mockSubtreeProducer
+	server.blocksKafkaProducerClient = mockBlocksProducer
+
+	server.P2PNode = mockP2PNode
+	mockP2PNode.On("SetTopicHandler", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockP2PNode.On("GetTopic", "bitcoin/regtest-handshake").Return(topic)
+	mockP2PNode.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	server.blockValidationClient = mockValidation
+
+	// Run server
+	go func() {
+		err := server.Start(ctx, readyCh)
+		require.NoError(t, err)
+	}()
+
+	select {
+	case <-readyCh:
+		// ok
+	case <-time.After(2 * time.Second):
+		t.Fatal("readyCh was not closed")
+	}
 }
