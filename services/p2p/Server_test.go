@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
@@ -23,6 +24,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
+	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-p2p"
@@ -36,6 +38,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -2884,4 +2887,177 @@ func TestServer_Start(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("readyCh was not closed")
 	}
+}
+
+func Test_invalidSubtreeHandler_HappyPath(t *testing.T) {
+	banHandler := &testBanHandler{}
+	banManager := &PeerBanManager{
+		peerBanScores: make(map[string]*BanScore),
+		reasonPoints: map[BanReason]int{
+			ReasonInvalidSubtree: 10,
+		},
+		banThreshold:  100,
+		banDuration:   time.Hour,
+		decayInterval: time.Minute,
+		decayAmount:   1,
+		handler:       banHandler,
+	}
+
+	mockBC := new(blockchain.Mock)
+	st := blockchain_api.FSMStateType_RUNNING
+	mockBC.On("GetFSMCurrentState", mock.Anything).Return(&st, nil)
+
+	s := &Server{
+		logger:           ulogger.New("test"),
+		banManager:       banManager,
+		blockchainClient: mockBC,
+	}
+
+	hash := "subtree-hash-456"
+	peerID := "peer-xyz"
+	s.subtreePeerMap.Store(hash, peerID)
+
+	m := &kafkamessage.KafkaInvalidSubtreeTopicMessage{
+		SubtreeHash: hash,
+		Reason:      "invalid_subtree",
+	}
+	payload, err := proto.Marshal(m)
+	require.NoError(t, err)
+
+	msg := &kafka.KafkaMessage{
+		ConsumerMessage: sarama.ConsumerMessage{
+			Topic: "invalid-subtrees",
+			Value: payload,
+		},
+	}
+
+	h := s.invalidSubtreeHandler(context.Background())
+	err = h(msg)
+	require.NoError(t, err)
+
+	_, ok := s.subtreePeerMap.Load(hash)
+	require.False(t, ok, "entry should be deleted")
+
+	s.banManager.mu.RLock()
+	score := s.banManager.peerBanScores[peerID]
+	s.banManager.mu.RUnlock()
+	if assert.NotNil(t, score, "peer should have a score entry") {
+		assert.Equal(t, int(10), score.Score)
+	}
+
+}
+
+func Test_invalidBlockHandler(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test")
+
+	mkMsgBytes := func(blockHash, reason string) []byte {
+		pb := &kafkamessage.KafkaInvalidBlockTopicMessage{
+			BlockHash: blockHash,
+			Reason:    reason,
+		}
+		b, err := proto.Marshal(pb)
+		require.NoError(t, err)
+		return b
+	}
+
+	mkKafkaMsg := func(payload []byte) *kafka.KafkaMessage {
+		return &kafka.KafkaMessage{
+			ConsumerMessage: sarama.ConsumerMessage{
+				Topic: "invalid-subtrees",
+				Value: payload,
+			},
+		}
+	}
+
+	t.Run("returns nil when syncing", func(t *testing.T) {
+		mockBC := new(blockchain.Mock)
+		syncingState := blockchain_api.FSMStateType_RUNNING
+		mockBC.On("GetFSMCurrentState", mock.Anything).Return(&syncingState, nil)
+
+		s := &Server{
+			logger:           logger,
+			blockchainClient: mockBC,
+		}
+
+		h := s.invalidBlockHandler(ctx)
+		err := h(mkKafkaMsg(mkMsgBytes("abc", "invalid_block")))
+		require.NoError(t, err)
+
+		mockBC.AssertExpectations(t)
+	})
+
+	t.Run("unmarshal error returns error", func(t *testing.T) {
+		mockBC := new(blockchain.Mock)
+		running := blockchain_api.FSMStateType_RUNNING
+		mockBC.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
+
+		s := &Server{
+			logger:           logger,
+			blockchainClient: mockBC,
+		}
+
+		h := s.invalidBlockHandler(ctx)
+		err := h(mkKafkaMsg([]byte{0xff, 0x00, 0x01}))
+		require.Error(t, err)
+
+		mockBC.AssertExpectations(t)
+	})
+
+	t.Run("happy path: ReportInvalidBlock error is swallowed (returns nil)", func(t *testing.T) {
+		mockBC := new(blockchain.Mock)
+		running := blockchain_api.FSMStateType_RUNNING
+		mockBC.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
+
+		s := &Server{
+			logger:           logger,
+			blockchainClient: mockBC,
+		}
+
+		h := s.invalidBlockHandler(ctx)
+
+		payload := mkMsgBytes("deadbeef", "invalid_block")
+		err := h(mkKafkaMsg(payload))
+		require.NoError(t, err)
+
+		mockBC.AssertExpectations(t)
+	})
+
+	t.Run("happy path: ReportInvalidBlock succeeds and returns nil", func(t *testing.T) {
+		mockBC := new(blockchain.Mock)
+		running := blockchain_api.FSMStateType_RUNNING
+		mockBC.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
+
+		banHandler := &testBanHandler{}
+		banManager := &PeerBanManager{
+			peerBanScores: make(map[string]*BanScore),
+			reasonPoints: map[BanReason]int{
+				ReasonInvalidBlock: 10,
+			},
+			banThreshold:  100,
+			banDuration:   time.Hour,
+			decayInterval: time.Minute,
+			decayAmount:   1,
+			handler:       banHandler,
+		}
+
+		s := &Server{
+			logger:           logger,
+			blockchainClient: mockBC,
+			banManager:       banManager,
+		}
+
+		blockHash := "beefcafe"
+		peerID := "peer-123"
+
+		s.blockPeerMap.Store(blockHash, peerID)
+
+		payload := mkMsgBytes(blockHash, "invalid_block")
+
+		h := s.invalidBlockHandler(ctx)
+		err := h(mkKafkaMsg(payload))
+		require.NoError(t, err)
+
+		mockBC.AssertExpectations(t)
+	})
 }
