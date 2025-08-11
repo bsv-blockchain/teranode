@@ -426,7 +426,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	// validate the transaction format, consensus rules etc.
 	// this does not validate the signatures in the transaction yet
-	if err = v.validateTransaction(ctx, tx, blockHeight, validationOptions); err != nil {
+	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
 		err := errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
 		span.RecordError(err)
 
@@ -916,7 +916,7 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 // validateTransaction performs transaction-level validation checks.
 // Ensures transaction is properly extended and meets all validation rules.
 // Returns error if validation fails.
-func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
+func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "validateTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
 	)
@@ -934,7 +934,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	}
 
 	// run the internal tx validation, checking policies, scripts, signatures etc.
-	return v.txValidator.ValidateTransaction(tx, blockHeight, validationOptions)
+	return v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions)
 }
 
 // validateTransactionScripts performs script validation for a transaction
@@ -959,27 +959,4 @@ func (v *Validator) validateTransactionScripts(ctx context.Context, tx *bt.Tx, b
 
 	// run the internal tx validation, checking policies, scripts, signatures etc.
 	return v.txValidator.ValidateTransactionScripts(tx, blockHeight, utxoHeights, validationOptions)
-}
-
-// feesToBtFeeQuote converts a minimum mining fee rate to a bt.FeeQuote structure.
-// The fee rate is specified in BSV/KB and converted to satoshis/KB.
-func feesToBtFeeQuote(minMiningFee float64) *bt.FeeQuote {
-	satoshisPerKB := int(minMiningFee * 1e8)
-
-	btFeeQuote := bt.NewFeeQuote()
-
-	for _, feeType := range []bt.FeeType{bt.FeeTypeStandard, bt.FeeTypeData} {
-		btFeeQuote.AddQuote(feeType, &bt.Fee{
-			MiningFee: bt.FeeUnit{
-				Satoshis: satoshisPerKB,
-				Bytes:    1000,
-			},
-			RelayFee: bt.FeeUnit{
-				Satoshis: satoshisPerKB,
-				Bytes:    1000,
-			},
-		})
-	}
-
-	return btFeeQuote
 }

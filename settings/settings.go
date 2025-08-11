@@ -92,11 +92,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// MaxNonStdTxValidationDuration: getInt("maxnonstdtxvalidationduration", 1000, alternativeContext...), // 1000ms
 			// MaxTxChainValidationBudget:    getInt("maxtxchainvalidationbudget", 50, alternativeContext...),      // 50ms
 			// ValidationClockCPU:              getBool("validationclockcpu", false, alternativeContext...),
-			// MinConsolidationFactor:          getInt("minconsolidationfactor", 20, alternativeContext...),
-			// MaxConsolidationInputScriptSize: getInt("maxconsolidationinputscriptsize", 1000000, alternativeContext...),
-			// MinConfConsolidationInput:       getInt("minconfconsolidationinput", 1000000, alternativeContext...),
-			// MinConsolidationInputMaturity:   getInt("minconsolidationinputmaturity", 1000000, alternativeContext...),
-			// AcceptNonStdConsolidationInput:  getBool("acceptnonstdconsolidationinput", false, alternativeContext...),
+			MinConsolidationFactor:          getInt("minconsolidationfactor", 20, alternativeContext...),
+			MaxConsolidationInputScriptSize: getInt("maxconsolidationinputscriptsize", 150, alternativeContext...),
+			MinConfConsolidationInput:       getInt("minconfconsolidationinput", 6, alternativeContext...),
+			MinConsolidationInputMaturity:   getInt("minconsolidationinputmaturity", 6, alternativeContext...),
+			AcceptNonStdConsolidationInput:  getBool("acceptnonstdconsolidationinput", false, alternativeContext...),
 		},
 		Kafka: KafkaSettings{
 			Blocks:                getString("KAFKA_BLOCKS", "blocks", alternativeContext...),

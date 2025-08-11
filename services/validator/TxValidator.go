@@ -71,10 +71,11 @@ type TxValidatorI interface {
 	// Parameters:
 	//   - tx: The transaction to validate, must be properly initialized
 	//   - blockHeight: The current block height for validation context
+	//   - utxoHeights: Block heights where each input UTXO was created (nil if not available)
 	//   - validationOptions: Optional validation options to customize validation behavior
 	// Returns:
 	//   - error: Specific validation error with reason if validation fails, nil on success
-	ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error
+	ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
 
 	// ValidateTransactionScripts performs script validation for a transaction.
 	// This method specifically handles the script execution and signature verification
@@ -180,7 +181,7 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 //
 // Returns:
 //   - error: Any validation errors encountered
-func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
+func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
 	//
 	// Each node will verify every transaction against a long checklist of criteria:
 	//
@@ -236,7 +237,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, valida
 	// 10) Reject if the sum of input values is less than sum of output values
 	// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
 	if !validationOptions.SkipPolicyChecks {
-		if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
+		if err := tv.checkFees(tx, blockHeight, utxoHeights); err != nil {
 			return err
 		}
 	}
@@ -282,6 +283,35 @@ func isUnspendableOutput(script *bscript.Script) bool {
 	}
 
 	return false
+}
+
+// isStandardInputScript checks if an input script (unlocking script) is standard
+// Standard input scripts should only contain data pushes (no other opcodes)
+// This uses the same interpreter as the SV node for consistency
+// Before UAHF height, all scripts are considered standard (no push-only requirement)
+func isStandardInputScript(script *bscript.Script, blockHeight uint32, uahfHeight uint32) bool {
+	// Before UAHF, there was no push-only requirement for input scripts
+	if blockHeight <= uahfHeight {
+		// Any parseable script is considered standard before UAHF
+		// Return true unless script is nil
+		return script != nil
+	}
+
+	if script == nil {
+		// Nil scripts are not standard (matches pushDataCheck behavior)
+		return false
+	}
+
+	// Use the same parser as pushDataCheck for consistency
+	parser := interpreter.DefaultOpcodeParser{}
+	parsedScript, err := parser.Parse(script)
+	if err != nil {
+		// If we can't parse the script, it's not standard
+		return false
+	}
+
+	// Check if the parsed script is push-only
+	return parsedScript.IsPushOnly()
 }
 
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
@@ -385,9 +415,11 @@ func (tv *TxValidator) checkTxSize(txSize int) error {
 	return nil
 }
 
-func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
-	if tv.isConsolidationTx(tx) {
-		return nil
+func (tv *TxValidator) checkFees(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32) error {
+	// Check for consolidation transaction with proper UTXO height verification
+	isConsolidation := tv.isConsolidationTx(tx, utxoHeights, blockHeight)
+	if isConsolidation {
+		return nil // We return nil here to say there was no issue with the fees
 	}
 
 	inputSats := tx.TotalInputSatoshis()
@@ -397,48 +429,181 @@ func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
 		return errors.NewTxInvalidError("transaction input satoshis is less than output satoshis: %d < %d", inputSats, outputSats)
 	}
 
+	minFeeRateBSVPerKB := tv.settings.Policy.GetMinMiningTxFee() // BSV per kilobyte
+
+	if minFeeRateBSVPerKB == 0 {
+		return nil // no fee policy found, skip fee check
+	}
+
 	actualFeePaid := inputSats - outputSats
 
-	minRequiredFee := tv.settings.Policy.GetMinMiningTxFee() * 1e8
+	// Convert BSV/kB to satoshis/byte
+	// 1 BSV = 1e8 satoshis
+	// 1 kB = 1000 bytes
+	// So BSV/kB * 1e8 / 1000 = satoshis/byte
+	satoshisPerByte := minFeeRateBSVPerKB * 1e8 / 1000
 
-	if float64(actualFeePaid) < minRequiredFee {
-		return errors.NewTxInvalidError("transaction fee is too low")
+	// Calculate minimum relay fee based on transaction size
+	txSize := tx.Size()
+	minRequiredFee := uint64(satoshisPerByte * float64(txSize))
+
+	// Ensure minimum 1 satoshi for non-zero sized transactions (matching Bitcoin SV)
+	if minRequiredFee == 0 && txSize > 0 && minFeeRateBSVPerKB > 0 {
+		minRequiredFee = 1
 	}
 
-	feesOK, err := tx.IsFeePaidEnough(feeQuote)
-	if err != nil {
-		return err
-	}
-
-	if !feesOK {
-		return errors.NewTxInvalidError("transaction fee is too low")
+	if actualFeePaid < minRequiredFee {
+		return errors.NewTxInvalidError("transaction fee is too low: %d < %d required", actualFeePaid, minRequiredFee)
 	}
 
 	return nil
 }
 
-// isConsolidationTx checks if a transaction is a consolidation transaction
-// A consolidation transaction is typically one that has multiples of inputs and fewer outputs,
-// which is a common pattern for consolidating small UTXOs into a larger one.
+// isDustReturnTx checks if a transaction is a dust return transaction.
+// A dust return transaction has a single output with 0 satoshis and an unspendable script
+// (OP_FALSE OP_RETURN pattern). These transactions are used to clean up dust UTXOs.
 //
 // Parameters:
 //   - tx: The transaction to check
 //
 // Returns:
-//   - bool: true if the transaction is a consolidation transaction, false otherwise
-func (tv *TxValidator) isConsolidationTx(tx *bt.Tx) bool {
+//   - bool: true if the transaction is a dust return transaction, false otherwise
+func (tv *TxValidator) isDustReturnTx(tx *bt.Tx) bool {
 	if tx == nil {
 		return false
 	}
 
-	// A consolidation transaction is one that has a single input and multiple outputs
-	// This is a common pattern for consolidating small UTXOs into a larger one
-	if len(tx.Inputs) >= 150 && len(tx.Outputs) <= 2 {
+	// Must have exactly one output
+	if len(tx.Outputs) != 1 {
+		return false
+	}
+
+	output := tx.Outputs[0]
+
+	// Output must have 0 satoshis
+	if output.Satoshis != 0 {
+		return false
+	}
+
+	// Output script must be unspendable (OP_FALSE OP_RETURN)
+	return isUnspendableOutput(output.LockingScript)
+}
+
+// isConsolidationTx checks if a transaction qualifies as a consolidation transaction
+// following Bitcoin SV rules.
+//
+// Parameters:
+//   - tx: The transaction to check
+//   - utxoHeights: Block heights of the UTXOs being spent (nil for fee checks only)
+//   - currentHeight: Current block height (ignored if utxoHeights is nil)
+//
+// Returns:
+//   - bool: true if the transaction qualifies as a consolidation transaction
+func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, currentHeight uint32) bool {
+	if tx == nil {
+		return false
+	}
+
+	// Coinbase transactions cannot be consolidation transactions
+	if tx.IsCoinbase() {
+		return false
+	}
+
+	// Get policy settings
+	minConsolidationFactor := tv.settings.Policy.GetMinConsolidationFactor()
+	if minConsolidationFactor <= 0 {
+		return false
+	}
+
+	numInputs := len(tx.Inputs)
+	numOutputs := len(tx.Outputs)
+
+	// Check if it's a dust return transaction (special case)
+	isDustReturn := tv.isDustReturnTx(tx)
+
+	// Rule 1: Input/Output Ratio
+	// The number of inputs must be >= minConsolidationFactor × number of outputs
+	if !isDustReturn && numInputs < minConsolidationFactor*numOutputs {
+		return false
+	}
+
+	// Rule 2: Script Size Comparison (Bitcoin SV rule)
+	// Sum of input scriptPubKey sizes >= minConsolidationFactor × sum of output scriptPubKey sizes
+	if !isDustReturn {
+		// Check if transaction is extended (has PreviousTxScript for all inputs)
+		for _, input := range tx.Inputs {
+			if input.PreviousTxScript == nil {
+				return false
+			}
+		}
+
+		// Calculate total size of scriptPubKeys from UTXOs being spent
+		totalInputScriptPubKeySize := 0
+		for _, input := range tx.Inputs {
+			totalInputScriptPubKeySize += len(*input.PreviousTxScript)
+		}
+
+		// Calculate total size of output scriptPubKeys
+		totalOutputScriptPubKeySize := 0
+		for _, output := range tx.Outputs {
+			if output.LockingScript != nil {
+				totalOutputScriptPubKeySize += len(*output.LockingScript)
+			}
+		}
+
+		// Check the script size ratio
+		if totalInputScriptPubKeySize < minConsolidationFactor*totalOutputScriptPubKeySize {
+			return false
+		}
+	}
+
+	// If no UTXO heights provided, we're done (fee exemption check)
+	if utxoHeights == nil {
 		return true
 	}
 
-	// Additional checks can be added here if needed to identify consolidation transactions
-	return false
+	// FULL VALIDATION - Only performed when UTXO heights are provided
+
+	// Get configuration settings
+	minConf := tv.settings.Policy.GetMinConfConsolidationInput()
+	maxInputScriptSize := tv.settings.Policy.GetMaxConsolidationInputScriptSize()
+	acceptNonStdInputs := tv.settings.Policy.GetAcceptNonStdConsolidationInput()
+
+	// Dust return transactions don't require confirmations
+	if isDustReturn {
+		minConf = 0
+	}
+
+	// Check each input
+	for i, input := range tx.Inputs {
+		// Rule 3: Input Maturity
+		// All inputs must have at least minConfConsolidationInput confirmations
+		if minConf > 0 && i < len(utxoHeights) {
+			inputHeight := utxoHeights[i]
+			confirmations := int(currentHeight - inputHeight)
+			if confirmations < minConf {
+				return false
+			}
+		}
+
+		// Rule 4: Input Script Size Limit
+		// Each input's scriptSig must be <= maxConsolidationInputScriptSize bytes
+		if maxInputScriptSize > 0 && input.UnlockingScript != nil {
+			scriptSize := len(*input.UnlockingScript)
+			if scriptSize > maxInputScriptSize {
+				return false
+			}
+		}
+
+		// Rule 5: Standard Script Rule
+		// If acceptNonStdConsolidationInput = 0, all inputs must use standard scripts
+		if !acceptNonStdInputs && !isStandardInputScript(input.UnlockingScript, currentHeight, tv.settings.ChainCfgParams.UahfForkHeight) {
+			return false
+		}
+	}
+
+	// Transaction qualifies as a consolidation transaction
+	return true
 }
 
 func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, validationOptions *Options) error {

@@ -17,7 +17,7 @@ Key features:
 Usage:
 
 	validator := NewTxValidator(logger, policy, params)
-	err := validator.ValidateTransaction(tx, blockHeight)
+	err := validator.ValidateTransaction(tx, blockHeight, nil)
 */
 package validator
 

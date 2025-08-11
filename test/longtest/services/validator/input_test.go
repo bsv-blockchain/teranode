@@ -39,13 +39,13 @@ func TestCheckInputsWithDuplicateInputs(t *testing.T) {
 	)
 
 	// Check for duplicate inputs
-	err = tv.ValidateTransaction(tx1, 0, &validator.Options{
+	err = tv.ValidateTransaction(tx1, 0, nil, &validator.Options{
 		SkipPolicyChecks: true,
 	})
 	require.NoError(t, err)
 
 	// Check for duplicate inputs
-	err = tv.ValidateTransaction(tx2, 0, &validator.Options{
+	err = tv.ValidateTransaction(tx2, 0, nil, &validator.Options{
 		SkipPolicyChecks: true,
 	})
 
