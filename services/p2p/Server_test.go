@@ -2642,7 +2642,7 @@ func TestGenerateAndStorePrivateKey(t *testing.T) {
 	})
 }
 
-func TestServer_Health(t *testing.T) {
+func TestServerHealth(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("liveness check returns OK", func(t *testing.T) {
@@ -2709,7 +2709,7 @@ func TestServer_Health(t *testing.T) {
 
 }
 
-func TestServer_Init_HTTPPublicAddressSet(t *testing.T) {
+func TestServerInitHTTPPublicAddressSet(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.New("test-server")
 	mockClient := &blockchain.Mock{}
@@ -2730,7 +2730,7 @@ func TestServer_Init_HTTPPublicAddressSet(t *testing.T) {
 	require.Equal(t, "http://public.example.com", server.AssetHTTPAddressURL)
 }
 
-func TestServer_Init_HTTPPublicAddressEmpty(t *testing.T) {
+func TestServerInitHTTPPublicAddressEmpty(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.New("test-server")
 	mockClient := &blockchain.Mock{}
@@ -2751,7 +2751,7 @@ func TestServer_Init_HTTPPublicAddressEmpty(t *testing.T) {
 	require.Equal(t, "http://fallback.example.com", server.AssetHTTPAddressURL)
 }
 
-func TestServer_setupHTTPServer(t *testing.T) {
+func TestServerSetupHTTPServer(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.New("test-logger")
 	mockClient := &blockchain.Mock{}
@@ -2785,7 +2785,7 @@ func TestServer_setupHTTPServer(t *testing.T) {
 	require.Equal(t, "OK", rec.Body.String())
 }
 
-func TestServer_Start(t *testing.T) {
+func TestServerStartFull(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -2889,7 +2889,7 @@ func TestServer_Start(t *testing.T) {
 	}
 }
 
-func Test_invalidSubtreeHandler_HappyPath(t *testing.T) {
+func TestInvalidSubtreeHandlerHappyPath(t *testing.T) {
 	banHandler := &testBanHandler{}
 	banManager := &PeerBanManager{
 		peerBanScores: make(map[string]*BanScore),
@@ -2947,7 +2947,7 @@ func Test_invalidSubtreeHandler_HappyPath(t *testing.T) {
 
 }
 
-func Test_invalidBlockHandler(t *testing.T) {
+func TestInvalidBlockHandler(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.New("test")
 
@@ -3060,4 +3060,186 @@ func Test_invalidBlockHandler(t *testing.T) {
 
 		mockBC.AssertExpectations(t)
 	})
+}
+
+func TestServerRejectedHandler(t *testing.T) {
+	t.Parallel()
+	topicDefaultString := "test-prefix-rejected"
+	ctx := context.Background()
+	logger := ulogger.New("test")
+
+	// helper: create payload proto for topic "rejected tx"
+	mkPayload := func(txHash, reason string) []byte {
+		m := &kafkamessage.KafkaRejectedTxTopicMessage{
+			TxHash: txHash,
+			Reason: reason,
+		}
+		b, err := proto.Marshal(m)
+		require.NoError(t, err)
+		return b
+	}
+
+	// helper: incapsulate in kafka.KafkaMessage
+	mkKafkaMsg := func(b []byte) *kafka.KafkaMessage {
+		return &kafka.KafkaMessage{
+			ConsumerMessage: sarama.ConsumerMessage{
+				Topic: "rejected-tx",
+				Value: b,
+			},
+		}
+	}
+
+	t.Run("returns nil when syncing and does not publish", func(t *testing.T) {
+		mockBC := new(blockchain.Mock)
+		syncFSM := blockchain_api.FSMStateType_CATCHINGBLOCKS
+		mockBC.On("GetFSMCurrentState", mock.Anything).Return(&syncFSM, nil)
+
+		mockP2P := new(MockServerP2PNode)
+		s := &Server{
+			logger:              logger,
+			blockchainClient:    mockBC,
+			P2PNode:             mockP2P,
+			rejectedTxTopicName: topicDefaultString, // optional, to avoid empty string
+		}
+
+		h := s.rejectedHandler(ctx)
+		err := h(mkKafkaMsg(mkPayload("a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2", "invalid_script")))
+		require.NoError(t, err)
+
+		mockP2P.AssertNotCalled(t, "HostID")
+		mockP2P.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything, mock.Anything)
+
+		mockBC.AssertExpectations(t)
+		mockP2P.AssertExpectations(t)
+	})
+
+	t.Run("publish error is logged but handler returns nil", func(t *testing.T) {
+		mockBC := new(blockchain.Mock)
+		state := blockchain_api.FSMStateType_RUNNING
+		mockBC.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+		mockP2P := new(MockServerP2PNode)
+		mockP2P.On("HostID").Return(peer.ID("peer-1"))
+		mockP2P.
+			On("Publish", mock.Anything, "rejected-topic", mock.Anything).
+			Return(errors.NewConfigurationError("Can't publish P2P topic"))
+
+		s := &Server{
+			logger:              logger,
+			blockchainClient:    mockBC,
+			P2PNode:             mockP2P,
+			rejectedTxTopicName: "rejected-topic",
+		}
+
+		h := s.rejectedHandler(ctx)
+		err := h(mkKafkaMsg(mkPayload(
+			"a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2",
+			"policy",
+		)))
+		require.NoError(t, err) // nil is expected
+		mockBC.AssertExpectations(t)
+		mockP2P.AssertExpectations(t)
+	})
+
+	t.Run("invalid proto payload returns error", func(t *testing.T) {
+		mockBC := new(blockchain.Mock)
+		state := blockchain_api.FSMStateType_RUNNING
+		mockBC.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+		mockP2P := new(MockServerP2PNode)
+
+		s := &Server{
+			logger:           logger,
+			blockchainClient: mockBC,
+			P2PNode:          mockP2P,
+		}
+
+		h := s.rejectedHandler(ctx)
+		// payload non-proto
+		err := h(mkKafkaMsg([]byte("not-a-protobuf")))
+		require.Error(t, err)
+
+		mockBC.AssertExpectations(t)
+	})
+
+	t.Run("publishes on valid message and returns nil", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.New("test")
+		mockBC := new(blockchain.Mock)
+		st := blockchain_api.FSMStateType_RUNNING
+		mockBC.On("GetFSMCurrentState", mock.Anything).Return(&st, nil)
+
+		// 2) P2P node mock
+		mockP2P := new(MockServerP2PNode)
+		mockP2P.On("HostID").Return(peer.ID("peer-123"))
+
+		s := &Server{
+			logger:              logger,
+			blockchainClient:    mockBC,
+			P2PNode:             mockP2P,
+			rejectedTxTopicName: topicDefaultString, // expected topic
+		}
+
+		// Kafka valid message: hash 64 hex chars
+		msgPB := &kafkamessage.KafkaRejectedTxTopicMessage{
+			TxHash: "a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2a3f1c4e2",
+			Reason: "invalid_script",
+		}
+		payload, err := proto.Marshal(msgPB)
+		require.NoError(t, err)
+
+		mkKafkaMsg := func(b []byte) *kafka.KafkaMessage {
+			return &kafka.KafkaMessage{
+				ConsumerMessage: sarama.ConsumerMessage{
+					Topic: "rejected-tx",
+					Value: b,
+				},
+			}
+		}
+
+		// Matching on published payload
+		published := mock.MatchedBy(func(b []byte) bool {
+			var m p2p.RejectedTxMessage
+			if err := json.Unmarshal(b, &m); err != nil {
+				return false
+			}
+			return strings.EqualFold(m.TxID, msgPB.TxHash) &&
+				m.Reason == msgPB.Reason &&
+				m.PeerID != ""
+		})
+		mockP2P.
+			On("Publish", mock.Anything, topicDefaultString, published).
+			Return(nil).
+			Once()
+
+		// Return value for HostID
+		mockP2P.On("HostID").Return(peer.ID("KoPCcJr6w9A"))
+
+		// Handler execution
+		h := s.rejectedHandler(ctx)
+		err = h(mkKafkaMsg(payload))
+		require.NoError(t, err)
+
+		mockP2P.AssertExpectations(t)
+		mockBC.AssertExpectations(t)
+	})
+}
+
+func TestGenerateRandomKey(t *testing.T) {
+	t.Parallel()
+
+	k1, err := generateRandomKey()
+	require.NoError(t, err)
+
+	// length 64 (32 byte → 64 hex)
+	require.Len(t, k1, 64)
+
+	// only hex
+	_, err = hex.DecodeString(k1)
+	require.NoError(t, err)
+
+	// 2 invocations should produce 2 different keys
+	k2, err := generateRandomKey()
+	require.NoError(t, err)
+	require.NotEqual(t, k1, k2)
 }
