@@ -1177,28 +1177,12 @@ func (ba *BlockAssembly) createMerkleTreeFromSubtrees(jobID string, subtreesInJo
 	}
 
 	var (
-		hashMerkleRoot      *chainhash.Hash
-		coinbaseMerkleProof []*chainhash.Hash
+		hashMerkleRoot *chainhash.Hash
 	)
 
 	if len(subtreesInJob) == 0 {
 		hashMerkleRoot = coinbaseTxIDHash
 	} else {
-		ba.logger.Infof("[BlockAssembly] calculating merkle proof for job %s", jobID)
-
-		if coinbaseMerkleProof, err = subtreepkg.GetMerkleProofForCoinbase(subtreesInJob); err != nil {
-			return nil, errors.NewProcessingError("[BlockAssembly][%s] error getting merkle proof for coinbase", jobID, err)
-		}
-
-		cmp := make([]string, len(coinbaseMerkleProof))
-
-		cmpB := make([][]byte, len(coinbaseMerkleProof))
-
-		for idx, hash := range coinbaseMerkleProof {
-			cmp[idx] = hash.String()
-			cmpB[idx] = hash.CloneBytes()
-		}
-
 		calculatedMerkleRoot := topTree.RootHash()
 
 		if hashMerkleRoot, err = chainhash.NewHash(calculatedMerkleRoot[:]); err != nil {
