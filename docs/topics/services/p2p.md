@@ -3,7 +3,7 @@
 ## Index
 
 - [🌐 P2P Service](#-p2p-service)
-    - [Index](#index)
+  - [Index](#index)
   - [1. Description](#1-description)
   - [2. Functionality](#2-functionality)
     - [2.1. Creating, initializing and starting a new P2P Server](#21-creating-initializing-and-starting-a-new-p2p-server)
@@ -42,9 +42,7 @@
     - [Security and Authentication](#security-and-authentication)
   - [8. Other Resources](#8-other-resources)
 
-
 ## 1. Description
-
 
 The p2p package implements a peer-to-peer (P2P) server using `libp2p` (`github.com/libp2p/go-libp2p`, `https://libp2p.io`), a modular network stack that allows for direct peer-to-peer communication. The implementation follows an interface-based design pattern with `P2PNodeI` abstracting the concrete `P2PNode` implementation to allow for better testability and modularity.
 
@@ -101,8 +99,8 @@ The p2p peers are part of a private network. This private network is managed by 
 
 In the diagram above:
 
-* The node P2P service subscribes and listens to Blockchain and Tx Validator service notifications. When blocks, subtrees or rejected transactions are detected, the P2P service publishes these messages to the network.
-* When the P2P service receives a message from the network (i.e. a Blockchain message from another node), it forwards it to the node Block Validation Service for processing.
+- The node P2P service subscribes and listens to Blockchain and Tx Validator service notifications. When blocks, subtrees or rejected transactions are detected, the P2P service publishes these messages to the network.
+- When the P2P service receives a message from the network (i.e. a Blockchain message from another node), it forwards it to the node Block Validation Service for processing.
 
 In more detail:
 
@@ -110,13 +108,12 @@ In more detail:
 
 ## 2. Functionality
 
-
 ### 2.1. Creating, initializing and starting a new P2P Server
 
 ![p2p_create_init_start.svg](img/plantuml/p2p/p2p_create_init_start.svg)
 
-
 ### 2.1.1. Creating a New P2P Server
+
 The startup process of the node involves the `main.go` file calling the `p2p.NewServer` function from the P2P package (`services/p2p/Server.go`). This function is tasked with creating a new P2P server instance.
 
 1. **Private Key Management**:
@@ -125,11 +122,12 @@ The startup process of the node involves the `main.go` file calling the `p2p.New
 
       - `readPrivateKey` calls `blockchainClient.GetState(ctx, "p2p.privateKey")` to retrieve the serialized key data
       - If found, it deserializes the key using `crypto.UnmarshalPrivateKey()`
-    - If no key is specified in the configuration and no key exists in the blockchain store, it generates a new one using the `generatePrivateKey()` function:
+    - If no key is specified in the configuration and no key exists in the blockchain store, it automatically generates and stores a new one using the `generateAndStorePrivateKey()` function:
 
-      - `generatePrivateKey` creates a new Ed25519 key pair using `crypto.GenerateEd25519Key()`
+      - `generateAndStorePrivateKey` creates a new Ed25519 key pair using `crypto.GenerateEd25519Key()`
       - It serializes the private key with `crypto.MarshalPrivateKey()`
       - It stores the serialized key in the blockchain store using `blockchainClient.SetState(ctx, "p2p.privateKey", privBytes)`
+      - The generated key is automatically persisted to ensure the node maintains the same peer ID across restarts
     - This blockchain store persistence mechanism works through gRPC calls to the blockchain service
     - Using the blockchain store ensures that the P2P private key (and therefore node identity) persists even if the container is destroyed, maintaining consistent peer relationships in the network
 
@@ -240,7 +238,6 @@ In the previous section, the P2P Service created a `P2PNode as part of the initi
 
     - The capabilities of the DHT for discovery and topic-based advertising enables the node to seamlessly integrate into the Teranode P2P network.
 
-
 ### 2.3. Best Block Messages
 
 ![p2p_handle_blockchain_messages.svg](img/plantuml/p2p/p2p_handle_blockchain_messages.svg)
@@ -261,37 +258,33 @@ In the previous section, the P2P Service created a `P2PNode as part of the initi
     - Node (Peer 1) handles the blockchain message using `s.handleBlockchainMessage(ctx, stream)`.
     - The message received is logged with `s.logger.Debugf("Received block topic message: %s", string(buf))` (at the time of writing, the `handleBlockchainMessage` function simply logs block topic messages).
 
-
-
 ### 2.4. Blockchain Messages
 
 When a node creates a new subtree, or finds a new block hashing solution, it will broadcast this information to the network. This is done by publishing a message to the relevant topic. The message is then received by all peers subscribed to that topic. Listening peers can then feed relevant messages to their own Block Validation Service.
 
-
 ![p2p_blockchain_subscription.svg](img/plantuml/p2p/p2p_blockchain_subscription.svg)
-
 
 1. **Blockchain Subscription**:
 
     - The server subscribes to the blockchain service using `s.blockchainClient.Subscribe(ctx, blockchain.SubscriptionType_Blockchain)`.
     - The server listens for blockchain notifications (`Block`, `Subtree` or `MiningOn` notifications) using `s.blockchainSubscriptionListener(ctx)`.
 
-1. **New Block Notification**:
+2. **New Block Notification**:
 
     - Node 1 listens for blockchain notifications.
     - If a new block notification is detected, it publishes the block message to the PubSub System.
     - The PubSub System then delivers this message to Node 2.
     - Node 2 receives the message on the block topic, **submits the block message to its own Block Validation Service**, and notifies the block message on its notification channel.
-     - Note that the Block Validation Service might be configured to either receive gRPC notifications or listen to a Kafka producer. In the diagram above, the gRPC method is described. Please check the [Block Validation Service](blockValidation.md) documentation for more details
+    - Note that the Block Validation Service might be configured to either receive gRPC notifications or listen to a Kafka producer. In the diagram above, the gRPC method is described. Please check the [Block Validation Service](blockValidation.md) documentation for more details
 
-2. **New Mined Block Notification**:
+3. **New Mined Block Notification**:
 
     - Node 1 listens for blockchain notifications.
     - If a new mined block notification is detected, it publishes the mining on message to the PubSub System.
     - The PubSub System delivers this message to Node 2.
     - Node 2 receives the mining message on the mining topic and notifies the "mining on" message on its notification channel.
 
-3. **New Subtree Notification**:
+4. **New Subtree Notification**:
 
     - Node 1 listens for blockchain notifications.
     - If a new subtree notification is detected, it publishes the subtree message to the PubSub System.
@@ -305,8 +298,8 @@ Nodes will broadcast rejected transaction notifications to the network. This is 
 
 ![p2p_tx_validator_messages.svg](img/plantuml/p2p/p2p_tx_validator_messages.svg)
 
- - The Node 1 listens for validator subscription events.
- - When a new rejected transaction notification is detected, the Node 1 publishes this message to the PubSub System using the topic name `rejectedTxTopicName`, forwarding it to any subscribers of the `rejectedTxTopicName` topic.
+- The Node 1 listens for validator subscription events.
+- When a new rejected transaction notification is detected, the Node 1 publishes this message to the PubSub System using the topic name `rejectedTxTopicName`, forwarding it to any subscribers of the `rejectedTxTopicName` topic.
 
 Note that the P2P service can only subscribe to these notifications if and when the TX Validator Service is available in the node. The service uses the `useLocalValidator` setting to determine whether a local validator or a validator service is in scope. If no TX validator runs in the node, the P2P will not attempt to subscribe.
 
@@ -316,21 +309,19 @@ All notifications collected from the Block and Validator listeners are sent over
 
 ![p2p_websocket_activity_diagram.svg](img/plantuml/p2p/p2p_websocket_activity_diagram.svg)
 
-* WebSocket Request Handling:
+- WebSocket Request Handling:
 
-    - An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client.
-    - Data is sent over the WebSocket, using its dedicated client channel.
-    - If there's an error in sending data, the channel is removed from the `clientChannels`.
-
-
+  - An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client.
+  - Data is sent over the WebSocket, using its dedicated client channel.
+  - If there's an error in sending data, the channel is removed from the `clientChannels`.
 
 - The server listens for various types of events in a concurrent process:
 
-    - The server tracks all active client channels (`clientChannels`).
-    - When a new client connects, it is added to the `clientChannels`.
-    - If a client disconnects, it is removed from `clientChannels`.
-    - Periodically, we ping all connected clients. Any error would have the client removed from the list of clients.
-    - When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
+  - The server tracks all active client channels (`clientChannels`).
+  - When a new client connects, it is added to the `clientChannels`.
+  - If a client disconnects, it is removed from `clientChannels`.
+  - Periodically, we ping all connected clients. Any error would have the client removed from the list of clients.
+  - When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
 
 As a sequence:
 
@@ -341,7 +332,6 @@ As a sequence:
 3. For each new notification or ping, the server dispatches this data to all client channels.
 4. If there's a WebSocket error or the client disconnects, the client is added to the `deadClientCh` queue, which leads to its removal from the active client channels.
 
-
 ### 2.7. Ban Management System
 
 The P2P service includes a ban management system that allows nodes to maintain a list of banned peers and handle ban-related events across the network.
@@ -351,6 +341,7 @@ The P2P service includes a ban management system that allows nodes to maintain a
 #### 2.7.1. Ban List Management
 
 The ban system consists of two main components:
+
 1. **BanList**: A thread-safe data structure that maintains banned IP addresses and subnets
 2. **BanChan**: A channel that broadcasts ban-related events to system components
 
@@ -368,6 +359,7 @@ While the banList is maintained by the P2P service, the ban operations are manag
 #### 2.7.3. Ban Event Handling
 
 When a ban event occurs:
+
 1. The ban is added to the persistent storage
 2. A ban event is broadcast through the ban channel
 3. The P2P service checks current connections against the ban
@@ -382,10 +374,7 @@ Ban-related settings in the configuration:
 - `ban_default_duration`: Default duration for bans (24 hours if not specified)
 - `ban_max_entries`: Maximum number of banned entries to maintain
 
-
-
 ## 3. Technology
-
 
 1. **Go Programming Language**:
 
@@ -435,7 +424,6 @@ Ban-related settings in the configuration:
 
     - Configuration management using environment variables, required for setting up network parameters, topic names, etc.
 
-
 ## 4. Data Model
 
 - [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.
@@ -443,51 +431,50 @@ Ban-related settings in the configuration:
 
 Within the P2P service, notifications are sent to the Websocket clients using the following data model:
 
-* Block notifications:
+- Block notifications:
 
 ```go
-			s.notificationCh <- &notificationMsg{
-				Timestamp: time.Now().UTC(),
-				Type:      "block",
-				Hash:      blockMessage.Hash,
-				BaseURL:   blockMessage.DataHubUrl,
-				PeerId:    blockMessage.PeerId,
-			}
+   s.notificationCh <- &notificationMsg{
+    Timestamp: time.Now().UTC(),
+    Type:      "block",
+    Hash:      blockMessage.Hash,
+    BaseURL:   blockMessage.DataHubUrl,
+    PeerId:    blockMessage.PeerId,
+   }
 
 ```
 
-* Subtree notifications:
+- Subtree notifications:
 
 ```go
-			s.notificationCh <- &notificationMsg{
-				Type:    "subtree",
-				Hash:    subtreeMessage.Hash,
-				BaseURL: subtreeMessage.DataHubUrl,
-				PeerId:  subtreeMessage.PeerId,
-			}
+   s.notificationCh <- &notificationMsg{
+    Type:    "subtree",
+    Hash:    subtreeMessage.Hash,
+    BaseURL: subtreeMessage.DataHubUrl,
+    PeerId:  subtreeMessage.PeerId,
+   }
 ```
 
-* "MiningOn" notifications:
+- "MiningOn" notifications:
 
 ```go
-			s.notificationCh <- &notificationMsg{
-				Timestamp:    time.Now().UTC(),
-				Type:         "mining_on",
-				Hash:         miningOnMessage.Hash,
-				BaseURL:      miningOnMessage.DataHubUrl,
-				PeerId:       miningOnMessage.PeerId,
-				PreviousHash: miningOnMessage.PreviousHash,
-				Height:       miningOnMessage.Height,
-				Miner:        miningOnMessage.Miner,
-				SizeInBytes:  miningOnMessage.SizeInBytes,
-				TxCount:      miningOnMessage.TxCount,
-			}
+   s.notificationCh <- &notificationMsg{
+    Timestamp:    time.Now().UTC(),
+    Type:         "mining_on",
+    Hash:         miningOnMessage.Hash,
+    BaseURL:      miningOnMessage.DataHubUrl,
+    PeerId:       miningOnMessage.PeerId,
+    PreviousHash: miningOnMessage.PreviousHash,
+    Height:       miningOnMessage.Height,
+    Miner:        miningOnMessage.Miner,
+    SizeInBytes:  miningOnMessage.SizeInBytes,
+    TxCount:      miningOnMessage.TxCount,
+   }
 ```
 
 ## 5. Directory Structure and Main Files
 
-
-```
+```text
 ./services/p2p
 │
 ├── HandleWebsocket.go   - Manages WebSocket connections and communications.
@@ -495,7 +482,6 @@ Within the P2P service, notifications are sent to the Websocket clients using th
 ├── client.html          - A client-side HTML file for testing or interacting with the WebSocket server.
 └── dht.go               - Implements the Distributed Hash Table (DHT) functionality for the P2P network.
 ```
-
 
 ## 6. How to run
 
@@ -519,6 +505,7 @@ The P2P service serves as the communication backbone of the Teranode network, en
 | `p2p_advertise_addresses` | []string | [] | Addresses to advertise to other peers | Affects how other peers discover and connect to this node. Supports both IP addresses and domain names with optional port specification (e.g., `192.168.1.1`, `example.com:9906`). When port is omitted, the `p2p_port` value is used. |
 | `p2p_port` | int | 9906 | Default port for P2P communication | Used as the fallback port when addresses don't specify a port |
 | `p2p_bootstrapAddresses` | []string | [] | Initial peer addresses for bootstrapping the DHT | Helps new nodes join the network by providing entry points |
+| `p2p_bootstrap_persistent` | bool | false | Treat bootstrap addresses as persistent connections | When enabled, bootstrap servers automatically reconnect after disconnection |
 | `p2p_static_peers` | []string | [] | Peer addresses to connect to on startup | Ensures connections to specific peers regardless of discovery |
 | `p2p_dht_protocol_id` | string | "" | Protocol identifier for DHT communications | Affects how nodes discover each other in the network |
 | `p2p_dht_use_private` | bool | false | Use private DHT mode | Restricts DHT communication to trusted peers when enabled |
@@ -551,7 +538,7 @@ The P2P service serves as the communication backbone of the Teranode network, en
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
 | `p2p_peer_id` | string | "" | Unique identifier for the P2P node | Used to identify this node in the P2P network |
-| `p2p_private_key` | string | "" | Private key for P2P authentication | Provides cryptographic identity for the node; if not provided, will be auto-generated and stored |
+| `p2p_private_key` | string | "" | Private key for P2P authentication | Provides cryptographic identity for the node; if not provided, will be automatically generated and persistently stored in the blockchain database |
 | `p2p_shared_key` | string | "" | **REQUIRED for private networks** - Shared key for private network communication | When provided, ensures only nodes with the same shared key can communicate |
 
 ### Ban Management
@@ -566,21 +553,26 @@ The P2P service serves as the communication backbone of the Teranode network, en
 The P2P service enforces several validation rules during startup:
 
 ### Required Configuration
+
 - `p2p_handshake_topic` - Must be set or service will fail with "p2p_handshake_topic not set in config"
 
 ### Network Address Validation
+
 - Listen addresses must be valid multiaddress format
 - Port numbers must be within valid range (1-65535)
 - Advertise addresses support both IP addresses and domain names
 - When advertise addresses omit ports, `p2p_port` value is automatically used
 
 ### Private Network Requirements
+
 - When `p2p_shared_key` is provided, all peers must use the same shared key
 - Private DHT mode (`p2p_dht_use_private: true`) restricts peer discovery to trusted nodes
 
 ### Key Management
-- If `p2p_private_key` is not provided, a new key is auto-generated and persisted to blockchain store
-- Private key format must be compatible with libp2p cryptographic standards
+
+- If `p2p_private_key` is not provided, a new Ed25519 key is automatically generated and persisted to blockchain store
+- The key generation happens on first startup and the same key is reused on subsequent restarts
+- Private key format must be compatible with libp2p cryptographic standards (64-byte Ed25519 format: 32-byte private + 32-byte public)
 
 ## Configuration Dependencies
 
@@ -594,9 +586,9 @@ The P2P service's network presence is controlled by several interrelated setting
 
 - `p2p_listen_addresses` determines which interfaces/ports the service listens on
 - `p2p_advertise_addresses` controls what addresses are advertised to peers
-    - Each address can be specified with or without a port (e.g., `192.168.1.1` or `example.com:9906`)
-    - For addresses without a port, the system automatically uses the value from `p2p_port`
-    - Both IP addresses and domain names are supported with proper multiaddress formatting
+  - Each address can be specified with or without a port (e.g., `192.168.1.1` or `example.com:9906`)
+  - For addresses without a port, the system automatically uses the value from `p2p_port`
+  - Both IP addresses and domain names are supported with proper multiaddress formatting
 - `p2p_port` provides a default when addresses don't specify ports
 - If no `p2p_listen_addresses` are specified, the service may not be reachable
 - The gRPC and HTTP listen addresses control how other services can interact with the P2P service
@@ -608,11 +600,16 @@ These settings should be configured together based on your network architecture 
 Peer discovery in the P2P service uses a multi-layered approach:
 
 - `p2p_bootstrapAddresses` provides initial entry points to the network
+- `p2p_bootstrap_persistent` controls whether bootstrap servers are treated as persistent connections that automatically reconnect
 - `p2p_static_peers` ensures connections to specific peers regardless of DHT discovery
 - `p2p_dht_protocol_id` and `p2p_dht_use_private` affect the DHT-based peer discovery mechanism
 - `p2p_optimise_retries` impacts connection retry behavior when peers are unreachable
 
 In private network deployments, you should configure static peers and bootstrap addresses carefully to ensure nodes can find each other.
+
+#### Bootstrap vs Static Peers
+
+By default, bootstrap addresses are used only for initial network discovery and DHT bootstrapping. If you need bootstrap servers to maintain persistent connections that automatically reconnect after disconnection, enable `p2p_bootstrap_persistent=true`. This will treat bootstrap addresses as static peers for connection purposes while still using them for DHT bootstrapping.
 
 ### Security and Authentication
 

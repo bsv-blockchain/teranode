@@ -93,7 +93,7 @@ type P2PNodeI interface {
 The server initializes through the NewServer function:
 
 ```go
-func NewServer(	ctx context.Context,
+func NewServer( ctx context.Context,
     logger ulogger.Logger,
     tSettings *settings.Settings,
     blockchainClient blockchain.ClientI,
@@ -135,15 +135,19 @@ For readiness checks, it verifies:
 The server manages its lifecycle through several key methods:
 
 The Init method prepares the server for operation:
+
 ```go
 func (s *Server) Init(ctx context.Context) (err error)
 ```
+
 It verifies and adjusts HTTP/HTTPS settings based on security requirements and establishes necessary connection URLs.
 
 The Start method initiates server operations:
+
 ```go
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
+
 It begins:
 
 - Kafka message processing
@@ -155,11 +159,12 @@ It begins:
 - Once initialization is complete, it signals readiness by closing the readyCh channel
 
 The Stop method ensures graceful shutdown:
+
 ```go
 func (s *Server) Stop(ctx context.Context) error
 ```
-It manages the orderly shutdown of all server components and connections.
 
+It manages the orderly shutdown of all server components and connections.
 
 ### Ban Management
 
@@ -279,12 +284,13 @@ The following settings can be configured for the p2p service:
 - `p2p_dht_use_private`: A boolean flag indicating whether a private Distributed Hash Table (DHT) should be used, enhancing network privacy.
 - `p2p_optimise_retries`: A boolean setting to optimize retry behavior in P2P communications, potentially improving network efficiency.
 - `p2p_static_peers`: A list of static peer addresses to connect to, ensuring the P2P node can always reach known peers.
-- `p2p_private_key`: The private key for the P2P node, used for secure communications within the network.
+- `p2p_private_key`: The private key for the P2P node, used for secure communications within the network. If not provided, a new Ed25519 key is automatically generated and persistently stored in the blockchain database.
 - `p2p_http_address`: Specifies the HTTP address for external clients to connect to the P2P service.
 - `p2p_http_listen_address`: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
 - `p2p_grpc_address`: Specifies the gRPC address for external clients to connect to the P2P service.
 - `p2p_grpc_listen_address`: Specifies the gRPC listen address for the P2P service.
 - `p2p_bootstrap_addresses`: List of bootstrap peer addresses for initial network discovery.
+- `p2p_bootstrap_persistent`: A boolean flag (default: false) that controls whether bootstrap addresses are treated as persistent connections that automatically reconnect after disconnection.
 - `p2p_ban_threshold`: Score threshold at which peers are banned from the network.
 - `p2p_ban_duration`: Duration of time a peer remains banned after exceeding the ban threshold.
 - `securityLevelHTTP`: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.
