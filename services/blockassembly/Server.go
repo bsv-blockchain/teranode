@@ -471,7 +471,7 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 			if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				txInpoints, found := subtreeRequest.ParentTxMap.Get(node.Hash)
 				if !found {
-					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to find parent tx hashes for node %s", node.Hash.String(), err)
+					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to find parent tx hashes for node %s: parent transaction not found in ParentTxMap", subtreeRequest.Subtree.RootHash().String(), node.Hash.String())
 
 					subtreeMetaMissingTxs = true
 
