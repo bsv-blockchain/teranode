@@ -44,6 +44,11 @@ type notificationMsg struct {
 	Uptime            float64 `json:"uptime,omitempty"`          // Node uptime in seconds
 	MinerName         string  `json:"miner_name,omitempty"`      // Miner name
 	ListenMode        string  `json:"listen_mode,omitempty"`     // Listen mode
+	// Sync peer fields
+	SyncPeerID        string `json:"sync_peer_id,omitempty"`         // ID of the peer we're syncing from
+	SyncPeerHeight    int32  `json:"sync_peer_height,omitempty"`     // Height of the sync peer
+	SyncPeerBlockHash string `json:"sync_peer_block_hash,omitempty"` // Best block hash of the sync peer
+	SyncConnectedAt   int64  `json:"sync_connected_at,omitempty"`    // Unix timestamp when we first connected to this sync peer
 }
 
 // clientChannelMap manages a thread-safe collection of WebSocket client channels.
@@ -241,7 +246,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseURL s
 			return err
 		}
 
-		// Add client channel before starting message handling
+		// Add client channel to the processor
 		newClientCh <- ch
 
 		// Start message handling in a goroutine

@@ -344,6 +344,10 @@
     "forks": {
       "menu-label": "Forks"
     },
+    "peers": {
+      "menu-label": "Peers",
+      "title": "Peer Network"
+    },
     "network": {
       "menu-label": "Network",
       "live": "Live",

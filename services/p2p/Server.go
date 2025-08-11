@@ -99,14 +99,17 @@ type Server struct {
 	subtreeTopicName                  string
 	miningOnTopicName                 string
 	rejectedTxTopicName               string
-	invalidBlocksTopicName            string    // Kafka topic for invalid blocks
-	invalidSubtreeTopicName           string    // Kafka topic for invalid subtrees
-	handshakeTopicName                string    // pubsub topic for version/verack
-	nodeStatusTopicName               string    // pubsub topic for node status messages
-	topicPrefix                       string    // Chain identifier prefix for topic validation
-	blockPeerMap                      sync.Map  // Map to track which peer sent each block (hash -> peerID)
-	subtreePeerMap                    sync.Map  // Map to track which peer sent each subtree (hash -> peerID)
-	startTime                         time.Time // Server start time for uptime calculation
+	invalidBlocksTopicName            string       // Kafka topic for invalid blocks
+	invalidSubtreeTopicName           string       // Kafka topic for invalid subtrees
+	handshakeTopicName                string       // pubsub topic for version/verack
+	nodeStatusTopicName               string       // pubsub topic for node status messages
+	topicPrefix                       string       // Chain identifier prefix for topic validation
+	blockPeerMap                      sync.Map     // Map to track which peer sent each block (hash -> peerID)
+	subtreePeerMap                    sync.Map     // Map to track which peer sent each subtree (hash -> peerID)
+	startTime                         time.Time    // Server start time for uptime calculation
+	syncManager                       *SyncManager // Manager for peer synchronization and best peer selection
+	peerBlockHashes                   sync.Map     // Map to track peer best block hashes (peerID -> hash string)
+	syncConnectionTimes               sync.Map     // Map to track when we first connected to each sync peer (peerID -> timestamp)
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -302,6 +305,9 @@ func NewServer(
 		topicPrefix:                       topicPrefix,
 		startTime:                         time.Now(),
 	}
+
+	// Initialize the sync manager for peer selection
+	p2pServer.syncManager = NewSyncManager(logger, tSettings.ChainCfgParams)
 
 	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
 
@@ -514,6 +520,33 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Set up the peer connected callback to announce our best block when a new peer connects
 	s.P2PNode.SetPeerConnectedCallback(s.P2PNodeConnected)
+
+	// Set up SyncManager callbacks
+	if s.syncManager != nil {
+		s.syncManager.SetPeerHeightCallback(func(peerID peer.ID) int32 {
+			// Find the peer in the connected peers list
+			for _, peerInfo := range s.P2PNode.ConnectedPeers() {
+				if peerInfo.ID == peerID {
+					return peerInfo.CurrentHeight
+				}
+			}
+			return 0
+		})
+		s.syncManager.SetLocalHeightCallback(func() uint32 {
+			height, _, err := s.blockchainClient.GetBestHeightAndTime(ctx)
+			if err != nil {
+				s.logger.Errorf("[SyncManager] Failed to get local height: %v", err)
+				return 0
+			}
+			return height
+		})
+		s.syncManager.SetPeerIPsCallback(func(peerID peer.ID) []string {
+			return s.P2PNode.GetPeerIPs(peerID)
+		})
+
+		// Start the SyncManager
+		s.syncManager.Start(ctx)
+	}
 
 	// Send initial handshake (version)
 	s.sendHandshake(ctx)
@@ -816,6 +849,10 @@ type NodeStatusMessage struct {
 	Uptime            float64 `json:"uptime"`
 	MinerName         string  `json:"miner_name"`
 	ListenMode        string  `json:"listen_mode"`
+	SyncPeerID        string  `json:"sync_peer_id,omitempty"`         // ID of the peer we're syncing from
+	SyncPeerHeight    int32   `json:"sync_peer_height,omitempty"`     // Height of the sync peer
+	SyncPeerBlockHash string  `json:"sync_peer_block_hash,omitempty"` // Best block hash of the sync peer
+	SyncConnectedAt   int64   `json:"sync_connected_at,omitempty"`    // Unix timestamp when we first connected to this sync peer
 }
 
 func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from string) {
@@ -825,7 +862,16 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from strin
 		return
 	}
 
-	s.logger.Debugf("[handleNodeStatusTopic] got p2p node status from %s (peer_id: %s)", from, nodeStatusMessage.PeerID)
+	// Check if this is our own message
+	isSelf := from == s.P2PNode.HostID().String()
+
+	// Skip further processing for our own messages (peer height updates, etc.)
+	// but still forward to WebSocket
+	if !isSelf {
+		s.logger.Debugf("[handleNodeStatusTopic] got p2p node status from %s (peer_id: %s)", from, nodeStatusMessage.PeerID)
+	} else {
+		s.logger.Debugf("[handleNodeStatusTopic] forwarding our own node status (peer_id: %s) with is_self=true", nodeStatusMessage.PeerID)
+	}
 
 	// Send to notification channel for WebSocket clients
 	s.notificationCh <- &notificationMsg{
@@ -843,15 +889,14 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from strin
 		Uptime:            nodeStatusMessage.Uptime,
 		MinerName:         nodeStatusMessage.MinerName,
 		ListenMode:        nodeStatusMessage.ListenMode,
+		SyncPeerID:        nodeStatusMessage.SyncPeerID,
+		SyncPeerHeight:    nodeStatusMessage.SyncPeerHeight,
+		SyncPeerBlockHash: nodeStatusMessage.SyncPeerBlockHash,
+		SyncConnectedAt:   nodeStatusMessage.SyncConnectedAt,
 	}
 
-	// Skip further processing for our own messages
-	if from == s.P2PNode.HostID().String() {
-		return
-	}
-
-	// Update peer height if provided
-	if nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
+	// Update peer height if provided (but not for our own messages)
+	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
 		if peerID, err := peer.Decode(nodeStatusMessage.PeerID); err == nil {
 			s.P2PNode.UpdatePeerHeight(peerID, int32(nodeStatusMessage.BestHeight)) //nolint:gosec
 		}
@@ -980,46 +1025,67 @@ func (s *Server) SyncHeights(hs p2p.HandshakeMessage, localHeight uint32) {
 		return
 	}
 
+	// update peer height and store starting height if first time seeing this peer
+	peerID2, err := peer.Decode(hs.PeerID)
+	if err != nil {
+		s.logger.Errorf("[SyncHeights] Failed to decode peer ID %s: %v", hs.PeerID, err)
+		return
+	}
+
+	// store starting height if we haven't seen this peer before
+	if _, exists := s.P2PNode.GetPeerStartingHeight(peerID2); !exists {
+		s.logger.Infof("[SyncHeights] Setting starting height for peer %s to %d", peerID2.String(), hs.BestHeight)
+		s.P2PNode.SetPeerStartingHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
+	} else {
+		s.logger.Debugf("[SyncHeights] Peer %s already has starting height set", peerID2.String())
+	}
+	s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
+
+	// Update SyncManager with new peer height
+	if s.syncManager != nil {
+		s.syncManager.UpdatePeerHeight(peerID2, int32(hs.BestHeight))
+	}
+
+	// Store the peer's best block hash for node status reporting
+	if hs.BestHash != "" {
+		s.peerBlockHashes.Store(peerID2, hs.BestHash)
+	}
+
+	// Only send to Kafka if this peer is the current sync peer
 	if hs.BestHeight > localHeight {
-		s.logger.Infof("[SyncHeights] peer %s has higher block (%s) at height %d > %d, sending to Kafka",
-			hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
+		if s.syncManager != nil && s.syncManager.IsSyncPeer(peerID2) {
+			s.logger.Infof("[SyncHeights] Sync peer %s has higher block (%s) at height %d > %d, sending to Kafka",
+				hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 
-		// Send peer's block info to Kafka if we have a producer client
-		if s.blocksKafkaProducerClient != nil {
-			hash, err := chainhash.NewHashFromStr(hs.BestHash)
-			if err != nil {
-				s.logger.Errorf("[SyncHeights] error getting chainhash from string %s: %v", hs.BestHash, err)
-			} else {
-				msg := &kafkamessage.KafkaBlockTopicMessage{
-					Hash: hash.String(),
-					URL:  hs.DataHubURL,
-				}
-
-				value, err := proto.Marshal(msg)
+			// Send peer's block info to Kafka if we have a producer client
+			if s.blocksKafkaProducerClient != nil {
+				hash, err := chainhash.NewHashFromStr(hs.BestHash)
 				if err != nil {
-					s.logger.Errorf("[SyncHeights] error marshaling KafkaBlockTopicMessage: %v", err)
+					s.logger.Errorf("[SyncHeights] error getting chainhash from string %s: %v", hs.BestHash, err)
 				} else {
-					s.blocksKafkaProducerClient.Publish(&kafka.Message{
-						Value: value,
-					})
+					msg := &kafkamessage.KafkaBlockTopicMessage{
+						Hash: hash.String(),
+						URL:  hs.DataHubURL,
+					}
+
+					value, err := proto.Marshal(msg)
+					if err != nil {
+						s.logger.Errorf("[SyncHeights] error marshaling KafkaBlockTopicMessage: %v", err)
+					} else {
+						s.blocksKafkaProducerClient.Publish(&kafka.Message{
+							Value: value,
+						})
+					}
 				}
 			}
+		} else {
+			// This peer is ahead but not our sync peer
+			s.logger.Debugf("[SyncHeights] Peer %s has higher block (%s) at height %d > %d, but is not sync peer, skipping Kafka",
+				hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 		}
 	} else if hs.BestHash != "" && hs.BestHeight > 0 {
 		s.logger.Debugf("[SyncHeights] peer %s has block %s at height %d (our height: %d), not requesting",
 			hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
-	}
-
-	// update peer height and store starting height if first time seeing this peer
-	if peerID2, err := peer.Decode(hs.PeerID); err == nil {
-		// store starting height if we haven't seen this peer before
-		if _, exists := s.P2PNode.GetPeerStartingHeight(peerID2); !exists {
-			s.logger.Infof("[SyncHeights] Setting starting height for peer %s to %d", peerID2.String(), hs.BestHeight)
-			s.P2PNode.SetPeerStartingHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
-		} else {
-			s.logger.Debugf("[SyncHeights] Peer %s already has starting height set", peerID2.String())
-		}
-		s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
 	}
 }
 
@@ -1063,6 +1129,11 @@ func (s *Server) receiveHandshakeStreamHandler(ns network.Stream) {
 func (s *Server) P2PNodeConnected(ctx context.Context, peerID peer.ID) {
 	s.logger.Infof("[P2PNodeConnected] Peer connected: %s", peerID.String())
 	s.logger.Infof("[P2PNodeConnected] Total connected peers: %d", len(s.P2PNode.ConnectedPeers()))
+
+	// Add peer to SyncManager
+	if s.syncManager != nil {
+		s.syncManager.AddPeer(peerID)
+	}
 
 	// try to get the peer's current height from the first message/block data we have
 	// and use it as starting height since handshake protocol isn't used by other peers
@@ -1248,6 +1319,48 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		height = bestBlockMeta.Height
 	}
 
+	// Get sync peer information
+	syncPeerID := ""
+	syncPeerHeight := int32(0)
+	syncPeerBlockHash := ""
+	syncConnectedAt := int64(0)
+
+	if s.syncManager != nil {
+		syncPeer := s.syncManager.GetSyncPeer()
+		if syncPeer != "" {
+			syncPeerID = syncPeer.String()
+
+			// Track when we first connected to this sync peer
+			if existingTime, ok := s.syncConnectionTimes.Load(syncPeerID); ok {
+				syncConnectedAt = existingTime.(int64)
+			} else {
+				// First time connecting to this sync peer
+				syncConnectedAt = time.Now().Unix()
+				s.syncConnectionTimes.Store(syncPeerID, syncConnectedAt)
+				s.logger.Debugf("[handleNodeStatusNotification] Recording sync connection time for peer %s: %d", syncPeerID, syncConnectedAt)
+			}
+
+			// Get sync peer's height and block hash
+			for _, peerInfo := range s.P2PNode.ConnectedPeers() {
+				if peerInfo.ID == syncPeer {
+					syncPeerHeight = peerInfo.CurrentHeight
+
+					// Get the peer's best block hash from stored handshake info
+					if hash, ok := s.peerBlockHashes.Load(syncPeer); ok {
+						syncPeerBlockHash = hash.(string)
+					}
+					break
+				}
+			}
+		} else {
+			// No sync peer - clear any old connection time tracking
+			s.syncConnectionTimes.Range(func(key, value interface{}) bool {
+				s.syncConnectionTimes.Delete(key)
+				return true
+			})
+		}
+	}
+
 	// Create node status message
 	nodeStatusMessage := NodeStatusMessage{
 		Type:              "node_status",
@@ -1263,6 +1376,10 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		Uptime:            uptime,
 		MinerName:         minerName,
 		ListenMode:        s.settings.P2P.ListenMode,
+		SyncPeerID:        syncPeerID,
+		SyncPeerHeight:    syncPeerHeight,
+		SyncPeerBlockHash: syncPeerBlockHash,
+		SyncConnectedAt:   syncConnectedAt,
 	}
 
 	msgBytes, err := json.Marshal(nodeStatusMessage)
@@ -1291,6 +1408,10 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		Uptime:            nodeStatusMessage.Uptime,
 		MinerName:         nodeStatusMessage.MinerName,
 		ListenMode:        nodeStatusMessage.ListenMode,
+		SyncPeerID:        nodeStatusMessage.SyncPeerID,
+		SyncPeerHeight:    nodeStatusMessage.SyncPeerHeight,
+		SyncPeerBlockHash: nodeStatusMessage.SyncPeerBlockHash,
+		SyncConnectedAt:   nodeStatusMessage.SyncConnectedAt,
 	}
 
 	return nil
@@ -1943,6 +2064,14 @@ func (s *Server) DisconnectPeer(ctx context.Context, req *p2p_api.DisconnectPeer
 		}, nil
 	}
 
+	// Remove peer from SyncManager
+	if s.syncManager != nil {
+		s.syncManager.RemovePeer(peerID)
+	}
+
+	// Clean up stored peer data
+	s.peerBlockHashes.Delete(peerID)
+
 	// Use the P2PNode's DisconnectPeer method
 	if err := s.P2PNode.DisconnectPeer(ctx, peerID); err != nil {
 		s.logger.Errorf("[DisconnectPeer] Failed to disconnect from peer %s: %v", req.PeerId, err)
@@ -2099,6 +2228,14 @@ func (s *Server) disconnectBannedPeers(ctx context.Context, bannedIP net.IP, ban
 
 			if isBanned(bannedIP, bannedSubnet, peerIP) {
 				s.logger.Infof("[disconnectBannedPeers] Disconnecting from banned peer: %s (%s)", peer.ID, peerIP)
+
+				// Remove peer from SyncManager before disconnecting
+				if s.syncManager != nil {
+					s.syncManager.RemovePeer(peer.ID)
+				}
+
+				// Clean up stored peer data
+				s.peerBlockHashes.Delete(peer.ID)
 
 				err := s.P2PNode.DisconnectPeer(ctx, peer.ID)
 				if err != nil {

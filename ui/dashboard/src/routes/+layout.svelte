@@ -101,6 +101,12 @@
       {
         icon: 'icon-network-line',
         iconSelected: 'icon-network-solid',
+        path: '/peers',
+        label: $i18n.t('page.peers.menu-label'),
+      },
+      {
+        icon: 'icon-network-line',
+        iconSelected: 'icon-network-solid',
         path: '/network',
         label: $i18n.t('page.network.menu-label'),
       },

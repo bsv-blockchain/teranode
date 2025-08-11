@@ -69,13 +69,17 @@ export async function connectToP2PServer() {
             return
           }
 
-          if (!json?.pub?.data) {
-            console.log('p2pWS: Received non-pub data:', json)
+          // Handle both wrapped (Centrifuge) and unwrapped messages
+          // The initial node_status is sent unwrapped, all others are wrapped
+          let jsonData
+          if (json?.pub?.data) {
+            jsonData = json.pub.data
+          } else if (json?.type === 'node_status') {
+            // This is our initial unwrapped node_status message
+            jsonData = json
+          } else {
             return
           }
-
-
-          const jsonData = json.pub.data
 
           jsonData.receivedAt = new Date()
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -42,6 +43,8 @@ type Centrifuge struct {
 	httpServer       *httpimpl.HTTP
 	blockchainClient blockchain.ClientI
 	centrifugeNode   *centrifuge.Node
+	latestNodeStatus []byte       // Store the latest node_status message for new clients
+	nodeStatusMutex  sync.RWMutex // Protect concurrent access to latestNodeStatus
 }
 
 // messageType represents the structure for incoming message type identification.
@@ -137,6 +140,24 @@ func (c *Centrifuge) Init(ctx context.Context) (err error) {
 
 		transport := client.Transport()
 		c.logger.Infof("user %s connected via %s", client.UserID(), transport.Name())
+
+		// Send the latest node_status to the new client immediately
+		c.nodeStatusMutex.RLock()
+		nodeStatus := c.latestNodeStatus
+		c.nodeStatusMutex.RUnlock()
+
+		if nodeStatus != nil {
+			// Publish to the node_status channel immediately - the new client will receive it
+			// Since they just subscribed, this should be their first message
+			_, err := c.centrifugeNode.Publish("node_status", nodeStatus)
+			if err != nil {
+				c.logger.Errorf("Failed to publish initial node_status for new client %s: %v", client.UserID(), err)
+			} else {
+				c.logger.Infof("Published initial node_status for new client %s", client.UserID())
+			}
+		} else {
+			c.logger.Warnf("No node_status available yet for new client %s", client.UserID())
+		}
 	})
 
 	return c.centrifugeNode.Run()
@@ -281,6 +302,14 @@ func (c *Centrifuge) readMessages(ctx context.Context, client *atomic.Pointer[we
 				if err != nil {
 					c.logger.Errorf("[Centrifuge] error unmarshalling message: %s", err)
 					continue
+				}
+
+				// Store the latest node_status message for new clients
+				if strings.ToLower(mType.Type) == "node_status" {
+					c.nodeStatusMutex.Lock()
+					c.latestNodeStatus = message
+					c.nodeStatusMutex.Unlock()
+					c.logger.Debugf("[Centrifuge] Stored latest node_status message for new clients")
 				}
 
 				// send the message on to the centrifuge node

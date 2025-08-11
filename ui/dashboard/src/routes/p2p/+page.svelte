@@ -264,7 +264,7 @@
             />
           </div>
           <div class="msg-contaienr">
-            {#each groupedMessages[peer] as message (message.hash + message.receivedAt)}
+            {#each groupedMessages[peer] as message, index (message.hash ? message.hash + message.receivedAt : peer + index + message.receivedAt)}
               <MessageBox {message} source="p2p" collapse={actualCollapseState} titleMinW={actualCollapseState ? "auto" : "80px"} hidePeer={true} />
             {/each}
           </div>
@@ -275,7 +275,7 @@
     <div class="container">
       <div class="column column-full">
         <div class="msg-contaienr">
-          {#each filteredMessages as message (message.hash + message.receivedAt)}
+          {#each filteredMessages as message, index (message.hash ? message.hash + message.receivedAt : 'msg' + index + message.receivedAt)}
             <MessageBox {message} source="p2p" collapse={actualCollapseState} titleMinW={actualCollapseState ? "auto" : "120px"} />
           {/each}
         </div>

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2175,19 +2176,48 @@ func TestServer_SyncHeights(t *testing.T) {
 		mockBlocksProducer := kafka.NewKafkaAsyncProducerMock()
 		publishCh := mockBlocksProducer.PublishChannel()
 
+		mockP2PNode := new(MockServerP2PNode)
+		mockP2PNode.On("GetPeerStartingHeight", mock.Anything).Return(int32(0), false)
+		mockP2PNode.On("SetPeerStartingHeight", mock.Anything, mock.Anything).Return()
+		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
+
+		// Create the sync peer ID that we'll use for testing
+		syncPeerID, err := peer.Decode("12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg")
+		require.NoError(t, err)
+
+		// Create a real SyncManager with the sync peer set
+		syncManager := &SyncManager{
+			syncPeer: syncPeerID,
+			logger:   ulogger.New("test-syncmanager"),
+		}
+
 		server := &Server{
 			settings:                  tSettings,
 			logger:                    ulogger.New("test-server"),
 			blockchainClient:          blockchainClient,
 			blocksKafkaProducerClient: mockBlocksProducer,
+			gCtx:                      context.Background(),
+			P2PNode:                   mockP2PNode,
+			peerBlockHashes:           sync.Map{},
+			syncManager:               syncManager,
 		}
 
+		// Use a valid peer ID for testing
+		peerIDStr := "12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg"
+
 		server.SyncHeights(p2p.HandshakeMessage{
+			PeerID:     peerIDStr,
 			BestHeight: 1111,
+			BestHash:   "00000000000000000007d3c1e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3",
 		}, 123)
 
-		msg := <-publishCh
-		assert.NotNil(t, msg)
+		// Wait for message with timeout
+		select {
+		case msg := <-publishCh:
+			assert.NotNil(t, msg)
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Expected message to be published but timeout occurred")
+		}
 
 		// do not send message of BestHeight is less than or equal to the current height
 		server.SyncHeights(p2p.HandshakeMessage{
@@ -2195,8 +2225,8 @@ func TestServer_SyncHeights(t *testing.T) {
 		}, 123)
 
 		select {
-		case msg = <-publishCh:
-			t.Errorf("Expected no message to be sent, but got: %v", msg)
+		case msg2 := <-publishCh:
+			t.Errorf("Expected no message to be sent, but got: %v", msg2)
 		default:
 			// No message received, which is expected
 		}
@@ -2210,15 +2240,26 @@ func TestServer_SyncHeights(t *testing.T) {
 		mockBlocksProducer := kafka.NewKafkaAsyncProducerMock()
 		publishCh := mockBlocksProducer.PublishChannel()
 
+		mockP2PNode := new(MockServerP2PNode)
+		// P2PNode methods should not be called when in LEGACYSYNCING mode
+
 		server := &Server{
 			settings:                  tSettings,
 			logger:                    ulogger.New("test-server"),
 			blockchainClient:          blockchainClient,
 			blocksKafkaProducerClient: mockBlocksProducer,
+			gCtx:                      context.Background(),
+			P2PNode:                   mockP2PNode,
+			peerBlockHashes:           sync.Map{},
 		}
 
+		// Use a valid peer ID for testing
+		peerIDStr := "12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg"
+
 		server.SyncHeights(p2p.HandshakeMessage{
+			PeerID:     peerIDStr,
 			BestHeight: 1111,
+			BestHash:   "00000000000000000007d3c1e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3",
 		}, 123)
 
 		// make sure not message was sent to the producer
