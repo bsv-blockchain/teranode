@@ -1040,7 +1040,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		}
 	} else {
 		transactionCount = 1 // Coinbase
-		sizeInBytes = uint64(coinbaseTx.Size())
+		sizeInBytes = 0      // Don't double-count coinbase size, it's added later
 	}
 
 	hashMerkleRoot, err := ba.createMerkleTreeFromSubtrees(jobID, subtreesInJob, subtreeHashes, coinbaseTxIDHash)
