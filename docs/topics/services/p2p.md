@@ -3,44 +3,45 @@
 ## Index
 
 - [🌐 P2P Service](#-p2p-service)
-  - [Index](#index)
-  - [1. Description](#1-description)
-  - [2. Functionality](#2-functionality)
-    - [2.1. Creating, initializing and starting a new P2P Server](#21-creating-initializing-and-starting-a-new-p2p-server)
-    - [2.1.1. Creating a New P2P Server](#211-creating-a-new-p2p-server)
-    - [2.1.2. Initializing the P2P Server](#212-initializing-the-p2p-server)
-    - [2.1.3. Starting the P2P Server](#213-starting-the-p2p-server)
-    - [2.2. Peer Discovery and Connection](#22-peer-discovery-and-connection)
-    - [2.3. Best Block Messages](#23-best-block-messages)
-    - [2.4. Blockchain Messages](#24-blockchain-messages)
-    - [2.5. TX Validator Messages](#25-tx-validator-messages)
-    - [2.6. Websocket notifications](#26-websocket-notifications)
-    - [2.7. Ban Management System](#27-ban-management-system)
-      - [2.7.1. Ban List Management](#271-ban-list-management)
-      - [2.7.2. Ban Operations](#272-ban-operations)
-      - [2.7.3. Ban Event Handling](#273-ban-event-handling)
-      - [2.7.4. Configuration](#274-configuration)
-  - [3. Technology](#3-technology)
-  - [4. Data Model](#4-data-model)
-  - [5. Directory Structure and Main Files](#5-directory-structure-and-main-files)
-  - [6. How to run](#6-how-to-run)
-  - [7. Configuration options (settings flags)](#7-configuration-options-settings-flags)
-    - [Network and Discovery Settings](#network-and-discovery-settings)
-    - [Service Endpoints](#service-endpoints)
-    - [Peer-to-Peer Topics](#peer-to-peer-topics)
-    - [Authentication and Security](#authentication-and-security)
-    - [Ban Management](#ban-management)
-  - [Configuration Validation Rules](#configuration-validation-rules)
-    - [Required Configuration](#required-configuration)
-    - [Network Address Validation](#network-address-validation)
-    - [Private Network Requirements](#private-network-requirements)
-    - [Key Management](#key-management)
-  - [Configuration Dependencies](#configuration-dependencies)
-  - [Configuration Interactions and Dependencies](#configuration-interactions-and-dependencies)
-    - [Network Binding and Discovery](#network-binding-and-discovery)
-    - [Peer Discovery and Connection](#peer-discovery-and-connection)
-    - [Security and Authentication](#security-and-authentication)
-  - [8. Other Resources](#8-other-resources)
+    - [Index](#index)
+    - [1. Description](#1-description)
+    - [2. Functionality](#2-functionality)
+        - [2.1. Creating, initializing and starting a new P2P Server](#21-creating-initializing-and-starting-a-new-p2p-server)
+        - [2.1.1. Creating a New P2P Server](#211-creating-a-new-p2p-server)
+        - [2.1.2. Initializing the P2P Server](#212-initializing-the-p2p-server)
+        - [2.1.3. Starting the P2P Server](#213-starting-the-p2p-server)
+        - [2.2. Peer Discovery and Connection](#22-peer-discovery-and-connection)
+        - [2.3. Best Block Messages](#23-best-block-messages)
+        - [2.4. Blockchain Messages](#24-blockchain-messages)
+        - [2.5. TX Validator Messages](#25-tx-validator-messages)
+        - [2.6. Websocket notifications](#26-websocket-notifications)
+        - [2.7. Ban Management System](#27-ban-management-system)
+
+            - [2.7.1. Ban List Management](#271-ban-list-management)
+            - [2.7.2. Ban Operations](#272-ban-operations)
+            - [2.7.3. Ban Event Handling](#273-ban-event-handling)
+            - [2.7.4. Configuration](#274-configuration)
+    - [3. Technology](#3-technology)
+    - [4. Data Model](#4-data-model)
+    - [5. Directory Structure and Main Files](#5-directory-structure-and-main-files)
+    - [6. How to run](#6-how-to-run)
+
+    - [7. Configuration options (settings flags)](#7-configuration-options-settings-flags)
+        - [Network and Discovery Settings](#network-and-discovery-settings)
+        - [Service Endpoints](#service-endpoints)
+        - [Peer-to-Peer Topics](#peer-to-peer-topics)
+        - [Authentication and Security](#authentication-and-security)
+        - [Ban Management](#ban-management)
+    - [Configuration Validation Rules](#configuration-validation-rules)
+        - [Network Address Validation](#network-address-validation)
+        - [Private Network Requirements](#private-network-requirements)
+    - [Configuration Dependencies](#configuration-dependencies)
+    - [Configuration Interactions and Dependencies](#configuration-interactions-and-dependencies)
+        - [Network Binding and Discovery](#network-binding-and-discovery)
+        - [Peer Discovery and Connection](#peer-discovery-and-connection)
+        - [Security and Authentication](#security-and-authentication)
+    - [8. Other Resources](#8-other-resources)
+
 
 ## 1. Description
 
@@ -120,18 +121,28 @@ The startup process of the node involves the `main.go` file calling the `p2p.New
 
     - The server tries to read an existing private key from the blockchain store through the `readPrivateKey()` function:
 
-      - `readPrivateKey` calls `blockchainClient.GetState(ctx, "p2p.privateKey")` to retrieve the serialized key data
-      - If found, it deserializes the key using `crypto.UnmarshalPrivateKey()`
+        - `readPrivateKey` calls `blockchainClient.GetState(ctx, "p2p.privateKey")` to retrieve the serialized key data
+        - If found, it deserializes the key using `crypto.UnmarshalPrivateKey()`
+
+    - If no key is specified in the configuration and no key exists in the blockchain store, it generates a new one using the `generatePrivateKey()` function:
+
+        - `generatePrivateKey` creates a new Ed25519 key pair using `crypto.GenerateEd25519Key()`
+        - It serializes the private key with `crypto.MarshalPrivateKey()`
+        - It stores the serialized key in the blockchain store using `blockchainClient.SetState(ctx, "p2p.privateKey", privBytes)`
+
+        - `readPrivateKey` calls `blockchainClient.GetState(ctx, "p2p.privateKey")` to retrieve the serialized key data
+        - If found, it deserializes the key using `crypto.UnmarshalPrivateKey()`
     - If no key is specified in the configuration and no key exists in the blockchain store, it automatically generates and stores a new one using the `generateAndStorePrivateKey()` function:
 
       - `generateAndStorePrivateKey` creates a new Ed25519 key pair using `crypto.GenerateEd25519Key()`
       - It serializes the private key with `crypto.MarshalPrivateKey()`
       - It stores the serialized key in the blockchain store using `blockchainClient.SetState(ctx, "p2p.privateKey", privBytes)`
       - The generated key is automatically persisted to ensure the node maintains the same peer ID across restarts
+      
     - This blockchain store persistence mechanism works through gRPC calls to the blockchain service
     - Using the blockchain store ensures that the P2P private key (and therefore node identity) persists even if the container is destroyed, maintaining consistent peer relationships in the network
 
-![p2p_private_key_persistence.svg](img/plantuml/p2p/p2p_private_key_persistence.svg)
+    ![p2p_private_key_persistence.svg](img/plantuml/p2p/p2p_private_key_persistence.svg)
 
 2. **Configuration Retrieval and Topic Registration**:
 
@@ -217,8 +228,8 @@ In the previous section, the P2P Service created a `P2PNode as part of the initi
     - Once the DHT is initialized, `P2PNode.Start` sets up `routingDiscovery` with the created DHT instance. This discovery service is responsible for locating peers within the network and advertising the node's own presence.
     - The DHT implementation supports two modes:
 
-      - Standard mode (`initDHT`): Uses the public IPFS bootstrap nodes for initial discovery
-      - Private mode (`initPrivateDHT`): Creates an isolated private network with custom bootstrap nodes, providing enhanced security for enterprise deployments
+        - Standard mode (`initDHT`): Uses the public IPFS bootstrap nodes for initial discovery
+        - Private mode (`initPrivateDHT`): Creates an isolated private network with custom bootstrap nodes, providing enhanced security for enterprise deployments
 
 3. **Advertising and Searching for Peers**:
 
@@ -228,9 +239,10 @@ In the previous section, the P2P Service created a `P2PNode as part of the initi
 
     - The `discoverPeers` method includes sophisticated filtering and error handling mechanisms:
 
-      - `shouldSkipPeer`: Determines if connection attempts should be skipped based on various criteria
-      - `shouldSkipBasedOnErrors`: Manages retry logic for previously failed connections
-      - `shouldSkipNoGoodAddresses`: Special handling for peers with address resolution issues
+        - `shouldSkipPeer`: Determines if connection attempts should be skipped based on various criteria
+        - `shouldSkipBasedOnErrors`: Manages retry logic for previously failed connections
+        - `shouldSkipNoGoodAddresses`: Special handling for peers with address resolution issues
+
     - The `connectToStaticPeers` method runs in a dedicated goroutine to periodically attempt connections with a predefined list of peers (static peers), ensuring critical network infrastructure remains connected even after temporary failures.
     - Connection errors are carefully tracked to avoid network congestion from repeated failed connection attempts.
 
@@ -275,7 +287,7 @@ When a node creates a new subtree, or finds a new block hashing solution, it wil
     - If a new block notification is detected, it publishes the block message to the PubSub System.
     - The PubSub System then delivers this message to Node 2.
     - Node 2 receives the message on the block topic, **submits the block message to its own Block Validation Service**, and notifies the block message on its notification channel.
-    - Note that the Block Validation Service might be configured to either receive gRPC notifications or listen to a Kafka producer. In the diagram above, the gRPC method is described. Please check the [Block Validation Service](blockValidation.md) documentation for more details
+        - Note that the Block Validation Service might be configured to either receive gRPC notifications or listen to a Kafka producer. In the diagram above, the gRPC method is described. Please check the [Block Validation Service](blockValidation.md) documentation for more details
 
 3. **New Mined Block Notification**:
 
@@ -290,7 +302,7 @@ When a node creates a new subtree, or finds a new block hashing solution, it wil
     - If a new subtree notification is detected, it publishes the subtree message to the PubSub System.
     - The PubSub System delivers this message to Node 2.
     - Node 2 receives the subtree message on the subtree topic, **submits the subtree message to its own Subtree Validation Service**, and notifies the subtree message on its notification channel.
-      - Note that the Subtree Validation Service might be configured to either receive gRPC notifications or listen to a Kafka producer. In the diagram above, the gRPC method is described. Please check the [Subtree Validation Service](subtreeValidation.md)  documentation for more details
+        - Note that the Subtree Validation Service might be configured to either receive gRPC notifications or listen to a Kafka producer. In the diagram above, the gRPC method is described. Please check the [Subtree Validation Service](subtreeValidation.md)  documentation for more details
 
 ### 2.5. TX Validator Messages
 
@@ -311,9 +323,10 @@ All notifications collected from the Block and Validator listeners are sent over
 
 - WebSocket Request Handling:
 
-  - An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client.
-  - Data is sent over the WebSocket, using its dedicated client channel.
-  - If there's an error in sending data, the channel is removed from the `clientChannels`.
+    - An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client.
+    - Data is sent over the WebSocket, using its dedicated client channel.
+    - If there's an error in sending data, the channel is removed from the `clientChannels`.
+
 
 - The server listens for various types of events in a concurrent process:
 
@@ -505,19 +518,20 @@ The P2P service serves as the communication backbone of the Teranode network, en
 | `p2p_advertise_addresses` | []string | [] | Addresses to advertise to other peers | Affects how other peers discover and connect to this node. Supports both IP addresses and domain names with optional port specification (e.g., `192.168.1.1`, `example.com:9906`). When port is omitted, the `p2p_port` value is used. |
 | `p2p_port` | int | 9906 | Default port for P2P communication | Used as the fallback port when addresses don't specify a port |
 | `p2p_bootstrapAddresses` | []string | [] | Initial peer addresses for bootstrapping the DHT | Helps new nodes join the network by providing entry points |
-| `p2p_bootstrap_persistent` | bool | false | Treat bootstrap addresses as persistent connections | When enabled, bootstrap servers automatically reconnect after disconnection |
+| `p2p_bootstrap_persistent` | bool | false | Add bootstrap addresses to static peers | When enabled, bootstrap addresses are automatically added to the static peers list for persistent connections |
 | `p2p_static_peers` | []string | [] | Peer addresses to connect to on startup | Ensures connections to specific peers regardless of discovery |
 | `p2p_dht_protocol_id` | string | "" | Protocol identifier for DHT communications | Affects how nodes discover each other in the network |
 | `p2p_dht_use_private` | bool | false | Use private DHT mode | Restricts DHT communication to trusted peers when enabled |
 | `p2p_optimise_retries` | bool | false | Optimize retry behavior for peer connections | Improves efficiency of connection attempts in certain network conditions |
+| `listen_mode` | string | "full" | Node operation mode | Controls node behavior: "full" for normal operation, "listen_only" for passive mode |
 
 ### Service Endpoints
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
 | `p2p_grpcAddress` | string | "" | Address for other services to connect to this service | Enables service-to-service communication |
-| `p2p_grpcListenAddress` | string | :9906 | Interface and port to listen on for gRPC connections | Controls network binding for the gRPC server |
-| `p2p_httpAddress` | string | localhost:9906 | Address other services use to connect to HTTP API | Affects how other services discover the P2P HTTP API |
+| `p2p_grpcListenAddress` | string | ":9906" | Interface and port to listen on for gRPC connections | Controls network binding for the gRPC server |
+| `p2p_httpAddress` | string | "localhost:9906" | Address other services use to connect to HTTP API | Affects how other services discover the P2P HTTP API |
 | `p2p_httpListenAddress` | string | "" | Interface and port to listen on for HTTP connections | Controls network binding for the HTTP server |
 | `securityLevelHTTP` | int | 0 | HTTP security level (0=HTTP, 1=HTTPS) | Determines whether HTTP or HTTPS is used for web connections |
 | `server_certFile` | string | "" | Path to SSL certificate file | Required for HTTPS when security level is 1 |
@@ -527,19 +541,34 @@ The P2P service serves as the communication backbone of the Teranode network, en
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
+| `p2p_bestblock_topic` | string | "" | Topic name for best block announcements | Controls subscription and publication to the best block channel |
 | `p2p_block_topic` | string | "" | Topic name for block announcements | Controls subscription and publication to the block channel |
 | `p2p_subtree_topic` | string | "" | Topic name for subtree announcements | Controls subscription and publication to the subtree channel |
 | `p2p_mining_on_topic` | string | "" | Topic name for mining status announcements | Controls subscription and publication to the mining status channel |
 | `p2p_rejected_tx_topic` | string | "" | Topic name for rejected transaction announcements | Controls subscription to rejected transaction notifications |
-| `p2p_handshake_topic` | string | "" | **REQUIRED** - Topic name for peer handshake messages | Used for version and verack exchanges between peers. Service will fail to start if not configured. |
+| `p2p_handshake_topic` | string | "" | Topic name for peer handshake messages | Used for version and verack exchanges between peers |
+| `p2p_handshake_topic_size` | int | 1 | Minimum topic size for handshake publishing | Controls reliability of handshake message delivery |
+| `p2p_handshake_topic_timeout` | duration | 5s | Timeout for handshake topic operations | Maximum wait time for handshake topic readiness |
+| `p2p_node_status_topic` | string | "" | Topic name for node status messages | Controls subscription and publication to the node status channel |
 
 ### Authentication and Security
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
 | `p2p_peer_id` | string | "" | Unique identifier for the P2P node | Used to identify this node in the P2P network |
-| `p2p_private_key` | string | "" | Private key for P2P authentication | Provides cryptographic identity for the node; if not provided, will be automatically generated and persistently stored in the blockchain database |
-| `p2p_shared_key` | string | "" | **REQUIRED for private networks** - Shared key for private network communication | When provided, ensures only nodes with the same shared key can communicate |
+| `p2p_private_key` | string | "" | Private key for P2P authentication | Provides cryptographic identity for the node; if not provided, will be auto-generated and stored |
+| `p2p_shared_key` | string | "" | Shared key for private network communication | When provided, ensures only nodes with the same shared key can communicate |
+| `grpcAdminAPIKey` | string | "" | API key for gRPC admin operations | Required for administrative gRPC calls to the P2P service |
+
+### Libp2p Feature Toggles
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `p2p_enable_nat_service` | bool | false | Enable NAT service for connectivity | Helps with NAT traversal and peer reachability |
+| `p2p_enable_hole_punching` | bool | false | Enable hole punching for NAT traversal | Allows direct connections through NATs |
+| `p2p_enable_relay` | bool | false | Enable relay functionality | Allows nodes to relay traffic for other peers |
+| `p2p_enable_nat_port_map` | bool | false | Enable NAT port mapping | Automatically configures port forwarding on compatible routers |
+
 
 ### Ban Management
 
@@ -547,6 +576,46 @@ The P2P service serves as the communication backbone of the Teranode network, en
 |---------|------|---------|-------------|--------|
 | `p2p_ban_threshold` | int | 100 | Score threshold at which peers are banned | Controls how aggressively misbehaving peers are banned |
 | `p2p_ban_duration` | duration | 24h | Duration for which peers remain banned | Controls how long banned peers are excluded from the network |
+
+### External Service Dependencies
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `chainCfgParams_topicPrefix` | string | "mainnet" | Chain identifier prefix for all topic names | **REQUIRED** - Provides network isolation by prefixing all pubsub topics (e.g., "mainnet-blocks", "testnet-blocks") |
+| `asset_httpPublicAddress` | string | "" | Public HTTP address of Asset service | Used for constructing data hub URLs in peer messages |
+| `asset_httpAddress` | string | "" | Internal HTTP address of Asset service | Fallback for data hub URL construction |
+| `version` | string | "" | Service version | Included in node status messages for network compatibility |
+| `commit` | string | "" | Git commit hash | Included in node status messages for version tracking |
+| `coinbase_arbitraryText` | string | "" | Miner name from coinbase configuration | Used as miner identifier in node status messages |
+
+### GRPC Client Configuration
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `grpcMaxRetries` | int | 3 | Maximum retry attempts for gRPC operations | Controls resilience of service-to-service communication |
+| `grpcRetryBackoff` | duration | 1s | Backoff duration between gRPC retries | Controls retry timing for failed gRPC calls |
+
+### Kafka Integration
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `kafka_invalidBlocksConfig` | URL | nil | Kafka URL for invalid blocks consumer | When set, enables consumption of invalid block notifications |
+| `kafka_hosts` | []string | [] | Kafka broker hosts | Required for Kafka connectivity when invalid blocks consumer is enabled |
+| `kafka_port` | int | 9092 | Kafka broker port | Default port for Kafka broker connections |
+| `kafka_invalidBlocks` | string | "" | Kafka topic name for invalid blocks | Topic to consume invalid block notifications from |
+| `kafka_partitions` | int | 1 | Number of Kafka partitions | Controls parallelism for Kafka message processing |
+
+### Subtree Validation
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `subtreeValidation_blacklistedBaseURLs` | map[string]struct{} | {} | Map of blacklisted base URLs | Prevents processing of subtrees from blacklisted sources |
+
+### Blockchain Store Integration
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `blockchain_storeURL` | URL | "" | Blockchain store URL | Required for ban list persistence and private key storage |
 
 ## Configuration Validation Rules
 
@@ -562,11 +631,30 @@ The P2P service enforces several validation rules during startup:
 - Port numbers must be within valid range (1-65535)
 - Advertise addresses support both IP addresses and domain names
 - When advertise addresses omit ports, `p2p_port` value is automatically used
+- gRPC and HTTP listen addresses must be valid network addresses
 
 ### Private Network Requirements
 
 - When `p2p_shared_key` is provided, all peers must use the same shared key
 - Private DHT mode (`p2p_dht_use_private: true`) restricts peer discovery to trusted nodes
+- Bootstrap persistent mode requires valid bootstrap addresses
+
+### HTTPS Configuration
+
+- When `securityLevelHTTP` is set to 1, both `server_certFile` and `server_keyFile` must be provided
+- Certificate and key files must be valid and readable
+
+### Kafka Integration
+
+- When `kafka_invalidBlocksConfig` is set, `kafka_hosts` and `kafka_invalidBlocks` topic must be configured
+- Kafka hosts must be reachable network addresses
+- Kafka port must be within valid range
+
+### Topic Configuration
+
+- All topic names should follow consistent naming conventions across the network
+- Handshake topic size must be positive when specified
+- Handshake topic timeout must be a valid duration
 
 ### Key Management
 
@@ -576,7 +664,7 @@ The P2P service enforces several validation rules during startup:
 
 ## Configuration Dependencies
 
-The P2P service requires integration with several other services:
+The P2P service has extensive integration dependencies with other services and external systems:
 
 ## Configuration Interactions and Dependencies
 
@@ -600,10 +688,11 @@ These settings should be configured together based on your network architecture 
 Peer discovery in the P2P service uses a multi-layered approach:
 
 - `p2p_bootstrapAddresses` provides initial entry points to the network
-- `p2p_bootstrap_persistent` controls whether bootstrap servers are treated as persistent connections that automatically reconnect
+- `p2p_bootstrap_persistent` controls whether bootstrap addresses are automatically added to static peers
 - `p2p_static_peers` ensures connections to specific peers regardless of DHT discovery
 - `p2p_dht_protocol_id` and `p2p_dht_use_private` affect the DHT-based peer discovery mechanism
 - `p2p_optimise_retries` impacts connection retry behavior when peers are unreachable
+- `listen_mode` determines whether the node operates in "full" or "listen_only" mode
 
 In private network deployments, you should configure static peers and bootstrap addresses carefully to ensure nodes can find each other.
 
@@ -617,8 +706,10 @@ The P2P service uses several security mechanisms:
 
 - `p2p_private_key` establishes the node's identity, which is reflected in its `p2p_peer_id`
 - `p2p_shared_key` enables private network functionality, restricting communication to nodes with the same shared key
-- If no private key is provided, it will be auto-generated and stored in the blockchain store
-- The ban system uses a score-based approach where peers accumulate points for bad behavior
+- If no private key is provided, it will be auto-generated and stored in the blockchain store via `blockchain_storeURL`
+- The ban system uses `p2p_ban_threshold` and `p2p_ban_duration` for score-based peer management
+- `grpcAdminAPIKey` protects administrative gRPC operations
+- HTTPS support via `securityLevelHTTP`, `server_certFile`, and `server_keyFile`
 
 These settings enable secure and authenticated communication between nodes in the network.
 

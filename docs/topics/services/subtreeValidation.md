@@ -242,9 +242,12 @@ These settings control how subtree validation is coordinated to prevent duplicat
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
-| `subtree_quorum_path` | string | `""` (empty) | Directory path where quorum data is stored for subtree validation | Critical - service will not initialize without this path configured |
+| `subtree_quorum_path` | string | `""` (empty) | **REQUIRED** - Directory path where quorum data is stored for subtree validation | Critical - service will not initialize without this path configured |
 | `subtree_quorum_absolute_timeout` | time.Duration | `30s` | Maximum time to wait for quorum operations to complete | Controls deadlock prevention and failure recovery during validation |
 | `subtreevalidation_subtree_validation_abandon_threshold` | int | `1` | Number of sequential validation failures before abandoning validation attempts | Controls resilience and retry behavior for validation errors |
+| `subtreevalidation_orphanageTimeout` | time.Duration | `15m` | Timeout for orphaned transactions in the orphanage cache | Controls memory usage and cleanup of orphaned transaction data |
+| `subtreevalidation_subtreeBlockHeightRetention` | uint32 | `globalBlockHeightRetention` | Block height retention for subtree data | Controls how long subtree data is retained based on block height |
+| `subtreevalidation_blockHeightRetentionAdjustment` | int32 | `0` | Adjustment to global block height retention (can be positive or negative) | Fine-tunes retention period for subtree-specific requirements |
 
 #### Quorum Interactions and Dependencies
 
@@ -268,6 +271,7 @@ These settings control how transactions are retrieved, validated, and processed 
 | `subtreevalidation_batch_missing_transactions` | bool | `true` | Controls whether missing transaction retrieval is batched | Affects network efficiency and transaction retrieval performance |
 | `subtreevalidation_missingTransactionsBatchSize` | int | `16384` | Maximum number of transactions to retrieve in a single batch | Controls network efficiency and memory usage during retrieval |
 | `subtreevalidation_percentageMissingGetFullData` | float64 | `20.0` | Percentage threshold for switching to full data retrieval | Controls when the service retrieves full transaction data based on missing rate |
+| `subtreevalidation_blacklisted_baseurls` | map[string]struct{} | `{}` (empty) | Set of blacklisted base URLs for subtree validation | Prevents validation attempts from known problematic sources |
 
 #### Transaction Processing Interactions and Dependencies
 
@@ -329,7 +333,7 @@ These settings control how the service communicates with other components in the
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
-| `subtreevalidation_grpcAddress` | string | `"localhost:8089"` | Address for connecting to the subtree validation service | Affects how other services connect to this service |
+| `subtreevalidation_grpcAddress` | string | `"localhost:8089"` | **REQUIRED** - Address for connecting to the subtree validation service | Affects how other services connect to this service |
 | `subtreevalidation_grpcListenAddress` | string | `":8089"` | Address where the service listens for gRPC connections | Controls network binding for service communication |
 | `subtreevalidation_subtreeValidationTimeout` | int | `1000` | Timeout (ms) for subtree validation operations | Controls error recovery and prevents hanging validation processes |
 | `validator.useLocalValidator` | bool | `false` | Controls whether to use a local or remote validator | Affects system architecture and validation performance |

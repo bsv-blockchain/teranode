@@ -1,7 +1,6 @@
-#  🔗 Legacy Service
+# 🔗 Legacy Service
 
 ## Index
-
 
 1. [Introduction](#1-introduction)
     - [1.1. Summary](#11-summary)
@@ -114,9 +113,10 @@ The overall cycle is:
 2) When a new block is received from the BSV node, it is transformed into a Teranode subtree and block propagation format. The block hash is then sent to the Teranode network for further processing.
 
 3) The Teranode network processes the block hash and requests the full block data from the Legacy Service.
-   3.1) Upon receipt of the full block data, Teranode will notice that it contains subtrees it is not aware of, and request them from the Legacy Service.
-   3.2) Upon receipt of the full subtree data, the list of transactions will be known, and will be requested from the Legacy Service.
-   3.3) With all the information now available, the block is then added to the Teranode blockchain.
+
+    - Upon receipt of the full block data, Teranode will notice that it contains subtrees it is not aware of, and request them from the Legacy Service.
+    - Upon receipt of the full subtree data, the list of transactions will be known, and will be requested from the Legacy Service.
+    - With all the information now available, the block is then added to the Teranode blockchain.
 
 In the next sections, we will detail the steps involved.
 
@@ -388,6 +388,7 @@ The Legacy service bridges traditional Bitcoin nodes with the Teranode architect
 | `legacy_spendBatcherSize` | int | 1024 | Batch size for spend operations | Affects efficiency of spend operations and memory usage |
 | `legacy_outpointBatcherSize` | int | 1024 | Batch size for outpoint operations | Affects efficiency of outpoint processing |
 | `legacy_workingDir` | string | "../../data" | Directory where service stores data files | Controls where peer information and other data is stored |
+| `temp_store` | string | "file://./data/tempstore" | Temporary storage URL for Legacy Service operations | Controls temporary file storage location for block processing and peer data |
 
 ### Concurrency and Performance
 
@@ -398,13 +399,15 @@ The Legacy service bridges traditional Bitcoin nodes with the Teranode architect
 | `legacy_outpointBatcherConcurrency` | int | 32 | Number of concurrent outpoint operations | Controls parallelism for outpoint operations |
 | `legacy_config_Upnp` | bool | false | Use UPnP for automatic port forwarding | Affects service accessibility from the internet |
 
-### Peer Management
+### Peer Management and Timeouts
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
 | `legacy_savePeers` | bool | false | Save peer information to disk for reuse on restart | Enables persistent peer connections across service restarts |
 | `legacy_allowSyncCandidateFromLocalPeers` | bool | false | Allow local peers as sync candidates | Affects peer selection for blockchain synchronization |
 | `legacy_printInvMessages` | bool | false | Print inventory messages to logs | Increases log verbosity for debugging |
+| `legacy_peerIdleTimeout` | duration | 125s | Timeout for idle peer connections | Controls when peers are disconnected due to inactivity. Set to 125s to accommodate 2-minute ping/pong intervals |
+| `legacy_peerProcessingTimeout` | duration | 3m | Timeout for peer message processing | Maximum time allowed for processing messages from peers. Block processing is typically the largest operation |
 
 ### Feature Flags
 

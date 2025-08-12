@@ -343,9 +343,33 @@ The Block Validation service configuration can be adjusted through environment v
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
+| `blockValidationMaxRetries` | int | 3 | Maximum retry attempts for block validation operations | Controls resilience and retry behavior for failed validation operations |
+| `blockValidationRetrySleep` | duration | 1s | Sleep duration between retry attempts | Controls retry timing and system load during failures |
 | `utxostore` | URL | (none) | URL for the UTXO store | Required for UTXO validation and updates |
 | `fsm_state_restore` | bool | false | Enables FSM state restoration | Affects recovery behavior after service restart |
 | `blockvalidation_subtreeBlockHeightRetention` | uint32 | (global setting) | How long to keep subtrees (in terms of block height) | Affects storage utilization and historical data availability |
+
+### Validator Integration Settings
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `blockValidationDelay` | int | 0 | Delay for block validation operations in validator | Controls timing of validation operations within the validator component |
+| `blockValidationMaxRetries` | int | 3 | Maximum retries for validator block validation operations | Controls validator-specific retry behavior for block validation |
+| `blockValidationRetrySleep` | string | "1s" | Sleep duration between validator retry attempts | Controls validator retry timing and backoff behavior |
+
+### Policy and Chain Configuration Dependencies
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `excessiveblocksize` | int | 4GB | Maximum allowed block size (Policy.ExcessiveBlockSize) | Controls block size validation limits in ValidateBlock() - blocks exceeding this size are rejected |
+| `network` | string | "mainnet" | Network type (mainnet/testnet/regtest) affecting ChainCfgParams | Controls chain-specific parameters including MaxCoinbaseScriptSigSize for coinbase validation |
+
+### Missing Retry and Backoff Settings
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `blockvalidation_arePreviousBlocksProcessed_max_retry` | int | 20 | Maximum retries for previous block processing checks | Controls retry behavior when verifying previous block processing status |
+| `blockvalidation_arePreviousBlocksProcessed_retry_backoff_multiplier` | int | 30 | Backoff multiplier for previous block processing retries | Controls exponential backoff timing for previous block processing verification |
 
 ## Configuration Interactions and Dependencies
 

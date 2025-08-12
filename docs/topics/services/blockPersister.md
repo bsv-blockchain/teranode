@@ -33,13 +33,13 @@ The Block Persister files are optionally post-processed by the UTXO Persister, w
 
 ![Block_Persister_Service_Container_Diagram.png](img/Block_Persister_Service_Container_Diagram.png)
 
-* The Block Persister polls the Blockchain service for new blocks and stores the decorated block in a data store (such as S3).
+- The Block Persister polls the Blockchain service for new blocks and stores the decorated block in a data store (such as S3).
 
 ![Block_Persister_Service_Component_Diagram.png](img/Block_Persister_Service_Component_Diagram.png)
 
-* The Block Persister service operates independently by polling the Blockchain service directly for new blocks, rather than relying on external notification systems.
+- The Block Persister service operates independently by polling the Blockchain service directly for new blocks, rather than relying on external notification systems.
 
-* The Blockchain client is directly accessed to wait for the node State Management to change to `RUNNING` state before beginning block processing operations. For more information on this, please refer to the [State Management](../architecture/stateManagement.md) documentation.
+- The Blockchain client is directly accessed to wait for the node State Management to change to `RUNNING` state before beginning block processing operations. For more information on this, please refer to the [State Management](../architecture/stateManagement.md) documentation.
 
 ## 2. Functionality
 
@@ -112,7 +112,7 @@ The detailed subtree processing workflow includes:
 
 ## 3. Data Model
 
-The Block Persister service data model is identical in scope to the Block Validation model. Please refer to the Block Validation documentation [here](blockValidation.md#4-data-model) for more information.
+The Block Persister service data model is identical in scope to the Block Validation model. Please refer to the [Block Validation documentation](blockValidation.md#4-data-model) for more information.
 
 In addition to blocks and subtrees, utxo additions and deletions files are created for each block, containing the newly created and spent UTXOs, respectively.
 
@@ -186,7 +186,6 @@ This dual-storage approach serves different purposes:
 
 If you need all transaction information in a subtree, you should access the `.subtree` file in the block-store bucket. If you only need basic transaction references (hashes, fees), you can use the more efficient files in the subtree-store bucket.
 
-
 ## 4. Technology
 
 1. **Go (Golang):** The primary programming language used for developing the service.
@@ -203,13 +202,11 @@ If you need all transaction information in a subtree, you should access the `.su
     - **Dynamic Configuration:** For managing service settings, including transaction metadata caching configurations and worker settings.
     - **Logging:** For monitoring service operations, error handling, and debugging.
 
-
 ## 5. Directory Structure and Main Files
 
 The Block Persister service is located in the `services/blockpersister` directory.
 
-
-```
+```text
 services/blockpersister/
 ├── state/          # State management
 ├── server.go       # Main service implementation
@@ -225,7 +222,6 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -BlockPersister=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Block Persister Service locally.
-
 
 ## 7. Configuration options (settings flags)
 
@@ -245,21 +241,22 @@ The Block Persister service configuration is organized into several categories t
 
 #### Block Storage
 
-- **Block Store URL** (defined through `Block.BlockStore` in settings)
+- **Block Store URL (`blockstore`)**
     - Type: `*url.URL`
-    - Default Value: Not explicitly set in viewed code
+    - Default Value: `"file://./data/blockstore"`
     - Purpose: Defines where block data files are stored
     - Supported Formats:
 
         - S3: `s3://bucket-name/prefix`
         - Local filesystem: `file://./path/to/dir`
+
     - Impact: Determines the persistence mechanism and reliability characteristics
 
-- **HTTP Listen Address (`blockpersister_httpListenAddress`)**
+- **HTTP Listen Address (`blockPersister_httpListenAddress`)**
     - Type: `string`
     - Default Value: `":8083"`
     - Purpose: Controls the network interface and port for the HTTP server that serves block data
-    - Usage: If empty, and BlockStore is set, a blob store HTTP server will be created automatically
+    - Usage: If empty, no HTTP server is started; when configured, enables external access to blob store
     - Security Consideration: In production environments, should be configured based on network security requirements
 
 ### Processing Configuration
@@ -307,11 +304,12 @@ The Block Persister service configuration is organized into several categories t
     - Impact: Can significantly improve performance by reducing the number of individual queries
     - Tuning Advice: Generally should be kept enabled unless encountering specific issues
 
-- **Process TxMeta Using Store Batch Size** (defined through `Block.ProcessTxMetaUsingStoreBatchSize` in settings)
+- **Process TxMeta Using Store Batch Size (`blockvalidation_processTxMetaUsingStore_BatchSize`)**
     - Type: `int`
+    - Default Value: `1024`
     - Purpose: Controls the batch size when processing transaction metadata from the store
     - Impact: Affects performance and memory usage when fetching transaction data
-  - Tuning Advice: Higher values improve throughput at the cost of increased memory usage
+    - Tuning Advice: Higher values improve throughput at the cost of increased memory usage
 
 #### UTXO Management
 
@@ -324,6 +322,30 @@ The Block Persister service configuration is organized into several categories t
 
         - Enable during initial sync or recovery to improve performance
         - Disable for normal operation to maintain complete UTXO tracking
+
+- **UTXO Store URL (`txmeta_store`)**
+    - Type: `*url.URL`
+    - Default Value: `""` (empty)
+    - Purpose: UTXO store URL for transaction metadata access
+    - Impact: Provides transaction metadata storage for UTXO processing operations
+    - Usage: Required when UTXO processing features are enabled
+
+- **UTXO Persister Buffer Size (`utxoPersister_buffer_size`)**
+    - Type: `string`
+    - Default Value: `"4KB"`
+    - Purpose: Buffer size for UTXO persister operations
+    - Impact: Controls memory allocation for UTXO processing operations
+    - Supported Formats: Standard size units (KB, MB, GB)
+
+- **UTXO Persister Direct Mode (`direct`)**
+    - Type: `bool`
+    - Default Value: `true`
+    - Purpose: Enable direct UTXO persister mode (bypasses intermediate buffering)
+    - Impact: Controls UTXO processing mode for performance optimization
+    - Tuning Advice:
+
+        - Direct mode: Better performance for most scenarios
+        - Buffered mode: May be useful for specific memory-constrained environments
 
 ### Configuration Interactions and Dependencies
 
@@ -343,7 +365,6 @@ The Block Persister's processing behavior is controlled by multiple interacting 
 3. **Wait Behavior**
     - `BlockPersisterPersistSleep` controls polling frequency when no blocks are available
     - On errors, the service applies a fixed 1-minute backoff regardless of this setting
-
 
 ## 8. Other Resources
 

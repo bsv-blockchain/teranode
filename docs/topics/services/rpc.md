@@ -210,13 +210,13 @@ The `freeze` command allows administrators to freeze a specific UTXO, preventing
 
 - **Parameters**:
 
-  - `txid` (string, required): The transaction ID of the output to freeze
-  - `vout` (numeric, required): The output index to freeze
+    - `txid` (string, required): The transaction ID of the output to freeze
+    - `vout` (numeric, required): The output index to freeze
 
 - **Return Value**:
 
-  - On success: Returns `true` indicating the UTXO was successfully frozen
-  - On failure: Returns an error if the UTXO cannot be found or frozen
+    - On success: Returns `true` indicating the UTXO was successfully frozen
+    - On failure: Returns an error if the UTXO cannot be found or frozen
 
 #### Process Flow
 
@@ -277,8 +277,9 @@ if err != nil {
 - **Settings**: It requires a valid `MINER_HTTP_PORT` setting.
 
 - **Considerations:**
-  - This function should not be exposed in production environments as it allows the generation of blocks outside of the normal consensus rules, which can be exploited or lead to unintended forks if used maliciously.
-  - Ensure the miner service is secured and only accessible by the RPC server to prevent unauthorized block generation.
+
+    - This function should not be exposed in production environments as it allows the generation of blocks outside of the normal consensus rules, which can be exploited or lead to unintended forks if used maliciously.
+    - Ensure the miner service is secured and only accessible by the RPC server to prevent unauthorized block generation.
 
 #### (Success) Response Fields
 
@@ -294,14 +295,14 @@ The `generatetoaddress` command mines blocks immediately to a specified address.
 
 - **Parameters**:
 
-  - `nblocks` (numeric, required): Number of blocks to generate
-  - `address` (string, required): The address to send the newly generated bitcoin to
-  - `maxtries` (numeric, optional): Maximum number of iterations to try
+    - `nblocks` (numeric, required): Number of blocks to generate
+    - `address` (string, required): The address to send the newly generated bitcoin to
+    - `maxtries` (numeric, optional): Maximum number of iterations to try
 
 - **Return Value**:
 
-  - On success: Returns an array of block hashes that were generated
-  - On failure: Returns an error describing what went wrong
+    - On success: Returns an array of block hashes that were generated
+    - On failure: Returns an error describing what went wrong
 
 #### Process Flow
 
@@ -327,7 +328,7 @@ The `generatetoaddress` command mines blocks immediately to a specified address.
 
     - For each requested block:
 
-                - Creates a new block template with the address script
+        - Creates a new block template with the address script
         - Performs proof-of-work calculation
         - Processes and validates the new block
         - Adds the block to the blockchain
@@ -396,16 +397,16 @@ The `getblockbyheight` command returns information about a block at a specific h
 
 - **Parameters**:
 
-  - `height`: The height of the block to retrieve
-  - `verbosity`: Determines the format and detail level of the returned data
-  - 0: Returns serialized, hex-encoded block data
-  - 1: Returns JSON object with block information
-  - 2: Returns JSON object with block information including detailed transaction data
+    - `height`: The height of the block to retrieve
+    - `verbosity`: Determines the format and detail level of the returned data
+        - 0: Returns serialized, hex-encoded block data
+        - 1: Returns JSON object with block information
+        - 2: Returns JSON object with block information including detailed transaction data
 
 - **Return Value**:
 
-  - On success: Returns block data in the format specified by verbosity
-  - On failure: Returns an error if the block cannot be found or retrieved
+    - On success: Returns block data in the format specified by verbosity
+    - On failure: Returns an error if the block cannot be found or retrieved
 
 #### Process Flow
 
@@ -426,9 +427,11 @@ The `getblockbyheight` command returns information about a block at a specific h
     - For verbosity=0:
 
         - Returns hex-encoded serialized block data
+
     - For verbosity=1:
 
         - Returns JSON object with block header information and transaction IDs
+
     - For verbosity=2:
 
         - Returns JSON object with complete block information including full transaction data
@@ -468,8 +471,8 @@ The `getblockchaininfo` command returns information about the current blockchain
 
 - **Return Value**:
 
-  - On success: Returns a JSON object containing blockchain state information
-  - On failure: Returns an error describing what went wrong
+    - On success: Returns a JSON object containing blockchain state information
+    - On failure: Returns an error describing what went wrong
 
 #### Process Flow
 
@@ -520,12 +523,12 @@ The `getblockhash` command returns the hash of a block at a specific height in t
 
 - **Parameters**:
 
-  - `index`: The height of the block in the blockchain
+    - `index`: The height of the block in the blockchain
 
 - **Return Value**:
 
-  - On success: Returns the block hash as a string
-  - On failure: Returns an error if the block cannot be found
+    - On success: Returns the block hash as a string
+    - On failure: Returns an error if the block cannot be found
 
 #### Process Flow
 
@@ -559,15 +562,15 @@ The `getblockheader` command returns information about a block's header given it
 
 - **Parameters**:
 
-  - `hash`: The hash of the block
-  - `verbose`: Boolean determining the format of the returned data
-  - false: Returns serialized, hex-encoded header data
-  - true: Returns JSON object with detailed header information
+    - `hash`: The hash of the block
+    - `verbose`: Boolean determining the format of the returned data
+        - false: Returns serialized, hex-encoded header data
+        - true: Returns JSON object with detailed header information
 
 - **Return Value**:
 
-  - On success: Returns header data in the format specified by verbose parameter
-  - On failure: Returns an error if the block cannot be found or hash is invalid
+    - On success: Returns header data in the format specified by verbose parameter
+    - On failure: Returns an error if the block cannot be found or hash is invalid
 
 #### Process Flow
 
@@ -588,6 +591,7 @@ The `getblockheader` command returns information about a block's header given it
     - For verbose=false:
 
         - Returns hex-encoded serialized header data
+
     - For verbose=true:
 
         - Calculates difficulty from bits
@@ -624,8 +628,8 @@ The `getdifficulty` command returns the proof-of-work difficulty as a multiple o
 
 - **Return Value**:
 
-  - On success: Returns the current difficulty as a floating-point number
-  - On failure: Returns an error if the difficulty cannot be retrieved
+    - On success: Returns the current difficulty as a floating-point number
+    - On failure: Returns an error if the difficulty cannot be retrieved
 
 #### Process Flow
 
@@ -657,8 +661,8 @@ The `getinfo` command returns general information about the node's state, includ
 
 - **Return Value**:
 
-  - On success: Returns a JSON object containing node state information
-  - On failure: Returns an error if blockchain height cannot be retrieved
+    - On success: Returns a JSON object containing node state information
+    - On failure: Returns an error if blockchain height cannot be retrieved
 
 #### Process Flow
 
@@ -706,8 +710,8 @@ The `getmininginfo` command returns various mining-related information including
 
 - **Return Value**:
 
-  - On success: Returns a JSON object containing mining-related information
-  - On failure: Returns an error if the mining information cannot be retrieved
+    - On success: Returns a JSON object containing mining-related information
+    - On failure: Returns an error if the mining information cannot be retrieved
 
 #### Process Flow
 
@@ -749,13 +753,13 @@ The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candid
 
 - **Parameters**:
 
-  - The function doesn't take any specific parameters from the RPC call.
-  - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling (not directly used in this implementation).
+    - The function doesn't take any specific parameters from the RPC call.
+    - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling (not directly used in this implementation).
 
 - **Return Value**:
 
-  - On success: Returns a mining candidate object (`mc`) containing the necessary information for mining.
-  - On failure: Returns an error detailing why the mining candidate could not be retrieved.
+    - On success: Returns a mining candidate object (`mc`) containing the necessary information for mining.
+    - On failure: Returns an error detailing why the mining candidate could not be retrieved.
 
 #### Process Flow
 
@@ -796,8 +800,8 @@ The `getpeerinfo` command returns data about each connected network peer as an a
 - **Parameters**: None
 - **Return Value**:
 
-  - On success: Returns an array of peer information objects
-  - On failure: Returns partial information if at least one peer service responds
+    - On success: Returns an array of peer information objects
+    - On failure: Returns partial information if at least one peer service responds
 
 #### Process Flow
 
@@ -862,14 +866,14 @@ The `getrawtransaction` command retrieves raw transaction data for a specific tr
 
 - **Parameters**:
 
-  - `txid` (string, required): The transaction ID to look up
-  - `verbose` (boolean, optional, default=false): If false, returns a hex-encoded string. If true, returns a JSON object with transaction details
+    - `txid` (string, required): The transaction ID to look up
+    - `verbose` (boolean, optional, default=false): If false, returns a hex-encoded string. If true, returns a JSON object with transaction details
 
 - **Return Value**:
 
-  - If verbose=false: Returns a serialized, hex-encoded string of the transaction
-  - If verbose=true: Returns a JSON object with detailed transaction information
-  - On failure: Returns an error if the transaction cannot be found
+    - If verbose=false: Returns a serialized, hex-encoded string of the transaction
+    - If verbose=true: Returns a JSON object with detailed transaction information
+    - On failure: Returns an error if the transaction cannot be found
 
 #### Process Flow
 
@@ -890,10 +894,11 @@ The `getrawtransaction` command retrieves raw transaction data for a specific tr
 
     - For non-verbose (false) response:
 
-                - Returns hex-encoded serialized transaction data
+        - Returns hex-encoded serialized transaction data
+
     - For verbose (true) response:
 
-                - Constructs detailed JSON object with transaction information
+        - Constructs detailed JSON object with transaction information
         - Includes metadata such as blockhash, confirmation count, and timestamp
         - Processes all inputs and outputs with script details
 
@@ -916,21 +921,21 @@ When verbose=true:
 - **version**: The transaction version number
 - **locktime**: The transaction's locktime
 - **vin**: Array of transaction inputs
-  - **txid**: Transaction ID of the input
-  - **vout**: Output index of the input
-  - **scriptSig**: Script signature
-    - **asm**: Assembly representation of the script
-    - **hex**: Hex-encoded script
-  - **sequence**: Input sequence number
+    - **txid**: Transaction ID of the input
+    - **vout**: Output index of the input
+    - **scriptSig**: Script signature
+        - **asm**: Assembly representation of the script
+        - **hex**: Hex-encoded script
+    - **sequence**: Input sequence number
 - **vout**: Array of transaction outputs
-  - **value**: The output value in BTC
-  - **n**: The output index number
-  - **scriptPubKey**: The output script
-    - **asm**: Assembly representation of the script
-    - **hex**: Hex-encoded script
-    - **reqSigs**: Required signatures
-    - **type**: Script type
-    - **addresses**: Array of Bitcoin addresses
+    - **value**: The output value in BTC
+    - **n**: The output index number
+    - **scriptPubKey**: The output script
+        - **asm**: Assembly representation of the script
+        - **hex**: Hex-encoded script
+        - **reqSigs**: Required signatures
+        - **type**: Script type
+        - **addresses**: Array of Bitcoin addresses
 - **blockhash**: The block hash containing this transaction
 - **confirmations**: Number of confirmations
 - **time**: Block time
@@ -946,12 +951,12 @@ The `invalidateblock` command permanently marks a block as invalid, as if it vio
 
 - **Parameters**:
 
-  - `blockhash`: The hash of the block to invalidate
+    - `blockhash`: The hash of the block to invalidate
 
 - **Return Value**:
 
-  - On success: Returns nil, indicating the block was successfully invalidated
-  - On failure: Returns an error if the block cannot be found or hash is invalid
+    - On success: Returns nil, indicating the block was successfully invalidated
+    - On failure: Returns an error if the block cannot be found or hash is invalid
 
 #### Process Flow
 
@@ -990,12 +995,12 @@ The `isbanned` command checks if a specific network address is currently banned 
 
 - **Parameters**:
 
-  - `address` (string, required): The network address to check, e.g. "192.168.0.1" or "192.168.0.0/24"
+    - `address` (string, required): The network address to check, e.g. "192.168.0.1" or "192.168.0.0/24"
 
 - **Return Value**:
 
-  - On success: Returns a boolean value - `true` if the address is banned, `false` if not
-  - On failure: Returns an error if the address format is invalid
+    - On success: Returns a boolean value - `true` if the address is banned, `false` if not
+    - On failure: Returns an error if the address format is invalid
 
 #### Process Flow
 
@@ -1039,14 +1044,14 @@ The `reassign` command allows administrators to change the ownership of a specif
 
 - **Parameters**:
 
-  - `txid` (string, required): The transaction ID of the output to reassign
-  - `vout` (numeric, required): The output index to reassign
-  - `destination` (string, required): The Bitcoin address to reassign the UTXO to
+    - `txid` (string, required): The transaction ID of the output to reassign
+    - `vout` (numeric, required): The output index to reassign
+    - `destination` (string, required): The Bitcoin address to reassign the UTXO to
 
 - **Return Value**:
 
-  - On success: Returns `true` indicating the UTXO was successfully reassigned
-  - On failure: Returns an error if the UTXO cannot be found or reassigned
+    - On success: Returns `true` indicating the UTXO was successfully reassigned
+    - On failure: Returns an error if the UTXO cannot be found or reassigned
 
 #### Process Flow
 
@@ -1095,12 +1100,12 @@ The `reconsiderblock` command removes the invalid status of a block and its desc
 
 - **Parameters**:
 
-  - `blockhash`: The hash of the block to reconsider
+    - `blockhash`: The hash of the block to reconsider
 
 - **Return Value**:
 
-  - On success: Returns nil, indicating the block was successfully reconsidered
-  - On failure: Returns an error if the block cannot be found or hash is invalid
+    - On success: Returns nil, indicating the block was successfully reconsidered
+    - On failure: Returns an error if the block cannot be found or hash is invalid
 
 #### Process Flow
 
@@ -1138,13 +1143,13 @@ The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-sign
 
 - **Parameters**:
 
-  - `cmd`: Contains the raw transaction data and any command-specific parameters.
-  - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
+    - `cmd`: Contains the raw transaction data and any command-specific parameters.
+    - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
 
 - **Return Value**:
 
-  - On success: Returns a result (e.g., transaction ID or confirmation message) indicating that the transaction was successfully broadcast.
-  - On failure: Returns an error detailing why the transaction could not be processed or broadcast.
+    - On success: Returns a result (e.g., transaction ID or confirmation message) indicating that the transaction was successfully broadcast.
+    - On failure: Returns an error detailing why the transaction could not be processed or broadcast.
 
 #### Process Flow
 
@@ -1191,15 +1196,15 @@ The `setban` command adds or removes an IP address or subnet from the banned lis
 
 - **Parameters**:
 
-  - `ipOrSubnet`: The IP/Subnet to ban/unban (e.g., "192.168.0.6" or "192.168.0.0/24")
-  - `command`: "add" to add a ban, "remove" to remove a ban
-  - `bantime`: Time in seconds for how long the IP is banned (optional)
-  - `absolute`: If true, bantime is interpreted as an absolute timestamp (optional)
+    - `ipOrSubnet`: The IP/Subnet to ban/unban (e.g., "192.168.0.6" or "192.168.0.0/24")
+    - `command`: "add" to add a ban, "remove" to remove a ban
+    - `bantime`: Time in seconds for how long the IP is banned (optional)
+    - `absolute`: If true, bantime is interpreted as an absolute timestamp (optional)
 
 - **Return Value**:
 
-  - On success: Returns nil
-  - On failure: Returns an error if parameters are invalid or operation fails
+    - On success: Returns nil
+    - On failure: Returns an error if parameters are invalid or operation fails
 
 #### Process Flow
 
@@ -1226,8 +1231,9 @@ The `setban` command adds or removes an IP address or subnet from the banned lis
 
 - For "add" command:
 
-  - If bantime is 0, defaults to 24 hours
-  - If absolute is true, bantime is treated as Unix timestamp
+    - If bantime is 0, defaults to 24 hours
+    - If absolute is true, bantime is treated as Unix timestamp
+
 - The IP/subnet format must be valid
 - Removing a non-existent ban is considered an error
 
@@ -1243,8 +1249,8 @@ The `stop` command initiates a clean shutdown of the node, stopping all services
 
 - **Return Value**:
 
-  - On success: Returns a string message indicating the node is stopping
-  - The actual shutdown process happens asynchronously after the response is sent
+    - On success: Returns a string message indicating the node is stopping
+    - The actual shutdown process happens asynchronously after the response is sent
 
 #### Process Flow
 
@@ -1295,13 +1301,13 @@ The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining
 
 - **Parameters**:
 
-  - `cmd`: Contains the JSON string of the mining solution and any command-specific parameters.
-  - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
+    - `cmd`: Contains the JSON string of the mining solution and any command-specific parameters.
+    - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
 
 - **Return Value**:
 
-  - On success: Returns `nil`, indicating that the mining solution was successfully submitted.
-  - On failure: Returns an error detailing why the mining solution could not be processed or submitted.
+    - On success: Returns `nil`, indicating that the mining solution was successfully submitted.
+    - On failure: Returns an error detailing why the mining solution could not be processed or submitted.
 
 #### Process Flow
 
@@ -1336,13 +1342,13 @@ The `unfreeze` command removes the freeze status from a previously frozen UTXO, 
 
 - **Parameters**:
 
-  - `txid` (string, required): The transaction ID of the frozen output
-  - `vout` (numeric, required): The output index to unfreeze
+    - `txid` (string, required): The transaction ID of the frozen output
+    - `vout` (numeric, required): The output index to unfreeze
 
 - **Return Value**:
 
-  - On success: Returns `true` indicating the UTXO was successfully unfrozen
-  - On failure: Returns an error if the UTXO cannot be found or unfrozen
+    - On success: Returns `true` indicating the UTXO was successfully unfrozen
+    - On failure: Returns an error if the UTXO cannot be found or unfrozen
 
 #### Process Flow
 
@@ -1388,10 +1394,10 @@ The `version` command is used to retrieve the version information of the RPC ser
 #### (Success) Response Fields
 
 - **btcdjsonrpcapi**: Object containing version information
-  - **versionString**: Semantic version string
-  - **major**: Major version number
-  - **minor**: Minor version number
-  - **patch**: Patch version number
+    - **versionString**: Semantic version string
+    - **major**: Major version number
+    - **minor**: Minor version number
+    - **patch**: Patch version number
 
 ## 4. Technology
 
@@ -1466,21 +1472,31 @@ This setting has significant security implications. In production environments, 
 
 ### 6.4 Performance & Scaling Settings
 
-These settings control resource usage and the service's ability to handle multiple simultaneous clients.
+These settings control resource usage, caching behavior, and the service's ability to handle multiple simultaneous clients.
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
 | `rpc_max_clients` | int | `1` | Maximum number of concurrent RPC client connections allowed | Limits resource usage; prevents overload from too many simultaneous connections |
+| `rpc_cache_enabled` | bool | `true` | Enable response caching for frequently accessed data | Improves performance by caching responses for commands like getblock, getblockheader, and getrawtransaction |
+| `rpc_timeout` | time.Duration | `30s` | Timeout for RPC request processing | Controls maximum time allowed for processing individual RPC requests; prevents hung requests |
+| `rpc_client_call_timeout` | time.Duration | `5s` | Timeout for calls to dependent services (P2P, Peer services) | Controls timeout when RPC service calls other Teranode services for data |
 
 #### Performance Scaling Interactions and Dependencies
 
-The `rpc_max_clients` setting directly impacts server resource usage. When the limit is reached, new connections are rejected with a 503 Service Unavailable response. This setting should be adjusted based on:
+The performance settings work together to optimize RPC service behavior:
+
+- **Connection Management**: `rpc_max_clients` directly impacts server resource usage. When the limit is reached, new connections are rejected with a 503 Service Unavailable response
+- **Response Caching**: `rpc_cache_enabled` significantly improves performance for read-heavy workloads by caching responses for blockchain data queries
+- **Timeout Control**: `rpc_timeout` and `rpc_client_call_timeout` prevent resource exhaustion from hung requests and service calls
+
+These settings should be adjusted based on:
 
 - Available server resources (CPU, memory, network capacity)
-- Expected client load patterns
+- Expected client load patterns and caching benefits
+- Network latency to dependent services
 - Complexity of RPC requests (some operations are more resource-intensive)
 
-The default value is conservative to prevent resource exhaustion in default configurations.
+The default values are conservative to prevent resource exhaustion in default configurations.
 
 ### 6.5 Compatibility Settings
 
@@ -1499,19 +1515,45 @@ The `rpc_quirks` setting primarily affects response formatting and error handlin
 
 This setting should be left enabled unless all clients are confirmed to support modern Bitcoin RPC conventions.
 
-### 6.6 Configuration Best Practices
+### 6.6 Dependency-Injected Settings
 
-1. **Secure Credential Management**: Never use default or easily guessable credentials. Consider using environment variables or secure credential storage instead of configuration files for passwords.
+These settings are not directly part of the RPC configuration but are required dependencies that the RPC service uses from other services.
 
-2. **Network Security**: Unless specifically required, always bind the RPC service to localhost to prevent unauthorized network access.
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `asset_httpAddress` | string | `""` (required) | HTTP address of the Asset service for transaction hex retrieval | **Required**: RPC service fails to start if not configured; used for getrawtransaction hex responses |
 
-3. **Connection Limiting**: Adjust `rpc_max_clients` based on your hardware resources and expected load. Monitor connection patterns in production to fine-tune this value.
+#### Dependency Configuration Interactions
 
-4. **Tiered Access**: Implement the two-tier authentication model, using limited access for applications that only need to read data, and full access for administrative operations.
+The RPC service acts as an API gateway and requires several service dependencies:
 
-5. **Load Balancing**: For high-volume deployments, consider deploying multiple RPC instances behind a load balancer instead of increasing the connection limit on a single instance.
+- **Asset Service Integration**: `asset_httpAddress` is mandatory for transaction data retrieval functionality. The RPC service constructs URLs like `{asset_httpAddress}/api/v1/tx/{txid}/hex` for transaction hex responses
+- **Service Context**: The `Context` setting is used for HTTP listener setup and management
+- **Client Dependencies**: The service requires active connections to Blockchain, UTXO Store, Block Assembly, Peer, and P2P services
 
-6. **TLS Encryption**: Consider deploying the RPC service behind a TLS-terminating reverse proxy if remote access is required, as the native RPC interface does not support HTTPS.
+### 6.7 Configuration Relationships and Dependencies
+
+The RPC service configuration settings have several important relationships:
+
+#### Authentication Flow
+
+- `rpc_user` + `rpc_pass` → Full admin access (all RPC commands)
+- `rpc_limit_user` + `rpc_limit_pass` → Limited access (read-only commands)
+- Both credential pairs are SHA256 hashed for secure validation
+
+#### Performance Optimization
+
+- `rpc_cache_enabled` + `rpc_timeout` → Balanced performance vs responsiveness
+- `rpc_max_clients` + `rpc_client_call_timeout` → Resource management
+
+#### Service Integration
+
+- `asset_httpAddress` → Required for transaction hex retrieval
+- `rpc_listener_url` → Required for HTTP server binding
+
+#### Compatibility and Behavior
+
+- `rpc_quirks` → Affects JSON-RPC request/response formatting
 
 ## 7. How to run
 

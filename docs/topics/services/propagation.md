@@ -189,15 +189,21 @@ The Propagation service serves as the transaction intake and distribution system
 | `propagation_grpcMaxConnectionAge` | duration | 90s | Maximum duration for gRPC connections before forced renewal | Controls connection lifecycle and helps with load balancing |
 | `propagation_httpRateLimit` | int | 1024 | Rate limit for HTTP API requests (per second) | Controls how many requests per second the HTTP API can handle |
 | `propagation_sendBatchSize` | int | 100 | Maximum number of transactions to send in a batch | Affects efficiency and throughput of transaction processing |
-| `propagation_sendBatchTimeout` | int | 5 | Timeout in seconds for batch sending operations | Controls how long the service waits to collect a full batch |
+| `propagation_sendBatchTimeout` | int | 5 | Timeout in milliseconds for batch sending operations | Controls how long the service waits to collect a full batch before processing |
 
 ### Validator Integration Settings
 
 | Setting | Type | Default | Description | Impact |
 |---------|------|---------|-------------|--------|
-| `useLocalValidator` | bool | false | Use a local validator instance embedded in the service | Eliminates network overhead for validation, improving performance |
-| `propagation_alwaysUseHTTP` | bool | false | Forces using HTTP instead of Kafka for transaction validation | Affects how transactions are sent to the validator service |
+| `propagation_alwaysUseHTTP` | bool | false | Forces using HTTP instead of Kafka for transaction validation | Affects performance and reliability of transaction validation |
+
+### Dependency-Injected Settings (from other services)
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
 | `validator_httpAddress` | url | null | URL for validator HTTP API | Used as fallback for large transactions exceeding Kafka limits |
+| `validator_kafkaMaxMessageBytes` | int | varies | Maximum size for Kafka messages in bytes | Determines when HTTP fallback is used for large transactions |
+| `useLocalValidator` | bool | false | Daemon-level setting for validator deployment mode | Controls whether validator runs in-process or as separate service |
 
 ### 8.4 Configuration Interactions and Dependencies
 
@@ -225,16 +231,20 @@ The Propagation service interacts with the Validator service using one of two ar
 
     - Propagation service communicates with a separate Validator service
     - Transactions are sent via Kafka or HTTP, controlled by `propagation_alwaysUseHTTP`
-    - Large transactions exceeding Kafka limits are automatically sent via HTTP using `validator_httpAddress`
+    - Large transactions exceeding `validator_kafkaMaxMessageBytes` are automatically sent via HTTP using `validator_httpAddress`
+    - Fallback mechanism ensures reliability for transactions of any size
 
 ### Batch Processing Optimization
 
 The transaction processing pipeline uses batching to optimize throughput, controlled by:
 
-- `propagation_sendBatchSize`: Determines maximum batch size for transaction processing
-- `propagation_sendBatchTimeout`: Controls how long to wait for a batch to fill before processing
+- `propagation_sendBatchSize`: Determines maximum batch size for transaction processing (default: 100)
+- `propagation_sendBatchTimeout`: Controls how long to wait in milliseconds for a batch to fill before processing (default: 5ms)
 
-These settings should be tuned together based on expected transaction volume and size characteristics. Higher batch sizes improve throughput but increase latency, while shorter timeouts decrease latency but may result in smaller, less efficient batches.
+These settings should be tuned together based on expected transaction volume and size characteristics:
+
+- **Higher batch sizes** improve throughput but increase latency
+- **Shorter timeouts** decrease latency but may result in smaller, less efficient batches
 
 ## 9. Other Resources
 

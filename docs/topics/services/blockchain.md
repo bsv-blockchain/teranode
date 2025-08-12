@@ -21,7 +21,6 @@
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
-
     - [Operational Settings](#operational-settings)
     - [Mining and Difficulty Settings](#mining-and-difficulty-settings)
     - [FSM Settings](#fsm-settings)
@@ -31,6 +30,7 @@
     - [9.3. Kafka Integration Details](#93-kafka-integration-details)
     - [9.4. Error Handling Strategies](#94-error-handling-strategies)
 10. [Other Resources](#10-other-resources)
+
 ## 1. Description
 
 This service implements a local Bitcoin SV (BSV) Blockchain service, maintaining the blockchain as understood by the node.
@@ -73,6 +73,7 @@ Explanation of the sequence:
     - The service enters a loop handling notifications and subscriptions.
 
 ### 2.2. Adding a new block to the blockchain
+
 There are 2 clients invoking this endpoint:
 
 1. **The `Block Assembly` service:**
@@ -229,26 +230,26 @@ The methods `GetBlockHeader`, `GetBlockHeaders`, and `GetBlockHeaderIDs` in the 
 1. **GetBlockHeader:**
     - **Purpose:** Retrieves a single block header.
     - **Process:**
-    - It takes a `GetBlockHeaderRequest` containing the hash of the desired block.
-    - Converts the hash into a `chainhash.Hash` object.
-    - Calls `GetBlockHeader` on the store, providing the context and the hash, to fetch the block header and associated metadata.
-    - If successful, it creates and returns a `GetBlockHeaderResponse` containing the block header's byte representation and metadata like height, transaction count, size, and miner.
+        - It takes a `GetBlockHeaderRequest` containing the hash of the desired block.
+        - Converts the hash into a `chainhash.Hash` object.
+        - Calls `GetBlockHeader` on the store, providing the context and the hash, to fetch the block header and associated metadata.
+        - If successful, it creates and returns a `GetBlockHeaderResponse` containing the block header's byte representation and metadata like height, transaction count, size, and miner.
 
 2. **GetBlockHeaders:**
     - **Purpose:** Fetches multiple block headers starting from a given hash.
     - **Process:**
-    - Accepts a `GetBlockHeadersRequest` with the starting block hash and the number of headers to retrieve.
-    - Converts the starting hash into a `chainhash.Hash` object.
-    - Calls `GetBlockHeaders` on the store to obtain a list of block headers and their heights.
-    - Assembles the headers into a byte array and returns them in a `GetBlockHeadersResponse`.
+        - Accepts a `GetBlockHeadersRequest` with the starting block hash and the number of headers to retrieve.
+        - Converts the starting hash into a `chainhash.Hash` object.
+        - Calls `GetBlockHeaders` on the store to obtain a list of block headers and their heights.
+        - Assembles the headers into a byte array and returns them in a `GetBlockHeadersResponse`.
 
 3. **GetBlockHeaderIDs:**
     - **Purpose:** Retrieves the IDs (hashes) of a range of block headers.
     - **Process:**
-    - Receives a `GetBlockHeadersRequest` similar to `GetBlockHeaders`.
-    - Converts the start hash to a `chainhash.Hash` object.
-    - Uses the store's `GetBlockHeaderIDs` method to fetch the IDs of the requested block headers.
-    - Returns the IDs in a `GetBlockHeaderIDsResponse`.
+        - Receives a `GetBlockHeadersRequest` similar to `GetBlockHeaders`.
+        - Converts the start hash to a `chainhash.Hash` object.
+        - Uses the store's `GetBlockHeaderIDs` method to fetch the IDs of the requested block headers.
+        - Returns the IDs in a `GetBlockHeaderIDsResponse`.
 
 Each of these methods serves a specific need:
 
@@ -365,7 +366,7 @@ The table structure is designed to store comprehensive information about each bl
 
 The Blockchain service is located in the `./services/blockchain` directory. The following is the directory structure of the service:
 
-```
+```text
 services/blockchain
 ├── Client.go - Implements the client-side logic for interacting with the Blockchain service.
 ├── Difficulty.go - Manages difficulty adjustment logic for the blockchain.
@@ -395,7 +396,8 @@ services/blockchain
 ```
 
 Further to this, the store part of the service is kept under `stores/blockchain`. The following is the directory structure of the store:
-```
+
+```text
 stores/blockchain
 ├── Interface.go
     - Defines the interface for blockchain storage, outlining the methods for blockchain data manipulation and retrieval.
@@ -500,6 +502,7 @@ The Blockchain service configuration is organized into several categories to man
 
         - SQLite: `sqlite:///path/to/db`
         - PostgreSQL: `postgres://user:password@host:port/dbname`
+
     - Impact: Determines where all blockchain data is persisted
     - Performance Impact: Choice of database affects scalability and performance
 
@@ -520,6 +523,7 @@ The Blockchain service configuration is organized into several categories to man
         - `"RUNNING"`: Normal operating state
         - `"LEGACY_SYNC"`: Legacy synchronization mode
         - `"CATCHUP_BLOCKS"`: Block catch-up mode
+
     - Impact: Controls the service's startup behavior and initial operational mode
 
 - **FSM State Restore (`FSMStateRestore`)**: Controls whether the service restores its previous FSM state from storage on startup.

@@ -29,6 +29,7 @@ make chain-integrity-test
 ```
 
 This runs the full chain integrity test with default parameters:
+
 - Required block height: 120
 - Maximum wait time: 10 minutes (120 attempts × 5 seconds)
 - Sleep interval: 5 seconds
@@ -40,6 +41,7 @@ make chain-integrity-test-custom REQUIRED_HEIGHT=100 MAX_ATTEMPTS=60 SLEEP=3
 ```
 
 This allows you to customize the test parameters:
+
 - `REQUIRED_HEIGHT`: The minimum block height all nodes must reach (default: 120)
 - `MAX_ATTEMPTS`: Maximum number of attempts to check node heights (default: 120)
 - `SLEEP`: Sleep interval between checks in seconds (default: 5)
@@ -51,6 +53,7 @@ make chain-integrity-test-quick
 ```
 
 This runs a faster version of the test with shorter 20 minutes:
+
 - Required block height: 50
 - Maximum wait time: 3 minutes (60 attempts × 3 seconds)
 - Sleep interval: 3 seconds
@@ -62,6 +65,7 @@ make show-hashes
 ```
 
 This displays the hash analysis results from a previous chain integrity test:
+
 - Shows individual node hash values
 - Indicates consensus status
 - Provides clear success/failure indicators
@@ -74,6 +78,7 @@ make ecr-login
 ```
 
 This logs into AWS ECR to enable pulling required Docker images:
+
 - Authenticates with AWS ECR in eu-north-1 region
 - Enables pulling teranode-commands and teranode-coinbase images
 - Required before running tests if ECR images are needed
@@ -86,6 +91,7 @@ make clean-chain-integrity
 ```
 
 This cleans up all artifacts from chain integrity tests:
+
 - Removes log files
 - Stops and removes Docker containers
 - Removes the chainintegrity binary
@@ -111,6 +117,7 @@ During the test, you can monitor progress by:
 - Checking the console output for height updates
 - Viewing container logs: `docker compose -f compose/docker-compose-3blasters.yml logs`
 - Checking individual node APIs:
+
   - Node 1: http://localhost:18090/api/v1/bestblockheader/json
   - Node 2: http://localhost:28090/api/v1/bestblockheader/json
   - Node 3: http://localhost:38090/api/v1/bestblockheader/json
@@ -212,6 +219,7 @@ rm -rf data
 ## Integration with Awkward CI/CD
 
 The local invokes the same process as the GitHub workflow:
+
 - Uses the same Docker Compose configuration
 - Follows the same error checking logic
 - Generates the same output format
