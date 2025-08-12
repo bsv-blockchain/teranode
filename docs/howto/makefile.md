@@ -2,7 +2,7 @@
 
 This Makefile facilitates a variety of development and build tasks for the Teranode project.
 
-- [🛠️ Makefile Documentation](#-makefile-documentation)
+- [🛠️ Makefile Documentation](#makefile-documentation)
   - [Environment Configuration](#environment-configuration)
   - [Key Commands](#key-commands)
   - [All Commands](#all-commands)

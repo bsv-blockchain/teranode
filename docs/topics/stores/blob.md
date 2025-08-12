@@ -2,8 +2,8 @@
 
 ## Index
 
-- [🗂️ Blob Server](#️-blob-server)
-    - [Index](#index)
+- [🗂️ Blob Server](#blob-server)
+  - [Index](#index)
   - [1. Description](#1-description)
   - [2. Architecture](#2-architecture)
   - [3. Technology](#3-technology)
@@ -34,7 +34,6 @@
     - [8.7. Configuration Interactions](#87-configuration-interactions)
   - [9. Other Resources](#9-other-resources)
 
-
 ## 1. Description
 
 The Blob Server is a generic datastore that can be used for any specific data model. In the current Teranode implementation, it is used to store transactions (extended tx) and subtrees.
@@ -44,38 +43,29 @@ The Blob Server provides a set of methods to interact with the TX and Subtree st
 1. **Health**: `Health(ctx)`
     - **Purpose**: Checks the health status of the Blob Server.
 
-
 2. **Exists**: `Exists(ctx, key)`
     - **Purpose**: Determines if a given key exists in the store.
-
 
 3. **Get**: `Get(ctx, key)`
     - **Purpose**: Retrieves the value associated with a given key.
 
-
 4. **GetIoReader**: `GetIoReader(ctx, key)`
     - **Purpose**: Retrieves an `io.ReadCloser` for the value associated with a given key, useful for streaming large data.
-
 
 5. **Set**: `Set(ctx, key, value, opts...)`
     - **Purpose**: Sets a key-value pair in the store.
 
-
 6. **SetFromReader**: `SetFromReader(ctx, key, value, opts...)`
     - **Purpose**: Sets a key-value pair in the store from an `io.ReadCloser`, useful for streaming large data.
-
 
 7. **SetTTL**: `SetTTL(ctx, key, ttl)`
     - **Purpose**: Sets a Time-To-Live for a given key.
 
-
 8. **Del**: `Del(ctx, key)`
     - **Purpose**: Deletes a key and its associated value from the store.
 
-
 9. **Close**: `Close(ctx)`
     - **Purpose**: Closes the Blob Server connection or any associated resources.
-
 
 ## 2. Architecture
 
@@ -85,47 +75,46 @@ The Blob Server is a store interface, with implementations for Tx Store and Subt
 
 The Blob Server implementations for Tx Store and Subtree Store are injected into the various services that require them. They are initialised in the `daemon/daemon_stores.go` file and passed into the services as a dependency. See below:
 
-
 ```go
 
 func getTxStore(logger ulogger.Logger) blob.Store {
-	if txStore != nil {
-		return txStore
-	}
+ if txStore != nil {
+  return txStore
+ }
 
-	txStoreUrl, err, found := gocore.Config().GetURL("txstore")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("txstore config not found")
-	}
-	txStore, err = blob.NewStore(logger, txStoreUrl, options.WithHashPrefix(10))
-	if err != nil {
-		panic(err)
-	}
+ txStoreUrl, err, found := gocore.Config().GetURL("txstore")
+ if err != nil {
+  panic(err)
+ }
+ if !found {
+  panic("txstore config not found")
+ }
+ txStore, err = blob.NewStore(logger, txStoreUrl, options.WithHashPrefix(10))
+ if err != nil {
+  panic(err)
+ }
 
-	return txStore
+ return txStore
 }
 
 func getSubtreeStore(logger ulogger.Logger) blob.Store {
-	if subtreeStore != nil {
-		return subtreeStore
-	}
+ if subtreeStore != nil {
+  return subtreeStore
+ }
 
-	subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("subtreestore config not found")
-	}
-	subtreeStore, err = blob.NewStore(logger, subtreeStoreUrl, options.WithHashPrefix(10))
-	if err != nil {
-		panic(err)
-	}
+ subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore")
+ if err != nil {
+  panic(err)
+ }
+ if !found {
+  panic("subtreestore config not found")
+ }
+ subtreeStore, err = blob.NewStore(logger, subtreeStoreUrl, options.WithHashPrefix(10))
+ if err != nil {
+  panic(err)
+ }
 
-	return subtreeStore
+ return subtreeStore
 }
 
 ```
@@ -140,7 +129,6 @@ Key technologies involved:
 
     - A statically typed, compiled language known for its simplicity and efficiency, especially in concurrent operations and networked services.
     - The primary language used for implementing the service's logic.
-
 
 ### 3.2 Store Options
 
@@ -170,14 +158,14 @@ Options for configuring these stores are managed through the `options` package.
 
 The Blob Server includes a `ConcurrentBlob` implementation that provides thread-safe access to blob storage operations with optimized concurrent access patterns. This feature is particularly important in high-concurrency environments where the same blob might be requested multiple times simultaneously.
 
-#### Key Features:
+#### Key Features
 
 - **Double-Checked Locking Pattern**: Ensures that only one fetch operation occurs at a time for each unique key, while allowing concurrent operations on different keys
 - **Generic Type Support**: Parametrized by a key type K that must satisfy `chainhash.Hash` constraints for type-safe handling
 - **Duplicate Operation Prevention**: Avoids duplicate network or disk operations when multiple goroutines request the same blob simultaneously
 - **Efficient Resource Usage**: Other goroutines wait for completion rather than duplicating work
 
-#### Usage Pattern:
+#### Usage Pattern
 
 ```go
 // Create a concurrent blob instance
@@ -196,7 +184,7 @@ The `ConcurrentBlob` wrapper is particularly useful for services that need to fe
 
 The Blob Server includes a comprehensive HTTP REST API server implementation (`HTTPBlobServer`) that provides full HTTP access to blob storage operations. This server implements the standard `http.Handler` interface and can be easily integrated into existing HTTP server infrastructure.
 
-#### Supported HTTP Endpoints:
+#### Supported HTTP Endpoints
 
 - **GET /health**: Health check endpoint returning server status
 - **GET /{key}**: Retrieve blob by key with optional range support
@@ -206,7 +194,7 @@ The Blob Server includes a comprehensive HTTP REST API server implementation (`H
 - **GET /{key}/dah**: Get Delete-At-Height information for a blob
 - **POST /{key}/dah**: Set Delete-At-Height for a blob
 
-#### Usage Example:
+#### Usage Example
 
 ```go
 // Create HTTP blob server
@@ -251,17 +239,13 @@ Service:
 
 ![blob_server_block_validation.svg](..%2Fservices%2Fimg%2Fplantuml%2Fblobserver%2Fblob_server_block_validation.svg)
 
-
 gRPC endpoints:
 
 ![blob_server_block_validation_addendum.svg](..%2Fservices%2Fimg%2Fplantuml%2Fblobserver%2Fblob_server_block_validation_addendum.svg)
 
-
-
 ### 5.5 Propagation: TXStore Set()
 
 ![txStore_propagation_set.svg](..%2Fservices%2Fimg%2Fplantuml%2Fassetserver%2FtxStore_propagation_set.svg)
-
 
 ## 6. Directory Structure and Main Files
 
@@ -385,21 +369,25 @@ These options can be specified per operation:
 ### 8.5. TX Store Configuration Examples
 
 - **Null Store (No-op)**
+
   ```plaintext
   txstore.${YOUR_USERNAME}=null:///
   ```
 
 - **Amazon S3**
+
   ```plaintext
   txstore.${YOUR_USERNAME}=s3:///mytxstore?region=eu-west-1&batch=true&batch_size=2000&batch_duration=100
   ```
 
 - **File System with DAH**
+
   ```plaintext
   txstore.${YOUR_USERNAME}=file:///data/txstore?batch=true&localDAHStore=true&localDAHStorePath=/data/txstore-dah
   ```
 
 - **Memory Store**
+
   ```plaintext
   txstore.${YOUR_USERNAME}=memory:///
   ```
@@ -407,21 +395,25 @@ These options can be specified per operation:
 ### 8.6. SubTree Store Configuration Examples
 
 - **Null Store (No-op)**
+
   ```plaintext
   subtreestore.${YOUR_USERNAME}=null:///
   ```
 
 - **Amazon S3 with Local DAH Store**
+
   ```plaintext
   subtreestore.${YOUR_USERNAME}=s3:///subtreestore?region=eu-west-1&localDAHStore=true&localDAHStorePath=/data/subtreestore-dah
   ```
 
 - **File System with Local DAH Store**
+
   ```plaintext
   subtreestore.${YOUR_USERNAME}=file:///data/subtreestore?localDAHStore=true&localDAHStorePath=./data/subtreestore-dah
   ```
 
 - **Memory Store**
+
   ```plaintext
   subtreestore.${YOUR_USERNAME}=memory:///
   ```
@@ -443,7 +435,6 @@ When `localDAHStore` is enabled, the store maintains metadata about when items s
 #### 8.7.4. Block Height Retention
 
 The `BlockHeightRetention` setting (via `WithDefaultBlockHeightRetention`) interacts with the `DAH` setting (via `WithDeleteAt`). The store-level setting provides a default, while the file-level setting allows per-file control.
-
 
 ## 9. Other Resources
 

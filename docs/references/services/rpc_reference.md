@@ -34,7 +34,6 @@
     - [getpeerinfo](#getpeerinfo) - Returns data about each connected network node
     - [getrawtransaction](#getrawtransaction) - Returns raw transaction data
     - [getminingcandidate](#getminingcandidate) - Returns mining candidate information for generating a new block
-    - [help](#help) - Lists all available commands or gets help on a specific command
     - [invalidateblock](#invalidateblock) - Permanently marks a block as invalid
     - [isbanned](#isbanned) - Checks if an IP/subnet is banned
     - [listbanned](#listbanned) - Lists all banned IPs/subnets

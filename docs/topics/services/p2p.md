@@ -42,7 +42,6 @@
         - [Security and Authentication](#security-and-authentication)
     - [8. Other Resources](#8-other-resources)
 
-
 ## 1. Description
 
 The p2p package implements a peer-to-peer (P2P) server using `libp2p` (`github.com/libp2p/go-libp2p`, `https://libp2p.io`), a modular network stack that allows for direct peer-to-peer communication. The implementation follows an interface-based design pattern with `P2PNodeI` abstracting the concrete `P2PNode` implementation to allow for better testability and modularity.
@@ -327,14 +326,13 @@ All notifications collected from the Block and Validator listeners are sent over
     - Data is sent over the WebSocket, using its dedicated client channel.
     - If there's an error in sending data, the channel is removed from the `clientChannels`.
 
-
 - The server listens for various types of events in a concurrent process:
 
-  - The server tracks all active client channels (`clientChannels`).
-  - When a new client connects, it is added to the `clientChannels`.
-  - If a client disconnects, it is removed from `clientChannels`.
-  - Periodically, we ping all connected clients. Any error would have the client removed from the list of clients.
-  - When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
+    - The server tracks all active client channels (`clientChannels`).
+    - When a new client connects, it is added to the `clientChannels`.
+    - If a client disconnects, it is removed from `clientChannels`.
+    - Periodically, we ping all connected clients. Any error would have the client removed from the list of clients.
+    - When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
 
 As a sequence:
 

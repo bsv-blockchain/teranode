@@ -29,7 +29,6 @@ nav:
       - Bug Reporting: howto/bugReporting.md
       - Developer's Guide to Teranode-CLI: howto/developersHowToTeranodeCLI.md
       - Miners:
-          - Using Test Miner: howto/miners/howToUseTheTestMiner.md
           - Installation:
               - Docker: howto/miners/docker/minersHowToInstallation.md
               - Kubernetes: howto/miners/kubernetes/minersHowToInstallation.md
@@ -100,10 +99,7 @@ nav:
       - Kafka:
           - Kafka Overview: topics/kafka/kafka.md
       - Commands:
-          - Chain Integrity: topics/commands/chainIntegrity.md
-          - Propagation Blaster: topics/commands/propagationBlaster.md
           - Seeder: topics/commands/seeder.md
-          - TX Blaster: topics/commands/txBlaster.md
   - Reference:
       - Project Structure: references/projectStructure.md
       - API & Protobuf:

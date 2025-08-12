@@ -352,7 +352,7 @@ Common error codes include:
 - `-8`: Out of memory
 - `-32`: Server error (e.g., shutting down)
 
-**Note:** Teranode implements a subset of Bitcoin Core's RPC methods. If you encounter a "Command unimplemented" error, that method is not currently supported. See the [RPC reference documentation](../references/services/rpc_reference.md) for the complete list of supported methods.
+**Note:** Teranode implements a subset of Bitcoin Core's RPC methods. If you encounter a "Command unimplemented" error, that method is not currently supported. See the [RPC reference documentation](../../references/services/rpc_reference.md) for the complete list of supported methods.
 
 ## Authentication
 
