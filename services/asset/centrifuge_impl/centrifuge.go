@@ -36,20 +36,21 @@ const (
 // Centrifuge represents a Centrifuge server instance that manages real-time
 // blockchain data broadcasting and client connections.
 type Centrifuge struct {
-	logger           ulogger.Logger
-	settings         *settings.Settings
-	repository       *repository.Repository
-	baseURL          string
-	httpServer       *httpimpl.HTTP
-	blockchainClient blockchain.ClientI
-	centrifugeNode   *centrifuge.Node
-	latestNodeStatus []byte       // Store the latest node_status message for new clients
-	nodeStatusMutex  sync.RWMutex // Protect concurrent access to latestNodeStatus
+	logger             ulogger.Logger
+	settings           *settings.Settings
+	repository         *repository.Repository
+	baseURL            string
+	httpServer         *httpimpl.HTTP
+	blockchainClient   blockchain.ClientI
+	centrifugeNode     *centrifuge.Node
+	nodeStatusByPeerID map[string][]byte // Store the latest node_status message per peer_id
+	nodeStatusMutex    sync.RWMutex      // Protect concurrent access to nodeStatusByPeerID
 }
 
 // messageType represents the structure for incoming message type identification.
 type messageType struct {
-	Type string `json:"type"`
+	Type   string `json:"type"`
+	PeerID string `json:"peer_id,omitempty"` // For node_status messages
 }
 
 // New creates a new Centrifuge server instance with the provided dependencies.
@@ -75,11 +76,12 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	}
 
 	c := &Centrifuge{
-		logger:     logger,
-		settings:   tSettings,
-		repository: repo,
-		baseURL:    assetHTTPAddress,
-		httpServer: httpServer,
+		logger:             logger,
+		settings:           tSettings,
+		repository:         repo,
+		baseURL:            assetHTTPAddress,
+		httpServer:         httpServer,
+		nodeStatusByPeerID: make(map[string][]byte),
 	}
 
 	// Only set blockchainClient if repo is not nil
@@ -141,22 +143,27 @@ func (c *Centrifuge) Init(ctx context.Context) (err error) {
 		transport := client.Transport()
 		c.logger.Infof("user %s connected via %s", client.UserID(), transport.Name())
 
-		// Send the latest node_status to the new client immediately
+		// Send all stored node_status messages to the new client
 		c.nodeStatusMutex.RLock()
-		nodeStatus := c.latestNodeStatus
+		nodeStatusCount := 0
+		for peerID, nodeStatus := range c.nodeStatusByPeerID {
+			if nodeStatus != nil {
+				// Publish each peer's status to the node_status channel
+				_, err := c.centrifugeNode.Publish("node_status", nodeStatus)
+				if err != nil {
+					c.logger.Errorf("Failed to publish node_status for peer %s to new client %s: %v", peerID, client.UserID(), err)
+				} else {
+					nodeStatusCount++
+					c.logger.Debugf("Published node_status for peer %s to new client %s", peerID, client.UserID())
+				}
+			}
+		}
 		c.nodeStatusMutex.RUnlock()
 
-		if nodeStatus != nil {
-			// Publish to the node_status channel immediately - the new client will receive it
-			// Since they just subscribed, this should be their first message
-			_, err := c.centrifugeNode.Publish("node_status", nodeStatus)
-			if err != nil {
-				c.logger.Errorf("Failed to publish initial node_status for new client %s: %v", client.UserID(), err)
-			} else {
-				c.logger.Infof("Published initial node_status for new client %s", client.UserID())
-			}
+		if nodeStatusCount > 0 {
+			c.logger.Infof("Published %d node_status messages for new client %s", nodeStatusCount, client.UserID())
 		} else {
-			c.logger.Warnf("No node_status available yet for new client %s", client.UserID())
+			c.logger.Warnf("No node_status messages available yet for new client %s", client.UserID())
 		}
 	})
 
@@ -304,12 +311,16 @@ func (c *Centrifuge) readMessages(ctx context.Context, client *atomic.Pointer[we
 					continue
 				}
 
-				// Store the latest node_status message for new clients
+				// Store the latest node_status message per peer
 				if strings.ToLower(mType.Type) == "node_status" {
-					c.nodeStatusMutex.Lock()
-					c.latestNodeStatus = message
-					c.nodeStatusMutex.Unlock()
-					c.logger.Debugf("[Centrifuge] Stored latest node_status message for new clients")
+					if mType.PeerID != "" {
+						c.nodeStatusMutex.Lock()
+						c.nodeStatusByPeerID[mType.PeerID] = message
+						c.nodeStatusMutex.Unlock()
+						c.logger.Infof("[Centrifuge] Stored node_status message for peer %s (total peers: %d)", mType.PeerID, len(c.nodeStatusByPeerID))
+					} else {
+						c.logger.Warnf("[Centrifuge] Received node_status message without peer_id: %s", string(message))
+					}
 				}
 
 				// send the message on to the centrifuge node

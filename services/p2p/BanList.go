@@ -54,8 +54,10 @@ type BanInfo struct {
 // other network components like the P2P node.
 type BanEvent struct {
 	Action string     // Action type ("add" for new bans or "remove" for unbanning)
-	IP     string     // IP address involved in the ban action
+	PeerID string     // Peer ID involved in the ban action (primary identifier)
+	IP     string     // IP address (for logging/backward compatibility)
 	Subnet *net.IPNet // Subnet information if the ban applies to a network range
+	Reason string     // Optional reason for the ban
 }
 
 // BanListI defines the interface for peer banning functionality.

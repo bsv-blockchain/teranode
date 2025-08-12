@@ -865,10 +865,14 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from strin
 	// Check if this is our own message
 	isSelf := from == s.P2PNode.HostID().String()
 
+	// Log all received node_status messages for debugging
+	s.logger.Infof("[handleNodeStatusTopic] Received node_status from %s (peer_id: %s, is_self: %v, version: %s, height: %d)",
+		from, nodeStatusMessage.PeerID, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight)
+
 	// Skip further processing for our own messages (peer height updates, etc.)
 	// but still forward to WebSocket
 	if !isSelf {
-		s.logger.Debugf("[handleNodeStatusTopic] got p2p node status from %s (peer_id: %s)", from, nodeStatusMessage.PeerID)
+		s.logger.Infof("[handleNodeStatusTopic] Processing node_status from remote peer %s (peer_id: %s)", from, nodeStatusMessage.PeerID)
 	} else {
 		s.logger.Debugf("[handleNodeStatusTopic] forwarding our own node status (peer_id: %s) with is_self=true", nodeStatusMessage.PeerID)
 	}
@@ -1387,10 +1391,12 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		return errors.NewError("nodeStatusMessage - json marshal error: %w", err)
 	}
 
-	s.logger.Debugf("[handleNodeStatusNotification] P2P publishing nodeStatusMessage")
+	s.logger.Infof("[handleNodeStatusNotification] P2P publishing nodeStatusMessage to topic %s (height: %d, version: %s)",
+		s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version)
 	if err = s.P2PNode.Publish(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
 		return errors.NewError("nodeStatusMessage - publish error: %w", err)
 	}
+	s.logger.Debugf("[handleNodeStatusNotification] Successfully published node_status message")
 
 	// Also send to local WebSocket clients
 	s.notificationCh <- &notificationMsg{
@@ -2192,24 +2198,75 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 		return // we only care about new bans
 	}
 
-	s.logger.Infof("[handleBanEvent] Received ban event for %s", event.IP)
+	// Handle PeerID-based banning
+	if event.PeerID != "" {
+		s.logger.Infof("[handleBanEvent] Received ban event for PeerID: %s (reason: %s)", event.PeerID, event.Reason)
 
-	// parse the banned IP or subnet
-	var bannedIP net.IP
-
-	var bannedSubnet *net.IPNet
-
-	if event.Subnet != nil {
-		bannedSubnet = event.Subnet
-	} else {
-		bannedIP = net.ParseIP(event.IP)
-		if bannedIP == nil {
-			s.logger.Errorf("[handleBanEvent] Invalid IP address in ban event: %s", event.IP)
+		// Parse the PeerID
+		peerID, err := peer.Decode(event.PeerID)
+		if err != nil {
+			s.logger.Errorf("[handleBanEvent] Invalid PeerID in ban event: %s, error: %v", event.PeerID, err)
+			// Fall back to IP-based banning if PeerID is invalid
+			if event.IP == "" {
+				return
+			}
+		} else {
+			// Disconnect by PeerID
+			s.disconnectBannedPeerByID(ctx, peerID, event.Reason)
 			return
 		}
 	}
 
-	s.disconnectBannedPeers(ctx, bannedIP, bannedSubnet)
+	// Backward compatibility: Handle IP-based banning
+	if event.IP != "" {
+		s.logger.Infof("[handleBanEvent] Received ban event for IP: %s", event.IP)
+
+		// parse the banned IP or subnet
+		var bannedIP net.IP
+		var bannedSubnet *net.IPNet
+
+		if event.Subnet != nil {
+			bannedSubnet = event.Subnet
+		} else {
+			bannedIP = net.ParseIP(event.IP)
+			if bannedIP == nil {
+				s.logger.Errorf("[handleBanEvent] Invalid IP address in ban event: %s", event.IP)
+				return
+			}
+		}
+
+		s.disconnectBannedPeers(ctx, bannedIP, bannedSubnet)
+	}
+}
+
+// disconnectBannedPeerByID disconnects a specific peer by their PeerID
+func (s *Server) disconnectBannedPeerByID(ctx context.Context, peerID peer.ID, reason string) {
+	// Check if we're connected to this peer
+	peers := s.P2PNode.ConnectedPeers()
+
+	for _, peer := range peers {
+		if peer.ID == peerID {
+			s.logger.Infof("[disconnectBannedPeerByID] Disconnecting banned peer: %s (reason: %s)", peerID, reason)
+
+			// Remove peer from SyncManager before disconnecting
+			if s.syncManager != nil {
+				s.syncManager.RemovePeer(peerID)
+			}
+
+			// Clean up stored peer data
+			s.peerBlockHashes.Delete(peerID)
+
+			// Disconnect the peer
+			err := s.P2PNode.DisconnectPeer(ctx, peerID)
+			if err != nil {
+				s.logger.Errorf("[disconnectBannedPeerByID] Error disconnecting peer %s: %v", peerID, err)
+			}
+
+			return
+		}
+	}
+
+	s.logger.Debugf("[disconnectBannedPeerByID] Peer %s not found in connected peers", peerID)
 }
 
 func (s *Server) disconnectBannedPeers(ctx context.Context, bannedIP net.IP, bannedSubnet *net.IPNet) {

@@ -1460,6 +1460,118 @@ func TestHandleBanEvent(t *testing.T) {
 		// Verify that DisconnectPeer was called for the peer in subnet
 		mockP2PNode.AssertCalled(t, "DisconnectPeer", mock.Anything, peerID1)
 	})
+
+	t.Run("bans_by_peerID", func(t *testing.T) {
+		// Create a server with mocked P2PNode
+		logger := ulogger.New("test-server")
+		mockP2PNode := new(MockServerP2PNode)
+
+		server := &Server{
+			P2PNode:         mockP2PNode,
+			logger:          logger,
+			peerBlockHashes: sync.Map{},
+		}
+
+		// Generate valid peer IDs
+		privKey1, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		require.NoError(t, err)
+		peerID1, err := peer.IDFromPrivateKey(privKey1)
+		require.NoError(t, err)
+
+		privKey2, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		require.NoError(t, err)
+		peerID2, err := peer.IDFromPrivateKey(privKey2)
+		require.NoError(t, err)
+
+		// Create peers
+		addr1, err := ma.NewMultiaddr("/ip4/192.168.1.50/tcp/8333")
+		require.NoError(t, err)
+		addr2, err := ma.NewMultiaddr("/ip4/10.0.0.50/tcp/8333")
+		require.NoError(t, err)
+
+		peer1 := p2p.PeerInfo{
+			ID:    peerID1,
+			Addrs: []ma.Multiaddr{addr1},
+		}
+		peer2 := p2p.PeerInfo{
+			ID:    peerID2,
+			Addrs: []ma.Multiaddr{addr2},
+		}
+
+		// Setup mocks - return both peers as connected
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{peer1, peer2})
+
+		// Only peer1 should be disconnected
+		mockP2PNode.On("DisconnectPeer", mock.Anything, peerID1).Return(nil)
+
+		// Store some test data for peer1
+		server.peerBlockHashes.Store(peerID1, "test-hash")
+
+		// Create a ban event for PeerID
+		event := BanEvent{
+			Action: banActionAdd,
+			PeerID: peerID1.String(),
+			Reason: "Invalid block propagation",
+		}
+
+		// Call the function under test
+		server.handleBanEvent(context.Background(), event)
+
+		// Verify that ConnectedPeers was called
+		mockP2PNode.AssertCalled(t, "ConnectedPeers")
+
+		// Verify that DisconnectPeer was called only for peer1
+		mockP2PNode.AssertCalled(t, "DisconnectPeer", mock.Anything, peerID1)
+		mockP2PNode.AssertNotCalled(t, "DisconnectPeer", mock.Anything, peerID2)
+
+		// Verify peer data was cleaned up
+		_, exists := server.peerBlockHashes.Load(peerID1)
+		assert.False(t, exists, "Peer block hash should be deleted after ban")
+	})
+
+	t.Run("invalid_peerID_falls_back_to_IP", func(t *testing.T) {
+		// Create a server with mocked P2PNode
+		logger := ulogger.New("test-server")
+		mockP2PNode := new(MockServerP2PNode)
+
+		server := &Server{
+			P2PNode: mockP2PNode,
+			logger:  logger,
+		}
+
+		// Generate a valid peer
+		privKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		require.NoError(t, err)
+		peerID, err := peer.IDFromPrivateKey(privKey)
+		require.NoError(t, err)
+
+		validIP := "192.168.1.100"
+		addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/8333", validIP))
+		require.NoError(t, err)
+
+		peerInfo := p2p.PeerInfo{
+			ID:    peerID,
+			Addrs: []ma.Multiaddr{addr},
+		}
+
+		// Setup mocks
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{peerInfo})
+		mockP2PNode.On("DisconnectPeer", mock.Anything, peerID).Return(nil)
+
+		// Create a ban event with invalid PeerID but valid IP
+		event := BanEvent{
+			Action: banActionAdd,
+			PeerID: "invalid-peer-id",
+			IP:     validIP,
+		}
+
+		// Call the function under test
+		server.handleBanEvent(context.Background(), event)
+
+		// Verify fallback to IP-based banning occurred
+		mockP2PNode.AssertCalled(t, "ConnectedPeers")
+		mockP2PNode.AssertCalled(t, "DisconnectPeer", mock.Anything, peerID)
+	})
 }
 
 func TestHandshakeFlow(t *testing.T) {
