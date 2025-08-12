@@ -383,6 +383,11 @@ type P2PSettings struct {
 
 	BanThreshold int
 	BanDuration  time.Duration
+
+	// Peer map cleanup configuration
+	PeerMapMaxSize         int           // Maximum entries in peer maps (default: 100000)
+	PeerMapTTL             time.Duration // Time-to-live for peer map entries (default: 30m)
+	PeerMapCleanupInterval time.Duration // Cleanup interval (default: 5m)
 }
 
 type CoinbaseSettings struct {

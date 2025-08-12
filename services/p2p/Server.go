@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,7 +62,18 @@ import (
 const (
 	banActionAdd  = "add" // Action constant for adding a ban
 	privateKeyKey = "p2p.privateKey"
+
+	// Default values for peer map cleanup
+	defaultPeerMapMaxSize         = 100000           // Maximum entries in peer maps
+	defaultPeerMapTTL             = 30 * time.Minute // Time-to-live for peer map entries
+	defaultPeerMapCleanupInterval = 5 * time.Minute  // Cleanup interval
 )
+
+// peerMapEntry stores peer information with timestamp for TTL tracking
+type peerMapEntry struct {
+	peerID    string
+	timestamp time.Time
+}
 
 // Server represents the P2P server instance and implements the P2P service functionality.
 // It is the main entry point for the p2p service and coordinates all peer-to-peer communication.
@@ -104,12 +116,17 @@ type Server struct {
 	handshakeTopicName                string       // pubsub topic for version/verack
 	nodeStatusTopicName               string       // pubsub topic for node status messages
 	topicPrefix                       string       // Chain identifier prefix for topic validation
-	blockPeerMap                      sync.Map     // Map to track which peer sent each block (hash -> peerID)
-	subtreePeerMap                    sync.Map     // Map to track which peer sent each subtree (hash -> peerID)
+	blockPeerMap                      sync.Map     // Map to track which peer sent each block (hash -> peerMapEntry)
+	subtreePeerMap                    sync.Map     // Map to track which peer sent each subtree (hash -> peerMapEntry)
 	startTime                         time.Time    // Server start time for uptime calculation
 	syncManager                       *SyncManager // Manager for peer synchronization and best peer selection
 	peerBlockHashes                   sync.Map     // Map to track peer best block hashes (peerID -> hash string)
 	syncConnectionTimes               sync.Map     // Map to track when we first connected to each sync peer (peerID -> timestamp)
+
+	// Cleanup configuration
+	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
+	peerMapMaxSize       int           // Maximum number of entries in peer maps
+	peerMapTTL           time.Duration // Time-to-live for peer map entries
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -304,6 +321,18 @@ func NewServer(
 		nodeStatusTopicName:               fmt.Sprintf("%s-%s", topicPrefix, nstn),
 		topicPrefix:                       topicPrefix,
 		startTime:                         time.Now(),
+
+		// Initialize cleanup configuration with defaults
+		peerMapMaxSize: defaultPeerMapMaxSize,
+		peerMapTTL:     defaultPeerMapTTL,
+	}
+
+	// Override defaults with settings if provided
+	if tSettings.P2P.PeerMapMaxSize > 0 {
+		p2pServer.peerMapMaxSize = tSettings.P2P.PeerMapMaxSize
+	}
+	if tSettings.P2P.PeerMapTTL > 0 {
+		p2pServer.peerMapTTL = tSettings.P2P.PeerMapTTL
 	}
 
 	// Initialize the sync manager for peer selection
@@ -520,6 +549,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Set up the peer connected callback to announce our best block when a new peer connects
 	s.P2PNode.SetPeerConnectedCallback(s.P2PNodeConnected)
+
+	// Start periodic cleanup of peer maps
+	s.startPeerMapCleanup(ctx)
 
 	// Set up SyncManager callbacks
 	if s.syncManager != nil {
@@ -1611,6 +1643,23 @@ func (s *Server) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Stop the peer map cleanup ticker
+	if s.peerMapCleanupTicker != nil {
+		s.peerMapCleanupTicker.Stop()
+		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
+	}
+
+	// Clear the peer maps to free memory
+	s.blockPeerMap.Range(func(key, value interface{}) bool {
+		s.blockPeerMap.Delete(key)
+		return true
+	})
+	s.subtreePeerMap.Range(func(key, value interface{}) bool {
+		s.subtreePeerMap.Delete(key)
+		return true
+	})
+	s.logger.Infof("[Stop] cleared peer maps")
+
 	if len(errs) > 0 {
 		// Combine errors if multiple occurred
 		// This simple approach just returns the first error, consider a multi-error type if needed
@@ -1669,8 +1718,12 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		return
 	}
 
-	// Store the peer ID that sent this block in the blockPeerMap
-	s.blockPeerMap.Store(blockMessage.Hash, from)
+	// Store the peer ID that sent this block in the blockPeerMap with timestamp
+	entry := peerMapEntry{
+		peerID:    from,
+		timestamp: time.Now(),
+	}
+	s.blockPeerMap.Store(blockMessage.Hash, entry)
 	s.logger.Debugf("[handleBlockTopic] storing peer %s for block %s", from, blockMessage.Hash)
 
 	// send block to kafka, if configured
@@ -1750,8 +1803,12 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		return
 	}
 
-	// Store the peer ID that sent this subtree in the subtreePeerMap
-	s.subtreePeerMap.Store(subtreeMessage.Hash, from)
+	// Store the peer ID that sent this subtree in the subtreePeerMap with timestamp
+	entry := peerMapEntry{
+		peerID:    from,
+		timestamp: time.Now(),
+	}
+	s.subtreePeerMap.Store(subtreeMessage.Hash, entry)
 	s.logger.Debugf("[handleSubtreeTopic] storing peer %s for subtree %s", from, subtreeMessage.Hash)
 
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
@@ -2348,11 +2405,12 @@ func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reaso
 		return errors.NewNotFoundError("no peer found for invalid block %s", blockHash)
 	}
 
-	peerID, ok := peerIDVal.(string)
+	entry, ok := peerIDVal.(peerMapEntry)
 	if !ok {
-		s.logger.Errorf("[ReportInvalidBlock] peer ID for block %s is not a string: %v", blockHash, peerIDVal)
-		return errors.NewInvalidArgumentError("peer ID for block %s is not a string", blockHash)
+		s.logger.Errorf("[ReportInvalidBlock] peer entry for block %s is not a peerMapEntry: %v", blockHash, peerIDVal)
+		return errors.NewInvalidArgumentError("peer entry for block %s is not a peerMapEntry", blockHash)
 	}
+	peerID := entry.peerID
 
 	// Add ban score to the peer
 	s.logger.Infof("[ReportInvalidBlock] adding ban score to peer %s for invalid block %s: %s", peerID, blockHash, reason)
@@ -2384,11 +2442,12 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, r
 		return errors.NewNotFoundError("no peer found for invalid subtree %s", subtreeHash)
 	}
 
-	peerID, ok := peerIDVal.(string)
+	entry, ok := peerIDVal.(peerMapEntry)
 	if !ok {
-		s.logger.Errorf("[ReportInvalidSubtree] peer ID for subtree %s is not a string: %v", subtreeHash, peerIDVal)
-		return errors.NewInvalidArgumentError("peer ID for subtree %s is not a string", subtreeHash)
+		s.logger.Errorf("[ReportInvalidSubtree] peer entry for subtree %s is not a peerMapEntry: %v", subtreeHash, peerIDVal)
+		return errors.NewInvalidArgumentError("peer entry for subtree %s is not a peerMapEntry", subtreeHash)
 	}
+	peerID := entry.peerID
 
 	// Add ban score to the peer
 	s.logger.Infof("[ReportInvalidSubtree] adding ban score to peer %s for invalid subtree %s: %s", peerID, subtreeHash, reason)
@@ -2604,11 +2663,12 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 		return nil // Not an error, just no peer to ban
 	}
 
-	peerID, ok := peerIDVal.(string)
+	entry, ok := peerIDVal.(peerMapEntry)
 	if !ok {
-		s.logger.Errorf("[handleInvalidBlockMessage] peer ID for block %s is not a string: %v", blockHash, peerIDVal)
+		s.logger.Errorf("[handleInvalidBlockMessage] peer entry for block %s is not a peerMapEntry: %v", blockHash, peerIDVal)
 		return nil
 	}
+	peerID := entry.peerID
 
 	// Add ban score to the peer
 	s.logger.Infof("[handleInvalidBlockMessage] adding ban score to peer %s for invalid block %s: %s",
@@ -2742,4 +2802,128 @@ func generateAndStorePrivateKey(ctx context.Context, blockchainClient blockchain
 	logger.Infof("generated and stored new P2P private key")
 
 	return hexKey, nil
+}
+
+// cleanupPeerMaps performs periodic cleanup of blockPeerMap and subtreePeerMap
+// It removes entries older than TTL and enforces size limits using LRU eviction
+func (s *Server) cleanupPeerMaps() {
+	now := time.Now()
+
+	// Collect entries to delete
+	var blockKeysToDelete []string
+	var subtreeKeysToDelete []string
+	blockCount := 0
+	subtreeCount := 0
+
+	// First pass: count entries and collect expired ones
+	s.blockPeerMap.Range(func(key, value interface{}) bool {
+		blockCount++
+		if entry, ok := value.(peerMapEntry); ok {
+			if now.Sub(entry.timestamp) > s.peerMapTTL {
+				blockKeysToDelete = append(blockKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+
+	s.subtreePeerMap.Range(func(key, value interface{}) bool {
+		subtreeCount++
+		if entry, ok := value.(peerMapEntry); ok {
+			if now.Sub(entry.timestamp) > s.peerMapTTL {
+				subtreeKeysToDelete = append(subtreeKeysToDelete, key.(string))
+			}
+		}
+		return true
+	})
+
+	// Delete expired entries
+	for _, key := range blockKeysToDelete {
+		s.blockPeerMap.Delete(key)
+	}
+	for _, key := range subtreeKeysToDelete {
+		s.subtreePeerMap.Delete(key)
+	}
+
+	// Log cleanup stats
+	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries and %d expired subtree entries",
+			len(blockKeysToDelete), len(subtreeKeysToDelete))
+	}
+
+	// Second pass: enforce size limits if needed
+	remainingBlockCount := blockCount - len(blockKeysToDelete)
+	remainingSubtreeCount := subtreeCount - len(subtreeKeysToDelete)
+
+	if remainingBlockCount > s.peerMapMaxSize {
+		s.enforceMapSizeLimit(&s.blockPeerMap, s.peerMapMaxSize, "block")
+	}
+
+	if remainingSubtreeCount > s.peerMapMaxSize {
+		s.enforceMapSizeLimit(&s.subtreePeerMap, s.peerMapMaxSize, "subtree")
+	}
+
+	// Log current sizes
+	s.logger.Debugf("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d",
+		remainingBlockCount, remainingSubtreeCount)
+}
+
+// enforceMapSizeLimit removes oldest entries from a map to enforce size limit
+func (s *Server) enforceMapSizeLimit(m *sync.Map, maxSize int, mapType string) {
+	type entryWithKey struct {
+		key       string
+		timestamp time.Time
+	}
+
+	var entries []entryWithKey
+
+	// Collect all entries with their timestamps
+	m.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(peerMapEntry); ok {
+			entries = append(entries, entryWithKey{
+				key:       key.(string),
+				timestamp: entry.timestamp,
+			})
+		}
+		return true
+	})
+
+	// Sort by timestamp (oldest first)
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].timestamp.Before(entries[j].timestamp)
+	})
+
+	// Remove oldest entries to get under the limit
+	toRemove := len(entries) - maxSize
+	if toRemove > 0 {
+		for i := 0; i < toRemove; i++ {
+			m.Delete(entries[i].key)
+		}
+		s.logger.Warnf("[enforceMapSizeLimit] removed %d oldest %s entries to enforce size limit of %d",
+			toRemove, mapType, maxSize)
+	}
+}
+
+// startPeerMapCleanup starts the periodic cleanup goroutine
+func (s *Server) startPeerMapCleanup(ctx context.Context) {
+	// Use configured interval or default
+	cleanupInterval := defaultPeerMapCleanupInterval
+	if s.settings.P2P.PeerMapCleanupInterval > 0 {
+		cleanupInterval = s.settings.P2P.PeerMapCleanupInterval
+	}
+
+	s.peerMapCleanupTicker = time.NewTicker(cleanupInterval)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				s.logger.Infof("[startPeerMapCleanup] stopping peer map cleanup")
+				return
+			case <-s.peerMapCleanupTicker.C:
+				s.cleanupPeerMaps()
+			}
+		}
+	}()
+
+	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
 }

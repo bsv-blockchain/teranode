@@ -269,7 +269,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 		_ = pprof.StartCPUProfile(f)
 		start := time.Now()
 
-		transactionMap, _, err := stp.CreateTransactionMap(context.Background(), blockSubtreesMap, nrSubtrees)
+		transactionMap, _, err := stp.CreateTransactionMap(context.Background(), blockSubtreesMap, nrSubtrees, uint64(nrSubtrees)*subtreeSize)
 		require.NoError(t, err)
 
 		pprof.StopCPUProfile()

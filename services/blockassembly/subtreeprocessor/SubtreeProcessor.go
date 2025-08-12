@@ -21,6 +21,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -1834,7 +1835,7 @@ func (stp *SubtreeProcessor) createTransactionMapIfNeeded(ctx context.Context, b
 		stp.logger.Debugf("[moveForwardBlock][%s] processing subtrees into transaction map", block.String())
 
 		var err error
-		if transactionMap, conflictingNodes, err = stp.CreateTransactionMap(ctx, blockSubtreesMap, len(block.Subtrees)); err != nil {
+		if transactionMap, conflictingNodes, err = stp.CreateTransactionMap(ctx, blockSubtreesMap, len(block.Subtrees), block.TransactionCount); err != nil {
 			// TODO revert the created utxos
 			return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error creating transaction map", block.String(), err)
 		}
@@ -2090,6 +2091,24 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 
 	// Finalize block processing
 	stp.finalizeBlockProcessing(ctx, block)
+
+	// Log memory stats after block processing if debug logging is enabled
+	if stp.logger.LogLevel() <= 0 { // 0 is DEBUG level
+		var memStats runtime.MemStats
+		runtime.ReadMemStats(&memStats)
+		stp.logger.Debugf("Memory after moveForwardBlock complete: Alloc=%d MB, TotalAlloc=%d MB, Sys=%d MB, NumGC=%d",
+			memStats.Alloc/(1024*1024), memStats.TotalAlloc/(1024*1024),
+			memStats.Sys/(1024*1024), memStats.NumGC)
+
+		// Force garbage collection for large blocks if memory usage is high
+		// This helps ensure transaction maps are cleaned up promptly
+		if block.TransactionCount > 100000 && memStats.Alloc > 1024*1024*1024 { // Over 1GB allocated
+			stp.logger.Debugf("Forcing GC after processing large block with %d transactions", block.TransactionCount)
+			runtime.GC()
+			runtime.ReadMemStats(&memStats)
+			stp.logger.Debugf("Memory after GC: Alloc=%d MB", memStats.Alloc/(1024*1024))
+		}
+	}
 
 	return nil
 }
@@ -2379,22 +2398,44 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 // Parameters:
 //   - ctx: Context for cancellation
 //   - blockSubtreesMap: Map of subtree hashes to their indices
+//   - totalSubtreesInBlock: Total number of subtrees in the block
+//   - estimatedTxCount: Estimated transaction count from block (0 if unknown)
 //
 // Returns:
 //   - util.TxMap: Created transaction map
 //   - error: Any error encountered during map creation
 func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int,
-	totalSubtreesInBlock int) (txmap.TxMap, []chainhash.Hash, error) {
+	totalSubtreesInBlock int, estimatedTxCount uint64) (txmap.TxMap, []chainhash.Hash, error) {
 	startTime := time.Now()
 
 	prometheusSubtreeProcessorCreateTransactionMap.Inc()
 
 	concurrentSubtreeReads := stp.settings.BlockAssembly.SubtreeProcessorConcurrentReads
 
-	// TODO this bit is slow !
-	stp.logger.Infof("CreateTransactionMap with %d subtrees, concurrency %d", len(blockSubtreesMap), concurrentSubtreeReads)
+	// Log memory stats before allocation if debug logging is enabled
+	var memStatsBefore runtime.MemStats
+	if stp.logger.LogLevel() <= 0 { // 0 is DEBUG level
+		runtime.ReadMemStats(&memStatsBefore)
+		stp.logger.Debugf("Memory before CreateTransactionMap: Alloc=%d MB, TotalAlloc=%d MB, Sys=%d MB",
+			memStatsBefore.Alloc/(1024*1024), memStatsBefore.TotalAlloc/(1024*1024), memStatsBefore.Sys/(1024*1024))
+	}
 
-	mapSize := len(blockSubtreesMap) * stp.currentItemsPerFile // TODO fix this assumption, should be gleaned from the block
+	stp.logger.Infof("CreateTransactionMap with %d subtrees, concurrency %d, estimated tx count %d",
+		len(blockSubtreesMap), concurrentSubtreeReads, estimatedTxCount)
+
+	// Calculate map size based on actual transaction count if available, otherwise use estimation
+	var mapSize int
+	if estimatedTxCount > 0 {
+		// Add 10% buffer for hash collisions and growth
+		mapSize = int(float64(estimatedTxCount) * 1.1)
+	} else {
+		// Fallback to old calculation but with more reasonable estimate
+		// Average transactions per subtree is typically lower than max capacity
+		avgTxPerSubtree := stp.currentItemsPerFile * 3 / 4 // Assume 75% fill rate
+		mapSize = len(blockSubtreesMap) * avgTxPerSubtree
+	}
+
+	stp.logger.Debugf("Allocating transaction map with size: %d", mapSize)
 	transactionMap := txmap.NewSplitSwissMap(mapSize)
 
 	conflictingNodesPerSubtree := make([][]chainhash.Hash, totalSubtreesInBlock)
@@ -2462,7 +2503,17 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 		}
 	}
 
-	stp.logger.Infof("CreateTransactionMap with %d subtrees DONE", len(blockSubtreesMap))
+	stp.logger.Infof("CreateTransactionMap with %d subtrees DONE, map has %d entries", len(blockSubtreesMap), transactionMap.Length())
+
+	// Log memory stats after allocation if debug logging is enabled
+	if stp.logger.LogLevel() <= 0 { // 0 is DEBUG level
+		var memStatsAfter runtime.MemStats
+		runtime.ReadMemStats(&memStatsAfter)
+		memDelta := memStatsAfter.Alloc - memStatsBefore.Alloc
+		stp.logger.Debugf("Memory after CreateTransactionMap: Alloc=%d MB (delta=%d MB), TotalAlloc=%d MB, Sys=%d MB",
+			memStatsAfter.Alloc/(1024*1024), memDelta/(1024*1024),
+			memStatsAfter.TotalAlloc/(1024*1024), memStatsAfter.Sys/(1024*1024))
+	}
 
 	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
@@ -2646,8 +2697,16 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 
 	// read leaves
 	hashes = make(map[uint16][]chainhash.Hash, nBuckets)
+	// Calculate expected bucket size with better distribution
+	expectedPerBucket := int(numLeaves / uint64(nBuckets))
+	// Add 20% buffer for uneven distribution, minimum 16 elements
+	bucketCapacity := expectedPerBucket + expectedPerBucket/5
+	if bucketCapacity < 16 {
+		bucketCapacity = 16
+	}
+
 	for i := uint16(0); i < nBuckets; i++ {
-		hashes[i] = make([]chainhash.Hash, 0, int(math.Ceil(float64(numLeaves/uint64(nBuckets))*1.1)))
+		hashes[i] = make([]chainhash.Hash, 0, bucketCapacity)
 	}
 
 	var bucket uint16
@@ -2664,8 +2723,6 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 		hashes[bucket] = append(hashes[bucket], chainhash.Hash(bytes48[:32]))
 	}
 
-	conflictingNodes = make([]chainhash.Hash, 0, 1024)
-
 	// read conflicting txs
 	if _, err = io.ReadFull(buf, bytes8); err != nil {
 		return nil, nil, errors.NewProcessingError("unable to read number of conflicting txs", err)
@@ -2673,7 +2730,9 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 
 	numConflicting := binary.LittleEndian.Uint64(bytes8)
 
+	// Pre-allocate exact size for conflicting nodes to avoid reallocation
 	if numConflicting > 0 {
+		conflictingNodes = make([]chainhash.Hash, 0, numConflicting)
 		bytes32 := make([]byte, 32)
 		for i := uint64(0); i < numConflicting; i++ {
 			if _, err = io.ReadFull(buf, bytes32); err != nil {
@@ -2682,6 +2741,8 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 
 			conflictingNodes = append(conflictingNodes, chainhash.Hash(bytes32))
 		}
+	} else {
+		conflictingNodes = make([]chainhash.Hash, 0)
 	}
 
 	return hashes, conflictingNodes, nil

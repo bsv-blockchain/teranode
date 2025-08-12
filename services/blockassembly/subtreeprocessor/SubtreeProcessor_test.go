@@ -1720,7 +1720,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 
 		_ = blockSubtreesMap
 
-		transactionMap, conflictingNodes, err := stp.CreateTransactionMap(ctx, blockSubtreesMap, len(block.Subtrees))
+		transactionMap, conflictingNodes, err := stp.CreateTransactionMap(ctx, blockSubtreesMap, len(block.Subtrees), 8)
 		require.NoError(t, err)
 
 		_ = conflictingNodes

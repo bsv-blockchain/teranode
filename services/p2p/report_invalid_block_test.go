@@ -51,8 +51,12 @@ func TestReportInvalidBlock(t *testing.T) {
 		blockHash := "0000000000000000000000000000000000000000000000000000000000000000"
 		peerID := "test-peer-1"
 
-		// Store the peer ID in the blockPeerMap
-		server.blockPeerMap.Store(blockHash, peerID)
+		// Store the peer ID in the blockPeerMap with timestamp
+		entry := peerMapEntry{
+			peerID:    peerID,
+			timestamp: time.Now(),
+		}
+		server.blockPeerMap.Store(blockHash, entry)
 
 		err := server.ReportInvalidBlock(ctx, blockHash, "test reason")
 		require.NoError(t, err)
@@ -74,14 +78,84 @@ func TestReportInvalidBlock(t *testing.T) {
 	// Test case 3: Invalid peer ID in map
 	t.Run("invalid peer ID type", func(t *testing.T) {
 		invalidBlockHash := "invalid-peer-block"
-		// Store an actual invalid type (int) instead of string
+		// Store an actual invalid type (int) instead of peerMapEntry
 		server.blockPeerMap.Store(invalidBlockHash, 123)
 
 		err := server.ReportInvalidBlock(ctx, invalidBlockHash, "test reason")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "peer ID for block", "error should indicate invalid peer ID type")
+		assert.Contains(t, err.Error(), "peer entry for block", "error should indicate invalid peer entry type")
 
 		// Cleanup
 		server.blockPeerMap.Delete(invalidBlockHash)
+	})
+}
+
+// TestPeerMapCleanup tests the cleanup mechanism for peer maps
+func TestPeerMapCleanup(t *testing.T) {
+	// Create test server with minimal required fields
+	server := &Server{
+		blockPeerMap:   sync.Map{},
+		subtreePeerMap: sync.Map{},
+		logger:         ulogger.TestLogger{},
+		peerMapMaxSize: 5,                      // Small size for testing
+		peerMapTTL:     100 * time.Millisecond, // Short TTL for testing
+	}
+
+	// Test TTL-based cleanup
+	t.Run("TTL cleanup", func(t *testing.T) {
+		// Add entries with old timestamps
+		oldEntry := peerMapEntry{
+			peerID:    "old-peer",
+			timestamp: time.Now().Add(-200 * time.Millisecond), // Older than TTL
+		}
+		server.blockPeerMap.Store("old-block", oldEntry)
+
+		// Add entries with recent timestamps
+		newEntry := peerMapEntry{
+			peerID:    "new-peer",
+			timestamp: time.Now(),
+		}
+		server.blockPeerMap.Store("new-block", newEntry)
+
+		// Run cleanup
+		server.cleanupPeerMaps()
+
+		// Check that old entry was removed
+		_, exists := server.blockPeerMap.Load("old-block")
+		assert.False(t, exists, "Old entry should be removed")
+
+		// Check that new entry still exists
+		_, exists = server.blockPeerMap.Load("new-block")
+		assert.True(t, exists, "New entry should still exist")
+	})
+
+	// Test size-based cleanup
+	t.Run("Size limit cleanup", func(t *testing.T) {
+		// Clear the map first
+		server.blockPeerMap.Range(func(key, value interface{}) bool {
+			server.blockPeerMap.Delete(key)
+			return true
+		})
+
+		// Add more entries than the limit
+		for i := 0; i < 10; i++ {
+			entry := peerMapEntry{
+				peerID:    string(rune('a' + i)),
+				timestamp: time.Now().Add(time.Duration(i) * time.Second),
+			}
+			server.blockPeerMap.Store(string(rune('a'+i)), entry)
+		}
+
+		// Run cleanup
+		server.cleanupPeerMaps()
+
+		// Count remaining entries
+		count := 0
+		server.blockPeerMap.Range(func(key, value interface{}) bool {
+			count++
+			return true
+		})
+
+		assert.Equal(t, server.peerMapMaxSize, count, "Map should be reduced to max size")
 	})
 }

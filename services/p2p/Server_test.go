@@ -3075,7 +3075,11 @@ func TestInvalidSubtreeHandlerHappyPath(t *testing.T) {
 
 	hash := "subtree-hash-456"
 	peerID := "peer-xyz"
-	s.subtreePeerMap.Store(hash, peerID)
+	entry := peerMapEntry{
+		peerID:    peerID,
+		timestamp: time.Now(),
+	}
+	s.subtreePeerMap.Store(hash, entry)
 
 	m := &kafkamessage.KafkaInvalidSubtreeTopicMessage{
 		SubtreeHash: hash,
@@ -3210,7 +3214,11 @@ func TestInvalidBlockHandler(t *testing.T) {
 		blockHash := "beefcafe"
 		peerID := "peer-123"
 
-		s.blockPeerMap.Store(blockHash, peerID)
+		entry := peerMapEntry{
+			peerID:    peerID,
+			timestamp: time.Now(),
+		}
+		s.blockPeerMap.Store(blockHash, entry)
 
 		payload := mkMsgBytes(blockHash, "invalid_block")
 
