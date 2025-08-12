@@ -48,6 +48,9 @@ kustomization.yaml.bak
 
 *.dump
 
+# Local Claude configuration (user-specific)
+CLAUDE.local.md
+
 *.log
 
 cmd/testutil/compose/docker-compose.yml
