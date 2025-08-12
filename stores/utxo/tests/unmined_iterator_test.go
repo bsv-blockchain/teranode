@@ -8,8 +8,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/factory"
-	"github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/aerospike"
+	"github.com/bitcoin-sv/teranode/test/utils/postgres"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -29,7 +29,7 @@ func TestUnminedTxIteratorSQLite(t *testing.T) {
 }
 
 func TestUnminedTxIteratorPostgres(t *testing.T) {
-	utxoStore, teardown, err := utils.SetupTestPostgresContainer()
+	utxoStore, teardown, err := postgres.SetupTestPostgresContainer()
 	require.NoError(t, err)
 
 	defer func() {

@@ -138,6 +138,24 @@ type Store interface {
 	// Returns: Hash of the ancestor block and any error encountered
 	GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error)
 
+	// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - bestBlockHash: The best block hash to start the search from, backwards through the blockchain
+	//   - blockLocator: Slice of block hashes representing the locator
+	// Returns: BlockHeader, BlockHeaderMeta, and any error encountered
+	GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+
+	// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
+	// This method is used to retrieve headers in a chain from the oldest block to the newest.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - chainTipHash: Hash of the current chain tip, used to determine the valid chain
+	//   - targetHash: Starting block hash
+	//   - numberOfHeaders: Number of headers to retrieve
+	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error
+	GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+
 	// GetBlockExists checks if a block exists in the store.
 	// Parameters:
 	//   - ctx: Context for the operation

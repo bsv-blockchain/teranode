@@ -479,6 +479,56 @@ func (c *Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhas
 	return hash, nil
 }
 
+// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.
+func (c *Client) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	if len(blockLocator) == 0 {
+		return nil, nil, errors.NewProcessingError("blockLocator cannot be empty")
+	}
+
+	blockLocatorBytes := make([][]byte, len(blockLocator))
+	for i, h := range blockLocator {
+		blockLocatorBytes[i] = h[:]
+	}
+
+	resp, err := c.client.GetLatestBlockHeaderFromBlockLocator(ctx, &blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest{
+		BestBlockHash:      bestBlockHash[:],
+		BlockLocatorHashes: blockLocatorBytes,
+	})
+	if err != nil {
+		return nil, nil, errors.UnwrapGRPC(err)
+	}
+
+	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	meta := &model.BlockHeaderMeta{
+		Height:      resp.Height,
+		TxCount:     resp.TxCount,
+		SizeInBytes: resp.SizeInBytes,
+		Miner:       resp.Miner,
+		BlockTime:   resp.BlockTime,
+		Timestamp:   resp.Timestamp,
+	}
+
+	return header, meta, nil
+}
+
+// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
+func (c *Client) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	resp, err := c.client.GetBlockHeadersFromOldest(ctx, &blockchain_api.GetBlockHeadersFromOldestRequest{
+		ChainTipHash:    chainTipHash.CloneBytes(),
+		TargetHash:      targetHash.CloneBytes(),
+		NumberOfHeaders: numberOfHeaders,
+	})
+	if err != nil {
+		return nil, nil, errors.UnwrapGRPC(err)
+	}
+
+	return c.returnBlockHeaders(resp)
+}
+
 // GetNextWorkRequired calculates the required proof of work for the next block.
 func (c *Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash) (*model.NBit, error) {
 	resp, err := c.client.GetNextWorkRequired(ctx, &blockchain_api.GetNextWorkRequiredRequest{
@@ -645,6 +695,54 @@ func (c *Client) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget
 	}
 
 	resp, err := c.client.GetBlockHeadersToCommonAncestor(ctx, &blockchain_api.GetBlockHeadersToCommonAncestorRequest{
+		TargetHash:         hashTarget.CloneBytes(),
+		BlockLocatorHashes: locatorBytes,
+		MaxHeaders:         maxHeaders,
+	})
+	if err != nil {
+		return nil, nil, errors.UnwrapGRPC(err)
+	}
+
+	return c.returnBlockHeaders(resp)
+}
+
+// GetBlockHeadersFromCommonAncestor retrieves block headers from a common ancestor to a target hash.
+// This method is used to retrieve block headers starting from a common ancestor
+// up to a specified target block hash. It is particularly useful for synchronizing
+// block headers between nodes in a peer-to-peer network, allowing them to
+// efficiently catch up with the latest blocks without needing to download the entire chain.
+//
+// The method uses a block locator array to find the common ancestor and then
+// retrieves the headers from that point up to the target hash. The block locator
+// is a list of block hashes that represent the path from the common ancestor to the target,
+// allowing the method to efficiently traverse the chain and return the relevant headers.
+//
+// This functionality is essential for:
+// - Efficiently synchronizing block headers between nodes
+// - Implementing header-first synchronization protocols
+// - Identifying chain reorganizations and forks
+// - Supporting P2P network block discovery and validation
+//
+// The method communicates with the blockchain service via gRPC to perform the
+// ancestor search and header retrieval from the underlying blockchain store.
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - hashTarget: The target block hash to retrieve headers up to
+//   - blockLocatorHashes: Array of block hashes used to locate the common ancestor
+//   - maxHeaders: Maximum number of headers to return (prevents excessive responses)
+//
+// Returns:
+//   - []*model.BlockHeader: Array of block headers from common ancestor to target
+//   - []*model.BlockHeaderMeta: Corresponding metadata for each header
+//   - error: Any error encountered during the ancestor search or header retrieval
+func (c *Client) GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	locatorBytes := make([][]byte, 0, len(blockLocatorHashes))
+	for _, hash := range blockLocatorHashes {
+		locatorBytes = append(locatorBytes, hash.CloneBytes())
+	}
+
+	resp, err := c.client.GetBlockHeadersFromCommonAncestor(ctx, &blockchain_api.GetBlockHeadersFromCommonAncestorRequest{
 		TargetHash:         hashTarget.CloneBytes(),
 		BlockLocatorHashes: locatorBytes,
 		MaxHeaders:         maxHeaders,

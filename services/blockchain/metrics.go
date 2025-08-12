@@ -23,39 +23,41 @@ import (
 )
 
 var (
-	prometheusBlockchainHealth                     prometheus.Counter
-	prometheusBlockchainAddBlock                   prometheus.Histogram
-	prometheusBlockchainGetBlock                   prometheus.Histogram
-	prometheusBlockchainGetBlockStats              prometheus.Histogram
-	prometheusBlockchainGetBlockGraphData          prometheus.Histogram
-	prometheusBlockchainGetLastNBlocks             prometheus.Histogram
-	prometheusBlockchainGetSuitableBlock           prometheus.Histogram
-	prometheusBlockchainGetHashOfAncestorBlock     prometheus.Histogram
-	prometheusBlockchainGetNextWorkRequired        prometheus.Histogram
-	prometheusBlockchainGetBlockExists             prometheus.Histogram
-	prometheusBlockchainGetBestBlockHeader         prometheus.Histogram
-	prometheusBlockchainCheckBlockIsInCurrentChain prometheus.Histogram
-	prometheusBlockchainGetChainTips               prometheus.Histogram
-	prometheusBlockchainGetBlockHeader             prometheus.Histogram
-	prometheusBlockchainGetBlockHeaders            prometheus.Histogram
-	prometheusBlockchainGetBlockHeadersFromHeight  prometheus.Histogram
-	prometheusBlockchainGetBlockHeadersByHeight    prometheus.Histogram
-	prometheusBlockchainSubscribe                  prometheus.Histogram
-	prometheusBlockchainGetState                   prometheus.Histogram
-	prometheusBlockchainSetState                   prometheus.Histogram
-	prometheusBlockchainGetBlockHeaderIDs          prometheus.Histogram
-	prometheusBlockchainInvalidateBlock            prometheus.Histogram
-	prometheusBlockchainRevalidateBlock            prometheus.Histogram
-	prometheusBlockchainSendNotification           prometheus.Histogram
-	prometheusBlockchainGetBlockIsMined            prometheus.Histogram
-	prometheusBlockchainSetBlockMinedSet           prometheus.Histogram
-	prometheusBlockchainGetBlocksMinedNotSet       prometheus.Histogram
-	prometheusBlockchainSetBlockSubtreesSet        prometheus.Histogram
-	prometheusBlockchainGetBlocksSubtreesNotSet    prometheus.Histogram
-	prometheusBlockchainFSMCurrentState            prometheus.Gauge
-	prometheusBlockchainGetFSMCurrentState         prometheus.Histogram
-	prometheusBlockchainGetBlockLocator            prometheus.Histogram
-	prometheusBlockchainLocateBlockHeaders         prometheus.Histogram
+	prometheusBlockchainHealth                               prometheus.Counter
+	prometheusBlockchainAddBlock                             prometheus.Histogram
+	prometheusBlockchainGetBlock                             prometheus.Histogram
+	prometheusBlockchainGetBlockStats                        prometheus.Histogram
+	prometheusBlockchainGetBlockGraphData                    prometheus.Histogram
+	prometheusBlockchainGetLastNBlocks                       prometheus.Histogram
+	prometheusBlockchainGetSuitableBlock                     prometheus.Histogram
+	prometheusBlockchainGetHashOfAncestorBlock               prometheus.Histogram
+	prometheusBlockchainGetLatestBlockHeaderFromBlockLocator prometheus.Histogram
+	prometheusBlockchainGetBlockHeadersFromOldest            prometheus.Histogram
+	prometheusBlockchainGetNextWorkRequired                  prometheus.Histogram
+	prometheusBlockchainGetBlockExists                       prometheus.Histogram
+	prometheusBlockchainGetBestBlockHeader                   prometheus.Histogram
+	prometheusBlockchainCheckBlockIsInCurrentChain           prometheus.Histogram
+	prometheusBlockchainGetChainTips                         prometheus.Histogram
+	prometheusBlockchainGetBlockHeader                       prometheus.Histogram
+	prometheusBlockchainGetBlockHeaders                      prometheus.Histogram
+	prometheusBlockchainGetBlockHeadersFromHeight            prometheus.Histogram
+	prometheusBlockchainGetBlockHeadersByHeight              prometheus.Histogram
+	prometheusBlockchainSubscribe                            prometheus.Histogram
+	prometheusBlockchainGetState                             prometheus.Histogram
+	prometheusBlockchainSetState                             prometheus.Histogram
+	prometheusBlockchainGetBlockHeaderIDs                    prometheus.Histogram
+	prometheusBlockchainInvalidateBlock                      prometheus.Histogram
+	prometheusBlockchainRevalidateBlock                      prometheus.Histogram
+	prometheusBlockchainSendNotification                     prometheus.Histogram
+	prometheusBlockchainGetBlockIsMined                      prometheus.Histogram
+	prometheusBlockchainSetBlockMinedSet                     prometheus.Histogram
+	prometheusBlockchainGetBlocksMinedNotSet                 prometheus.Histogram
+	prometheusBlockchainSetBlockSubtreesSet                  prometheus.Histogram
+	prometheusBlockchainGetBlocksSubtreesNotSet              prometheus.Histogram
+	prometheusBlockchainFSMCurrentState                      prometheus.Gauge
+	prometheusBlockchainGetFSMCurrentState                   prometheus.Histogram
+	prometheusBlockchainGetBlockLocator                      prometheus.Histogram
+	prometheusBlockchainLocateBlockHeaders                   prometheus.Histogram
 	// prometheusExportBlockDb                        prometheus.Histogram
 )
 
@@ -146,6 +148,24 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockchain",
 			Name:      "get_hash_of_ancestor_block",
 			Help:      "Histogram of GetHashOfAncestorBlock calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusBlockchainGetLatestBlockHeaderFromBlockLocator = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "get_latest_block_header_from_block_locator",
+			Help:      "Histogram of GetLatestBlockHeaderFromBlockLocator calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusBlockchainGetBlockHeadersFromOldest = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "get_block_headers_from_oldest",
+			Help:      "Histogram of GetBlockHeadersFromOldest calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

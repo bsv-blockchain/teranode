@@ -23,53 +23,56 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BlockchainAPI_HealthGRPC_FullMethodName                          = "/blockchain_api.BlockchainAPI/HealthGRPC"
-	BlockchainAPI_AddBlock_FullMethodName                            = "/blockchain_api.BlockchainAPI/AddBlock"
-	BlockchainAPI_GetBlock_FullMethodName                            = "/blockchain_api.BlockchainAPI/GetBlock"
-	BlockchainAPI_GetBlocks_FullMethodName                           = "/blockchain_api.BlockchainAPI/GetBlocks"
-	BlockchainAPI_GetBlockByHeight_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlockByHeight"
-	BlockchainAPI_GetBlockByID_FullMethodName                        = "/blockchain_api.BlockchainAPI/GetBlockByID"
-	BlockchainAPI_GetBlockStats_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetBlockStats"
-	BlockchainAPI_GetBlockGraphData_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBlockGraphData"
-	BlockchainAPI_GetLastNBlocks_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
-	BlockchainAPI_GetLastNInvalidBlocks_FullMethodName               = "/blockchain_api.BlockchainAPI/GetLastNInvalidBlocks"
-	BlockchainAPI_GetSuitableBlock_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetSuitableBlock"
-	BlockchainAPI_GetHashOfAncestorBlock_FullMethodName              = "/blockchain_api.BlockchainAPI/GetHashOfAncestorBlock"
-	BlockchainAPI_GetNextWorkRequired_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetNextWorkRequired"
-	BlockchainAPI_GetBlockExists_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockExists"
-	BlockchainAPI_GetBlockHeaders_FullMethodName                     = "/blockchain_api.BlockchainAPI/GetBlockHeaders"
-	BlockchainAPI_GetBlockHeadersToCommonAncestor_FullMethodName     = "/blockchain_api.BlockchainAPI/GetBlockHeadersToCommonAncestor"
-	BlockchainAPI_GetBlockHeadersFromTill_FullMethodName             = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromTill"
-	BlockchainAPI_GetBlockHeadersFromHeight_FullMethodName           = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromHeight"
-	BlockchainAPI_GetBlockHeadersByHeight_FullMethodName             = "/blockchain_api.BlockchainAPI/GetBlockHeadersByHeight"
-	BlockchainAPI_GetBlockHeaderIDs_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
-	BlockchainAPI_GetBestBlockHeader_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
-	BlockchainAPI_CheckBlockIsInCurrentChain_FullMethodName          = "/blockchain_api.BlockchainAPI/CheckBlockIsInCurrentChain"
-	BlockchainAPI_GetChainTips_FullMethodName                        = "/blockchain_api.BlockchainAPI/GetChainTips"
-	BlockchainAPI_GetBlockHeader_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockHeader"
-	BlockchainAPI_InvalidateBlock_FullMethodName                     = "/blockchain_api.BlockchainAPI/InvalidateBlock"
-	BlockchainAPI_RevalidateBlock_FullMethodName                     = "/blockchain_api.BlockchainAPI/RevalidateBlock"
-	BlockchainAPI_Subscribe_FullMethodName                           = "/blockchain_api.BlockchainAPI/Subscribe"
-	BlockchainAPI_SendNotification_FullMethodName                    = "/blockchain_api.BlockchainAPI/SendNotification"
-	BlockchainAPI_GetState_FullMethodName                            = "/blockchain_api.BlockchainAPI/GetState"
-	BlockchainAPI_SetState_FullMethodName                            = "/blockchain_api.BlockchainAPI/SetState"
-	BlockchainAPI_GetBlockIsMined_FullMethodName                     = "/blockchain_api.BlockchainAPI/GetBlockIsMined"
-	BlockchainAPI_SetBlockMinedSet_FullMethodName                    = "/blockchain_api.BlockchainAPI/SetBlockMinedSet"
-	BlockchainAPI_GetBlocksMinedNotSet_FullMethodName                = "/blockchain_api.BlockchainAPI/GetBlocksMinedNotSet"
-	BlockchainAPI_SetBlockSubtreesSet_FullMethodName                 = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
-	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName             = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
-	BlockchainAPI_SetBlockProcessedAt_FullMethodName                 = "/blockchain_api.BlockchainAPI/SetBlockProcessedAt"
-	BlockchainAPI_SendFSMEvent_FullMethodName                        = "/blockchain_api.BlockchainAPI/SendFSMEvent"
-	BlockchainAPI_GetFSMCurrentState_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
-	BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName     = "/blockchain_api.BlockchainAPI/WaitFSMToTransitionToGivenState"
-	BlockchainAPI_WaitUntilFSMTransitionFromIdleState_FullMethodName = "/blockchain_api.BlockchainAPI/WaitUntilFSMTransitionFromIdleState"
-	BlockchainAPI_Run_FullMethodName                                 = "/blockchain_api.BlockchainAPI/Run"
-	BlockchainAPI_CatchUpBlocks_FullMethodName                       = "/blockchain_api.BlockchainAPI/CatchUpBlocks"
-	BlockchainAPI_LegacySync_FullMethodName                          = "/blockchain_api.BlockchainAPI/LegacySync"
-	BlockchainAPI_Idle_FullMethodName                                = "/blockchain_api.BlockchainAPI/Idle"
-	BlockchainAPI_GetBlockLocator_FullMethodName                     = "/blockchain_api.BlockchainAPI/GetBlockLocator"
-	BlockchainAPI_LocateBlockHeaders_FullMethodName                  = "/blockchain_api.BlockchainAPI/LocateBlockHeaders"
-	BlockchainAPI_GetBestHeightAndTime_FullMethodName                = "/blockchain_api.BlockchainAPI/GetBestHeightAndTime"
+	BlockchainAPI_HealthGRPC_FullMethodName                           = "/blockchain_api.BlockchainAPI/HealthGRPC"
+	BlockchainAPI_AddBlock_FullMethodName                             = "/blockchain_api.BlockchainAPI/AddBlock"
+	BlockchainAPI_GetBlock_FullMethodName                             = "/blockchain_api.BlockchainAPI/GetBlock"
+	BlockchainAPI_GetBlocks_FullMethodName                            = "/blockchain_api.BlockchainAPI/GetBlocks"
+	BlockchainAPI_GetBlockByHeight_FullMethodName                     = "/blockchain_api.BlockchainAPI/GetBlockByHeight"
+	BlockchainAPI_GetBlockByID_FullMethodName                         = "/blockchain_api.BlockchainAPI/GetBlockByID"
+	BlockchainAPI_GetBlockStats_FullMethodName                        = "/blockchain_api.BlockchainAPI/GetBlockStats"
+	BlockchainAPI_GetBlockGraphData_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlockGraphData"
+	BlockchainAPI_GetLastNBlocks_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
+	BlockchainAPI_GetLastNInvalidBlocks_FullMethodName                = "/blockchain_api.BlockchainAPI/GetLastNInvalidBlocks"
+	BlockchainAPI_GetSuitableBlock_FullMethodName                     = "/blockchain_api.BlockchainAPI/GetSuitableBlock"
+	BlockchainAPI_GetHashOfAncestorBlock_FullMethodName               = "/blockchain_api.BlockchainAPI/GetHashOfAncestorBlock"
+	BlockchainAPI_GetLatestBlockHeaderFromBlockLocator_FullMethodName = "/blockchain_api.BlockchainAPI/GetLatestBlockHeaderFromBlockLocator"
+	BlockchainAPI_GetBlockHeadersFromOldest_FullMethodName            = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromOldest"
+	BlockchainAPI_GetNextWorkRequired_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetNextWorkRequired"
+	BlockchainAPI_GetBlockExists_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetBlockExists"
+	BlockchainAPI_GetBlockHeaders_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockHeaders"
+	BlockchainAPI_GetBlockHeadersToCommonAncestor_FullMethodName      = "/blockchain_api.BlockchainAPI/GetBlockHeadersToCommonAncestor"
+	BlockchainAPI_GetBlockHeadersFromCommonAncestor_FullMethodName    = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromCommonAncestor"
+	BlockchainAPI_GetBlockHeadersFromTill_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromTill"
+	BlockchainAPI_GetBlockHeadersFromHeight_FullMethodName            = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromHeight"
+	BlockchainAPI_GetBlockHeadersByHeight_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBlockHeadersByHeight"
+	BlockchainAPI_GetBlockHeaderIDs_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
+	BlockchainAPI_GetBestBlockHeader_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
+	BlockchainAPI_CheckBlockIsInCurrentChain_FullMethodName           = "/blockchain_api.BlockchainAPI/CheckBlockIsInCurrentChain"
+	BlockchainAPI_GetChainTips_FullMethodName                         = "/blockchain_api.BlockchainAPI/GetChainTips"
+	BlockchainAPI_GetBlockHeader_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetBlockHeader"
+	BlockchainAPI_InvalidateBlock_FullMethodName                      = "/blockchain_api.BlockchainAPI/InvalidateBlock"
+	BlockchainAPI_RevalidateBlock_FullMethodName                      = "/blockchain_api.BlockchainAPI/RevalidateBlock"
+	BlockchainAPI_Subscribe_FullMethodName                            = "/blockchain_api.BlockchainAPI/Subscribe"
+	BlockchainAPI_SendNotification_FullMethodName                     = "/blockchain_api.BlockchainAPI/SendNotification"
+	BlockchainAPI_GetState_FullMethodName                             = "/blockchain_api.BlockchainAPI/GetState"
+	BlockchainAPI_SetState_FullMethodName                             = "/blockchain_api.BlockchainAPI/SetState"
+	BlockchainAPI_GetBlockIsMined_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockIsMined"
+	BlockchainAPI_SetBlockMinedSet_FullMethodName                     = "/blockchain_api.BlockchainAPI/SetBlockMinedSet"
+	BlockchainAPI_GetBlocksMinedNotSet_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBlocksMinedNotSet"
+	BlockchainAPI_SetBlockSubtreesSet_FullMethodName                  = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
+	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
+	BlockchainAPI_SetBlockProcessedAt_FullMethodName                  = "/blockchain_api.BlockchainAPI/SetBlockProcessedAt"
+	BlockchainAPI_SendFSMEvent_FullMethodName                         = "/blockchain_api.BlockchainAPI/SendFSMEvent"
+	BlockchainAPI_GetFSMCurrentState_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
+	BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName      = "/blockchain_api.BlockchainAPI/WaitFSMToTransitionToGivenState"
+	BlockchainAPI_WaitUntilFSMTransitionFromIdleState_FullMethodName  = "/blockchain_api.BlockchainAPI/WaitUntilFSMTransitionFromIdleState"
+	BlockchainAPI_Run_FullMethodName                                  = "/blockchain_api.BlockchainAPI/Run"
+	BlockchainAPI_CatchUpBlocks_FullMethodName                        = "/blockchain_api.BlockchainAPI/CatchUpBlocks"
+	BlockchainAPI_LegacySync_FullMethodName                           = "/blockchain_api.BlockchainAPI/LegacySync"
+	BlockchainAPI_Idle_FullMethodName                                 = "/blockchain_api.BlockchainAPI/Idle"
+	BlockchainAPI_GetBlockLocator_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockLocator"
+	BlockchainAPI_LocateBlockHeaders_FullMethodName                   = "/blockchain_api.BlockchainAPI/LocateBlockHeaders"
+	BlockchainAPI_GetBestHeightAndTime_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBestHeightAndTime"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -103,13 +106,20 @@ type BlockchainAPIClient interface {
 	GetSuitableBlock(ctx context.Context, in *GetSuitableBlockRequest, opts ...grpc.CallOption) (*GetSuitableBlockResponse, error)
 	// GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specified depth.
 	GetHashOfAncestorBlock(ctx context.Context, in *GetHashOfAncestorBlockRequest, opts ...grpc.CallOption) (*GetHashOfAncestorBlockResponse, error)
+	// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header using a block locator.
+	GetLatestBlockHeaderFromBlockLocator(ctx context.Context, in *GetLatestBlockHeaderFromBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
+	// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
+	GetBlockHeadersFromOldest(ctx context.Context, in *GetBlockHeadersFromOldestRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
 	// GetNextWorkRequired calculates the required proof of work for the next block.
 	GetNextWorkRequired(ctx context.Context, in *GetNextWorkRequiredRequest, opts ...grpc.CallOption) (*GetNextWorkRequiredResponse, error)
 	// GetBlockExists checks if a block exists in the blockchain.
 	GetBlockExists(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockExistsResponse, error)
 	// GetBlockHeaders retrieves headers for multiple blocks.
 	GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
+	// GetBlockHeadersToCommonAncestor retrieves headers from a block to its common ancestor.
 	GetBlockHeadersToCommonAncestor(ctx context.Context, in *GetBlockHeadersToCommonAncestorRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
+	// GetBlockHeadersFromCommonAncestor retrieves headers from a common ancestor to a target block.
+	GetBlockHeadersFromCommonAncestor(ctx context.Context, in *GetBlockHeadersFromCommonAncestorRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
 	// GetBlockHeadersFromTill retrieves block headers between two specified blocks.
 	GetBlockHeadersFromTill(ctx context.Context, in *GetBlockHeadersFromTillRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
 	// GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
@@ -302,6 +312,26 @@ func (c *blockchainAPIClient) GetHashOfAncestorBlock(ctx context.Context, in *Ge
 	return out, nil
 }
 
+func (c *blockchainAPIClient) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, in *GetLatestBlockHeaderFromBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlockHeaderResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetLatestBlockHeaderFromBlockLocator_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetBlockHeadersFromOldest(ctx context.Context, in *GetBlockHeadersFromOldestRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlockHeadersResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockHeadersFromOldest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockchainAPIClient) GetNextWorkRequired(ctx context.Context, in *GetNextWorkRequiredRequest, opts ...grpc.CallOption) (*GetNextWorkRequiredResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetNextWorkRequiredResponse)
@@ -336,6 +366,16 @@ func (c *blockchainAPIClient) GetBlockHeadersToCommonAncestor(ctx context.Contex
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockHeadersResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockHeadersToCommonAncestor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, in *GetBlockHeadersFromCommonAncestorRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlockHeadersResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockHeadersFromCommonAncestor_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -692,13 +732,20 @@ type BlockchainAPIServer interface {
 	GetSuitableBlock(context.Context, *GetSuitableBlockRequest) (*GetSuitableBlockResponse, error)
 	// GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specified depth.
 	GetHashOfAncestorBlock(context.Context, *GetHashOfAncestorBlockRequest) (*GetHashOfAncestorBlockResponse, error)
+	// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header using a block locator.
+	GetLatestBlockHeaderFromBlockLocator(context.Context, *GetLatestBlockHeaderFromBlockLocatorRequest) (*GetBlockHeaderResponse, error)
+	// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
+	GetBlockHeadersFromOldest(context.Context, *GetBlockHeadersFromOldestRequest) (*GetBlockHeadersResponse, error)
 	// GetNextWorkRequired calculates the required proof of work for the next block.
 	GetNextWorkRequired(context.Context, *GetNextWorkRequiredRequest) (*GetNextWorkRequiredResponse, error)
 	// GetBlockExists checks if a block exists in the blockchain.
 	GetBlockExists(context.Context, *GetBlockRequest) (*GetBlockExistsResponse, error)
 	// GetBlockHeaders retrieves headers for multiple blocks.
 	GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error)
+	// GetBlockHeadersToCommonAncestor retrieves headers from a block to its common ancestor.
 	GetBlockHeadersToCommonAncestor(context.Context, *GetBlockHeadersToCommonAncestorRequest) (*GetBlockHeadersResponse, error)
+	// GetBlockHeadersFromCommonAncestor retrieves headers from a common ancestor to a target block.
+	GetBlockHeadersFromCommonAncestor(context.Context, *GetBlockHeadersFromCommonAncestorRequest) (*GetBlockHeadersResponse, error)
 	// GetBlockHeadersFromTill retrieves block headers between two specified blocks.
 	GetBlockHeadersFromTill(context.Context, *GetBlockHeadersFromTillRequest) (*GetBlockHeadersResponse, error)
 	// GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
@@ -807,6 +854,12 @@ func (UnimplementedBlockchainAPIServer) GetSuitableBlock(context.Context, *GetSu
 func (UnimplementedBlockchainAPIServer) GetHashOfAncestorBlock(context.Context, *GetHashOfAncestorBlockRequest) (*GetHashOfAncestorBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetHashOfAncestorBlock not implemented")
 }
+func (UnimplementedBlockchainAPIServer) GetLatestBlockHeaderFromBlockLocator(context.Context, *GetLatestBlockHeaderFromBlockLocatorRequest) (*GetBlockHeaderResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetLatestBlockHeaderFromBlockLocator not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetBlockHeadersFromOldest(context.Context, *GetBlockHeadersFromOldestRequest) (*GetBlockHeadersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersFromOldest not implemented")
+}
 func (UnimplementedBlockchainAPIServer) GetNextWorkRequired(context.Context, *GetNextWorkRequiredRequest) (*GetNextWorkRequiredResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetNextWorkRequired not implemented")
 }
@@ -818,6 +871,9 @@ func (UnimplementedBlockchainAPIServer) GetBlockHeaders(context.Context, *GetBlo
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeadersToCommonAncestor(context.Context, *GetBlockHeadersToCommonAncestorRequest) (*GetBlockHeadersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersToCommonAncestor not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetBlockHeadersFromCommonAncestor(context.Context, *GetBlockHeadersFromCommonAncestorRequest) (*GetBlockHeadersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersFromCommonAncestor not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeadersFromTill(context.Context, *GetBlockHeadersFromTillRequest) (*GetBlockHeadersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersFromTill not implemented")
@@ -1149,6 +1205,42 @@ func _BlockchainAPI_GetHashOfAncestorBlock_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_GetLatestBlockHeaderFromBlockLocator_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLatestBlockHeaderFromBlockLocatorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetLatestBlockHeaderFromBlockLocator(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetLatestBlockHeaderFromBlockLocator_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetLatestBlockHeaderFromBlockLocator(ctx, req.(*GetLatestBlockHeaderFromBlockLocatorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetBlockHeadersFromOldest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlockHeadersFromOldestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetBlockHeadersFromOldest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetBlockHeadersFromOldest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetBlockHeadersFromOldest(ctx, req.(*GetBlockHeadersFromOldestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockchainAPI_GetNextWorkRequired_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetNextWorkRequiredRequest)
 	if err := dec(in); err != nil {
@@ -1217,6 +1309,24 @@ func _BlockchainAPI_GetBlockHeadersToCommonAncestor_Handler(srv interface{}, ctx
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetBlockHeadersToCommonAncestor(ctx, req.(*GetBlockHeadersToCommonAncestorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetBlockHeadersFromCommonAncestor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlockHeadersFromCommonAncestorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetBlockHeadersFromCommonAncestor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetBlockHeadersFromCommonAncestor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetBlockHeadersFromCommonAncestor(ctx, req.(*GetBlockHeadersFromCommonAncestorRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1828,6 +1938,14 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockchainAPI_GetHashOfAncestorBlock_Handler,
 		},
 		{
+			MethodName: "GetLatestBlockHeaderFromBlockLocator",
+			Handler:    _BlockchainAPI_GetLatestBlockHeaderFromBlockLocator_Handler,
+		},
+		{
+			MethodName: "GetBlockHeadersFromOldest",
+			Handler:    _BlockchainAPI_GetBlockHeadersFromOldest_Handler,
+		},
+		{
 			MethodName: "GetNextWorkRequired",
 			Handler:    _BlockchainAPI_GetNextWorkRequired_Handler,
 		},
@@ -1842,6 +1960,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockHeadersToCommonAncestor",
 			Handler:    _BlockchainAPI_GetBlockHeadersToCommonAncestor_Handler,
+		},
+		{
+			MethodName: "GetBlockHeadersFromCommonAncestor",
+			Handler:    _BlockchainAPI_GetBlockHeadersFromCommonAncestor_Handler,
 		},
 		{
 			MethodName: "GetBlockHeadersFromTill",

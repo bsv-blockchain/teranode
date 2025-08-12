@@ -323,6 +323,59 @@ type ClientI interface {
 	// - Error if the header retrieval or ancestor finding fails
 	GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
+	// GetBlockHeadersFromCommonAncestor retrieves headers from a common ancestor to a target hash.
+	//
+	// This method fetches block headers starting from a common ancestor identified in the block locator
+	// on the chain that contains the target hash, moving forward to the target hash.
+	// This is useful for retrieving headers in a forward direction from a known point in the chain.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - hashTarget: Hash of the target block to retrieve headers up to
+	// - blockLocatorHashes: Array of hashes representing the block locator to find the common ancestor
+	// - maxHeaders: Maximum number of headers to retrieve
+	//
+	// Returns:
+	// - Array of BlockHeader objects from common ancestor to target (inclusive)
+	// - Array of corresponding BlockHeaderMeta objects with additional metadata
+	// - Error if the header retrieval or ancestor finding fails
+	GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+
+	// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.
+	//
+	// This method finds the latest block header that can be reached from a given block locator,
+	// starting from the best block hash. It traverses the blockchain using the provided locator
+	// hashes to find the most recent header that is part of the main chain.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - bestBlockHash: Hash of the current best block to start the search from
+	// - blockLocator: Array of hashes representing the block locator to traverse
+	//
+	// Returns:
+	// - BlockHeader containing the latest header found
+	// - BlockHeaderMeta containing additional metadata about the header
+	// - Error if the header retrieval fails or if no valid header is found in the locator
+	GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+
+	// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
+	//
+	// This method fetches a sequence of block headers starting from the specified hash,
+	// moving forward in the chain order. This is useful for retrieving headers in ascending
+	// order, such as when processing blocks from the genesis block onward.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - chainTipHash: Hash of the current chain tip to ensure the blocks are on the same chain
+	// - targetHash: Hash of the starting block (inclusive)
+	// - numberOfHeaders: Maximum number of headers to retrieve
+	//
+	// Returns:
+	// - Array of BlockHeader objects in ascending order
+	// - Array of corresponding BlockHeaderMeta objects with additional metadata
+	// - Error if the header retrieval fails or if the blocks aren't on the same chain
+	GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+
 	// GetBlockHeadersFromTill retrieves block headers between two blocks.
 	//
 	// This method fetches a sequence of block headers starting from one specified hash

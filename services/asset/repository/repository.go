@@ -41,6 +41,7 @@ type Interface interface {
 	GetBlocks(ctx context.Context, hash *chainhash.Hash, n uint32) ([]*model.Block, error)
 	GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
 	GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
@@ -399,6 +400,31 @@ func (repo *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Has
 //   - error: Any error encountered during header retrieval or common ancestor detection
 func (repo *Repository) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return repo.BlockchainClient.GetBlockHeadersToCommonAncestor(ctx, hashTarget, blockLocatorHashes, maxHeaders)
+}
+
+// GetBlockHeadersFromCommonAncestor retrieves block headers from a common ancestor to a target hash (chain tip).
+// This method is used in blockchain synchronization to find the point where two chains diverge
+// and retrieve the headers needed to bring a client up to date with the main chain.
+//
+// The function uses block locator hashes to efficiently find the common ancestor between
+// the target block and the client's current chain state, then returns headers from that
+// point forward up to the specified maximum number of headers.
+//
+// This is a critical operation for peer-to-peer synchronization and chain reorganization
+// handling, allowing nodes to efficiently discover and download missing block headers.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//   - hashTarget: Target block hash to work backwards from
+//   - blockLocatorHashes: Array of block hashes representing the client's current chain state
+//   - maxHeaders: Maximum number of headers to return to prevent excessive response sizes
+//
+// Returns:
+//   - []*model.BlockHeader: Array of block headers from common ancestor to target
+//   - []*model.BlockHeaderMeta: Array of corresponding block header metadata
+//   - error: Any error encountered during header retrieval or common ancestor detection
+func (repo *Repository) GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return repo.BlockchainClient.GetBlockHeadersFromCommonAncestor(ctx, hashTarget, blockLocatorHashes, maxHeaders)
 }
 
 // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.

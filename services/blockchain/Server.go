@@ -1050,6 +1050,83 @@ func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockc
 	}, nil
 }
 
+func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Context, request *blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLatestBlockHeaderFromBlockLocatorRequest",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetLatestBlockHeaderFromBlockLocator),
+	)
+	defer deferFn()
+
+	bestBlockHash, err := chainhash.NewHash(request.BestBlockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocatorRequest] request's best block hash is not valid", err))
+	}
+
+	locatorHashes := make([]chainhash.Hash, len(request.BlockLocatorHashes))
+	for i, hashBytes := range request.BlockLocatorHashes {
+		hash, err := chainhash.NewHash(hashBytes)
+		if err != nil {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocatorRequest] request's block locator hash is not valid", err))
+		}
+
+		locatorHashes[i] = *hash
+	}
+
+	blockHeader, meta, err := b.store.GetLatestBlockHeaderFromBlockLocator(ctx, bestBlockHash, locatorHashes)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetBlockHeaderResponse{
+		BlockHeader: blockHeader.Bytes(),
+		Height:      meta.Height,
+		TxCount:     meta.TxCount,
+		SizeInBytes: meta.SizeInBytes,
+		Miner:       meta.Miner,
+		BlockTime:   meta.BlockTime,
+		Timestamp:   meta.Timestamp,
+	}, nil
+}
+
+func (b *Blockchain) GetBlockHeadersFromOldestRequest(ctx context.Context, request *blockchain_api.GetBlockHeadersFromOldestRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromOldestRequest",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeadersFromOldest),
+	)
+	defer deferFn()
+
+	chainTipHash, err := chainhash.NewHash(request.ChainTipHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldestRequest] request's start hash is not valid", err))
+	}
+
+	targetHash, err := chainhash.NewHash(request.TargetHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldestRequest] request's target hash is not valid", err))
+	}
+
+	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeadersFromOldest(ctx, chainTipHash, targetHash, request.GetNumberOfHeaders())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	blockHeaderMetaBytes := make([][]byte, len(blockHeaderMetas))
+	for i, meta := range blockHeaderMetas {
+		blockHeaderMetaBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.GetBlockHeadersResponse{
+		BlockHeaders: blockHeaderBytes,
+		Metas:        blockHeaderMetaBytes,
+	}, nil
+}
+
 // GetBlockExists checks if a block with the given hash exists in the blockchain.
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockExists",
@@ -2373,6 +2450,17 @@ out:
 	headerMetaHistory := sliceFromRing[*model.BlockHeaderMeta](lastNMetas)
 
 	return headerHistory, headerMetaHistory, nil
+}
+
+func getBlockHeadersFromCommonAncestor(ctx context.Context, store blockchain_store.Store, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	// first we need to get the common ancestor of the target hash and the block locator hashes
+	commonBlockHeader, _, err := store.GetLatestBlockHeaderFromBlockLocator(ctx, hashTarget, blockLocatorHashes)
+	if err != nil {
+		return nil, nil, errors.NewStorageError("failed to get latest block header from block locator", err)
+	}
+
+	// now get the headers from the common ancestor to the target hash
+	return store.GetBlockHeadersFromOldest(ctx, commonBlockHeader.Hash(), hashTarget, uint64(maxHeaders)) // golint:nolint
 }
 
 func sliceFromRing[T any](ring *ring.Ring) []T {

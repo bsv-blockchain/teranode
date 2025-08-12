@@ -10,8 +10,8 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/test/txregistry"
-	"github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/aerospike"
+	"github.com/bitcoin-sv/teranode/test/utils/postgres"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/stretchr/testify/assert"
@@ -75,7 +75,7 @@ func TestDoubleSpendSQLite(t *testing.T) {
 func TestDoubleSpendPostgres(t *testing.T) {
 	// t.Skip()
 	// start a postgres container
-	utxoStore, teardown, err := utils.SetupTestPostgresContainer()
+	utxoStore, teardown, err := postgres.SetupTestPostgresContainer()
 	require.NoError(t, err)
 
 	defer func() {

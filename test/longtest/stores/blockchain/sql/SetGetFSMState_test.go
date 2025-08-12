@@ -7,7 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/settings"
 	storesql "github.com/bitcoin-sv/teranode/stores/blockchain/sql"
-	helper "github.com/bitcoin-sv/teranode/test/utils"
+	helper "github.com/bitcoin-sv/teranode/test/utils/postgres"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/stretchr/testify/require"

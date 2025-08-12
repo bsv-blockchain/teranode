@@ -163,8 +163,17 @@ func (m *MockStore) GetBlockGraphData(ctx context.Context, periodMillis uint64) 
 	panic(implementMe)
 }
 
-func (m *MockStore) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
-	panic(implementMe)
+func (m *MockStore) GetBlockByID(_ context.Context, id uint64) (*model.Block, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, block := range m.Blocks {
+		if uint64(block.ID) == id { // golint:nolint
+			return block, nil
+		}
+	}
+
+	return nil, context.DeadlineExceeded
 }
 
 func (m *MockStore) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
@@ -180,6 +189,14 @@ func (m *MockStore) GetSuitableBlock(ctx context.Context, blockHash *chainhash.H
 }
 
 func (m *MockStore) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	panic(implementMe)
 }
 

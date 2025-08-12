@@ -198,6 +198,39 @@ func (m *Mock) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *
 	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
 }
 
+// GetBlockHeadersFromCommonAncestor mocks the GetBlockHeadersToCommonAncestor method
+func (m *Mock) GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, hashTarget, blockLocatorHashes, maxHeaders)
+
+	if args.Error(2) != nil {
+		return nil, nil, args.Error(2)
+	}
+
+	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
+}
+
+// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.
+func (m *Mock) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, bestBlockHash, blockLocator)
+
+	if args.Error(2) != nil {
+		return nil, nil, args.Error(2)
+	}
+
+	return args.Get(0).(*model.BlockHeader), args.Get(1).(*model.BlockHeaderMeta), args.Error(2)
+}
+
+// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
+func (m *Mock) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, chainTipHash, targetHash, numberOfHeaders)
+
+	if args.Error(2) != nil {
+		return nil, nil, args.Error(2)
+	}
+
+	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
+}
+
 // GetBlockHeadersFromTill mocks the GetBlockHeadersFromTill method
 func (m *Mock) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	args := m.Called(ctx, blockHashFrom, blockHashTill)

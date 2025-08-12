@@ -1,9 +1,7 @@
 package httpimpl
 
 import (
-	"encoding/hex"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -13,9 +11,8 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// GetBlockHeadersToCommonAncestor creates an HTTP handler for retrieving multiple consecutive block headers
-// starting from a specific block hash. It supports multiple response formats
-// and pagination.
+// GetBlockHeadersFromCommonAncestor creates an HTTP handler for retrieving multiple consecutive block headers
+// starting from a given block hash, up to a specified number of headers.
 //
 // Parameters:
 //   - mode: ReadMode specifying the response format (JSON, BINARY_STREAM, or HEX)
@@ -107,14 +104,14 @@ import (
 //   - Binary response size can be calculated as n * 80 bytes
 //   - Hex response size can be calculated as n * 160 characters
 //   - Default limit of 100 headers can be adjusted via 'n' parameter
-//   - Maximum limit of 1000 headers per request
-func (h *HTTP) GetBlockHeadersToCommonAncestor(mode ReadMode) func(c echo.Context) error {
+//   - Maximum limit of 10_000 headers per request
+func (h *HTTP) GetBlockHeadersFromCommonAncestor(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashStr := c.Param("hash")
 
-		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockHeadersToCommonAncestor_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockHeadersFromCommonAncestor_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[GetBlockHeadersToCommonAncestor_http] Get %s Block Headers in %s for %s", mode, c.Request().RemoteAddr, hashStr),
+			tracing.WithLogMessage(h.logger, "[GetBlockHeadersFromCommonAncestor_http] Get %s Block Headers in %s for %s", mode, c.Request().RemoteAddr, hashStr),
 		)
 		defer deferFn()
 
@@ -123,7 +120,7 @@ func (h *HTTP) GetBlockHeadersToCommonAncestor(mode ReadMode) func(c echo.Contex
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash string", err).Error())
 		}
 
-		hashes, err := h.parseBlockLocatorHashes(c.QueryParam("block_locator_hashes"))
+		hashes, err := h.parseBlockLocatorHashValues(c.QueryParam("block_locator_hashes"))
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
@@ -133,12 +130,16 @@ func (h *HTTP) GetBlockHeadersToCommonAncestor(mode ReadMode) func(c echo.Contex
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 
+		if numberOfHeaders > 10_000 {
+			numberOfHeaders = 10_000
+		}
+
 		var (
 			headers     []*model.BlockHeader
 			headerMetas []*model.BlockHeaderMeta
 		)
 
-		headers, headerMetas, err = h.repository.GetBlockHeadersToCommonAncestor(ctx, hash, hashes, uint32(numberOfHeaders)) // nolint:gosec
+		headers, headerMetas, err = h.repository.GetBlockHeadersFromCommonAncestor(ctx, hash, hashes, uint32(numberOfHeaders)) // nolint:gosec
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -154,7 +155,7 @@ func (h *HTTP) GetBlockHeadersToCommonAncestor(mode ReadMode) func(c echo.Contex
 }
 
 // parseBlockLocatorHashes parses a string of concatenated hashes into an array of chainhash.Hash
-func (h *HTTP) parseBlockLocatorHashes(hashesStr string) ([]*chainhash.Hash, error) {
+func (h *HTTP) parseBlockLocatorHashValues(hashesStr string) ([]chainhash.Hash, error) {
 	if len(hashesStr) == 0 {
 		return nil, errors.NewInvalidArgumentError("block locator hashes cannot be empty")
 	}
@@ -164,7 +165,7 @@ func (h *HTTP) parseBlockLocatorHashes(hashesStr string) ([]*chainhash.Hash, err
 	}
 
 	numHashes := len(hashesStr) / 64
-	hashes := make([]*chainhash.Hash, numHashes)
+	hashes := make([]chainhash.Hash, numHashes)
 
 	for i := 0; i < numHashes; i++ {
 		hashPart := hashesStr[i*64 : (i+1)*64]
@@ -174,63 +175,8 @@ func (h *HTTP) parseBlockLocatorHashes(hashesStr string) ([]*chainhash.Hash, err
 			return nil, errors.NewInvalidArgumentError("invalid hash string in block locator", err)
 		}
 
-		hashes[i] = hash
+		hashes[i] = *hash
 	}
 
 	return hashes, nil
-}
-
-// parseNumberOfHeaders parses and validates the 'n' parameter for number of headers
-func (h *HTTP) parseNumberOfHeaders(nStr string) (int, error) {
-	if nStr == "" {
-		return 100, nil
-	}
-
-	n, err := strconv.Atoi(nStr)
-	if err != nil {
-		return 0, errors.NewInvalidArgumentError("invalid number of headers")
-	}
-
-	if n == 0 {
-		return 100, nil
-	}
-
-	if n > 1000 {
-		return 1000, nil
-	}
-
-	return n, nil
-}
-
-// formatResponse formats the block headers according to the specified mode
-func (h *HTTP) formatResponse(c echo.Context, mode ReadMode, headers []*model.BlockHeader, headerMetas []*model.BlockHeaderMeta) error {
-	if mode == JSON {
-		headerResponses := make([]*blockHeaderResponse, 0, len(headers))
-		for idx, header := range headers {
-			headerResponses = append(headerResponses, &blockHeaderResponse{
-				BlockHeader: header,
-				Hash:        header.String(),
-				Height:      headerMetas[idx].Height,
-				TxCount:     headerMetas[idx].TxCount,
-				SizeInBytes: headerMetas[idx].SizeInBytes,
-				Miner:       headerMetas[idx].Miner,
-			})
-		}
-
-		return c.JSONPretty(200, headerResponses, "  ")
-	}
-
-	bytes := make([]byte, 0, len(headers)*model.BlockHeaderSize)
-	for _, header := range headers {
-		bytes = append(bytes, header.Bytes()...)
-	}
-
-	switch mode {
-	case BINARY_STREAM:
-		return c.Blob(200, echo.MIMEOctetStream, bytes)
-	case HEX:
-		return c.String(200, hex.EncodeToString(bytes))
-	default:
-		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
-	}
 }

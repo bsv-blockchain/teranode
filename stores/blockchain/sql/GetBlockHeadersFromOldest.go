@@ -23,14 +23,16 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
-	"github.com/bitcoin-sv/teranode/model/time"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 )
 
-// GetBlockHeaders retrieves a sequence of consecutive block headers starting from a specified block hash.
-// This implements the blockchain.Store.GetBlockHeaders interface method.
+// GetBlockHeadersFromOldest retrieves a sequence of consecutive block headers starting from a specified block hash.
+// This implements the blockchain.Store.GetBlockHeadersFromOldest interface method.
+//
+// Unlike the GetBlockHeaders method, which retrieves headers in reverse order,
+// this method retrieves headers starting from the oldest block in the sequence and returns them in ascending order
+// of height.
 //
 // This method is a cornerstone of blockchain synchronization, enabling nodes to efficiently
 // retrieve chains of headers to validate and update their local blockchain state. In Bitcoin's
@@ -53,7 +55,8 @@ import (
 //
 // Parameters:
 //   - ctx: Context for the database operation, allowing for cancellation and timeouts
-//   - blockHashFrom: The hash of the starting block for header retrieval
+//   - chainTipHash: The hash of the current chain tip, used to determine the valid chain
+//   - targetHash: The hash of the starting block for header retrieval
 //   - numberOfHeaders: Maximum number of consecutive headers to retrieve
 //
 // Returns:
@@ -63,16 +66,11 @@ import (
 //   - StorageError for database access or query execution errors
 //   - ProcessingError for errors during header reconstruction
 //   - nil if the operation was successful (even if fewer headers than requested were found)
-func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+func (s *SQL) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeaders",
-		tracing.WithLogMessage(s.logger, "[GetBlockHeaders][%s] called for %d headers", blockHashFrom.String(), numberOfHeaders),
+		tracing.WithLogMessage(s.logger, "[GetBlockHeaders][%s] called for %d headers", targetHash.String(), numberOfHeaders),
 	)
 	defer deferFn()
-
-	headers, metas := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
-	if headers != nil {
-		return headers, metas, nil
-	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -108,13 +106,14 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 					WHERE bb.id != cb.id
 				)
 				SELECT id FROM ChainBlocks
-				LIMIT $2
 			)
-		)
-		ORDER BY height DESC
+		)				        
+		  AND id >= (SELECT id from blocks WHERE hash = $2)
+		ORDER BY height ASC
+		LIMIT $3
 	`
 
-	rows, err := s.db.QueryContext(ctx, q, blockHashFrom[:], numberOfHeaders)
+	rows, err := s.db.QueryContext(ctx, q, chainTipHash[:], targetHash[:], numberOfHeaders)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
@@ -126,69 +125,4 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	defer rows.Close()
 
 	return s.processBlockHeadersRows(rows, numberOfHeaders)
-}
-
-func (s *SQL) processBlockHeadersRows(rows *sql.Rows, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	var (
-		err            error
-		hashPrevBlock  []byte
-		hashMerkleRoot []byte
-		nBits          []byte
-		insertedAt     time.CustomTime
-	)
-
-	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
-	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
-
-	for rows.Next() {
-		blockHeader := &model.BlockHeader{}
-		blockHeaderMeta := &model.BlockHeaderMeta{}
-
-		if err = rows.Scan(
-			&blockHeader.Version,
-			&blockHeader.Timestamp,
-			&blockHeader.Nonce,
-			&hashPrevBlock,
-			&hashMerkleRoot,
-			&nBits,
-			&blockHeaderMeta.ID,
-			&blockHeaderMeta.Height,
-			&blockHeaderMeta.TxCount,
-			&blockHeaderMeta.SizeInBytes,
-			&blockHeaderMeta.PeerID,
-			&blockHeaderMeta.BlockTime,
-			&insertedAt,
-			&blockHeaderMeta.ChainWork,
-		); err != nil {
-			return nil, nil, errors.NewStorageError("failed to scan row", err)
-		}
-
-		bits, _ := model.NewNBitFromSlice(nBits)
-		blockHeader.Bits = *bits
-
-		blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
-		if err != nil {
-			return nil, nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
-		}
-
-		blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
-		if err != nil {
-			return nil, nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
-		}
-
-		insertedAtUint32, err := safeconversion.Int64ToUint32(insertedAt.Unix())
-		if err != nil {
-			return nil, nil, errors.NewProcessingError("failed to convert insertedAt", err)
-		}
-
-		blockHeaderMeta.Timestamp = insertedAtUint32
-
-		// Set the block time to the timestamp in the meta
-		blockHeaderMeta.BlockTime = blockHeader.Timestamp
-
-		blockHeaders = append(blockHeaders, blockHeader)
-		blockHeaderMetas = append(blockHeaderMetas, blockHeaderMeta)
-	}
-
-	return blockHeaders, blockHeaderMetas, nil
 }
