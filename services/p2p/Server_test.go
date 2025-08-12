@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1716,6 +1717,12 @@ func (m *MockNetworkStream) Reset() error {
 	return args.Error(0)
 }
 
+// Reset with Error implements the network.Stream interface
+func (m *MockNetworkStream) ResetWithError(code network.StreamErrorCode) error {
+	args := m.Called(code)
+	return args.Error(0)
+}
+
 // ID implements the network.Stream interface
 func (m *MockNetworkStream) ID() string {
 	args := m.Called()
@@ -3283,4 +3290,306 @@ func TestGenerateRandomKey(t *testing.T) {
 	k2, err := generateRandomKey()
 	require.NoError(t, err)
 	require.NotEqual(t, k1, k2)
+}
+
+func TestServerSendDirectHandshakeSendToPeerSuccess(t *testing.T) {
+	ctx := context.Background()
+
+	mockBC := new(blockchain.Mock)
+	mockP2P := new(MockServerP2PNode)
+	logger := ulogger.New("test")
+
+	// Create a valid BlockHeader with initialized fields
+	prevHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	merkleRoot, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+
+	validHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  prevHash,
+		HashMerkleRoot: merkleRoot,
+		Timestamp:      1231006505,
+		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Nonce:          2083236893,
+	}
+
+	meta := &model.BlockHeaderMeta{Height: 123}
+
+	mockBC.On("GetBestBlockHeader", mock.Anything).Return(validHeader, meta, nil)
+
+	expectedPeerID := peer.ID("KoPCcJr6w9A")
+	var capturedMsg []byte
+	mockP2P.On("HostID").Return(expectedPeerID)
+	mockP2P.On("SendToPeer", mock.Anything, expectedPeerID, mock.MatchedBy(func(b []byte) bool {
+		capturedMsg = b
+		return true
+	})).Return(nil)
+
+	s := &Server{
+		logger:              logger,
+		blockchainClient:    mockBC,
+		P2PNode:             mockP2P,
+		AssetHTTPAddressURL: "https://datahub.test",
+		bitcoinProtocolID:   "/bitcoin-sv",
+		topicPrefix:         "testnet",
+	}
+
+	s.sendDirectHandshake(ctx, expectedPeerID)
+
+	mockBC.AssertExpectations(t)
+	mockP2P.AssertExpectations(t)
+
+	var msg p2p.HandshakeMessage
+	require.NoError(t, json.Unmarshal(capturedMsg, &msg))
+	require.Equal(t, uint32(123), msg.BestHeight)
+	require.Equal(t, "testnet", msg.TopicPrefix)
+	require.Equal(t, "https://datahub.test", msg.DataHubURL)
+}
+
+func TestServerSendDirectHandshakeSendToPeerFailsFallbackToPublish(t *testing.T) {
+	ctx := context.Background()
+
+	mockBC := new(blockchain.Mock)
+	mockP2P := new(MockServerP2PNode)
+	logger := ulogger.New("test")
+
+	prevHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	merkleRoot, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+
+	validHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  prevHash,
+		HashMerkleRoot: merkleRoot,
+		Timestamp:      1231006505,
+		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Nonce:          2083236893,
+	}
+	meta := &model.BlockHeaderMeta{Height: 123}
+	mockBC.On("GetBestBlockHeader", mock.Anything).Return(validHeader, meta, nil)
+
+	mockP2P.On("HostID").Return(peer.ID("mockPeer"))
+	mockP2P.On("SendToPeer", mock.Anything, mock.Anything, mock.Anything).Return(errors.NewConfigurationError("stream failed"))
+
+	var published atomic.Pointer[[]byte]
+	mockP2P.On("Publish", mock.Anything, "test-prefix-handshake", mock.MatchedBy(func(b []byte) bool {
+		copied := make([]byte, len(b))
+		copy(copied, b)
+		published.Store(&copied)
+		return true
+	})).Return(nil)
+
+	s := &Server{
+		logger:              logger,
+		blockchainClient:    mockBC,
+		P2PNode:             mockP2P,
+		handshakeTopicName:  "test-prefix-handshake",
+		topicPrefix:         "test-prefix",
+		AssetHTTPAddressURL: "https://hub",
+		bitcoinProtocolID:   "/bitcoin-sv",
+	}
+
+	s.sendDirectHandshake(ctx, peer.ID("mockPeer"))
+
+	// wait fallback async (and poll)
+	var result []byte
+	require.Eventually(t, func() bool {
+		ptr := published.Load()
+		if ptr != nil {
+			result = *ptr
+			return true
+		}
+		return false
+	}, 3*time.Second, 100*time.Millisecond)
+
+	require.NotNil(t, result)
+	var m p2p.HandshakeMessage
+	require.NoError(t, json.Unmarshal(result, &m))
+	require.Equal(t, uint32(123), m.BestHeight)
+	require.Equal(t, "test-prefix", m.TopicPrefix)
+}
+func TestServerSendHandshakeToPeerCallsSendToPeer(t *testing.T) {
+	ctx := context.Background()
+	mockP2P := new(MockServerP2PNode)
+
+	expectedPeerID := peer.ID("abc")
+	expectedMsg := []byte("hello")
+
+	mockP2P.On("SendToPeer", ctx, expectedPeerID, expectedMsg).Return(nil)
+
+	s := &Server{P2PNode: mockP2P}
+
+	err := s.sendHandshakeToPeer(ctx, expectedPeerID, expectedMsg)
+	require.NoError(t, err)
+
+	mockP2P.AssertExpectations(t)
+}
+
+func TestServerHandleNodeStatusTopic(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("message_from_self_forwards_to_websocket_but_does_not_update_peer_height", func(t *testing.T) {
+		logger := ulogger.New("test")
+
+		mockP2P := new(MockServerP2PNode)
+		mockP2P.On("HostID").Return(peer.ID("my-peer-id"))
+
+		notifCh := make(chan *notificationMsg, 1)
+
+		s := &Server{
+			logger:         logger,
+			P2PNode:        mockP2P,
+			notificationCh: notifCh,
+		}
+
+		jsonMsg := `{
+			"peer_id": "my-peer-id",
+			"BaseURL": "https://self",
+			"Version": "v1.0.0",
+			"CommitHash": "abc123",
+			"BestBlockHash": "hash1",
+			"BestHeight": 100,
+			"TxCountInAssembly": 5,
+			"FSMState": "RUNNING",
+			"StartTime": "2025-01-01T00:00:00Z",
+			"Uptime": 36000,
+			"MinerName": "MyMiner",
+			"ListenMode": "full",
+			"SyncPeerID": "peer-xyz",
+			"SyncPeerHeight": 99,
+			"SyncPeerBlockHash": "hash2",
+			"SyncConnectedAt": "2025-01-01T01:00:00Z"
+		}`
+
+		s.handleNodeStatusTopic(ctx, []byte(jsonMsg), "my-peer-id")
+
+		msg := <-notifCh
+		assert.Equal(t, "my-peer-id", msg.PeerID)
+	})
+
+	t.Run("message_from_another_peer_updates_height_and_forwards_to_websocket", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.New("test")
+
+		selfPeerIDStr := "12D3KooWJpBNhwgvoZ15EB1JwRTRpxgM9NVaqpDtWZXfTf6CpCQd"
+		selfPeerID, err := peer.Decode(selfPeerIDStr)
+		require.NoError(t, err)
+		remotePeerIDStr := "12D3KooWBv1jXjEN3zMZ7cJzQa4LZQZKGeNp8xYZAtNAd5DEbR9n"
+		remotePeerID, err := peer.Decode(remotePeerIDStr)
+		require.NoError(t, err)
+		require.NotNil(t, remotePeerID)
+
+		mockP2P := new(MockServerP2PNode)
+		mockP2P.On("HostID").Return(selfPeerID)
+
+		notifCh := make(chan *notificationMsg, 1)
+
+		s := &Server{
+			logger:         logger,
+			P2PNode:        mockP2P,
+			notificationCh: notifCh,
+		}
+
+		jsonMsg := fmt.Sprintf(`{
+		"peer_id": "%s",
+		"BaseURL": "https://peer",
+		"Version": "v1.0.0",
+		"CommitHash": "abc456",
+		"BestBlockHash": "hash3",
+		"BestHeight": 101,
+		"TxCountInAssembly": 6,
+		"FSMState": "RUNNING",
+		"StartTime": "2025-01-01T00:00:00Z",
+		"Uptime": 36000,
+		"MinerName": "PeerMiner",
+		"ListenMode": "full",
+		"SyncPeerID": "peer-abc",
+		"SyncPeerHeight": 100,
+		"SyncPeerBlockHash": "hash4",
+		"SyncConnectedAt": "2025-01-01T01:30:00Z"
+	}`, remotePeerIDStr)
+
+		s.handleNodeStatusTopic(ctx, []byte(jsonMsg), remotePeerIDStr)
+
+		msg := <-notifCh
+		assert.Equal(t, remotePeerIDStr, msg.PeerID)
+
+		mockP2P.AssertExpectations(t)
+	})
+
+}
+
+func TestReceiveHandshakeStreamHandler(t *testing.T) {
+	ctx := context.Background()
+
+	// Setup peer IDs
+	remotePeerIDStr := "12D3KooWQyYzzZpAMnsLgDK5bWZ5CPJSvxGgRA9SSGpS3zXw5tHr"
+	remotePeerID, err := peer.Decode(remotePeerIDStr)
+	require.NoError(t, err)
+
+	handshakeMsg := fmt.Sprintf(`{"Type":"verack","PeerID":"%s"}`, remotePeerIDStr)
+	msgBytes := []byte(handshakeMsg)
+
+	// Mock P2PNode
+	mockP2P := new(MockServerP2PNode)
+	mockP2P.On("GetProcessName").Return("test-node")
+	mockP2P.On("UpdateBytesReceived", uint64(len(msgBytes))).Return()
+	mockP2P.On("UpdateLastReceived").Return()
+	mockP2P.On("HostID").Return(remotePeerID)
+	mockP2P.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
+	mockP2P.On("GetPeerStartingHeight", mock.Anything).Return(int32(0), false) // First time seeing peer
+	mockP2P.On("SetPeerStartingHeight", mock.Anything, mock.Anything).Return()
+
+	// Mock conn
+	mockConn := new(MockNetworkConn)
+	mockConn.On("RemotePeer").Return(remotePeerID)
+
+	mockBlockchainClient := new(blockchain.Mock)
+	fsmState := blockchain.FSMStateRUNNING
+
+	// Create a valid BlockHeader with initialized fields
+	prevHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	merkleRoot, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+
+	validHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  prevHash,
+		HashMerkleRoot: merkleRoot,
+		Timestamp:      1231006505,
+		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Nonce:          2083236893,
+	}
+
+	meta := &model.BlockHeaderMeta{Height: 100}
+	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(validHeader, meta, nil).Maybe()
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+	// Mock stream
+	mockStream := new(MockNetworkStream)
+	mockStream.On("Read", mock.Anything).Run(func(args mock.Arguments) {
+		buf := args.Get(0).([]byte)
+		copy(buf, handshakeMsg)
+	}).Return(len(handshakeMsg), nil).Once()
+	mockStream.On("Read", mock.Anything).Return(0, io.EOF).Maybe()
+	mockStream.On("Close").Return(nil)
+	mockStream.On("Conn").Return(mockConn)
+
+	// Server
+	server := &Server{
+		P2PNode:          mockP2P,
+		gCtx:             ctx,
+		logger:           ulogger.New("test"),
+		topicPrefix:      "testnet",
+		blockchainClient: mockBlockchainClient,
+	}
+
+	mockP2P.On("SendToPeer", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+	// Act
+	server.receiveHandshakeStreamHandler(mockStream)
+
+	// Assert
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+	mockStream.AssertExpectations(t)
+	mockConn.AssertExpectations(t)
+
 }
