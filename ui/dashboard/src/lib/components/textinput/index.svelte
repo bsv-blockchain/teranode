@@ -191,6 +191,8 @@
     <!-- svelte-ignore a11y-click-events-have-key-events -->
     <FocusRect {disabled} style={`--comp-focus-rect-border-radius:var(--border-radius)`}>
       <div
+        role="button"
+        tabindex="-1"
         class="input"
         class:disabled
         class:error={!valid || error !== ''}
@@ -199,6 +201,12 @@
         class:width={width !== -1}
         class:placeholder={placeholder && !localValue}
         on:click={onInputParentClick}
+        on:keydown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onInputParentClick()
+          }
+        }}
       >
         {#if icon}
           <Icon
@@ -224,20 +232,24 @@
         {/if}
         {#if confirm && localValue !== value}
           <div class="confirm-row">
-            <div
+            <button
               class="confirm-icon"
               style="color: #6EC492; width: 20px; height: 20px;"
               on:click={doConfirm}
+              type="button"
+              aria-label="Confirm"
             >
               <Icon name="check" size={20} />
-            </div>
-            <div
+            </button>
+            <button
               class="confirm-icon"
               style="color: #FF344C; width: 17px; height: 17px;"
               on:click={doReset}
+              type="button"
+              aria-label="Cancel"
             >
               <Icon name="close" size={17} />
-            </div>
+            </button>
           </div>
         {/if}
       </div>
@@ -362,6 +374,12 @@
   .confirm-icon {
     width: 18px;
     height: 18px;
+    background: none;
+    border: none;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .confirm-icon:hover {
     cursor: pointer;

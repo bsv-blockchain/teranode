@@ -37,27 +37,35 @@ let nodeGroup: d3.Selection<any, any, any, any> | null = null
 let linkGroup: d3.Selection<any, any, any, any> | null = null
 let tooltip: d3.Selection<any, any, any, any> | null = null
 
-export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], currentNodePeerID?: string, persistentConnectionMap?: Map<string, number>) {
+export function drawPeerNetwork(
+  selector: HTMLElement,
+  nodes: PeerNode[],
+  currentNodePeerID?: string,
+  persistentConnectionMap?: Map<string, number>,
+) {
   // Check if selector is still in DOM
   if (!selector || !document.body.contains(selector)) {
     return
   }
-  
+
   // Filter out any nodes with invalid peer_ids
-  const validNodes = nodes.filter(node => {
-    if (!node || !node.peer_id || 
-        node.peer_id === 'undefined' || 
-        node.peer_id === 'null' || 
-        String(node.peer_id).trim().length === 0) {
+  const validNodes = nodes.filter((node) => {
+    if (
+      !node ||
+      !node.peer_id ||
+      node.peer_id === 'undefined' ||
+      node.peer_id === 'null' ||
+      String(node.peer_id).trim().length === 0
+    ) {
       console.warn('Filtering out invalid node:', node)
       return false
     }
     return true
   })
-  
+
   // Use validNodes instead of nodes from here on
   nodes = validNodes
-  
+
   if (!nodes || nodes.length === 0) {
     if (svg) {
       svg.remove()
@@ -80,11 +88,17 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
   const nodeHeight = 140
 
   // Create a map for quick lookup
-  const nodeMap = new Map<string, PeerNode & { x?: number; y?: number; fx?: number | null; fy?: number | null }>()
-  
+  const nodeMap = new Map<
+    string,
+    PeerNode & { x?: number; y?: number; fx?: number | null; fy?: number | null }
+  >()
+
   // Preserve positions from existing nodes if we have them
   const existingNodes = currentSimulation ? currentSimulation.nodes() : []
-  const existingPositions = new Map<string, { x: number; y: number; fx?: number | null; fy?: number | null }>()
+  const existingPositions = new Map<
+    string,
+    { x: number; y: number; fx?: number | null; fy?: number | null }
+  >()
   existingNodes.forEach((n: any) => {
     if (n.peer_id) {
       existingPositions.set(n.peer_id, { x: n.x, y: n.y, fx: n.fx, fy: n.fy })
@@ -103,7 +117,7 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
       // For disconnected nodes, place them in a grid pattern on the sides
       let initialX = width / 2 + (Math.random() - 0.5) * 200
       let initialY = height / 2 + (Math.random() - 0.5) * 200
-      
+
       if (!position) {
         // Check if this is our current node - if so, ALWAYS center it regardless of sync status
         if (currentNodePeerID && node.peer_id === currentNodePeerID) {
@@ -111,46 +125,48 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
           initialY = height / 2
         } else {
           // Check if this will be a disconnected node
-          const willBeDisconnected = !node.sync_peer_id && 
-            !nodes.some(n => n.sync_peer_id === node.peer_id)
-          
+          const willBeDisconnected =
+            !node.sync_peer_id && !nodes.some((n) => n.sync_peer_id === node.peer_id)
+
           if (willBeDisconnected) {
             // Place disconnected nodes in a grid pattern on the right side
-            const disconnectedCount = nodes.filter(n => 
-              !n.sync_peer_id && !nodes.some(other => other.sync_peer_id === n.peer_id)
-            ).indexOf(node)
-            
+            const disconnectedCount = nodes
+              .filter(
+                (n) => !n.sync_peer_id && !nodes.some((other) => other.sync_peer_id === n.peer_id),
+              )
+              .indexOf(node)
+
             const cols = 2
             const rowSpacing = 150
             const colSpacing = 250
             const startX = width - 300 // Right side of screen
             const startY = 100
-            
+
             const col = disconnectedCount % cols
             const row = Math.floor(disconnectedCount / cols)
-            
-            initialX = startX + (col * colSpacing)
-            initialY = startY + (row * rowSpacing)
+
+            initialX = startX + col * colSpacing
+            initialY = startY + row * rowSpacing
           }
         }
       }
-      
+
       // Always fix our node to the center
       const isCurrentNode = currentNodePeerID && node.peer_id === currentNodePeerID
-      
+
       const nodeWithPosition = {
         ...node,
-        x: isCurrentNode ? width / 2 : (position?.x ?? initialX),
-        y: isCurrentNode ? height / 2 : (position?.y ?? initialY),
+        x: isCurrentNode ? width / 2 : position?.x ?? initialX,
+        y: isCurrentNode ? height / 2 : position?.y ?? initialY,
         fx: isCurrentNode ? width / 2 : position?.fx,
-        fy: isCurrentNode ? height / 2 : position?.fy
+        fy: isCurrentNode ? height / 2 : position?.fy,
       }
       nodeMap.set(node.peer_id, nodeWithPosition)
-      
+
       // Update connection tracking using persistent connection times
       if (node.sync_peer_id) {
         const connectionKey = `${node.peer_id}->${node.sync_peer_id}`
-        
+
         // Use the persistent connection time if available
         if (persistentConnectionMap && persistentConnectionMap.has(connectionKey)) {
           const connectedAt = persistentConnectionMap.get(connectionKey)!
@@ -175,19 +191,20 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
   // Note: Data flows FROM the sync peer TO the node that's catching up
   // The arrow points AT the receiving node (the one catching up)
   const links: any[] = []
-  nodeMap.forEach(node => {
+  nodeMap.forEach((node) => {
     if (node.sync_peer_id && nodeMap.has(node.sync_peer_id)) {
       links.push({
-        source: node.sync_peer_id,  // The peer providing data (source)
-        target: node.peer_id,  // The node that is catching up (receiver)
-        connectionInfo: connectionMap.get(`${node.peer_id}->${node.sync_peer_id}`)
+        source: node.sync_peer_id, // The peer providing data (source)
+        target: node.peer_id, // The node that is catching up (receiver)
+        connectionInfo: connectionMap.get(`${node.peer_id}->${node.sync_peer_id}`),
       })
     }
   })
 
   // Initialize SVG if not exists
   if (!svg) {
-    svg = d3.select(selector)
+    svg = d3
+      .select(selector)
       .append('svg')
       .attr('width', width)
       .attr('height', height)
@@ -195,9 +212,10 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
 
     // Define arrow marker for directed edges
     const defs = svg.append('defs')
-    
+
     // Arrow marker
-    defs.append('marker')
+    defs
+      .append('marker')
       .attr('id', 'arrowhead')
       .attr('viewBox', '-0 -5 10 10')
       .attr('refX', 8)
@@ -209,35 +227,41 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
       .attr('d', 'M 0,-5 L 10,0 L 0,5')
       .attr('fill', '#15B241')
       .style('stroke', 'none')
-    
+
     // Define animated gradient for flowing data effect
-    const gradient = defs.append('linearGradient')
+    const gradient = defs
+      .append('linearGradient')
       .attr('id', 'flow-gradient')
       .attr('gradientUnits', 'userSpaceOnUse')
-    
-    gradient.append('stop')
+
+    gradient
+      .append('stop')
       .attr('offset', '0%')
       .attr('stop-color', '#15B241')
       .attr('stop-opacity', 0)
-    
-    gradient.append('stop')
+
+    gradient
+      .append('stop')
       .attr('offset', '50%')
       .attr('stop-color', '#15B241')
       .attr('stop-opacity', 1)
-    
-    gradient.append('stop')
+
+    gradient
+      .append('stop')
       .attr('offset', '100%')
       .attr('stop-color', '#15B241')
       .attr('stop-opacity', 0)
-    
+
     // Animate the gradient
-    gradient.append('animate')
+    gradient
+      .append('animate')
       .attr('attributeName', 'x1')
       .attr('values', '0%;100%')
       .attr('dur', '2s')
       .attr('repeatCount', 'indefinite')
-    
-    gradient.append('animate')
+
+    gradient
+      .append('animate')
       .attr('attributeName', 'x2')
       .attr('values', '100%;200%')
       .attr('dur', '2s')
@@ -247,7 +271,8 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
     g = svg.append('g')
 
     // Add zoom behavior
-    const zoom = d3.zoom()
+    const zoom = d3
+      .zoom()
       .scaleExtent([0.1, 4])
       .on('zoom', (event) => {
         g!.attr('transform', event.transform)
@@ -260,7 +285,9 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
     nodeGroup = g.append('g').attr('class', 'nodes')
 
     // Create tooltip
-    tooltip = d3.select('body').append('div')
+    tooltip = d3
+      .select('body')
+      .append('div')
       .attr('class', 'tooltip')
       .style('opacity', 0)
       .style('position', 'absolute')
@@ -270,33 +297,43 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
 
   // Update or create simulation
   if (!currentSimulation) {
-    currentSimulation = d3.forceSimulation(nodesArray)
-      .force('link', d3.forceLink(links)
-        .id((d: any) => d.peer_id)
-        .distance(350)  // Increased distance for better arrow visibility
-        .strength((d: any) => {
-          // Weaker link force for our own node to keep it centered
-          if (currentNodePeerID && 
-              (d.source.peer_id === currentNodePeerID || d.target.peer_id === currentNodePeerID)) {
-            return 0.1
+    currentSimulation = d3
+      .forceSimulation(nodesArray)
+      .force(
+        'link',
+        d3
+          .forceLink(links)
+          .id((d: any) => d.peer_id)
+          .distance(350) // Increased distance for better arrow visibility
+          .strength((d: any) => {
+            // Weaker link force for our own node to keep it centered
+            if (
+              currentNodePeerID &&
+              (d.source.peer_id === currentNodePeerID || d.target.peer_id === currentNodePeerID)
+            ) {
+              return 0.1
+            }
+            return 0.8 // Slightly weaker to allow more flexible positioning
+          }),
+      )
+      .force(
+        'charge',
+        d3.forceManyBody().strength((d: any) => {
+          // No charge for our own node (keeps it centered)
+          if (currentNodePeerID && d.peer_id === currentNodePeerID) {
+            return 0
           }
-          return 0.8  // Slightly weaker to allow more flexible positioning
-        }))
-      .force('charge', d3.forceManyBody().strength((d: any) => {
-        // No charge for our own node (keeps it centered)
-        if ((currentNodePeerID && d.peer_id === currentNodePeerID)) {
-          return 0
-        }
-        // Stronger repulsion to keep nodes apart
-        const isDisconnected = !d.sync_peer_id && 
-          !nodesArray.some(n => n.sync_peer_id === d.peer_id)
-        return isDisconnected ? -400 : -800
-      }))
+          // Stronger repulsion to keep nodes apart
+          const isDisconnected =
+            !d.sync_peer_id && !nodesArray.some((n) => n.sync_peer_id === d.peer_id)
+          return isDisconnected ? -400 : -800
+        }),
+      )
       .force('center', d3.forceCenter(width / 2, height / 2).strength(0.05))
-      .force('collision', d3.forceCollide(nodeWidth / 2 + 80))  // Much larger collision radius
+      .force('collision', d3.forceCollide(nodeWidth / 2 + 80)) // Much larger collision radius
       .force('boundary', () => {
         // Keep nodes within bounds
-        nodesArray.forEach(d => {
+        nodesArray.forEach((d) => {
           const margin = nodeWidth / 2 + 20
           if (d.x !== undefined) {
             d.x = Math.max(margin, Math.min(width - margin, d.x))
@@ -313,41 +350,41 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
     ;(currentSimulation.force('link') as d3.ForceLink<any, any>)
       .links(links)
       .id((d: any) => d.peer_id)
-      .distance(350)  // Keep consistent distance
+      .distance(350) // Keep consistent distance
       .strength((d: any) => {
         // Weaker link force for our own node to keep it centered
-        if (currentNodePeerID && 
-            ((typeof d.source === 'object' && d.source.peer_id === currentNodePeerID) || 
-             (typeof d.target === 'object' && d.target.peer_id === currentNodePeerID) ||
-             d.source === currentNodePeerID || 
-             d.target === currentNodePeerID)) {
+        if (
+          currentNodePeerID &&
+          ((typeof d.source === 'object' && d.source.peer_id === currentNodePeerID) ||
+            (typeof d.target === 'object' && d.target.peer_id === currentNodePeerID) ||
+            d.source === currentNodePeerID ||
+            d.target === currentNodePeerID)
+        ) {
           return 0.1
         }
         return 0.8
       })
-    
+
     // Update charge force strengths for disconnected nodes
-    ;(currentSimulation.force('charge') as d3.ForceManyBody<any>)
-      .strength((d: any) => {
-        // No charge for our own node (keeps it centered)
-        if ((currentNodePeerID && d.peer_id === currentNodePeerID)) {
-          return 0
-        }
-        const isDisconnected = !d.sync_peer_id && 
-          !nodesArray.some(n => n.sync_peer_id === d.peer_id)
-        return isDisconnected ? -400 : -800  // Stronger repulsion
-      })
-    
+    ;(currentSimulation.force('charge') as d3.ForceManyBody<any>).strength((d: any) => {
+      // No charge for our own node (keeps it centered)
+      if (currentNodePeerID && d.peer_id === currentNodePeerID) {
+        return 0
+      }
+      const isDisconnected =
+        !d.sync_peer_id && !nodesArray.some((n) => n.sync_peer_id === d.peer_id)
+      return isDisconnected ? -400 : -800 // Stronger repulsion
+    })
+
     // Update collision force
-    ;(currentSimulation.force('collision') as d3.ForceCollide<any>)
-      .radius(nodeWidth / 2 + 80)  // Keep consistent collision radius
-    
+    ;(currentSimulation.force('collision') as d3.ForceCollide<any>).radius(nodeWidth / 2 + 80) // Keep consistent collision radius
+
     // Only restart if there are new nodes or removed nodes
     const oldNodeIds = new Set(currentSimulation.nodes().map((n: any) => n.peer_id))
-    const newNodeIds = new Set(nodesArray.map(n => n.peer_id))
-    const hasChanges = oldNodeIds.size !== newNodeIds.size || 
-                      [...newNodeIds].some(id => !oldNodeIds.has(id))
-    
+    const newNodeIds = new Set(nodesArray.map((n) => n.peer_id))
+    const hasChanges =
+      oldNodeIds.size !== newNodeIds.size || [...newNodeIds].some((id) => !oldNodeIds.has(id))
+
     if (hasChanges) {
       // Restart with very low alpha only when topology changes
       currentSimulation.alpha(0.1).restart()
@@ -355,32 +392,32 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
   }
 
   // DATA JOIN for links
-  const link = linkGroup!.selectAll('g.sync-link-group')
-    .data(links, (d: any) => {
-      // Use a consistent key for the link (now reversed: sync_peer -> receiving node)
-      const sourceId = typeof d.source === 'string' ? d.source : d.source.peer_id
-      const targetId = typeof d.target === 'string' ? d.target : d.target.peer_id
-      return `${sourceId}->${targetId}`
-    })
+  const link = linkGroup!.selectAll('g.sync-link-group').data(links, (d: any) => {
+    // Use a consistent key for the link (now reversed: sync_peer -> receiving node)
+    const sourceId = typeof d.source === 'string' ? d.source : d.source.peer_id
+    const targetId = typeof d.target === 'string' ? d.target : d.target.peer_id
+    return `${sourceId}->${targetId}`
+  })
 
   // EXIT
   link.exit().remove()
 
   // ENTER - Create a group for each link to hold multiple animated elements
-  const linkEnter = link.enter().append('g')
-    .attr('class', 'sync-link-group')
-  
+  const linkEnter = link.enter().append('g').attr('class', 'sync-link-group')
+
   // Main dotted line
-  const mainLine = linkEnter.append('line')
+  const mainLine = linkEnter
+    .append('line')
     .attr('class', 'sync-link')
     .attr('stroke-width', 3)
     .attr('stroke', '#15B241')
-    .attr('stroke-dasharray', '8, 4')  // Dotted line pattern
+    .attr('stroke-dasharray', '8, 4') // Dotted line pattern
     .attr('marker-end', 'url(#arrowhead)')
     .attr('opacity', 0.7)
-  
+
   // Add a second line for the glow effect
-  linkEnter.append('line')
+  linkEnter
+    .append('line')
     .attr('class', 'sync-link-glow')
     .attr('stroke-width', 6)
     .attr('stroke', '#15B241')
@@ -389,15 +426,17 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
     .attr('filter', 'blur(2px)')
 
   // Add animation for the dotted line movement
-  mainLine.append('animate')
+  mainLine
+    .append('animate')
     .attr('attributeName', 'stroke-dashoffset')
     .attr('from', 0)
-    .attr('to', -12)  // Negative value makes dots flow from source to target
+    .attr('to', -12) // Negative value makes dots flow from source to target
     .attr('dur', '0.8s')
     .attr('repeatCount', 'indefinite')
-  
+
   // Add pulsing opacity animation
-  mainLine.append('animate')
+  mainLine
+    .append('animate')
     .attr('attributeName', 'opacity')
     .attr('values', '0.5;0.9;0.5')
     .attr('dur', '2s')
@@ -407,22 +446,20 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
   const linkMerge = linkEnter.merge(link as any)
 
   // DATA JOIN for nodes
-  const node = nodeGroup!.selectAll('g.peer-node-group')
-    .data(nodesArray, (d: any) => d.peer_id)
+  const node = nodeGroup!.selectAll('g.peer-node-group').data(nodesArray, (d: any) => d.peer_id)
 
   // EXIT
   node.exit().remove()
 
   // ENTER
-  const nodeEnter = node.enter().append('g')
+  const nodeEnter = node
+    .enter()
+    .append('g')
     .attr('class', 'peer-node-group')
-    .call(d3.drag()
-      .on('start', dragstarted)
-      .on('drag', dragged)
-      .on('end', dragended) as any)
-    .on('dblclick', function(_event: any, d: any) {
+    .call(d3.drag().on('start', dragstarted).on('drag', dragged).on('end', dragended) as any)
+    .on('dblclick', function (_event: any, d: any) {
       // Don't allow releasing our own node's fixed position
-      if ((currentNodePeerID && d.peer_id === currentNodePeerID)) {
+      if (currentNodePeerID && d.peer_id === currentNodePeerID) {
         return
       }
       // Double-click to release fixed position
@@ -434,15 +471,16 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
     })
 
   // Add all the node elements
-  nodeEnter.append('rect')
+  nodeEnter
+    .append('rect')
     .attr('class', (d: any) => {
       // Check if this is our current node
-      if ((currentNodePeerID && d.peer_id === currentNodePeerID)) {
+      if (currentNodePeerID && d.peer_id === currentNodePeerID) {
         return 'peer-node current-node'
       }
       // Check if this node is connected (has sync relationship or is being synced from)
       const hasOutgoingSync = d.sync_peer_id && nodeMap.has(d.sync_peer_id)
-      const hasIncomingSync = Array.from(nodeMap.values()).some(n => n.sync_peer_id === d.peer_id)
+      const hasIncomingSync = Array.from(nodeMap.values()).some((n) => n.sync_peer_id === d.peer_id)
       return hasOutgoingSync || hasIncomingSync ? 'peer-node connected' : 'peer-node disconnected'
     })
     .attr('width', nodeWidth)
@@ -452,48 +490,56 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
     .attr('rx', 8)
     .attr('ry', 8)
 
-  nodeEnter.append('text')
+  nodeEnter
+    .append('text')
     .attr('class', 'uptime-text')
     .attr('x', -nodeWidth / 2 + 10)
     .attr('y', -nodeHeight / 2 + 20)
 
-  nodeEnter.append('text')
+  nodeEnter
+    .append('text')
     .attr('class', 'connection-time')
     .attr('x', nodeWidth / 2 - 10)
     .attr('y', -nodeHeight / 2 + 20)
     .attr('text-anchor', 'end')
 
-  nodeEnter.append('text')
+  nodeEnter
+    .append('text')
     .attr('class', 'peer-text peer-id')
     .attr('x', 0)
     .attr('y', -40)
     .attr('text-anchor', 'middle')
 
-  nodeEnter.append('text')
+  nodeEnter
+    .append('text')
     .attr('class', 'peer-text label base-url')
     .attr('x', 0)
     .attr('y', -20)
     .attr('text-anchor', 'middle')
 
-  nodeEnter.append('text')
+  nodeEnter
+    .append('text')
     .attr('class', 'peer-text block-height')
     .attr('x', 0)
     .attr('y', 0)
     .attr('text-anchor', 'middle')
 
-  nodeEnter.append('text')
+  nodeEnter
+    .append('text')
     .attr('class', 'peer-text label block-hash')
     .attr('x', 0)
     .attr('y', 20)
     .attr('text-anchor', 'middle')
 
-  nodeEnter.append('text')
+  nodeEnter
+    .append('text')
     .attr('class', 'peer-text label fsm-state')
     .attr('x', 0)
     .attr('y', 40)
     .attr('text-anchor', 'middle')
-  
-  nodeEnter.append('text')
+
+  nodeEnter
+    .append('text')
     .attr('class', 'peer-text label miner-name')
     .attr('x', 0)
     .attr('y', 60)
@@ -503,79 +549,72 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
   const nodeMerge = nodeEnter.merge(node as any)
 
   // Update node class based on connection status
-  nodeMerge.select('rect')
-    .attr('class', function(this: any, d: any) {
-      // Check if this is our current node
-      if ((currentNodePeerID && d.peer_id === currentNodePeerID)) {
-        return 'peer-node current-node'
-      }
-      const hasOutgoingSync = d.sync_peer_id && nodeMap.has(d.sync_peer_id)
-      const hasIncomingSync = Array.from(nodeMap.values()).some(n => n.sync_peer_id === d.peer_id)
-      
-      // Check if this node just finished syncing (was syncing before, not anymore)
-      const rect = d3.select(this)
-      const wasSyncing = rect.classed('connected')
-      const isNowSynced = !hasOutgoingSync && !hasIncomingSync && wasSyncing
-      
-      if (isNowSynced) {
-        // Flash green briefly when sync completes
-        rect
-          .transition()
-          .duration(300)
-          .style('fill', '#15B241')
-          .style('opacity', 0.8)
-          .transition()
-          .duration(300)
-          .style('fill', null)
-          .style('opacity', null)
-      }
-      
-      return hasOutgoingSync || hasIncomingSync ? 'peer-node connected' : 'peer-node disconnected'
-    })
+  nodeMerge.select('rect').attr('class', function (this: any, d: any) {
+    // Check if this is our current node
+    if (currentNodePeerID && d.peer_id === currentNodePeerID) {
+      return 'peer-node current-node'
+    }
+    const hasOutgoingSync = d.sync_peer_id && nodeMap.has(d.sync_peer_id)
+    const hasIncomingSync = Array.from(nodeMap.values()).some((n) => n.sync_peer_id === d.peer_id)
+
+    // Check if this node just finished syncing (was syncing before, not anymore)
+    const rect = d3.select(this)
+    const wasSyncing = rect.classed('connected')
+    const isNowSynced = !hasOutgoingSync && !hasIncomingSync && wasSyncing
+
+    if (isNowSynced) {
+      // Flash green briefly when sync completes
+      rect
+        .transition()
+        .duration(300)
+        .style('fill', '#15B241')
+        .style('opacity', 0.8)
+        .transition()
+        .duration(300)
+        .style('fill', null)
+        .style('opacity', null)
+    }
+
+    return hasOutgoingSync || hasIncomingSync ? 'peer-node connected' : 'peer-node disconnected'
+  })
 
   // Update text content for all nodes
-  nodeMerge.select('.uptime-text')
-    .text((d: any) => {
-      if (d.start_time) {
-        // Convert Unix timestamp to milliseconds for humanTime
-        return humanTime(d.start_time * 1000)
-      }
-      return ''
-    })
+  nodeMerge.select('.uptime-text').text((d: any) => {
+    if (d.start_time) {
+      // Convert Unix timestamp to milliseconds for humanTime
+      return humanTime(d.start_time * 1000)
+    }
+    return ''
+  })
 
-  nodeMerge.select('.connection-time')
-    .text((d: any) => {
-      if (d.sync_peer_id && d.sync_connected_at) {
-        // Use server-provided sync connection time (Unix timestamp in seconds)
-        return '→ ' + humanTime(d.sync_connected_at * 1000)
-      }
-      return ''
-    })
+  nodeMerge.select('.connection-time').text((d: any) => {
+    if (d.sync_peer_id && d.sync_connected_at) {
+      // Use server-provided sync connection time (Unix timestamp in seconds)
+      return '→ ' + humanTime(d.sync_connected_at * 1000)
+    }
+    return ''
+  })
 
-  nodeMerge.select('.peer-id')
-    .text((d: any) => d?.peer_id ? truncatePeerId(d.peer_id) : '')
+  nodeMerge.select('.peer-id').text((d: any) => (d?.peer_id ? truncatePeerId(d.peer_id) : ''))
 
-  nodeMerge.select('.base-url')
-    .text((d: any) => d?.base_url || 'No URL')
+  nodeMerge.select('.base-url').text((d: any) => d?.base_url || 'No URL')
 
-  nodeMerge.select('.block-height')
-    .text((d: any) => {
-      if (!d) return 'Height: 0'
-      const height = d.best_height || d.height || 0
-      return `Height: ${height.toLocaleString()}`
-    })
+  nodeMerge.select('.block-height').text((d: any) => {
+    if (!d) return 'Height: 0'
+    const height = d.best_height || d.height || 0
+    return `Height: ${height.toLocaleString()}`
+  })
 
-  nodeMerge.select('.block-hash')
-    .text((d: any) => {
-      if (!d) return 'No hash'
-      const hash = d.best_block_hash || d.hash || ''
-      return hash ? `${hash.slice(0, 8)}...${hash.slice(-8)}` : 'No hash'
-    })
+  nodeMerge.select('.block-hash').text((d: any) => {
+    if (!d) return 'No hash'
+    const hash = d.best_block_hash || d.hash || ''
+    return hash ? `${hash.slice(0, 8)}...${hash.slice(-8)}` : 'No hash'
+  })
 
-  nodeMerge.select('.fsm-state')
-    .text((d: any) => d?.fsm_state || '')
-  
-  nodeMerge.select('.miner-name')
+  nodeMerge.select('.fsm-state').text((d: any) => d?.fsm_state || '')
+
+  nodeMerge
+    .select('.miner-name')
     .text((d: any) => {
       if (!d) return ''
       const minerName = d.miner_name || d.miner || ''
@@ -589,16 +628,14 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
 
   // Add hover effects
   nodeMerge
-    .on('mouseover', function(event: any, d: any) {
+    .on('mouseover', function (event: any, d: any) {
       if (!d) return // Guard against undefined data
-      
+
       d3.select(this).select('rect').classed('selected', true)
-      
+
       // Show tooltip with full information
-      tooltip!.transition()
-        .duration(200)
-        .style('opacity', .9)
-      
+      tooltip!.transition().duration(200).style('opacity', 0.9)
+
       let html = `
         <div class="label">Peer ID:</div>
         <div class="value">${d.peer_id || 'Unknown'}</div>
@@ -609,7 +646,7 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
         <div class="label">Block Hash:</div>
         <div class="value">${d.best_block_hash || d.hash || 'N/A'}</div>
       `
-      
+
       if (d.miner_name || d.miner) {
         html += `
           <div class="label">Miner:</div>
@@ -647,23 +684,22 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
         `
       }
 
-      tooltip!.html(html)
-        .style('left', (event.pageX + 10) + 'px')
-        .style('top', (event.pageY - 28) + 'px')
+      tooltip!
+        .html(html)
+        .style('left', event.pageX + 10 + 'px')
+        .style('top', event.pageY - 28 + 'px')
     })
-    .on('mouseout', function(_event: any, _d: any) {
+    .on('mouseout', function (_event: any, _d: any) {
       d3.select(this).select('rect').classed('selected', false)
-      tooltip!.transition()
-        .duration(500)
-        .style('opacity', 0)
+      tooltip!.transition().duration(500).style('opacity', 0)
     })
 
   // Update positions on simulation tick
   currentSimulation.on('tick', () => {
     // Apply boundary constraints
-    nodesArray.forEach(d => {
+    nodesArray.forEach((d) => {
       // Always keep our node centered (check both currentNodePeerID and is_self flag)
-      if ((currentNodePeerID && d.peer_id === currentNodePeerID)) {
+      if (currentNodePeerID && d.peer_id === currentNodePeerID) {
         d.x = width / 2
         d.y = height / 2
         d.fx = width / 2
@@ -678,39 +714,40 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
         }
       }
     })
-    
+
     // Update all lines within each link group
-    linkMerge.selectAll('line')
-      .attr('x1', function(this: any) {
+    linkMerge
+      .selectAll('line')
+      .attr('x1', function (this: any) {
         const d = d3.select(this.parentNode).datum() as any
-        const sourceId = typeof d.source === 'string' ? d.source : (d.source.peer_id || d.source.id)
-        const source = nodesArray.find(n => n.peer_id === sourceId)
+        const sourceId = typeof d.source === 'string' ? d.source : d.source.peer_id || d.source.id
+        const source = nodesArray.find((n) => n.peer_id === sourceId)
         return source?.x || 0
       })
-      .attr('y1', function(this: any) {
+      .attr('y1', function (this: any) {
         const d = d3.select(this.parentNode).datum() as any
-        const sourceId = typeof d.source === 'string' ? d.source : (d.source.peer_id || d.source.id)
-        const source = nodesArray.find(n => n.peer_id === sourceId)
+        const sourceId = typeof d.source === 'string' ? d.source : d.source.peer_id || d.source.id
+        const source = nodesArray.find((n) => n.peer_id === sourceId)
         return source?.y || 0
       })
-      .attr('x2', function(this: any) {
+      .attr('x2', function (this: any) {
         const d = d3.select(this.parentNode).datum() as any
-        const targetId = typeof d.target === 'string' ? d.target : (d.target.peer_id || d.target.id)
-        const sourceId = typeof d.source === 'string' ? d.source : (d.source.peer_id || d.source.id)
-        const target = nodesArray.find(n => n.peer_id === targetId)
-        const source = nodesArray.find(n => n.peer_id === sourceId)
+        const targetId = typeof d.target === 'string' ? d.target : d.target.peer_id || d.target.id
+        const sourceId = typeof d.source === 'string' ? d.source : d.source.peer_id || d.source.id
+        const target = nodesArray.find((n) => n.peer_id === targetId)
+        const source = nodesArray.find((n) => n.peer_id === sourceId)
         const dx = (target?.x || 0) - (source?.x || 0)
         const dy = (target?.y || 0) - (source?.y || 0)
         const angle = Math.atan2(dy, dx)
         // Shorten line to not overlap with target node
         return (target?.x || 0) - Math.cos(angle) * (nodeWidth / 2 + 15)
       })
-      .attr('y2', function(this: any) {
+      .attr('y2', function (this: any) {
         const d = d3.select(this.parentNode).datum() as any
-        const targetId = typeof d.target === 'string' ? d.target : (d.target.peer_id || d.target.id)
-        const sourceId = typeof d.source === 'string' ? d.source : (d.source.peer_id || d.source.id)
-        const target = nodesArray.find(n => n.peer_id === targetId)
-        const source = nodesArray.find(n => n.peer_id === sourceId)
+        const targetId = typeof d.target === 'string' ? d.target : d.target.peer_id || d.target.id
+        const sourceId = typeof d.source === 'string' ? d.source : d.source.peer_id || d.source.id
+        const target = nodesArray.find((n) => n.peer_id === targetId)
+        const source = nodesArray.find((n) => n.peer_id === sourceId)
         const dx = (target?.x || 0) - (source?.x || 0)
         const dy = (target?.y || 0) - (source?.y || 0)
         const angle = Math.atan2(dy, dx)
@@ -723,7 +760,7 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
 
   function dragstarted(event: any, d: any) {
     // Don't allow dragging our own node
-    if ((currentNodePeerID && d.peer_id === currentNodePeerID)) {
+    if (currentNodePeerID && d.peer_id === currentNodePeerID) {
       return
     }
     if (!event.active) currentSimulation!.alphaTarget(0.3).restart()
@@ -733,7 +770,7 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
 
   function dragged(event: any, d: any) {
     // Don't allow dragging our own node
-    if ((currentNodePeerID && d.peer_id === currentNodePeerID)) {
+    if (currentNodePeerID && d.peer_id === currentNodePeerID) {
       return
     }
     d.fx = event.x
@@ -742,7 +779,7 @@ export function drawPeerNetwork(selector: HTMLElement, nodes: PeerNode[], curren
 
   function dragended(event: any, d: any) {
     // Don't allow dragging our own node
-    if ((currentNodePeerID && d.peer_id === currentNodePeerID)) {
+    if (currentNodePeerID && d.peer_id === currentNodePeerID) {
       return
     }
     if (!event.active) currentSimulation!.alphaTarget(0)

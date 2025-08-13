@@ -135,7 +135,7 @@
   <div class="content">
     <HomeStatsCard loading={statsLoading} data={statsData} onRefresh={getStatsData} />
     {#if Graph}
-      <Graph data={blockGraphData} {period} {onChangePeriod} />
+      <svelte:component this={Graph} data={blockGraphData} {period} {onChangePeriod} />
     {/if}
   </div>
 </PageWithMenu>

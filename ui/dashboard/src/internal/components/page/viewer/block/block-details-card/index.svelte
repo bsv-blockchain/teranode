@@ -67,13 +67,14 @@
         size={15}
       />
     </div>
-    <div
+    <button
       class="icon"
       on:click={() => onReverseHash(expandedHeader.hash)}
       use:$tippy={{ content: t('tooltip.reverse-hash') }}
+      type="button"
     >
       <Icon name="icon-reeverse-line" size={15} />
-    </div>
+    </button>
     &nbsp;&nbsp;&nbsp;
     <a href="/forks/?hash={expandedHeader.hash}">forks</a>
   </div>
@@ -272,5 +273,12 @@
     padding-top: 4px;
     padding-left: 8px;
     cursor: pointer;
+  }
+
+  button.icon {
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
   }
 </style>

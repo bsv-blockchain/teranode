@@ -121,6 +121,8 @@
   <!-- svelte-ignore a11y-click-events-have-key-events -->
   <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
   <div
+    role="tab"
+    aria-selected={selected}
     data-test-id={testId}
     class={`tui-tab${clazz ? ' ' + clazz : ''}`}
     style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}

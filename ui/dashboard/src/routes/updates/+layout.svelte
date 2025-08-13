@@ -70,9 +70,10 @@
         in:fly={{ x: 200, opacity: 0, duration: 300 }}
         out:fade={{ delay: 100 }}
       >
-        <div
+        <button
           class="expand"
           on:click={showExpand ? onMaxMsg : onPosts}
+          type="button"
           use:$tippy={{
             content: showExpand
               ? maxMsg
@@ -82,7 +83,7 @@
           }}
         >
           <Icon name="icon-chevron-left-line" size={15} />
-        </div>
+        </button>
         <slot />
       </div>
     {/if}

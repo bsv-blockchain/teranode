@@ -155,10 +155,11 @@
             {/if}
             {#each colDefs as colDef, i (colDef.id)}
               <!-- svelte-ignore a11y-click-events-have-key-events -->
-              <div
+              <button
                 class="th"
                 on:click={() => onHeaderClick(colDef.id)}
                 class:right={i > 0 && colDef?.type === 'number'}
+                type="button"
               >
                 <div class="table-cell-row">
                   {colDef.name}
@@ -176,7 +177,7 @@
                     </div>
                   {/if}
                 </div>
-              </div>
+              </button>
             {/each}
             {#if getRowIconActions}
               <div class="th" />
@@ -218,7 +219,11 @@
                   {#each colDefs as colDef (colDef.id)}
                     <div class="inner-grid-item" {...getStyleProps(colDef)}>
                       <!-- svelte-ignore a11y-click-events-have-key-events -->
-                      <div class="inner-grid-item-label" on:click={() => onHeaderClick(colDef.id)}>
+                      <button
+                        class="inner-grid-item-label"
+                        on:click={() => onHeaderClick(colDef.id)}
+                        type="button"
+                      >
                         <div class="table-cell-row">
                           {colDef.name}
                           {#if sortEnabled && sortState.sortColumn === colDef.id}
@@ -241,7 +246,7 @@
                             </div>
                           {/if}
                         </div>
-                      </div>
+                      </button>
                       <div class="inner-grid-item-value">
                         {#if getDisplay(renderCells, renderTypes, colDef, idField, item).component}
                           <svelte:component
@@ -269,12 +274,14 @@
                   <div class="table-cell-row">
                     {#each getRowIconActions(name, item, idField) || [] as actionItem (actionItem.icon)}
                       <!-- svelte-ignore a11y-click-events-have-key-events -->
-                      <div
+                      <button
                         class="action"
                         class:disabled={actionItem.disabled}
                         on:click={actionItem.disabled
                           ? null
                           : () => onActionIcon(actionItem.type, item)}
+                        disabled={actionItem.disabled}
+                        type="button"
                       >
                         {#if actionItem.render === 'icon'}
                           <div class="ico">
@@ -291,7 +298,7 @@
                             />
                           </div>
                         {/if}
-                      </div>
+                      </button>
                     {/each}
                   </div>
                 {/if}
@@ -438,6 +445,16 @@
     cursor: pointer;
   }
 
+  button.th {
+    background: none;
+    border: none;
+    padding: inherit;
+    font: inherit;
+    color: inherit;
+    width: 100%;
+    display: block;
+  }
+
   .table .th + .th {
     padding-left: 15px;
   }
@@ -552,6 +569,17 @@
     cursor: pointer;
   }
 
+  button.inner-grid-item-label {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    width: 100%;
+    display: block;
+    text-align: left;
+  }
+
   .table-cell-row {
     display: flex;
     align-items: center;
@@ -575,6 +603,10 @@
   .action {
     cursor: pointer;
     color: #232d7c;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
   }
   .action .ico {
     width: 18px;

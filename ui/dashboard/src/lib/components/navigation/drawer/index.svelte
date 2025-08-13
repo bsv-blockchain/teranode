@@ -69,7 +69,15 @@
 </script>
 
 {#if showCover}
-  <div class="cover" in:fade on:mousedown|preventDefault={onClose} style={`${cssVars.join(';')}`} />
+  <div
+    class="cover"
+    role="button"
+    tabindex="-1"
+    in:fade
+    on:mousedown|preventDefault={onClose}
+    on:keydown={(e) => e.key === 'Escape' && onClose()}
+    style={`${cssVars.join(';')}`}
+  />
 {/if}
 
 <div
@@ -78,17 +86,22 @@
   style={`${cssVars.join(';')}`}
 >
   {#if enableCollapse}
-    <div class="collapse-icon" on:click={onCollapseClick}>
+    <button
+      class="collapse-icon"
+      on:click={onCollapseClick}
+      type="button"
+      aria-label="Toggle drawer"
+    >
       <Icon name="chevron-right" class="icon" size={15} />
-    </div>
+    </button>
   {/if}
 
   <div class="container">
     {#key collapsed}
       {#if hasHeader}
-        <div class="header" on:click={onHeader}>
+        <button class="header" on:click={onHeader} type="button">
           <slot name="header" />
-        </div>
+        </button>
       {/if}
     {/key}
 
@@ -97,9 +110,9 @@
     </div>
 
     {#if hasFooter}
-      <div class="footer" on:click={onHeader}>
+      <button class="footer" on:click={onHeader} type="button">
         <slot name="footer" />
-      </div>
+      </button>
     {/if}
   </div>
 </div>
@@ -131,6 +144,13 @@
     height: var(--header-height);
 
     padding: 0 16px;
+    background: none;
+    border: none;
+    display: block;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
 
     display: flex;
     align-items: center;
@@ -184,6 +204,10 @@
       transform var(--easing-duration, 0.2s) var(--easing-function, ease-in-out),
       background-color var(--easing-duration, 0.2s) var(--easing-function, ease-in-out),
       box-shadow var(--easing-duration, 0.2s) var(--easing-function, ease-in-out);
+    border: none;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
   }
   .tui-drawer.collapsed .collapse-icon {
     transform: rotate(0deg);
@@ -192,5 +216,17 @@
     cursor: pointer;
     background-color: rgba(255, 255, 255, 0.05);
     box-shadow: 0px 0px 4px rgba(0, 0, 0, 0.08);
+  }
+
+  .tui-drawer .footer {
+    width: 100%;
+    background: none;
+    border: none;
+    display: block;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
   }
 </style>

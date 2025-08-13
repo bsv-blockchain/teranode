@@ -21,8 +21,9 @@
   $: hasOutputs = coinbaseTx?.outputs?.length > 0
 
   // Calculate total block reward from coinbase outputs
-  $: totalReward = coinbaseTx?.outputs?.reduce((sum, output) => sum + (output.satoshis || 0), 0) || 0
-  
+  $: totalReward =
+    coinbaseTx?.outputs?.reduce((sum, output) => sum + (output.satoshis || 0), 0) || 0
+
   // Calculate transaction size from hex
   $: txSize = coinbaseTx?.hex ? coinbaseTx.hex.length / 2 : 0
 </script>
@@ -30,7 +31,8 @@
 {#if coinbaseTx}
   <Card title={t(`${baseKey}.title`)} headerPadding="20px 24px 16px 24px">
     <div class="copy-link" slot="subtitle">
-      <a href={getDetailsUrl(DetailType.tx, coinbaseTx.txid)} class="hash-link">{coinbaseTx.txid}</a>
+      <a href={getDetailsUrl(DetailType.tx, coinbaseTx.txid)} class="hash-link">{coinbaseTx.txid}</a
+      >
       <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
         <ActionStatusIcon
           icon="icon-duplicate-line"
@@ -118,14 +120,6 @@
     font-weight: 400;
     line-height: 24px;
     letter-spacing: 0.3px;
-  }
-
-  .link {
-    color: #4a9eff;
-    text-decoration: none;
-  }
-  .link:hover {
-    text-decoration: underline;
   }
 
   .copy-link {

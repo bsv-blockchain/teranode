@@ -159,12 +159,14 @@
                   <div class="table-cell-row">
                     {#each getRowIconActions(name, item, idField) || [] as actionItem (actionItem.icon)}
                       <!-- svelte-ignore a11y-click-events-have-key-events -->
-                      <div
+                      <button
                         class="action"
                         class:disabled={actionItem.disabled}
                         on:click={actionItem.disabled
                           ? null
                           : () => onActionIcon(actionItem.type, item)}
+                        disabled={actionItem.disabled}
+                        type="button"
                       >
                         {#if actionItem.render === 'icon'}
                           <div class="ico">
@@ -181,7 +183,7 @@
                             />
                           </div>
                         {/if}
-                      </div>
+                      </button>
                     {/each}
                   </div>
                 {/if}
@@ -369,6 +371,10 @@
   .action {
     cursor: pointer;
     color: #232d7c;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
   }
   .action .ico {
     width: 18px;

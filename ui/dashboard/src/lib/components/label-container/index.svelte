@@ -114,11 +114,18 @@
 
 <!-- svelte-ignore a11y-click-events-have-key-events -->
 <div
+  role={interactive && !disabled ? 'button' : null}
   data-test-id={testId}
   class={`tui-label-container${clazz ? ' ' + clazz : ''}`}
   class:interactive={interactive && !disabled}
   style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}
   on:click
+  on:keydown={(e) => {
+    if (interactive && !disabled && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault()
+      e.currentTarget.click()
+    }
+  }}
   tabindex="-1"
 >
   {#if label}
@@ -130,7 +137,7 @@
         ? `--color:var(--comp-label-disabled-color);--margin:${margin}`
         : `--margin:${margin}`}
     /> -->
-    <label class="label" aria-label={label} id={`${name}_label`}>
+    <label class="label" aria-label={label} id={`${name}_label`} for={name}>
       {label}
       {required ? ' *' : ''}
     </label>

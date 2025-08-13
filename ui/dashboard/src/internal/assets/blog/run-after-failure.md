@@ -8,4 +8,4 @@ When one or more Teranode nodes fail, we sometimes let it keep on running, becau
 
 We are confident that we have solution for the problems we have been experiencing and this is partly due to running the network out of sync, and seeing what happens on the service under stress.
 
-The long-running test is now coming very close to start. 
+The long-running test is now coming very close to start.

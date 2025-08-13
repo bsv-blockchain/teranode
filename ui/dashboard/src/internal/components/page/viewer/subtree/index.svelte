@@ -29,8 +29,17 @@
 
   let result: any = null
 
-  $: {
-    if ($assetHTTPAddress && type && hash && hash.length === 64) {
+  // Track previous values to prevent unnecessary fetches
+  let lastFetchParams = { assetHTTPAddress: '', hash: '', blockHash: '' }
+
+  $: if ($assetHTTPAddress && type && hash && hash.length === 64) {
+    // Only fetch if parameters actually changed
+    if (
+      lastFetchParams.assetHTTPAddress !== $assetHTTPAddress ||
+      lastFetchParams.hash !== hash ||
+      lastFetchParams.blockHash !== blockHash
+    ) {
+      lastFetchParams = { assetHTTPAddress: $assetHTTPAddress, hash, blockHash }
       fetchData()
     }
   }

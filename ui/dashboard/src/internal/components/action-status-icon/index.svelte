@@ -68,13 +68,22 @@
   })
 </script>
 
-<div class="action-status-icon" on:click={onClick} style:--size={size}>
+<button class="action-status-icon" on:click={onClick} style:--size={size} type="button">
   <Icon name={showIcon} {size} />
-</div>
+</button>
 
 <style>
   .action-status-icon {
     width: var(--size);
     height: var(--size);
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 </style>

@@ -1,795 +1,891 @@
-import * as d3 from 'd3';
-import type {TreeLayout} from "d3-hierarchy";
+import * as d3 from 'd3'
+import type { TreeLayout } from 'd3-hierarchy'
 
+function treeBoxes(selector, jsonData, orientation) {
+  // const direction = "bottom-to-top"
+  // const direction = "left-to-right"
+  // const direction = "right-to-left"
+  // const direction = "top-to-bottom"
 
-function treeBoxes(selector, jsonData, orientation)
-{
-    // const direction = "bottom-to-top"
-    // const direction = "left-to-right"
-    // const direction = "right-to-left"
-    // const direction = "top-to-bottom"
-    
-    const blue = '#337ab7',
-        green = '#3b763b',
-        yellow = '#9d742e',
-        // blueText = '#4ab1eb',
-        purple = '#693c83';
+  const blue = '#337ab7',
+    green = '#3b763b',
+    yellow = '#9d742e',
+    // blueText = '#4ab1eb',
+    purple = '#693c83'
 
-    const margin = {
-            top : 0,
-            right : 0,
-            bottom : 100,
-            left : 0
-        };
-    // Height and width are redefined later in function of the size of the tree
-    // (after that the data are loaded)
-    // default direction is assumed horizontal (left-to-right | right-to-left)
-    let width = 800 - margin.right - margin.left,
-    height = 400 - margin.top - margin.bottom;
+  const margin = {
+    top: 0,
+    right: 0,
+    bottom: 100,
+    left: 0,
+  }
+  // Height and width are redefined later in function of the size of the tree
+  // (after that the data are loaded)
+  // default direction is assumed horizontal (left-to-right | right-to-left)
+  let width = 800 - margin.right - margin.left,
+    height = 400 - margin.top - margin.bottom
 
+  switch (orientation) {
+    case 'bottom-to-top':
+    case 'top-to-bottom':
+      height = 800 - margin.right - margin.left
+      width = 400 - margin.top - margin.bottom
+  }
+
+  const rectNode = { width: 128, height: 72, textMargin: 5 },
+    tooltip = { width: 150, height: 40, textMargin: 5 },
+    duration = 750
+  let i = 0
+
+  let mousedown, mouseWheelName // Use to save temporarily 'mousedown.zoom' value
+  // let mouseWheel,
+  //     mouseWheelName,
+  //     isKeydownZoom = false;
+
+  let tree: TreeLayout<any>
+  let root: any
+  let baseSvg,
+    svgGroup,
+    nodeGroup, // If nodes are not grouped together, after a click the svg node will be set after his corresponding tooltip and will hide it
+    nodeGroupTooltip,
+    linkGroup,
+    linkGroupToolTip,
+    defs
+
+  init(jsonData)
+
+  function init(jsonData) {
+    if (jsonData) {
+      drawTree(jsonData)
+    } else {
+      console.error(jsonData)
+      alert('Invalid data.')
+    }
+  }
+
+  function drawTree(jsonData) {
+    root = d3.hierarchy(jsonData)
+    tree = d3.tree().size([height, width])
     switch (orientation) {
-    case "bottom-to-top":
-    case "top-to-bottom":
-        height = 800 - margin.right - margin.left;
-        width = 400 - margin.top - margin.bottom;
+      case 'bottom-to-top':
+      case 'top-to-bottom':
+        tree = d3.tree().size([width, height])
     }
 
-    const rectNode = { width : 128, height :72, textMargin : 5 },
-          tooltip = { width : 150, height : 40, textMargin : 5 },
-          duration = 750;
-    let i = 0;
+    const url = new URL(document.location.href)
+    const currentMiner = url.hostname.split('.')[0]
 
-    let mousedown,
-        mouseWheelName; // Use to save temporarily 'mousedown.zoom' value
-    // let mouseWheel,
-    //     mouseWheelName,
-    //     isKeydownZoom = false;
+    // Dynamically set the height of the main svg container
+    // breadthFirstTraversal returns the max number of node on a same level
+    // and colors the nodes
+    const maxTreeWidth = breadthFirstTraversal([root], function (currentLevel) {
+      currentLevel.forEach(function (node: any) {
+        if (!node.data?.miner || node.data?.miner?.match(currentMiner)) node.color = blue
+        if (node.data?.miner?.endsWith('1')) node.color = yellow
+        if (node.data?.miner?.endsWith('2')) node.color = green
+        if (node.data?.miner?.endsWith('3')) node.color = purple
+      })
+    })
+    switch (orientation) {
+      case 'bottom-to-top':
+        height +=
+          root.height * (rectNode.height + 20) + tooltip.height + 20 + margin.right + margin.left
+        width +=
+          maxTreeWidth * (rectNode.width * 1.5) + tooltip.width / 2 - margin.top - margin.bottom
+        break
+      case 'top-to-bottom':
+        height +=
+          root.height * (rectNode.height + 20) + tooltip.height + 20 + margin.top + margin.bottom
+        width +=
+          maxTreeWidth * (rectNode.width * 1.5) + tooltip.width / 2 - margin.right - margin.left
+        break
+      case 'left-to-right':
+        height +=
+          maxTreeWidth * (rectNode.height + 20) + tooltip.height + 20 - margin.right - margin.left
+        width +=
+          root.height * (rectNode.width * 1.5) + tooltip.width / 2 - margin.top - margin.bottom
+        break
+      case 'right-to-left':
+        height +=
+          maxTreeWidth * (rectNode.height + 20) + tooltip.height + 20 - margin.right - margin.left
+        width +=
+          root.height * (rectNode.width * 1.5) + tooltip.width / 2 - margin.top - margin.bottom
+        break
+    }
 
-    let tree: TreeLayout<any>;
-    let root: any;
-    let baseSvg,
-        svgGroup,
-        nodeGroup, // If nodes are not grouped together, after a click the svg node will be set after his corresponding tooltip and will hide it
-        nodeGroupTooltip,
-        linkGroup,
-        linkGroupToolTip,
-        defs;
+    root.x0 = 0
+    root.y0 = 0
 
-    init(jsonData);
+    // root.height and maxTree Width appear to be inverted, but it's normal
+    console.log({ maxDepth: root.height, maxTreeWidth, height, width })
 
-    function init(jsonData)
-    {
-        if (jsonData) {
-            drawTree(jsonData);
-        } else {
-            console.error(jsonData);
-            alert('Invalid data.');
+    baseSvg = d3
+      .select(selector)
+      .append('svg')
+      .attr('width', width + margin.right + margin.left)
+      .attr('height', height + margin.top + margin.bottom)
+      .attr('class', 'svgContainer')
+    //.call(d3.zoom().on('zoom', zoomAndDrag));
+    //.scaleExtent([0.5, 1.5]) // Limit the zoom scale
+
+    // Mouse wheel is desactivated, else after a first drag of the tree, wheel event drags the tree (instead of scrolling the window)
+    getMouseWheelEvent()
+    d3.select(selector).select('svg').on(mouseWheelName, null)
+    d3.select(selector).select('svg').on('dblclick.zoom', null)
+
+    svgGroup = baseSvg
+      .append('g')
+      .attr('class', 'drawarea')
+      .append('g')
+      .attr('transform', 'translate(' + margin.left + ',' + margin.top + ')')
+
+    // SVG elements under nodeGroupTooltip could be associated with nodeGroup,
+    // same for linkGroupToolTip and linkGroup,
+    // but this separation allows to manage the order on which elements are drew
+    // and so tooltips are always on top.
+    nodeGroup = svgGroup.append('g').attr('id', 'nodes')
+    linkGroup = svgGroup.append('g').attr('id', 'links')
+    linkGroupToolTip = svgGroup.append('g').attr('id', 'linksTooltips')
+    nodeGroupTooltip = svgGroup.append('g').attr('id', 'nodesTooltips')
+
+    defs = baseSvg.append('defs')
+    initArrowDef()
+    initDropShadow()
+
+    update(root)
+    d3.select(root).call(click)
+  }
+
+  function update(source) {
+    // Compute the new tree layout
+    const nodes = root.descendants().reverse()
+    const links = tree(root).links()
+
+    // Check if two nodes are in collision on the ordinates axe and move them
+    breadthFirstTraversal([root], collision)
+    // Normalize for fixed-depth
+    nodes.forEach(function (d) {
+      switch (orientation) {
+        case 'bottom-to-top':
+          d.y = (root.height - d.depth) * (rectNode.height * 2.0)
+          break
+        case 'top-to-bottom':
+          d.y = d.depth * (rectNode.height * 2.0)
+          break
+        case 'left-to-right':
+          d.y = d.depth * (rectNode.width * 1.5)
+          break
+        case 'right-to-left':
+          d.y = (root.height - d.depth) * (rectNode.width * 1.5)
+          break
+      }
+    })
+
+    // 1) ******************* Update the nodes *******************
+    const node = nodeGroup.selectAll('g.node').data(nodes, function (d) {
+      return d.id || (d.id = ++i)
+    })
+    const nodesTooltip = nodeGroupTooltip.selectAll('g').data(nodes, function (d) {
+      return d.id || (d.id = ++i)
+    })
+
+    // Enter any new nodes at the parent's previous position
+    // We use "insert" rather than "append", so when a new child node is added (after a click)
+    // it is added at the top of the group, so it is drawed first
+    // else the nodes tooltips are drawed before their children nodes and they
+    // hide them
+    const nodeEnter = node
+      .enter()
+      .insert('g', 'g.node')
+      .attr('class', 'node')
+      .attr('transform', function () {
+        return 'translate(' + source.y0 + ',' + source.x0 + ')'
+      })
+      .on('click', function (d) {
+        click(d)
+      })
+    const nodeEnterTooltip = nodesTooltip
+      .enter()
+      .append('g')
+      .attr('transform', function () {
+        return 'translate(' + source.y0 + ',' + source.x0 + ')'
+      })
+
+    nodeEnter
+      .append('g')
+      .append('rect')
+      .attr('rx', 6)
+      .attr('ry', 6)
+      .attr('width', rectNode.width)
+      .attr('height', rectNode.height)
+      .attr('class', 'node-rect')
+      .attr('fill', function (d) {
+        return d.color
+      })
+      .attr('filter', 'url(#drop-shadow)')
+
+    nodeEnter
+      .append('foreignObject')
+      .attr('x', rectNode.textMargin)
+      .attr('y', rectNode.textMargin)
+      .attr('width', function () {
+        return rectNode.width - rectNode.textMargin * 2 < 0
+          ? 0
+          : rectNode.width - rectNode.textMargin * 2
+      })
+      .attr('height', function () {
+        return rectNode.height - rectNode.textMargin * 2 < 0
+          ? 0
+          : rectNode.height - rectNode.textMargin * 2
+      })
+      .append('xhtml')
+      .html(function (d) {
+        // get the main domain from the url of the form http://m2.scaling.teranode.network/api/v1
+        let domain = d.data.miner
+        if (domain) {
+          try {
+            const url = new URL(d.data.miner)
+            domain = url.hostname.split('.')[0]
+          } catch (e) {
+            console.error(e)
+          }
         }
+        const date = new Date(d.data.block_time * 1000)
+
+        // replace the hash in the url with the current hash
+        //const link = document.location.href.replace(/\/forks\/\?hash=.*/, `/forks/?hash=${d.data.hash}`);
+
+        return (
+          '<div style="width: ' +
+          (rectNode.width - rectNode.textMargin * 2) +
+          'px; height: ' +
+          (rectNode.height - rectNode.textMargin * 2) +
+          'px;" class="node-text wordwrap" >' +
+          '<b>Height: </b>' +
+          d.data.height +
+          '<br>' +
+          '<b>Miner: </b>' +
+          (domain || 'local') +
+          ' (' +
+          date.getHours() +
+          ':' +
+          date.getMinutes().toString().padStart(2, '0') +
+          ')<br>' +
+          //+ '<b><a href="' + link + '">' + d.data.hash + '</a></b><br><br>'
+          d.data.hash +
+          '<br><br>' +
+          '</div>'
+        )
+      })
+      .on('mouseover', function (d: any) {
+        const node = d3.select('#nodeInfoID' + d.id)
+        node.style('visibility', 'visible')
+        node.style('visibility', 'visible')
+      })
+      .on('mouseout', function (d: any) {
+        const node = d3.select('#nodeInfoID' + d.id)
+        node.style('visibility', 'hidden')
+        node.style('visibility', 'hidden')
+      })
+      .on('dblclick', function (e: any) {
+        const d = e.currentTarget?.__data__
+        if (d) {
+          const url = new URL(document.location.href)
+          url.searchParams.set('hash', d.data.hash)
+          window.open(url.toString(), '_self')
+        }
+      })
+
+    nodeEnterTooltip
+      .append('rect')
+      .attr('id', function (d) {
+        return 'nodeInfoID' + d.id
+      })
+      .attr('x', rectNode.width / 2)
+      .attr('y', rectNode.height / 2)
+      .attr('width', tooltip.width)
+      .attr('height', tooltip.height)
+      .attr('class', 'tooltip-box')
+      .style('fill-opacity', 0.8)
+      .on('mouseover', function () {
+        // $('#nodeInfoID' + d.id).css('visibility', 'visible');
+        // $('#nodeInfoTextID' + d.id).css('visibility', 'visible');
+        removeMouseEvents()
+      })
+      .on('mouseout', function () {
+        // $('#nodeInfoID' + d.id).css('visibility', 'hidden');
+        // $('#nodeInfoTextID' + d.id).css('visibility', 'hidden');
+        reactivateMouseEvents()
+      })
+
+    nodeEnterTooltip
+      .append('text')
+      .attr('id', function (d) {
+        return 'nodeInfoTextID' + d.id
+      })
+      .attr('x', rectNode.width / 2 + tooltip.textMargin)
+      .attr('y', rectNode.height / 2 + tooltip.textMargin * 2)
+      .attr('width', tooltip.width)
+      .attr('height', tooltip.height)
+      .attr('class', 'tooltip-text')
+      .style('fill', 'white')
+      .append('tspan')
+      .text(function (d) {
+        return 'Name: ' + d.data.name
+      })
+      .append('tspan')
+      .attr('x', rectNode.width / 2 + tooltip.textMargin)
+      .attr('dy', '1.5em')
+      .text(function (d) {
+        return 'Info: ' + d.data.label
+      })
+
+    // Transition nodes to their new position.
+    switch (orientation) {
+      case 'bottom-to-top':
+      case 'top-to-bottom': {
+        const nodeUpdate = node
+          .transition()
+          .duration(duration)
+          .attr('transform', function (d) {
+            return 'translate(' + d.x + ',' + d.y + ')'
+          })
+        nodesTooltip
+          .transition()
+          .duration(duration)
+          .attr('transform', function (d) {
+            return 'translate(' + d.x + ',' + d.y + ')'
+          })
+
+        nodeUpdate.select('rect').attr('class', function (d) {
+          return d._children ? 'node-rect-closed' : 'node-rect'
+        })
+
+        nodeUpdate.select('text').style('fill-opacity', 1)
+
+        // Transition exiting nodes to the parent's new position
+        const nodeExit = node
+          .exit()
+          .transition()
+          .duration(duration)
+          .attr('transform', function () {
+            return 'translate(' + source.x + ',' + source.y + ')'
+          })
+          .remove()
+        nodesTooltip
+          .exit()
+          .transition()
+          .duration(duration)
+          .attr('transform', function () {
+            return 'translate(' + source.x + ',' + source.y + ')'
+          })
+          .remove()
+
+        nodeExit.select('text').style('fill-opacity', 1e-6)
+
+        break
+      }
+      case 'left-to-right':
+      case 'right-to-left': {
+        const nodeUpdate = node
+          .transition()
+          .duration(duration)
+          .attr('transform', function (d) {
+            return 'translate(' + d.y + ',' + d.x + ')'
+          })
+        nodesTooltip
+          .transition()
+          .duration(duration)
+          .attr('transform', function (d) {
+            return 'translate(' + d.y + ',' + d.x + ')'
+          })
+
+        nodeUpdate.select('rect').attr('class', function (d) {
+          return d._children ? 'node-rect-closed' : 'node-rect'
+        })
+
+        nodeUpdate.select('text').style('fill-opacity', 1)
+
+        // Transition exiting nodes to the parent's new position
+        const nodeExit = node
+          .exit()
+          .transition()
+          .duration(duration)
+          .attr('transform', function () {
+            return 'translate(' + source.y + ',' + source.x + ')'
+          })
+          .remove()
+        nodesTooltip
+          .exit()
+          .transition()
+          .duration(duration)
+          .attr('transform', function () {
+            return 'translate(' + source.y + ',' + source.x + ')'
+          })
+          .remove()
+
+        nodeExit.select('text').style('fill-opacity', 1e-6)
+      }
     }
 
-    function drawTree(jsonData)
-    {
-        root = d3.hierarchy(jsonData);
-        tree = d3.tree().size([ height, width ]);
+    // 2) ******************* Update the links *******************
+    const link = linkGroup.selectAll('path').data(links, function (d) {
+      return d.target.id
+    })
+    const linkTooltip = linkGroupToolTip.selectAll('g').data(links, function (d) {
+      return d.target.id
+    })
+
+    function linkMarkerStart(direction, isSelected) {
+      if (direction == 'SYNC') {
+        return isSelected ? 'url(#start-arrow-selected)' : 'url(#start-arrow)'
+      }
+      return ''
+    }
+
+    function linkType(link) {
+      if (link.direction == 'SYNC') return 'Synchronous [\u2194]'
+      else {
+        if (link.direction == 'ASYN') return 'Asynchronous [\u2192]'
+      }
+      return '???'
+    }
+
+    d3.selection.prototype.moveToFront = function () {
+      return this.each(function () {
+        // @ts-expect-error ignore
+        this.parentNode.appendChild(this)
+      })
+    }
+
+    // Enter any new links at the parent's previous position.
+    // Enter any new links at the parent's previous position.
+    const linkenter = link
+      .enter()
+      .insert('path', 'g')
+      .attr('class', 'link')
+      .attr('id', function (d) {
+        return 'linkID' + d.target.id
+      })
+      .attr('d', function (d) {
+        return diagonal(d)
+      })
+      .attr('marker-end', 'url(#end-arrow)')
+      .attr('marker-start', function (d: any) {
+        return linkMarkerStart(d.target.data.link.direction, false)
+      })
+      .on('mouseover', function (d: any) {
+        // @ts-expect-error ignore
+        const link = d3.select(this)
+        // @ts-expect-error ignore
+        link.moveToFront()
+
+        // why is this like this?
+        const source = d.target.__data__.source
+        const target = d.target.__data__.target
+
+        link.attr('marker-end', 'url(#end-arrow-selected)')
+        link.attr('marker-start', linkMarkerStart(target.data.link.direction, true))
+        link.attr('class', 'linkselected')
+
+        const tooltip = d3.select('#tooltipLinkID' + target.id)
+        tooltip.attr('x', (target.y + rectNode.width - source.y) / 2 + source.y)
+        tooltip.attr('y', (target.x - source.x) / 2 + source.x)
+        tooltip.style('visibility', 'visible')
+        tooltip.style('visibility', 'visible')
+      })
+      .on('mouseout', function (d: any) {
+        // @ts-expect-error ignore
+        const link = d3.select(this)
+
+        const target = d.target.__data__.target
+
+        link.attr('marker-end', 'url(#end-arrow)')
+        link.attr('marker-start', linkMarkerStart(target.data.link.direction, false))
+        link.attr('class', 'link')
+
+        const tooltip = d3.select('#tooltipLinkID' + target.id)
+        tooltip.style('visibility', 'hidden')
+        tooltip.style('visibility', 'hidden')
+      })
+
+    linkTooltip
+      .enter()
+      .append('rect')
+      .attr('id', function (d: any) {
+        return 'tooltipLinkID' + d.target.id
+      })
+      .attr('class', 'tooltip-box')
+      .style('fill-opacity', 0.8)
+      .attr('x', function (d: any) {
+        return (d.target.y + rectNode.width - d.source.y) / 2 + d.source.y
+      })
+      .attr('y', function (d: any) {
+        return (d.target.x - d.source.x) / 2 + d.source.x
+      })
+      .attr('width', tooltip.width)
+      .attr('height', tooltip.height)
+      .on('mouseover', function (d: any) {
+        const tooltip = d3.select('#tooltipLinkID' + d.target.id)
+        const target = d.target.__data__.target
+
+        tooltip.style('visibility', 'visible')
+        tooltip.style('visibility', 'visible')
+        // After selected a link, the cursor can be hover the tooltip, that's why we still need to highlight the link and the arrow
+        tooltip.attr('class', 'linkselected')
+        tooltip.attr('marker-end', 'url(#end-arrow-selected)')
+        tooltip.attr('marker-start', linkMarkerStart(target.data.link.direction, true))
+        removeMouseEvents()
+      })
+      .on('mouseout', function (d: any) {
+        const tooltip = d3.select('#tooltipLinkID' + d.target.id)
+        const target = d.target.__data__.target
+
+        tooltip.style('visibility', 'hidden')
+        tooltip.style('visibility', 'hidden')
+        tooltip.attr('class', 'link')
+        tooltip.attr('marker-end', 'url(#end-arrow)')
+        tooltip.attr('marker-start', linkMarkerStart(target.data.link.direction, false))
+
+        reactivateMouseEvents()
+      })
+
+    linkTooltip
+      .enter()
+      .append('text')
+      .attr('id', function (d) {
+        return 'tooltipLinkTextID' + d.target.id
+      })
+      .attr('class', 'tooltip-text')
+      .attr('x', function (d) {
+        return (d.target.y + rectNode.width - d.source.y) / 2 + d.source.y + tooltip.textMargin
+      })
+      .attr('y', function (d) {
+        return (d.target.x - d.source.x) / 2 + d.source.x + tooltip.textMargin * 2
+      })
+      .attr('width', tooltip.width)
+      .attr('height', tooltip.height)
+      .style('fill', 'white')
+      .append('tspan')
+      .text(function (d) {
+        return linkType(d.target)
+      })
+      .append('tspan')
+      .attr('x', function (d) {
+        return (d.target.y + rectNode.width - d.source.y) / 2 + d.source.y + tooltip.textMargin
+      })
+      .attr('dy', '1.5em')
+      .text(function (d) {
+        return d.target.data.name
+      })
+
+    // Transition links to their new position.
+    const linkUpdate = link
+      .transition()
+      .duration(duration)
+      .attr('d', function (d) {
+        return diagonal(d)
+      })
+    linkTooltip
+      .transition()
+      .duration(duration)
+      .attr('d', function (d) {
+        return diagonal(d)
+      })
+
+    // Transition exiting nodes to the parent's new position.
+    link.exit().transition().remove()
+
+    linkTooltip.exit().transition().remove()
+
+    // Stash the old positions for transition.
+    nodes.forEach(function (d) {
+      d.x0 = d.x
+      d.y0 = d.y
+    })
+  }
+
+  // Zoom functionnality is desactivated (user can use browser Ctrl + mouse wheel shortcut)
+  // function zoomAndDrag(event) {
+  //     console.log({event})
+  //     //var scale = d3.event.scale,
+  //     const scale = 1,
+  //         tbound = -height * scale,
+  //         bbound = height * scale,
+  //         lbound = (-width + margin.right) * scale,
+  //         rbound = (width - margin.left) * scale;
+  //     let translation = d3.event.translate;
+  //     // limit translation to thresholds
+  //     console.log({translation})
+  //     translation = [
+  //         Math.max(Math.min(translation[0], rbound), lbound),
+  //         Math.max(Math.min(translation[1], bbound), tbound)
+  //     ];
+  //     d3.select('.drawarea')
+  //         .attr('transform', 'translate(' + translation + ')' +
+  //             ' scale(' + scale + ')');
+  // }
+
+  // Toggle children on click.
+  function click(d) {
+    if (d.children) {
+      d._children = d.children
+      d.children = null
+    } else {
+      d.children = d._children
+      d._children = null
+    }
+    update(d)
+  }
+
+  // Breadth-first traversal of the tree
+  // func function is processed on every node of a same level
+  // return the max level
+  function breadthFirstTraversal(tree: any, func: any) {
+    let max = 0
+    if (tree && tree.length > 0) {
+      let currentDepth = tree[0].depth
+      const fifo: any = []
+      let currentLevel: any = []
+
+      fifo.push(tree[0])
+      while (fifo.length > 0) {
+        const node: any = fifo.shift()
+        if (node.depth > currentDepth) {
+          func(currentLevel)
+          currentDepth++
+          max = Math.max(max, currentLevel.length)
+          currentLevel = []
+        }
+        currentLevel.push(node)
+        if (node.children) {
+          for (let j = 0; j < node.children.length; j++) {
+            fifo.push(node.children[j])
+          }
+        }
+      }
+      func(currentLevel)
+      return Math.max(max, currentLevel.length)
+    }
+
+    return 0
+  }
+
+  // x = ordoninates and y = abscissas
+  function collision(siblings) {
+    const minPadding = 5
+    if (siblings) {
+      for (let i = 0; i < siblings.length - 1; i++) {
         switch (orientation) {
-        case "bottom-to-top":
-        case "top-to-bottom":
-            tree = d3.tree().size([ width, height ]);
-        }
-
-
-        const url = new URL(document.location.href);
-        const currentMiner = url.hostname.split('.')[0];
-
-        // Dynamically set the height of the main svg container
-        // breadthFirstTraversal returns the max number of node on a same level
-        // and colors the nodes
-        const maxTreeWidth = breadthFirstTraversal([root], function(currentLevel) {
-            currentLevel.forEach(function(node: any) {
-                if (!node.data?.miner || node.data?.miner?.match(currentMiner))
-                    node.color = blue;
-                if (node.data?.miner?.endsWith("1"))
-                    node.color = yellow;
-                if (node.data?.miner?.endsWith("2"))
-                    node.color = green;
-                if (node.data?.miner?.endsWith("3"))
-                    node.color = purple;
-            });
-        });
-        switch (orientation) {
-        case "bottom-to-top":
-            height += root.height * (rectNode.height + 20) + tooltip.height + 20 + margin.right + margin.left;
-            width += maxTreeWidth * (rectNode.width * 1.5) + tooltip.width / 2 - margin.top - margin.bottom;
-            break;
-        case "top-to-bottom":
-            height += root.height * (rectNode.height + 20) + tooltip.height + 20 + margin.top + margin.bottom;
-            width += maxTreeWidth * (rectNode.width * 1.5) + tooltip.width / 2 - margin.right - margin.left;
-            break;
-        case "left-to-right":
-            height += maxTreeWidth * (rectNode.height + 20) + tooltip.height + 20 - margin.right - margin.left;
-            width += root.height * (rectNode.width * 1.5) + tooltip.width / 2 - margin.top - margin.bottom;
-            break;
-        case "right-to-left":
-            height += maxTreeWidth * (rectNode.height + 20) + tooltip.height + 20 - margin.right - margin.left;
-            width += root.height * (rectNode.width * 1.5) + tooltip.width / 2 - margin.top - margin.bottom;
-            break;
-        }
-
-        root.x0 = 0;
-        root.y0 = 0;
-
-        // root.height and maxTree Width appear to be inverted, but it's normal
-        console.log({maxDepth: root.height, maxTreeWidth, height, width}); 
-
-        baseSvg = d3.select(selector).append('svg')
-            .attr('width', width + margin.right + margin.left)
-            .attr('height', height + margin.top + margin.bottom)
-            .attr('class', 'svgContainer')
-            //.call(d3.zoom().on('zoom', zoomAndDrag));
-        //.scaleExtent([0.5, 1.5]) // Limit the zoom scale
-
-        // Mouse wheel is desactivated, else after a first drag of the tree, wheel event drags the tree (instead of scrolling the window)
-        getMouseWheelEvent();
-        d3.select(selector).select('svg').on(mouseWheelName, null);
-        d3.select(selector).select('svg').on('dblclick.zoom', null);
-
-        svgGroup = baseSvg.append('g')
-            .attr('class','drawarea')
-            .append('g')
-            .attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
-
-        // SVG elements under nodeGroupTooltip could be associated with nodeGroup,
-        // same for linkGroupToolTip and linkGroup,
-        // but this separation allows to manage the order on which elements are drew
-        // and so tooltips are always on top.
-        nodeGroup = svgGroup.append('g')
-            .attr('id', 'nodes');
-        linkGroup = svgGroup.append('g')
-            .attr('id', 'links');
-        linkGroupToolTip = svgGroup.append('g')
-            .attr('id', 'linksTooltips');
-        nodeGroupTooltip = svgGroup.append('g')
-            .attr('id', 'nodesTooltips');
-
-        defs = baseSvg.append('defs');
-        initArrowDef();
-        initDropShadow();
-
-        update(root);
-        d3.select(root).call(click);
-    }
-
-    function update(source)
-    {
-        // Compute the new tree layout
-        const nodes = root.descendants().reverse();
-        const links = tree(root).links();
-
-
-        // Check if two nodes are in collision on the ordinates axe and move them
-        breadthFirstTraversal([root], collision);
-        // Normalize for fixed-depth
-        nodes.forEach(function(d) {
-            switch (orientation) {
-            case "bottom-to-top":
-                d.y = (root.height - d.depth) * (rectNode.height * 2.0)
-                break;
-            case "top-to-bottom":
-                d.y = d.depth * (rectNode.height * 2.0)
-                break;
-            case "left-to-right":
-                d.y = d.depth * (rectNode.width * 1.5);
-                break;
-            case "right-to-left":
-                d.y = (root.height - d.depth) * (rectNode.width * 1.5);
-                break;
+          case 'bottom-to-top':
+          case 'top-to-bottom':
+            if (siblings[i + 1].x - (siblings[i].x + rectNode.width) < minPadding) {
+              siblings[i + 1].x = siblings[i].x + rectNode.width + minPadding * 4
             }
-        }
-        );
-
-
-        // 1) ******************* Update the nodes *******************
-        const node = nodeGroup.selectAll('g.node').data(nodes, function(d) {
-            return d.id || (d.id = ++i);
-        });
-        const nodesTooltip = nodeGroupTooltip.selectAll('g').data(nodes, function(d) {
-            return d.id || (d.id = ++i);
-        });
-
-        // Enter any new nodes at the parent's previous position
-        // We use "insert" rather than "append", so when a new child node is added (after a click)
-        // it is added at the top of the group, so it is drawed first
-        // else the nodes tooltips are drawed before their children nodes and they
-        // hide them
-        const nodeEnter = node.enter().insert('g', 'g.node')
-            .attr('class', 'node')
-            .attr('transform', function() {
-                return 'translate(' + source.y0 + ',' + source.x0 + ')'; })
-            .on('click', function(d) {
-                click(d);
-            });
-        const nodeEnterTooltip = nodesTooltip.enter().append('g')
-            .attr('transform', function() {
-                return 'translate(' + source.y0 + ',' + source.x0 + ')'; });
-
-        nodeEnter.append('g').append('rect')
-            .attr('rx', 6)
-            .attr('ry', 6)
-            .attr('width', rectNode.width)
-            .attr('height', rectNode.height)
-            .attr('class', 'node-rect')
-            .attr('fill', function (d) { return d.color; })
-            .attr('filter', 'url(#drop-shadow)');
-
-        nodeEnter.append('foreignObject')
-            .attr('x', rectNode.textMargin)
-            .attr('y', rectNode.textMargin)
-            .attr('width', function() {
-                return (rectNode.width - rectNode.textMargin * 2) < 0 ? 0
-                    : (rectNode.width - rectNode.textMargin * 2)
-            })
-            .attr('height', function() {
-                return (rectNode.height - rectNode.textMargin * 2) < 0 ? 0
-                    : (rectNode.height - rectNode.textMargin * 2)
-            })
-            .append('xhtml').html(function(d) {
-                // get the main domain from the url of the form http://m2.scaling.ubsv.dev/api/v1
-                let domain = d.data.miner
-                if (domain) {
-                    try {
-                        const url = new URL(d.data.miner);
-                        domain = url.hostname.split('.')[0];
-                    } catch (e) {
-                        console.error(e);
-                    }
-                }
-                const date = new Date(d.data.block_time * 1000);
-
-                // replace the hash in the url with the current hash
-                //const link = document.location.href.replace(/\/forks\/\?hash=.*/, `/forks/?hash=${d.data.hash}`);
-
-                return '<div style="width: '
-                    + (rectNode.width - rectNode.textMargin * 2) + 'px; height: '
-                    + (rectNode.height - rectNode.textMargin * 2) + 'px;" class="node-text wordwrap" >'
-                    + '<b>Height: </b>' + d.data.height + '<br>'
-                    + '<b>Miner: </b>' + (domain || 'local') + ' (' + date.getHours() + ':' + date.getMinutes().toString().padStart(2, '0') + ')<br>'
-                    //+ '<b><a href="' + link + '">' + d.data.hash + '</a></b><br><br>'
-                    + d.data.hash + '<br><br>'
-                    + '</div>';
-            })
-            .on('mouseover', function(d: any) {
-                const node = d3.select('#nodeInfoID' + d.id)
-                node.style('visibility', 'visible');
-                node.style('visibility', 'visible');
-            })
-            .on('mouseout', function(d: any) {
-                const node = d3.select('#nodeInfoID' + d.id)
-                node.style('visibility', 'hidden');
-                node.style('visibility', 'hidden');
-            })
-            .on('dblclick', function(e: any) {
-                const d = e.currentTarget?.__data__;
-                if (d) {
-                    const url = new URL(document.location.href);
-                    url.searchParams.set('hash', d.data.hash);
-                    window.open(url.toString(), "_self");
-                }
-            });
-
-        nodeEnterTooltip.append("rect")
-            .attr('id', function(d) { return 'nodeInfoID' + d.id; })
-            .attr('x', rectNode.width / 2)
-            .attr('y', rectNode.height / 2)
-            .attr('width', tooltip.width)
-            .attr('height', tooltip.height)
-            .attr('class', 'tooltip-box')
-            .style('fill-opacity', 0.8)
-            .on('mouseover', function() {
-                // $('#nodeInfoID' + d.id).css('visibility', 'visible');
-                // $('#nodeInfoTextID' + d.id).css('visibility', 'visible');
-                removeMouseEvents();
-            })
-            .on('mouseout', function() {
-                // $('#nodeInfoID' + d.id).css('visibility', 'hidden');
-                // $('#nodeInfoTextID' + d.id).css('visibility', 'hidden');
-                reactivateMouseEvents();
-            });
-
-        nodeEnterTooltip.append("text")
-            .attr('id', function(d) { return 'nodeInfoTextID' + d.id; })
-            .attr('x', rectNode.width / 2 + tooltip.textMargin)
-            .attr('y', rectNode.height / 2 + tooltip.textMargin * 2)
-            .attr('width', tooltip.width)
-            .attr('height', tooltip.height)
-            .attr('class', 'tooltip-text')
-            .style('fill', 'white')
-            .append("tspan")
-            .text(function(d) {return 'Name: ' + d.data.name;})
-            .append("tspan")
-            .attr('x', rectNode.width / 2 + tooltip.textMargin)
-            .attr('dy', '1.5em')
-            .text(function(d) {return 'Info: ' + d.data.label;});
-
-        // Transition nodes to their new position.
-        switch (orientation) {
-        case "bottom-to-top":
-        case "top-to-bottom": {
-            const nodeUpdate = node.transition().duration(duration)
-                .attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
-            nodesTooltip.transition().duration(duration)
-                .attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
-
-            nodeUpdate.select('rect')
-                .attr('class', function(d) { return d._children ? 'node-rect-closed' : 'node-rect'; });
-    
-            nodeUpdate.select('text').style('fill-opacity', 1);
-
-            // Transition exiting nodes to the parent's new position
-            const nodeExit = node.exit().transition().duration(duration)
-                .attr('transform', function() { return 'translate(' + source.x + ',' + source.y + ')'; })
-                .remove();
-            nodesTooltip.exit().transition().duration(duration)
-                .attr('transform', function() { return 'translate(' + source.x + ',' + source.y + ')'; })
-                .remove();
-
-            nodeExit.select('text').style('fill-opacity', 1e-6);
-
-            break;
-        }
-        case "left-to-right":
-        case "right-to-left": {
-            const nodeUpdate = node.transition().duration(duration)
-                .attr('transform', function(d) { return 'translate(' + d.y + ',' + d.x + ')'; });
-            nodesTooltip.transition().duration(duration)
-                .attr('transform', function(d) { return 'translate(' + d.y + ',' + d.x + ')'; });
-
-            nodeUpdate.select('rect')
-                .attr('class', function(d) { return d._children ? 'node-rect-closed' : 'node-rect'; });
-    
-            nodeUpdate.select('text').style('fill-opacity', 1);
-
-            // Transition exiting nodes to the parent's new position
-            const nodeExit = node.exit().transition().duration(duration)
-                .attr('transform', function() { return 'translate(' + source.y + ',' + source.x + ')'; })
-                .remove();
-            nodesTooltip.exit().transition().duration(duration)
-                .attr('transform', function() { return 'translate(' + source.y + ',' + source.x + ')'; })
-                .remove();
-
-            nodeExit.select('text').style('fill-opacity', 1e-6);
-        }}
-
-
-        // 2) ******************* Update the links *******************
-        const link = linkGroup.selectAll('path').data(links, function(d) {
-            return d.target.id;
-        });
-        const linkTooltip = linkGroupToolTip.selectAll('g').data(links, function(d) {
-            return d.target.id;
-        });
-
-        function linkMarkerStart(direction, isSelected) {
-            if (direction == 'SYNC')
-            {
-                return isSelected ? 'url(#start-arrow-selected)' : 'url(#start-arrow)';
+            break
+          case 'left-to-right':
+          case 'right-to-left':
+            if (siblings[i + 1].x - (siblings[i].x + rectNode.height) < minPadding) {
+              siblings[i + 1].x = siblings[i].x + rectNode.height + minPadding
             }
-            return '';
+            break
         }
-
-        function linkType(link) {
-            if (link.direction == 'SYNC')
-                return "Synchronous [\u2194]";
-            else
-            {
-                if (link.direction == 'ASYN')
-                    return "Asynchronous [\u2192]";
-            }
-            return '???';
-        }
-
-        d3.selection.prototype.moveToFront = function() {
-            return this.each(function(){
-                // @ts-expect-error ignore
-                this.parentNode.appendChild(this);
-            });
-        };
-
-        // Enter any new links at the parent's previous position.
-        // Enter any new links at the parent's previous position.
-        const linkenter = link.enter().insert('path', 'g')
-            .attr('class', 'link')
-            .attr('id', function(d) { return 'linkID' + d.target.id; })
-            .attr('d', function(d) { return diagonal(d); })
-            .attr('marker-end', 'url(#end-arrow)')
-            .attr('marker-start', function(d: any) { return linkMarkerStart(d.target.data.link.direction, false); })
-            .on('mouseover', function(d: any) {
-                // @ts-expect-error ignore
-                const link = d3.select(this)
-                // @ts-expect-error ignore
-                link.moveToFront();
-
-                // why is this like this?
-                const source = d.target.__data__.source;
-                const target = d.target.__data__.target;
-
-                link.attr('marker-end', 'url(#end-arrow-selected)');
-                link.attr('marker-start', linkMarkerStart(target.data.link.direction, true));
-                link.attr('class', 'linkselected');
-
-                const tooltip = d3.select('#tooltipLinkID' + target.id)
-                tooltip.attr('x', (target.y + rectNode.width - source.y) / 2 + source.y);
-                tooltip.attr('y', (target.x - source.x) / 2 + source.x);
-                tooltip.style('visibility', 'visible');
-                tooltip.style('visibility', 'visible');
-            })
-            .on('mouseout', function(d: any) {
-                // @ts-expect-error ignore
-                const link = d3.select(this)
-
-                const target = d.target.__data__.target
-
-                link.attr('marker-end', 'url(#end-arrow)');
-                link.attr('marker-start', linkMarkerStart(target.data.link.direction, false));
-                link.attr('class', 'link');
-
-                const tooltip = d3.select('#tooltipLinkID' + target.id)
-                tooltip.style('visibility', 'hidden');
-                tooltip.style('visibility', 'hidden');
-            });
-
-        linkTooltip.enter().append('rect')
-            .attr('id', function(d: any) { return 'tooltipLinkID' + d.target.id; })
-            .attr('class', 'tooltip-box')
-            .style('fill-opacity', 0.8)
-            .attr('x', function(d: any) { return (d.target.y + rectNode.width - d.source.y) / 2 + d.source.y; })
-            .attr('y', function(d: any) { return (d.target.x - d.source.x) / 2 + d.source.x; })
-            .attr('width', tooltip.width)
-            .attr('height', tooltip.height)
-            .on('mouseover', function(d: any) {
-                const tooltip = d3.select('#tooltipLinkID' + d.target.id)
-                const target = d.target.__data__.target
-
-                tooltip.style('visibility', 'visible');
-                tooltip.style('visibility', 'visible');
-                // After selected a link, the cursor can be hover the tooltip, that's why we still need to highlight the link and the arrow
-                tooltip.attr('class', 'linkselected');
-                tooltip.attr('marker-end', 'url(#end-arrow-selected)');
-                tooltip.attr('marker-start', linkMarkerStart(target.data.link.direction, true));
-                removeMouseEvents();
-            })
-            .on('mouseout', function(d: any) {
-                const tooltip = d3.select('#tooltipLinkID' + d.target.id)
-                const target = d.target.__data__.target
-
-                tooltip.style('visibility', 'hidden');
-                tooltip.style('visibility', 'hidden');
-                tooltip.attr('class', 'link');
-                tooltip.attr('marker-end', 'url(#end-arrow)');
-                tooltip.attr('marker-start', linkMarkerStart(target.data.link.direction, false));
-
-                reactivateMouseEvents();
-            });
-
-        linkTooltip.enter().append('text')
-            .attr('id', function(d) { return 'tooltipLinkTextID' + d.target.id; })
-            .attr('class', 'tooltip-text')
-            .attr('x', function(d) { return (d.target.y + rectNode.width - d.source.y) / 2 + d.source.y + tooltip.textMargin; })
-            .attr('y', function(d) { return (d.target.x - d.source.x) / 2 + d.source.x + tooltip.textMargin * 2; })
-            .attr('width', tooltip.width)
-            .attr('height', tooltip.height)
-            .style('fill', 'white')
-            .append("tspan")
-            .text(function(d) { return linkType(d.target); })
-            .append("tspan")
-            .attr('x', function(d) { return (d.target.y + rectNode.width - d.source.y) / 2 + d.source.y + tooltip.textMargin; })
-            .attr('dy', '1.5em')
-            .text(function(d) {return d.target.data.name;});
-
-        // Transition links to their new position.
-        const linkUpdate = link.transition().duration(duration)
-             .attr('d', function(d) { return diagonal(d); });
-        linkTooltip.transition().duration(duration)
-            .attr('d', function(d) { return diagonal(d); });
-
-        // Transition exiting nodes to the parent's new position.
-        link.exit().transition()
-            .remove();
-
-        linkTooltip.exit().transition()
-            .remove();
-
-        // Stash the old positions for transition.
-        nodes.forEach(function(d) {
-            d.x0 = d.x;
-            d.y0 = d.y;
-        });
+      }
     }
+  }
 
-    // Zoom functionnality is desactivated (user can use browser Ctrl + mouse wheel shortcut)
-    // function zoomAndDrag(event) {
-    //     console.log({event})
-    //     //var scale = d3.event.scale,
-    //     const scale = 1,
-    //         tbound = -height * scale,
-    //         bbound = height * scale,
-    //         lbound = (-width + margin.right) * scale,
-    //         rbound = (width - margin.left) * scale;
-    //     let translation = d3.event.translate;
-    //     // limit translation to thresholds
-    //     console.log({translation})
-    //     translation = [
-    //         Math.max(Math.min(translation[0], rbound), lbound),
-    //         Math.max(Math.min(translation[1], bbound), tbound)
-    //     ];
-    //     d3.select('.drawarea')
-    //         .attr('transform', 'translate(' + translation + ')' +
-    //             ' scale(' + scale + ')');
-    // }
+  function removeMouseEvents() {
+    // Drag and zoom behaviors are temporarily disabled, so tooltip text can be selected
+    mousedown = d3.select(selector).select('svg').on('mousedown.zoom')
+    d3.select(selector).select('svg').on('mousedown.zoom', null)
+  }
 
-    // Toggle children on click.
-    function click(d) {
-        if (d.children) {
-            d._children = d.children;
-            d.children = null;
-        } else {
-            d.children = d._children;
-            d._children = null;
-        }
-        update(d);
+  function reactivateMouseEvents() {
+    // Reactivate the drag and zoom behaviors
+    d3.select(selector).select('svg').on('mousedown.zoom', mousedown)
+  }
+
+  // Name of the event depends of the browser
+  function getMouseWheelEvent() {
+    if (d3.select(selector).select('svg').on('wheel.zoom')) {
+      mouseWheelName = 'wheel.zoom'
+      return d3.select(selector).select('svg').on('wheel.zoom')
     }
-
-    // Breadth-first traversal of the tree
-    // func function is processed on every node of a same level
-    // return the max level
-    function breadthFirstTraversal(tree: any, func: any)
-    {
-        let max = 0;
-        if (tree && tree.length > 0)
-        {
-            let currentDepth = tree[0].depth;
-            const fifo: any = [];
-            let currentLevel: any = [];
-
-            fifo.push(tree[0]);
-            while (fifo.length > 0) {
-                const node: any = fifo.shift();
-                if (node.depth > currentDepth) {
-                    func(currentLevel);
-                    currentDepth++;
-                    max = Math.max(max, currentLevel.length);
-                    currentLevel = [];
-                }
-                currentLevel.push(node);
-                if (node.children) {
-                    for (let j = 0; j < node.children.length; j++) {
-                        fifo.push(node.children[j]);
-                    }
-                }
-            }
-            func(currentLevel);
-            return Math.max(max, currentLevel.length);
-        }
-
-        return 0;
+    if (d3.select(selector).select('svg').on('mousewheel.zoom') != null) {
+      mouseWheelName = 'mousewheel.zoom'
+      return d3.select(selector).select('svg').on('mousewheel.zoom')
     }
-
-    // x = ordoninates and y = abscissas
-    function collision(siblings) {
-        const minPadding = 5;
-        if (siblings) {
-            for (let i = 0; i < siblings.length - 1; i++) {
-                switch (orientation) {
-                case "bottom-to-top":
-                case "top-to-bottom":
-                    if (siblings[i + 1].x - (siblings[i].x + rectNode.width) < minPadding) {
-                        siblings[i + 1].x = siblings[i].x + rectNode.width + minPadding * 4;
-                    }
-                    break;
-                case "left-to-right":
-                case "right-to-left":
-                    if (siblings[i + 1].x - (siblings[i].x + rectNode.height) < minPadding) {
-                        siblings[i + 1].x = siblings[i].x + rectNode.height + minPadding;
-                    }
-                    break;
-                }
-            }
-        }
+    if (d3.select(selector).select('svg').on('DOMMouseScroll.zoom')) {
+      mouseWheelName = 'DOMMouseScroll.zoom'
+      return d3.select(selector).select('svg').on('DOMMouseScroll.zoom')
     }
+  }
 
-    function removeMouseEvents() {
-        // Drag and zoom behaviors are temporarily disabled, so tooltip text can be selected
-        mousedown = d3.select(selector).select('svg').on('mousedown.zoom');
-        d3.select(selector).select('svg').on("mousedown.zoom", null);
+  function diagonal(d) {
+    switch (orientation) {
+      case 'bottom-to-top': {
+        const p0 = {
+            y: d.target.y + rectNode.height,
+            x: d.target.x + rectNode.width / 2,
+          },
+          p3 = {
+            y: d.source.y - 12,
+            x: d.source.x + rectNode.width / 2,
+          },
+          m = (p0.y + p3.y) / 2
+
+        return `M ${p0.x},${p0.y} C ${p0.x},${m} ${p3.x},${m} ${p3.x},${p3.y}`
+      }
+      case 'top-to-bottom': {
+        const p0 = {
+            y: d.target.y,
+            x: d.target.x + rectNode.width / 2,
+          },
+          p3 = {
+            y: d.source.y + rectNode.height + 12,
+            x: d.source.x + rectNode.width / 2,
+          },
+          m = (p0.y + p3.y) / 2
+
+        return `M ${p0.x},${p0.y} C ${p0.x},${m} ${p3.x},${m} ${p3.x},${p3.y}`
+      }
+      case 'left-to-right': {
+        const p0 = {
+            x: d.source.x + rectNode.height / 2,
+            y: d.source.y + rectNode.width,
+          },
+          p3 = {
+            x: d.target.x + rectNode.height / 2,
+            y: d.target.y - 12, // -12, so the end arrows are just before the rect node
+          },
+          m = (p0.y + p3.y) / 2
+
+        let p: any = [
+          p0,
+          {
+            x: p0.x,
+            y: m,
+          },
+          {
+            x: p3.x,
+            y: m,
+          },
+          p3,
+        ]
+        p = p.map(function (d) {
+          return [d.y, d.x]
+        })
+        return 'M' + p[0] + 'C' + p[1] + ' ' + p[2] + ' ' + p[3]
+      }
+      case 'right-to-left': {
+        const p0 = {
+            x: d.source.x + rectNode.height / 2,
+            y: d.source.y,
+          },
+          p3 = {
+            x: d.target.x + rectNode.height / 2,
+            y: d.target.y + rectNode.width + 12, // -12, so the end arrows are just before the rect node
+          },
+          m = (p0.y + p3.y) / 2
+
+        let p: any = [
+          p0,
+          {
+            x: p0.x,
+            y: m,
+          },
+          {
+            x: p3.x,
+            y: m,
+          },
+          p3,
+        ]
+        p = p.map(function (d) {
+          return [d.y, d.x]
+        })
+        return 'M' + p[0] + 'C' + p[1] + ' ' + p[2] + ' ' + p[3]
+      }
     }
+  }
 
-    function reactivateMouseEvents() {
-        // Reactivate the drag and zoom behaviors
-        d3.select(selector).select('svg').on('mousedown.zoom', mousedown);
-    }
+  function initDropShadow() {
+    const filter = defs
+      .append('filter')
+      .attr('id', 'drop-shadow')
+      .attr('color-interpolation-filters', 'sRGB')
 
-    // Name of the event depends of the browser
-    function getMouseWheelEvent() {
-        if (d3.select(selector).select('svg').on('wheel.zoom'))
-        {
-            mouseWheelName = 'wheel.zoom';
-            return d3.select(selector).select('svg').on('wheel.zoom');
-        }
-        if (d3.select(selector).select('svg').on('mousewheel.zoom') != null)
-        {
-            mouseWheelName = 'mousewheel.zoom';
-            return d3.select(selector).select('svg').on('mousewheel.zoom');
-        }
-        if (d3.select(selector).select('svg').on('DOMMouseScroll.zoom'))
-        {
-            mouseWheelName = 'DOMMouseScroll.zoom';
-            return d3.select(selector).select('svg').on('DOMMouseScroll.zoom');
-        }
-    }
+    filter
+      .append('feOffset')
+      .attr('result', 'offOut')
+      .attr('in', 'SourceGraphic')
+      .attr('dx', 0)
+      .attr('dy', 0)
 
-    function diagonal(d) {
-        switch (orientation) {
-        case "bottom-to-top":
-        {
-            const p0 = {
-                y : d.target.y + rectNode.height,
-                x : d.target.x + rectNode.width / 2
-            },
-            p3 = {
-                y : d.source.y - 12,
-                x : d.source.x + rectNode.width / 2
-            },
-            m = (p0.y + p3.y) / 2;
-        
-            return `M ${p0.x},${p0.y} C ${p0.x},${m} ${p3.x},${m} ${p3.x},${p3.y}`;
-    }
-        case "top-to-bottom":
-            {
-                const p0 = {
-                    y : d.target.y ,
-                    x : d.target.x + rectNode.width / 2
-                },
-                p3 = {
-                    y : d.source.y + rectNode.height + 12,
-                    x : d.source.x + rectNode.width / 2
-                },
-                m = (p0.y + p3.y) / 2;
-            
-                return `M ${p0.x},${p0.y} C ${p0.x},${m} ${p3.x},${m} ${p3.x},${p3.y}`;
-            }
-        case "left-to-right":
-        {
-            const p0 = {
-                x : d.source.x + rectNode.height / 2,
-                y : (d.source.y + rectNode.width)
-            },
-            p3 = {
-                x : d.target.x + rectNode.height / 2,
-                y : d.target.y  - 12 // -12, so the end arrows are just before the rect node
-            },
-            m = (p0.y + p3.y) / 2;
-    
-            let p: any = [
-                p0, {
-                    x : p0.x,
-                    y : m
-                }, {
-                    x : p3.x,
-                    y : m
-                }, p3
-            ];
-            p = p.map(function(d) {
-                return [ d.y, d.x ];
-            });
-            return 'M' + p[0] + 'C' + p[1] + ' ' + p[2] + ' ' + p[3];
-        }
-        case "right-to-left":
-            {
-                const p0 = {
-                    x : d.source.x + rectNode.height / 2,
-                    y : d.source.y
-                },
-                p3 = {
-                    x : d.target.x + rectNode.height / 2,
-                    y : d.target.y + rectNode.width + 12 // -12, so the end arrows are just before the rect node
-                },
-                m = (p0.y + p3.y) / 2;
-        
-                let p: any = [
-                    p0, {
-                        x : p0.x,
-                        y : m
-                    }, {
-                        x : p3.x,
-                        y : m
-                    }, p3
-                ];
-                p = p.map(function(d) {
-                    return [ d.y, d.x ];
-                });
-                return 'M' + p[0] + 'C' + p[1] + ' ' + p[2] + ' ' + p[3];
-            }
-            }
-    }
+    filter.append('feGaussianBlur').attr('stdDeviation', 2)
 
-    function initDropShadow() {
-        const filter = defs.append("filter")
-            .attr("id", "drop-shadow")
-            .attr("color-interpolation-filters", "sRGB");
+    filter.append('feOffset').attr('dx', 2).attr('dy', 2).attr('result', 'shadow')
 
-        filter.append("feOffset")
-            .attr("result", "offOut")
-            .attr("in", "SourceGraphic")
-            .attr("dx", 0)
-            .attr("dy", 0);
+    filter.append('feComposite').attr('in', 'offOut').attr('in2', 'shadow').attr('operator', 'over')
+  }
 
-        filter.append("feGaussianBlur")
-            .attr("stdDeviation", 2);
+  function initArrowDef() {
+    // Build the arrows definitions
+    // End arrow
+    defs
+      .append('marker')
+      .attr('id', 'end-arrow')
+      .attr('viewBox', '0 -5 10 10')
+      .attr('refX', 0)
+      .attr('refY', 0)
+      .attr('markerWidth', 6)
+      .attr('markerHeight', 6)
+      .attr('orient', 'auto')
+      .attr('class', 'arrow')
+      .append('path')
+      .attr('d', 'M0,-5L10,0L0,5')
 
-        filter.append("feOffset")
-            .attr("dx", 2)
-            .attr("dy", 2)
-            .attr("result", "shadow");
+    // End arrow selected
+    defs
+      .append('marker')
+      .attr('id', 'end-arrow-selected')
+      .attr('viewBox', '0 -5 10 10')
+      .attr('refX', 0)
+      .attr('refY', 0)
+      .attr('markerWidth', 6)
+      .attr('markerHeight', 6)
+      .attr('orient', 'auto')
+      .attr('class', 'arrowselected')
+      .append('path')
+      .attr('d', 'M0,-5L10,0L0,5')
 
-        filter.append("feComposite")
-            .attr("in", 'offOut')
-            .attr("in2", 'shadow')
-            .attr("operator", "over");
-    }
+    // Start arrow
+    defs
+      .append('marker')
+      .attr('id', 'start-arrow')
+      .attr('viewBox', '0 -5 10 10')
+      .attr('refX', 0)
+      .attr('refY', 0)
+      .attr('markerWidth', 6)
+      .attr('markerHeight', 6)
+      .attr('orient', 'auto')
+      .attr('class', 'arrow')
+      .append('path')
+      .attr('d', 'M10,-5L0,0L10,5')
 
-    function initArrowDef() {
-        // Build the arrows definitions
-        // End arrow
-        defs.append('marker')
-            .attr('id', 'end-arrow')
-            .attr('viewBox', '0 -5 10 10')
-            .attr('refX', 0)
-            .attr('refY', 0)
-            .attr('markerWidth', 6)
-            .attr('markerHeight', 6)
-            .attr('orient', 'auto')
-            .attr('class', 'arrow')
-            .append('path')
-            .attr('d', 'M0,-5L10,0L0,5');
-
-        // End arrow selected
-        defs.append('marker')
-            .attr('id', 'end-arrow-selected')
-            .attr('viewBox', '0 -5 10 10')
-            .attr('refX', 0)
-            .attr('refY', 0)
-            .attr('markerWidth', 6)
-            .attr('markerHeight', 6)
-            .attr('orient', 'auto')
-            .attr('class', 'arrowselected')
-            .append('path')
-            .attr('d', 'M0,-5L10,0L0,5');
-
-        // Start arrow
-        defs.append('marker')
-            .attr('id', 'start-arrow')
-            .attr('viewBox', '0 -5 10 10')
-            .attr('refX', 0)
-            .attr('refY', 0)
-            .attr('markerWidth', 6)
-            .attr('markerHeight', 6)
-            .attr('orient', 'auto')
-            .attr('class', 'arrow')
-            .append('path')
-            .attr('d', 'M10,-5L0,0L10,5');
-
-        // Start arrow selected
-        defs.append('marker')
-            .attr('id', 'start-arrow-selected')
-            .attr('viewBox', '0 -5 10 10')
-            .attr('refX', 0)
-            .attr('refY', 0)
-            .attr('markerWidth', 6)
-            .attr('markerHeight', 6)
-            .attr('orient', 'auto')
-            .attr('class', 'arrowselected')
-            .append('path')
-            .attr('d', 'M10,-5L0,0L10,5');
-    }
+    // Start arrow selected
+    defs
+      .append('marker')
+      .attr('id', 'start-arrow-selected')
+      .attr('viewBox', '0 -5 10 10')
+      .attr('refX', 0)
+      .attr('refY', 0)
+      .attr('markerWidth', 6)
+      .attr('markerHeight', 6)
+      .attr('orient', 'auto')
+      .attr('class', 'arrowselected')
+      .append('path')
+      .attr('d', 'M10,-5L0,0L10,5')
+  }
 }
 
-export { treeBoxes };
+export { treeBoxes }

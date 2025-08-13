@@ -1,9 +1,10 @@
 ## Successful test, next steps
+
 > Teranode 2-week test completes successfully, what are the next steps?
 
 We have completed our first 2-week test of Teranode, running sustained at over 1 million transactions per second.
 
-![Teranode test dashboard screenshot](/blog/successful-test.png "Successful test")
+![Teranode test dashboard screenshot](/blog/successful-test.png 'Successful test')
 
 Although we experienced some issues during the test, both with our infrastructure and in the software, in every instance we were able to recover and keep the chain going. This is a great achievement by the Teranode team and proves the scalability of the BSV Blockchain and the Bitcoin protocol.
 

@@ -49,6 +49,7 @@
 
 {#key collapsed}
   <div
+    role="menuitem"
     class={`tui-menu-item${selected ? ' selected' : ''}${collapsed ? ' collapsed' : ''}`}
     tabindex="0"
     on:click={dispatchClick}

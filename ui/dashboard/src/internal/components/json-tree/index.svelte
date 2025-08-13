@@ -94,9 +94,15 @@
   <div class="json-tree" style:--block-indent={`${(level + 1) * -15}px`}>
     {#if typeof data === 'object'}
       {#if level === 0 || !inlineObj}
-        <div class="expand" class:closed={expandState[id]} {id} on:click={onExpClick}>
+        <button
+          class="expand"
+          class:closed={expandState[id]}
+          {id}
+          on:click={onExpClick}
+          type="button"
+        >
           <div class="exp_icon"><Icon name="icon-chevron-down-line" size={11} /></div>
-        </div>
+        </button>
         <span class="obj-start">&#123;</span>{#if expandState[id]}..&#125;{/if}
       {/if}
       {#if !expandState[id]}
@@ -105,15 +111,16 @@
             <li>
               {#if getType(value) === 'array' || getType(value) === 'object'}
                 {#if (getType(value) === 'array' && inlineArr) || (getType(value) === 'object' && value !== null && inlineObj)}
-                  <div
+                  <button
                     class="expand obj-start"
                     class:closed={expandState[id + '_' + i]}
                     id={id + '_' + i}
                     style="padding-left:3px;"
                     on:click={onExpClick}
+                    type="button"
                   >
                     <div class="exp_icon"><Icon name="icon-chevron-down-line" size={11} /></div>
-                  </div>
+                  </button>
                   <span class="key" style="margin-left:-9px;">{key}:</span>
                 {:else}
                   <span class="key">{key}:</span>
@@ -145,15 +152,16 @@
                 {#if !expandState[id + '_' + i] || !inlineArr}
                   {#if !inlineArr}
                     <br />
-                    <div
+                    <button
                       class="expand"
                       class:closed={expandState[id + '_' + i + '_']}
                       id={id + '_' + i + '_'}
                       style="margin-left:-15px;"
                       on:click={onExpClick}
+                      type="button"
                     >
                       <div class="exp_icon"><Icon name="icon-chevron-down-line" size={11} /></div>
-                    </div>
+                    </button>
                     <span class="obj-start" style="margin-left:-9px;">&#91;</span
                     >{#if expandState[id + '_' + i + '_']}..&#93;{/if}
                   {/if}
@@ -279,6 +287,14 @@
     position: relative;
     left: var(--block-indent);
     color: rgba(255, 255, 255, 0.3);
+  }
+
+  button.expand {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
   }
   .expand:hover {
     cursor: pointer;

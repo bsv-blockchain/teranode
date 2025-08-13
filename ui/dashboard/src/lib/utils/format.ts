@@ -116,16 +116,16 @@ export const dataSize = (val) => {
   }
 
   if (val >= 1024 ** 5) {
-    val = val / (1024 ** 5)
+    val = val / 1024 ** 5
     unit = 'PB'
   } else if (val >= 1024 ** 4) {
-    val = val / (1024 ** 4)
+    val = val / 1024 ** 4
     unit = 'TB'
   } else if (val >= 1024 ** 3) {
-    val = val / (1024 ** 3)
+    val = val / 1024 ** 3
     unit = 'GB'
   } else if (val >= 1024 ** 2) {
-    val = val / (1024 ** 2)
+    val = val / 1024 ** 2
     unit = 'MB'
   } else if (val >= 1024) {
     val = val / 1024

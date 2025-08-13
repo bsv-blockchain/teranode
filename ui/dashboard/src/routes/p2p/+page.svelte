@@ -39,7 +39,6 @@
       } catch (error) {
         currentNodeUrl = '' // Disable filtering if we can't determine the node URL
       }
-
     }
   })
 
@@ -59,7 +58,7 @@
   })
 
   let collapseMsgContent = false
-  
+
   // In by-peer mode, always collapse messages for compact view
   $: actualCollapseState = byPeer ? true : collapseMsgContent
 
@@ -80,9 +79,12 @@
     if (messageType && !messageTypeSet.has(messageType)) {
       messageTypeSet.add(messageType)
       // Rebuild options array only when a new type is discovered
-      messageTypeOptions = ['All', ...Array.from(messageTypeSet)
-        .filter(t => t !== 'All')
-        .sort()]
+      messageTypeOptions = [
+        'All',
+        ...Array.from(messageTypeSet)
+          .filter((t) => t !== 'All')
+          .sort(),
+      ]
     }
   }
 
@@ -101,18 +103,15 @@
   $: data = dataSnapshot ? dataSnapshot : $messages
 
   $: {
-
     // Transform types to be lower case, as they have been changing case in the BE
     // Filter messages based on the showLocalMessages toggle
     filteredMessages = data
       .filter((item) => {
-
         // Only filter out local messages if showLocalMessages is false
         if (!showLocalMessages && currentNodeUrl && item.base_url) {
           // Extract base URL without path for comparison
           const itemBaseUrl = item.base_url.replace(/\/api\/v1.*$/, '') // Remove /api/v1 and everything after
           const normalizedCurrentUrl = currentNodeUrl.replace(/\/$/, '') // Remove trailing slash if present
-
 
           return itemBaseUrl !== normalizedCurrentUrl // Keep message if it's NOT from current node
         }
@@ -127,7 +126,7 @@
 
     // Apply message type filter
     if (selectedMessageType !== 'All') {
-      filteredMessages = filteredMessages.filter(msg => msg.type === selectedMessageType)
+      filteredMessages = filteredMessages.filter((msg) => msg.type === selectedMessageType)
     }
 
     if (filter.length > 0) {
@@ -150,16 +149,12 @@
       })
     }
 
-
     if (byPeer) {
       let newGroupedMessages: any = {}
 
-
       filteredMessages.forEach((message, index) => {
-
         // Compare with lowercase since we convert types to lowercase
         if (message.type !== MessageType.ping.toLowerCase()) {
-
           // Check for peer_id, peerID, or peer field
           const peerId = message.peer_id || message.peerID || message.peer || 'unknown'
 
@@ -170,7 +165,6 @@
         } else {
         }
       })
-
 
       // Sort messages in descending order by receivedAt timestamp
       Object.keys(newGroupedMessages).forEach((peer_id) => {
@@ -199,7 +193,9 @@
       <div class="title">
         {t(`${pageKey}.title`)}
         {#if $connectionAttempts > 0 && !connected}
-          <span class="connection-error">P2P connection failed. Attempt {$connectionAttempts}/5</span>
+          <span class="connection-error"
+            >P2P connection failed. Attempt {$connectionAttempts}/5</span
+          >
         {/if}
       </div>
       <div class="filters">
@@ -227,14 +223,9 @@
             size="small"
             name="messageType"
             bind:value={selectedMessageType}
-            items={messageTypeOptions.map(type => ({ value: type, label: type }))}
+            items={messageTypeOptions.map((type) => ({ value: type, label: type }))}
           />
-          <TextInput
-            size="small"
-            name="filter"
-            placeholder="Search..."
-            bind:value={filter}
-          />
+          <TextInput size="small" name="filter" placeholder="Search..." bind:value={filter} />
         </div>
 
         <Button
@@ -264,8 +255,14 @@
             />
           </div>
           <div class="msg-contaienr">
-            {#each groupedMessages[peer] as message, index (message.hash ? message.hash + message.receivedAt : peer + index + message.receivedAt)}
-              <MessageBox {message} source="p2p" collapse={actualCollapseState} titleMinW={actualCollapseState ? "auto" : "80px"} hidePeer={true} />
+            {#each groupedMessages[peer] as message, index (peer + '_' + index + '_' + (message.hash || 'no-hash') + '_' + message.receivedAt)}
+              <MessageBox
+                {message}
+                source="p2p"
+                collapse={actualCollapseState}
+                titleMinW={actualCollapseState ? 'auto' : '80px'}
+                hidePeer={true}
+              />
             {/each}
           </div>
         </div>
@@ -275,8 +272,13 @@
     <div class="container">
       <div class="column column-full">
         <div class="msg-contaienr">
-          {#each filteredMessages as message, index (message.hash ? message.hash + message.receivedAt : 'msg' + index + message.receivedAt)}
-            <MessageBox {message} source="p2p" collapse={actualCollapseState} titleMinW={actualCollapseState ? "auto" : "120px"} />
+          {#each filteredMessages as message, index ('msg_' + index + '_' + (message.hash || 'no-hash') + '_' + message.receivedAt)}
+            <MessageBox
+              {message}
+              source="p2p"
+              collapse={actualCollapseState}
+              titleMinW={actualCollapseState ? 'auto' : '120px'}
+            />
           {/each}
         </div>
       </div>
@@ -380,13 +382,13 @@
     min-width: 280px;
     max-width: 350px;
   }
-  
+
   .column-full {
     flex: 1;
     min-width: unset;
     max-width: unset;
   }
-  
+
   .column .peer {
     padding: 8px 12px;
     background: rgba(255, 255, 255, 0.05);

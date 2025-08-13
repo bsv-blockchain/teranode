@@ -33,6 +33,11 @@ export const msgbox = {
       color: '#2778FF',
     },
   },
+  node_status: {
+    border: {
+      color: '#FF9500',
+    },
+  },
   default: {
     border: {
       color: 'orange',

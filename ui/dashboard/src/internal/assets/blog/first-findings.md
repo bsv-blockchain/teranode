@@ -10,7 +10,7 @@ The block structure in Teranode is exactly the same as in the original [Bitcoin 
 
 This block header and list of subtrees is enough information for a miner to validate the proof of work on the block, since the transaction ids in the subtrees suffice to calculate the Merkle root of that block. The only thing that a miner needs to make sure of, is that the transactions in the subtrees are all valid and in the correct order.
 
-This transaction validation happens every time a subtree is propagated by a competing miner, or around 1 subtree, with 1 million transaction ids, per second, per miner. 
+This transaction validation happens every time a subtree is propagated by a competing miner, or around 1 subtree, with 1 million transaction ids, per second, per miner.
 
 ### Latest issue: Cache warm-up leading to forks
 

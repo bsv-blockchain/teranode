@@ -164,7 +164,7 @@ export const renderCells = {
     // Use humanTime function to calculate uptime from start time
     const startTime = item.start_time * 1000 // Convert to milliseconds
     const uptimeStr = humanTime(startTime)
-    
+
     return {
       component: RenderSpan,
       props: {
@@ -190,7 +190,7 @@ export const renderCells = {
     const mode = item[colId] || '-'
     let className = ''
     let displayValue = mode
-    
+
     // Make the display more user-friendly
     if (mode === 'full') {
       displayValue = 'Full'
@@ -199,7 +199,7 @@ export const renderCells = {
       displayValue = 'Listen Only'
       className = 'status-warning'
     }
-    
+
     return {
       component: RenderSpan,
       props: {

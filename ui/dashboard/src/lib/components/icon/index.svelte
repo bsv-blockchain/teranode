@@ -69,14 +69,22 @@
 
 <!-- svelte-ignore a11y-click-events-have-key-events -->
 <div
+  role="button"
+  tabindex="0"
   data-test-id={testId}
   class={`tui-icon${clazz ? ' ' + clazz : ''}`}
   style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}
   on:click
+  on:keydown={(e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      e.currentTarget.click()
+    }
+  }}
 >
   {#if finalName && SvgIcon}
     {#key finalName}
-      <SvgIcon />
+      <svelte:component this={SvgIcon} />
     {/key}
   {:else if iconSvg}
     {@html iconSvg}

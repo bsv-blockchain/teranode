@@ -5,7 +5,8 @@ import type {
   BlockMessage,
   MiningOnMessage,
   SubtreeMessage,
-  MessageSource, PingMessage,
+  MessageSource,
+  PingMessage,
   NodeStatusMessage,
 } from './types'
 import i18n from '../../i18n'
@@ -18,7 +19,12 @@ i18n.subscribe((value) => {
   t = value.t
 })
 
-export const getMessageFields = (source: MessageSource, data: Message, age: string, hidePeer: boolean = false) => {
+export const getMessageFields = (
+  source: MessageSource,
+  data: Message,
+  age: string,
+  hidePeer: boolean = false,
+) => {
   const fields: msg.MsgDisplayField[] = []
   let key = `${baseKey}.${data.type}.fields`
   if (source === 'p2p') {
@@ -64,45 +70,60 @@ export const getMessageFields = (source: MessageSource, data: Message, age: stri
         break
       case msg.MessageType.node_status:
         const nodeStatusMsg = data as NodeStatusMessage
-        
+
         // Format UTC datetime consistently
         const formatUTCDateTime = (date: Date) => {
           const pad = (n: number) => n.toString().padStart(2, '0')
-          return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ` +
-                 `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`
+          return (
+            `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ` +
+            `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`
+          )
         }
-        
+
         // Calculate uptime using humanTime
         const startTime = nodeStatusMsg.start_time * 1000 // Convert to milliseconds
         const uptimeStr = humanTime(startTime) + ' ago'
-        
+
         // Static data at the top
-        const fromWithMiner = nodeStatusMsg.miner_name 
+        const fromWithMiner = nodeStatusMsg.miner_name
           ? `${nodeStatusMsg.base_url} (${nodeStatusMsg.miner_name})`
           : nodeStatusMsg.base_url
-        
+
         fields.push({ label: t(`${key}.base_url`), value: fromWithMiner })
         fields.push({ label: t(`${key}.commit_hash`), value: nodeStatusMsg.commit_hash })
         fields.push({ label: t(`${key}.version`), value: nodeStatusMsg.version })
-        
+
         const startTimeStr = formatUTCDateTime(new Date(nodeStatusMsg.start_time * 1000))
         fields.push({ label: t(`${key}.start_time`), value: `${startTimeStr} (${uptimeStr})` })
-        
+
         // Dynamic data
         fields.push({ label: t(`${key}.best_height`), value: nodeStatusMsg.best_height })
         fields.push({ label: t(`${key}.best_block_hash`), value: nodeStatusMsg.best_block_hash })
-        fields.push({ label: t(`${key}.tx_count_in_assembly`), value: nodeStatusMsg.tx_count_in_assembly })
+        fields.push({
+          label: t(`${key}.tx_count_in_assembly`),
+          value: nodeStatusMsg.tx_count_in_assembly,
+        })
         fields.push({ label: t(`${key}.fsm_state`), value: nodeStatusMsg.fsm_state })
         fields.push({ label: t(`${key}.listen_mode`), value: nodeStatusMsg.listen_mode })
-        
+
         // Add peer_id if not hidden
         if (!hidePeer && nodeStatusMsg.peer_id) {
           fields.push({ label: t(`${key}.peer_id`), value: nodeStatusMsg.peer_id })
         }
-        
+
         // Received at with age
         const receivedStr = formatUTCDateTime(nodeStatusMsg.receivedAt)
         fields.push({ label: t(`${key}.receivedAt`), value: `${receivedStr} (${age})` })
+        fields.push({ label: t(`${key}.age`), value: age })
+        break
+      default:
+        // Handle unknown message types with generic fields
+        const genericMsg = data as any
+        fields.push({ label: t(`${baseKey}.ping.fields.age`), value: age })
+        if (genericMsg.hash) fields.push({ label: 'Hash', value: genericMsg.hash })
+        if (genericMsg.base_url) fields.push({ label: 'From', value: genericMsg.base_url })
+        if (genericMsg.receivedAt)
+          fields.push({ label: 'Received at', value: genericMsg.receivedAt })
         break
     }
   } else if (source === 'status') {

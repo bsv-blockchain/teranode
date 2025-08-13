@@ -23,6 +23,7 @@
   let data: any[] = []
   let coinbaseTxId = ''
   let fetchingCoinbase = false
+  let fetchedBlockHashes = new Set()
 
   $: renderCells = getRenderCells(t, blockHash, coinbaseTxId) || {}
 
@@ -73,14 +74,26 @@
     fetchData(subtree.expandedData.hash, page, pageSize)
   }
 
-  $: if (blockHash && blockHash.length === 64 && !coinbaseTxId && !fetchingCoinbase) {
+  // Reset coinbaseTxId when blockHash changes
+  $: if (blockHash) {
+    coinbaseTxId = ''
+  }
+
+  $: if (
+    blockHash &&
+    blockHash.length === 64 &&
+    !coinbaseTxId &&
+    !fetchedBlockHashes.has(blockHash)
+  ) {
     fetchCoinbaseId(blockHash)
   }
 
   async function fetchCoinbaseId(hash) {
-    if (fetchingCoinbase) return
-    
+    if (fetchingCoinbase || fetchedBlockHashes.has(hash)) return
+
     fetchingCoinbase = true
+    fetchedBlockHashes.add(hash)
+
     try {
       const blockData = await api.getItemData({ type: api.ItemType.block, hash })
       if (blockData.ok && blockData.data.coinbase_tx) {

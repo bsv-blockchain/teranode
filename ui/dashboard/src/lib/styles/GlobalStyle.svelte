@@ -85,16 +85,16 @@
     --toastWidth: var(--toast-width);
     --toastBarHeight: 3px;
     --toastBarBackground: var(--toast-bar-bg-color, rgba(0, 0, 0, 0.1));
-    
+
     /* Message box border colors */
     --msgbox-default-border-color: #3e4451;
-    --msgbox-block-border-color: #4CAF50;
-    --msgbox-mining_on-border-color: #2196F3;
-    --msgbox-subtree-border-color: #FF9800;
-    --msgbox-ping-border-color: #9C27B0;
-    --msgbox-node_status-border-color: #00BCD4;
+    --msgbox-block-border-color: #4caf50;
+    --msgbox-mining_on-border-color: #2196f3;
+    --msgbox-subtree-border-color: #ff9800;
+    --msgbox-ping-border-color: #9c27b0;
+    --msgbox-node_status-border-color: #00bcd4;
     --msgbox-getminingcandidate-border-color: #795548;
-    
+
     /* Message box background and text colors */
     --msgbox-bg-color: rgba(255, 255, 255, 0.04);
     --msgbox-label-color: rgba(255, 255, 255, 0.66);

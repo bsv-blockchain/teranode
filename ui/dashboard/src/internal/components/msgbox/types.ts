@@ -9,7 +9,7 @@ export enum MessageType {
 
 interface P2PMessageBase {
   type: MessageType
-  hash: string
+  hash?: string
   base_url: string
   peer_id: string
   receivedAt: Date
@@ -17,11 +17,13 @@ interface P2PMessageBase {
 
 export interface BlockMessage extends P2PMessageBase {
   type: MessageType.block
+  hash: string
   timestamp: number
 }
 
 export interface MiningOnMessage extends P2PMessageBase {
   type: MessageType.mining_on
+  hash: string
   previousblockhash: string
   tx_count: number
   size_in_bytes: number
@@ -31,6 +33,7 @@ export interface MiningOnMessage extends P2PMessageBase {
 
 export interface SubtreeMessage extends P2PMessageBase {
   type: MessageType.subtree
+  hash: string
 }
 
 export interface PingMessage {
@@ -53,7 +56,12 @@ export interface NodeStatusMessage extends P2PMessageBase {
   listen_mode: string
 }
 
-export type P2PMessage = BlockMessage | MiningOnMessage | SubtreeMessage | PingMessage | NodeStatusMessage
+export type P2PMessage =
+  | BlockMessage
+  | MiningOnMessage
+  | SubtreeMessage
+  | PingMessage
+  | NodeStatusMessage
 
 export interface StatusMessage {
   timestamp: string

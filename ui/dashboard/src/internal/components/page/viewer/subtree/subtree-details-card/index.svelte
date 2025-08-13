@@ -60,13 +60,14 @@
         size={15}
       />
     </div>
-    <div
+    <button
       class="icon"
       on:click={() => onReverseHash(expandedData.hash)}
       use:$tippy={{ content: t('tooltip.reverse-hash') }}
+      type="button"
     >
       <Icon name="icon-reeverse-line" size={15} />
-    </div>
+    </button>
   </div>
   <div class="content">
     <div class="tabs">
@@ -240,5 +241,12 @@
     padding-top: 4px;
     padding-left: 8px;
     cursor: pointer;
+  }
+
+  button.icon {
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
   }
 </style>

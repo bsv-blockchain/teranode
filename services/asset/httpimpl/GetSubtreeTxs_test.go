@@ -21,6 +21,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
 		mockRepo.On("GetSubtree", mock.Anything, mock.Anything).Return(testSubtree, nil)
+		mockRepo.On("GetSubtreeData", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		mockRepo.On("GetTransactionMeta", mock.Anything, mock.Anything).Return(testTxMeta, nil)
 
 		echoContext.SetPath("/subtree/txs/:hash")
@@ -141,6 +142,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
 		mockRepo.On("GetSubtree", mock.Anything, mock.Anything).Return(testSubtree, nil)
+		mockRepo.On("GetSubtreeData", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		mockRepo.On("GetTransactionMeta", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 
 		echoContext.SetPath("/subtree/txs/:hash")
@@ -163,7 +165,20 @@ func TestGetSubtreeTxs(t *testing.T) {
 		assert.Equal(t, float64(20), response["pagination"].(map[string]interface{})["limit"])
 		assert.Equal(t, float64(4), response["pagination"].(map[string]interface{})["totalRecords"])
 
-		assert.Equal(t, 0, len(response["data"].([]interface{})))
+		assert.Equal(t, 4, len(response["data"].([]interface{})))
+
+		// Verify that transactions are returned but without metadata
+		for i := 0; i < 4; i++ {
+			hash, _ := chainhash.NewHashFromStr(fmt.Sprintf("%x", i))
+			data := response["data"].([]interface{})[i].(map[string]interface{})
+			assert.Equal(t, i, int(data["index"].(float64)))
+			assert.Equal(t, hash.String(), data["txid"])
+			// These fields should be zero since metadata was not found
+			assert.Equal(t, float64(0), data["inputsCount"])
+			assert.Equal(t, float64(0), data["outputsCount"])
+			assert.Equal(t, float64(0), data["size"])
+			assert.Equal(t, float64(0), data["fee"])
+		}
 	})
 
 	t.Run("Repository error", func(t *testing.T) {

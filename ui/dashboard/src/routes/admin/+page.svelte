@@ -7,92 +7,92 @@
   import i18n from '$internal/i18n'
   import { goto } from '$app/navigation'
   import { logout } from '$internal/stores/authStore'
-  import LogoutButton from '../../components/LogoutButton.svelte';
+  import LogoutButton from '../../components/LogoutButton.svelte'
   import { Icon } from '$lib/components'
 
   // FSM State Management
-  let fsmState: FSMState | null = null;
-  let fsmEvents: FSMEvent[] = [];
-  let fsmStates: string[] = [];
-  let fsmLoading = true;
-  let fsmError: string | null = null;
-  let apiBaseUrl = '';
-  let pollingInterval: any = null;
-  let selectedEvent: string | null = null;
-  const POLLING_INTERVAL_MS = 5000; // 5 seconds
+  let fsmState: FSMState | null = null
+  let fsmEvents: FSMEvent[] = []
+  let fsmStates: string[] = []
+  let fsmLoading = true
+  let fsmError: string | null = null
+  let apiBaseUrl = ''
+  let pollingInterval: any = null
+  let selectedEvent: string | null = null
+  const POLLING_INTERVAL_MS = 5000 // 5 seconds
 
   // Block invalidation
-  let blockHash = '';
-  let blockActionLoading = false;
-  let blockActionResult: { success: boolean; message: string } | null = null;
+  let blockHash = ''
+  let blockActionLoading = false
+  let blockActionResult: { success: boolean; message: string } | null = null
   // Create regex pattern for hash validation
-  const hashRegex = /^[0-9a-fA-F]{64}$/;
+  const hashRegex = /^[0-9a-fA-F]{64}$/
 
   // Invalid blocks list
-  let invalidBlocks: any[] = [];
-  let invalidBlocksLoading = false;
-  let invalidBlocksError: string | null = null;
-  let lastInvalidBlocksRefresh: Date | null = null;
-  
+  let invalidBlocks: any[] = []
+  let invalidBlocksLoading = false
+  let invalidBlocksError: string | null = null
+  let lastInvalidBlocksRefresh: Date | null = null
+
   // Reconsider block state
-  let reconsideringBlock = false;
-  let reconsideringBlockHash = '';
+  let reconsideringBlock = false
+  let reconsideringBlockHash = ''
 
   // Subscribe to the API base URL
-  const unsubscribe = api.assetHTTPAddress.subscribe(value => {
-    apiBaseUrl = value;
-    console.log('API base URL updated:', apiBaseUrl);
-  });
+  const unsubscribe = api.assetHTTPAddress.subscribe((value) => {
+    apiBaseUrl = value
+    console.log('API base URL updated:', apiBaseUrl)
+  })
 
   // Get translation function
-  const t = $i18n.t;
+  const t = $i18n.t
 
   function getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
+    return error instanceof Error ? error.message : String(error)
   }
-  
+
   function formatTimeAgo(timestamp: number): string {
-    const now = Date.now();
-    const diffMs = now - timestamp;
-    const diffSec = Math.floor(diffMs / 1000);
-    const diffMin = Math.floor(diffSec / 60);
-    const diffHour = Math.floor(diffMin / 60);
-    const diffDay = Math.floor(diffHour / 24);
-    
+    const now = Date.now()
+    const diffMs = now - timestamp
+    const diffSec = Math.floor(diffMs / 1000)
+    const diffMin = Math.floor(diffSec / 60)
+    const diffHour = Math.floor(diffMin / 60)
+    const diffDay = Math.floor(diffHour / 24)
+
     if (diffSec < 60) {
-      return `${diffSec}s ago`;
+      return `${diffSec}s ago`
     } else if (diffMin < 60) {
-      return `${diffMin}m ago`;
+      return `${diffMin}m ago`
     } else if (diffHour < 24) {
-      return `${diffHour}h ago`;
+      return `${diffHour}h ago`
     } else {
-      return `${diffDay}d ago`;
+      return `${diffDay}d ago`
     }
   }
 
   async function fetchFSMState(silent = false) {
     if (!silent) {
-      fsmLoading = true;
+      fsmLoading = true
     }
-    
+
     try {
       // Log the baseUrl for debugging
-      console.log('FSM API baseUrl:', apiBaseUrl);
-      
-      const result = await api.getFSMState();
-      console.log('FSM State API response:', result);
-      
+      console.log('FSM API baseUrl:', apiBaseUrl)
+
+      const result = await api.getFSMState()
+      console.log('FSM State API response:', result)
+
       if (!result.ok) {
-        throw new Error(`Failed to fetch FSM state: ${result.error?.message || 'Unknown error'}`);
+        throw new Error(`Failed to fetch FSM state: ${result.error?.message || 'Unknown error'}`)
       }
-      
-      fsmState = result.data;
+
+      fsmState = result.data
     } catch (error: unknown) {
-      console.error('Error fetching FSM state:', error);
-      fsmError = getErrorMessage(error);
+      console.error('Error fetching FSM state:', error)
+      fsmError = getErrorMessage(error)
     } finally {
       if (!silent) {
-        fsmLoading = false;
+        fsmLoading = false
       }
     }
   }
@@ -100,61 +100,63 @@
   // Fetch FSM events
   async function fetchFSMEvents() {
     try {
-      const result = await api.getFSMEvents();
-      console.log('FSM Events API response:', result);
-      
+      const result = await api.getFSMEvents()
+      console.log('FSM Events API response:', result)
+
       if (!result.ok) {
-        throw new Error(`Failed to fetch FSM events: ${result.error?.message || 'Unknown error'}`);
+        throw new Error(`Failed to fetch FSM events: ${result.error?.message || 'Unknown error'}`)
       }
-      
-      fsmEvents = result.data;
+
+      fsmEvents = result.data
     } catch (error: unknown) {
-      console.error('Error fetching FSM events:', error);
+      console.error('Error fetching FSM events:', error)
     }
   }
 
   async function sendFSMEvent(eventName: string) {
     if (fsmLoading) {
-      return;
+      return
     }
-    
-    fsmLoading = true;
-    const previousState = fsmState;
-    
+
+    fsmLoading = true
+    const previousState = fsmState
+
     try {
-      console.log(`Sending FSM event: ${eventName}`);
-      
+      console.log(`Sending FSM event: ${eventName}`)
+
       // Use the custom event endpoint for all events
-      const result = await api.sendCustomFSMEvent(eventName);
-      
+      const result = await api.sendCustomFSMEvent(eventName)
+
       if (!result.ok) {
-        throw new Error(result.error?.message || `Failed to send ${eventName} event`);
+        throw new Error(result.error?.message || `Failed to send ${eventName} event`)
       }
-      
+
       // Store the new state
-      fsmState = result.data;
-      
+      fsmState = result.data
+
       // Check if state actually changed
       if (previousState && previousState.state_value === fsmState.state_value) {
-        console.warn(`FSM state did not change after ${eventName} event. Still in ${fsmState.state} state.`);
+        console.warn(
+          `FSM state did not change after ${eventName} event. Still in ${fsmState.state} state.`,
+        )
       }
-      
-      success(`Successfully sent ${eventName} event. State: ${fsmState.state}`);
-      
+
+      success(`Successfully sent ${eventName} event. State: ${fsmState.state}`)
+
       // Refresh the state after a short delay to ensure we get the latest state
       setTimeout(() => {
-        fetchFSMState();
-      }, 1000);
+        fetchFSMState()
+      }, 1000)
     } catch (error) {
-      console.error(`Error sending ${eventName} event:`, error);
-      failure(`Failed to send ${eventName} event: ${getErrorMessage(error)}`);
-      
+      console.error(`Error sending ${eventName} event:`, error)
+      failure(`Failed to send ${eventName} event: ${getErrorMessage(error)}`)
+
       // Refresh the state to ensure we're showing the correct information
       setTimeout(() => {
-        fetchFSMState();
-      }, 1000);
+        fetchFSMState()
+      }, 1000)
     } finally {
-      fsmLoading = false;
+      fsmLoading = false
     }
   }
 
@@ -164,8 +166,8 @@
     1: 'RUNNING',
     2: 'CATCHING BLOCKS',
     3: 'LEGACY SYNCING',
-    '-1': 'DISCONNECTED'
-  };
+    '-1': 'DISCONNECTED',
+  }
 
   // Map of state values to colors
   const stateColors = {
@@ -173,338 +175,355 @@
     1: 'green',
     2: 'blue',
     3: 'purple',
-    '-1': 'red'
-  };
+    '-1': 'red',
+  }
 
   function getStateLabel(stateValue: number): string {
-    return stateNames[stateValue] || `Unknown (${stateValue})`;
+    return stateNames[stateValue] || `Unknown (${stateValue})`
   }
 
   function getStateColor(stateValue: number): string {
-    return stateColors[stateValue] || '#888';
+    return stateColors[stateValue] || '#888'
   }
 
   function getEventIcon(eventName: string): string {
-    if (!eventName) return 'fas fa-question';
-    
+    if (!eventName) return 'fas fa-question'
+
     switch (eventName) {
       case 'RUN':
-        return 'fas fa-play';
+        return 'fas fa-play'
       case 'STOP':
-        return 'fas fa-stop';
+        return 'fas fa-stop'
       case 'CATCHUPBLOCKS':
-        return 'fas fa-fast-forward';
+        return 'fas fa-fast-forward'
       case 'LEGACYSYNC':
-        return 'fas fa-sync';
+        return 'fas fa-sync'
       default:
-        return 'fas fa-question';
+        return 'fas fa-question'
     }
   }
 
   function formatEventName(eventName: string): string {
-    if (!eventName) return 'Unknown';
-    
+    if (!eventName) return 'Unknown'
+
     switch (eventName) {
       case 'RUN':
-        return 'Run';
+        return 'Run'
       case 'STOP':
-        return 'Stop';
+        return 'Stop'
       case 'CATCHUPBLOCKS':
-        return 'Catch Up';
+        return 'Catch Up'
       case 'LEGACYSYNC':
-        return 'Legacy Sync';
+        return 'Legacy Sync'
       default:
-        return eventName;
+        return eventName
     }
   }
 
   // Handle logout and redirect to home page
   function handleLogout() {
-    logout();
-    goto('/');
-  }  
+    logout()
+    goto('/')
+  }
 
   async function idleBlockchain() {
-    fsmLoading = true;
+    fsmLoading = true
     try {
-      const result = await api.idleFSM();
+      const result = await api.idleFSM()
       if (!result.ok) {
-        throw new Error(result.error?.message || 'Failed to stop blockchain');
+        throw new Error(result.error?.message || 'Failed to stop blockchain')
       }
-      success('Blockchain is now idle');
-      await fetchFSMState();
+      success('Blockchain is now idle')
+      await fetchFSMState()
     } catch (error: unknown) {
-      console.error('Error stopping blockchain:', error);
-      failure(getErrorMessage(error) || 'Failed to stop blockchain');
+      console.error('Error stopping blockchain:', error)
+      failure(getErrorMessage(error) || 'Failed to stop blockchain')
     } finally {
-      fsmLoading = false;
+      fsmLoading = false
     }
   }
 
   async function catchupBlockchain() {
-    fsmLoading = true;
+    fsmLoading = true
     try {
-      const result = await api.catchupFSM();
+      const result = await api.catchupFSM()
       if (!result.ok) {
-        throw new Error(result.error?.message || 'Failed to start catchup');
+        throw new Error(result.error?.message || 'Failed to start catchup')
       }
-      success('Blockchain is now in catchup mode');
-      await fetchFSMState();
+      success('Blockchain is now in catchup mode')
+      await fetchFSMState()
     } catch (error: unknown) {
-      console.error('Error starting catchup:', error);
-      failure(getErrorMessage(error) || 'Failed to start catchup');
+      console.error('Error starting catchup:', error)
+      failure(getErrorMessage(error) || 'Failed to start catchup')
     } finally {
-      fsmLoading = false;
+      fsmLoading = false
     }
   }
 
   async function legacySyncBlockchain() {
-    fsmLoading = true;
+    fsmLoading = true
     try {
-      const result = await api.legacySyncFSM();
+      const result = await api.legacySyncFSM()
       if (!result.ok) {
-        throw new Error(result.error?.message || 'Failed to start legacy sync');
+        throw new Error(result.error?.message || 'Failed to start legacy sync')
       }
-      success('Blockchain is now in legacy sync mode');
-      await fetchFSMState();
+      success('Blockchain is now in legacy sync mode')
+      await fetchFSMState()
     } catch (error: unknown) {
-      console.error('Error starting legacy sync:', error);
-      failure(getErrorMessage(error) || 'Failed to start legacy sync');
+      console.error('Error starting legacy sync:', error)
+      failure(getErrorMessage(error) || 'Failed to start legacy sync')
     } finally {
-      fsmLoading = false;
+      fsmLoading = false
     }
   }
 
   async function handleInvalidateBlock() {
     if (!hashRegex.test(blockHash)) {
-      failure('Invalid block hash');
-      return;
+      failure('Invalid block hash')
+      return
     }
 
-    blockActionLoading = true;
-    blockActionResult = null;
+    blockActionLoading = true
+    blockActionResult = null
 
     try {
-      console.log(`Invalidating block hash: ${blockHash}`);
-      const result = await api.invalidateBlock(blockHash);
+      console.log(`Invalidating block hash: ${blockHash}`)
+      const result = await api.invalidateBlock(blockHash)
       if (!result.ok) {
-        throw new Error(result.error?.message || 'Failed to invalidate block');
+        throw new Error(result.error?.message || 'Failed to invalidate block')
       }
 
-      blockActionResult = { success: true, message: 'Block invalidated successfully' };
-      
+      blockActionResult = { success: true, message: 'Block invalidated successfully' }
+
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks();
+      await fetchInvalidBlocks()
     } catch (error: unknown) {
-      blockActionResult = { success: false, message: `Failed to invalidate block: ${getErrorMessage(error)}` };
+      blockActionResult = {
+        success: false,
+        message: `Failed to invalidate block: ${getErrorMessage(error)}`,
+      }
     } finally {
-      blockActionLoading = false;
+      blockActionLoading = false
     }
   }
 
   async function handleRevalidateBlock(hash?: string) {
-    const blockHashToUse = hash || blockHash;
-    
+    const blockHashToUse = hash || blockHash
+
     if (!hashRegex.test(blockHashToUse)) {
-      failure('Invalid block hash');
-      return;
+      failure('Invalid block hash')
+      return
     }
 
-    blockActionLoading = true;
+    blockActionLoading = true
 
     try {
-      console.log(`Revalidating block hash: ${blockHashToUse}`);
-      const result = await api.revalidateBlock(blockHashToUse);
+      console.log(`Revalidating block hash: ${blockHashToUse}`)
+      const result = await api.revalidateBlock(blockHashToUse)
       if (!result.ok) {
-        const errorMsg = result.error?.message || 'Failed to revalidate block';
-        const errorStatus = result.error?.status;
-        
+        const errorMsg = result.error?.message || 'Failed to revalidate block'
+        const errorStatus = result.error?.status
+
         // Handle 404 errors specifically
         if (errorStatus === 404) {
-          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`);
+          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`)
         }
-        
+
         // Check if the error contains "not found" or "does not exist"
-        if (errorMsg.toLowerCase().includes('not found') || 
-            errorMsg.toLowerCase().includes('does not exist')) {
-          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`);
+        if (
+          errorMsg.toLowerCase().includes('not found') ||
+          errorMsg.toLowerCase().includes('does not exist')
+        ) {
+          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`)
         }
-        
-        throw new Error(errorMsg);
+
+        throw new Error(errorMsg)
       }
 
       // Use the success notification with the hash in the message
-      success(`Block revalidated successfully: ${blockHashToUse.substring(0, 8)}...${blockHashToUse.substring(blockHashToUse.length - 8)}`);
-      
+      success(
+        `Block revalidated successfully: ${blockHashToUse.substring(0, 8)}...${blockHashToUse.substring(blockHashToUse.length - 8)}`,
+      )
+
       // If this was called with the input field hash, clear it
       if (!hash) {
-        blockHash = '';
+        blockHash = ''
       }
-      
+
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks();
+      await fetchInvalidBlocks()
     } catch (error: unknown) {
-      failure(`${getErrorMessage(error)}`);
+      failure(`${getErrorMessage(error)}`)
     } finally {
-      blockActionLoading = false;
+      blockActionLoading = false
     }
   }
-  
+
   async function reconsiderBlock(hash: string) {
-    if (reconsideringBlock) return;
-    
-    reconsideringBlock = true;
-    reconsideringBlockHash = hash;
-    
+    if (reconsideringBlock) return
+
+    reconsideringBlock = true
+    reconsideringBlockHash = hash
+
     try {
-      console.log(`Reconsidering block hash: ${hash}`);
-      
+      console.log(`Reconsidering block hash: ${hash}`)
+
       // Call the API to reconsider the block
-      const result = await api.revalidateBlock(hash);
-      
+      const result = await api.revalidateBlock(hash)
+
       if (!result.ok) {
-        const errorMsg = result.error?.message || 'Failed to reconsider block';
-        const errorStatus = result.error?.status;
-        
+        const errorMsg = result.error?.message || 'Failed to reconsider block'
+        const errorStatus = result.error?.status
+
         // Handle 404 errors specifically
         if (errorStatus === 404) {
-          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`);
+          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`)
         }
-        
+
         // Check if the error contains "not found" or "does not exist"
-        if (errorMsg.toLowerCase().includes('not found') || 
-            errorMsg.toLowerCase().includes('does not exist')) {
-          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`);
+        if (
+          errorMsg.toLowerCase().includes('not found') ||
+          errorMsg.toLowerCase().includes('does not exist')
+        ) {
+          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`)
         }
-        
-        throw new Error(errorMsg);
+
+        throw new Error(errorMsg)
       }
-      
-      success(`Block reconsidered successfully: ${hash.substring(0, 8)}...${hash.substring(hash.length - 8)}`);
-      
+
+      success(
+        `Block reconsidered successfully: ${hash.substring(0, 8)}...${hash.substring(hash.length - 8)}`,
+      )
+
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks();
+      await fetchInvalidBlocks()
     } catch (error: unknown) {
-      failure(`${getErrorMessage(error)}`);
+      failure(`${getErrorMessage(error)}`)
     } finally {
-      reconsideringBlock = false;
-      reconsideringBlockHash = '';
+      reconsideringBlock = false
+      reconsideringBlockHash = ''
     }
   }
 
   async function performBlockAction(action: (hash: string) => Promise<any>, actionName: string) {
     if (!hashRegex.test(blockHash)) {
-      failure('Invalid block hash');
-      return;
+      failure('Invalid block hash')
+      return
     }
 
-    blockActionLoading = true;
-    
+    blockActionLoading = true
+
     // Store the current hash for the message
-    const currentHash = blockHash;
+    const currentHash = blockHash
 
     try {
-      console.log(`${actionName} block hash: ${currentHash}`);
-      
+      console.log(`${actionName} block hash: ${currentHash}`)
+
       // Use the custom event endpoint for all events
-      const result = await action(currentHash);
-      
+      const result = await action(currentHash)
+
       if (!result.ok) {
-        const errorMsg = result.error?.message || `Failed to ${actionName} block`;
-        const errorStatus = result.error?.status;
-        
+        const errorMsg = result.error?.message || `Failed to ${actionName} block`
+        const errorStatus = result.error?.status
+
         // Handle 404 errors specifically
         if (errorStatus === 404) {
-          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`);
+          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`)
         }
-        
+
         // Check if the error contains "not found" or "does not exist"
-        if (errorMsg.toLowerCase().includes('not found') || 
-            errorMsg.toLowerCase().includes('does not exist')) {
-          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`);
+        if (
+          errorMsg.toLowerCase().includes('not found') ||
+          errorMsg.toLowerCase().includes('does not exist')
+        ) {
+          throw new Error(`Block hash not found: This hash is not a valid block in the blockchain`)
         }
-        
-        throw new Error(errorMsg);
+
+        throw new Error(errorMsg)
       }
-      
+
       // Use the success notification with the hash in the message
-      success(`Block ${actionName}d successfully: ${currentHash.substring(0, 8)}...${currentHash.substring(currentHash.length - 8)}`);
-      
+      success(
+        `Block ${actionName}d successfully: ${currentHash.substring(0, 8)}...${currentHash.substring(currentHash.length - 8)}`,
+      )
+
       // Clear the input field after successful operation
-      blockHash = '';
-      
+      blockHash = ''
+
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks();
+      await fetchInvalidBlocks()
     } catch (error: unknown) {
-      failure(`${getErrorMessage(error)}`);
+      failure(`${getErrorMessage(error)}`)
     } finally {
-      blockActionLoading = false;
+      blockActionLoading = false
     }
   }
 
   async function fetchInvalidBlocks() {
     // Save current scroll position before updating
-    const scrollPosition = window.scrollY;
-    
-    invalidBlocksLoading = true;
-    invalidBlocksError = null;
-    
+    const scrollPosition = window.scrollY
+
+    invalidBlocksLoading = true
+    invalidBlocksError = null
+
     try {
-      const result = await api.getLastInvalidBlocks(5);
-      
+      const result = await api.getLastInvalidBlocks(5)
+
       if (!result.ok) {
-        throw new Error(`Failed to fetch invalid blocks: ${result.error?.message || 'Unknown error'}`);
+        throw new Error(
+          `Failed to fetch invalid blocks: ${result.error?.message || 'Unknown error'}`,
+        )
       }
-      
-      invalidBlocks = result.data.blocks || [];
-      lastInvalidBlocksRefresh = new Date();
-      console.log('Invalid blocks:', invalidBlocks);
+
+      invalidBlocks = result.data.blocks || []
+      lastInvalidBlocksRefresh = new Date()
+      console.log('Invalid blocks:', invalidBlocks)
     } catch (error: unknown) {
-      console.error('Error fetching invalid blocks:', error);
-      invalidBlocksError = getErrorMessage(error);
+      console.error('Error fetching invalid blocks:', error)
+      invalidBlocksError = getErrorMessage(error)
     } finally {
-      invalidBlocksLoading = false;
-      
+      invalidBlocksLoading = false
+
       // Restore scroll position after the component updates
       setTimeout(() => {
         window.scrollTo({
           top: scrollPosition,
-          behavior: 'instant'
-        });
-      }, 0);
+          behavior: 'instant',
+        })
+      }, 0)
     }
   }
 
   onMount(async () => {
     // Fetch FSM state and related data
-    await fetchFSMState();
-    await fetchFSMEvents();
-    await fetchInvalidBlocks();
-    
+    await fetchFSMState()
+    await fetchFSMEvents()
+    await fetchInvalidBlocks()
+
     // Set up polling for FSM state
     pollingInterval = setInterval(async () => {
       try {
-        await fetchFSMState(true);
+        await fetchFSMState(true)
       } catch (error) {
-        console.error('Error during polling:', error);
+        console.error('Error during polling:', error)
         // Don't show failure notifications for polling errors
       }
-    }, POLLING_INTERVAL_MS);
-  });
+    }, POLLING_INTERVAL_MS)
+  })
 
   onDestroy(() => {
     // Clean up the subscription and polling interval
     if (unsubscribe) {
-      unsubscribe();
+      unsubscribe()
     }
-    
+
     if (pollingInterval) {
-      clearInterval(pollingInterval);
+      clearInterval(pollingInterval)
     }
-  });
+  })
 
   function handleRefreshClick(): void {
-    fetchFSMState(false);
+    fetchFSMState(false)
   }
 </script>
 
@@ -521,7 +540,7 @@
       <div class="section-header">
         <h2>Blockchain FSM State Management</h2>
       </div>
-      
+
       <div class="admin-card fsm-card">
         <div class="fsm-content-container">
           {#if fsmLoading && !fsmState}
@@ -541,11 +560,14 @@
             <div class="fsm-state-container">
               <div class="fsm-state-info">
                 <h3>Current State</h3>
-                <div class="state-indicator" style={`background-color: ${getStateColor(fsmState.state_value)}`}>
+                <div
+                  class="state-indicator"
+                  style={`background-color: ${getStateColor(fsmState.state_value)}`}
+                >
                   <h2 class="state-name">{fsmState.state}</h2>
                 </div>
               </div>
-              
+
               <div class="fsm-actions">
                 <h3>Actions</h3>
                 {#if fsmEvents.length === 0}
@@ -555,7 +577,7 @@
                     {#each fsmEvents.sort((a, b) => a.value - b.value) as event}
                       {#if event && event.name}
                         <button
-                          on:click={() => sendFSMEvent(event.name)} 
+                          on:click={() => sendFSMEvent(event.name)}
                           disabled={fsmLoading}
                           class="action-button"
                           data-event={event.name.toLowerCase()}
@@ -564,7 +586,7 @@
                           {#if fsmLoading}
                             <div class="spinner"></div>
                           {:else}
-                            <i class={getEventIcon(event.name)}></i> 
+                            <i class={getEventIcon(event.name)}></i>
                           {/if}
                           <span>{formatEventName(event.name)}</span>
                         </button>
@@ -594,22 +616,25 @@
       <div class="admin-card">
         <div class="block-operations">
           <p class="block-operations-description">
-            Use this tool to invalidate or revalidate a specific block by its hash. Invalidating a block marks it as invalid in the blockchain, while revalidating reverses this action.
+            Use this tool to invalidate or revalidate a specific block by its hash. Invalidating a
+            block marks it as invalid in the blockchain, while revalidating reverses this action.
           </p>
           <div class="block-input-container">
             <label for="blockHash">Block Hash:</label>
-            <input 
-              type="text" 
-              id="blockHash" 
-              bind:value={blockHash} 
-              placeholder="Enter block hash (64 hex characters)" 
+            <input
+              type="text"
+              id="blockHash"
+              bind:value={blockHash}
+              placeholder="Enter block hash (64 hex characters)"
               class="block-hash-input"
               class:invalid={blockHash && !hashRegex.test(blockHash)}
             />
             {#if blockHash}
               <div class="hash-validation-message">
                 {#if hashRegex.test(blockHash)}
-                  <span class="valid-hash"><i class="fas fa-check-circle"></i> Valid hash format</span>
+                  <span class="valid-hash"
+                    ><i class="fas fa-check-circle"></i> Valid hash format</span
+                  >
                 {:else}
                   <span class="invalid-hash">
                     <i class="fas fa-exclamation-circle"></i> Invalid hash format
@@ -618,25 +643,25 @@
               </div>
             {/if}
           </div>
-          
+
           <div class="block-actions">
-            <button 
-              class="block-action-button" 
-              on:click={() => performBlockAction(api.invalidateBlock, 'invalidate')} 
+            <button
+              class="block-action-button"
+              on:click={() => performBlockAction(api.invalidateBlock, 'invalidate')}
               disabled={!hashRegex.test(blockHash) || blockActionLoading}
             >
               <i class="fas fa-ban"></i> Invalidate Block
             </button>
-            
-            <button 
-              class="block-action-button" 
-              on:click={() => performBlockAction(api.revalidateBlock, 'revalidate')} 
+
+            <button
+              class="block-action-button"
+              on:click={() => performBlockAction(api.revalidateBlock, 'revalidate')}
               disabled={!hashRegex.test(blockHash) || blockActionLoading}
             >
               <i class="fas fa-check-circle"></i> Revalidate Block
             </button>
           </div>
-          
+
           {#if blockActionLoading}
             <div class="block-operation-loading">
               <div class="spinner"></div>
@@ -656,16 +681,16 @@
               Last refreshed: {lastInvalidBlocksRefresh.toLocaleTimeString()}
             </span>
           {/if}
-          <button 
-            class="icon-button" 
-            on:click={fetchInvalidBlocks} 
+          <button
+            class="icon-button"
+            on:click={fetchInvalidBlocks}
             disabled={invalidBlocksLoading}
             title="Refresh invalidated blocks list"
           >
-            <Icon 
-              name="icon-refresh-line" 
-              size={20} 
-              class={invalidBlocksLoading ? "spinning" : ""}
+            <Icon
+              name="icon-refresh-line"
+              size={20}
+              class={invalidBlocksLoading ? 'spinning' : ''}
             />
           </button>
         </div>
@@ -712,12 +737,16 @@
                       <td class="height-cell">{block.height}</td>
                       <td class="hash-cell">
                         <div class="hash-content">
-                          <span title={block.hash}>{block.hash.substring(0, 10)}...{block.hash.substring(block.hash.length - 10)}</span>
-                          <button 
-                            class="copy-button" 
+                          <span title={block.hash}
+                            >{block.hash.substring(0, 10)}...{block.hash.substring(
+                              block.hash.length - 10,
+                            )}</span
+                          >
+                          <button
+                            class="copy-button"
                             on:click={() => {
-                              navigator.clipboard.writeText(block.hash);
-                              success('Block hash copied to clipboard');
+                              navigator.clipboard.writeText(block.hash)
+                              success('Block hash copied to clipboard')
                             }}
                             title="Copy hash"
                           >
@@ -728,8 +757,8 @@
                       <td style="text-align: center;">
                         {block.size ? `${block.size} B` : '-'}
                       </td>
-                       <td class="actions-cell">
-                        <button 
+                      <td class="actions-cell">
+                        <button
                           class="reconsider-button"
                           on:click={() => reconsiderBlock(block.hash)}
                           disabled={reconsideringBlock}
@@ -762,7 +791,7 @@
     margin: 0 auto;
     color: #e9ecef;
   }
-  
+
   .admin-section {
     margin-bottom: 3rem;
     background-color: rgba(33, 37, 41, 0.6);
@@ -770,7 +799,7 @@
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     overflow: hidden;
   }
-  
+
   .section-header {
     display: flex;
     align-items: center;
@@ -780,7 +809,7 @@
     background-color: rgba(33, 37, 41, 0.8);
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   }
-  
+
   .section-header h2 {
     font-size: 1.5rem;
     font-weight: 600;
@@ -788,28 +817,30 @@
     margin: 0;
     letter-spacing: 0.01em;
   }
-  
+
   .admin-card {
     background-color: #111827;
     border-radius: 0.5rem;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    box-shadow:
+      0 4px 6px -1px rgba(0, 0, 0, 0.1),
+      0 2px 4px -1px rgba(0, 0, 0, 0.06);
   }
-  
+
   .fsm-section {
     margin-bottom: 3rem;
   }
-  
+
   .fsm-card {
     padding: 0;
   }
-  
+
   .fsm-content-container {
     min-height: 200px;
     position: relative;
   }
-  
+
   .fsm-state-container {
     display: flex;
     flex-direction: row;
@@ -820,7 +851,7 @@
     border-radius: 0.75rem;
     padding: 1rem;
   }
-  
+
   .spinner-container {
     position: absolute;
     top: 0;
@@ -834,7 +865,7 @@
     border-radius: 0.75rem;
     min-height: 200px;
   }
-  
+
   .fsm-state-info {
     padding: 1.5rem 2rem;
     flex: 1;
@@ -842,14 +873,14 @@
     display: flex;
     flex-direction: column;
   }
-  
+
   .fsm-state-info h3 {
     font-size: 1.25rem;
     font-weight: 500;
     margin-bottom: 1.25rem;
     color: #ced4da;
   }
-  
+
   .state-indicator {
     padding: 2rem;
     border-radius: 0.75rem;
@@ -864,9 +895,9 @@
     justify-content: center;
     align-items: center;
   }
-  
+
   .state-indicator::before {
-    content: "";
+    content: '';
     position: absolute;
     top: 0;
     left: 0;
@@ -874,7 +905,7 @@
     height: 4px;
     background: rgba(255, 255, 255, 0.3);
   }
-  
+
   .state-name {
     font-size: 2.25rem;
     font-weight: 700;
@@ -883,21 +914,21 @@
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     letter-spacing: 0.02em;
   }
-  
+
   .fsm-actions {
     padding: 1.5rem 2rem;
     flex: 1;
     display: flex;
     flex-direction: column;
   }
-  
+
   .fsm-actions h3 {
     font-size: 1.25rem;
     font-weight: 500;
     margin-bottom: 1.25rem;
     color: #ced4da;
   }
-  
+
   .action-buttons {
     display: flex;
     flex-wrap: wrap;
@@ -905,7 +936,7 @@
     flex: 1;
     align-content: flex-start;
   }
-  
+
   .action-button {
     display: flex;
     align-items: center;
@@ -924,66 +955,66 @@
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     position: relative;
   }
-  
+
   .action-button :global(.spinner-small) {
     width: 16px;
     height: 16px;
   }
-  
+
   .action-button:hover {
     background-color: #2563eb;
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
   }
-  
+
   .action-button:active {
     transform: translateY(0);
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   }
-  
+
   .action-button:disabled {
     opacity: 0.6;
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
   }
-  
-  .action-button[data-event="stop"] {
+
+  .action-button[data-event='stop'] {
     background-color: #ef4444;
   }
-  
-  .action-button[data-event="stop"]:hover {
+
+  .action-button[data-event='stop']:hover {
     background-color: #dc2626;
   }
-  
-  .action-button[data-event="run"] {
+
+  .action-button[data-event='run'] {
     background-color: #10b981;
   }
-  
-  .action-button[data-event="run"]:hover {
+
+  .action-button[data-event='run']:hover {
     background-color: #059669;
   }
-  
-  .action-button[data-event="catchup"] {
+
+  .action-button[data-event='catchup'] {
     background-color: #6366f1;
   }
-  
-  .action-button[data-event="catchup"]:hover {
+
+  .action-button[data-event='catchup']:hover {
     background-color: #4f46e5;
   }
-  
-  .action-button[data-event="legacysync"] {
+
+  .action-button[data-event='legacysync'] {
     background-color: #8b5cf6;
   }
-  
-  .action-button[data-event="legacysync"]:hover {
+
+  .action-button[data-event='legacysync']:hover {
     background-color: #7c3aed;
   }
-  
+
   .action-button i {
     font-size: 1.125rem;
   }
-  
+
   .error-container {
     display: flex;
     flex-direction: column;
@@ -992,7 +1023,7 @@
     padding: 2.5rem 2rem;
     text-align: center;
   }
-  
+
   .error-message {
     color: #ef4444;
     font-size: 1.125rem;
@@ -1003,12 +1034,12 @@
     width: 100%;
     max-width: 500px;
   }
-  
+
   .error-message i {
     margin-right: 0.5rem;
     font-size: 1.25rem;
   }
-  
+
   .no-events {
     color: #9ca3af;
     font-style: italic;
@@ -1017,7 +1048,7 @@
     background-color: rgba(156, 163, 175, 0.1);
     border-radius: 0.5rem;
   }
-  
+
   .no-state {
     display: flex;
     flex-direction: column;
@@ -1027,7 +1058,7 @@
     text-align: center;
     color: #9ca3af;
   }
-  
+
   .btn {
     padding: 0.75rem 1.5rem;
     border-radius: 0.5rem;
@@ -1040,51 +1071,51 @@
     align-items: center;
     gap: 0.5rem;
   }
-  
+
   .btn-primary {
     background-color: #3b82f6;
     color: white;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   }
-  
+
   .btn-primary:hover {
     background-color: #2563eb;
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
   }
-  
+
   .btn-primary:active {
     transform: translateY(0);
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   }
-  
+
   .hash-validation-message {
     font-size: 0.875rem;
     margin-top: 0.5rem;
     padding: 0.5rem;
     border-radius: 0.375rem;
   }
-  
+
   .valid-hash {
     color: #10b981;
     display: flex;
     align-items: center;
     gap: 0.375rem;
   }
-  
+
   .invalid-hash {
     color: #ef4444;
     display: flex;
     align-items: center;
     gap: 0.375rem;
   }
-  
+
   .block-operation-loading {
     display: flex;
     justify-content: center;
     min-height: 100px;
   }
-  
+
   .block-operation-result {
     padding: 1rem 1.5rem;
     border-radius: 0.5rem;
@@ -1093,19 +1124,19 @@
     align-items: center;
     gap: 0.75rem;
   }
-  
+
   .block-operation-result.success {
     background-color: rgba(46, 204, 113, 0.1);
     color: #2ecc71;
     border: 1px solid rgba(46, 204, 113, 0.3);
   }
-  
+
   .block-operation-result.error {
     background-color: rgba(231, 76, 60, 0.1);
     color: #e74c3c;
     border: 1px solid rgba(231, 76, 60, 0.3);
   }
-  
+
   .admin-header {
     display: flex;
     justify-content: space-between;
@@ -1114,7 +1145,7 @@
     padding-bottom: 1.5rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   }
-  
+
   .admin-header h1 {
     font-size: 2rem;
     font-weight: 700;
@@ -1122,17 +1153,17 @@
     margin: 0;
     letter-spacing: 0.01em;
   }
-  
+
   .header-actions {
     display: flex;
     gap: 1rem;
   }
-  
+
   .header-logout {
     font-size: 0.8rem;
     padding: 0.4rem 0.8rem;
   }
-  
+
   .logout-button {
     background-color: rgba(107, 114, 128, 0.1);
     color: #e5e7eb;
@@ -1147,39 +1178,35 @@
     gap: 0.5rem;
     transition: all 0.2s;
   }
-  
+
   .logout-button:hover {
     background-color: rgba(107, 114, 128, 0.2);
     color: #f3f4f6;
     border-color: rgba(209, 213, 219, 0.3);
   }
-  
-  .logout-button i {
-    font-size: 1rem;
-  }
-  
+
   .block-operations {
     padding: 1.5rem;
   }
-  
+
   .block-operations-description {
     margin-bottom: 1.5rem;
     color: #ced4da;
     line-height: 1.6;
     font-size: 1rem;
   }
-  
+
   .block-input-container {
     margin-bottom: 1.5rem;
   }
-  
+
   .block-input-container label {
     display: block;
     margin-bottom: 0.5rem;
     font-weight: 500;
     color: #e9ecef;
   }
-  
+
   .block-hash-input {
     padding: 0.75rem 1rem;
     border-radius: 0.5rem;
@@ -1190,18 +1217,18 @@
     width: 100%;
     transition: all 0.2s ease;
   }
-  
+
   .block-hash-input:focus {
     outline: none;
     border-color: #3b82f6;
     box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
   }
-  
+
   .block-hash-input.invalid {
     border-color: #ef4444;
     box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);
   }
-  
+
   .block-actions {
     display: flex;
     justify-content: flex-end;
@@ -1209,7 +1236,7 @@
     padding-top: 0.75rem;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
   }
-  
+
   .text-button {
     background: none;
     border: none;
@@ -1219,15 +1246,15 @@
     font-size: 0.875rem;
     text-decoration: underline;
   }
-  
+
   .text-button:hover {
     color: #2563eb;
   }
-  
+
   .invalid-blocks {
     padding: 0;
   }
-  
+
   .invalid-blocks-list {
     max-height: 600px;
     overflow-y: auto;
@@ -1236,25 +1263,25 @@
     background-color: #111827;
     border-radius: 0.5rem;
   }
-  
+
   .invalid-blocks-list::-webkit-scrollbar {
     width: 8px;
   }
-  
+
   .invalid-blocks-list::-webkit-scrollbar-track {
     background: rgba(255, 255, 255, 0.1);
     border-radius: 4px;
   }
-  
+
   .invalid-blocks-list::-webkit-scrollbar-thumb {
     background-color: rgba(255, 255, 255, 0.2);
     border-radius: 4px;
   }
-  
+
   .invalid-blocks-list::-webkit-scrollbar-thumb:hover {
     background-color: rgba(255, 255, 255, 0.3);
   }
-  
+
   .invalid-blocks-list table {
     width: 100%;
     border-collapse: collapse;
@@ -1263,7 +1290,7 @@
     table-layout: fixed;
     border-spacing: 0;
   }
-  
+
   .invalid-blocks-list th {
     text-align: left;
     padding: 0.75rem 1rem;
@@ -1275,7 +1302,7 @@
     /* Removed text-transform: uppercase; */
     letter-spacing: 0.02em;
   }
-  
+
   .invalid-blocks-list td {
     padding: 0.75rem 1rem;
     border-bottom: 1px solid var(--table-td-border-bottom, 1px solid #fcfcff);
@@ -1283,50 +1310,50 @@
     vertical-align: middle;
     color: var(--table-td-color, #282933);
   }
-  
+
   /* Removed hover effect for table rows */
   .invalid-blocks-list tr:hover {
     background-color: transparent;
   }
-  
+
   .height-cell {
     color: #3b82f6;
     font-weight: 500;
     width: 100px;
     text-align: center;
   }
-  
+
   .hash-cell {
     font-family: monospace;
     width: auto;
     overflow: hidden;
   }
-  
+
   .hash-content {
     display: flex;
     align-items: center;
   }
-  
+
   .hash-content span {
     margin-right: 0.5rem;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  
+
   .actions-cell {
     display: flex;
     justify-content: center;
     width: 150px;
   }
-  
+
   .invalid-blocks-loading {
     display: flex;
     justify-content: center;
     align-items: center;
     padding: 2rem;
   }
-  
+
   .invalid-blocks-error {
     display: flex;
     flex-direction: column;
@@ -1335,13 +1362,13 @@
     padding: 2rem;
     text-align: center;
   }
-  
+
   .invalid-blocks-error i {
     font-size: 3rem;
     color: #ef4444;
     margin-bottom: 1rem;
   }
-  
+
   .error-message {
     font-weight: normal !important;
     color: #6b7280 !important;
@@ -1350,33 +1377,7 @@
     word-break: break-word;
     margin-bottom: 1rem !important;
   }
-  
-  .invalid-blocks-error .text-button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background-color: #f3f4f6;
-    color: #4b5563;
-    border: 1px solid #d1d5db;
-    padding: 0.5rem 1rem;
-    border-radius: 0.25rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-  
-  .invalid-blocks-error .text-button i {
-    font-size: 0.875rem;
-    color: #4b5563;
-    margin-right: 0.5rem;
-    margin-bottom: 0;
-  }
-  
-  .invalid-blocks-error .text-button:hover {
-    background-color: #e5e7eb;
-    color: #1f2937;
-  }
-  
+
   .invalid-blocks-empty {
     display: flex;
     flex-direction: column;
@@ -1391,19 +1392,19 @@
     color: #10b981;
     margin-bottom: 1rem;
   }
-  
+
   .invalid-blocks-empty p {
     margin: 0.25rem 0;
     font-weight: 600;
     color: #4b5563;
   }
-  
+
   .empty-description {
     font-weight: normal !important;
     color: #6b7280 !important;
     font-size: 0.9rem;
   }
-  
+
   .copy-button {
     background: none;
     border: none;
@@ -1417,18 +1418,18 @@
     transition: all 0.2s ease;
     opacity: 0.7;
   }
-  
+
   .copy-button:hover {
     color: #3b82f6;
     opacity: 1;
   }
-  
+
   .copy-icon {
     font-size: 16px;
     line-height: 1;
     font-weight: bold;
   }
-  
+
   .reconsider-button {
     background-color: #3b82f6;
     color: white;
@@ -1442,16 +1443,16 @@
     align-items: center;
     gap: 0.5rem;
   }
-  
+
   .reconsider-button:hover {
     background-color: #2563eb;
   }
-  
+
   .reconsider-button:disabled {
     background-color: #6b7280;
     cursor: not-allowed;
   }
-  
+
   .button-spinner {
     width: 1rem;
     height: 1rem;
@@ -1460,47 +1461,37 @@
     border-radius: 50%;
     animation: spin 1s linear infinite;
   }
-  
+
   .detail-label {
     font-weight: 600;
     color: #1f2937;
     margin-right: 0.25rem;
   }
-  
+
   .timestamp {
     color: #6b7280;
   }
-  
-  .timestamp i {
-    color: #3b82f6;
-  }
-  
+
   .reason {
     color: #6b7280;
   }
-  
-  .reason i {
-    color: #f59e0b;
-  }
-  
+
   .reason-text {
     color: #4b5563;
   }
-  
 
-  
   /* Add responsive behavior for smaller screens */
   @media (max-width: 768px) {
     .fsm-state-container {
       flex-direction: column;
     }
-    
+
     .fsm-state-info {
       border-right: none;
       border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     }
   }
-  
+
   .refresh-button {
     background-color: #f3f4f6;
     border: 1px solid #e5e7eb;
@@ -1515,22 +1506,22 @@
     font-size: 0.875rem;
     font-weight: 500;
   }
-  
+
   .refresh-button:hover {
     color: #3b82f6;
     background-color: rgba(59, 130, 246, 0.1);
     border-color: #3b82f6;
   }
-  
+
   .refresh-button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }
-  
+
   .spinning {
     animation: spin 1s linear infinite;
   }
-  
+
   @keyframes spin {
     from {
       transform: rotate(0deg);
@@ -1539,7 +1530,7 @@
       transform: rotate(360deg);
     }
   }
-  
+
   .block-action-button {
     padding: 0.75rem 1.25rem;
     border-radius: 0.5rem;
@@ -1557,30 +1548,30 @@
     background-color: #3b82f6;
     color: white;
   }
-  
+
   .block-action-button i {
     font-size: 1.125rem;
   }
-  
+
   .block-action-button:hover {
     background-color: #2563eb;
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
   }
-  
+
   .block-action-button:disabled {
     opacity: 0.6;
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
   }
-  
+
   .invalid-blocks-loading {
     display: flex;
     justify-content: center;
     padding: 2rem;
   }
-  
+
   .spinner {
     border: 4px solid rgba(0, 0, 0, 0.1);
     width: 36px;
@@ -1589,7 +1580,7 @@
     border-left-color: #3b82f6;
     animation: spin 1s linear infinite;
   }
-  
+
   .copy-button {
     background-color: transparent;
     border: none;
@@ -1600,37 +1591,37 @@
     transition: all 0.2s ease;
     font-size: 0.875rem;
   }
-  
+
   .copy-button:hover {
     color: #3b82f6;
     background-color: rgba(59, 130, 246, 0.1);
   }
-  
+
   .spinner-container {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
   }
-  
+
   .spinner-container p {
     margin-top: 1rem;
     color: #6b7280;
     font-size: 0.9rem;
   }
-  
+
   .refresh-container {
     display: flex;
     align-items: center;
     gap: 1rem;
   }
-  
+
   .last-refresh {
     font-size: 0.875rem;
     color: #6b7280;
     white-space: nowrap;
   }
-  
+
   .icon-button {
     background-color: transparent;
     border: none;
@@ -1643,17 +1634,17 @@
     align-items: center;
     justify-content: center;
   }
-  
+
   .icon-button.with-text {
     gap: 0.5rem;
     padding: 0.5rem 0.75rem;
   }
-  
+
   .icon-button:hover {
     color: #3b82f6;
     background-color: rgba(59, 130, 246, 0.1);
   }
-  
+
   .icon-button:disabled {
     opacity: 0.5;
     cursor: not-allowed;

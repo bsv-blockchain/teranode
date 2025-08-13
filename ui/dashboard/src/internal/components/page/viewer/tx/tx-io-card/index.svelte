@@ -30,7 +30,9 @@
       <div>{t(`${baseKey}.input.title`, { count: data.inputs.length })}</div>
       <div class="total">
         {t(`${baseKey}.input.total`, {
-          amount: formatSatoshi(data.inputs.reduce((acc, item) => (acc += item.previousTxSatoshis || 0), 0)),
+          amount: formatSatoshi(
+            data.inputs.reduce((acc, item) => (acc += item.previousTxSatoshis || 0), 0),
+          ),
         })}
       </div>
     </div>
@@ -44,13 +46,17 @@
             <div class="copy-link">
               <LinkHashCopy {...getHashLinkProps(DetailType.tx, input.txid, t, false)} />
             </div>
-            <span>{`${input.previousTxSatoshis ? formatSatoshi(input.previousTxSatoshis) : '-'} BSV`}</span>
+            <span
+              >{`${input.previousTxSatoshis ? formatSatoshi(input.previousTxSatoshis) : '-'} BSV`}</span
+            >
           </div>
         </div>
       {/each}
     </div>
     {#if data.inputs.length > inputSlice.length}
-      <div class="load-more" on:click={increaseSlize}>{t(`${baseKey}.load-more`)}</div>
+      <button class="load-more" on:click={increaseSlize} type="button"
+        >{t(`${baseKey}.load-more`)}</button
+      >
     {/if}
   </div>
   <div class="col">
@@ -78,7 +84,9 @@
       {/each}
     </div>
     {#if data.outputs.length > outputSlice.length}
-      <div class="load-more" on:click={increaseSlize}>{t(`${baseKey}.load-more`)}</div>
+      <button class="load-more" on:click={increaseSlize} type="button"
+        >{t(`${baseKey}.load-more`)}</button
+      >
     {/if}
   </div>
 </div>
@@ -188,5 +196,11 @@
     cursor: pointer;
 
     padding: 16px 24px 0 24px;
+    background: none;
+    border: none;
+    font: inherit;
+    display: block;
+    width: 100%;
+    text-align: left;
   }
 </style>

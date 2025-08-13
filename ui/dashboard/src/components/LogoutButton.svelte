@@ -1,32 +1,32 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
-  import { logout } from '$internal/stores/authStore';
-  
-  export let buttonText = 'Logout';
-  export let redirectTo = '/login';
-  export let buttonClass = '';
-  
-  let loading = false;
-  
+  import { goto } from '$app/navigation'
+  import { logout } from '$internal/stores/authStore'
+
+  export let buttonText = 'Logout'
+  export let redirectTo = '/login'
+  export let buttonClass = ''
+
+  let loading = false
+
   async function handleLogout() {
-    loading = true;
-    
+    loading = true
+
     try {
-      await logout();
-      goto(redirectTo);
+      await logout()
+      goto(redirectTo)
     } catch (error) {
-      console.error('Logout error:', error);
+      console.error('Logout error:', error)
       // Even if the server-side logout fails, we'll still redirect to the login page
-      goto(redirectTo);
+      goto(redirectTo)
     } finally {
-      loading = false;
+      loading = false
     }
   }
 </script>
 
-<button 
-  class="logout-button {buttonClass}" 
-  on:click={handleLogout} 
+<button
+  class="logout-button {buttonClass}"
+  on:click={handleLogout}
   disabled={loading}
   aria-label="Logout"
 >
@@ -51,18 +51,18 @@
     font-size: 0.9rem;
     transition: all 0.2s;
   }
-  
+
   .logout-button:hover:not(:disabled) {
     background-color: rgba(107, 114, 128, 0.1);
     color: #4b5563;
     border-color: #4b5563;
   }
-  
+
   .logout-button:disabled {
     opacity: 0.7;
     cursor: not-allowed;
   }
-  
+
   .spinner {
     width: 16px;
     height: 16px;
@@ -71,7 +71,7 @@
     border-top-color: white;
     animation: spin 0.8s linear infinite;
   }
-  
+
   @keyframes spin {
     to {
       transform: rotate(360deg);

@@ -35,6 +35,8 @@
 
 <!-- svelte-ignore a11y-click-events-have-key-events -->
 <div
+  role="button"
+  tabindex="0"
   data-test-id={testId}
   class={`tui-logo${clazz ? ' ' + clazz : ''}`}
   style={`${cssVars.join(';')}${style ? `;${style}` : ''}`}
@@ -42,6 +44,12 @@
   class:w={width !== -1}
   class:h={height !== -1 || hasNoSize}
   on:click
+  on:keydown={(e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      e.currentTarget.click()
+    }
+  }}
 >
   {#if logoSvg}
     {@html logoSvg}

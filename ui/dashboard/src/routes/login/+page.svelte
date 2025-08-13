@@ -1,141 +1,143 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
-  import { login, authError, isAuthenticated } from '$internal/stores/authStore';
-  import { fade } from 'svelte/transition';
-  import { browser } from '$app/environment';
-  import { validateUrl } from '$internal/utils/urlUtils';
-  import i18n from '$internal/i18n';
+  import { onMount } from 'svelte'
+  import { goto } from '$app/navigation'
+  import { page } from '$app/stores'
+  import { login, authError, isAuthenticated } from '$internal/stores/authStore'
+  import { fade } from 'svelte/transition'
+  import { browser } from '$app/environment'
+  import { validateUrl } from '$internal/utils/urlUtils'
+  import i18n from '$internal/i18n'
 
   // Form fields
-  let username = '';
-  let password = '';
-  let showPassword = false;
-  let loading = false;
-  let errorMessage = '';
-  let csrfToken = '';
-  let passwordTimeout: ReturnType<typeof setTimeout>;
-  let passwordStrength = 0;
-  
+  let username = ''
+  let password = ''
+  let showPassword = false
+  let loading = false
+  let errorMessage = ''
+  let csrfToken = ''
+  let passwordTimeout: ReturnType<typeof setTimeout>
+  let passwordStrength = 0
+
   // Subscribe to the auth error store
-  $: errorMessage = $authError;
-  $: t = $i18n.t;
-  
+  $: errorMessage = $authError
+  $: t = $i18n.t
+
   // Get the redirect URL from the query parameter
-  let redirectUrl = '/admin';
-  
+  let redirectUrl = '/admin'
+
   // Generate a CSRF token
   function generateCSRFToken() {
-    const array = new Uint8Array(16);
-    window.crypto.getRandomValues(array);
-    return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+    const array = new Uint8Array(16)
+    window.crypto.getRandomValues(array)
+    return Array.from(array, (byte) => byte.toString(16).padStart(2, '0')).join('')
   }
-  
+
   // Auto-hide password after a delay
   function startPasswordVisibilityTimer() {
-    clearTimeout(passwordTimeout);
+    clearTimeout(passwordTimeout)
     passwordTimeout = setTimeout(() => {
-      showPassword = false;
-    }, 5000); // Hide password after 5 seconds
+      showPassword = false
+    }, 5000) // Hide password after 5 seconds
   }
-  
+
   // Toggle password visibility
   function togglePasswordVisibility() {
-    showPassword = !showPassword;
+    showPassword = !showPassword
     if (showPassword) {
-      startPasswordVisibilityTimer();
+      startPasswordVisibilityTimer()
     } else {
-      clearTimeout(passwordTimeout);
+      clearTimeout(passwordTimeout)
     }
   }
-  
+
   // Check password strength
   function checkPasswordStrength(pwd: string) {
-    if (!pwd) return 0;
-    
-    let score = 0;
-    
+    if (!pwd) return 0
+
+    let score = 0
+
     // Length check
-    if (pwd.length >= 8) score += 1;
-    if (pwd.length >= 12) score += 1;
-    
+    if (pwd.length >= 8) score += 1
+    if (pwd.length >= 12) score += 1
+
     // Complexity checks
-    if (/[A-Z]/.test(pwd)) score += 1;
-    if (/[a-z]/.test(pwd)) score += 1;
-    if (/[0-9]/.test(pwd)) score += 1;
-    if (/[^A-Za-z0-9]/.test(pwd)) score += 1;
-    
+    if (/[A-Z]/.test(pwd)) score += 1
+    if (/[a-z]/.test(pwd)) score += 1
+    if (/[0-9]/.test(pwd)) score += 1
+    if (/[^A-Za-z0-9]/.test(pwd)) score += 1
+
     // Normalize to 0-100
-    return Math.min(100, Math.round((score / 6) * 100));
+    return Math.min(100, Math.round((score / 6) * 100))
   }
-  
+
   // Update password strength when password changes
-  $: passwordStrength = checkPasswordStrength(password);
-  
+  $: passwordStrength = checkPasswordStrength(password)
+
   // Get strength color based on score
-  $: strengthColor = 
-    passwordStrength < 30 ? 'var(--color-error)' : 
-    passwordStrength < 60 ? 'var(--color-warning)' : 
-    'var(--color-success)';
-  
+  $: strengthColor =
+    passwordStrength < 30
+      ? 'var(--color-error)'
+      : passwordStrength < 60
+        ? 'var(--color-warning)'
+        : 'var(--color-success)'
+
   // Handle form submission
   async function handleSubmit() {
-    loading = true;
-    errorMessage = '';
-    
+    loading = true
+    errorMessage = ''
+
     try {
       // Attempt login with the provided credentials and CSRF token
-      const success = await login(username, password, csrfToken);
-      
+      const success = await login(username, password, csrfToken)
+
       if (success) {
         // Validate and sanitize the redirect URL
-        const validatedUrl = validateUrl(redirectUrl);
+        const validatedUrl = validateUrl(redirectUrl)
         if (validatedUrl) {
-          goto(validatedUrl);
+          goto(validatedUrl)
         } else {
           // Default to admin page if redirect URL is invalid
-          goto('/admin');
+          goto('/admin')
         }
       }
     } catch (error) {
-      console.error('Login error:', error);
-      errorMessage = 'An unexpected error occurred. Please try again.';
+      console.error('Login error:', error)
+      errorMessage = 'An unexpected error occurred. Please try again.'
     } finally {
-      loading = false;
+      loading = false
     }
   }
-  
+
   // Navigate back to the dashboard
   function goToDashboard() {
-    goto('/');
+    goto('/')
   }
-  
+
   onMount(() => {
     // Get the redirect URL from the query parameter
     if (browser) {
-      const params = new URLSearchParams($page.url.search);
-      const redirect = params.get('redirect');
+      const params = new URLSearchParams($page.url.search)
+      const redirect = params.get('redirect')
       if (redirect) {
-        redirectUrl = redirect;
+        redirectUrl = redirect
       }
-      
+
       // Generate a CSRF token
-      csrfToken = generateCSRFToken();
-      
+      csrfToken = generateCSRFToken()
+
       // Check if already authenticated
       if ($isAuthenticated) {
         // Validate and sanitize the redirect URL
-        const validatedUrl = validateUrl(redirectUrl);
+        const validatedUrl = validateUrl(redirectUrl)
         if (validatedUrl) {
-          goto(validatedUrl);
+          goto(validatedUrl)
         } else {
           // Default to admin page if redirect URL is invalid
-          goto('/admin');
+          goto('/admin')
         }
       }
     }
-  });
+  })
 </script>
 
 <svelte:head>
@@ -149,23 +151,23 @@
         <h1>{t('login.title', 'Teranode Admin')}</h1>
         <p>{t('login.subtitle', 'Please log in to continue')}</p>
       </div>
-      
+
       {#if errorMessage}
         <div class="error-message" transition:fade={{ duration: 200 }}>
           {errorMessage}
         </div>
       {/if}
-      
-      <form 
-        on:submit|preventDefault={handleSubmit} 
-        id="login-form" 
-        name="login-form" 
+
+      <form
+        on:submit|preventDefault={handleSubmit}
+        id="login-form"
+        name="login-form"
         autocomplete="on"
         method="post"
       >
         <!-- Hidden CSRF token field -->
-        <input type="hidden" name="csrfToken" bind:value={csrfToken}>
-        
+        <input type="hidden" name="csrfToken" bind:value={csrfToken} />
+
         <div class="form-group">
           <label for="username">{t('login.username', 'Username')}</label>
           <div class="input-container">
@@ -182,26 +184,46 @@
             />
           </div>
         </div>
-        
+
         <div class="form-group">
           <label for="current-password">{t('login.password', 'Password')}</label>
           <div class="input-container password-input-container">
-            <button 
-              type="button" 
-              class="password-toggle password-toggle-left" 
+            <button
+              type="button"
+              class="password-toggle password-toggle-left"
               on:click={togglePasswordVisibility}
               disabled={loading}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
               tabindex="-1"
             >
               {#if showPassword}
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                   <circle cx="12" cy="12" r="3"></circle>
                   <line x1="1" y1="1" x2="23" y2="23"></line>
                 </svg>
               {:else}
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                   <circle cx="12" cy="12" r="3"></circle>
                 </svg>
@@ -235,13 +257,13 @@
               />
             {/if}
           </div>
-          
+
           <!-- Password strength indicator -->
           {#if password.length > 0}
             <div class="password-strength">
               <div class="strength-bar">
-                <div 
-                  class="strength-fill" 
+                <div
+                  class="strength-fill"
                   style="width: {passwordStrength}%; background-color: {strengthColor};"
                 ></div>
               </div>
@@ -257,7 +279,7 @@
             </div>
           {/if}
         </div>
-        
+
         <button type="submit" class="login-button" disabled={loading}>
           {#if loading}
             <div class="spinner"></div>
@@ -267,7 +289,7 @@
           {/if}
         </button>
       </form>
-      
+
       <div class="back-link-container">
         <a href="/" class="back-link" on:click|preventDefault={goToDashboard}>
           {t('login.back_to_dashboard', 'Back to Dashboard')}
@@ -285,13 +307,13 @@
     justify-content: center;
     background-color: var(--color-background, #121212);
   }
-  
+
   .login-container {
     width: 100%;
     max-width: 400px;
     padding: 1rem;
   }
-  
+
   .login-card {
     background-color: var(--color-surface, #1e1e1e);
     border-radius: 8px;
@@ -299,40 +321,40 @@
     padding: 2rem;
     width: 100%;
   }
-  
+
   .login-header {
     text-align: center;
     margin-bottom: 2rem;
   }
-  
+
   .login-header h1 {
     margin: 0;
     font-size: 1.8rem;
     color: var(--color-text, #e0e0e0);
   }
-  
+
   .login-header p {
     margin: 0.5rem 0 0;
     color: var(--color-text-secondary, #a0a0a0);
     font-size: 0.9rem;
   }
-  
+
   .form-group {
     margin-bottom: 1.5rem;
   }
-  
+
   label {
     display: block;
     margin-bottom: 0.5rem;
     font-size: 0.9rem;
     color: var(--color-text-secondary, #a0a0a0);
   }
-  
+
   .input-container {
     position: relative;
     width: 100%;
   }
-  
+
   input {
     width: 100%;
     height: 42px;
@@ -345,20 +367,20 @@
     transition: border-color 0.2s;
     box-sizing: border-box;
   }
-  
+
   input::placeholder {
     color: var(--color-text-muted, #666666);
   }
-  
+
   input:focus {
     outline: none;
     border-color: var(--color-primary, #0066cc);
   }
-  
+
   .password-input-container {
     position: relative;
   }
-  
+
   .password-toggle {
     position: absolute;
     right: 10px;
@@ -377,20 +399,20 @@
     width: 24px;
     height: 24px;
   }
-  
+
   .password-toggle:hover {
     color: var(--color-text, #e0e0e0);
   }
-  
+
   .password-toggle-left {
     right: auto;
     left: 10px;
   }
-  
+
   .password-input-with-left-icon {
     padding-left: 2.5rem;
   }
-  
+
   .login-button {
     width: 100%;
     padding: 0.75rem;
@@ -406,16 +428,16 @@
     align-items: center;
     gap: 0.5rem;
   }
-  
+
   .login-button:hover:not(:disabled) {
     background-color: var(--color-primary-dark, #0052a3);
   }
-  
+
   .login-button:disabled {
     background-color: var(--color-disabled, #444444);
     cursor: not-allowed;
   }
-  
+
   .error-message {
     background-color: var(--color-error-background, rgba(220, 53, 69, 0.1));
     color: var(--color-error, #dc3545);
@@ -424,7 +446,7 @@
     margin-bottom: 1.5rem;
     font-size: 0.9rem;
   }
-  
+
   .spinner {
     width: 20px;
     height: 20px;
@@ -433,13 +455,13 @@
     border-top-color: white;
     animation: spin 0.8s linear infinite;
   }
-  
+
   @keyframes spin {
     to {
       transform: rotate(360deg);
     }
   }
-  
+
   /* Password strength indicator */
   .password-strength {
     margin-top: 0.5rem;
@@ -447,7 +469,7 @@
     align-items: center;
     gap: 0.5rem;
   }
-  
+
   .strength-bar {
     flex-grow: 1;
     height: 4px;
@@ -455,31 +477,33 @@
     border-radius: 2px;
     overflow: hidden;
   }
-  
+
   .strength-fill {
     height: 100%;
-    transition: width 0.3s, background-color 0.3s;
+    transition:
+      width 0.3s,
+      background-color 0.3s;
   }
-  
+
   .strength-text {
     font-size: 0.8rem;
     min-width: 50px;
     text-align: right;
   }
-  
+
   /* Back to dashboard link */
   .back-link-container {
     margin-top: 1.5rem;
     text-align: center;
   }
-  
+
   .back-link {
     color: var(--color-primary, #0066cc);
     text-decoration: none;
     font-size: 0.9rem;
     transition: color 0.2s;
   }
-  
+
   .back-link:hover {
     color: var(--color-primary-dark, #0052a3);
     text-decoration: underline;

@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -147,6 +148,12 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 				}
 			}
 
+			// check whether we have a subtreeData file and use that for the data instead of the utxo store
+			subtreeData, err := h.repository.GetSubtreeData(ctx, hash)
+			if err != nil {
+				h.logger.Warnf("[GetSubtreeTxs][%s] subtreeData not found, proceeding without subtreeData", hash.String())
+			}
+
 			data := make([]SubtreeTx, 0, limit)
 
 			var txMeta *meta.Data
@@ -158,7 +165,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 
 				node := subtree.Nodes[i]
 
-				subtreeData := SubtreeTx{
+				subtreeTx := SubtreeTx{
 					Index: i,
 					TxID:  node.Hash.String(),
 				}
@@ -170,35 +177,39 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 					}
 					txMeta.Tx.SetTxHash(subtreepkg.CoinbasePlaceholderHash)
 				} else {
-					txMeta, err = h.repository.GetTransactionMeta(ctx, &node.Hash)
-					if err != nil {
-						// NewTxNotFoundError
-						if errors.Is(err, errors.ErrTxNotFound) {
-							h.logger.Infof("[GetSubtreeTxs][%s] not found in utxo store", node.Hash.String())
-						} else {
-							h.logger.Warnf("[GetSubtreeTxs][%s] error getting transaction meta: %s", node.Hash.String(), err.Error())
+					if subtreeData != nil {
+						// Use subtreeData to get the transaction metadata
+						txMeta, err = util.TxMetaDataFromTx(subtreeData.Txs[i])
+						if err != nil {
+							h.logger.Warnf("[GetSubtreeTxs][%s] error getting transaction meta from subtreeData: %s", node.Hash.String(), err.Error())
 						}
-
-						continue
 					}
 
 					if txMeta == nil {
+						// If subtreeData is not available or txMeta is nil,
+						// Fallback to the repository to get the transaction metadata
+						txMeta, err = h.repository.GetTransactionMeta(ctx, &node.Hash)
+						if err != nil {
+							// NewTxNotFoundError
+							if errors.Is(err, errors.ErrTxNotFound) {
+								h.logger.Infof("[GetSubtreeTxs][%s] not found in utxo store", node.Hash.String())
+							} else {
+								h.logger.Warnf("[GetSubtreeTxs][%s] error getting transaction meta: %s", node.Hash.String(), err.Error())
+							}
+						}
+					}
+
+					if txMeta == nil || txMeta.Tx == nil {
 						h.logger.Warnf("[GetSubtreeTxs][%s] txMeta is nil", node.Hash.String())
-						continue
+					} else {
+						subtreeTx.InputsCount = len(txMeta.Tx.Inputs)
+						subtreeTx.OutputsCount = len(txMeta.Tx.Outputs)
+						subtreeTx.Size = int(txMeta.SizeInBytes) //nolint:gosec
+						subtreeTx.Fee = int(txMeta.Fee)          //nolint:gosec
 					}
-
-					if txMeta.Tx == nil {
-						h.logger.Warnf("[GetSubtreeTxs][%s] txMeta.Tx is nil", node.Hash.String())
-						continue
-					}
-
-					subtreeData.InputsCount = len(txMeta.Tx.Inputs)
-					subtreeData.OutputsCount = len(txMeta.Tx.Outputs)
-					subtreeData.Size = int(txMeta.SizeInBytes) //nolint:gosec
-					subtreeData.Fee = int(txMeta.Fee)          //nolint:gosec
 				}
 
-				data = append(data, subtreeData)
+				data = append(data, subtreeTx)
 			}
 
 			response := ExtendedResponse{

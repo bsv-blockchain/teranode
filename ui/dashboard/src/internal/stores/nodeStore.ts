@@ -9,7 +9,7 @@ export const assetHTTPAddress = writable('', (set: any) => {
     // Use the common utility function to get the base URL
     const baseUrl = getBaseUrl(apiPathname)
     set(baseUrl)
-    
+
     // console.log('Using API URL:', baseUrl)
   }
 

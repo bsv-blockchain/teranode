@@ -198,11 +198,19 @@
       <FocusRect {disabled} style={`--comp-focus-rect-border-radius:var(--border-radius)`}>
         <!-- svelte-ignore a11y-click-events-have-key-events -->
         <div
+          role="button"
+          tabindex="-1"
           class="select"
           class:disabled
           class:error={!valid || error !== ''}
           class:focused
           on:click={disabled ? null : onSelectParentClick}
+          on:keydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              !disabled && onSelectParentClick()
+            }
+          }}
         >
           <select
             bind:this={selectRef}
@@ -242,10 +250,19 @@
                 {#each items as item, i (item.value)}
                   <!-- svelte-ignore a11y-click-events-have-key-events -->
                   <div
+                    role="option"
+                    tabindex="-1"
+                    aria-selected={item.value === value}
                     class="list-item"
                     class:selected={item.value === value}
                     class:arrowFocused={arrowFocusIndex === i}
                     on:click={() => onItemSelect(item.value)}
+                    on:keydown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        onItemSelect(item.value)
+                      }
+                    }}
                   >
                     <div>{item.label}</div>
                   </div>

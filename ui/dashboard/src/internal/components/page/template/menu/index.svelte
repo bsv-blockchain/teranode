@@ -77,13 +77,13 @@
 {#if showMobileNavbar}
   <MobileNavbar offsetTop={'var(--banner-height, 0px)'}>
     <div class="navbar-content">
-      <div class="logo-container" on:click={onLogo}>
+      <button class="logo-container" on:click={onLogo} type="button">
         <Logo name="teranode" height={28} />
         <Logo name="teranode-text" height={14} />
-      </div>
-      <div class="icon" on:click={(e) => onToggleMenu()}>
+      </button>
+      <button class="icon" on:click={(e) => onToggleMenu()} type="button">
         <AnimMenuIcon open={showDrawer} />
-      </div>
+      </button>
     </div>
   </MobileNavbar>
 {/if}
@@ -169,6 +169,18 @@
     display: flex;
     align-items: center;
     gap: 14px;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+  }
+
+  .icon {
+    background: none;
+    border: none;
+    padding: 0;
     cursor: pointer;
   }
 </style>

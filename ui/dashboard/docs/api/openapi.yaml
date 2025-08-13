@@ -370,7 +370,7 @@ components:
       type: string
       format: date-time
       examples:
-        - "2022-03-20T09:12:28Z"
+        - '2022-03-20T09:12:28Z'
     # Item:
     #   type: string
     #   description: Common entities identified by a hash

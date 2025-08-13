@@ -12,10 +12,10 @@
 
   // Handle predefined sizes
   if (size === 'small') {
-    size = 16;
-    thickness = 2;
-    radius = 6;
-    gap = 20;
+    size = 16
+    thickness = 2
+    radius = 6
+    gap = 20
   }
 
   let dash

@@ -114,7 +114,8 @@
           "uptime": "Uptime",
           "miner_name": "Miner",
           "listen_mode": "Mode",
-          "receivedAt": "Received at"
+          "receivedAt": "Received at",
+          "peer_id": "Peer"
         }
       }
     },

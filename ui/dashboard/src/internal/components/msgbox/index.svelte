@@ -14,6 +14,7 @@
 
   let age = ''
   let fields: MsgDisplayField[] = []
+  let title = ''
 
   function getMsgDateMillis(source: MessageSource, msg: Message) {
     if (source === 'p2p') {
@@ -44,10 +45,19 @@
   $: updatedFields = getMessageFields(source, message, `${age} ago`, hidePeer)
   $: baseKey = `comp.msgbox.${message.type.toLowerCase()}`
 
-  $: title =
-    source === 'status' && (message as StatusMessage).source === 'status'
-      ? $i18n.t(`comp.msgbox.status.type.${message.type.toLowerCase()}.title`)
-      : $i18n.t(`${baseKey}.title`)
+  $: {
+    const translationKey =
+      source === 'status' && (message as StatusMessage).source === 'status'
+        ? `comp.msgbox.status.type.${message.type.toLowerCase()}.title`
+        : `${baseKey}.title`
+
+    // Check if translation exists, if not provide a fallback
+    const translation = $i18n.t(translationKey)
+    title =
+      translation === translationKey
+        ? `${message.type.charAt(0).toUpperCase()}${message.type.slice(1).toLowerCase().replace(/_/g, ' ')}`
+        : translation
+  }
 </script>
 
 <div

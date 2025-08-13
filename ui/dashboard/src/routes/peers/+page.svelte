@@ -19,11 +19,11 @@
 
   onMount(() => {
     mounted = true
-    
+
     // Force a redraw if we have data
     if (peerDataMap.size > 0) {
       const nodes = Array.from(peerDataMap.values())
-      
+
       if (vis && nodes.length > 0) {
         drawPeerNetwork(vis, nodes, currentNodePeerID, syncConnectionMap)
       }
@@ -39,7 +39,7 @@
   $: {
     // Only process new messages (messages added since last run)
     const currentMessageCount = $messages.length
-    
+
     // If message count decreased (e.g., array was truncated), rebuild from scratch
     if (currentMessageCount < processedMessageCount) {
       peerDataMap.clear()
@@ -47,34 +47,34 @@
       currentNodePeerID = ''
       firstNodeStatusReceived = false
     }
-    
+
     // Process only unprocessed messages
     // Messages are stored newest first, so new messages are at the beginning
     const newMessages = $messages.slice(0, currentMessageCount - processedMessageCount)
-    
+
     // Track if any data actually changed
     let dataChanged = false
-    
+
     // Process new messages (they're already in newest-first order)
-    newMessages.forEach(msg => {
+    newMessages.forEach((msg) => {
       // Extract peer_id from various message formats - normalize to ensure uniqueness
       let peerId = msg.peer_id || msg.peerID || msg.peer || msg.from
-      
+
       // Skip messages without a valid peer identifier
       if (!peerId || peerId === 'undefined' || peerId === 'null') {
         console.warn('Skipping message with invalid peer_id:', msg)
         return
       }
-      
+
       // Normalize peer ID format (trim whitespace, ensure consistent format)
       peerId = String(peerId).trim()
-      
+
       // Additional validation
       if (!peerId || peerId.length === 0) {
         console.warn('Skipping message with empty peer_id after normalization')
         return
       }
-      
+
       // Get or create peer data entry
       let peerData = peerDataMap.get(peerId)
       if (!peerData) {
@@ -82,25 +82,26 @@
         peerData = {
           peer_id: peerId,
           first_seen: Date.now(),
-          last_seen: Date.now()
+          last_seen: Date.now(),
         }
         peerDataMap.set(peerId, peerData)
         dataChanged = true
       }
-      
+
       // Always update last_seen
       peerData.last_seen = Date.now()
-      
+
       // Update peer data based on message type
       if (msg.type === 'node_status') {
         // Check for duplicate node_status
         const messageHash = `node_status:${peerId}:${msg.best_height || ''}:${msg.best_block_hash || ''}:${msg.fsm_state || ''}:${msg.sync_peer_id || ''}`
-        
-        const isDuplicate = peerData.best_height === msg.best_height && 
-                           peerData.best_block_hash === msg.best_block_hash &&
-                           peerData.fsm_state === msg.fsm_state &&
-                           peerData.sync_peer_id === msg.sync_peer_id
-        
+
+        const isDuplicate =
+          peerData.best_height === msg.best_height &&
+          peerData.best_block_hash === msg.best_block_hash &&
+          peerData.fsm_state === msg.fsm_state &&
+          peerData.sync_peer_id === msg.sync_peer_id
+
         if (!isDuplicate) {
           // Track sync peer connections
           if (msg.sync_peer_id && msg.sync_peer_id !== peerData.sync_peer_id) {
@@ -114,7 +115,7 @@
             const connectionKey = `${peerId}->${peerData.sync_peer_id}`
             syncConnectionMap.delete(connectionKey)
           }
-          
+
           // Update all node_status fields
           // IMPORTANT: We explicitly set sync_peer_id even if it's null/undefined
           // This ensures arrows disappear when syncing is complete
@@ -130,14 +131,14 @@
             uptime: msg.uptime,
             miner_name: msg.miner_name,
             listen_mode: msg.listen_mode,
-            sync_peer_id: msg.sync_peer_id || null,  // Explicitly set to null if undefined
+            sync_peer_id: msg.sync_peer_id || null, // Explicitly set to null if undefined
             sync_peer_height: msg.sync_peer_height,
             sync_peer_block_hash: msg.sync_peer_block_hash,
-            sync_connected_at: msg.sync_connected_at // Now coming from server
+            sync_connected_at: msg.sync_connected_at, // Now coming from server
           })
           messageHashes.set(messageHash, Date.now())
           dataChanged = true
-          
+
           // The very first node_status message we receive is from our own node
           // (sent immediately upon WebSocket connection)
           if (!firstNodeStatusReceived) {
@@ -146,13 +147,12 @@
             console.log('Identified current node from first node_status:', currentNodePeerID)
           }
         }
-        
       } else if (msg.type === 'miningon' || msg.type === 'mining_on') {
         // Check for duplicate miningOn
         const messageHash = `miningon:${peerId}:${msg.height || ''}:${msg.hash || ''}`
-        
+
         const isDuplicate = peerData.height === msg.height && peerData.hash === msg.hash
-        
+
         if (!isDuplicate) {
           // Update mining-related fields
           if (msg.height !== undefined) peerData.height = msg.height
@@ -161,37 +161,32 @@
           messageHashes.set(messageHash, Date.now())
           dataChanged = true
         }
-        
       } else if (msg.type === 'PING' || msg.type === 'ping') {
         // PING just updates last_seen (already done above)
         dataChanged = true
-        
       } else if (msg.type === 'block') {
         // Update block-related fields
         if (msg.height !== undefined) peerData.latest_block_height = msg.height
         if (msg.hash) peerData.latest_block_hash = msg.hash
         dataChanged = true
-        
       } else if (msg.type === 'verack' || msg.type === 'version') {
         // Handshake messages - update connection info
         if (msg.best_height !== undefined) peerData.handshake_height = msg.best_height
         if (msg.best_hash) peerData.handshake_hash = msg.best_hash
         if (msg.user_agent) peerData.user_agent = msg.user_agent
         dataChanged = true
-        
       } else if (msg.type === 'tx' || msg.type === 'transaction') {
         // Transaction propagation - just track activity
         peerData.last_tx_time = Date.now()
         dataChanged = true
-        
       } else {
         // Unknown message type - still track that we saw activity from this peer
         dataChanged = true
       }
-      
+
       hasReceivedMessages = true
     })
-    
+
     // Clean up old message hashes periodically (older than 5 minutes)
     const now = Date.now()
     const fiveMinutesAgo = now - 5 * 60 * 1000
@@ -200,15 +195,14 @@
         messageHashes.delete(hash)
       }
     }
-    
+
     processedMessageCount = currentMessageCount
 
     // Only update visualization if data actually changed
     if (dataChanged) {
       // Convert peer data to nodes array for visualization
       const nodes = Array.from(peerDataMap.values())
-      
-      
+
       if (mounted && vis && nodes.length > 0) {
         drawPeerNetwork(vis, nodes, currentNodePeerID, syncConnectionMap)
       } else if (mounted && vis && nodes.length === 0) {
@@ -221,10 +215,10 @@
   // Helper function to format uptime
   function formatUptime(startTime: number): string {
     if (!startTime) return 'Unknown'
-    
+
     const now = Date.now() / 1000
     const uptime = now - startTime
-    
+
     if (uptime < 60) return `${Math.floor(uptime)}s`
     if (uptime < 3600) return `${Math.floor(uptime / 60)}m`
     if (uptime < 86400) return `${Math.floor(uptime / 3600)}h`
@@ -238,7 +232,9 @@
       <h1>
         {t('page.peers.title')}
         {#if $connectionAttempts > 0 && !$sock}
-          <span class="connection-error">P2P connection failed. Attempt {$connectionAttempts}/5</span>
+          <span class="connection-error"
+            >P2P connection failed. Attempt {$connectionAttempts}/5</span
+          >
         {/if}
       </h1>
       <div class="stats">
@@ -248,7 +244,10 @@
         </span>
         <span class="stat-item">
           <span class="stat-label">Active:</span>
-          <span class="stat-value">{Array.from(peerDataMap.values()).filter(p => Date.now() - p.last_seen < 60000).length}</span>
+          <span class="stat-value"
+            >{Array.from(peerDataMap.values()).filter((p) => Date.now() - p.last_seen < 60000)
+              .length}</span
+          >
         </span>
         <span class="stat-item">
           <span class="stat-label">Connected:</span>
@@ -284,7 +283,8 @@
     justify-content: space-between;
     align-items: center;
     padding: 20px;
-    background: linear-gradient(0deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.04) 100%), #0a1018;
+    background: linear-gradient(0deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.04) 100%),
+      #0a1018;
     border-radius: 12px;
   }
 
@@ -327,7 +327,8 @@
   #peer-vis {
     flex: 1;
     width: 100%;
-    background: linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.02) 100%), #0a1018;
+    background: linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.02) 100%),
+      #0a1018;
     border-radius: 12px;
     padding: 20px;
     overflow: auto;
@@ -425,7 +426,7 @@
   }
 
   :global(.uptime-text) {
-    fill: #15B241;
+    fill: #15b241;
     font-size: 10px;
     font-weight: 500;
   }
