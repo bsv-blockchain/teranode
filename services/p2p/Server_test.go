@@ -2284,7 +2284,7 @@ func TestBlacklistBaseURL(t *testing.T) {
 	})
 }
 
-func TestServer_SyncHeights(t *testing.T) {
+func TestServer_checkAndTriggerSync(t *testing.T) {
 	tSettings := createBaseTestSettings()
 
 	t.Run("sync in running sync mode", func(t *testing.T) {
@@ -2305,10 +2305,9 @@ func TestServer_SyncHeights(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create a real SyncManager with the sync peer set
-		syncManager := &SyncManager{
-			syncPeer: syncPeerID,
-			logger:   ulogger.New("test-syncmanager"),
-		}
+		syncManager := NewSyncManager(ulogger.New("test-syncmanager"), &chaincfg.RegressionNetParams)
+		// Manually set the sync peer for testing
+		syncManager.syncPeer = syncPeerID
 
 		server := &Server{
 			settings:                  tSettings,
@@ -2324,7 +2323,7 @@ func TestServer_SyncHeights(t *testing.T) {
 		// Use a valid peer ID for testing
 		peerIDStr := "12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg"
 
-		server.SyncHeights(p2p.HandshakeMessage{
+		server.checkAndTriggerSync(p2p.HandshakeMessage{
 			PeerID:     peerIDStr,
 			BestHeight: 1111,
 			BestHash:   "00000000000000000007d3c1e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3",
@@ -2339,7 +2338,7 @@ func TestServer_SyncHeights(t *testing.T) {
 		}
 
 		// do not send message of BestHeight is less than or equal to the current height
-		server.SyncHeights(p2p.HandshakeMessage{
+		server.checkAndTriggerSync(p2p.HandshakeMessage{
 			BestHeight: 111,
 		}, 123)
 
@@ -2375,7 +2374,7 @@ func TestServer_SyncHeights(t *testing.T) {
 		// Use a valid peer ID for testing
 		peerIDStr := "12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg"
 
-		server.SyncHeights(p2p.HandshakeMessage{
+		server.checkAndTriggerSync(p2p.HandshakeMessage{
 			PeerID:     peerIDStr,
 			BestHeight: 1111,
 			BestHash:   "00000000000000000007d3c1e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3",

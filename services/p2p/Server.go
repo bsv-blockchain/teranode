@@ -1002,7 +1002,7 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 		}
 
 		// Check if peer has a higher height and valid hash
-		s.SyncHeights(hs, localHeight)
+		s.checkAndTriggerSync(hs, localHeight)
 	}
 }
 
@@ -1049,14 +1049,16 @@ func (s *Server) sendVerack(ctx context.Context, from string, hs p2p.HandshakeMe
 	}
 
 	// Check if peer has a higher height and valid hash
-	s.SyncHeights(hs, localHeight)
+	s.checkAndTriggerSync(hs, localHeight)
 
 	return nil
 }
 
-func (s *Server) SyncHeights(hs p2p.HandshakeMessage, localHeight uint32) {
+// checkAndTriggerSync evaluates if the peer should trigger blockchain sync.
+// It sends a Kafka message to blockchain service if the peer is our sync peer and ahead of us.
+func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32) {
 	if syncing, err := s.isBlockchainSynchingOrCatchingUp(s.gCtx); err != nil || syncing {
-		s.logger.Debugf("[SyncHeights] skipping height sync, blockchain is syncing or catching up: %v", err)
+		s.logger.Debugf("[checkAndTriggerSync] skipping height sync, blockchain is syncing or catching up: %v", err)
 
 		return
 	}
@@ -1064,22 +1066,24 @@ func (s *Server) SyncHeights(hs p2p.HandshakeMessage, localHeight uint32) {
 	// update peer height and store starting height if first time seeing this peer
 	peerID2, err := peer.Decode(hs.PeerID)
 	if err != nil {
-		s.logger.Errorf("[SyncHeights] Failed to decode peer ID %s: %v", hs.PeerID, err)
+		s.logger.Errorf("[checkAndTriggerSync] Failed to decode peer ID %s: %v", hs.PeerID, err)
 		return
 	}
 
 	// store starting height if we haven't seen this peer before
 	if _, exists := s.P2PNode.GetPeerStartingHeight(peerID2); !exists {
-		s.logger.Infof("[SyncHeights] Setting starting height for peer %s to %d", peerID2.String(), hs.BestHeight)
+		s.logger.Infof("[checkAndTriggerSync] Setting starting height for peer %s to %d", peerID2.String(), hs.BestHeight)
 		s.P2PNode.SetPeerStartingHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
 	} else {
-		s.logger.Debugf("[SyncHeights] Peer %s already has starting height set", peerID2.String())
+		s.logger.Debugf("[checkAndTriggerSync] Peer %s already has starting height set", peerID2.String())
 	}
 	s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
 
 	// Update SyncManager with new peer height
+	// This will evaluate sync candidacy and potentially select this peer as sync peer
+	wasSelectedAsSyncPeer := false
 	if s.syncManager != nil {
-		s.syncManager.UpdatePeerHeight(peerID2, int32(hs.BestHeight))
+		wasSelectedAsSyncPeer = s.syncManager.UpdatePeerHeight(peerID2, int32(hs.BestHeight))
 	}
 
 	// Store the peer's best block hash for node status reporting
@@ -1087,17 +1091,20 @@ func (s *Server) SyncHeights(hs p2p.HandshakeMessage, localHeight uint32) {
 		s.peerBlockHashes.Store(peerID2, hs.BestHash)
 	}
 
-	// Only send to Kafka if this peer is the current sync peer
+	// Send to Kafka if this peer is ahead of us AND is our sync peer
+	// Either it was just selected (wasSelectedAsSyncPeer) or it was already the sync peer
 	if hs.BestHeight > localHeight {
-		if s.syncManager != nil && s.syncManager.IsSyncPeer(peerID2) {
-			s.logger.Infof("[SyncHeights] Sync peer %s has higher block (%s) at height %d > %d, sending to Kafka",
+		isSyncPeer := wasSelectedAsSyncPeer || (s.syncManager != nil && s.syncManager.IsSyncPeer(peerID2))
+
+		if isSyncPeer {
+			s.logger.Infof("[checkAndTriggerSync] Sync peer %s has higher block (%s) at height %d > %d, triggering sync via Kafka",
 				hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 
 			// Send peer's block info to Kafka if we have a producer client
 			if s.blocksKafkaProducerClient != nil {
 				hash, err := chainhash.NewHashFromStr(hs.BestHash)
 				if err != nil {
-					s.logger.Errorf("[SyncHeights] error getting chainhash from string %s: %v", hs.BestHash, err)
+					s.logger.Errorf("[checkAndTriggerSync] error getting chainhash from string %s: %v", hs.BestHash, err)
 				} else {
 					msg := &kafkamessage.KafkaBlockTopicMessage{
 						Hash: hash.String(),
@@ -1106,7 +1113,7 @@ func (s *Server) SyncHeights(hs p2p.HandshakeMessage, localHeight uint32) {
 
 					value, err := proto.Marshal(msg)
 					if err != nil {
-						s.logger.Errorf("[SyncHeights] error marshaling KafkaBlockTopicMessage: %v", err)
+						s.logger.Errorf("[checkAndTriggerSync] error marshaling KafkaBlockTopicMessage: %v", err)
 					} else {
 						s.blocksKafkaProducerClient.Publish(&kafka.Message{
 							Value: value,
@@ -1115,12 +1122,12 @@ func (s *Server) SyncHeights(hs p2p.HandshakeMessage, localHeight uint32) {
 				}
 			}
 		} else {
-			// This peer is ahead but not our sync peer
-			s.logger.Debugf("[SyncHeights] Peer %s has higher block (%s) at height %d > %d, but is not sync peer, skipping Kafka",
+			// Peer is ahead but not our sync peer
+			s.logger.Debugf("[checkAndTriggerSync] Peer %s has higher block (%s) at height %d > %d, but is not sync peer",
 				hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 		}
 	} else if hs.BestHash != "" && hs.BestHeight > 0 {
-		s.logger.Debugf("[SyncHeights] peer %s has block %s at height %d (our height: %d), not requesting",
+		s.logger.Debugf("[checkAndTriggerSync] peer %s has block %s at height %d (our height: %d), not requesting",
 			hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 	}
 }
@@ -2697,10 +2704,32 @@ func (s *Server) isBlockchainSynchingOrCatchingUp(ctx context.Context) (bool, er
 			err   error
 		)
 
-		if state, err = s.blockchainClient.GetFSMCurrentState(ctx); err != nil {
-			s.logger.Errorf("[isBlockchainSynchingOrCatchingUp] error getting blockchain FSM state: %v", err)
+		retryCount := 0
 
-			return false, err
+		for {
+			state, err = s.blockchainClient.GetFSMCurrentState(ctx)
+			if err == nil {
+				// Successfully got state
+				if retryCount > 0 {
+					s.logger.Infof("[isBlockchainSynchingOrCatchingUp] successfully got FSM state after %d retries", retryCount)
+				}
+				break
+			}
+
+			retryCount++
+
+			// Check if context is done (timeout or cancellation)
+			select {
+			case <-ctx.Done():
+				s.logger.Errorf("[isBlockchainSynchingOrCatchingUp] timeout after 15s getting blockchain FSM state (tried %d times): %v", retryCount, err)
+				// On timeout, allow sync to proceed rather than blocking
+				return false, nil
+			case <-time.After(1 * time.Second):
+				// Retry after short delay
+				if retryCount == 1 || retryCount%10 == 0 {
+					s.logger.Infof("[isBlockchainSynchingOrCatchingUp] retrying FSM state check (attempt %d) after error: %v", retryCount, err)
+				}
+			}
 		}
 
 		if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {

@@ -80,9 +80,9 @@ func TestCurrentSyncBehavior(t *testing.T) {
 
 		// New behavior: Only sync peer sends blocks to Kafka
 		// Since syncManager has no sync peer selected initially, no messages should be sent
-		server.SyncHeights(peer1, localHeight)
-		server.SyncHeights(peer2, localHeight)
-		server.SyncHeights(peer3, localHeight)
+		server.checkAndTriggerSync(peer1, localHeight)
+		server.checkAndTriggerSync(peer2, localHeight)
+		server.checkAndTriggerSync(peer3, localHeight)
 
 		// Verify that NO messages were sent to Kafka (since no sync peer is selected)
 		select {
@@ -136,8 +136,8 @@ func TestCurrentSyncBehavior(t *testing.T) {
 			BestHash:   "0000000000000000000000000000000000000000000000000000000000000095",
 		}
 
-		server.SyncHeights(samePeer, localHeight)
-		server.SyncHeights(behindPeer, localHeight)
+		server.checkAndTriggerSync(samePeer, localHeight)
+		server.checkAndTriggerSync(behindPeer, localHeight)
 
 		// Verify no messages sent
 		select {
@@ -182,7 +182,7 @@ func TestCurrentSyncBehavior(t *testing.T) {
 			BestHash:   "0000000000000000000000000000000000000000000000000000000000000110",
 		}
 
-		server.SyncHeights(higherPeer, localHeight)
+		server.checkAndTriggerSync(higherPeer, localHeight)
 
 		// Verify no message sent when syncing
 		select {
@@ -252,9 +252,9 @@ func TestPeerSelectionLogic(t *testing.T) {
 		}
 
 		// DESIRED BEHAVIOR: Only the highest peer's block should be sent
-		server.SyncHeights(peer1, localHeight)
-		server.SyncHeights(peer2, localHeight)
-		server.SyncHeights(peer3, localHeight)
+		server.checkAndTriggerSync(peer1, localHeight)
+		server.checkAndTriggerSync(peer2, localHeight)
+		server.checkAndTriggerSync(peer3, localHeight)
 
 		// Should receive only ONE message (from peer2 with height 110)
 		select {

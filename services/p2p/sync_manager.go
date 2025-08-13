@@ -85,16 +85,10 @@ func (sm *SyncManager) AddPeer(peerID peer.ID) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Determine if peer is a sync candidate
-	isSyncCandidate := sm.isSyncCandidate(peerID)
-	sm.peerStates.AddPeer(peerID, isSyncCandidate)
-
-	sm.logger.Infof("[SyncManager] Added peer %s (sync candidate: %v)", peerID, isSyncCandidate)
-
-	// If we don't have a sync peer and this is a candidate, try to start sync
-	if sm.syncPeer == "" && isSyncCandidate {
-		go sm.startSync()
-	}
+	// Just register the peer exists - don't determine sync candidacy yet
+	// We need the peer's height to make that decision
+	sm.peerStates.AddPeer(peerID, false)
+	sm.logger.Infof("[SyncManager] Added peer %s (awaiting height for sync evaluation)", peerID)
 }
 
 // RemovePeer removes a peer from the sync manager
@@ -109,7 +103,7 @@ func (sm *SyncManager) RemovePeer(peerID peer.ID) {
 		sm.logger.Infof("[SyncManager] Sync peer %s removed, finding new sync peer", peerID)
 		sm.syncPeer = ""
 		sm.syncPeerState = nil
-		go sm.startSync()
+		sm.selectSyncPeerLocked()
 	}
 }
 
@@ -207,22 +201,20 @@ func (sm *SyncManager) selectSyncPeer() peer.ID {
 	return selectedPeer
 }
 
-// startSync initiates synchronization with the best available peer
-func (sm *SyncManager) startSync() {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
+// selectSyncPeerLocked selects a sync peer but does not trigger blockchain sync
+// It assumes the lock is already held. Returns true if a sync peer was selected.
+func (sm *SyncManager) selectSyncPeerLocked() bool {
 	// Already syncing
 	if sm.syncPeer != "" {
-		sm.logger.Debugf("[SyncManager] Already syncing, skipping startSync")
-		return
+		sm.logger.Debugf("[SyncManager] Already have a sync peer, skipping selection")
+		return false
 	}
 
 	// Select the best peer
 	bestPeer := sm.selectSyncPeer()
 	if bestPeer == "" {
 		sm.logger.Warnf("[SyncManager] No sync peer available")
-		return
+		return false
 	}
 
 	// Set as sync peer
@@ -234,10 +226,8 @@ func (sm *SyncManager) startSync() {
 		ticks:         0,
 	}
 
-	sm.logger.Infof("[SyncManager] Starting sync with peer %s", bestPeer)
-
-	// TODO: Send getheaders or getblocks message to sync peer
-	// This will be implemented when we integrate with the Server
+	sm.logger.Infof("[SyncManager] Selected sync peer %s", bestPeer)
+	return true
 }
 
 // checkSyncPeer evaluates the current sync peer's health
@@ -246,15 +236,13 @@ func (sm *SyncManager) checkSyncPeer() {
 	defer sm.mu.Unlock()
 
 	if sm.syncPeer == "" {
-		// No sync peer, try to find one
-		go sm.startSync()
+		// No sync peer, next peer that's ahead will be selected automatically
 		return
 	}
 
 	if sm.syncPeerState == nil {
 		sm.logger.Errorf("[SyncManager] Sync peer set but no state, resetting")
 		sm.syncPeer = ""
-		go sm.startSync()
 		return
 	}
 
@@ -283,7 +271,8 @@ func (sm *SyncManager) checkSyncPeer() {
 		sm.logger.Infof("[SyncManager] Switching sync peer %s due to: %s", sm.syncPeer, switchReason)
 		sm.syncPeer = ""
 		sm.syncPeerState = nil
-		go sm.startSync()
+		// Try to find a new sync peer using bitcoin-sv selection logic
+		sm.selectSyncPeerLocked()
 	}
 }
 
@@ -325,20 +314,36 @@ func (sm *SyncManager) IsSyncPeer(peerID peer.ID) bool {
 	return sm.syncPeer == peerID
 }
 
-// UpdatePeerHeight updates the height for a peer
-// This should be called when we receive height updates from peers
-func (sm *SyncManager) UpdatePeerHeight(peerID peer.ID, height int32) {
-	// If this peer just got ahead of us and we don't have a sync peer, consider syncing
-	sm.mu.RLock()
-	needSync := sm.syncPeer == "" && sm.getLocalHeight != nil && height > int32(sm.getLocalHeight())
-	sm.mu.RUnlock()
+// UpdatePeerHeight updates the height for a peer and evaluates sync candidacy
+// This is where we evaluate sync candidacy since we now have height information
+// Returns true if this peer was selected as the sync peer
+func (sm *SyncManager) UpdatePeerHeight(peerID peer.ID, height int32) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 
-	if needSync {
-		if state, exists := sm.peerStates.GetPeerState(peerID); exists && state.syncCandidate {
-			sm.logger.Debugf("[SyncManager] Peer %s now ahead at height %d, considering for sync", peerID, height)
-			go sm.startSync()
+	// Update sync candidacy now that we have height
+	if state, exists := sm.peerStates.GetPeerState(peerID); exists {
+		// Re-evaluate sync candidacy with height information
+		isSyncCandidate := sm.isSyncCandidate(peerID)
+		if isSyncCandidate != state.syncCandidate {
+			sm.peerStates.SetSyncCandidate(peerID, isSyncCandidate)
+			sm.logger.Debugf("[SyncManager] Peer %s sync candidate status updated to %v (height: %d)",
+				peerID, isSyncCandidate, height)
 		}
 	}
+
+	// Check if we should select a sync peer (only if we don't have one)
+	if sm.syncPeer == "" && sm.getLocalHeight != nil {
+		localHeight := int32(sm.getLocalHeight())
+
+		// If this peer is ahead of us, try to select a sync peer
+		if height > localHeight {
+			// Use the bitcoin-sv selection logic synchronously
+			return sm.selectSyncPeerLocked()
+		}
+	}
+
+	return false
 }
 
 // UpdateSyncPeerNetwork updates network stats for the sync peer

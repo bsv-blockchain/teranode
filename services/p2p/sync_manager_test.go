@@ -330,7 +330,7 @@ func TestSyncManager_UpdateCallbacks(t *testing.T) {
 		// Update peer to be ahead of us (should consider for sync)
 		sm.UpdatePeerHeight(peerID, 105)
 
-		// Give async startSync time to run
+		// Give time for sync peer selection
 		time.Sleep(10 * time.Millisecond)
 	})
 

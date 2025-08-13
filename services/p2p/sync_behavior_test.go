@@ -111,9 +111,9 @@ func TestNewSyncBehavior(t *testing.T) {
 		}
 
 		// NEW BEHAVIOR: Only the sync peer's block should be sent
-		server.SyncHeights(peer1, localHeight)
-		server.SyncHeights(peer2, localHeight)
-		server.SyncHeights(peer3, localHeight)
+		server.checkAndTriggerSync(peer1, localHeight)
+		server.checkAndTriggerSync(peer2, localHeight)
+		server.checkAndTriggerSync(peer3, localHeight)
 
 		// Check which peer was selected as sync peer
 		syncPeer := server.syncManager.GetSyncPeer()
@@ -144,16 +144,24 @@ func TestNewSyncBehavior(t *testing.T) {
 
 		<-done
 
-		// Should have received exactly one message
-		assert.Equal(t, 1, messagesReceived, "Should receive exactly one message from sync peer")
+		// With sync peer switching, we may receive up to 2 messages as we upgrade to better peers
+		// (first from peer1 at 105, then from peer2 at 110 when it's discovered to be better)
+		assert.LessOrEqual(t, messagesReceived, 2, "Should receive at most 2 messages (initial + switch)")
+		assert.GreaterOrEqual(t, messagesReceived, 1, "Should receive at least 1 message from sync peer")
 
-		// The message should be from one of the peers ahead of us
+		// The last message should be from one of the peers ahead of us (preferably the highest)
 		validHashes := []string{
 			"0000000000000000000000000000000000000000000000000000000000000105",
 			"0000000000000000000000000000000000000000000000000000000000000110",
 			"0000000000000000000000000000000000000000000000000000000000000103",
 		}
 		assert.Contains(t, validHashes, receivedHash, "Received hash should be from one of the peers ahead")
+
+		// With our switching logic, the last message should be from the best peer (110)
+		if messagesReceived == 2 {
+			assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000110",
+				receivedHash, "Final message should be from the best peer after switching")
+		}
 
 		// Most likely it should be from peer2 (highest), but could be peer1 or peer3 due to random selection
 		// The important thing is that only ONE peer sent a message, not all three
@@ -202,8 +210,8 @@ func TestNewSyncBehavior(t *testing.T) {
 			BestHash:   "0000000000000000000000000000000000000000000000000000000000000095",
 		}
 
-		server.SyncHeights(samePeer, localHeight)
-		server.SyncHeights(behindPeer, localHeight)
+		server.checkAndTriggerSync(samePeer, localHeight)
+		server.checkAndTriggerSync(behindPeer, localHeight)
 
 		// Verify no messages sent
 		select {

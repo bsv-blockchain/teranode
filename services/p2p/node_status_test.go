@@ -96,14 +96,15 @@ func TestNodeStatusWithSyncPeer(t *testing.T) {
 			return []string{"127.0.0.1"}
 		})
 
-		// Add the sync peer and let it be selected
+		// Add the sync peer
 		server.syncManager.AddPeer(syncPeerID)
+
+		// Update peer height - this will trigger sync peer selection
+		// The peer at height 110 is ahead of local height 100, so it will be selected
+		server.syncManager.UpdatePeerHeight(syncPeerID, 110)
 
 		// Store the peer's block hash
 		server.peerBlockHashes.Store(syncPeerID, "0000000000000000000000000000000000000000000000000000000000000110")
-
-		// Give sync manager time to select the peer
-		time.Sleep(50 * time.Millisecond)
 
 		// Send node status
 		err := server.handleNodeStatusNotification(ctx)
