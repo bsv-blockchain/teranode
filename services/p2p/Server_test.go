@@ -23,6 +23,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
+	"github.com/bitcoin-sv/teranode/services/p2p/p2p_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/kafka"
@@ -3711,4 +3712,549 @@ func TestReceiveHandshakeStreamHandler(t *testing.T) {
 	mockStream.AssertExpectations(t)
 	mockConn.AssertExpectations(t)
 
+}
+
+func TestServerP2PNodeConnected(t *testing.T) {
+	ctx := context.Background()
+
+	testPeerID := peer.ID("12D3KooWQyYzzZpAMnsLgDK5bWZ5CPJSvxGgRA9SSGpS3zXw5tHr")
+
+	mockBlockchainClient := new(blockchain.Mock)
+	fsmState := blockchain.FSMStateRUNNING
+
+	// Create a valid BlockHeader with initialized fields
+	prevHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	merkleRoot, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+
+	validHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  prevHash,
+		HashMerkleRoot: merkleRoot,
+		Timestamp:      1231006505,
+		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Nonce:          2083236893,
+	}
+
+	meta := &model.BlockHeaderMeta{Height: 100}
+	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(validHeader, meta, nil).Maybe()
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+	// Real SyncManager (non mocked)
+	syncMgr := NewSyncManager(ulogger.New("syncmgr-test"), &chaincfg.TestNetParams)
+
+	validIP := "192.168.1.100"
+	addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/8333", validIP))
+	require.NoError(t, err)
+
+	peerInfo := p2p.PeerInfo{
+		ID:    testPeerID,
+		Addrs: []ma.Multiaddr{addr},
+	}
+
+	// Mocks
+	handshakeCalled := make(chan struct{}, 1)
+	mockP2P := new(MockServerP2PNode)
+	mockP2P.On("ConnectedPeers").Return([]p2p.PeerInfo{peerInfo})
+	mockP2P.On("GetPeerStartingHeight", testPeerID).Return(int32(0), false).Maybe()
+	mockP2P.On("SetPeerStartingHeight", testPeerID, int32(100)).Return().Maybe()
+	mockP2P.On("HostID").Return(testPeerID)
+	mockP2P.
+		On("Publish", mock.Anything, "test-prefix-handshake", mock.AnythingOfType("[]uint8")).
+		Run(func(args mock.Arguments) {
+			handshakeCalled <- struct{}{}
+		}).
+		Return(nil).
+		Maybe()
+	mockP2P.On("SendToPeer", mock.Anything, mock.Anything, mock.Anything).Return(errors.NewConfigurationError("stream failed"))
+
+	server := &Server{
+		P2PNode:            mockP2P,
+		logger:             ulogger.New("server-test"),
+		syncManager:        syncMgr,
+		blockchainClient:   mockBlockchainClient,
+		topicPrefix:        "test-prefix",
+		handshakeTopicName: "test-prefix-handshake",
+	}
+
+	// Act
+	server.P2PNodeConnected(ctx, testPeerID)
+
+	// Assert: wait for SetPeerStartingHeight to be called
+	require.Eventually(t, func() bool {
+		mockP2P.AssertExpectations(t)
+		return true
+	}, 2*time.Second, 100*time.Millisecond)
+
+	// Assert: wait for sendDirectHandshake to be called
+	select {
+	case <-handshakeCalled:
+		// OK
+	case <-time.After(2 * time.Second):
+		t.Fatal("sendDirectHandshake was not called")
+	}
+}
+
+func TestHandleBlockNotificationSuccess(t *testing.T) {
+	ctx := context.Background()
+	fsmState := blockchain.FSMStateRUNNING
+
+	testHash, _ := chainhash.NewHashFromStr("0000000000000000000a7b7f00c92f4414f8e632ce0e0a7a91e6d5bfb4b6c157")
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  testHash,
+		HashMerkleRoot: testHash,
+		Timestamp:      1234567890,
+		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Nonce:          1234,
+	}
+	meta := &model.BlockHeaderMeta{Height: 150}
+
+	// --- Mocks ---
+	mockP2P := new(MockServerP2PNode)
+	mockP2P.On("HostID").Return(peer.ID("12D3KooWTestPeer")).Maybe()
+	mockP2P.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	mockBlockchain := new(blockchain.Mock)
+	mockBlockchain.On("GetBlockHeader", ctx, testHash).Return(header, meta, nil).Once()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(header, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+	testSettings := settings.NewSettings()
+	testSettings.Coinbase.ArbitraryText = "MockMiner"
+
+	mockServer := &Server{
+		P2PNode:             mockP2P,
+		blockchainClient:    mockBlockchain,
+		logger:              ulogger.New("test"),
+		blockTopicName:      "block-topic",
+		AssetHTTPAddressURL: "https://datahub.node",
+		settings:            testSettings,
+		startTime:           time.Now(),
+		syncConnectionTimes: sync.Map{},
+		peerBlockHashes:     sync.Map{},
+		notificationCh:      make(chan *notificationMsg, 1),
+	}
+
+	err := mockServer.handleBlockNotification(ctx, testHash)
+	require.NoError(t, err)
+
+	mockP2P.AssertExpectations(t)
+	mockBlockchain.AssertExpectations(t)
+}
+
+func TestHandleMiningOnNotificationSuccess(t *testing.T) {
+	ctx := context.Background()
+
+	mockBlockchainClient := new(blockchain.Mock)
+	mockP2PNode := new(MockServerP2PNode)
+	logger := ulogger.New("test")
+	fsmState := blockchain.FSMStateRUNNING
+
+	prevBlockHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000000")
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  prevBlockHash,
+		HashMerkleRoot: model.GenesisBlockHeader.HashMerkleRoot,
+		Timestamp:      1234567890,
+		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Nonce:          1234,
+	}
+	meta := &model.BlockHeaderMeta{
+		Height:      100,
+		Miner:       "MockMiner",
+		SizeInBytes: 2048,
+		TxCount:     12,
+	}
+
+	// Set expectations
+	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(header, meta, nil)
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+	mockP2PNode.On("HostID").Return(peer.ID("75MDc5Ffg7m7gfZLY1Fszq"))
+	mockP2PNode.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	testSettings := settings.NewSettings()
+	testSettings.Coinbase.ArbitraryText = "MockMiner"
+
+	s := &Server{
+		blockchainClient:    mockBlockchainClient,
+		P2PNode:             mockP2PNode,
+		logger:              logger,
+		miningOnTopicName:   "mining-topic",
+		AssetHTTPAddressURL: "https://datahub.node",
+		syncConnectionTimes: sync.Map{},
+		peerBlockHashes:     sync.Map{},
+		settings:            testSettings,
+		notificationCh:      make(chan *notificationMsg, 2),
+	}
+
+	err := s.handleMiningOnNotification(ctx)
+	require.NoError(t, err)
+
+	select {
+	case msg := <-s.notificationCh:
+		assert.Equal(t, "mining_on", msg.Type)
+		assert.Equal(t, prevBlockHash.String(), msg.PreviousHash)
+		assert.Equal(t, uint32(100), msg.Height)
+		assert.Equal(t, "MockMiner", msg.Miner)
+		assert.Equal(t, uint64(12), msg.TxCount)
+		assert.Equal(t, uint64(2048), msg.SizeInBytes)
+	default:
+		t.Fatal("expected message on notificationCh")
+	}
+
+	mockBlockchainClient.AssertExpectations(t)
+	mockP2PNode.AssertExpectations(t)
+}
+
+func TestHandleSubtreeNotificationSuccess(t *testing.T) {
+	ctx := context.Background()
+	hash := &chainhash.Hash{0x1}
+	subtreeTopicName := "subtree-topic"
+
+	mockP2P := new(MockServerP2PNode)
+	mockP2P.On("HostID").Return(peer.ID("peer-123"))
+	mockP2P.On("Publish", ctx, subtreeTopicName, mock.Anything).Return(nil)
+
+	server := &Server{
+		P2PNode:             mockP2P,
+		subtreeTopicName:    subtreeTopicName,
+		AssetHTTPAddressURL: "https://datahub.node",
+	}
+
+	err := server.handleSubtreeNotification(ctx, hash)
+	assert.NoError(t, err)
+
+	// Verify that Publish was called
+	mockP2P.AssertCalled(t, "Publish", ctx, subtreeTopicName, mock.Anything)
+}
+
+func TestProcessBlockchainNotificationSubtree(t *testing.T) {
+	ctx := context.Background()
+	subtreeTopicName := "subtree-topic"
+	logger := ulogger.New("test")
+
+	hash := &chainhash.Hash{0x1}
+	hashBytes := hash.CloneBytes()
+	notification := &blockchain.Notification{
+		Type: model.NotificationType_Subtree,
+		Hash: hashBytes[:],
+	}
+
+	mockP2P := new(MockServerP2PNode)
+	mockP2P.On("HostID").Return(peer.ID("peer-123"))
+	mockP2P.On("Publish", ctx, subtreeTopicName, mock.Anything).Return(nil)
+
+	server := &Server{
+		P2PNode:             mockP2P,
+		subtreeTopicName:    subtreeTopicName,
+		AssetHTTPAddressURL: "https://datahub.node",
+		logger:              logger,
+	}
+
+	err := server.processBlockchainNotification(ctx, notification)
+	assert.NoError(t, err)
+	mockP2P.AssertCalled(t, "Publish", ctx, subtreeTopicName, mock.Anything)
+}
+
+func TestProcessBlockchainNotificationUnknownType(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test")
+
+	hash := &chainhash.Hash{0x1}
+	hashBytes := hash.CloneBytes()
+	notification := &blockchain.Notification{
+		Type: model.NotificationType(255), // not defined in the model
+		Hash: hashBytes[:],
+	}
+
+	server := &Server{
+		logger: logger,
+	}
+
+	err := server.processBlockchainNotification(ctx, notification)
+	assert.NoError(t, err) // not defined, no error
+}
+
+func TestProcessBlockchainNotificationInvalidHash(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test")
+
+	notification := &blockchain.Notification{
+		Type: model.NotificationType_Subtree,
+		Hash: []byte{0x1, 0x2, 0x3}, // invalid hash, not 32 bytes long
+	}
+
+	server := &Server{
+		logger: logger,
+	}
+
+	err := server.processBlockchainNotification(ctx, notification)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "error getting chainhash")
+}
+
+func TestServerStopSuccess(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test")
+
+	mockP2P := new(MockServerP2PNode)
+	mockP2P.On("Stop", ctx).Return(nil)
+
+	mockKafkaConsumer := new(MockKafkaConsumerGroup)
+	mockKafkaConsumer.On("Close").Return(nil)
+
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+
+	// Pre-load elements into the maps
+	server := &Server{
+		logger:                           logger,
+		P2PNode:                          mockP2P,
+		rejectedTxKafkaConsumerClient:    mockKafkaConsumer,
+		invalidBlocksKafkaConsumerClient: mockKafkaConsumer,
+		peerMapCleanupTicker:             ticker,
+	}
+
+	server.blockPeerMap.Store("key1", "value1")
+	server.subtreePeerMap.Store("key2", "value2")
+
+	err := server.Stop(ctx)
+	assert.NoError(t, err)
+
+	mockP2P.AssertCalled(t, "Stop", ctx)
+	mockKafkaConsumer.AssertNumberOfCalls(t, "Close", 2)
+
+	// Check that maps are empty
+	_, ok := server.blockPeerMap.Load("test")
+	assert.False(t, ok)
+	_, ok = server.subtreePeerMap.Load("test")
+	assert.False(t, ok)
+}
+
+func TestDisconnectPeerSuccess(t *testing.T) {
+	ctx := context.Background()
+	peerID := "12D3KooWQ89fFeXZtbj4Lmq2Z3zAqz1QzAAzC7D2yxjZK7XWuK6h"
+	logger := ulogger.New("test")
+	testSettings := settings.NewSettings()
+
+	mockP2P := new(MockServerP2PNode)
+	decodedPeerID, _ := peer.Decode(peerID)
+	mockP2P.On("DisconnectPeer", ctx, decodedPeerID).Return(nil)
+
+	server := &Server{
+		P2PNode:         mockP2P,
+		peerBlockHashes: sync.Map{},
+		logger:          logger,
+		syncManager:     NewSyncManager(logger, testSettings.ChainCfgParams),
+	}
+
+	req := &p2p_api.DisconnectPeerRequest{PeerId: peerID}
+
+	resp, err := server.DisconnectPeer(ctx, req)
+	assert.NoError(t, err)
+	assert.True(t, resp.Success)
+	assert.Empty(t, resp.Error)
+
+	mockP2P.AssertCalled(t, "DisconnectPeer", ctx, decodedPeerID)
+}
+
+func TestDisconnectPeerInvalidID(t *testing.T) {
+	ctx := context.Background()
+	invalidPeerID := "invalid-peer-id"
+	logger := ulogger.New("test")
+
+	server := &Server{
+		P2PNode: new(MockServerP2PNode),
+		logger:  logger,
+	}
+
+	req := &p2p_api.DisconnectPeerRequest{PeerId: invalidPeerID}
+
+	resp, err := server.DisconnectPeer(ctx, req)
+	assert.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.Error, "invalid peer ID")
+}
+
+func TestDisconnectPeerNoP2PNode(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test")
+
+	server := &Server{
+		P2PNode: nil,
+		logger:  logger,
+	}
+
+	req := &p2p_api.DisconnectPeerRequest{PeerId: "12D3KooWQ89fFeXZtbj4Lmq2Z3zAqz1QzAAzC7D2yxjZK7XWuK6h"}
+
+	resp, err := server.DisconnectPeer(ctx, req)
+	assert.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Equal(t, "P2P node not available", resp.Error)
+}
+
+func TestProcessInvalidBlockMessageSuccess(t *testing.T) {
+
+	logger := ulogger.New("test")
+	mockPeerID := peer.ID("peer-123")
+
+	blockHash := "abc123"
+	reason := "invalid_signature"
+	msg := &kafkamessage.KafkaInvalidBlockTopicMessage{
+		BlockHash: blockHash,
+		Reason:    reason,
+	}
+	msgBytes, err := proto.Marshal(msg)
+	require.NoError(t, err)
+
+	kafkaMsg := &kafka.KafkaMessage{
+		ConsumerMessage: sarama.ConsumerMessage{
+			Topic: "invalid-blocks",
+			Value: msgBytes,
+		},
+	}
+
+	// Create a real ban manager for testing
+	banHandler := &testBanHandler{}
+	banManager := &PeerBanManager{
+		peerBanScores: make(map[string]*BanScore),
+		reasonPoints: map[BanReason]int{
+			ReasonInvalidSubtree:    10,
+			ReasonProtocolViolation: 20,
+			ReasonSpam:              50,
+		},
+		banThreshold:  100,
+		banDuration:   time.Hour,
+		decayInterval: time.Minute,
+		decayAmount:   1,
+		handler:       banHandler,
+	}
+
+	server := &Server{
+		blockPeerMap: sync.Map{},
+		logger:       logger,
+		banManager:   banManager,
+	}
+	server.blockPeerMap.Store(blockHash, peerMapEntry{peerID: mockPeerID.String()})
+
+	err = server.processInvalidBlockMessage(kafkaMsg)
+	assert.NoError(t, err)
+
+	_, ok := server.blockPeerMap.Load(blockHash)
+	assert.False(t, ok)
+}
+
+func TestProcessInvalidBlockMessageUnmarshalError(t *testing.T) {
+	invalidBytes := []byte{0x00, 0x01, 0x02} // invalid proto
+	logger := ulogger.New("test")
+
+	kafkaMsg := &kafka.KafkaMessage{
+		ConsumerMessage: sarama.ConsumerMessage{
+			Topic: "invalid-blocks",
+			Value: invalidBytes,
+		},
+	}
+	server := &Server{
+		logger: logger,
+	}
+
+	err := server.processInvalidBlockMessage(kafkaMsg)
+	assert.Error(t, err)
+}
+
+func TestProcessInvalidBlockMessageNoPeerInMap(t *testing.T) {
+	blockHash := "not_in_map"
+	msgProto := &kafkamessage.KafkaInvalidBlockTopicMessage{
+		BlockHash: blockHash,
+		Reason:    "any",
+	}
+	msgBytes, _ := proto.Marshal(msgProto)
+	logger := ulogger.New("test")
+
+	kafkaMsg := &kafka.KafkaMessage{
+		ConsumerMessage: sarama.ConsumerMessage{
+			Topic: "invalid-blocks",
+			Value: msgBytes,
+		},
+	}
+
+	server := &Server{
+		blockPeerMap: sync.Map{},
+		logger:       logger,
+	}
+
+	err := server.processInvalidBlockMessage(kafkaMsg)
+	assert.NoError(t, err) // it's not an error
+}
+
+func TestProcessInvalidBlockMessageWrongTypeInMap(t *testing.T) {
+	blockHash := "bad_type"
+	msgProto := &kafkamessage.KafkaInvalidBlockTopicMessage{
+		BlockHash: blockHash,
+		Reason:    "any",
+	}
+	msgBytes, _ := proto.Marshal(msgProto)
+	logger := ulogger.New("test")
+
+	kafkaMsg := &kafka.KafkaMessage{
+		ConsumerMessage: sarama.ConsumerMessage{
+			Topic: "invalid-blocks",
+			Value: msgBytes,
+		},
+	}
+
+	server := &Server{
+		blockPeerMap: sync.Map{},
+		logger:       logger,
+	}
+	server.blockPeerMap.Store(blockHash, "string_instead_of_struct")
+
+	err := server.processInvalidBlockMessage(kafkaMsg)
+	assert.NoError(t, err)
+}
+
+func TestProcessInvalidBlockMessageAddBanScoreFails(t *testing.T) {
+	blockHash := "fail_hash"
+	msgProto := &kafkamessage.KafkaInvalidBlockTopicMessage{
+		BlockHash: blockHash,
+		Reason:    "invalid_data",
+	}
+	msgBytes, _ := proto.Marshal(msgProto)
+	logger := ulogger.New("test")
+
+	mockPeerID := peer.ID("peer-fail")
+
+	kafkaMsg := &kafka.KafkaMessage{
+		ConsumerMessage: sarama.ConsumerMessage{
+			Topic: "invalid-blocks",
+			Value: msgBytes,
+		},
+	}
+
+	// Create a real ban manager for testing
+	banHandler := &testBanHandler{}
+	banManager := &PeerBanManager{
+		peerBanScores: make(map[string]*BanScore),
+		reasonPoints: map[BanReason]int{
+			ReasonInvalidSubtree:    10,
+			ReasonProtocolViolation: 20,
+			ReasonSpam:              50,
+		},
+		banThreshold:  100,
+		banDuration:   time.Hour,
+		decayInterval: time.Minute,
+		decayAmount:   1,
+		handler:       banHandler,
+	}
+
+	server := &Server{
+		blockPeerMap: sync.Map{},
+		logger:       logger,
+		banManager:   banManager,
+	}
+	server.blockPeerMap.Store(blockHash, peerMapEntry{peerID: mockPeerID.String()})
+
+	err := server.processInvalidBlockMessage(kafkaMsg)
+	assert.Nil(t, err)
 }
