@@ -46,8 +46,10 @@ import (
 )
 
 // Constants for testing
-const bannedPeerIDStr = "12D3KooWB9kmtfHg5Ct1Sj5DX6fmqRnatrXnE5zMRg25d6rbwLzp" // Use a genuinely valid Peer ID hash
-const peerIDStr = "12D3KooWRj9ajsNaVuT2fNv7k2AyLnrC5NQQzZS9GixSVWKZZYRE"
+const (
+	bannedPeerIDStr = "12D3KooWB9kmtfHg5Ct1Sj5DX6fmqRnatrXnE5zMRg25d6rbwLzp" // Use a genuinely valid Peer ID hash
+	peerIDStr       = "12D3KooWRj9ajsNaVuT2fNv7k2AyLnrC5NQQzZS9GixSVWKZZYRE"
+)
 
 // MockKafkaConsumerGroup is a mock implementation of kafka.KafkaConsumerGroupI
 type MockKafkaConsumerGroup struct {
@@ -245,7 +247,7 @@ func TestResolveDNS(t *testing.T) {
 
 		// If the test gets this far and the resolution succeeded, log it
 		if err == nil {
-			t.Logf("DNS resolution succeeded where we expected it might fail: %v", result)
+			t.Logf("DNS resolution succeeded where we expected failure: %v", result)
 		}
 	})
 }

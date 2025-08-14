@@ -4,6 +4,7 @@ package blockchain
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -25,6 +26,10 @@ type LocalClient struct {
 	subtreeStore blob.Store       // Subtree store
 	utxoStore    utxo.Store       // UTXO store
 	logger       ulogger.Logger   // Logger instance
+
+	// Subscription management
+	subscribersMu sync.RWMutex
+	subscribers   map[string]chan *blockchain_api.Notification
 }
 
 // NewLocalClient creates a new LocalClient instance with the provided dependencies.
@@ -34,6 +39,7 @@ func NewLocalClient(logger ulogger.Logger, store blockchain.Store, subtreeStore 
 		store:        store,
 		subtreeStore: subtreeStore,
 		utxoStore:    utxoStore,
+		subscribers:  make(map[string]chan *blockchain_api.Notification),
 	}, nil
 }
 
@@ -100,10 +106,37 @@ func (c *LocalClient) AddBlock(ctx context.Context, block *model.Block, peerID s
 
 	c.logger.Infof("[Blockchain LocalClient] stored block %s (ID: %d, height: %d)", block.Hash(), ID, height)
 
+	// Send notification to all subscribers about the new block
+	notification := &blockchain_api.Notification{
+		Type: model.NotificationType_Block,
+		Hash: block.Hash().CloneBytes(),
+	}
+
+	c.subscribersMu.RLock()
+	defer c.subscribersMu.RUnlock()
+
+	// Skip if no subscribers
+	if c.subscribers == nil {
+		return nil
+	}
+
+	for source, ch := range c.subscribers {
+		select {
+		case ch <- notification:
+			c.logger.Debugf("[Blockchain LocalClient] sent block notification to subscriber %s", source)
+		default:
+			c.logger.Warnf("[Blockchain LocalClient] failed to send notification to subscriber %s (channel full)", source)
+		}
+	}
+
 	return nil
 }
 
 func (c *LocalClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
+	if c.store == nil {
+		return nil, errors.NewBlockNotFoundError("store not configured")
+	}
+
 	block, _, err := c.store.GetBlock(ctx, blockHash)
 	if err != nil {
 		return nil, err
@@ -225,11 +258,74 @@ func (c *LocalClient) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhas
 }
 
 func (c *LocalClient) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
+	// Send notification to all subscribers
+	c.subscribersMu.RLock()
+	defer c.subscribersMu.RUnlock()
+
+	// Skip if no subscribers
+	if c.subscribers == nil {
+		return nil
+	}
+
+	for source, ch := range c.subscribers {
+		select {
+		case ch <- notification:
+			c.logger.Debugf("[LocalClient] sent notification to subscriber %s", source)
+		default:
+			c.logger.Warnf("[LocalClient] failed to send notification to subscriber %s (channel full)", source)
+		}
+	}
+
 	return nil
 }
 
 func (c *LocalClient) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
-	return nil, nil
+	// Return a buffered channel to prevent blocking
+	ch := make(chan *blockchain_api.Notification, 10)
+
+	// Register the subscriber
+	c.subscribersMu.Lock()
+	if c.subscribers == nil {
+		c.subscribers = make(map[string]chan *blockchain_api.Notification)
+	}
+	c.subscribers[source] = ch
+	c.subscribersMu.Unlock()
+
+	c.logger.Infof("[LocalClient] Registered subscriber %s", source)
+
+	// initial notification to let subscribers know the current state
+	initialNotification := &blockchain_api.Notification{
+		Type: model.NotificationType_Block,
+		Hash: (&chainhash.Hash{}).CloneBytes(), // Empty hash for genesis/no blocks
+	}
+
+	if c.store != nil {
+		chainTip, _, err := c.store.GetBestBlockHeader(ctx)
+		if err != nil {
+			return ch, errors.NewServiceError("[Subscribe] failed to get best block header", err)
+		}
+
+		initialNotification = &blockchain_api.Notification{
+			Type: model.NotificationType_Block,
+			Hash: chainTip.Hash().CloneBytes(),
+		}
+	}
+
+	// Send the initial notification asynchronously to avoid race condition
+	// where the goroutine listening on the channel hasn't started yet
+	go func() {
+		// Put the notification in the channel
+		select {
+		case ch <- initialNotification:
+			c.logger.Infof("[LocalClient] Sent initial block notification to %s", source)
+		case <-ctx.Done():
+			c.logger.Debugf("[LocalClient] Context cancelled, skipping initial notification to %s", source)
+		}
+	}()
+
+	// We don't close the channel here as it should be managed by the receiver
+	// to avoid race conditions with concurrent send operations
+	return ch, nil
 }
 
 func (c *LocalClient) GetState(ctx context.Context, key string) ([]byte, error) {
@@ -378,7 +474,7 @@ func (c *LocalClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32,
 		return 0, 0, errors.NewProcessingError("[Blockchain] could not calculate median block time", err)
 	}
 
-	medianTimestampUint32, err := safeconversion.TimeToUint32(*medianTimestamp)
+	medianTimestampUint32, err := safeconversion.TimeToUint32(*medianTimestamp) // cspell:ignore safeconversion
 	if err != nil {
 		return 0, 0, err
 	}

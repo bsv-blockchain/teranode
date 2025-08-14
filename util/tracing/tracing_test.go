@@ -12,17 +12,55 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// initTestTracer initializes a test tracer that doesn't require external connections
+func initTestTracer() error {
+	// Create a no-op exporter for tests
+	exporter := tracetest.NewNoopExporter()
+
+	// Create resource with service information
+	res, err := resource.New(
+		context.Background(),
+		resource.WithAttributes(
+			semconv.ServiceNameKey.String("test-service"),
+			semconv.ServiceVersionKey.String("test"),
+		),
+	)
+	if err != nil {
+		return err
+	}
+
+	// Create trace provider with the no-op exporter
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter,
+			sdktrace.WithBatchTimeout(10*time.Millisecond)), // Very short timeout for tests
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithResource(res),
+	)
+
+	// Set the global trace provider
+	otel.SetTracerProvider(tp)
+
+	// Store the provider in the package global variable (accessing from test)
+	// This is a bit hacky but allows us to use the existing ShutdownTracer
+	setTestTracerProvider(tp)
+
+	return nil
+}
 
 func TestUTracer_WithError(t *testing.T) {
 	gocore.SetInfo("name", "v0.1.2b", "76b9cdd7e5ff85b62f6fec6cc20cfe02b4a12c17")
 
-	tSettings := test.CreateBaseTestSettings()
-	tSettings.TracingSampleRate = 1.0
-
-	err := InitTracer(tSettings)
+	// Use a no-op tracer for tests to avoid connection attempts
+	err := initTestTracer()
 	require.NoError(t, err)
 
 	defer func() {
@@ -52,10 +90,8 @@ func TestUTracer_WithError(t *testing.T) {
 func TestUTracer_ChildSpans(t *testing.T) {
 	gocore.SetInfo("name", "v0.1.2b", "76b9cdd7e5ff85b62f6fec6cc20cfe02b4a12c17")
 
-	tSettings := test.CreateBaseTestSettings()
-	tSettings.TracingSampleRate = 1.0
-
-	err := InitTracer(tSettings)
+	// Use a no-op tracer for tests to avoid connection attempts
+	err := initTestTracer()
 	require.NoError(t, err)
 
 	defer func() {
@@ -174,4 +210,10 @@ func (l *lineLogger) Fatalf(format string, args ...interface{}) {
 
 func (l *lineLogger) log(_ string, format string, args ...interface{}) {
 	l.lastLog = fmt.Sprintf(format, args...)
+}
+
+func setTestTracerProvider(provider *sdktrace.TracerProvider) {
+	mu.Lock()
+	defer mu.Unlock()
+	tp = provider
 }

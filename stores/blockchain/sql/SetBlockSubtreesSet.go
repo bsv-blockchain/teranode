@@ -26,5 +26,8 @@ func (s *SQL) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash
 		return errors.NewStorageError("block %s subtrees_set was not updated", blockHash.String())
 	}
 
+	// Invalidate response cache to ensure cached blocks reflect updated processed_at timestamp
+	s.ResetResponseCache()
+
 	return nil
 }

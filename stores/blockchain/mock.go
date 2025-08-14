@@ -279,11 +279,14 @@ func (m *MockStore) StoreBlock(ctx context.Context, block *model.Block, peerID s
 //   - *model.BlockHeaderMeta: Minimal metadata including just the height
 //   - error: Always nil in this implementation
 //
-// Note: This implementation does not check if BestBlock is nil, which could cause a panic.
-// In a production implementation, this should be handled.
+// Note: This implementation now checks if BestBlock is nil to prevent panics.
 func (m *MockStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	if m.BestBlock == nil {
+		return nil, nil, errors.NewBlockNotFoundError("no best block set")
+	}
 
 	return m.BestBlock.Header, &model.BlockHeaderMeta{Height: m.BestBlock.Height}, nil
 }

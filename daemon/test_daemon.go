@@ -485,6 +485,7 @@ func GetPorts(appSettings *settings.Settings) []int {
 		getPortFromString(appSettings.Validator.HTTPListenAddress),
 		getPortFromString(appSettings.P2P.GRPCListenAddress),
 		getPortFromString(appSettings.P2P.HTTPListenAddress),
+		appSettings.P2P.Port, // Add the actual P2P libp2p port
 		getPortFromString(appSettings.Coinbase.GRPCListenAddress),
 		getPortFromString(appSettings.SubtreeValidation.GRPCListenAddress),
 		getPortFromString(appSettings.Legacy.GRPCListenAddress),
@@ -816,6 +817,13 @@ func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, useInput 
 
 	if len(useInput) > 0 {
 		parentOutput = useInput[0]
+		// If a specific output was requested, validate it's not the OP_RETURN output
+		// (which is always the last output)
+		if parentOutput >= uint64(len(parentTx.Outputs)-1) {
+			// If the requested output is the last one (OP_RETURN) or beyond range,
+			// use the first output instead
+			parentOutput = 0
+		}
 	} else {
 		useParentOutput, _ := rand.Int(rand.Reader, big.NewInt(int64(len(parentTx.Outputs))))
 

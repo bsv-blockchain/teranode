@@ -7,7 +7,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/settings"
-	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,10 +45,6 @@ func TestInvalidSubtree_BanScoreConfiguration(t *testing.T) {
 	// connect node2 to node1 via p2p
 	node2.ConnectToPeer(t, node1)
 	node1.ConnectToPeer(t, node2)
-
-	// Wait for node1 to have at least one peer (node2)
-	err := helper.WaitForNodePeerCount(t.Context(), node1, 1, blockWait)
-	require.NoError(t, err)
 
 	// Mine blocks on node1
 	coinbaseTx := node1.MineToMaturityAndGetSpendableCoinbaseTx(t, node1.Ctx)

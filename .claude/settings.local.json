@@ -3,7 +3,13 @@
     "allow": [
       "WebFetch(domain:github.com)",
       "Bash(gci write:*)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh api:*)",
+      "Bash(gh workflow list:*)"
     ],
     "deny": []
   }

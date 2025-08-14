@@ -804,6 +804,12 @@ func (s *Server) sendHandshake(ctx context.Context) {
 				return
 			}
 
+			// Don't log errors if context was canceled (during shutdown)
+			if errors.Is(err, context.Canceled) {
+				s.logger.Debugf("[sendHandshake][p2p-handshake] context canceled during shutdown")
+				return
+			}
+
 			s.logger.Errorf("[sendHandshake][p2p-handshake] (handshake topic size: %d), publish error: %v", s.settings.P2P.HandshakeTopicSize, err)
 			return
 		}
@@ -2704,10 +2710,14 @@ func (s *Server) isBlockchainSynchingOrCatchingUp(ctx context.Context) (bool, er
 			err   error
 		)
 
-		retryCount := 0
+		// Retry for up to 15 seconds if we get an error getting FSM state
+		// This handles the case where blockchain service isn't ready yet
+		retryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
 
+		retryCount := 0
 		for {
-			state, err = s.blockchainClient.GetFSMCurrentState(ctx)
+			state, err = s.blockchainClient.GetFSMCurrentState(retryCtx)
 			if err == nil {
 				// Successfully got state
 				if retryCount > 0 {
@@ -2720,7 +2730,7 @@ func (s *Server) isBlockchainSynchingOrCatchingUp(ctx context.Context) (bool, er
 
 			// Check if context is done (timeout or cancellation)
 			select {
-			case <-ctx.Done():
+			case <-retryCtx.Done():
 				s.logger.Errorf("[isBlockchainSynchingOrCatchingUp] timeout after 15s getting blockchain FSM state (tried %d times): %v", retryCount, err)
 				// On timeout, allow sync to proceed rather than blocking
 				return false, nil

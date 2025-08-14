@@ -98,6 +98,42 @@ var (
 	hash7 = tx7.TxIDChainHash()
 )
 
+// setupBlockchainClient creates a blockchain client with in-memory store for testing
+func setupBlockchainClient(t *testing.T, testItems *baTestItems) (*blockchain.Mock, chan *blockchain_api.Notification, *model.Block) {
+	// Create in-memory blockchain store
+	blockchainStoreURL, err := url.Parse("sqlitememory://")
+	require.NoError(t, err)
+
+	logger := ulogger.TestLogger{}
+	blockchainStore, err := blockchainstore.NewStore(logger, blockchainStoreURL, testItems.blockAssembler.settings)
+	require.NoError(t, err)
+
+	// The store automatically initializes with the genesis block, so we don't need to add it
+
+	// Create real blockchain client
+	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
+	require.NoError(t, err)
+
+	// Get the genesis block that was automatically inserted
+	ctx := context.Background()
+	genesisBlock, err := blockchainStore.GetBlockByID(ctx, 0)
+	require.NoError(t, err)
+
+	// Subscribe returns a valid channel from our fixed LocalClient
+	subChan, err := blockchainClient.Subscribe(ctx, "test")
+	require.NoError(t, err)
+
+	// Replace the blockchain client
+	testItems.blockAssembler.blockchainClient = blockchainClient
+
+	// Set the best block header before starting listeners
+	testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
+	testItems.blockAssembler.bestBlockHeight.Store(0)
+
+	// Return nil for mock since we're using a real client
+	return nil, subChan, genesisBlock
+}
+
 func newTx(lockTime uint32) *bt.Tx {
 	tx := bt.NewTx()
 	tx.LockTime = lockTime
@@ -137,6 +173,11 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		subChan := make(chan *blockchain_api.Notification, 1)
+		// Send initial notification to mimic real blockchain service behavior
+		subChan <- &blockchain_api.Notification{
+			Type: model.NotificationType_Block,
+			Hash: (&chainhash.Hash{}).CloneBytes(),
+		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
@@ -172,6 +213,11 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		subChan := make(chan *blockchain_api.Notification, 1)
+		// Send initial notification to mimic real blockchain service behavior
+		subChan <- &blockchain_api.Notification{
+			Type: model.NotificationType_Block,
+			Hash: (&chainhash.Hash{}).CloneBytes(),
+		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
@@ -225,6 +271,11 @@ func TestBlockAssembly_Start(t *testing.T) {
 		nextBits := model.NBit{0xff, 0xff, 0x7f, 0x20}
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, bestBlockHeader.Hash()).Return(&nextBits, nil)
 		subChan := make(chan *blockchain_api.Notification, 1)
+		// Send initial notification to mimic real blockchain service behavior
+		subChan <- &blockchain_api.Notification{
+			Type: model.NotificationType_Block,
+			Hash: (&chainhash.Hash{}).CloneBytes(),
+		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 		blockchainClient.On("SetState", mock.Anything, "BlockAssembler", mock.Anything).Return(nil)
 
@@ -259,6 +310,11 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		subChan := make(chan *blockchain_api.Notification, 1)
+		// Send initial notification to mimic real blockchain service behavior
+		subChan <- &blockchain_api.Notification{
+			Type: model.NotificationType_Block,
+			Hash: (&chainhash.Hash{}).CloneBytes(),
+		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
@@ -281,20 +337,14 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
-		testItems.blockAssembler.startChannelListeners(ctx)
+		// Set up mock blockchain client
+		_, _, genesisBlock := setupBlockchainClient(t, testItems)
 
-		var buf bytes.Buffer
+		// Start listeners in a goroutine since it will wait for readyCh
+		go testItems.blockAssembler.startChannelListeners(ctx)
 
-		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
-		require.NoError(t, err)
-
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), testItems.blockAssembler.settings)
-		require.NoError(t, err)
-		require.NotNil(t, genesisBlock)
-
+		// Verify genesis block
 		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
-
-		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
 
 		var wg sync.WaitGroup
 
@@ -321,7 +371,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 			}
 		}()
 
-		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
+		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash1, Fee: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
@@ -627,18 +677,11 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
-		testItems.blockAssembler.startChannelListeners(ctx)
+		// Set up mock blockchain client
+		_, _, _ = setupBlockchainClient(t, testItems)
 
-		var buf bytes.Buffer
-
-		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
-		require.NoError(t, err)
-
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), nil)
-		require.NoError(t, err)
-		require.NotNil(t, genesisBlock)
-
-		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
+		// Start listeners in a goroutine since it will wait for readyCh
+		go testItems.blockAssembler.startChannelListeners(ctx)
 
 		var wg sync.WaitGroup
 
@@ -659,7 +702,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 			wg.Done()
 		}()
 
-		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
+		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
@@ -719,26 +762,18 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 	t.Run("GetMiningCandidate", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		tSettings := createTestSettings()
-
 		ctx := context.Background()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
-		testItems.blockAssembler.startChannelListeners(ctx)
+		// Set up mock blockchain client
+		_, _, genesisBlock := setupBlockchainClient(t, testItems)
 
-		var buf bytes.Buffer
+		// Start listeners in a goroutine since it will wait for readyCh
+		go testItems.blockAssembler.startChannelListeners(ctx)
 
-		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
-		require.NoError(t, err)
-
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), tSettings)
-		require.NoError(t, err)
-		require.NotNil(t, genesisBlock)
-
+		// Verify genesis block
 		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
-
-		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
 
 		var wg sync.WaitGroup
 
@@ -760,7 +795,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		}()
 
 		// first add coinbase
-		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
+		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
@@ -832,27 +867,19 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 	t.Run("GetMiningCandidate_MaxBlockSize", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		tSettings := createTestSettings()
-
 		ctx := context.Background()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 		testItems.blockAssembler.settings.Policy.BlockMaxSize = 15000*4 + 1000
 
-		testItems.blockAssembler.startChannelListeners(ctx)
+		// Set up mock blockchain client
+		_, _, genesisBlock := setupBlockchainClient(t, testItems)
 
-		var buf bytes.Buffer
+		// Start listeners in a goroutine since it will wait for readyCh
+		go testItems.blockAssembler.startChannelListeners(ctx)
 
-		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
-		require.NoError(t, err)
-
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), tSettings)
-		require.NoError(t, err)
-		require.NotNil(t, genesisBlock)
-
+		// Verify genesis block
 		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
-
-		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
 
 		var wg sync.WaitGroup
 
@@ -883,7 +910,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		for i := 0; i < 15; i++ {
 			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 			tx := newTx(uint32(i))
-			_, err = testItems.utxoStore.Create(ctx, tx, 0)
+			_, err := testItems.utxoStore.Create(ctx, tx, 0)
 			require.NoError(t, err)
 
 			if i == 0 {
@@ -950,27 +977,16 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 	t.Run("GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		tSettings := createTestSettings()
-
 		ctx := context.Background()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 		testItems.blockAssembler.settings.Policy.BlockMaxSize = 430000
 
-		testItems.blockAssembler.startChannelListeners(ctx)
+		// Set up mock blockchain client
+		_, _, _ = setupBlockchainClient(t, testItems)
 
-		var buf bytes.Buffer
-
-		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
-		require.NoError(t, err)
-
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), tSettings)
-		require.NoError(t, err)
-		require.NotNil(t, genesisBlock)
-
-		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
-
-		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
+		// Start listeners in a goroutine since it will wait for readyCh
+		go testItems.blockAssembler.startChannelListeners(ctx)
 
 		var wg sync.WaitGroup
 
@@ -994,7 +1010,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 		for i := 0; i < 4; i++ {
 			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 			tx := newTx(uint32(i))
-			_, err = testItems.utxoStore.Create(ctx, tx, 0)
+			_, err := testItems.utxoStore.Create(ctx, tx, 0)
 			require.NoError(t, err)
 
 			if i == 0 {
@@ -1007,7 +1023,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 
 		wg.Wait()
 
-		_, _, err = testItems.blockAssembler.GetMiningCandidate(ctx)
+		_, _, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.Error(t, err)
 
 		assert.Equal(t, "PROCESSING (4): max block size is less than the size of the subtree", err.Error())
@@ -1059,21 +1075,14 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 	t.Run("FeesOnlyScenario", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		testItems := setupBlockAssemblyTest(t)
 		ctx := context.Background()
+		testItems := setupBlockAssemblyTest(t)
 
-		testItems.blockAssembler.startChannelListeners(ctx)
+		// Set up mock blockchain client
+		_, _, _ = setupBlockchainClient(t, testItems)
 
-		// Set up genesis block
-		var buf bytes.Buffer
-		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
-		require.NoError(t, err)
-
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), testItems.blockAssembler.settings)
-		require.NoError(t, err)
-		require.NotNil(t, genesisBlock)
-
-		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
+		// Start listeners in a goroutine since it will wait for readyCh
+		go testItems.blockAssembler.startChannelListeners(ctx)
 
 		// Create the exact scenario from the bug report: fees only, no subsidy
 		height := uint32(1) // Height 1 (after genesis)
@@ -1110,7 +1119,7 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 		}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 
 		// Add transactions to UTXO store and then to block assembler
-		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
+		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{
 			Hash:        *tx1.TxIDChainHash(),
@@ -1255,18 +1264,13 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 
 		ba := testItems.blockAssembler
 
-		// Setup initial block
-		var buf bytes.Buffer
-		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
-		require.NoError(t, err)
+		// Set up mock blockchain client
+		_, _, _ = setupBlockchainClient(t, testItems)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), createTestSettings())
-		require.NoError(t, err)
-
-		ba.bestBlockHeader.Store(genesisBlock.Header)
 		ba.bestBlockHeight.Store(1)
 
-		ba.startChannelListeners(ctx)
+		// Start listeners in a goroutine since it will wait for readyCh
+		go ba.startChannelListeners(ctx)
 
 		// First call
 		h := ba.bestBlockHeight.Load()
@@ -1305,18 +1309,13 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 
 		ba := testItems.blockAssembler
 
-		// Setup genesis block
-		var buf bytes.Buffer
-		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
-		require.NoError(t, err)
+		// Set up mock blockchain client
+		_, _, _ = setupBlockchainClient(t, testItems)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), createTestSettings())
-		require.NoError(t, err)
-
-		ba.bestBlockHeader.Store(genesisBlock.Header)
 		ba.bestBlockHeight.Store(1)
 
-		ba.startChannelListeners(ctx)
+		// Start listeners in a goroutine since it will wait for readyCh
+		go ba.startChannelListeners(ctx)
 
 		// First call
 		candidate1, _, err1 := ba.GetMiningCandidate(ctx)
@@ -1349,15 +1348,9 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 
 		ba := testItems.blockAssembler
 
-		// Setup genesis block
-		var buf bytes.Buffer
-		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
-		require.NoError(t, err)
+		// Set up mock blockchain client
+		_, _, _ = setupBlockchainClient(t, testItems)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), createTestSettings())
-		require.NoError(t, err)
-
-		ba.bestBlockHeader.Store(genesisBlock.Header)
 		ba.bestBlockHeight.Store(1)
 
 		// Clear any existing cache to ensure we test fresh generation
@@ -1369,7 +1362,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		ba.cachedCandidate.generating = false
 		ba.cachedCandidate.mu.Unlock()
 
-		ba.startChannelListeners(ctx)
+		// Start listeners in a goroutine since it will wait for readyCh
+		go ba.startChannelListeners(ctx)
 
 		// Mock response with delay to simulate slow generation
 		mockResponse := &miningCandidateResponse{
@@ -1452,9 +1446,6 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		for err := range results {
 			require.NoError(t, err)
 		}
-
-		// Give a moment for any remaining operations to complete
-		time.Sleep(100 * time.Millisecond)
 
 		// Should only generate once, not three times (caching prevents multiple generations)
 		// NOTE: This test validates that the caching mechanism prevents redundant requests.

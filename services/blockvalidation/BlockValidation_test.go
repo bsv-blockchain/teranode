@@ -576,6 +576,8 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 		}
 	}
 
+	tSettings := test.CreateBaseTestSettings()
+
 	block := &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
@@ -583,8 +585,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
-
-	tSettings := test.CreateBaseTestSettings()
+	block.SetSettings(tSettings)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, subtreeValidationClient)
@@ -664,6 +665,8 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 		}
 	}
 
+	tSettings := test.CreateBaseTestSettings()
+
 	block := &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
@@ -671,8 +674,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
-
-	tSettings := test.CreateBaseTestSettings()
+	block.SetSettings(tSettings)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
@@ -781,6 +783,8 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 		}
 	}
 
+	tSettings := test.CreateBaseTestSettings()
+
 	block := &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbase,
@@ -788,8 +792,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
-
-	tSettings := test.CreateBaseTestSettings()
+	block.SetSettings(tSettings)
 
 	block.SetSettings(tSettings)
 
@@ -1414,6 +1417,8 @@ func TestBlockValidationExcessiveBlockSize(t *testing.T) {
 				CoinbaseTx:       tx1,                 // Using tx1 from test setup
 				Subtrees:         []*chainhash.Hash{}, // Initialize empty subtrees slice
 			}
+			// Set the settings to avoid nil pointer dereference
+			block.SetSettings(tSettings)
 
 			// Validate the block
 			err = blockValidator.ValidateBlock(ctx, block, "test", nil)
@@ -1467,6 +1472,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			Header:   blockHeader,
 			Subtrees: make([]*chainhash.Hash, 0),
 		}
+		block.SetSettings(tSettings)
 
 		err = blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000")
 		require.NoError(t, err)
@@ -1492,6 +1498,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 				subtree2.RootHash(),
 			},
 		}
+		block.SetSettings(tSettings)
 
 		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000"))
 	})
@@ -1525,6 +1532,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 				subtree2.RootHash(),
 			},
 		}
+		block.SetSettings(tSettings)
 
 		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000"))
 
@@ -2115,6 +2123,7 @@ func Test_createAppendBloomFilter(t *testing.T) {
 	}
 
 	// Create a test block with specified size and valid header
+	tSettings := test.CreateBaseTestSettings()
 	block := &model.Block{
 		Header:           blockHeader,
 		SizeInBytes:      123,
@@ -2122,6 +2131,7 @@ func Test_createAppendBloomFilter(t *testing.T) {
 		CoinbaseTx:       tx1,                 // Using tx1 from test setup
 		Subtrees:         []*chainhash.Hash{}, // Initialize empty subtrees slice
 	}
+	block.SetSettings(tSettings)
 
 	t.Run("smoke test", func(t *testing.T) {
 		blockchainMock := &blockchain.Mock{}
@@ -2670,6 +2680,7 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 		SizeInBytes:      uint64(coinbaseTx.Size()), //nolint:gosec
 		Subtrees:         subtreeHashes,
 	}
+	block.SetSettings(tSettings)
 
 	// Call ValidateBlock (should trigger ReValidateBlock due to header error)
 	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
@@ -2960,7 +2971,8 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
-	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 
 	bv := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 
@@ -3038,7 +3050,8 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return(nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
-	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
@@ -3516,7 +3529,8 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
-	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 

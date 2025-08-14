@@ -182,6 +182,7 @@ func TestFileLoadDAHs(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
 func BenchmarkFileLoadDAHs(b *testing.B) {
 	// Get a temporary directory
 	tempDir, err := os.MkdirTemp("", "test")
@@ -244,7 +245,7 @@ func TestFileLoadDAHsCleanupTmpFiles(t *testing.T) {
 
 		// Create an old .dah.tmp file (>10 minutes old)
 		oldTmpFile := filepath.Join(tempDir, "old.tx.dah.tmp")
-		err = os.WriteFile(oldTmpFile, []byte("12345"), 0600)
+		err = os.WriteFile(oldTmpFile, []byte("12345"), 0o600)
 		require.NoError(t, err)
 
 		// Modify the file's mod time to be 15 minutes ago
@@ -254,7 +255,7 @@ func TestFileLoadDAHsCleanupTmpFiles(t *testing.T) {
 
 		// Create a new .dah.tmp file (recent)
 		newTmpFile := filepath.Join(tempDir, "new.tx.dah.tmp")
-		err = os.WriteFile(newTmpFile, []byte("67890"), 0600)
+		err = os.WriteFile(newTmpFile, []byte("67890"), 0o600)
 		require.NoError(t, err)
 
 		// Create file store
@@ -834,11 +835,11 @@ func TestFileHealth(t *testing.T) {
 		defer os.RemoveAll(tempDir)
 
 		// Make the directory read-only
-		err = os.Chmod(tempDir, 0555)
+		err = os.Chmod(tempDir, 0o555)
 		require.NoError(t, err)
 
 		// nolint:errcheck
-		defer os.Chmod(tempDir, 0755) // Restore permissions for cleanup
+		defer os.Chmod(tempDir, 0o755) // Restore permissions for cleanup
 
 		u, err := url.Parse("file://" + tempDir)
 		require.NoError(t, err)
@@ -862,11 +863,11 @@ func TestFileHealth(t *testing.T) {
 		defer os.RemoveAll(tempDir)
 
 		// Make the directory read-only
-		err = os.Chmod(tempDir, 0555)
+		err = os.Chmod(tempDir, 0o555)
 		require.NoError(t, err)
 
 		// nolint:errcheck
-		defer os.Chmod(tempDir, 0755) // Restore permissions for cleanup
+		defer os.Chmod(tempDir, 0o755) // Restore permissions for cleanup
 
 		u, err := url.Parse("file://" + tempDir)
 		require.NoError(t, err)
@@ -1467,7 +1468,7 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		filename, err := f.options.ConstructFilename(tempDir, key, fileformat.FileTypeTesting)
 		require.NoError(t, err)
 
-		err = os.WriteFile(filename+".dah", []byte(strconv.FormatUint(uint64(initialDAH+10), 10)), 0644) // nolint:gosec
+		err = os.WriteFile(filename+".dah", []byte(strconv.FormatUint(uint64(initialDAH+10), 10)), 0o644) // nolint:gosec
 		require.NoError(t, err)
 
 		f.SetCurrentBlockHeight(initialDAH + 9)
@@ -1478,7 +1479,7 @@ func TestFileGetAndSetDAH(t *testing.T) {
 		require.True(t, exists)
 
 		// try again with a past time
-		err = os.WriteFile(filename+".dah", []byte(strconv.FormatUint(uint64(initialDAH+5), 10)), 0644) // nolint:gosec
+		err = os.WriteFile(filename+".dah", []byte(strconv.FormatUint(uint64(initialDAH+5), 10)), 0o644) // nolint:gosec
 		require.NoError(t, err)
 
 		f.cleanupExpiredFiles()
@@ -1822,7 +1823,7 @@ func TestDAHZeroHandling(t *testing.T) {
 
 		// Create a DAH file with value 0
 		dahFile := filepath.Join(tempDir, "test.dah")
-		err = os.WriteFile(dahFile, []byte("0"), 0600)
+		err = os.WriteFile(dahFile, []byte("0"), 0o600)
 		require.NoError(t, err)
 
 		// Try to read it
@@ -1845,7 +1846,7 @@ func TestDAHZeroHandling(t *testing.T) {
 
 		// Create an empty DAH file
 		dahFile := filepath.Join(tempDir, "test.dah")
-		err = os.WriteFile(dahFile, []byte(""), 0600)
+		err = os.WriteFile(dahFile, []byte(""), 0o600)
 		require.NoError(t, err)
 
 		// Try to read it
@@ -1869,7 +1870,7 @@ func TestDAHZeroHandling(t *testing.T) {
 
 		// Create a DAH file with only whitespace
 		dahFile := filepath.Join(tempDir, "test.dah")
-		err = os.WriteFile(dahFile, []byte("  \n\t  "), 0600)
+		err = os.WriteFile(dahFile, []byte("  \n\t  "), 0o600)
 		require.NoError(t, err)
 
 		// Try to read it
@@ -1893,12 +1894,12 @@ func TestDAHZeroHandling(t *testing.T) {
 
 		// Create a blob file
 		blobFile := filepath.Join(tempDir, "test.tx")
-		err = os.WriteFile(blobFile, []byte("blob content"), 0600)
+		err = os.WriteFile(blobFile, []byte("blob content"), 0o600)
 		require.NoError(t, err)
 
 		// Create a DAH file with value 0
 		dahFile := filepath.Join(tempDir, "test.tx.dah")
-		err = os.WriteFile(dahFile, []byte("0"), 0600)
+		err = os.WriteFile(dahFile, []byte("0"), 0o600)
 		require.NoError(t, err)
 
 		// Add to in-memory map
@@ -1932,15 +1933,15 @@ func TestDAHZeroHandling(t *testing.T) {
 
 		// Create some DAH files
 		validDAHFile := filepath.Join(tempDir, "valid.tx.dah")
-		err = os.WriteFile(validDAHFile, []byte("100"), 0600)
+		err = os.WriteFile(validDAHFile, []byte("100"), 0o600)
 		require.NoError(t, err)
 
 		invalidDAHFile1 := filepath.Join(tempDir, "invalid1.tx.dah")
-		err = os.WriteFile(invalidDAHFile1, []byte("0"), 0600)
+		err = os.WriteFile(invalidDAHFile1, []byte("0"), 0o600)
 		require.NoError(t, err)
 
 		invalidDAHFile2 := filepath.Join(tempDir, "invalid2.tx.dah")
-		err = os.WriteFile(invalidDAHFile2, []byte(""), 0600)
+		err = os.WriteFile(invalidDAHFile2, []byte(""), 0o600)
 		require.NoError(t, err)
 
 		// Create file store through normal initialization

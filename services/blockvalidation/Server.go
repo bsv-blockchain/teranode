@@ -272,7 +272,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
 	}
 
-	u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, subtreeValidationClient)
+	// Only create a new BlockValidation if one wasn't already set (for testing)
+	if u.blockValidation == nil {
+		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, subtreeValidationClient)
+	}
 
 	go u.processSubtreeNotify.Start()
 
@@ -524,6 +527,11 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 func (u *Server) Stop(_ context.Context) error {
 	u.processSubtreeNotify.Stop()
+
+	// Wait for all background tasks in BlockValidation to complete
+	if u.blockValidation != nil {
+		u.blockValidation.Wait()
+	}
 
 	// close the kafka consumer gracefully
 	if err := u.kafkaConsumerClient.Close(); err != nil {
@@ -1014,9 +1022,7 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 			blockCount := 0
 			i := 0
 
-			var (
-				blocks []*model.Block
-			)
+			var blocks []*model.Block
 
 			for _, batch := range batches {
 				batch := batch
@@ -1138,20 +1144,17 @@ LOOP:
 		}
 
 		for i, blockHeader := range blockHeaders {
-			// check if parent block is currently being validated, then wait for it to finish. If the parent block was being validated, when the for loop is done, GetBlockExists will return true.
+			// Always add the block to catchup list first, before checking if we should stop
+			u.logger.Debugf("[catchup][%s] [%d/%d] adding block [%s] to catchup list", blockUpTo.Hash().String(), i, blockHeadersLength, blockHeader.String())
+			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
+
+			// Now check if the parent exists - if it does, we can stop searching for more blocks
 			if u.parentExistsAndIsValidated(ctx, blockHeader, blockUpTo) {
+				u.logger.Debugf("[catchup][%s] parent exists for block %s, stopping search", blockUpTo.Hash().String(), blockHeader.Hash().String())
 				break LOOP
 			}
 
-			u.logger.Debugf("[catchup][%s] [%d/%d] parent block does not exist [%s]", blockUpTo.Hash().String(), i, blockHeadersLength, blockHeader.String())
-
-			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
-
 			blockHeaderHashUpTo = blockHeader.HashPrevBlock
-			// TODO: check if its only useful for a chain with different genesis block?
-			if blockHeaderHashUpTo.IsEqual(&chainhash.Hash{}) {
-				return nil, errors.NewProcessingError("[catchup][%s] failed to find parent block header, last was: %s", blockUpTo.Hash().String(), blockHeader.String())
-			}
 		}
 	}
 
@@ -1185,9 +1188,9 @@ func (u *Server) parentExistsAndIsValidated(ctx context.Context, blockHeader *mo
 		u.logger.Infof("[catchup][%s] parent block is done being validated", blockUpTo.Hash().String())
 	}
 
-	exists, err := u.blockValidation.GetBlockExists(ctx, blockHeader.Hash())
+	exists, err := u.blockValidation.GetBlockExists(ctx, blockHeader.HashPrevBlock)
 	if err != nil {
-		u.logger.Errorf("[catchup][%s] failed to check if block exists", blockUpTo.Hash().String(), err)
+		u.logger.Errorf("[catchup][%s] failed to check if parent block exists", blockUpTo.Hash().String(), err)
 	}
 
 	return exists

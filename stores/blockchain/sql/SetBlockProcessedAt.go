@@ -46,5 +46,10 @@ func (s *SQL) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash
 		return errors.NewStorageError("block %s processed_at timestamp was not updated", blockHash.String())
 	}
 
+	// Invalidate response cache to ensure cached blocks reflect updated processed_at timestamp
+	// NOTE: We don't invalidate blocksCache here as processed_at isn't cached in blocksCache
+	// and ResetBlocksCache is expensive
+	s.ResetResponseCache()
+
 	return nil
 }

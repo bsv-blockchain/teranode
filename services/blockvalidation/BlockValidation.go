@@ -138,6 +138,9 @@ type BlockValidation struct {
 
 	// invalidBlockKafkaProducer publishes invalid block events to Kafka
 	invalidBlockKafkaProducer kafka.KafkaAsyncProducerI
+
+	// backgroundTasks tracks background goroutines to ensure proper shutdown
+	backgroundTasks sync.WaitGroup
 }
 
 // NewBlockValidation creates a new block validation instance with the provided dependencies.
@@ -159,7 +162,8 @@ type BlockValidation struct {
 //
 // Returns a configured BlockValidation instance ready for use.
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txStore blob.Store, utxoStore utxo.Store, subtreeValidationClient subtreevalidation.Interface, opts ...interface{}) *BlockValidation {
+	txStore blob.Store, utxoStore utxo.Store, subtreeValidationClient subtreevalidation.Interface, opts ...interface{},
+) *BlockValidation {
 	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
 	// Initialize Kafka producer for invalid blocks if configured
 	var invalidBlockKafkaProducer kafka.KafkaAsyncProducerI
@@ -241,6 +245,13 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 
 					blockchainSubscription, err := bv.blockchainClient.Subscribe(subscribeCtx, "blockvalidation")
 					if err != nil {
+						// Check if context is done before logging
+						select {
+						case <-ctx.Done():
+							return
+						default:
+						}
+
 						bv.logger.Errorf("[BlockValidation:setMined] failed to subscribe to blockchain: %s", err)
 
 						// backoff for 5 seconds and try again
@@ -270,7 +281,13 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 
 	go func() {
 		if err := bv.start(ctx); err != nil {
-			logger.Errorf("[BlockValidation:start] failed to start: %s", err)
+			// Check if context is done before logging
+			select {
+			case <-ctx.Done():
+				// Context canceled, don't log
+			default:
+				logger.Errorf("[BlockValidation:start] failed to start: %s", err)
+			}
 		}
 	}()
 
@@ -325,8 +342,10 @@ func (u *BlockValidation) start(ctx context.Context) error {
 								u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
 							}
 							u.setMinedChan <- blockHash
-						} else {
-							_ = u.blockHashesCurrentlyValidated.Delete(*blockHash)
+						}
+
+						if err := u.blockHashesCurrentlyValidated.Delete(*blockHash); err != nil {
+							u.logger.Errorf("[BlockValidation:start] failed to delete block from currently validated: %s", err)
 						}
 
 						u.logger.Infof("[BlockValidation:start] processed block mined and set mined_set: %s", blockHash.String())
@@ -385,15 +404,26 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 				startTime := time.Now()
 
-				u.logger.Debugf("[BlockValidation:start][%s] block setTxMined", blockHash.String())
-
 				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
 
 				if err := u.setTxMined(ctx, blockHash); err != nil {
+					// Check if context is done before logging
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+
 					u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
 
+					// Always remove from map on failure to prevent blocking child blocks
+					if err := u.blockHashesCurrentlyValidated.Delete(*blockHash); err != nil {
+						u.logger.Errorf("[BlockValidation:start][%s] failed to delete blockHash from blockHashesCurrentlyValidated: %s", blockHash.String(), err)
+					}
+
 					if !errors.Is(err, errors.ErrBlockNotFound) {
-						// put the block back in the setMinedChan
+						time.Sleep(1 * time.Second)
+						// put the block back in the setMinedChan for retry
 						u.setMinedChan <- blockHash
 					}
 				} else {
@@ -425,7 +455,15 @@ func (u *BlockValidation) start(ctx context.Context) error {
 				err := u.reValidateBlock(blockData)
 				if err != nil {
 					prometheusBlockValidationReValidateBlockErr.Observe(float64(time.Since(startTime).Microseconds() / 1_000_000))
+					// Check if context is done before logging
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+
 					u.logger.Errorf("[BlockValidation:start][%s] failed block revalidation, retrying: %s", blockData.block.String(), err)
+
 					// put the block back in the revalidateBlockChan
 					if blockData.retries < 3 {
 						blockData.retries++
@@ -591,6 +629,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	)
 
 	cachedBlock, blockWasAlreadyCached := u.lastValidatedBlocks.Get(*blockHash)
+
 	if blockWasAlreadyCached && cachedBlock != nil {
 		// we have just validated this block, so we can use the cached block
 		// this should have all the subtrees already loaded
@@ -600,6 +639,8 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		if block, err = u.blockchainClient.GetBlock(ctx, blockHash); err != nil {
 			return errors.NewServiceError("[setTxMined][%s] failed to get block from blockchain", blockHash.String(), err)
 		}
+		// Ensure the block has settings initialized
+		block.SetSettings(u.settings)
 	}
 
 	var baseURL string
@@ -762,8 +803,21 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// Wait for reValidationBlock to do its thing
 	// When waitForPreviousBlocksToBeProcessed is done, all the previous blocks will be processed, and all previous blocks' bloom filters should be created
 	if err = u.waitForPreviousBlocksToBeProcessed(ctx, block, blockHeaders); err != nil {
-		// re-trigger the setMinedChan for the parent block
-		u.setMinedChan <- block.Header.HashPrevBlock
+		// Check if parent block actually needs setTxMined before re-triggering
+		blocksMinedNotSet, getErr := u.blockchainClient.GetBlocksMinedNotSet(ctx)
+		if getErr == nil {
+			parentNeedsMining := false
+			for _, b := range blocksMinedNotSet {
+				if b.Header.Hash().IsEqual(block.Header.HashPrevBlock) {
+					parentNeedsMining = true
+					break
+				}
+			}
+			if parentNeedsMining {
+				// re-trigger the setMinedChan for the parent block
+				u.setMinedChan <- block.Header.HashPrevBlock
+			}
+		}
 
 		if err = u.waitForPreviousBlocksToBeProcessed(ctx, block, blockHeaders); err != nil {
 			// Give up, the parent block isn't being fully validated
@@ -988,7 +1042,9 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// decouple the tracing context to not cancel the context when finalize the block processing in the background
 	decoupledCtx, _, _ := tracing.DecoupleTracingSpan(ctx, "ValidateBlock", "decoupled")
 
+	u.backgroundTasks.Add(1)
 	go func() {
+		defer u.backgroundTasks.Done()
 		if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
 			// TODO: what to do here? We have already added the block to the blockchain
 			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
@@ -1386,7 +1442,8 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 //
 // Returns an error if block verification fails.
 func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
-	block *model.Block) (iterationError error) {
+	block *model.Block,
+) (iterationError error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockValidation:checkOldBlockIDs",
 		tracing.WithDebugLogMessage(u.logger, "[checkOldBlockIDs][%s] checking %d old block IDs", oldBlockIDsMap.Length(), block.Hash().String()),
 	)
@@ -1467,4 +1524,10 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 	})
 
 	return
+}
+
+// Wait waits for all background tasks to complete.
+// This should be called during shutdown to ensure graceful termination.
+func (u *BlockValidation) Wait() {
+	u.backgroundTasks.Wait()
 }

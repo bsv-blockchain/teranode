@@ -33,14 +33,15 @@ type clientSubscriber struct {
 
 // Client represents a blockchain service client.
 type Client struct {
-	client        blockchain_api.BlockchainAPIClient // gRPC client for blockchain service
-	logger        ulogger.Logger                     // Logger instance
-	settings      *settings.Settings                 // Configuration settings
-	running       *atomic.Bool                       // Flag indicating if client is running
-	conn          *grpc.ClientConn                   // gRPC connection
-	fmsState      atomic.Pointer[FSMStateType]       // Current FSM state
-	subscribers   []clientSubscriber                 // List of subscribers
-	subscribersMu sync.Mutex                         // Mutex for subscribers list
+	client                blockchain_api.BlockchainAPIClient // gRPC client for blockchain service
+	logger                ulogger.Logger                     // Logger instance
+	settings              *settings.Settings                 // Configuration settings
+	running               *atomic.Bool                       // Flag indicating if client is running
+	conn                  *grpc.ClientConn                   // gRPC connection
+	fmsState              atomic.Pointer[FSMStateType]       // Current FSM state
+	subscribers           []clientSubscriber                 // List of subscribers
+	subscribersMu         sync.Mutex                         // Mutex for subscribers list
+	lastBlockNotification *blockchain_api.Notification       // Last block notification received
 }
 
 // BestBlockHeader represents the best block header in the blockchain.
@@ -171,6 +172,11 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 				default:
 					// send the notification to all subscribers
 					c.subscribersMu.Lock()
+					// Store the last block notification for new subscribers
+					if notification.Type == model.NotificationType_Block {
+						c.lastBlockNotification = notification
+					}
+
 					for _, s := range c.subscribers {
 						go func(ch chan *blockchain_api.Notification, notification *blockchain_api.Notification) {
 							utils.SafeSend(ch, notification)
@@ -623,7 +629,6 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 	resp, err := c.client.GetBlockHeader(ctx, &blockchain_api.GetBlockHeaderRequest{
 		BlockHash: blockHash[:],
 	})
-
 	if err != nil {
 		return nil, nil, errors.UnwrapGRPC(err)
 	}
@@ -975,6 +980,16 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 		ch:     ch,
 		id:     id,
 	})
+
+	// Send the last block notification to the new subscriber if available
+	// This ensures new subscribers get the current state immediately
+	if c.lastBlockNotification != nil {
+		lastNotification := c.lastBlockNotification
+		go func() {
+			utils.SafeSend(ch, lastNotification)
+			c.logger.Debugf("[Blockchain] Sent initial block notification to new subscriber %s", source)
+		}()
+	}
 	c.subscribersMu.Unlock()
 
 	// wait for the context to be done and then remove the subscriber and close the channel
@@ -1748,7 +1763,6 @@ func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash
 	}
 
 	resp, err := c.client.GetBlockLocator(ctx, req)
-
 	if err != nil {
 		return nil, errors.UnwrapGRPC(err)
 	}

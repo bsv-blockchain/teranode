@@ -447,7 +447,9 @@ func TestServer_processBlockFoundChannel(t *testing.T) {
 func TestServer_catchup(t *testing.T) {
 	initPrometheusMetrics()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 
 	tSettings := test.CreateBaseTestSettings()
@@ -456,6 +458,9 @@ func TestServer_catchup(t *testing.T) {
 	baseURL := "http://test.com"
 
 	t.Run("catchup", func(t *testing.T) {
+		// Create a sub-context for this test that gets cancelled when test ends
+		testCtx, testCancel := context.WithCancel(ctx)
+		defer testCancel()
 		// Setup
 		mockBlockchainStore := blockchain_store.NewMockStore()
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
@@ -468,7 +473,7 @@ func TestServer_catchup(t *testing.T) {
 			panic(err)
 		}
 
-		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		utxoStore, err := sql.New(testCtx, logger, tSettings, utxoStoreURL)
 		if err != nil {
 			panic(err)
 		}
@@ -481,7 +486,7 @@ func TestServer_catchup(t *testing.T) {
 			logger:               logger,
 			settings:             tSettings,
 			blockchainClient:     mockBlockchainClient,
-			blockValidation:      NewBlockValidation(ctx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
+			blockValidation:      NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
 			utxoStore:            utxoStore,
 			processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		}
@@ -524,12 +529,17 @@ func TestServer_catchup(t *testing.T) {
 		err = server.catchup(ctx, lastBlock, baseURL)
 		require.NoError(t, err)
 	})
+
+	// Give all goroutines time to exit before test completes
+	// time.Sleep(100 * time.Millisecond)
 }
 
 func TestServer_catchupGetBlocks(t *testing.T) {
 	initPrometheusMetrics()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 
 	tSettings := test.CreateBaseTestSettings()
@@ -546,6 +556,10 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 	baseURL := "http://test.com"
 
 	t.Run("successful catchup with multiple blocks", func(t *testing.T) {
+		// Create a sub-context for this test that gets cancelled when test ends
+		testCtx, testCancel := context.WithCancel(ctx)
+		defer testCancel()
+
 		// Setup
 		mockBlockchainStore := blockchain_store.NewMockStore()
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
@@ -557,7 +571,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 			logger:               logger,
 			settings:             tSettings,
 			blockchainClient:     mockBlockchainClient,
-			blockValidation:      NewBlockValidation(ctx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
+			blockValidation:      NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
 			utxoStore:            utxoStore,
 			processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		}
@@ -597,6 +611,10 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 	})
 
 	t.Run("catchup when target block already exists", func(t *testing.T) {
+		// Create a sub-context for this test that gets cancelled when test ends
+		testCtx, testCancel := context.WithCancel(ctx)
+		defer testCancel()
+
 		// Setup
 		mockBlockchainStore := blockchain_store.NewMockStore()
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
@@ -608,7 +626,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 			logger:               logger,
 			settings:             tSettings,
 			blockchainClient:     mockBlockchainClient,
-			blockValidation:      NewBlockValidation(ctx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
+			blockValidation:      NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
 			processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		}
 
@@ -626,7 +644,14 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		assert.Nil(t, catchupBlockHeaders)
 	})
 
+	// Give goroutines time to exit before moving to next test
+	// time.Sleep(50 * time.Millisecond)
+
 	t.Run("error when getting block headers", func(t *testing.T) {
+		// Create a sub-context for this test that gets cancelled when test ends
+		testCtx, testCancel := context.WithCancel(ctx)
+		defer testCancel()
+
 		// Setup
 		mockBlockchainStore := blockchain_store.NewMockStore()
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
@@ -637,7 +662,7 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 			logger:               logger,
 			settings:             tSettings,
 			blockchainClient:     mockBlockchainClient,
-			blockValidation:      NewBlockValidation(ctx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
+			blockValidation:      NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, nil, nil, nil, nil),
 			processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		}
 
@@ -666,6 +691,9 @@ func TestServer_catchupGetBlocks(t *testing.T) {
 		assert.Contains(t, err.Error(), "network error")
 		assert.Nil(t, catchupBlockHeaders)
 	})
+
+	// Give all goroutines time to exit before test completes
+	// time.Sleep(100 * time.Millisecond)
 }
 
 func Test_checkSecretMining(t *testing.T) {
@@ -673,8 +701,9 @@ func Test_checkSecretMining(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings()
 		tSettings.BlockValidation.SecretMiningThreshold = 10
 
-		ctx := context.Background()
-		logger := ulogger.NewErrorTestLogger(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		logger := ulogger.NewErrorTestLogger(t, cancel)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -686,7 +715,7 @@ func Test_checkSecretMining(t *testing.T) {
 
 		blockchainClient := &blockchain.Mock{}
 
-		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
+		server := New(logger, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
 
 		block := &model.Block{Height: 110}
 
@@ -715,8 +744,9 @@ func Test_checkSecretMining(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings()
 		tSettings.BlockValidation.SecretMiningThreshold = 10
 
-		ctx := context.Background()
-		logger := ulogger.NewErrorTestLogger(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		logger := ulogger.NewErrorTestLogger(t, cancel)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -730,7 +760,7 @@ func Test_checkSecretMining(t *testing.T) {
 		blockBytes, err := hex.DecodeString("0000002006226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f1633819a69afbd7ce1f1a01c3b786fcbb023274f3b15172b24feadd4c80e6c6a8b491267ffff7f20040000000102000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
 		require.NoError(t, err)
 
-		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
+		server := New(logger, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
 
 		block, err := model.NewBlockFromBytes(blockBytes, nil)
 		require.NoError(t, err)
@@ -749,8 +779,9 @@ func Test_checkSecretMining_blockchainClientError(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings()
 		tSettings.BlockValidation.SecretMiningThreshold = 10
 
-		ctx := context.Background()
-		logger := ulogger.NewErrorTestLogger(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		logger := ulogger.NewErrorTestLogger(t, cancel)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -764,7 +795,7 @@ func Test_checkSecretMining_blockchainClientError(t *testing.T) {
 		errExpected := errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found")
 		blockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errExpected).Once()
 
-		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
+		server := New(logger, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
 
 		secretMining, err := server.checkSecretMining(t.Context(), &chainhash.Hash{})
 		assert.Error(t, err)
@@ -843,6 +874,7 @@ func createTestBlockChain(t *testing.T, numBlocks int) []*model.Block {
 
 	return blocks
 }
+
 func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -860,14 +892,15 @@ func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
-	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("AddBlock", mock.Anything, testBlock, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
 	mockBlockchain.On("InvalidateBlock", mock.Anything, testBlock.Header.Hash()).Return(nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
-	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{testBlock.Header}, []*model.BlockHeaderMeta{&model.BlockHeaderMeta{Height: 100}}, nil)
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{testBlock.Header}, []*model.BlockHeaderMeta{{Height: 100}}, nil)
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 
@@ -926,7 +959,8 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetBlock", mock.Anything, mock.Anything).Return(&model.Block{}, nil)
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
-	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
@@ -1008,7 +1042,8 @@ func TestServer_blockFoundCh_triggersCatchupCh_BlockLocator(t *testing.T) {
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetBlock", mock.Anything, mock.Anything).Return(&model.Block{}, nil)
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
-	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
@@ -1023,8 +1058,8 @@ func TestServer_blockFoundCh_triggersCatchupCh_BlockLocator(t *testing.T) {
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
 	mockBlockchain.On("Run", mock.Anything, mock.Anything).Return(nil)
 
-	blockFoundCh := make(chan processBlockFound, 1)
-	catchupCh := make(chan processBlockCatchup, 1)
+	blockFoundCh := make(chan processBlockFound, 10)
+	catchupCh := make(chan processBlockCatchup, 10)
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 	baseServer := &Server{
@@ -1119,7 +1154,7 @@ func TestServer_getBlockHeaders_happyPath(t *testing.T) {
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(bestBlockHeader, bestBlockMeta, nil)
 
 	// Prepare block locator hashes
-	locatorHashes := []*chainhash.Hash{&chainhash.Hash{}}
+	locatorHashes := []*chainhash.Hash{{}}
 	mockBlockchain.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(locatorHashes, nil)
 
 	// Prepare a block header to be returned by the HTTP call
@@ -1177,10 +1212,11 @@ func TestProcessBlockFoundChannelCatchup(t *testing.T) {
 	// Create mock blockchain client
 	mockBlockchainClient := &blockchain.Mock{}
 	mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
-	mockBlockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 	mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchainClient.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
-	mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{blocks[0].Header}, []*model.BlockHeaderMeta{&model.BlockHeaderMeta{Height: 100}}, nil)
+	mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{blocks[0].Header}, []*model.BlockHeaderMeta{{Height: 100}}, nil)
 	mockBlockchainClient.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
 
 	// Mock GetBestBlockHeader once for all test cases
@@ -1488,7 +1524,6 @@ func Test_Start(t *testing.T) {
 
 	readyCh := make(chan struct{})
 	err := server.Start(ctx, readyCh)
-
 	// The error might be nil if the context cancels quickly before the GRPC server fully starts
 	// or an error if port binding fails
 	if err != nil {
@@ -2174,6 +2209,11 @@ func TestCatchup(t *testing.T) {
 
 	// Create mock blockchain client
 	mockBlockchainClient := &blockchain.Mock{}
+	subChan := make(chan *blockchain_api.Notification, 1)
+	mockBlockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+	mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchainClient.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchainClient.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
 
 	// Create a minimal BlockValidation instance without starting background goroutines
 	bv := &BlockValidation{

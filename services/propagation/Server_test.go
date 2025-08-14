@@ -636,8 +636,12 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 
 		g := errgroup.Group{}
 
+		// Reduce parallelism to avoid hot key issues in Aerospike test environment
+		// Still tests the deduplication logic with concurrent requests
+		numGoroutines := 50 // Reduced from 99 to avoid overwhelming test Aerospike
+
 		// add the transaction in parallel
-		for i := 1; i < 100; i++ {
+		for i := 0; i < numGoroutines; i++ {
 			g.Go(func() error {
 				if err := ps.processTransactionInternal(t.Context(), txs[2]); err != nil {
 					return err

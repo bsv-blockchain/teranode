@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/go-sdk/script"
-	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/errors"
 	blockmodel "github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
@@ -198,14 +197,12 @@ func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store,
 		stHash, _ := chainhash.NewHashFromStr(fileWithoutExtension)
 		var stReader io.Reader
 		stReader, err = storeSubtree.GetIoReader(ctx, stHash[:], fileformat.FileType(ext))
-
 		if err != nil {
 			return false, errors.NewProcessingError("error getting subtree reader from store", err)
 		}
 
 		var ok bool
 		ok, err = isTxInSubtree(l, stReader, queryTxId)
-
 		if err != nil {
 			return false, errors.NewProcessingError("error getting subtree reader from store", err)
 		}
@@ -223,7 +220,6 @@ func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store,
 func isTxInSubtree(_ ulogger.Logger, stReader io.Reader, queryTxId chainhash.Hash) (bool, error) {
 	st := subtree.Subtree{}
 	err := st.DeserializeFromReader(stReader)
-
 	if err != nil {
 		return false, errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error deserializing subtree", err)
 	}
@@ -366,7 +362,8 @@ func MineBlockWithRPC(_ context.Context, node TeranodeTestClient, _ ulogger.Logg
 
 // MineBlockWithCandidate mines a block using the provided mining candidate and returns the block hash.
 func MineBlockWithCandidate(ctx context.Context, tSettings *settings.Settings, baClient ba.Client,
-	miningCandidate *blockmodel.MiningCandidate, _ ulogger.Logger) ([]byte, error) {
+	miningCandidate *blockmodel.MiningCandidate, _ ulogger.Logger,
+) ([]byte, error) {
 	solution, err := mining.Mine(ctx, tSettings, miningCandidate, nil)
 	if err != nil {
 		return nil, errors.NewProcessingError("error mining block", err)
@@ -535,7 +532,6 @@ func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []TeranodeTestClie
 
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxoVal)
-
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction", err)
 	}
@@ -788,7 +784,6 @@ func UseCoinbaseUtxoV2(ctx context.Context, node TeranodeTestClient, coinbaseTx 
 
 	newTx := bt.NewTx()
 	err := newTx.FromUTXOs(utxoVal)
-
 	if err != nil {
 		return nilHash, errors.NewProcessingError("error creating new transaction", err)
 	}
@@ -884,7 +879,6 @@ loop:
 
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxoVal)
-
 	if err != nil {
 		return false, errors.NewProcessingError("Error adding UTXO to transaction: %s\n", err)
 	}
@@ -1023,7 +1017,6 @@ func WaitForBlockHeight(url string, targetHeight uint32, timeout time.Duration) 
 			return errors.NewError("timeout waiting for block height")
 		case <-ticker.C:
 			currentHeight, err := GetBlockHeight(url)
-
 			if err != nil {
 				return errors.NewError("error getting block height", err)
 			}
@@ -1274,7 +1267,6 @@ func ReassignUtxo(ctx context.Context, testenv TeranodeTestEnv, firstTx, reassig
 			Vout:     0,
 			UTXOHash: oldUtxoHash,
 		}, newSpend, tSettings)
-
 		if err != nil {
 			return err
 		}
@@ -1356,9 +1348,7 @@ func WaitForHealthLiveness(port int, timeout time.Duration) error {
 
 // SendEventRun sends a RUN event to the blockchain client and waits for it to be ready.
 func SendEventRun(ctx context.Context, blockchainClient blockchain.ClientI, _ ulogger.Logger) error {
-	var (
-		err error
-	)
+	var err error
 
 	timeout := time.After(30 * time.Second)
 	// wait for Blockchain GRPC to be ready and send FSM RUN event
@@ -1414,7 +1404,6 @@ func WaitForBlockAccepted(ctx context.Context, node TeranodeTestClient, expected
 
 	for {
 		bestBlockHeader, _, err := node.BlockchainClient.GetBestBlockHeader(ctx)
-
 		if err != nil {
 			return errors.NewProcessingError("failed to get best block header: %w", err)
 		}
@@ -1489,61 +1478,4 @@ func WaitForNodeBlockHeight(ctx context.Context, blockchainClient blockchain.Cli
 
 		time.Sleep(1 * time.Second)
 	}
-}
-
-// WaitForNodePeerCount waits for a node to have at least the specified number of peers
-func WaitForNodePeerCount(ctx context.Context, node *daemon.TestDaemon, minPeerCount int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		resp, err := node.CallRPC(ctx, "getpeerinfo", []any{})
-		if err != nil {
-			node.Logger.Infof("Error calling getpeerinfo: %v", err)
-			time.Sleep(1 * time.Second)
-
-			continue
-		}
-
-		var p2pResp P2PRPCResponse
-		err = json.Unmarshal([]byte(resp), &p2pResp)
-
-		if err != nil {
-			node.Logger.Infof("Error unmarshaling peer response: %v", err)
-			time.Sleep(1 * time.Second)
-
-			continue
-		}
-
-		node.Logger.Infof("Current peer count: %d, waiting for at least %d", len(p2pResp.Result), minPeerCount)
-
-		if len(p2pResp.Result) >= minPeerCount {
-			node.Logger.Infof("Successfully reached peer count: %d", len(p2pResp.Result))
-			return nil
-		}
-
-		time.Sleep(1 * time.Second)
-	}
-
-	return errors.NewProcessingError("timeout waiting for peer count to reach %d", minPeerCount)
-}
-
-// GetAndPrintPeerInfo gets peer info from a node and prints it for debugging
-func GetAndPrintPeerInfo(ctx context.Context, node *daemon.TestDaemon) ([]P2PNode, error) {
-	resp, err := node.CallRPC(ctx, "getpeerinfo", []any{})
-	if err != nil {
-		return nil, err
-	}
-
-	var p2pResp P2PRPCResponse
-	err = json.Unmarshal([]byte(resp), &p2pResp)
-
-	if err != nil {
-		return nil, err
-	}
-
-	// Print peer info for debugging
-	node.Logger.Infof("Peer info response: %s", resp)
-	node.Logger.Infof("Number of peers: %d", len(p2pResp.Result))
-
-	return p2pResp.Result, nil
 }

@@ -267,29 +267,27 @@ func (b *BlockAssembler) SubtreeCount() int {
 // Parameters:
 //   - ctx: Context for cancellation
 func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
-	var err error
+	var (
+		err       error
+		readyOnce sync.Once
+	)
 
 	// start a subscription for the best block header and the FSM state
 	// this will be used to reset the subtree processor when a new block is mined
-	go func() {
-		b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, "BlockAssembler")
-		if err != nil {
-			b.logger.Errorf("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
-			return
-		}
+	b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, "BlockAssembler")
+	if err != nil {
+		b.logger.Errorf("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
+		return
+	}
 
+	readyCh := make(chan struct{})
+
+	go func() {
 		// variables are defined here to prevent unnecessary allocations
 		var (
 			bestBlockchainBlockHeader *model.BlockHeader
 			meta                      *model.BlockHeaderMeta
 		)
-
-		// send out initial notification to check the best block header
-		go func() {
-			b.blockchainSubscriptionCh <- &blockchain.Notification{
-				Type: model.NotificationType_Block,
-			}
-		}()
 
 		b.setCurrentRunningState(StateRunning)
 
@@ -298,7 +296,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			case <-ctx.Done():
 				b.logger.Infof("Stopping blockassembler as ctx is done")
 				close(b.miningCandidateCh)
-
+				// Note: We don't close blockchainSubscriptionCh here because we don't own it -
+				// it's created by the blockchain client's Subscribe method
 				return
 
 			case <-b.resetCh:
@@ -435,9 +434,23 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				}
 
 				b.setCurrentRunningState(StateRunning)
+
+				readyOnce.Do(func() {
+					readyCh <- struct{}{}
+				})
 			} // select
 		} // for
 	}()
+
+	select {
+	case <-time.After(time.Second * 30):
+		b.logger.Errorf("[BlockAssembler] timeout waiting for blockchain subscription to be ready")
+		return
+	case <-readyCh:
+	case <-ctx.Done():
+		return
+	}
+
 }
 
 // UpdateBestBlock updates the best block information.
@@ -1501,11 +1514,6 @@ func (b *BlockAssembler) waitForPendingBlocks(ctx context.Context) error {
 
 		if len(blockNotMined) == 0 {
 			b.logger.Infof("[waitForPendingBlocks] no pending blocks found, ready to load unmined transactions")
-			return nil, nil
-		}
-
-		if len(blockNotMined) == 1 && blockNotMined[0].Height == 0 && blockNotMined[0].ID == 0 {
-			// ignore genesis block
 			return nil, nil
 		}
 

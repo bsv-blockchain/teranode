@@ -15,10 +15,10 @@ func CreateBaseTestSettings() *settings.Settings {
 	settings.ChainCfgParams.CoinbaseMaturity = 1
 
 	// We sometimes get 'hot key' errors while running the test
-	// To mitigate this, we tweak the aerospike write policy
+	// To mitigate this, we use more aggressive retry settings with exponential backoff
 	settings.Aerospike.WritePolicyURL = &url.URL{
 		Scheme:   "aerospike",
-		RawQuery: "MaxRetries=15&SleepBetweenRetries=1s&SleepMultiplier=1&TotalTimeout=5s&SocketTimeout=5s",
+		RawQuery: "MaxRetries=30&SleepBetweenRetries=50ms&SleepMultiplier=2&TotalTimeout=30s&SocketTimeout=10s",
 	}
 
 	// Initialize adjustment values to 0 for tests (use global value by default)

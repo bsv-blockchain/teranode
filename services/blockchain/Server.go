@@ -554,7 +554,6 @@ func (b *Blockchain) startSubscriptions() {
 	// Signal that subscription manager is now ready to handle subscriptions
 	b.subscriptionManagerReady.Store(true)
 	b.logger.Infof("[Blockchain][startSubscriptions] Subscription manager is now ready")
-
 	for {
 		select {
 		case <-b.AppCtx.Done():
@@ -589,7 +588,32 @@ func (b *Blockchain) startSubscriptions() {
 			b.subscribersMu.Lock()
 			b.subscribers[s] = true
 			b.subscribersMu.Unlock()
-		//	b.logger.Infof("[Blockchain][startSubscriptions] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
+
+			// Send initial notification to let the subscriber know the subscription is ready
+			// and provide the current blockchain state
+			go func(sub subscriber) {
+				chainTip, _, err := b.store.GetBestBlockHeader(context.Background())
+				var initialNotification *blockchain_api.Notification
+				if err != nil {
+					// If no best block exists yet (e.g., empty blockchain), send notification with genesis hash
+					b.logger.Warnf("[Blockchain][startSubscriptions] No best block header available for initial notification to %s: %v", sub.source, err)
+					initialNotification = &blockchain_api.Notification{
+						Type: model.NotificationType_Block,
+						Hash: b.settings.ChainCfgParams.GenesisHash.CloneBytes(),
+					}
+				} else {
+					initialNotification = &blockchain_api.Notification{
+						Type: model.NotificationType_Block,
+						Hash: chainTip.Hash().CloneBytes(),
+					}
+				}
+
+				b.logger.Infof("[Blockchain][startSubscriptions] Sending initial notification to %s", sub.source)
+				if err := sub.subscription.Send(initialNotification); err != nil {
+					b.logger.Errorf("[Blockchain][startSubscriptions] Failed to send initial notification to %s: %v", sub.source, err)
+					b.deadSubscriptions <- sub
+				}
+			}(s)
 
 		case s := <-b.deadSubscriptions:
 			delete(b.subscribers, s)
@@ -1456,6 +1480,7 @@ func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchai
 // Returns:
 //   - error: Any error encountered during subscription management or stream handling
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
+	b.logger.Infof("[Blockchain] Subscribe called from source: %s", req.Source)
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(sub.Context(), "Subscribe",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSubscribe),
@@ -1466,6 +1491,7 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})
 
+	b.logger.Infof("[Blockchain] Sending new subscription to handler for source: %s", req.Source)
 	b.newSubscriptions <- subscriber{
 		subscription: sub,
 		done:         ch,

@@ -80,9 +80,6 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 
 	<-readyCh // Wait for service to be ready
 
-	err = blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Blockchain client failed to start")
-
 	cleanup := func() {
 		if err := ba.Stop(ctx); err != nil {
 			t.Logf("Error stopping block assembly service: %v", err)

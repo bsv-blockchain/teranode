@@ -13,10 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	// Reasonable timeout for block synchronization
-	blockWait = 30 * time.Second
-)
+// Reasonable timeout for block synchronization
+var blockWait = 30 * time.Second
 
 func TestMoveUp(t *testing.T) {
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -40,10 +38,6 @@ func TestMoveUp(t *testing.T) {
 
 	// connect node2 to node1 via p2p
 	node2.ConnectToPeer(t, node1)
-
-	// Wait for node1 to have at least one peer (node2)
-	err = helper.WaitForNodePeerCount(t.Context(), node1, 1, blockWait)
-	require.NoError(t, err)
 
 	// wait for node1 to catchup to block 1
 	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 1, blockWait)
@@ -107,8 +101,8 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 	// this will sync node 1 to height 3
 	node2.ConnectToPeer(t, node1)
 
-	// Wait for node2 to have at least one peer (node1)
-	err = helper.WaitForNodePeerCount(t.Context(), node2, 1, blockWait)
+	// Wait for node1 to sync to height 3 before generating the next block
+	err = helper.WaitForNodeBlockHeight(t.Context(), node1.BlockchainClient, 3, blockWait)
 	require.NoError(t, err)
 
 	_, err = node2.CallRPC(node2.Ctx, "generate", []any{1})
@@ -160,10 +154,6 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 	//	node 2 (which is at height 3) and node 1 (height 2)
 	// this will sync node 1 to height 3
 	node2.ConnectToPeer(t, node1)
-
-	// Wait for node2 to have at least one peer (node1)
-	err = helper.WaitForNodePeerCount(t.Context(), node2, 1, blockWait)
-	require.NoError(t, err)
 
 	// verify blockheight on node2
 	err = helper.WaitForNodeBlockHeight(t.Context(), node2.BlockchainClient, 3, blockWait)
@@ -382,17 +372,6 @@ func TestBlockValidationCatchup(t *testing.T) {
 
 	_, err := node1.CallRPC(node1.Ctx, "generate", []any{100})
 	require.NoError(t, err)
-
-	// Wait for node1 to have at least one peer (node2)
-	err = helper.WaitForNodePeerCount(t.Context(), node1, 1, blockWait)
-	require.NoError(t, err)
-
-	// Print peer info for debugging
-	_, err = helper.GetAndPrintPeerInfo(t.Context(), node1)
-	require.NoError(t, err)
-
-	_, err = node1.CallRPC(node1.Ctx, "generate", []any{100})
-	require.NoError(t, err)
 	// 0 -> 1 ... 100 (node1 main chain)
 
 	// Verify node2 has synced to node1's chain
@@ -421,14 +400,6 @@ func TestBlockValidationCatchup(t *testing.T) {
 	node2.ConnectToPeer(t, node1)
 
 	// _, err = node2.CallRPC("generate", []any{1})
-
-	// Wait for node2 to have at least one peer (node1)
-	err = helper.WaitForNodePeerCount(t.Context(), node2, 1, blockWait)
-	require.NoError(t, err)
-
-	// Print peer info for debugging
-	_, err = helper.GetAndPrintPeerInfo(t.Context(), node2)
-	require.NoError(t, err)
 
 	// _, err = node2.CallRPC(node2.Ctx, "generate", []any{1})
 	// require.NoError(t, err)

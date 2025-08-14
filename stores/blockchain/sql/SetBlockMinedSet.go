@@ -26,5 +26,8 @@ func (s *SQL) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) e
 		return errors.NewStorageError("block %s mined_set was not updated", blockHash.String())
 	}
 
+	// Invalidate response cache to ensure cached blocks reflect updated processed_at timestamp
+	s.ResetResponseCache()
+
 	return nil
 }

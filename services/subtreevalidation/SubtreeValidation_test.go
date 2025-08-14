@@ -149,7 +149,11 @@ func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store
 
 	validatorClient := &validator.MockValidatorClient{UtxoStore: utxoStore}
 
-	blockchainClient := &blockchain.LocalClient{}
+	// Create LocalClient properly using the constructor to ensure all fields are initialized
+	blockchainClient, err := blockchain.NewLocalClient(logger, nil, subtreeStore, utxoStore)
+	if err != nil {
+		panic(err)
+	}
 
 	return utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, func() {
 		httpmock.DeactivateAndReset()

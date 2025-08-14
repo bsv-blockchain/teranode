@@ -63,18 +63,28 @@ func initWorker(tSettings *settings.Settings) {
 
 	go func() {
 		for msg := range txMinedChan {
-			if err := updateTxMinedStatus(
-				msg.ctx,
-				msg.logger,
-				tSettings,
-				msg.txMetaStore,
-				msg.block,
-				msg.blockID,
-			); err != nil {
-				msg.done <- err
-			} else {
-				msg.done <- nil
-			}
+			func() {
+				// Recover from any panic to prevent the worker from dying
+				defer func() {
+					if r := recover(); r != nil {
+						msg.logger.Errorf("[UpdateTxMinedStatus] worker panic recovered: %v", r)
+						msg.done <- errors.NewProcessingError("[UpdateTxMinedStatus] worker panic: %v", r)
+					}
+				}()
+
+				if err := updateTxMinedStatus(
+					msg.ctx,
+					msg.logger,
+					tSettings,
+					msg.txMetaStore,
+					msg.block,
+					msg.blockID,
+				); err != nil {
+					msg.done <- err
+				} else {
+					msg.done <- nil
+				}
+			}()
 
 			prometheusUpdateTxMinedQueue.Set(float64(len(txMinedChan)))
 		}
@@ -162,13 +172,28 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 					retries := 0
 
 					for {
+						// Check if context is canceled before attempting
+						select {
+						case <-gCtx.Done():
+							return errors.NewProcessingError("[UpdateTxMinedStatus][%s] context canceled during retry", block.Hash().String(), gCtx.Err())
+						default:
+						}
+
 						if err := txMetaStore.SetMinedMulti(gCtx, hashes, minedBlockInfo); err != nil {
 							if retries >= maxRetries {
 								return errors.NewProcessingError("[UpdateTxMinedStatus][%s] error setting mined tx", block.Hash().String(), err)
 							} else {
 								backoff := time.Duration(1+(2*retries)) * time.Second
 								logger.Warnf("[UpdateTxMinedStatus][%s] error setting mined tx, retrying in %s: %v", block.Hash().String(), backoff.String(), err)
-								time.Sleep(backoff)
+
+								// Use a timer with context cancellation check
+								timer := time.NewTimer(backoff)
+								select {
+								case <-gCtx.Done():
+									timer.Stop()
+									return errors.NewProcessingError("[UpdateTxMinedStatus][%s] context canceled during backoff", block.Hash().String(), gCtx.Err())
+								case <-timer.C:
+								}
 							}
 						} else {
 							break
@@ -185,6 +210,13 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 				retries := 0
 
 				for {
+					// Check if context is canceled before attempting
+					select {
+					case <-gCtx.Done():
+						return errors.NewProcessingError("[UpdateTxMinedStatus][%s] context canceled during remainder retry", block.Hash().String(), gCtx.Err())
+					default:
+					}
+
 					logger.Debugf("[UpdateTxMinedStatus][%s][%s] for %d remainder hashes", block.String(), block.Subtrees[subtreeIdx].String(), len(hashes))
 
 					if err := txMetaStore.SetMinedMulti(gCtx, hashes, minedBlockInfo); err != nil {
@@ -193,7 +225,15 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 						} else {
 							backoff := time.Duration(1+(2*retries)) * time.Second
 							logger.Warnf("[UpdateTxMinedStatus][%s] error setting remainder batch mined tx, retrying in %s: %v", block.Hash().String(), backoff.String(), err)
-							time.Sleep(backoff)
+
+							// Use a timer with context cancellation check
+							timer := time.NewTimer(backoff)
+							select {
+							case <-gCtx.Done():
+								timer.Stop()
+								return errors.NewProcessingError("[UpdateTxMinedStatus][%s] context canceled during remainder backoff", block.Hash().String(), gCtx.Err())
+							case <-timer.C:
+							}
 						}
 
 						retries++
