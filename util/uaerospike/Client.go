@@ -12,26 +12,43 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-var (
-	stat                       = gocore.NewStat("Aerospike")
-	operateStat                = stat.NewStat("Operate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
-	batchOperateStat           = stat.NewStat("BatchOperate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
-	defaultConnectionQueueSize int
+const (
+	// DefaultConnectionQueueSize is the default size for the connection queue
+	// if not specified in the client policy
+	DefaultConnectionQueueSize = 128
 )
 
-func init() {
-	policy := aerospike.NewClientPolicy()
-	if policy.ConnectionQueueSize == 0 {
-		panic("Aerospike connection queue size is 0")
+// getConnectionQueueSize returns the connection queue size from the given policy
+// or falls back to DefaultConnectionQueueSize if the policy is nil or returns 0
+func getConnectionQueueSize(policy *aerospike.ClientPolicy) int {
+	if policy != nil && policy.ConnectionQueueSize > 0 {
+		return policy.ConnectionQueueSize
 	}
+	return DefaultConnectionQueueSize
+}
 
-	defaultConnectionQueueSize = policy.ConnectionQueueSize
+// ClientStats holds the statistics for Aerospike operations
+type ClientStats struct {
+	stat             *gocore.Stat
+	operateStat      *gocore.Stat
+	batchOperateStat *gocore.Stat
+}
+
+// NewClientStats creates a new ClientStats instance
+func NewClientStats() *ClientStats {
+	stat := gocore.NewStat("Aerospike")
+	return &ClientStats{
+		stat:             stat,
+		operateStat:      stat.NewStat("Operate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000),
+		batchOperateStat: stat.NewStat("BatchOperate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000),
+	}
 }
 
 // Client is a wrapper around aerospike.Client that provides a semaphore to limit concurrent connections.
 type Client struct {
 	*aerospike.Client
 	connSemaphore chan struct{} // Simple channel-based semaphore
+	stats         *ClientStats  // Always initialized, never nil
 }
 
 // NewClient creates a new Aerospike client with the specified hostname and port.
@@ -41,9 +58,14 @@ func NewClient(hostname string, port int) (*Client, error) {
 		return nil, err
 	}
 
+	// Get queue size from default policy
+	policy := aerospike.NewClientPolicy()
+	queueSize := getConnectionQueueSize(policy)
+
 	return &Client{
 		Client:        client,
-		connSemaphore: make(chan struct{}, defaultConnectionQueueSize),
+		connSemaphore: make(chan struct{}, queueSize),
+		stats:         NewClientStats(),
 	}, nil
 }
 
@@ -93,14 +115,12 @@ func NewClientWithPolicyAndHost(policy *aerospike.ClientPolicy, hosts ...*aerosp
 		return nil, err
 	}
 
-	queueSize := policy.ConnectionQueueSize
-	if queueSize == 0 {
-		queueSize = defaultConnectionQueueSize
-	}
+	queueSize := getConnectionQueueSize(policy)
 
 	return &Client{
 		Client:        client,
 		connSemaphore: make(chan struct{}, queueSize),
+		stats:         NewClientStats(),
 	}, nil
 }
 
@@ -137,7 +157,7 @@ func (c *Client) Put(policy *aerospike.WritePolicy, key *aerospike.Key, binMap a
 			sb.WriteString(k)
 		}
 
-		stat.NewStat(sb.String()).AddTime(start)
+		c.stats.stat.NewStat(sb.String()).AddTime(start)
 	}()
 
 	return c.Client.Put(policy, key, binMap)
@@ -169,7 +189,7 @@ func (c *Client) PutBins(policy *aerospike.WritePolicy, key *aerospike.Key, bins
 			sb.WriteString(k)
 		}
 
-		stat.NewStat(sb.String()).AddTime(start)
+		c.stats.stat.NewStat(sb.String()).AddTime(start)
 	}()
 
 	return c.Client.PutBins(policy, key, bins...)
@@ -182,7 +202,7 @@ func (c *Client) Delete(policy *aerospike.WritePolicy, key *aerospike.Key) (bool
 
 	start := gocore.CurrentTime()
 	defer func() {
-		stat.NewStat("Delete").AddTime(start)
+		c.stats.stat.NewStat("Delete").AddTime(start)
 	}()
 
 	return c.Client.Delete(policy, key)
@@ -210,7 +230,7 @@ func (c *Client) Get(policy *aerospike.BasePolicy, key *aerospike.Key, binNames 
 			sb.WriteString(k)
 		}
 
-		stat.NewStat(sb.String()).AddTime(start)
+		c.stats.stat.NewStat(sb.String()).AddTime(start)
 	}()
 
 	return c.Client.Get(policy, key, binNames...)
@@ -224,7 +244,7 @@ func (c *Client) Operate(policy *aerospike.WritePolicy, key *aerospike.Key, oper
 
 	start := gocore.CurrentTime()
 	defer func() {
-		operateStat.AddTimeForRange(start, len(operations))
+		c.stats.operateStat.AddTimeForRange(start, len(operations))
 	}()
 
 	return c.Client.Operate(policy, key, operations...)
@@ -237,7 +257,7 @@ func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike
 
 	start := gocore.CurrentTime()
 	defer func() {
-		batchOperateStat.AddTimeForRange(start, len(records))
+		c.stats.batchOperateStat.AddTimeForRange(start, len(records))
 	}()
 
 	return c.Client.BatchOperate(policy, records)
@@ -245,17 +265,17 @@ func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike
 
 // CalculateKeySource generates a key source based on the transaction hash and an optional offset.
 func CalculateKeySource(hash *chainhash.Hash, num uint32) []byte {
-	// The key is normally the hash of the transaction
-	keySource := hash.CloneBytes()
 	if num == 0 {
-		return keySource
+		// Fast path: just return cloned hash bytes
+		return hash.CloneBytes()
 	}
 
-	// Convert the offset to int64 little ending
-	batchOffsetLE := make([]byte, 4)
-	binary.LittleEndian.PutUint32(batchOffsetLE, num)
+	// Optimized path: pre-allocate slice with exact capacity to avoid reallocation
+	keySource := make([]byte, chainhash.HashSize+4)
+	copy(keySource[:chainhash.HashSize], hash[:])
 
-	keySource = append(keySource, batchOffsetLE...)
+	// Directly write little-endian uint32 to avoid intermediate allocation
+	binary.LittleEndian.PutUint32(keySource[chainhash.HashSize:], num)
 
 	return keySource
 }
