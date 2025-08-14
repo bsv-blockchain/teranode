@@ -46,6 +46,3 @@
 <PageWithMenu>
   <ConnectedNodesCard data={nodes} {connected} />
 </PageWithMenu>
-
-<style>
-</style>
