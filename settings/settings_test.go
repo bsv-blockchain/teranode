@@ -55,7 +55,7 @@ func TestBootstrapPersistentSetting(t *testing.T) {
 		envValue     string
 		expectedBool bool
 	}{
-		{"Default false", "", false},
+		{"Default true", "", true},
 		{"Explicit false", "false", false},
 		{"Explicit true", "true", true},
 	}

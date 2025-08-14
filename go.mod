@@ -41,7 +41,7 @@ require (
 	github.com/looplab/fsm v1.0.2
 	github.com/mrz1836/go-datastore v0.9.5
 	github.com/mrz1836/go-logger v0.3.6
-	github.com/multiformats/go-multiaddr v0.16.0
+	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/ordishs/go-utils v1.0.53
 	github.com/ordishs/gocore v1.0.79
 	github.com/prometheus/client_golang v1.22.0
@@ -158,7 +158,7 @@ require (
 	github.com/bsv-blockchain/go-batcher v1.0.0
 	github.com/bsv-blockchain/go-bn v1.0.3
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
-	github.com/bsv-blockchain/go-p2p v1.1.18
+	github.com/bsv-blockchain/go-p2p v1.2.1
 	github.com/bsv-blockchain/go-safe-conversion v1.0.1
 	github.com/bsv-blockchain/go-sdk v1.2.6
 	github.com/bsv-blockchain/go-tx-map v1.0.5

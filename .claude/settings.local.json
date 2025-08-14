@@ -11,6 +11,9 @@
       "Bash(gh api:*)",
       "Bash(gh workflow list:*)"
     ],
-    "deny": []
+    "deny": [],
+    "additionalDirectories": [
+      "/Users/ordishs/dev/taal/ilumis/teranode_workspace/go-p2p"
+    ]
   }
 }

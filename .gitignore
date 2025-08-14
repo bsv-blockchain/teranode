@@ -92,3 +92,4 @@ test/longtest/services/validator/testnet_18869txs_b1682153.csv
 .sonarlint/
 
 plantuml.jar
+teranode_peers.json

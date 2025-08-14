@@ -153,11 +153,8 @@ github.com/bsv-blockchain/go-chaincfg v1.1.2 h1:Vnkh/7htz0f3in8xmKNbgetS40DKf2+q
 github.com/bsv-blockchain/go-chaincfg v1.1.2/go.mod h1:ki2ML6vCfIV4RiH4KRMTHSuG3JQqBtLBDJtoc/h3VT8=
 github.com/bsv-blockchain/go-lockfree-queue v1.0.0 h1:rizOsTImw2Gk/iSTQRHqB+2OcJWBl5qN6pbIHqDWxRw=
 github.com/bsv-blockchain/go-lockfree-queue v1.0.0/go.mod h1:NS0Zfkaz8G3jDQNNr1rtvjeH45rxK7pVH4iV7xy4o4U=
-github.com/bsv-blockchain/go-p2p v1.1.16 h1:HH/xre5uvr8H22tJAafLwdS1lkbNMgTPbuSaiG9hwHA=
-github.com/bsv-blockchain/go-p2p v1.1.16/go.mod h1:5kqT+JvUi6uGIio/X30rL/74Xagdls0vyZu/Je85jgM=
-github.com/bsv-blockchain/go-p2p v1.1.17/go.mod h1:5kqT+JvUi6uGIio/X30rL/74Xagdls0vyZu/Je85jgM=
-github.com/bsv-blockchain/go-p2p v1.1.18 h1:G8BqtCIUkgLDLgcZpFrEJcKBM4EoZ4zKglHMAn7d5QY=
-github.com/bsv-blockchain/go-p2p v1.1.18/go.mod h1:5kqT+JvUi6uGIio/X30rL/74Xagdls0vyZu/Je85jgM=
+github.com/bsv-blockchain/go-p2p v1.2.1 h1:HOQEuEe0ormhLjVBHP33PZCkrrMZIXYbG2/K0dU3Nfc=
+github.com/bsv-blockchain/go-p2p v1.2.1/go.mod h1:cUiFKFCqIeOHAf1dNd/clikVie5k+cfli/EFEoFiUkg=
 github.com/bsv-blockchain/go-safe-conversion v1.0.1 h1:b/AVkGVF2JnKRgG0oVpCRFAZBgghylDbgSD47VdM6KI=
 github.com/bsv-blockchain/go-safe-conversion v1.0.1/go.mod h1:q2+SQIAONrc2T7Ip1W9OsEzKXLoWeI06vuVm0Q85Bss=
 github.com/bsv-blockchain/go-sdk v1.2.6 h1:6J1I1rBNhCZuQ64OoNAZICMVDKYEEGYkmsD21dQt4LY=
@@ -733,8 +730,8 @@ github.com/multiformats/go-base32 v0.1.0/go.mod h1:Kj3tFY6zNr+ABYMqeUNeGvkIC/UYg
 github.com/multiformats/go-base36 v0.2.0 h1:lFsAbNOGeKtuKozrtBsAkSVhv1p9D0/qedU9rQyccr0=
 github.com/multiformats/go-base36 v0.2.0/go.mod h1:qvnKE++v+2MWCfePClUEjE78Z7P2a1UV0xHgWc0hkp4=
 github.com/multiformats/go-multiaddr v0.1.1/go.mod h1:aMKBKNEYmzmDmxfX88/vz+J5IU55txyt0p4aiWVohjo=
-github.com/multiformats/go-multiaddr v0.16.0 h1:oGWEVKioVQcdIOBlYM8BH1rZDWOGJSqr9/BKl6zQ4qc=
-github.com/multiformats/go-multiaddr v0.16.0/go.mod h1:JSVUmXDjsVFiW7RjIFMP7+Ev+h1DTbiJgVeTV/tcmP0=
+github.com/multiformats/go-multiaddr v0.16.1 h1:fgJ0Pitow+wWXzN9do+1b8Pyjmo8m5WhGfzpL82MpCw=
+github.com/multiformats/go-multiaddr v0.16.1/go.mod h1:JSVUmXDjsVFiW7RjIFMP7+Ev+h1DTbiJgVeTV/tcmP0=
 github.com/multiformats/go-multiaddr-dns v0.4.1 h1:whi/uCLbDS3mSEUMb1MsoT4uzUeZB0N32yzufqS0i5M=
 github.com/multiformats/go-multiaddr-dns v0.4.1/go.mod h1:7hfthtB4E4pQwirrz+J0CcDUfbWzTqEzVyYKKIKpgkc=
 github.com/multiformats/go-multiaddr-fmt v0.1.0 h1:WLEFClPycPkp4fnIzoFoV9FVd49/eQsuaL3/CWe167E=

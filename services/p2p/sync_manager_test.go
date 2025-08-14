@@ -268,7 +268,7 @@ func TestSyncManager_HealthChecks(t *testing.T) {
 }
 
 func TestSyncManager_IsSyncCandidate(t *testing.T) {
-	t.Run("regtest_only_localhost", func(t *testing.T) {
+	t.Run("regtest_accepts_all_peers", func(t *testing.T) {
 		sm := NewSyncManager(ulogger.New("test"), &chaincfg.RegressionNetParams)
 
 		sm.SetPeerIPsCallback(func(p peer.ID) []string {
@@ -278,11 +278,9 @@ func TestSyncManager_IsSyncCandidate(t *testing.T) {
 			return []string{"192.168.1.1"}
 		})
 
-		// Localhost peer should be candidate in regtest
+		// All peers should be candidates in regtest (for local testing)
 		assert.True(t, sm.isSyncCandidate(peer.ID("local-peer")))
-
-		// Non-localhost should not be candidate in regtest
-		assert.False(t, sm.isSyncCandidate(peer.ID("remote-peer")))
+		assert.True(t, sm.isSyncCandidate(peer.ID("remote-peer")))
 	})
 
 	t.Run("mainnet_all_peers", func(t *testing.T) {

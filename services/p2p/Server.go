@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -146,6 +147,21 @@ type Server struct {
 //
 // Returns a configured Server instance ready to be initialized and started, or an error if configuration
 // validation fails or any dependencies cannot be properly initialized.
+
+// getPeerCacheFilePath constructs the full path to the teranode_peers.json file based on the configured directory.
+// If no directory is specified, it defaults to the current working directory.
+// The filename is always "teranode_peers.json" for consistency.
+func getPeerCacheFilePath(configuredDir string) string {
+	var dir string
+	if configuredDir != "" {
+		dir = configuredDir
+	} else {
+		// Default to current working directory
+		dir = "."
+	}
+	return filepath.Join(dir, "teranode_peers.json")
+}
+
 func NewServer(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -270,10 +286,49 @@ func NewServer(
 		}
 	}
 
+	// Configure advertise addresses
+	// With go-p2p v1.2.1, address advertisement is handled more intelligently:
+	// - If AdvertiseAddresses is explicitly set, those addresses are used
+	// - If SharePrivateAddresses is true, we pass listen addresses to ensure local connectivity
+	// - Otherwise, go-p2p will automatically filter private IPs and detect public addresses
+	var advertiseAddresses []string
+	if len(tSettings.P2P.AdvertiseAddresses) > 0 {
+		// Use explicitly configured advertise addresses
+		advertiseAddresses = tSettings.P2P.AdvertiseAddresses
+		logger.Infof("Using configured advertise addresses: %v", advertiseAddresses)
+	} else if tSettings.P2P.SharePrivateAddresses {
+		// Share private addresses for local/test environments
+		advertiseAddresses = listenAddresses
+		logger.Infof("Sharing private addresses for local connectivity: %v", advertiseAddresses)
+	} else {
+		// Let go-p2p auto-detect and filter private addresses
+		advertiseAddresses = []string{}
+		logger.Infof("Private address sharing disabled - go-p2p will auto-detect public addresses only")
+	}
+
+	// Log NAT configuration
+	if tSettings.P2P.EnableNATService {
+		logger.Infof("AutoNAT service enabled for address detection")
+	}
+	if tSettings.P2P.EnableNATPortMap {
+		logger.Infof("NAT port mapping enabled (UPnP/NAT-PMP)")
+	}
+	if tSettings.P2P.EnableHolePunching {
+		logger.Infof("NAT hole punching enabled (DCUtR)")
+	}
+	if tSettings.P2P.EnableRelay {
+		logger.Infof("Relay service enabled (Circuit Relay v2)")
+	}
+
+	// Important: When behind NAT, enabling NAT features helps with connectivity
+	if len(advertiseAddresses) == 0 && !tSettings.P2P.EnableNATService {
+		logger.Infof("NAT service disabled - node will rely on go-p2p's automatic public IP detection")
+	}
+
 	config := p2p.Config{
 		ProcessName:        "peer",
 		ListenAddresses:    listenAddresses,
-		AdvertiseAddresses: tSettings.P2P.AdvertiseAddresses,
+		AdvertiseAddresses: advertiseAddresses,
 		Port:               p2pPort,
 		PrivateKey:         privateKey,
 		SharedKey:          sharedKey,
@@ -288,12 +343,37 @@ func NewServer(
 		EnableHolePunching: tSettings.P2P.EnableHolePunching,
 		EnableRelay:        tSettings.P2P.EnableRelay,
 		EnableNATPortMap:   tSettings.P2P.EnableNATPortMap,
+		// Enhanced NAT traversal features
+		EnableAutoNATv2:    tSettings.P2P.EnableAutoNATv2,
+		ForceReachability:  tSettings.P2P.ForceReachability,
+		EnableRelayService: tSettings.P2P.EnableRelayService,
+		// Connection management
+		EnableConnManager: tSettings.P2P.EnableConnManager,
+		ConnLowWater:      tSettings.P2P.ConnLowWater,
+		ConnHighWater:     tSettings.P2P.ConnHighWater,
+		ConnGracePeriod:   tSettings.P2P.ConnGracePeriod,
+		EnableConnGater:   tSettings.P2P.EnableConnGater,
+		MaxConnsPerPeer:   tSettings.P2P.MaxConnsPerPeer,
+		// Peer persistence
+		EnablePeerCache: tSettings.P2P.EnablePeerCache,
+		PeerCacheFile:   getPeerCacheFilePath(tSettings.P2P.PeerCacheDir),
+		MaxCachedPeers:  tSettings.P2P.MaxCachedPeers,
+		PeerCacheTTL:    tSettings.P2P.PeerCacheTTL,
 	}
+
+	// Log peer cache configuration for debugging
+	logger.Infof("P2P Peer Cache Config - Enabled: %v, File: %s, MaxCached: %d, TTL: %v",
+		config.EnablePeerCache, config.PeerCacheFile, config.MaxCachedPeers, config.PeerCacheTTL)
 
 	p2pNode, err := p2p.NewNode(ctx, logger, config)
 	if err != nil {
 		return nil, errors.NewServiceError("Error creating P2PNode", err)
 	}
+
+	// Log P2P node creation
+	logger.Infof("P2P node created successfully")
+	// The node will learn its external address via libp2p's Identify protocol
+	// when peers connect and tell us what address they see us from
 
 	p2pServer := &Server{
 		P2PNode:           p2pNode,
@@ -496,6 +576,33 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			}
 
 			return
+		}
+	}()
+
+	// Start a goroutine to periodically log observed addresses (for debugging NAT traversal)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if s.P2PNode != nil {
+					// Get current peer addresses from the P2P node
+					peers := s.P2PNode.ConnectedPeers()
+					s.logger.Debugf("P2P node currently connected to %d peers", len(peers))
+
+					// Log our advertised addresses (these should include observed addresses)
+					// The go-p2p library should be handling this via libp2p's Identify protocol
+					if len(peers) > 0 {
+						s.logger.Debugf("Node is reachable - peers can connect to us")
+					} else if time.Since(s.startTime) > 2*time.Minute {
+						s.logger.Warnf("No peers connected after %v - check NAT/firewall configuration", time.Since(s.startTime))
+					}
+				}
+			}
 		}
 	}()
 
@@ -1996,17 +2103,23 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 		var addr string
 
 		if len(sp.Addrs) > 0 {
+			// For GetPeers API, we always return connected peers regardless of address type
+			// The SharePrivateAddresses setting only controls what we advertise to other peers,
+			// not what we report in our own peer list
 			addr = sp.Addrs[0].String()
 		}
 
-		resp.Peers = append(resp.Peers, &p2p_api.Peer{
-			Id:             sp.ID.String(),
-			Addr:           addr,
-			StartingHeight: sp.StartingHeight,
-			CurrentHeight:  sp.CurrentHeight,
-			Banscore:       int32(banScore), //nolint:gosec
-			ConnTime:       connTime,
-		})
+		// Include all connected peers
+		if addr != "" {
+			resp.Peers = append(resp.Peers, &p2p_api.Peer{
+				Id:             sp.ID.String(),
+				Addr:           addr,
+				StartingHeight: sp.StartingHeight,
+				CurrentHeight:  sp.CurrentHeight,
+				Banscore:       int32(banScore), //nolint:gosec
+				ConnTime:       connTime,
+			})
+		}
 	}
 
 	return resp, nil

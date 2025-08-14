@@ -109,20 +109,12 @@ func (sm *SyncManager) RemovePeer(peerID peer.ID) {
 
 // isSyncCandidate determines if a peer is eligible for syncing
 func (sm *SyncManager) isSyncCandidate(peerID peer.ID) bool {
-	// In regtest, all peers are sync candidates
+	// In regtest, accept all peers as sync candidates
+	// This is for local testing where nodes connect via localhost
 	if sm.chainParams == &chaincfg.RegressionNetParams {
-		ips := []string{}
-		if sm.getPeerIPs != nil {
-			ips = sm.getPeerIPs(peerID)
-		}
-
-		// Check if peer is from localhost
-		for _, ip := range ips {
-			if ip == "127.0.0.1" || ip == "::1" {
-				return true
-			}
-		}
-		return false
+		// For regtest, accept all peers regardless of IP
+		// This fixes issues where peers might advertise 0.0.0.0 or have no IPs yet
+		return true
 	}
 
 	// For mainnet/testnet, all peers that support our protocol are candidates

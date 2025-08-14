@@ -942,7 +942,7 @@ func (m *MockPeerBanManager) AddScore(peerID string, reason BanReason) (score in
 }
 
 func TestGetPeers(t *testing.T) {
-	t.Run("returns_connected_peers", func(t *testing.T) {
+	t.Run("returns_connected_peers_with_private_addresses_allowed", func(t *testing.T) {
 		// Create mock dependencies
 		logger := ulogger.New("test-server")
 		mockP2PNode := new(MockServerP2PNode)
@@ -954,7 +954,7 @@ func TestGetPeers(t *testing.T) {
 		peerID, err := peer.IDFromPrivateKey(privKey)
 		require.NoError(t, err)
 
-		// Create a peer with test IP
+		// Create a peer with test IP (private IP)
 		validIP := "192.168.1.20"
 		addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/8333", validIP))
 		require.NoError(t, err)
@@ -984,11 +984,14 @@ func TestGetPeers(t *testing.T) {
 			handler:       banHandler,
 		}
 
-		// Create server with mocks including ban manager
+		// Create server with SharePrivateAddresses set to true
+		testSettings := &settings.Settings{}
+		testSettings.P2P.SharePrivateAddresses = true // Allow private addresses
+
 		server := &Server{
 			P2PNode:    mockP2PNode,
 			logger:     logger,
-			settings:   &settings.Settings{},
+			settings:   testSettings,
 			banManager: banManager,
 		}
 
@@ -999,9 +1002,162 @@ func TestGetPeers(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 
-		// We should get exactly 1 peer in the response
+		// We should get exactly 1 peer in the response with private IP
 		require.Len(t, resp.Peers, 1, "Should have one peer in the response")
 		require.Contains(t, resp.Peers[0].Addr, validIP)
+
+		// Verify calls to mocks
+		mockP2PNode.AssertCalled(t, "ConnectedPeers")
+	})
+
+	t.Run("returns_all_peers_regardless_of_share_private_setting", func(t *testing.T) {
+		// Create mock dependencies
+		logger := ulogger.New("test-server")
+		mockP2PNode := new(MockServerP2PNode)
+
+		// Generate peer IDs
+		privKey1, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		require.NoError(t, err)
+		peerID1, err := peer.IDFromPrivateKey(privKey1)
+		require.NoError(t, err)
+
+		privKey2, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		require.NoError(t, err)
+		peerID2, err := peer.IDFromPrivateKey(privKey2)
+		require.NoError(t, err)
+
+		// Create peers with private and public IPs
+		privateAddr, err := ma.NewMultiaddr("/ip4/192.168.1.20/tcp/8333")
+		require.NoError(t, err)
+		publicAddr, err := ma.NewMultiaddr("/ip4/8.8.8.8/tcp/8333")
+		require.NoError(t, err)
+
+		peerInfo1 := p2p.PeerInfo{
+			ID:    peerID1,
+			Addrs: []ma.Multiaddr{privateAddr}, // Only private address
+		}
+
+		peerInfo2 := p2p.PeerInfo{
+			ID:    peerID2,
+			Addrs: []ma.Multiaddr{publicAddr}, // Public address
+		}
+
+		// Setup mock to return both peers
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{peerInfo1, peerInfo2})
+		mockP2PNode.On("HostID").Return(peer.ID("QmServerID"))
+
+		// Create a real ban manager for testing
+		banHandler := &testBanHandler{}
+		banManager := &PeerBanManager{
+			peerBanScores: make(map[string]*BanScore),
+			reasonPoints: map[BanReason]int{
+				ReasonInvalidSubtree:    10,
+				ReasonProtocolViolation: 20,
+				ReasonSpam:              50,
+			},
+			banThreshold:  100,
+			banDuration:   time.Hour,
+			decayInterval: time.Minute,
+			decayAmount:   1,
+			handler:       banHandler,
+		}
+
+		// Create server with SharePrivateAddresses set to false
+		testSettings := &settings.Settings{}
+		testSettings.P2P.SharePrivateAddresses = false // Disable private addresses
+
+		server := &Server{
+			P2PNode:    mockP2PNode,
+			logger:     logger,
+			settings:   testSettings,
+			banManager: banManager,
+		}
+
+		// Call GetPeers
+		resp, err := server.GetPeers(context.Background(), &emptypb.Empty{})
+
+		// Verify
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+
+		// We should get all connected peers regardless of SharePrivateAddresses setting
+		// GetPeers always returns all connected peers for monitoring purposes
+		require.Len(t, resp.Peers, 2, "Should have all connected peers")
+
+		// Both peers should be present
+		addrs := []string{resp.Peers[0].Addr, resp.Peers[1].Addr}
+		assert.Contains(t, addrs, "/ip4/192.168.1.20/tcp/8333")
+		assert.Contains(t, addrs, "/ip4/8.8.8.8/tcp/8333")
+
+		// Verify calls to mocks
+		mockP2PNode.AssertCalled(t, "ConnectedPeers")
+	})
+
+	t.Run("returns_first_address_when_peer_has_multiple", func(t *testing.T) {
+		// Create mock dependencies
+		logger := ulogger.New("test-server")
+		mockP2PNode := new(MockServerP2PNode)
+
+		// Generate a valid peer ID
+		privKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		require.NoError(t, err)
+
+		peerID, err := peer.IDFromPrivateKey(privKey)
+		require.NoError(t, err)
+
+		// Create a peer with both private and public addresses
+		privateAddr, err := ma.NewMultiaddr("/ip4/192.168.1.20/tcp/8333")
+		require.NoError(t, err)
+		publicAddr, err := ma.NewMultiaddr("/ip4/1.2.3.4/tcp/8333")
+		require.NoError(t, err)
+
+		peerInfo := p2p.PeerInfo{
+			ID:    peerID,
+			Addrs: []ma.Multiaddr{privateAddr, publicAddr},
+		}
+
+		// Setup mock to return our test peer
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{peerInfo})
+		mockP2PNode.On("HostID").Return(peer.ID("QmServerID"))
+
+		// Create a real ban manager for testing
+		banHandler := &testBanHandler{}
+		banManager := &PeerBanManager{
+			peerBanScores: make(map[string]*BanScore),
+			reasonPoints: map[BanReason]int{
+				ReasonInvalidSubtree:    10,
+				ReasonProtocolViolation: 20,
+				ReasonSpam:              50,
+			},
+			banThreshold:  100,
+			banDuration:   time.Hour,
+			decayInterval: time.Minute,
+			decayAmount:   1,
+			handler:       banHandler,
+		}
+
+		// Create server with SharePrivateAddresses disabled
+		testSettings := &settings.Settings{}
+		testSettings.P2P.SharePrivateAddresses = false // Disable private addresses
+
+		server := &Server{
+			P2PNode:    mockP2PNode,
+			logger:     logger,
+			settings:   testSettings,
+			banManager: banManager,
+		}
+
+		// Call GetPeers
+		resp, err := server.GetPeers(context.Background(), &emptypb.Empty{})
+
+		// Verify
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+
+		// GetPeers returns the first available address without preference
+		require.Len(t, resp.Peers, 1, "Should have one peer in the response")
+		// The first address in the list is returned (private in this case)
+		require.Equal(t, "/ip4/192.168.1.20/tcp/8333", resp.Peers[0].Addr, "Should return first address")
 
 		// Verify calls to mocks
 		mockP2PNode.AssertCalled(t, "ConnectedPeers")
@@ -1125,8 +1281,8 @@ func TestGetPeers(t *testing.T) {
 		// Create a test connection time
 		connTime := time.Now().Add(-5 * time.Minute) // Connected 5 minutes ago
 
-		// Create a peer with test IP and connection time
-		validIP := "192.168.1.20"
+		// Create a peer with test IP and connection time (use public IP for test)
+		validIP := "8.8.8.8"
 		addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/8333", validIP))
 		require.NoError(t, err)
 
@@ -1196,8 +1352,8 @@ func TestGetPeers(t *testing.T) {
 		peerID, err := peer.IDFromPrivateKey(privKey)
 		require.NoError(t, err)
 
-		// Create a peer with nil connection time
-		validIP := "192.168.1.20"
+		// Create a peer with nil connection time (use public IP for test)
+		validIP := "1.2.3.4"
 		addr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/8333", validIP))
 		require.NoError(t, err)
 

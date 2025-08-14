@@ -327,39 +327,56 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DisableDAHCleaner:              getBool("utxostore_disableDAHCleaner", false, alternativeContext...),
 		},
 		P2P: P2PSettings{
-			BestBlockTopic:        getString("p2p_bestblock_topic", "", alternativeContext...),
-			BlockTopic:            getString("p2p_block_topic", "", alternativeContext...),
-			BootstrapAddresses:    getMultiString("p2p_bootstrapAddresses", "|", []string{}, alternativeContext...),
-			BootstrapPersistent:   getBool("p2p_bootstrap_persistent", false, alternativeContext...),
-			GRPCAddress:           getString("p2p_grpcAddress", "", alternativeContext...),
-			GRPCListenAddress:     getString("p2p_grpcListenAddress", ":9906", alternativeContext...),
-			HTTPAddress:           getString("p2p_httpAddress", "localhost:9906", alternativeContext...),
-			HTTPListenAddress:     getString("p2p_httpListenAddress", "", alternativeContext...),
-			ListenAddresses:       getMultiString("p2p_listen_addresses", "|", []string{}, alternativeContext...),
-			AdvertiseAddresses:    getMultiString("p2p_advertise_addresses", "|", []string{}, alternativeContext...),
-			ListenMode:            getString("listen_mode", ListenModeFull, alternativeContext...),
-			MiningOnTopic:         getString("p2p_mining_on_topic", "", alternativeContext...),
-			PeerID:                getString("p2p_peer_id", "", alternativeContext...),
-			Port:                  getInt("p2p_port", 9906, alternativeContext...),
-			PrivateKey:            getString("p2p_private_key", "", alternativeContext...),
-			RejectedTxTopic:       getString("p2p_rejected_tx_topic", "", alternativeContext...),
-			SharedKey:             getString("p2p_shared_key", "", alternativeContext...),
-			StaticPeers:           getMultiString("p2p_static_peers", "|", []string{}, alternativeContext...),
-			SubtreeTopic:          getString("p2p_subtree_topic", "", alternativeContext...),
-			DHTProtocolID:         getString("p2p_dht_protocol_id", "", alternativeContext...),
-			DHTUsePrivate:         getBool("p2p_dht_use_private", false, alternativeContext...),
-			OptimiseRetries:       getBool("p2p_optimise_retries", false, alternativeContext...),
+			BestBlockTopic:      getString("p2p_bestblock_topic", "", alternativeContext...),
+			BlockTopic:          getString("p2p_block_topic", "", alternativeContext...),
+			BootstrapAddresses:  getMultiString("p2p_bootstrapAddresses", "|", []string{}, alternativeContext...),
+			BootstrapPersistent: getBool("p2p_bootstrap_persistent", false, alternativeContext...),
+			GRPCAddress:         getString("p2p_grpcAddress", "", alternativeContext...),
+			GRPCListenAddress:   getString("p2p_grpcListenAddress", ":9906", alternativeContext...),
+			HTTPAddress:         getString("p2p_httpAddress", "localhost:9906", alternativeContext...),
+			HTTPListenAddress:   getString("p2p_httpListenAddress", "", alternativeContext...),
+			ListenAddresses:     getMultiString("p2p_listen_addresses", "|", []string{}, alternativeContext...),
+			AdvertiseAddresses:  getMultiString("p2p_advertise_addresses", "|", []string{}, alternativeContext...),
+			ListenMode:          getString("listen_mode", ListenModeFull, alternativeContext...),
+			MiningOnTopic:       getString("p2p_mining_on_topic", "", alternativeContext...),
+			PeerID:              getString("p2p_peer_id", "", alternativeContext...),
+			Port:                getInt("p2p_port", 9906, alternativeContext...),
+			PrivateKey:          getString("p2p_private_key", "", alternativeContext...),
+			RejectedTxTopic:     getString("p2p_rejected_tx_topic", "", alternativeContext...),
+			SharedKey:           getString("p2p_shared_key", "", alternativeContext...),
+			StaticPeers:         getMultiString("p2p_static_peers", "|", []string{}, alternativeContext...),
+			SubtreeTopic:        getString("p2p_subtree_topic", "", alternativeContext...),
+			DHTProtocolID:       getString("p2p_dht_protocol_id", "", alternativeContext...),
+			DHTUsePrivate:       getBool("p2p_dht_use_private", false, alternativeContext...),
+			OptimiseRetries:     getBool("p2p_optimise_retries", false, alternativeContext...),
 			// libp2p feature toggles
-			EnableNATService:      getBool("p2p_enable_nat_service", false, alternativeContext...),
-			EnableHolePunching:    getBool("p2p_enable_hole_punching", false, alternativeContext...),
-			EnableRelay:           getBool("p2p_enable_relay", false, alternativeContext...),
-			EnableNATPortMap:      getBool("p2p_enable_nat_port_map", false, alternativeContext...),
+			EnableNATService:   getBool("p2p_enable_nat_service", true, alternativeContext...),   // ON: Essential for address discovery
+			EnableHolePunching: getBool("p2p_enable_hole_punching", true, alternativeContext...), // ON: Critical for NAT traversal
+			EnableRelay:        getBool("p2p_enable_relay", true, alternativeContext...),         // ON: Fallback for difficult NAT scenarios
+			EnableNATPortMap:   getBool("p2p_enable_nat_port_map", true, alternativeContext...),  // ON: Automatic port forwarding via UPnP
+			// Enhanced NAT traversal features
+			EnableAutoNATv2:    getBool("p2p_enable_autonat_v2", true, alternativeContext...),     // ON: Better address discovery
+			ForceReachability:  getString("p2p_force_reachability", "", alternativeContext...),    // Auto-detect by default
+			EnableRelayService: getBool("p2p_enable_relay_service", false, alternativeContext...), // OFF: Only for well-resourced nodes
+			// Connection management
+			EnableConnManager: getBool("p2p_enable_conn_manager", true, alternativeContext...), // ON: Prevents resource exhaustion
+			ConnLowWater:      getInt("p2p_conn_low_water", 200, alternativeContext...),
+			ConnHighWater:     getInt("p2p_conn_high_water", 400, alternativeContext...),
+			ConnGracePeriod:   getDuration("p2p_conn_grace_period", 60*time.Second),
+			EnableConnGater:   getBool("p2p_enable_conn_gater", false, alternativeContext...), // OFF: Only needed for strict control
+			MaxConnsPerPeer:   getInt("p2p_max_conns_per_peer", 3, alternativeContext...),
+			// Peer persistence
+			EnablePeerCache:       getBool("p2p_enable_peer_cache", true, alternativeContext...), // ON: Faster network recovery
+			PeerCacheDir:          getString("p2p_peer_cache_dir", "", alternativeContext...),    // Empty = binary directory
+			MaxCachedPeers:        getInt("p2p_max_cached_peers", 100, alternativeContext...),
+			PeerCacheTTL:          getDuration("p2p_peer_cache_ttl", 30*24*time.Hour),
 			BanThreshold:          getInt("p2p_ban_threshold", 100, alternativeContext...),
 			BanDuration:           getDuration("p2p_ban_duration", 24*time.Hour),
 			HandshakeTopic:        getString("p2p_handshake_topic", "", alternativeContext...),
 			HandshakeTopicSize:    getInt("p2p_handshake_topic_size", 1, alternativeContext...),
 			HandshakeTopicTimeout: getDuration("p2p_handshake_topic_timeout", 5*time.Second),
 			NodeStatusTopic:       getString("p2p_node_status_topic", "", alternativeContext...),
+			SharePrivateAddresses: getBool("p2p_share_private_addresses", true, alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                          getString("coinbaseDB", "", alternativeContext...),
