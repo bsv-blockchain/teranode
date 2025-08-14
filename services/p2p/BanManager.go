@@ -75,6 +75,23 @@ type BanEventHandler interface {
 	OnPeerBanned(peerID string, until time.Time, reason string)
 }
 
+// PeerBanManagerI defines the interface for peer ban management functionality.
+// This interface abstracts the implementation details of peer ban management,
+// allowing different implementations to be used (such as in-memory, database-backed,
+// or mock implementations) while providing a consistent API.
+type PeerBanManagerI interface {
+	// IsBanned checks if a peer is currently banned by PeerID.
+	// Returns true if the peer is currently banned, false otherwise.
+	IsBanned(peerID string) bool
+
+	// GetBanScore returns the current ban score and ban status for a given peer.
+	GetBanScore(peerID string) (score int, banned bool, banUntil time.Time)
+
+	// AddScore adds points to a peer's ban score for a specific reason.
+	// Returns the peer's current score after adjustment and whether the peer is now banned.
+	AddScore(peerID string, reason BanReason) (score int, banned bool)
+}
+
 // PeerBanManager manages all peer scores and bans.
 // It implements a reputation system that tracks peer behavior, applies score penalties
 // for violations, and enforces temporary bans when scores exceed configured thresholds.

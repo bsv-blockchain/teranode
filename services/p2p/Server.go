@@ -105,7 +105,7 @@ type Server struct {
 	blocksKafkaProducerClient         kafka.KafkaAsyncProducerI // Kafka producer for blocks
 	banList                           BanListI                  // List of banned peers
 	banChan                           chan BanEvent             // Channel for ban events
-	banManager                        *PeerBanManager           // Manager for peer banning
+	banManager                        PeerBanManagerI           // Manager for peer banning
 	gCtx                              context.Context
 	blockTopicName                    string
 	subtreeTopicName                  string
@@ -1715,14 +1715,10 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		return
 	}
 
-	// Skip notifications from banned peers by IP
-	if pid, err := peer.Decode(from); err == nil {
-		for _, ip := range s.P2PNode.GetPeerIPs(pid) {
-			if s.banList.IsBanned(ip) {
-				s.logger.Debugf("[handleBlockTopic] ignoring block notification from banned peer %s (ip %s)", from, ip)
-				return
-			}
-		}
+	// Skip notifications from banned peers by PeerID
+	if s.banManager.IsBanned(from) {
+		s.logger.Debugf("[handleBlockTopic] ignoring block notification from banned peer %s", from)
+		return
 	}
 
 	hash, err = chainhash.NewHashFromStr(blockMessage.Hash)
@@ -1793,21 +1789,10 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		return
 	}
 
-	// is it from a banned peer
-	// get the ip address of the peer
-	peerID, err := peer.Decode(from)
-	if err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] error decoding peer ID %s: %v", from, err)
+	// Skip notifications from banned peers by PeerID
+	if s.banManager.IsBanned(from) {
+		s.logger.Debugf("[handleSubtreeTopic] got p2p subtree notification from banned peer %s", from)
 		return
-	}
-
-	// get the ip address of the peer
-	peerIPs := s.P2PNode.GetPeerIPs(peerID)
-	for _, ip := range peerIPs {
-		if s.banList.IsBanned(ip) {
-			s.logger.Debugf("[handleSubtreeTopic] got p2p subtree notification from banned peer %s", from)
-			return
-		}
 	}
 
 	hash, err = chainhash.NewHashFromStr(subtreeMessage.Hash)
@@ -1931,19 +1916,10 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 	// add height to peer info
 	s.P2PNode.UpdatePeerHeight(peer.ID(miningOnMessage.PeerID), int32(miningOnMessage.Height)) //nolint:gosec
 
-	// is it from a banned peer
-	peerID, err := peer.Decode(from)
-	if err != nil {
-		s.logger.Errorf("[handleMiningOnTopic] error decoding peer ID %s: %v", from, err)
+	// Skip notifications from banned peers by PeerID
+	if s.banManager.IsBanned(from) {
+		s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification from banned peer %s", from)
 		return
-	}
-
-	peerIPs := s.P2PNode.GetPeerIPs(peerID)
-	for _, ip := range peerIPs {
-		if s.banList.IsBanned(ip) {
-			s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification from banned peer %s", from)
-			return
-		}
 	}
 
 	// Send peer's block info to Kafka if we have a producer client
@@ -2055,7 +2031,9 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) 
 }
 
 func (s *Server) IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
-	return &p2p_api.IsBannedResponse{IsBanned: s.banList.IsBanned(peer.IpOrSubnet)}, nil
+	// Only check PeerID-based bans
+	// Note: The field is still called IpOrSubnet for backward compatibility, but we only accept PeerIDs
+	return &p2p_api.IsBannedResponse{IsBanned: s.banManager.IsBanned(peer.IpOrSubnet)}, nil
 }
 
 func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ListBannedResponse, error) {
@@ -2268,45 +2246,23 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 		return // we only care about new bans
 	}
 
-	// Handle PeerID-based banning
-	if event.PeerID != "" {
-		s.logger.Infof("[handleBanEvent] Received ban event for PeerID: %s (reason: %s)", event.PeerID, event.Reason)
-
-		// Parse the PeerID
-		peerID, err := peer.Decode(event.PeerID)
-		if err != nil {
-			s.logger.Errorf("[handleBanEvent] Invalid PeerID in ban event: %s, error: %v", event.PeerID, err)
-			// Fall back to IP-based banning if PeerID is invalid
-			if event.IP == "" {
-				return
-			}
-		} else {
-			// Disconnect by PeerID
-			s.disconnectBannedPeerByID(ctx, peerID, event.Reason)
-			return
-		}
+	// Only handle PeerID-based banning
+	if event.PeerID == "" {
+		s.logger.Warnf("[handleBanEvent] Ban event received without PeerID, ignoring (PeerID-only banning enabled)")
+		return
 	}
 
-	// Backward compatibility: Handle IP-based banning
-	if event.IP != "" {
-		s.logger.Infof("[handleBanEvent] Received ban event for IP: %s", event.IP)
+	s.logger.Infof("[handleBanEvent] Received ban event for PeerID: %s (reason: %s)", event.PeerID, event.Reason)
 
-		// parse the banned IP or subnet
-		var bannedIP net.IP
-		var bannedSubnet *net.IPNet
-
-		if event.Subnet != nil {
-			bannedSubnet = event.Subnet
-		} else {
-			bannedIP = net.ParseIP(event.IP)
-			if bannedIP == nil {
-				s.logger.Errorf("[handleBanEvent] Invalid IP address in ban event: %s", event.IP)
-				return
-			}
-		}
-
-		s.disconnectBannedPeers(ctx, bannedIP, bannedSubnet)
+	// Parse the PeerID
+	peerID, err := peer.Decode(event.PeerID)
+	if err != nil {
+		s.logger.Errorf("[handleBanEvent] Invalid PeerID in ban event: %s, error: %v", event.PeerID, err)
+		return
 	}
+
+	// Disconnect by PeerID
+	s.disconnectBannedPeerByID(ctx, peerID, event.Reason)
 }
 
 // disconnectBannedPeerByID disconnects a specific peer by their PeerID
@@ -2339,46 +2295,6 @@ func (s *Server) disconnectBannedPeerByID(ctx context.Context, peerID peer.ID, r
 	s.logger.Debugf("[disconnectBannedPeerByID] Peer %s not found in connected peers", peerID)
 }
 
-func (s *Server) disconnectBannedPeers(ctx context.Context, bannedIP net.IP, bannedSubnet *net.IPNet) {
-	// check if we're connected to the banned IP
-	peers := s.P2PNode.ConnectedPeers()
-
-	for _, peer := range peers {
-		for _, addr := range peer.Addrs {
-			peerIP, err := s.getIPFromMultiaddr(ctx, addr)
-			if err != nil || peerIP == nil {
-				s.logger.Errorf("[disconnectBannedPeers] PeerIP is either nil or an error occurred getting IP from multiaddr %s: %v", addr, err)
-				continue
-			}
-
-			s.logger.Debugf("[disconnectBannedPeers] bannedSubnet: %v, bannedIP: %v, peerIP: %s", bannedSubnet, bannedIP, peerIP)
-
-			if isBanned(bannedIP, bannedSubnet, peerIP) {
-				s.logger.Infof("[disconnectBannedPeers] Disconnecting from banned peer: %s (%s)", peer.ID, peerIP)
-
-				// Remove peer from SyncManager before disconnecting
-				if s.syncManager != nil {
-					s.syncManager.RemovePeer(peer.ID)
-				}
-
-				// Clean up stored peer data
-				s.peerBlockHashes.Delete(peer.ID)
-
-				err := s.P2PNode.DisconnectPeer(ctx, peer.ID)
-				if err != nil {
-					s.logger.Errorf("[disconnectBannedPeers] Error disconnecting from peer %s: %v", peer.ID, err)
-				}
-
-				break // no need to check other addresses for this peer
-			}
-		}
-	}
-}
-
-func isBanned(bannedIP net.IP, bannedSubnet *net.IPNet, peerIP net.IP) bool {
-	return (bannedSubnet != nil && bannedSubnet.Contains(peerIP)) ||
-		(bannedIP != nil && peerIP.Equal(bannedIP))
-}
 
 func (s *Server) getIPFromMultiaddr(ctx context.Context, maddr ma.Multiaddr) (net.IP, error) {
 	// try to get the IP address component
