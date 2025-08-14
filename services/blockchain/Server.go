@@ -2452,6 +2452,44 @@ out:
 	return headerHistory, headerMetaHistory, nil
 }
 
+// GetBlockHeadersFromCommonAncestor retrieves block headers from a common ancestor.
+func (b *Blockchain) GetBlockHeadersFromCommonAncestor(ctx context.Context, request *blockchain_api.GetBlockHeadersFromCommonAncestorRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
+	targetHash, err := chainhash.NewHash(request.TargetHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromCommonAncestor] request's target hash is not valid", err))
+	}
+
+	blockLocatorHashes := make([]chainhash.Hash, len(request.BlockLocatorHashes))
+	for i, hash := range request.BlockLocatorHashes {
+		blockHash, err := chainhash.NewHash(hash)
+		if err != nil {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromCommonAncestor] request's block locator hash is not valid", err))
+		}
+
+		blockLocatorHashes[i] = *blockHash
+	}
+
+	blockHeaders, blockHeaderMetas, err := getBlockHeadersFromCommonAncestor(ctx, b.store, targetHash, blockLocatorHashes, request.MaxHeaders)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeadersBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeadersBytes[i] = blockHeader.Bytes()
+	}
+
+	blockHeaderMetasBytes := make([][]byte, len(blockHeaderMetas))
+	for i, blockHeaderMeta := range blockHeaderMetas {
+		blockHeaderMetasBytes[i] = blockHeaderMeta.Bytes()
+	}
+
+	return &blockchain_api.GetBlockHeadersResponse{
+		BlockHeaders: blockHeadersBytes,
+		Metas:        blockHeaderMetasBytes,
+	}, nil
+}
+
 func getBlockHeadersFromCommonAncestor(ctx context.Context, store blockchain_store.Store, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	// first we need to get the common ancestor of the target hash and the block locator hashes
 	commonBlockHeader, _, err := store.GetLatestBlockHeaderFromBlockLocator(ctx, hashTarget, blockLocatorHashes)
