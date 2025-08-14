@@ -1084,6 +1084,39 @@ func (p *Peer) handlePongMsg(msg *wire.MsgPong) {
 	}
 }
 
+// handleAuthChMsg is invoked when a peer receives an authch bitcoin message.
+// This implements the authenticated connections handshake as a seed node would,
+// responding to the handshake but indicating no minerID support is available.
+// The authch message starts the authentication handshake as defined in BSV v1.0.13.
+//
+// NOTE: Legacy nodes are handling messages without Miner ID as the base assumption.
+// This implementation assumes no MinerID is available and provides graceful fallback.
+func (p *Peer) handleAuthChMsg(msg *wire.MsgAuthch) {
+	p.logger.Debugf("Received authch message from %v - version: %d, length: %d, challenge length: %d",
+		p, msg.Version, msg.Length, len(msg.Challenge))
+
+	// Validate the message format - following C++ pattern of sending REJECT
+	if msg.Version != 1 {
+		reason := fmt.Sprintf("Unsupported authch message version %d", msg.Version)
+		p.logger.Warnf("Failed to process authch from %v: %s", p, reason)
+		p.PushRejectMsg("authch", wire.RejectInvalid, reason, nil, false)
+		return
+	}
+
+	// Validate challenge is not empty (should contain actual challenge data)
+	if len(msg.Challenge) == 0 {
+		reason := "Invalid authch message: empty challenge"
+		p.logger.Warnf("Failed to process authch from %v: %s", p, reason)
+		p.PushRejectMsg("authch", wire.RejectInvalid, reason, nil, false)
+		return
+	}
+
+	// All validations passed - graceful fallback for nodes without MinerID (like seed nodes)
+	// Connection continues unauthenticated
+	// Auth connection is not established, all other Bitcoin operations work normally
+	p.logger.Debugf("Ignoring authch message from %v - this node does not have MinerID configured", p)
+}
+
 // readMessage reads the next bitcoin message from the peer with logging.
 func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte, error) {
 	n, msg, buf, err := wire.ReadMessageWithEncodingN(p.conn,
@@ -1631,6 +1664,9 @@ out:
 			if p.cfg.Listeners.OnSendHeaders != nil {
 				p.cfg.Listeners.OnSendHeaders(p, msg)
 			}
+
+		case *wire.MsgAuthch:
+			p.handleAuthChMsg(msg)
 
 		default:
 			p.logger.Debugf("Received unhandled message of type %v from %v", rmsg.Command(), p)
