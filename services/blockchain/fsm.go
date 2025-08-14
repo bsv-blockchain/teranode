@@ -119,9 +119,9 @@ func CheckFSM(blockchainClient ClientI) func(ctx context.Context, checkLiveness 
 		case blockchain_api.FSMStateType_RUNNING:
 			status = http.StatusOK
 		case blockchain_api.FSMStateType_IDLE:
-			status = http.StatusServiceUnavailable
-		default:
 			status = http.StatusOK
+		default:
+			status = http.StatusServiceUnavailable
 		}
 
 		return status, state.String(), nil
