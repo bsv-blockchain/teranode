@@ -219,7 +219,21 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := make([]health.Check, 0, 6)
+	checks := make([]health.Check, 0, 7)
+
+	// Check if the gRPC server is actually listening and accepting requests
+	// Only check if the address is configured (not empty)
+	if u.settings.BlockValidation.GRPCListenAddress != "" {
+		checks = append(checks, health.Check{
+			Name: "gRPC Server",
+			Check: health.CheckGRPCServerWithSettings(u.settings.BlockValidation.GRPCListenAddress, u.settings, func(ctx context.Context, conn *grpc.ClientConn) error {
+				client := blockvalidation_api.NewBlockValidationAPIClient(conn)
+				_, err := client.HealthGRPC(ctx, &blockvalidation_api.EmptyMessage{})
+				return err
+			}),
+		})
+	}
+
 	checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
 
 	if u.blockchainClient != nil {
@@ -252,6 +266,8 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
 	prometheusBlockValidationHealth.Add(1)
 
+	// Add context value to prevent circular dependency when checking gRPC server health
+	ctx = context.WithValue(ctx, "skip-grpc-self-check", true)
 	status, details, err := u.Health(ctx, false)
 
 	return &blockvalidation_api.HealthResponse{

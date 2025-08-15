@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,6 +147,9 @@ func setup(t *testing.T) *testContext {
 
 	tSettings := test.CreateBaseTestSettings()
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	// Clear the default addresses since we're not starting the servers in tests
+	tSettings.BlockChain.GRPCListenAddress = ""
+	tSettings.BlockChain.HTTPListenAddress = ""
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -554,6 +558,118 @@ func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
 	}
 }
 
+// Test_GetStoreFSMState tests the GetStoreFSMState functionality
+func Test_GetStoreFSMState(t *testing.T) {
+	ctx := setup(t)
+
+	state, err := ctx.server.GetStoreFSMState(context.Background())
+	assert.NoError(t, err)
+	assert.NotEmpty(t, state)
+}
+
+// Test_ResetFSMS tests the ResetFSMS functionality
+func Test_ResetFSMS(t *testing.T) {
+	ctx := setup(t)
+
+	ctx.server.ResetFSMS()
+	// Method has no return value
+}
+
+// Test_GetBlockStats tests the GetBlockStats functionality
+func Test_GetBlockStats(t *testing.T) {
+	ctx := setup(t)
+
+	// Store a block first
+	block := mockBlock(ctx, t)
+	_, _, err := ctx.server.store.StoreBlock(context.Background(), block, "peer1")
+	require.NoError(t, err)
+
+	t.Run("get block stats", func(t *testing.T) {
+		response, err := ctx.server.GetBlockStats(context.Background(), &emptypb.Empty{})
+		require.NoError(t, err)
+		require.NotNil(t, response)
+	})
+}
+
+// Test_GetBlockGraphData tests the GetBlockGraphData functionality
+func Test_GetBlockGraphData(t *testing.T) {
+	ctx := setup(t)
+
+	// Store blocks
+	block := mockBlock(ctx, t)
+	_, _, err := ctx.server.store.StoreBlock(context.Background(), block, "peer1")
+	require.NoError(t, err)
+
+	t.Run("get block graph data", func(t *testing.T) {
+		request := &blockchain_api.GetBlockGraphDataRequest{}
+
+		response, err := ctx.server.GetBlockGraphData(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, response)
+	})
+}
+
+// Test_GetLastNBlocks tests the GetLastNBlocks functionality
+func Test_GetLastNBlocks(t *testing.T) {
+	ctx := setup(t)
+
+	// Create and store unique blocks
+	tSettings := test.CreateBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+
+	for i := 0; i <= 5; i++ {
+		// Create a unique coinbase transaction for each block
+		coinbase := bt.NewTx()
+		err := coinbase.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+		require.NoError(t, err)
+
+		// Set unique unlocking script with block height data
+		arbitraryData := []byte{0x03, byte(i), 0x00, 0x00}
+		coinbase.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
+
+		// Add output
+		err = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000)
+		require.NoError(t, err)
+
+		// Create unique merkle root from coinbase tx
+		merkleRoot := coinbase.TxIDChainHash()
+
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: merkleRoot,
+				Timestamp:      uint32(time.Now().Unix() + int64(i)),
+				Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+				Nonce:          uint32(i),
+			},
+			CoinbaseTx:       coinbase,
+			Height:           uint32(i),
+			TransactionCount: 1,
+			SizeInBytes:      1000,
+		}
+
+		// Store the block
+		_, _, err = ctx.server.store.StoreBlock(context.Background(), block, "peer1")
+		require.NoError(t, err)
+
+		// Update prevHash for next block
+		prevHash = block.Hash()
+	}
+
+	t.Run("get last N blocks", func(t *testing.T) {
+		request := &blockchain_api.GetLastNBlocksRequest{
+			NumberOfBlocks: 3,
+		}
+
+		response, err := ctx.server.GetLastNBlocks(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, response)
+		assert.LessOrEqual(t, len(response.Blocks), 3)
+	})
+}
+
 // Test_GetBlockHeadersFromCommonAncestor verifies the GetBlockHeadersFromCommonAncestor functionality.
 func Test_GetBlockHeadersFromCommonAncestor(t *testing.T) {
 	ctx := setup(t)
@@ -754,4 +870,169 @@ func Test_GetBlockHeadersFromCommonAncestor(t *testing.T) {
 			require.Equal(t, tt.expectedLen, len(response.Metas))
 		})
 	}
+}
+
+// Test_GetLastNInvalidBlocks tests the GetLastNInvalidBlocks functionality
+func Test_GetLastNInvalidBlocks(t *testing.T) {
+	ctx := setup(t)
+
+	t.Run("get last N invalid blocks", func(t *testing.T) {
+		request := &blockchain_api.GetLastNInvalidBlocksRequest{}
+
+		response, err := ctx.server.GetLastNInvalidBlocks(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, response)
+		assert.Empty(t, response.Blocks) // No invalid blocks initially
+	})
+}
+
+// Test_GetSuitableBlock tests the GetSuitableBlock functionality
+func Test_GetSuitableBlock(t *testing.T) {
+	ctx := setup(t)
+
+	// Store a block
+	block := mockBlock(ctx, t)
+	_, _, err := ctx.server.store.StoreBlock(context.Background(), block, "peer1")
+	require.NoError(t, err)
+
+	t.Run("get suitable block with zero hash", func(t *testing.T) {
+		// Create a proper zero hash (32 bytes of zeros)
+		zeroHash := make([]byte, 32)
+		request := &blockchain_api.GetSuitableBlockRequest{
+			Hash: zeroHash,
+		}
+
+		response, err := ctx.server.GetSuitableBlock(context.Background(), request)
+		// This may error if there's no suitable block with zero hash
+		if err != nil {
+			assert.Contains(t, err.Error(), "median block")
+		} else {
+			require.NotNil(t, response)
+			assert.NotNil(t, response.Block)
+		}
+	})
+
+	t.Run("get suitable block with specific hash", func(t *testing.T) {
+		request := &blockchain_api.GetSuitableBlockRequest{
+			Hash: block.Hash().CloneBytes(),
+		}
+
+		response, err := ctx.server.GetSuitableBlock(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, response)
+		assert.NotNil(t, response.Block)
+	})
+}
+
+// Test_Subscribe tests the subscription functionality
+func Test_Subscribe(t *testing.T) {
+	ctx := setup(t)
+
+	// Manually start subscription goroutine if not ready
+	if !ctx.server.subscriptionManagerReady.Load() {
+		go ctx.server.startSubscriptions()
+
+		// Wait for subscription manager to be ready
+		for i := 0; i < 50; i++ {
+			if ctx.server.subscriptionManagerReady.Load() {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	// If still not ready, skip test
+	if !ctx.server.subscriptionManagerReady.Load() {
+		t.Skip("Subscription manager not ready, skipping test")
+	}
+
+	// Create a mock stream
+	mockStream := &mockSubscribeServer{
+		context: context.Background(),
+		sent:    make([]*blockchain_api.Notification, 0),
+	}
+
+	// Start subscription in goroutine
+	done := make(chan error, 1)
+	go func() {
+		done <- ctx.server.Subscribe(&blockchain_api.SubscribeRequest{
+			Source: "test-subscriber",
+		}, mockStream)
+	}()
+
+	// Give subscription time to register - wait with retry
+	var subCount int
+	for i := 0; i < 50; i++ {
+		ctx.server.subscribersMu.RLock()
+		subCount = len(ctx.server.subscribers)
+		ctx.server.subscribersMu.RUnlock()
+		if subCount > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	assert.Equal(t, 1, subCount)
+
+	// Cancel context to end subscription
+	mockStream.Cancel()
+
+	// Wait for subscription to end
+	select {
+	case <-done:
+		// Success
+	case <-time.After(time.Second):
+		t.Fatal("Subscription didn't end in time")
+	}
+}
+
+// mockSubscribeServer implements blockchain_api.BlockchainAPI_SubscribeServer for testing
+type mockSubscribeServer struct {
+	blockchain_api.BlockchainAPI_SubscribeServer
+	context context.Context
+	cancel  context.CancelFunc
+	sent    []*blockchain_api.Notification
+	mu      sync.Mutex
+}
+
+func (m *mockSubscribeServer) Send(notification *blockchain_api.Notification) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sent = append(m.sent, notification)
+	return nil
+}
+
+func (m *mockSubscribeServer) Context() context.Context {
+	if m.cancel == nil {
+		m.context, m.cancel = context.WithCancel(m.context)
+	}
+	return m.context
+}
+
+func (m *mockSubscribeServer) Cancel() {
+	if m.cancel != nil {
+		m.cancel()
+	}
+}
+
+// Test_GetBlockLocator tests the GetBlockLocator functionality
+func Test_GetBlockLocator(t *testing.T) {
+	ctx := setup(t)
+
+	// Store blocks
+	block := mockBlock(ctx, t)
+	_, _, err := ctx.server.store.StoreBlock(context.Background(), block, "peer1")
+	require.NoError(t, err)
+
+	t.Run("get block locator", func(t *testing.T) {
+		request := &blockchain_api.GetBlockLocatorRequest{
+			Hash:   block.Hash().CloneBytes(),
+			Height: block.Height,
+		}
+
+		response, err := ctx.server.GetBlockLocator(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, response)
+		assert.NotNil(t, response.Locator)
+	})
 }

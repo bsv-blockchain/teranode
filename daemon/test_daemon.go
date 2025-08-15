@@ -214,6 +214,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
 	appSettings.P2P.Port = p2pPort
 
+	// Disable both NAT services to avoid libp2p "multiple NATManagers" error
+	appSettings.P2P.EnableNATService = false
+	appSettings.P2P.EnableNATPortMap = false
+
 	if opts.EnableP2P {
 		_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "p2p", "", ":0")
 		require.NoError(t, err)

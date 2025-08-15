@@ -23,10 +23,12 @@ package validator
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -201,7 +203,33 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := make([]health.Check, 0, 5)
+	checks := make([]health.Check, 0, 7)
+
+	// Check if the gRPC server is actually listening and accepting requests
+	// Only check if the address is configured (not empty)
+	if v.settings.Validator.GRPCListenAddress != "" {
+		checks = append(checks, health.Check{
+			Name: "gRPC Server",
+			Check: health.CheckGRPCServerWithSettings(v.settings.Validator.GRPCListenAddress, v.settings, func(ctx context.Context, conn *grpc.ClientConn) error {
+				client := validator_api.NewValidatorAPIClient(conn)
+				_, err := client.HealthGRPC(ctx, &validator_api.EmptyMessage{})
+				return err
+			}),
+		})
+	}
+
+	// Check if the HTTP server is actually listening and accepting requests
+	if v.settings.Validator.HTTPListenAddress != "" {
+		addr := v.settings.Validator.HTTPListenAddress
+		if strings.HasPrefix(addr, ":") {
+			addr = "localhost" + addr
+		}
+		checks = append(checks, health.Check{
+			Name:  "HTTP Server",
+			Check: health.CheckHTTPServer(fmt.Sprintf("http://%s", addr), "/health"),
+		})
+	}
+
 	checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
 
 	if v.blockchainClient != nil {
@@ -237,6 +265,8 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
 	prometheusHealth.Add(1)
 
+	// Add context value to prevent circular dependency when checking gRPC server health
+	ctx = context.WithValue(ctx, "skip-grpc-self-check", true)
 	status, details, err := v.Health(ctx, false)
 
 	return &validator_api.HealthResponse{

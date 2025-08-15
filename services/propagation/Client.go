@@ -542,6 +542,10 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 //   - *grpc.ClientConn: Established gRPC connection ready for client creation
 //   - error: Error if connection establishment fails
 func getClientConn(ctx context.Context, propagationGrpcAddresses []string, tSettings *settings.Settings) (*grpc.ClientConn, error) {
+	if len(propagationGrpcAddresses) == 0 {
+		return nil, errors.NewServiceError("no gRPC addresses provided")
+	}
+
 	conn, err := util.GetGRPCClient(ctx, propagationGrpcAddresses[0], &util.ConnectionOptions{
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,

@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -234,11 +235,45 @@ func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, strin
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := make([]health.Check, 0, 2)
-	checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
+	var checks []health.Check
+
+	// Check if the gRPC server is actually listening and accepting requests
+	// Only check if the address is configured (not empty)
+	if b.settings.BlockChain.GRPCListenAddress != "" {
+		checks = append(checks, health.Check{
+			Name: "gRPC Server",
+			Check: health.CheckGRPCServerWithSettings(b.settings.BlockChain.GRPCListenAddress, b.settings, func(ctx context.Context, conn *grpc.ClientConn) error {
+				client := blockchain_api.NewBlockchainAPIClient(conn)
+				_, err := client.HealthGRPC(ctx, nil)
+				return err
+			}),
+		})
+	}
+
+	// Check if the HTTP server is actually listening and accepting requests
+	if b.settings.BlockChain.HTTPListenAddress != "" {
+		addr := b.settings.BlockChain.HTTPListenAddress
+		if strings.HasPrefix(addr, ":") {
+			addr = "localhost" + addr
+		}
+		checks = append(checks, health.Check{
+			Name:  "HTTP Server",
+			Check: health.CheckHTTPServer(fmt.Sprintf("http://%s", addr), "/health"),
+		})
+	}
+
+	// Only check Kafka if it's configured
+	if len(brokersURL) > 0 {
+		checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
+	}
 
 	if b.store != nil {
 		checks = append(checks, health.Check{Name: "BlockchainStore", Check: b.store.Health})
+	}
+
+	// If no checks configured (test environment), return OK
+	if len(checks) == 0 {
+		return http.StatusOK, `{"status":"200", "dependencies":[]}`, nil
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -263,6 +298,8 @@ func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, strin
 // - HealthResponse with current service status, human-readable details, and timestamp
 // - Error if the health check fails unexpectedly (wrapped for gRPC transmission)
 func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
+	// Add context value to prevent circular dependency when checking gRPC server health
+	ctx = context.WithValue(ctx, "skip-grpc-self-check", true)
 	status, details, err := b.Health(ctx, false)
 
 	return &blockchain_api.HealthResponse{
@@ -413,6 +450,11 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{echo.GET},
 	}))
+
+	// Add health endpoint for HTTP health checks
+	e.GET("/health", func(c echo.Context) error {
+		return c.String(http.StatusOK, "OK")
+	})
 
 	e.GET("/invalidate/:hash", b.invalidateHandler)
 	e.GET("/revalidate/:hash", b.revalidateHandler)

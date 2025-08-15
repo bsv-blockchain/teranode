@@ -3,13 +3,16 @@ package repository_test
 import (
 	"context"
 	"encoding/binary"
+	"io"
 	"net/url"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/asset/repository"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blob"
+	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -306,5 +309,490 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 // 	require.NoError(t, err)
 // 	require.NotNil(t, tx)
 
-// 	require.Equal(t, size+size2, len(txBytes))
-// }
+//		require.Equal(t, size+size2, len(txBytes))
+//	}
+func TestRepository_GetBlockByHash(t *testing.T) {
+	t.Run("GetBlockByHash returns block", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+		require.NoError(t, err)
+
+		txStore := getMemoryStore(t)
+		subtreeStore := getMemoryStore(t)
+		blockStore := getMemoryStore(t)
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
+		require.NoError(t, err)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+		require.NoError(t, err)
+
+		blockHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+		// This will return an error as no block exists
+		block, err := repo.GetBlockByHash(ctx, blockHash)
+		assert.Error(t, err)
+		assert.Nil(t, block)
+		assert.Contains(t, err.Error(), "BLOCK_NOT_FOUND")
+	})
+}
+
+func TestRepository_GetLastNBlocks(t *testing.T) {
+	t.Run("GetLastNBlocks with various parameters", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+		require.NoError(t, err)
+
+		txStore := getMemoryStore(t)
+		subtreeStore := getMemoryStore(t)
+		blockStore := getMemoryStore(t)
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
+		require.NoError(t, err)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+		require.NoError(t, err)
+
+		// Test with different parameters
+		blocks, err := repo.GetLastNBlocks(ctx, 10, false, 0)
+		assert.NoError(t, err)
+		assert.NotNil(t, blocks)
+
+		// Test with include orphans
+		blocks, err = repo.GetLastNBlocks(ctx, 5, true, 0)
+		assert.NoError(t, err)
+		assert.NotNil(t, blocks)
+
+		// Test with from height
+		blocks, err = repo.GetLastNBlocks(ctx, 3, false, 100)
+		assert.NoError(t, err)
+		assert.NotNil(t, blocks)
+	})
+}
+
+func TestRepository_GetBlocks(t *testing.T) {
+	t.Run("GetBlocks with hash and count", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+		require.NoError(t, err)
+
+		txStore := getMemoryStore(t)
+		subtreeStore := getMemoryStore(t)
+		blockStore := getMemoryStore(t)
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
+		require.NoError(t, err)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+		require.NoError(t, err)
+
+		blockHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+		blocks, err := repo.GetBlocks(ctx, blockHash, 5)
+		assert.NoError(t, err)
+		assert.NotNil(t, blocks)
+	})
+}
+
+func TestRepository_GetBlockHeaders(t *testing.T) {
+	t.Run("GetBlockHeaders with hash and count", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+		require.NoError(t, err)
+
+		txStore := getMemoryStore(t)
+		subtreeStore := getMemoryStore(t)
+		blockStore := getMemoryStore(t)
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
+		require.NoError(t, err)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+		require.NoError(t, err)
+
+		blockHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+		headers, metas, err := repo.GetBlockHeaders(ctx, blockHash, 10)
+		// Might not error, but will return empty results
+		if err != nil {
+			// If error, headers and metas should be nil
+			assert.Nil(t, headers)
+			assert.Nil(t, metas)
+		} else {
+			// If no error, headers and metas should be empty
+			assert.Empty(t, headers)
+			assert.Empty(t, metas)
+		}
+	})
+}
+
+func TestRepository_GetBlockHeadersToCommonAncestor(t *testing.T) {
+	t.Run("GetBlockHeadersToCommonAncestor finds common ancestor", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+		require.NoError(t, err)
+
+		txStore := getMemoryStore(t)
+		subtreeStore := getMemoryStore(t)
+		blockStore := getMemoryStore(t)
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
+		require.NoError(t, err)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+		require.NoError(t, err)
+
+		blockHash1, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+		blockHash2, _ := chainhash.NewHashFromStr("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210")
+
+		hashes := []*chainhash.Hash{blockHash1, blockHash2}
+
+		headers, metas, err := repo.GetBlockHeadersToCommonAncestor(ctx, blockHash1, hashes, 10)
+		// Will error because no blocks exist
+		assert.Error(t, err)
+		assert.Nil(t, headers)
+		assert.Nil(t, metas)
+	})
+}
+
+func TestRepository_GetBlockHeadersFromCommonAncestor(t *testing.T) {
+	t.Run("GetBlockHeadersFromCommonAncestor returns headers", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+		require.NoError(t, err)
+
+		txStore := getMemoryStore(t)
+		subtreeStore := getMemoryStore(t)
+		blockStore := getMemoryStore(t)
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
+		require.NoError(t, err)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+		require.NoError(t, err)
+
+		blockHash1, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+		blockHash2, _ := chainhash.NewHashFromStr("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210")
+
+		hashes := []chainhash.Hash{*blockHash1, *blockHash2}
+
+		headers, metas, err := repo.GetBlockHeadersFromCommonAncestor(ctx, blockHash1, hashes, 10)
+		// Will error because no blocks exist
+		assert.Error(t, err)
+		assert.Nil(t, headers)
+		assert.Nil(t, metas)
+	})
+}
+
+func TestRepository_GetBlockHeadersFromHeight(t *testing.T) {
+	t.Run("GetBlockHeadersFromHeight returns headers starting at height", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+		require.NoError(t, err)
+
+		txStore := getMemoryStore(t)
+		subtreeStore := getMemoryStore(t)
+		blockStore := getMemoryStore(t)
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
+		require.NoError(t, err)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+		require.NoError(t, err)
+
+		headers, metas, err := repo.GetBlockHeadersFromHeight(ctx, 100, 10)
+		assert.NoError(t, err)
+		assert.NotNil(t, headers)
+		// metas might be empty slice
+		assert.True(t, metas == nil || len(metas) == 0)
+	})
+}
+
+func TestRepository_GetSubtreeData(t *testing.T) {
+	t.Run("GetSubtreeData with various scenarios", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+		require.NoError(t, err)
+
+		txStore := getMemoryStore(t)
+		subtreeStore := getMemoryStore(t)
+		blockStore := getMemoryStore(t)
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
+		require.NoError(t, err)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+		require.NoError(t, err)
+
+		// Create a simple subtree
+		st, err := subtree.NewTreeByLeafCount(2)
+		require.NoError(t, err)
+
+		tx1 := &bt.Tx{Version: 1, LockTime: 0}
+		tx2 := &bt.Tx{Version: 2, LockTime: 0}
+
+		hash1 := tx1.TxIDChainHash()
+		hash2 := tx2.TxIDChainHash()
+
+		err = st.AddNode(*hash1, 0, 0)
+		require.NoError(t, err)
+		err = st.AddNode(*hash2, 0, 0)
+		require.NoError(t, err)
+
+		subtreeData := subtree.NewSubtreeData(st)
+		err = subtreeData.AddTx(tx1, 0)
+		require.NoError(t, err)
+		err = subtreeData.AddTx(tx2, 1)
+		require.NoError(t, err)
+
+		subtreeHash := st.RootHash()
+		subtreeDataBytes, err := subtreeData.Serialize()
+		require.NoError(t, err)
+
+		// Store both subtree and subtree data (GetSubtreeData needs both)
+		subtreeBytes, err := st.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree, subtreeBytes)
+		require.NoError(t, err)
+		err = subtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData, subtreeDataBytes)
+		require.NoError(t, err)
+
+		// Get subtree data
+		retrievedData, err := repo.GetSubtreeData(ctx, subtreeHash)
+		assert.NoError(t, err)
+		assert.NotNil(t, retrievedData)
+	})
+}
+
+func TestRepository_GetSubtreeHead(t *testing.T) {
+	t.Run("GetSubtreeHead returns structured data", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+		require.NoError(t, err)
+
+		txStore := getMemoryStore(t)
+		subtreeStore := getMemoryStore(t)
+		blockStore := getMemoryStore(t)
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
+		require.NoError(t, err)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+		require.NoError(t, err)
+
+		// Create a simple subtree
+		st, err := subtree.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+
+		for i := 0; i < 4; i++ {
+			tx := &bt.Tx{Version: uint32(i), LockTime: uint32(i)}
+			hash := tx.TxIDChainHash()
+			err = st.AddNode(*hash, 0, 0)
+			require.NoError(t, err)
+		}
+
+		subtreeHash := st.RootHash()
+		subtreeBytes, err := st.Serialize()
+		require.NoError(t, err)
+
+		// Store subtree
+		err = subtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree, subtreeBytes)
+		require.NoError(t, err)
+
+		// Get subtree head
+		result, numNodes, err := repo.GetSubtreeHead(ctx, subtreeHash)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, 4, numNodes) // We added 4 nodes to the subtree
+	})
+}
+
+func TestRepository_ErrorHandling(t *testing.T) {
+	t.Run("handles missing transaction", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings()
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+		require.NoError(t, err)
+
+		txStore := getMemoryStore(t)
+		subtreeStore := getMemoryStore(t)
+		blockStore := getMemoryStore(t)
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
+		require.NoError(t, err)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
+		require.NoError(t, err)
+
+		// Try to get non-existent transaction
+		txHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+		data, err := repo.GetTransaction(ctx, txHash)
+		assert.Error(t, err)
+		assert.Nil(t, data)
+	})
+
+	t.Run("handles store errors gracefully", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings()
+
+		// Create mock store that returns errors
+		errorStore := &mockErrorStore{}
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+		require.NoError(t, err)
+
+		subtreeStore := getMemoryStore(t)
+		blockStore := getMemoryStore(t)
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
+		require.NoError(t, err)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		repo, err := repository.NewRepository(logger, settings, utxoStore, errorStore, blockchainClient, subtreeStore, blockStore)
+		require.NoError(t, err)
+
+		// Try to get transaction from error store
+		txHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+		data, err := repo.GetTransaction(ctx, txHash)
+		assert.Error(t, err)
+		assert.Nil(t, data)
+	})
+}
+
+// mockErrorStore is a blob.Store that always returns errors
+type mockErrorStore struct{}
+
+func (m *mockErrorStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
+	return nil, errors.NewStorageError("mock error")
+}
+
+func (m *mockErrorStore) GetReader(ctx context.Context, key []byte, fileType fileformat.FileType) (io.ReadCloser, error) {
+	return nil, errors.NewStorageError("mock error")
+}
+
+func (m *mockErrorStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+	return nil, errors.NewStorageError("mock error")
+}
+
+func (m *mockErrorStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
+	return 0, errors.NewStorageError("mock error")
+}
+
+func (m *mockErrorStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
+	return errors.NewStorageError("mock error")
+}
+
+func (m *mockErrorStore) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
+	return errors.NewStorageError("mock error")
+}
+
+func (m *mockErrorStore) KeyExists(ctx context.Context, key []byte, fileType fileformat.FileType) bool {
+	return false
+}
+
+func (m *mockErrorStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
+	return false, errors.NewStorageError("mock error")
+}
+
+func (m *mockErrorStore) Health(ctx context.Context, includeMetrics bool) (int, string, error) {
+	return 500, "error", errors.NewStorageError("mock error")
+}
+
+func (m *mockErrorStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
+	return errors.NewStorageError("mock error")
+}
+
+func (m *mockErrorStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, height uint32, opts ...options.FileOption) error {
+	return errors.NewStorageError("mock error")
+}
+
+func (m *mockErrorStore) SetCurrentBlockHeight(height uint32) {
+}
+
+func (m *mockErrorStore) Close(ctx context.Context) error {
+	return nil
+}

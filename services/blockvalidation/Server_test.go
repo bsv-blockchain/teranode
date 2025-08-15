@@ -1327,6 +1327,8 @@ func Test_HealthReadiness(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings()
+	// Clear the default addresses since we're not starting the servers in tests
+	tSettings.BlockValidation.GRPCListenAddress = ""
 
 	// Use actual in-memory stores that have proper health methods
 	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()

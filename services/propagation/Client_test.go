@@ -1,15 +1,53 @@
 package propagation
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestNewClient tests the NewClient constructor
+func TestNewClient(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	ctx := context.Background()
+
+	t.Run("with empty addresses", func(t *testing.T) {
+		// Create mock settings with empty addresses
+		s := &settings.Settings{
+			Propagation: settings.PropagationSettings{
+				GRPCAddresses: []string{},
+				HTTPAddresses: []string{},
+			},
+		}
+
+		client, err := NewClient(ctx, logger, s)
+		assert.Error(t, err)
+		assert.Nil(t, client)
+		assert.Contains(t, err.Error(), "no gRPC addresses provided")
+	})
+
+	t.Run("with invalid HTTP address", func(t *testing.T) {
+		// Create mock settings with invalid HTTP address
+		s := &settings.Settings{
+			Propagation: settings.PropagationSettings{
+				GRPCAddresses: []string{"localhost:9090"},
+				HTTPAddresses: []string{"://invalid-url"},
+			},
+		}
+
+		client, err := NewClient(ctx, logger, s)
+		assert.Error(t, err)
+		assert.Nil(t, client)
+		assert.Contains(t, err.Error(), "invalid")
+	})
+}
 
 // TestHandleBatchError tests the handleBatchError method of the Client
 func TestHandleBatchError(t *testing.T) {

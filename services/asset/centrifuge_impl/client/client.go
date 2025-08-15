@@ -5,6 +5,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/centrifugal/centrifuge-go"
 	"github.com/ordishs/go-utils"
@@ -14,6 +15,7 @@ import (
 // It handles real-time message processing and subscription management.
 type Client struct {
 	logger utils.Logger
+	mu     sync.RWMutex
 	client *centrifuge.Client
 }
 
@@ -55,7 +57,9 @@ func New(logger utils.Logger) *Client {
 func (c *Client) Start(_ context.Context, addr string) error {
 	c.logger.Infof("[CentrifugeClient] Starting client")
 
+	c.mu.Lock()
 	c.client = centrifuge.NewJsonClient(fmt.Sprintf("ws://%s/connection/websocket", addr), centrifuge.Config{})
+	c.mu.Unlock()
 
 	c.client.OnConnecting(func(e centrifuge.ConnectingEvent) {
 		c.logger.Infof("[CentrifugeClient] connecting - %d (%s)", e.Code, e.Reason)
@@ -107,7 +111,25 @@ func (c *Client) Start(_ context.Context, addr string) error {
 // Returns:
 //   - error: Any error encountered during the shutdown process
 func (c *Client) Stop(_ context.Context) error {
-	c.logger.Infof("Stopping client")
+	c.logger.Infof("[CentrifugeClient] Stopping client")
 
-	return c.client.Disconnect()
+	c.mu.RLock()
+	client := c.client
+	c.mu.RUnlock()
+
+	if client == nil {
+		return nil
+	}
+	return client.Disconnect()
+}
+
+// IsConnected returns true if the client has been initialized.
+// This is a thread-safe method to check if the client connection has been established.
+//
+// Returns:
+//   - bool: True if client is initialized, false otherwise
+func (c *Client) IsConnected() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.client != nil
 }

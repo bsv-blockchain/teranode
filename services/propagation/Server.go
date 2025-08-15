@@ -181,8 +181,37 @@ func (ps *PropagationServer) Health(ctx context.Context, checkLiveness bool) (in
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := make([]health.Check, 0, 5)
-	checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
+	checks := make([]health.Check, 0, 7)
+
+	// Check if the gRPC server is actually listening and accepting requests
+	// Only check if the address is configured (not empty)
+	if ps.settings.Propagation.GRPCListenAddress != "" {
+		checks = append(checks, health.Check{
+			Name: "gRPC Server",
+			Check: health.CheckGRPCServerWithSettings(ps.settings.Propagation.GRPCListenAddress, ps.settings, func(ctx context.Context, conn *grpc.ClientConn) error {
+				client := propagation_api.NewPropagationAPIClient(conn)
+				_, err := client.HealthGRPC(ctx, &propagation_api.EmptyMessage{})
+				return err
+			}),
+		})
+	}
+
+	// Check if the HTTP server is actually listening and accepting requests
+	if ps.settings.Propagation.HTTPListenAddress != "" {
+		addr := ps.settings.Propagation.HTTPListenAddress
+		if strings.HasPrefix(addr, ":") {
+			addr = "localhost" + addr
+		}
+		checks = append(checks, health.Check{
+			Name:  "HTTP Server",
+			Check: health.CheckHTTPServer(fmt.Sprintf("http://%s", addr), "/health"),
+		})
+	}
+
+	// Only check Kafka if it's configured
+	if len(brokersURL) > 0 {
+		checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
+	}
 
 	if ps.blockchainClient != nil {
 		checks = append(checks, health.Check{Name: "BlockchainClient", Check: ps.blockchainClient.Health})
@@ -195,6 +224,11 @@ func (ps *PropagationServer) Health(ctx context.Context, checkLiveness bool) (in
 
 	if ps.txStore != nil {
 		checks = append(checks, health.Check{Name: "TxStore", Check: ps.txStore.Health})
+	}
+
+	// If no checks configured (test environment), return OK
+	if len(checks) == 0 {
+		return http.StatusOK, `{"status":"200", "dependencies":[]}`, nil
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -217,6 +251,8 @@ func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.
 		prometheusHealth.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
 
+	// Add context value to prevent circular dependency when checking gRPC server health
+	ctx = context.WithValue(ctx, "skip-grpc-self-check", true)
 	status, details, err := ps.Health(ctx, false)
 
 	return &propagation_api.HealthResponse{

@@ -182,7 +182,20 @@ func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, s
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := make([]health.Check, 0, 5)
+	checks := make([]health.Check, 0, 6)
+
+	// Check if the gRPC server is actually listening and accepting requests
+	// Only check if the address is configured (not empty)
+	if ba.settings.BlockAssembly.GRPCListenAddress != "" {
+		checks = append(checks, health.Check{
+			Name: "gRPC Server",
+			Check: health.CheckGRPCServerWithSettings(ba.settings.BlockAssembly.GRPCListenAddress, ba.settings, func(ctx context.Context, conn *grpc.ClientConn) error {
+				client := blockassembly_api.NewBlockAssemblyAPIClient(conn)
+				_, err := client.HealthGRPC(ctx, &blockassembly_api.EmptyMessage{})
+				return err
+			}),
+		})
+	}
 
 	if ba.blockchainClient != nil {
 		checks = append(checks, health.Check{Name: "BlockchainClient", Check: ba.blockchainClient.Health})
@@ -214,6 +227,8 @@ func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, s
 //   - *blockassembly_api.HealthResponse: Health check response
 //   - error: Any error encountered during health check
 func (ba *BlockAssembly) HealthGRPC(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.HealthResponse, error) {
+	// Add context value to prevent circular dependency when checking gRPC server health
+	ctx = context.WithValue(ctx, "skip-grpc-self-check", true)
 	status, details, err := ba.Health(ctx, false)
 
 	return &blockassembly_api.HealthResponse{

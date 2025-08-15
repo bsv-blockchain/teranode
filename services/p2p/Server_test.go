@@ -1546,7 +1546,6 @@ func TestHandleBanEvent(t *testing.T) {
 		mockP2PNode.AssertNotCalled(t, "ConnectedPeers")
 	})
 
-
 	t.Run("bans_by_peerID", func(t *testing.T) {
 		// Create a server with mocked P2PNode
 		logger := ulogger.New("test-server")
@@ -2480,6 +2479,12 @@ func createBaseTestSettings() *settings.Settings {
 	s := settings.NewSettings()
 	s.SubtreeValidation.BlacklistedBaseURLs = make(map[string]struct{})
 
+	// Disable AutoNAT service in tests to avoid conflicts
+	// libp2p doesn't allow multiple NAT managers to be configured
+	// Keep NAT port mapping disabled as well
+	s.P2P.EnableNATService = false
+	s.P2P.EnableNATPortMap = false
+
 	return s
 }
 
@@ -3050,6 +3055,9 @@ func TestServerStartFull(t *testing.T) {
 	settings := createBaseTestSettings()
 	settings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 	settings.BlockChain.StoreURL = &url.URL{Scheme: "sqlitememory"}
+
+	// Ensure only one NAT manager is configured
+	settings.P2P.EnableNATPortMap = false
 
 	server, err := NewServer(ctx, logger, settings, mockBlockchain, nil, nil, mockRejectedKafka, mockBlocksProducer, mockSubtreeProducer)
 	require.NoError(t, err)

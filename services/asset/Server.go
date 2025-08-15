@@ -21,7 +21,9 @@ package asset
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/bitcoin-sv/teranode/errors"
@@ -140,7 +142,21 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
-	checks := make([]health.Check, 0, 5)
+	checks := make([]health.Check, 0, 6)
+
+	// Check if the HTTP server is actually listening and accepting requests
+	if v.httpServer != nil {
+		addr := v.httpAddr
+		if strings.HasPrefix(addr, ":") {
+			addr = "localhost" + addr
+		}
+		checks = append(checks, health.Check{
+			Name:  "HTTP Server",
+			Check: health.CheckHTTPServer(fmt.Sprintf("http://%s", addr), "/health"),
+		})
+	}
+
+	// Note: Centrifuge server check removed as it may not always be running
 
 	if v.blockchainClient != nil {
 		checks = append(checks, health.Check{Name: "BlockchainClient", Check: v.blockchainClient.Health})
