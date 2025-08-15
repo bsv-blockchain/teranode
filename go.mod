@@ -68,7 +68,7 @@ require (
 	golang.org/x/text v0.27.0 // indirect
 	golang.org/x/time v0.12.0
 	google.golang.org/grpc v1.74.2
-	google.golang.org/protobuf v1.36.6
+	google.golang.org/protobuf v1.36.7
 	gopkg.in/DataDog/dd-trace-go.v1 v1.67.0
 	k8s.io/api v0.33.3
 	k8s.io/apimachinery v0.33.3
@@ -155,7 +155,7 @@ require (
 
 require (
 	github.com/bitcoin-sv/alert-system v0.2.0
-	github.com/bsv-blockchain/go-batcher v1.0.0
+	github.com/bsv-blockchain/go-batcher v1.1.0
 	github.com/bsv-blockchain/go-bn v1.0.3
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p v1.2.1

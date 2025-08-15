@@ -143,6 +143,8 @@ github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869/go.mod h1:Ekp36dR
 github.com/bradfitz/go-smtpd v0.0.0-20170404230938-deb6d6237625/go.mod h1:HYsPBTaaSFSlLx/70C2HPIMNZpVV8+vt/A+FMnYP11g=
 github.com/bsv-blockchain/go-batcher v1.0.0 h1:SpvWAvEZtk2G40+MYd9g3Ryagh5JDu9V6DWt6bvoe5c=
 github.com/bsv-blockchain/go-batcher v1.0.0/go.mod h1:69pxNteTblVliQot7VRzVoPW+5F1NSsXvgdVZw7eUZk=
+github.com/bsv-blockchain/go-batcher v1.1.0 h1:LntvZyDY/0ySmVaITYtHD6e5ydkcc67WoSqWc5oo4sU=
+github.com/bsv-blockchain/go-batcher v1.1.0/go.mod h1:69pxNteTblVliQot7VRzVoPW+5F1NSsXvgdVZw7eUZk=
 github.com/bsv-blockchain/go-bc v1.0.2 h1:D1PIYI6Q3Jwdhkp2cucf91vmsPXgXtbGkFpk+xpsD0Y=
 github.com/bsv-blockchain/go-bc v1.0.2/go.mod h1:h3/1KfzgrDos3+bLGWsHkGYoFWcWZ2Vmep2r2AoE3AA=
 github.com/bsv-blockchain/go-bn v1.0.3 h1:98+8/mmj8V6nzpvC6e9WvH4MXc6GtkG0JYL/OMPIU3E=
@@ -1370,6 +1372,8 @@ google.golang.org/protobuf v1.26.0-rc.1/go.mod h1:jlhhOSvTdKEhbULTjvd4ARK9grFBp0
 google.golang.org/protobuf v1.33.0/go.mod h1:c6P6GXX6sHbq/GpV6MGZEdwhWPcYBgnhAHhKbcUYpos=
 google.golang.org/protobuf v1.36.6 h1:z1NpPI8ku2WgiWnf+t9wTPsn6eP1L7ksHUlkfLvd9xY=
 google.golang.org/protobuf v1.36.6/go.mod h1:jduwjTPXsFjZGTmRluh+L6NjiWu7pchiJ2/5YcXBHnY=
+google.golang.org/protobuf v1.36.7 h1:IgrO7UwFQGJdRNXH/sQux4R1Dj1WAKcLElzeeRaXV2A=
+google.golang.org/protobuf v1.36.7/go.mod h1:jduwjTPXsFjZGTmRluh+L6NjiWu7pchiJ2/5YcXBHnY=
 gopkg.in/DataDog/dd-trace-go.v1 v1.67.0 h1:3Cb46zyKIlEWac21tvDF2O4KyMlOHQxrQkyiaUpdwM0=
 gopkg.in/DataDog/dd-trace-go.v1 v1.67.0/go.mod h1:6DdiJPKOeJfZyd/IUGCAd5elY8qPGkztK6wbYYsMjag=
 gopkg.in/airbrake/gobrake.v2 v2.0.9/go.mod h1:/h5ZAUhDkGaJfjzjKLSjv6zCL6O0LLBxU4K+aSYdM/U=
