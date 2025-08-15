@@ -8,15 +8,67 @@ export const wsUrl: Writable<URL | string> = writable('')
 export const error: Writable<any> = writable(null)
 export const sock: Writable<any> = writable(null)
 export const connectionAttempts: Writable<number> = writable(0)
-export const currentNodePeerID: Writable<string | null> = writable(null) // Track our own node's peer ID reactively
+// Create a persistent store for current node peer ID
+function createCurrentNodePeerIDStore() {
+  const STORAGE_KEY = 'teranode_current_node_peer_id'
+  
+  // Initialize from localStorage if available
+  let initialValue: string | null = null
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY)
+      initialValue = stored || null
+    } catch (e) {
+      console.warn('Failed to read currentNodePeerID from localStorage:', e)
+    }
+  }
+  
+  const { subscribe, set, update } = writable<string | null>(initialValue)
+  
+  return {
+    subscribe,
+    set: (value: string | null) => {
+      set(value)
+      // Persist to localStorage
+      if (typeof window !== 'undefined') {
+        try {
+          if (value) {
+            localStorage.setItem(STORAGE_KEY, value)
+          } else {
+            localStorage.removeItem(STORAGE_KEY)
+          }
+        } catch (e) {
+          console.warn('Failed to save currentNodePeerID to localStorage:', e)
+        }
+      }
+    },
+    clear: () => {
+      set(null)
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem(STORAGE_KEY)
+        } catch (e) {
+          console.warn('Failed to clear currentNodePeerID from localStorage:', e)
+        }
+      }
+    }
+  }
+}
+
+export const currentNodePeerID = createCurrentNodePeerIDStore() // Track our own node's peer ID persistently
 
 const maxMessages = 500
 const MAX_RECONNECT_ATTEMPTS = 5
 const BASE_RECONNECT_DELAY = 2000 // Start with 2 seconds
 
+// Track if we've received the first node_status message for this session
+let firstNodeStatusReceived = false
+
 export async function connectToP2PServer() {
   // Reset connection attempts when manually connecting
   connectionAttempts.set(0)
+  // Reset first node status flag for new connection
+  firstNodeStatusReceived = false
   if (!import.meta.env.SSR && window && window.location) {
     try {
       // Fetch WebSocket configuration from the backend
@@ -44,8 +96,8 @@ export async function connectToP2PServer() {
         socket.onopen = () => {
           error.set(null)
           sock.set(socket)
-          // Reset the current node peer ID on new connection
-          currentNodePeerID.set(null)
+          // Don't reset the current node peer ID on reconnection - it should persist
+          // unless we're connecting to a different backend
           // This is required to trigger connect on server side since server expects
           // initial connect request from a WebSocket unidirectional client.
           socket.send(JSON.stringify({}))
@@ -78,12 +130,11 @@ export async function connectToP2PServer() {
             }
 
             // Handle both wrapped (Centrifuge) and unwrapped messages
-            // The initial node_status is sent unwrapped, all others are wrapped
             let jsonData
             if (json?.pub?.data) {
               jsonData = json.pub.data
             } else if (json?.type === 'node_status') {
-              // This is our initial unwrapped node_status message
+              // Unwrapped messages: initial node_status
               jsonData = json
             } else {
               return
@@ -98,30 +149,32 @@ export async function connectToP2PServer() {
 
             const miningNodeSet: any = get(miningNodes)
 
-            // Always process every message for miningNodes
             if (jsonData.type === 'mining_on') {
               const nodeKey = jsonData.peer_id
+              const currentPeerID = get(currentNodePeerID)
               miningNodeSet[nodeKey] = {
                 ...miningNodeSet[nodeKey],
                 ...jsonData,
                 base_url: baseUrl,
                 receivedAt: new Date(),
+                isCurrentNode: jsonData.peer_id === currentPeerID,
               }
               miningNodes.set(miningNodeSet)
             } else if (jsonData.type === 'node_status') {
               // Handle node_status messages - these provide comprehensive node information
-              // The first unwrapped node_status is from our own node
-              const currentPeerID = get(currentNodePeerID)
-              const isOurNode = !currentPeerID && !json?.pub?.data
-              if (isOurNode && jsonData.peer_id) {
+              const nodeKey = jsonData.peer_id
+              
+              // The very first node_status message we receive should be from our own node
+              // (sent immediately upon WebSocket connection by the backend)
+              let currentPeerID = get(currentNodePeerID)
+              if (!firstNodeStatusReceived && !currentPeerID) {
                 currentNodePeerID.set(jsonData.peer_id)
-                console.log('Identified current node peer ID:', jsonData.peer_id)
+                currentPeerID = jsonData.peer_id
+                firstNodeStatusReceived = true
+                console.log('🎯 Auto-detected current node from first node_status:', jsonData.peer_id)
               }
               
-              // Check if this node matches our peer ID
-              const updatedPeerID = get(currentNodePeerID)
-              const isCurrentNode = jsonData.peer_id === updatedPeerID
-              const nodeKey = jsonData.peer_id
+              const isCurrentNode = jsonData.peer_id === currentPeerID
               
               miningNodeSet[nodeKey] = {
                 ...miningNodeSet[nodeKey],
@@ -134,8 +187,13 @@ export async function connectToP2PServer() {
               // Don't return here - let it fall through to add to messages array
             } else if (jsonData.type === 'block') {
               const nodeKey = jsonData.peer_id
+              const currentPeerID = get(currentNodePeerID)
               if (!miningNodeSet[nodeKey]) {
-                miningNodeSet[nodeKey] = { base_url: baseUrl, peer_id: jsonData.peer_id }
+                miningNodeSet[nodeKey] = { 
+                  base_url: baseUrl, 
+                  peer_id: jsonData.peer_id,
+                  isCurrentNode: jsonData.peer_id === currentPeerID,
+                }
               }
               // Update only the specific block fields, preserving existing mining_on data
               miningNodeSet[nodeKey] = {
@@ -149,11 +207,13 @@ export async function connectToP2PServer() {
               miningNodes.set(miningNodeSet)
             } else if (baseUrl && jsonData.peer_id) {
               const nodeKey = jsonData.peer_id
+              const currentPeerID = get(currentNodePeerID)
               if (!miningNodeSet[nodeKey]) {
                 miningNodeSet[nodeKey] = {
                   base_url: baseUrl,
                   peer_id: jsonData.peer_id,
                   receivedAt: new Date(),
+                  isCurrentNode: jsonData.peer_id === currentPeerID,
                 }
                 miningNodes.set(miningNodeSet)
               } else {
@@ -177,8 +237,10 @@ export async function connectToP2PServer() {
           console.log(`p2pWS connection closed by server (${url})`)
           socket = null
           sock.set(null)
-          // Reset the current node peer ID on connection close
-          currentNodePeerID.set(null)
+          // Don't reset the current node peer ID on connection close - it should persist
+          // across reconnections unless we're connecting to a different backend
+          // Reset the first node status flag so we can detect it again on reconnection
+          firstNodeStatusReceived = false
 
           const attempts = get(connectionAttempts) + 1
           connectionAttempts.set(attempts)

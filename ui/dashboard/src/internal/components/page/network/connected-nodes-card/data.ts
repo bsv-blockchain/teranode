@@ -144,13 +144,32 @@ export const getColDefs = (t) => {
 
 export const filters = {}
 
-// Function to get render props for cells (not currently used for row styling)
+// Function to get render props for cells and rows
 export const getRenderProps = (name: any, colDef: any, idField: any, item: any) => {
-  // Row styling is now handled directly in the table component via class:current-node-row
+  // Add special styling for the current node row
+  if (item?.isCurrentNode) {
+    return {
+      className: 'current-node-row'
+    }
+  }
   return {}
 }
 
 export const renderCells = {
+  base_url: (idField, item, colId) => {
+    const url = item[colId] || '-'
+    const isCurrentNode = item.isCurrentNode === true
+    
+    return {
+      component: RenderSpan,
+      props: {
+        value: url,
+        className: isCurrentNode ? 'current-node-url' : '',
+        title: isCurrentNode ? 'This is your node' : url,
+      },
+      value: '',
+    }
+  },
   version: (idField, item, colId) => {
     const version = item.version || '-'
     const commitHash = item.commit_hash ? ` (${item.commit_hash.slice(0, 7)})` : ''

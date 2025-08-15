@@ -2,7 +2,6 @@ package p2p
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -37,6 +36,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr" // nolint:misspell
+	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -2645,23 +2645,16 @@ func TestPrivateKeyHandling(t *testing.T) {
 		mockClient.AssertExpectations(t)
 	})
 
-	t.Run("no key in settings, key exists in DB - should read from DB", func(t *testing.T) {
+	t.Run("no key in settings - should generate new key", func(t *testing.T) {
 		// Setup
 		mockClient := &blockchain.Mock{}
-
-		// Generate a valid Ed25519 key for testing
-		testPrivKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
-		require.NoError(t, err)
-		keyBytes, err := crypto.MarshalPrivateKey(testPrivKey)
-		require.NoError(t, err)
 
 		settings := createBaseTestSettings()
 		settings.P2P.PrivateKey = "" // No key in settings
 		settings.P2P.StaticPeers = []string{}
 		settings.P2P.ListenAddresses = []string{"127.0.0.1"}
 
-		// Mock blockchain client to return existing key
-		mockClient.On("GetState", ctx, "p2p.privateKey").Return(keyBytes, nil)
+		// No blockchain client expectations - we don't use it for key storage anymore
 
 		// Execute
 		server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil)
@@ -2669,174 +2662,33 @@ func TestPrivateKeyHandling(t *testing.T) {
 		// Verify
 		require.NoError(t, err)
 		require.NotNil(t, server)
+		require.NotNil(t, server.P2PNode, "P2P node should be created")
 		mockClient.AssertExpectations(t)
 	})
 
-	t.Run("no key in settings/DB - should generate and save new key", func(t *testing.T) {
+	t.Run("invalid key in settings - should return error", func(t *testing.T) {
 		// Setup
 		mockClient := &blockchain.Mock{}
 
 		settings := createBaseTestSettings()
-		settings.P2P.PrivateKey = "" // No key in settings
-		settings.P2P.StaticPeers = []string{}
-		settings.P2P.ListenAddresses = []string{"127.0.0.1"}
-		settings.BlockChain.StoreURL = &url.URL{
-			Scheme: "sqlitememory",
-		}
-		// Mock blockchain client: GetState returns error (no key), SetState succeeds
-		mockClient.On("GetState", ctx, "p2p.privateKey").Return(nil, errors.NewServiceError("key not found", nil))
-		mockClient.On("SetState", ctx, "p2p.privateKey", mock.AnythingOfType("[]uint8")).Return(nil)
-
-		// Execute
-		server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil)
-
-		// Verify
-		require.NoError(t, err)
-		require.NotNil(t, server)
-		mockClient.AssertExpectations(t)
-	})
-
-	t.Run("DB read fails, generation succeeds - should generate and save", func(t *testing.T) {
-		// Setup
-		mockClient := &blockchain.Mock{}
-
-		settings := createBaseTestSettings()
-		settings.P2P.PrivateKey = "" // No key in settings
+		settings.P2P.PrivateKey = "invalid-key" // Invalid key in settings
 		settings.P2P.StaticPeers = []string{}
 		settings.P2P.ListenAddresses = []string{"127.0.0.1"}
 		settings.BlockChain.StoreURL = &url.URL{
 			Scheme: "sqlitememory",
 		}
 
-		// Mock blockchain client: GetState fails, SetState succeeds
-		mockClient.On("GetState", ctx, "p2p.privateKey").Return(nil, errors.NewServiceError("database error", nil))
-		mockClient.On("SetState", ctx, "p2p.privateKey", mock.AnythingOfType("[]uint8")).Return(nil)
+		// No blockchain client expectations - we don't use it for key storage anymore
 
 		// Execute
-		server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil)
+		_, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil)
 
-		// Verify
-		require.NoError(t, err)
-		require.NotNil(t, server)
-		mockClient.AssertExpectations(t)
-	})
-
-	t.Run("DB save fails during generation - should return error", func(t *testing.T) {
-		// Setup
-		mockClient := &blockchain.Mock{}
-
-		settings := createBaseTestSettings()
-		settings.P2P.PrivateKey = "" // No key in settings
-		settings.P2P.StaticPeers = []string{}
-		settings.P2P.ListenAddresses = []string{"127.0.0.1"}
-		settings.BlockChain.StoreURL = &url.URL{
-			Scheme: "sqlitememory",
-		}
-
-		// Mock blockchain client: GetState fails, SetState fails
-		mockClient.On("GetState", ctx, "p2p.privateKey").Return(nil, errors.NewServiceError("key not found", nil))
-		mockClient.On("SetState", ctx, "p2p.privateKey", mock.AnythingOfType("[]uint8")).Return(errors.NewServiceError("storage failed", nil))
-
-		// Execute
-		server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil)
-
-		// Verify
+		// Verify - should fail with invalid key
 		require.Error(t, err)
-		require.Nil(t, server)
-		require.Contains(t, err.Error(), "failed to generate and store private key")
-		mockClient.AssertExpectations(t)
-	})
-}
-
-func TestGenerateAndStorePrivateKey(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.New("test-server")
-
-	t.Run("successful key generation and storage", func(t *testing.T) {
-		// Setup
-		mockClient := &blockchain.Mock{}
-		mockClient.On("SetState", ctx, "p2p.privateKey", mock.AnythingOfType("[]uint8")).Return(nil)
-
-		// Execute
-		hexKey, err := generateAndStorePrivateKey(ctx, mockClient, logger)
-
-		// Verify
-		require.NoError(t, err)
-		require.NotEmpty(t, hexKey)
-
-		// Verify hex key is valid
-		keyBytes, err := hex.DecodeString(hexKey)
-		require.NoError(t, err)
-		// Ed25519 key can be either 64 bytes (new format) or 96 bytes (old format)
-		require.True(t, len(keyBytes) == 64 || len(keyBytes) == 96, "Ed25519 key should be 64 or 96 bytes, got %d", len(keyBytes))
-		require.True(t, len(hexKey) == 128 || len(hexKey) == 192, "Hex key should be 128 or 192 characters, got %d", len(hexKey))
-
+		require.Contains(t, err.Error(), "decoding")
 		mockClient.AssertExpectations(t)
 	})
 
-	t.Run("blockchain client is nil - should return error", func(t *testing.T) {
-		// Execute
-		hexKey, err := generateAndStorePrivateKey(ctx, nil, logger)
-
-		// Verify
-		require.Error(t, err)
-		require.Empty(t, hexKey)
-		require.Contains(t, err.Error(), "blockchain client is nil")
-	})
-
-	t.Run("storage fails - should return error", func(t *testing.T) {
-		// Setup
-		mockClient := &blockchain.Mock{}
-		mockClient.On("SetState", ctx, "p2p.privateKey", mock.AnythingOfType("[]uint8")).Return(errors.NewServiceError("storage failed", nil))
-
-		// Execute
-		hexKey, err := generateAndStorePrivateKey(ctx, mockClient, logger)
-
-		// Verify
-		require.Error(t, err)
-		require.Empty(t, hexKey)
-		require.Contains(t, err.Error(), "failed to store private key in database")
-		mockClient.AssertExpectations(t)
-	})
-
-	t.Run("generated key persistence verification", func(t *testing.T) {
-		// Setup
-		mockClient := &blockchain.Mock{}
-
-		var storedKeyBytes []byte
-		mockClient.On("SetState", ctx, "p2p.privateKey", mock.AnythingOfType("[]uint8")).Run(func(args mock.Arguments) {
-			storedKeyBytes = args.Get(2).([]byte)
-		}).Return(nil)
-
-		// Execute - generate key
-		hexKey, err := generateAndStorePrivateKey(ctx, mockClient, logger)
-		require.NoError(t, err)
-
-		// Verify the stored key can be unmarshaled back to a valid private key
-		unmarshaledKey, err := crypto.UnmarshalPrivateKey(storedKeyBytes)
-		require.NoError(t, err)
-
-		// Verify the hex key matches the Ed25519 format (private + public)
-		// The function should return 64-byte Ed25519 format for p2p library
-		rawPriv, err := unmarshaledKey.Raw()
-		require.NoError(t, err)
-
-		// Get the public key and its raw bytes.
-		pubKey := unmarshaledKey.GetPublic()
-		rawPub, err := pubKey.Raw()
-		require.NoError(t, err)
-
-		// Combine private (32 bytes) + public (32 bytes) = 64 bytes total
-		ed25519Key := append(rawPriv, rawPub...)
-		expectedHex := hex.EncodeToString(ed25519Key)
-		require.Equal(t, expectedHex, hexKey)
-
-		// Verify the stored key is in marshaled format (for backward compatibility)
-		require.NotEqual(t, len(storedKeyBytes), 64) // Should not be raw Ed25519 format
-		require.Greater(t, len(storedKeyBytes), 32)  // Should be marshaled format with metadata
-
-		mockClient.AssertExpectations(t)
-	})
 }
 
 func TestServerHealth(t *testing.T) {
@@ -3599,6 +3451,7 @@ func TestServerHandleNodeStatusTopic(t *testing.T) {
 			logger:         logger,
 			P2PNode:        mockP2P,
 			notificationCh: notifCh,
+			nodeStatusMap:  expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
 		}
 
 		jsonMsg := `{
@@ -3647,6 +3500,7 @@ func TestServerHandleNodeStatusTopic(t *testing.T) {
 			logger:         logger,
 			P2PNode:        mockP2P,
 			notificationCh: notifCh,
+			nodeStatusMap:  expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
 		}
 
 		jsonMsg := fmt.Sprintf(`{

@@ -87,7 +87,7 @@ export function drawPeerNetwork(
   const width = selector.clientWidth || 1200
   const height = selector.clientHeight || 600
   const nodeWidth = 220
-  const nodeHeight = 140
+  const nodeHeight = 160
 
   // Create a map for quick lookup
   const nodeMap = new Map<

@@ -15,7 +15,6 @@
   // currentNodePeerID is now imported from the reactive store
   let messageHashes = new Map() // Track message hashes to detect duplicates
   let mounted = false // Track if component is mounted
-  let firstNodeStatusReceived = false // Track if we've received the first node_status
 
   onMount(() => {
     mounted = true
@@ -44,7 +43,6 @@
     if (currentMessageCount < processedMessageCount) {
       peerDataMap.clear()
       processedMessageCount = 0
-      firstNodeStatusReceived = false
     }
 
     // Process only unprocessed messages
@@ -138,14 +136,8 @@
           })
           messageHashes.set(messageHash, Date.now())
           dataChanged = true
-
-          // The very first node_status message we receive is from our own node
-          // (sent immediately upon WebSocket connection)
-          if (!firstNodeStatusReceived) {
-            currentNodePeerID.set(peerId)
-            firstNodeStatusReceived = true
-            console.log('Identified current node from first node_status:', peerId)
-          }
+          
+          // Current node identification is now handled automatically in p2pStore
         }
       } else if (msg.type === 'miningon' || msg.type === 'mining_on') {
         // Check for duplicate miningOn

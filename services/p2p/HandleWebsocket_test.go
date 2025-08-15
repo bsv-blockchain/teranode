@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -255,7 +256,8 @@ func (c *testWebSocketConn) ReadMessage() (messageType int, p []byte, err error)
 
 func TestStartNotificationProcessor(t *testing.T) {
 	s := &Server{
-		logger: &ulogger.TestLogger{},
+		logger:        &ulogger.TestLogger{},
+		nodeStatusMap: expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
 	}
 
 	clientChannels := newClientChannelMap()
@@ -303,13 +305,14 @@ func TestStartNotificationProcessor(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		require.True(t, clientChannels.contains(clientCh), errClientNotAdded)
 
+		// Send our test notification
 		testNotification := &notificationMsg{
 			Type:    "test",
 			BaseURL: baseURL,
 		}
 		notificationCh <- testNotification
 
-		// Verify client received notification
+		// Verify client received the test notification
 		select {
 		case msg := <-clientCh:
 			var received notificationMsg
@@ -318,7 +321,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 			assert.Equal(t, testNotification.Type, received.Type, "Unexpected notification type")
 			assert.Equal(t, testNotification.BaseURL, received.BaseURL, "Unexpected notification baseURL")
 		case <-time.After(time.Second):
-			t.Fatal("Timeout waiting for notification")
+			t.Fatal("Timeout waiting for test notification")
 		}
 	})
 
@@ -376,7 +379,8 @@ func TestStartNotificationProcessor(t *testing.T) {
 func TestHandleWebSocket(t *testing.T) {
 	// Create server with logger
 	s := &Server{
-		logger: &ulogger.TestLogger{},
+		logger:        &ulogger.TestLogger{},
+		nodeStatusMap: expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
 	}
 
 	// Create notification channel
@@ -457,7 +461,7 @@ func TestHandleWebSocket(t *testing.T) {
 		}
 		notificationCh <- testNotification
 
-		// Read response with timeout
+		// Read the test message
 		t.Log("Waiting for test message")
 
 		err = ws.SetReadDeadline(time.Now().Add(2 * time.Second))

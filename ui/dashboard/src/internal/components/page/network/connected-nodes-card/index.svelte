@@ -143,6 +143,22 @@
     gap: 8px;
   }
 
+  
+  /* Highlight the current node URL */
+  :global(.current-node-url) {
+    color: #4a9eff !important;
+    font-weight: bold;
+    position: relative;
+  }
+  
+  :global(.current-node-url::after) {
+    content: ' (You)';
+    color: #4a9eff;
+    font-size: 12px;
+    font-weight: normal;
+    margin-left: 8px;
+  }
+  
   :global(.chainwork-score-top) {
     color: #15b241 !important;
     font-weight: bold;
@@ -153,10 +169,5 @@
     color: #ffd700 !important;
     font-weight: bold;
     font-size: 16px;
-  }
-
-  :global(.current-node-row) {
-    background-color: rgba(74, 158, 255, 0.15) !important;
-    border-left: 4px solid #4a9eff !important;
   }
 </style>

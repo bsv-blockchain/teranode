@@ -36,21 +36,49 @@ const (
 // Centrifuge represents a Centrifuge server instance that manages real-time
 // blockchain data broadcasting and client connections.
 type Centrifuge struct {
-	logger             ulogger.Logger
-	settings           *settings.Settings
-	repository         *repository.Repository
-	baseURL            string
-	httpServer         *httpimpl.HTTP
-	blockchainClient   blockchain.ClientI
-	centrifugeNode     *centrifuge.Node
-	nodeStatusByPeerID map[string][]byte // Store the latest node_status message per peer_id
-	nodeStatusMutex    sync.RWMutex      // Protect concurrent access to nodeStatusByPeerID
+	logger                  ulogger.Logger
+	settings                *settings.Settings
+	repository              *repository.Repository
+	baseURL                 string
+	httpServer              *httpimpl.HTTP
+	blockchainClient        blockchain.ClientI
+	centrifugeNode          *centrifuge.Node
+	cachedCurrentNodeStatus *notificationMsg // Cached current node status for new clients
+	statusMutex             sync.RWMutex     // Protects cachedCurrentNodeStatus
+}
+
+// notificationMsg represents a P2P notification message that will be relayed to clients
+type notificationMsg struct {
+	Timestamp         string  `json:"timestamp,omitempty"`
+	Type              string  `json:"type"`
+	Hash              string  `json:"hash,omitempty"`
+	BaseURL           string  `json:"base_url,omitempty"`
+	PeerID            string  `json:"peer_id,omitempty"`
+	PreviousHash      string  `json:"previousblockhash,omitempty"`
+	TxCount           uint64  `json:"tx_count,omitempty"`
+	Height            uint32  `json:"height,omitempty"`
+	SizeInBytes       uint64  `json:"size_in_bytes,omitempty"`
+	Miner             string  `json:"miner,omitempty"`
+	Version           string  `json:"version,omitempty"`
+	CommitHash        string  `json:"commit_hash,omitempty"`
+	BestBlockHash     string  `json:"best_block_hash,omitempty"`
+	BestHeight        uint32  `json:"best_height,omitempty"`
+	TxCountInAssembly int     `json:"tx_count_in_assembly"`
+	FSMState          string  `json:"fsm_state,omitempty"`
+	StartTime         int64   `json:"start_time,omitempty"`
+	Uptime            float64 `json:"uptime,omitempty"`
+	MinerName         string  `json:"miner_name,omitempty"`
+	ListenMode        string  `json:"listen_mode,omitempty"`
+	ChainWork         string  `json:"chain_work,omitempty"`
+	SyncPeerID        string  `json:"sync_peer_id,omitempty"`
+	SyncPeerHeight    int32   `json:"sync_peer_height,omitempty"`
+	SyncPeerBlockHash string  `json:"sync_peer_block_hash,omitempty"`
+	SyncConnectedAt   int64   `json:"sync_connected_at,omitempty"`
 }
 
 // messageType represents the structure for incoming message type identification.
 type messageType struct {
-	Type   string `json:"type"`
-	PeerID string `json:"peer_id,omitempty"` // For node_status messages
+	Type string `json:"type"`
 }
 
 // New creates a new Centrifuge server instance with the provided dependencies.
@@ -76,12 +104,11 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	}
 
 	c := &Centrifuge{
-		logger:             logger,
-		settings:           tSettings,
-		repository:         repo,
-		baseURL:            assetHTTPAddress,
-		httpServer:         httpServer,
-		nodeStatusByPeerID: make(map[string][]byte),
+		logger:     logger,
+		settings:   tSettings,
+		repository: repo,
+		baseURL:    assetHTTPAddress,
+		httpServer: httpServer,
 	}
 
 	// Only set blockchainClient if repo is not nil
@@ -143,27 +170,25 @@ func (c *Centrifuge) Init(ctx context.Context) (err error) {
 		transport := client.Transport()
 		c.logger.Infof("user %s connected via %s", client.UserID(), transport.Name())
 
-		// Send all stored node_status messages to the new client
-		c.nodeStatusMutex.RLock()
-		nodeStatusCount := 0
-		for peerID, nodeStatus := range c.nodeStatusByPeerID {
-			if nodeStatus != nil {
-				// Publish each peer's status to the node_status channel
-				_, err := c.centrifugeNode.Publish("node_status", nodeStatus)
-				if err != nil {
-					c.logger.Errorf("Failed to publish node_status for peer %s to new client %s: %v", peerID, client.UserID(), err)
-				} else {
-					nodeStatusCount++
-					c.logger.Debugf("Published node_status for peer %s to new client %s", peerID, client.UserID())
-				}
-			}
-		}
-		c.nodeStatusMutex.RUnlock()
+		// Send cached current node status first (replicates p2p behavior)
+		c.statusMutex.RLock()
+		cachedStatus := c.cachedCurrentNodeStatus
+		c.statusMutex.RUnlock()
 
-		if nodeStatusCount > 0 {
-			c.logger.Infof("Published %d node_status messages for new client %s", nodeStatusCount, client.UserID())
-		} else {
-			c.logger.Warnf("No node_status messages available yet for new client %s", client.UserID())
+		if cachedStatus != nil {
+			// Convert cached status back to JSON message
+			if statusData, err := json.Marshal(cachedStatus); err == nil {
+				// Publish to node_status channel immediately for this new client
+				_, err = c.centrifugeNode.Publish("node_status", statusData)
+				if err != nil {
+					c.logger.Errorf("[Centrifuge] Failed to publish cached node status: %v", err)
+				} else {
+					c.logger.Debugf("[Centrifuge] Sent cached current node status to new client %s (peer: %s)",
+						client.UserID(), cachedStatus.PeerID)
+				}
+			} else {
+				c.logger.Errorf("[Centrifuge] Failed to marshal cached node status: %v", err)
+			}
 		}
 	})
 
@@ -194,7 +219,7 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 			return true
 		},
 	})
-	_ = c.httpServer.AddHTTPHandler("/connection/websocket", authMiddleware(websocketHandler))
+	_ = c.httpServer.AddHTTPHandler("/connection/websocket", c.authMiddleware(websocketHandler))
 	_ = c.httpServer.AddHTTPHandler("/subscribe", handleSubscribe(c.centrifugeNode))
 	_ = c.httpServer.AddHTTPHandler("/unsubscribe", handleUnsubscribe(c.centrifugeNode))
 	_ = c.httpServer.AddHTTPHandler("/client/", http.FileServer(http.Dir("./client")))
@@ -299,6 +324,14 @@ func (c *Centrifuge) readMessages(ctx context.Context, client *atomic.Pointer[we
 					time.Sleep(1 * time.Second)
 					clientConnected.Store(false)
 
+					// Reset cached status when p2p connection is lost
+					c.statusMutex.Lock()
+					if c.cachedCurrentNodeStatus != nil {
+						c.logger.Infof("[Centrifuge] P2P connection lost - clearing cached current node status")
+						c.cachedCurrentNodeStatus = nil
+					}
+					c.statusMutex.Unlock()
+
 					continue
 				}
 
@@ -311,15 +344,23 @@ func (c *Centrifuge) readMessages(ctx context.Context, client *atomic.Pointer[we
 					continue
 				}
 
-				// Store the latest node_status message per peer
-				if strings.ToLower(mType.Type) == "node_status" {
-					if mType.PeerID != "" {
-						c.nodeStatusMutex.Lock()
-						c.nodeStatusByPeerID[mType.PeerID] = message
-						c.nodeStatusMutex.Unlock()
-						c.logger.Infof("[Centrifuge] Stored node_status message for peer %s (total peers: %d)", mType.PeerID, len(c.nodeStatusByPeerID))
-					} else {
-						c.logger.Warnf("[Centrifuge] Received node_status message without peer_id: %s", string(message))
+				// Cache the first node_status message (this is the current node from p2p)
+				if mType.Type == "node_status" {
+					c.statusMutex.RLock()
+					needsCache := (c.cachedCurrentNodeStatus == nil)
+					c.statusMutex.RUnlock()
+
+					if needsCache {
+						var nodeStatus notificationMsg
+						if json.Unmarshal(message, &nodeStatus) == nil {
+							c.statusMutex.Lock()
+							// Double-check in case another goroutine cached it
+							if c.cachedCurrentNodeStatus == nil {
+								c.cachedCurrentNodeStatus = &nodeStatus
+								c.logger.Infof("[Centrifuge] Asset service ready - cached current node status from peer: %s", nodeStatus.PeerID)
+							}
+							c.statusMutex.Unlock()
+						}
 					}
 				}
 
@@ -434,7 +475,7 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 		},
 	})
 
-	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
+	http.Handle("/connection/websocket", c.authMiddleware(websocketHandler))
 	http.Handle("/subscribe", handleSubscribe(c.centrifugeNode))
 	http.Handle("/unsubscribe", handleUnsubscribe(c.centrifugeNode))
 	http.Handle("/client/", http.FileServer(http.Dir("./client")))
@@ -488,14 +529,27 @@ func (c *Centrifuge) Stop(ctx context.Context) error {
 
 // authMiddleware provides authentication middleware for WebSocket connections.
 // It sets up CORS headers and user credentials for connecting clients.
+// It also checks if the asset service is ready (has cached current node status).
 //
 // Parameters:
 //   - h: The HTTP handler to wrap with authentication
 //
 // Returns:
 //   - http.Handler: Middleware-wrapped HTTP handler
-func authMiddleware(h http.Handler) http.Handler {
+func (c *Centrifuge) authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if asset service is ready (has cached current node status)
+		c.statusMutex.RLock()
+		ready := (c.cachedCurrentNodeStatus != nil)
+		c.statusMutex.RUnlock()
+
+		if !ready {
+			// Asset service not ready - return service unavailable
+			c.logger.Debugf("[Centrifuge] WebSocket connection rejected - asset service not ready (no current node status cached)")
+			http.Error(w, "Asset service not ready - current node status unknown", http.StatusServiceUnavailable)
+			return
+		}
+
 		ctx := r.Context()
 		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
 			UserID: "42",

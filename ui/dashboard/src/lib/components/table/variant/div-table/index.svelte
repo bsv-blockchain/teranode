@@ -187,7 +187,7 @@
       {/if}
       <section class="tbody">
         {#each data as item (item[idField])}
-          <div class="tr">
+          <div class="tr" class:current-node-row={item.isCurrentNode}>
             {#if selectable}
               <div class="td">
                 <Checkbox
@@ -649,5 +649,15 @@
     text-align: left;
     display: inline;
     width: auto;
+  }
+  
+  .tr.current-node-row {
+    background-color: rgba(74, 158, 255, 0.25) !important;
+    box-shadow: 0 0 0 1px rgba(74, 158, 255, 0.3) !important;
+  }
+  
+  .tr.current-node-row .td:first-child {
+    border-left: 4px solid #4a9eff;
+    padding-left: 12px;
   }
 </style>

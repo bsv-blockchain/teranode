@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -55,14 +56,14 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
+	"github.com/ordishs/go-utils/expiringmap"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const (
-	banActionAdd  = "add" // Action constant for adding a ban
-	privateKeyKey = "p2p.privateKey"
+	banActionAdd = "add" // Action constant for adding a ban
 
 	// Default values for peer map cleanup
 	defaultPeerMapMaxSize         = 100000           // Maximum entries in peer maps
@@ -112,17 +113,18 @@ type Server struct {
 	subtreeTopicName                  string
 	miningOnTopicName                 string
 	rejectedTxTopicName               string
-	invalidBlocksTopicName            string       // Kafka topic for invalid blocks
-	invalidSubtreeTopicName           string       // Kafka topic for invalid subtrees
-	handshakeTopicName                string       // pubsub topic for version/verack
-	nodeStatusTopicName               string       // pubsub topic for node status messages
-	topicPrefix                       string       // Chain identifier prefix for topic validation
-	blockPeerMap                      sync.Map     // Map to track which peer sent each block (hash -> peerMapEntry)
-	subtreePeerMap                    sync.Map     // Map to track which peer sent each subtree (hash -> peerMapEntry)
-	startTime                         time.Time    // Server start time for uptime calculation
-	syncManager                       *SyncManager // Manager for peer synchronization and best peer selection
-	peerBlockHashes                   sync.Map     // Map to track peer best block hashes (peerID -> hash string)
-	syncConnectionTimes               sync.Map     // Map to track when we first connected to each sync peer (peerID -> timestamp)
+	invalidBlocksTopicName            string                                               // Kafka topic for invalid blocks
+	invalidSubtreeTopicName           string                                               // Kafka topic for invalid subtrees
+	handshakeTopicName                string                                               // pubsub topic for version/verack
+	nodeStatusTopicName               string                                               // pubsub topic for node status messages
+	topicPrefix                       string                                               // Chain identifier prefix for topic validation
+	blockPeerMap                      sync.Map                                             // Map to track which peer sent each block (hash -> peerMapEntry)
+	subtreePeerMap                    sync.Map                                             // Map to track which peer sent each subtree (hash -> peerMapEntry)
+	startTime                         time.Time                                            // Server start time for uptime calculation
+	syncManager                       *SyncManager                                         // Manager for peer synchronization and best peer selection
+	peerBlockHashes                   sync.Map                                             // Map to track peer best block hashes (peerID -> hash string)
+	syncConnectionTimes               sync.Map                                             // Map to track when we first connected to each sync peer (peerID -> timestamp)
+	nodeStatusMap                     *expiringmap.ExpiringMap[string, *NodeStatusMessage] // Map to track node status messages with 1 minute TTL
 
 	// Cleanup configuration
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
@@ -248,41 +250,57 @@ func NewServer(
 
 	privateKey := tSettings.P2P.PrivateKey
 
-	// Attempt to read the private key from the blockchain service if not provided in settings
-	var pk *crypto.PrivKey
+	// Attempt to get the private key if not provided in settings
+	// The private key can come from:
+	// 1. tSettings.P2P.PrivateKey (already loaded from config/environment)
+	// 2. Read from p2p.key file
+	// 3. Generate new key and save to p2p.key file
 	if privateKey == "" {
-		pk, err = readPrivateKey(ctx, blockchainClient)
-		if err != nil {
-			logger.Debugf("error reading private key: %v; will generate a new key instead", err)
-		}
-	}
-	// if found private key, encode it to hex and put it in config
-	if pk != nil {
-		// Get the raw private key bytes (32 bytes) and public key bytes (32 bytes)
-		// to create the 64-byte Ed25519 format expected by the p2p library
-		rawPriv, err := (*pk).Raw()
-		if err != nil {
-			return nil, errors.NewServiceError("error getting raw private key bytes", err)
-		}
+		// Construct the key file path (same directory as teranode_peers.json)
+		keyFilePath := getPeerCacheFilePath(tSettings.P2P.PeerCacheDir)
+		// Replace the filename from teranode_peers.json to p2p.key
+		keyFilePath = filepath.Join(filepath.Dir(keyFilePath), "p2p.key")
 
-		// Get the public key and its raw bytes
-		pubKey := (*pk).GetPublic()
-		rawPub, err := pubKey.Raw()
-		if err != nil {
-			return nil, errors.NewServiceError("error getting raw public key bytes", err)
-		}
+		if keyData, err := os.ReadFile(keyFilePath); err == nil {
+			// File exists, use its content
+			privateKey = strings.TrimSpace(string(keyData))
+			logger.Infof("[P2P] Loaded private key from file: %s", keyFilePath)
+		} else if os.IsNotExist(err) {
+			// File doesn't exist, generate new key and save it
+			logger.Infof("[P2P] Private key not found, generating new key...")
 
-		// Combine private (32 bytes) + public (32 bytes) = 64 bytes total
-		ed25519Key := append(rawPriv, rawPub...)
-		privateKey = hex.EncodeToString(ed25519Key)
-		logger.Infof("loaded existing P2P private key from database")
-	}
+			// Generate a new Ed25519 private key for libp2p
+			privKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+			if err != nil {
+				return nil, errors.NewServiceError("failed to generate P2P private key", err)
+			}
 
-	// If still no private key (not in settings and not in database), generate and store a new one
-	if privateKey == "" {
-		privateKey, err = generateAndStorePrivateKey(ctx, blockchainClient, logger)
-		if err != nil {
-			return nil, errors.NewServiceError("failed to generate and store private key", err)
+			// Get raw bytes for the hex format (private + public)
+			rawPriv, err := privKey.Raw()
+			if err != nil {
+				return nil, errors.NewServiceError("failed to get raw private key bytes", err)
+			}
+
+			pubKey := privKey.GetPublic()
+			rawPub, err := pubKey.Raw()
+			if err != nil {
+				return nil, errors.NewServiceError("failed to get raw public key bytes", err)
+			}
+
+			// Combine private (32 bytes) + public (32 bytes) = 64 bytes total
+			ed25519Key := append(rawPriv, rawPub...)
+			privateKey = hex.EncodeToString(ed25519Key)
+
+			// Save to file with secure permissions (0600)
+			if err := os.WriteFile(keyFilePath, []byte(privateKey), 0600); err != nil {
+				logger.Errorf("[P2P] Failed to save private key to file %s: %v", keyFilePath, err)
+				return nil, errors.NewServiceError(fmt.Sprintf("failed to save private key to file %s", keyFilePath), err)
+			}
+
+			logger.Infof("[P2P] Generated and saved new P2P private key to file: %s", keyFilePath)
+		} else {
+			// Some other error reading the file
+			return nil, errors.NewServiceError(fmt.Sprintf("error reading private key file %s", keyFilePath), err)
 		}
 	}
 
@@ -417,6 +435,9 @@ func NewServer(
 
 	// Initialize the sync manager for peer selection
 	p2pServer.syncManager = NewSyncManager(logger, tSettings.ChainCfgParams)
+
+	// Initialize node status map with 1 minute expiry
+	p2pServer.nodeStatusMap = expiringmap.New[string, *NodeStatusMessage](1 * time.Minute)
 
 	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
 
@@ -1015,6 +1036,13 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from strin
 	s.logger.Infof("[handleNodeStatusTopic] Received node_status from %s (peer_id: %s, is_self: %v, version: %s, height: %d)",
 		from, nodeStatusMessage.PeerID, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight)
 
+	// Store the node status message in the expiring map
+	// Use the PeerID as the key (not the 'from' parameter which might be different)
+	if nodeStatusMessage.PeerID != "" {
+		s.nodeStatusMap.Set(nodeStatusMessage.PeerID, &nodeStatusMessage)
+		s.logger.Debugf("[handleNodeStatusTopic] Stored node_status for peer %s in map", nodeStatusMessage.PeerID)
+	}
+
 	// Skip further processing for our own messages (peer height updates, etc.)
 	// but still forward to WebSocket
 	if !isSelf {
@@ -1427,7 +1455,9 @@ func (s *Server) publishNodeStatus(ctx context.Context) {
 	}
 }
 
-func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
+// getNodeStatusMessage creates a notification message with the current node's status.
+// This is used both for periodic broadcasts and for sending to newly connected WebSocket clients.
+func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Get best block info
 	var bestBlockHeader *model.BlockHeader
 	var bestBlockMeta *model.BlockHeaderMeta
@@ -1460,7 +1490,12 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 
 	// TODO: Get actual tx count from block assembly service when API is available
 	txCountInAssembly := 0
-	minerName := s.settings.Coinbase.ArbitraryText // Get miner name from coinbase configuration
+
+	// Get miner name from coinbase configuration (safely handle nil settings)
+	minerName := ""
+	if s.settings != nil {
+		minerName = s.settings.Coinbase.ArbitraryText
+	}
 
 	// Get block hash string
 	blockHashStr := ""
@@ -1525,26 +1560,80 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		}
 	}
 
-	// Create node status message
-	nodeStatusMessage := NodeStatusMessage{
+	// Get peer ID safely
+	peerID := ""
+	if s.P2PNode != nil {
+		peerID = s.P2PNode.HostID().String()
+	}
+
+	// Get version, commit, and listen mode safely
+	version := ""
+	commit := ""
+	listenMode := ""
+
+	if s.settings != nil {
+		version = s.settings.Version
+		commit = s.settings.Commit
+		listenMode = s.settings.P2P.ListenMode
+	}
+
+	// Get start time safely
+	startTime := int64(0)
+	if !s.startTime.IsZero() {
+		startTime = s.startTime.Unix()
+	}
+
+	// Return the notification message
+	return &notificationMsg{
+		Timestamp:         time.Now().UTC().Format(isoFormat),
 		Type:              "node_status",
 		BaseURL:           s.AssetHTTPAddressURL,
-		PeerID:            s.P2PNode.HostID().String(),
-		Version:           s.settings.Version,
-		CommitHash:        s.settings.Commit,
+		PeerID:            peerID,
+		Version:           version,
+		CommitHash:        commit,
 		BestBlockHash:     blockHashStr,
 		BestHeight:        height,
 		TxCountInAssembly: txCountInAssembly,
 		FSMState:          fsmState,
-		StartTime:         s.startTime.Unix(),
+		StartTime:         startTime,
 		Uptime:            uptime,
 		MinerName:         minerName,
-		ListenMode:        s.settings.P2P.ListenMode,
+		ListenMode:        listenMode,
 		ChainWork:         chainWorkStr,
 		SyncPeerID:        syncPeerID,
 		SyncPeerHeight:    syncPeerHeight,
 		SyncPeerBlockHash: syncPeerBlockHash,
 		SyncConnectedAt:   syncConnectedAt,
+	}
+}
+
+func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
+	// Get the node status message
+	notificationMsg := s.getNodeStatusMessage(ctx)
+	if notificationMsg == nil {
+		return errors.NewError("failed to get node status message", nil)
+	}
+
+	// Create the NodeStatusMessage for P2P publishing
+	nodeStatusMessage := NodeStatusMessage{
+		Type:              "node_status",
+		BaseURL:           notificationMsg.BaseURL,
+		PeerID:            notificationMsg.PeerID,
+		Version:           notificationMsg.Version,
+		CommitHash:        notificationMsg.CommitHash,
+		BestBlockHash:     notificationMsg.BestBlockHash,
+		BestHeight:        notificationMsg.BestHeight,
+		TxCountInAssembly: notificationMsg.TxCountInAssembly,
+		FSMState:          notificationMsg.FSMState,
+		StartTime:         notificationMsg.StartTime,
+		Uptime:            notificationMsg.Uptime,
+		MinerName:         notificationMsg.MinerName,
+		ListenMode:        notificationMsg.ListenMode,
+		ChainWork:         notificationMsg.ChainWork,
+		SyncPeerID:        notificationMsg.SyncPeerID,
+		SyncPeerHeight:    notificationMsg.SyncPeerHeight,
+		SyncPeerBlockHash: notificationMsg.SyncPeerBlockHash,
+		SyncConnectedAt:   notificationMsg.SyncConnectedAt,
 	}
 
 	msgBytes, err := json.Marshal(nodeStatusMessage)
@@ -1560,27 +1649,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	s.logger.Debugf("[handleNodeStatusNotification] Successfully published node_status message")
 
 	// Also send to local WebSocket clients
-	s.notificationCh <- &notificationMsg{
-		Timestamp:         time.Now().UTC().Format(isoFormat),
-		Type:              "node_status",
-		BaseURL:           nodeStatusMessage.BaseURL,
-		PeerID:            nodeStatusMessage.PeerID,
-		Version:           nodeStatusMessage.Version,
-		CommitHash:        nodeStatusMessage.CommitHash,
-		BestBlockHash:     nodeStatusMessage.BestBlockHash,
-		BestHeight:        nodeStatusMessage.BestHeight,
-		TxCountInAssembly: nodeStatusMessage.TxCountInAssembly,
-		FSMState:          nodeStatusMessage.FSMState,
-		StartTime:         nodeStatusMessage.StartTime,
-		Uptime:            nodeStatusMessage.Uptime,
-		MinerName:         nodeStatusMessage.MinerName,
-		ListenMode:        nodeStatusMessage.ListenMode,
-		ChainWork:         nodeStatusMessage.ChainWork,
-		SyncPeerID:        nodeStatusMessage.SyncPeerID,
-		SyncPeerHeight:    nodeStatusMessage.SyncPeerHeight,
-		SyncPeerBlockHash: nodeStatusMessage.SyncPeerBlockHash,
-		SyncConnectedAt:   nodeStatusMessage.SyncConnectedAt,
-	}
+	s.notificationCh <- notificationMsg
 
 	return nil
 }
@@ -2805,81 +2874,6 @@ func (s *Server) isBlockchainSynchingOrCatchingUp(ctx context.Context) (bool, er
 // Returns:
 //   - Pointer to the retrieved private key, or nil if no key exists
 //   - Error if storage access fails or key unmarshaling fails
-func readPrivateKey(ctx context.Context, blockchainClient blockchain.ClientI) (*crypto.PrivKey, error) {
-	// Read private key from the state store
-	if blockchainClient == nil {
-		return nil, errors.NewServiceError("error reading private key", nil)
-	}
-
-	privBytes, err := blockchainClient.GetState(ctx, privateKeyKey)
-	if err != nil {
-		return nil, err
-	}
-	// Unmarshal the private key bytes into a key
-	priv, err := crypto.UnmarshalPrivateKey(privBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	return &priv, nil
-}
-
-// generateAndStorePrivateKey generates a new Ed25519 private key and stores it to the blockchain state store.
-// This function creates a new cryptographic identity for the P2P node when no existing key is found.
-// The generated key is persisted to ensure the node maintains the same peer ID across restarts.
-//
-// Parameters:
-//   - ctx: Context for the operation, used for state store operations
-//   - blockchainClient: Client for accessing persistent key storage
-//   - logger: Logger for recording key generation events
-//
-// Returns:
-//   - Hex-encoded private key string ready for use in p2p.Config
-//   - Error if key generation or storage fails
-func generateAndStorePrivateKey(ctx context.Context, blockchainClient blockchain.ClientI, logger ulogger.Logger) (string, error) {
-	if blockchainClient == nil {
-		return "", errors.NewServiceError("blockchain client is nil, cannot store private key", nil)
-	}
-
-	// generate new Ed25519 private key
-	privateKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
-	if err != nil {
-		return "", errors.NewServiceError("failed to generate Ed25519 private key", err)
-	}
-
-	// marshal the private key to bytes for storage
-	keyBytes, err := crypto.MarshalPrivateKey(privateKey)
-	if err != nil {
-		return "", errors.NewServiceError("failed to marshal private key", err)
-	}
-
-	// store the private key in the blockchain state store
-	err = blockchainClient.SetState(ctx, privateKeyKey, keyBytes)
-	if err != nil {
-		return "", errors.NewServiceError("failed to store private key in database", err)
-	}
-
-	// Get the raw private key bytes (32 bytes) and public key bytes (32 bytes)
-	// to create the 64-byte Ed25519 format expected by the p2p library
-	rawPriv, err := privateKey.Raw()
-	if err != nil {
-		return "", errors.NewServiceError("failed to get raw private key bytes", err)
-	}
-
-	// Get the public key and its raw bytes
-	pubKey := privateKey.GetPublic()
-	rawPub, err := pubKey.Raw()
-	if err != nil {
-		return "", errors.NewServiceError("failed to get raw public key bytes", err)
-	}
-
-	// Combine private (32 bytes) + public (32 bytes) = 64 bytes total
-	ed25519Key := append(rawPriv, rawPub...)
-	hexKey := hex.EncodeToString(ed25519Key)
-	logger.Infof("generated and stored new P2P private key")
-
-	return hexKey, nil
-}
 
 // cleanupPeerMaps performs periodic cleanup of blockPeerMap and subtreePeerMap
 // It removes entries older than TTL and enforces size limits using LRU eviction
@@ -3003,4 +2997,28 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 	}()
 
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
+}
+
+// GetNodeStatuses returns all current node status messages from the expiring map.
+// Only statuses that have been updated within the last minute are returned.
+func (s *Server) GetNodeStatuses() map[string]*NodeStatusMessage {
+	result := make(map[string]*NodeStatusMessage)
+
+	// Get all items from the expiring map
+	items := s.nodeStatusMap.Items()
+	for peerID, status := range items {
+		result[peerID] = status
+	}
+
+	return result
+}
+
+// GetNodeStatus returns the node status for a specific peer ID.
+// Returns nil if the peer's status is not found or has expired.
+func (s *Server) GetNodeStatus(peerID string) *NodeStatusMessage {
+	status, found := s.nodeStatusMap.Get(peerID)
+	if !found {
+		return nil
+	}
+	return status
 }

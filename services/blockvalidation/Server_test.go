@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -1530,7 +1531,8 @@ func Test_Start(t *testing.T) {
 	// or an error if port binding fails
 	if err != nil {
 		// If we get an error, it should be context related or port binding
-		assert.Contains(t, err.Error(), "context")
+		assert.True(t, strings.Contains(err.Error(), "context") || strings.Contains(err.Error(), "address already in use"),
+			"Expected context cancellation or port binding error, got: %v", err)
 	}
 	mockBlockchainClient.AssertExpectations(t)
 }
