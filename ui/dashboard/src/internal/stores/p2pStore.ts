@@ -4,10 +4,11 @@ import type { Writable } from 'svelte/store'
 
 export const messages = writable([])
 export const miningNodes: any = writable({})
-export const wsUrl: Writable<any> = writable('')
+export const wsUrl: Writable<URL | string> = writable('')
 export const error: Writable<any> = writable(null)
 export const sock: Writable<any> = writable(null)
 export const connectionAttempts: Writable<number> = writable(0)
+export const currentNodePeerID: Writable<string | null> = writable(null) // Track our own node's peer ID reactively
 
 const maxMessages = 500
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -43,6 +44,8 @@ export async function connectToP2PServer() {
         socket.onopen = () => {
           error.set(null)
           sock.set(socket)
+          // Reset the current node peer ID on new connection
+          currentNodePeerID.set(null)
           // This is required to trigger connect on server side since server expects
           // initial connect request from a WebSocket unidirectional client.
           socket.send(JSON.stringify({}))
@@ -97,8 +100,9 @@ export async function connectToP2PServer() {
 
             // Always process every message for miningNodes
             if (jsonData.type === 'mining_on') {
-              miningNodeSet[baseUrl] = {
-                ...miningNodeSet[baseUrl],
+              const nodeKey = jsonData.peer_id
+              miningNodeSet[nodeKey] = {
+                ...miningNodeSet[nodeKey],
                 ...jsonData,
                 base_url: baseUrl,
                 receivedAt: new Date(),
@@ -106,21 +110,36 @@ export async function connectToP2PServer() {
               miningNodes.set(miningNodeSet)
             } else if (jsonData.type === 'node_status') {
               // Handle node_status messages - these provide comprehensive node information
-              miningNodeSet[baseUrl] = {
-                ...miningNodeSet[baseUrl],
+              // The first unwrapped node_status is from our own node
+              const currentPeerID = get(currentNodePeerID)
+              const isOurNode = !currentPeerID && !json?.pub?.data
+              if (isOurNode && jsonData.peer_id) {
+                currentNodePeerID.set(jsonData.peer_id)
+                console.log('Identified current node peer ID:', jsonData.peer_id)
+              }
+              
+              // Check if this node matches our peer ID
+              const updatedPeerID = get(currentNodePeerID)
+              const isCurrentNode = jsonData.peer_id === updatedPeerID
+              const nodeKey = jsonData.peer_id
+              
+              miningNodeSet[nodeKey] = {
+                ...miningNodeSet[nodeKey],
                 ...jsonData,
                 base_url: baseUrl,
                 receivedAt: new Date(),
+                isCurrentNode: isCurrentNode,
               }
               miningNodes.set(miningNodeSet)
               // Don't return here - let it fall through to add to messages array
             } else if (jsonData.type === 'block') {
-              if (!miningNodeSet[baseUrl]) {
-                miningNodeSet[baseUrl] = { base_url: baseUrl }
+              const nodeKey = jsonData.peer_id
+              if (!miningNodeSet[nodeKey]) {
+                miningNodeSet[nodeKey] = { base_url: baseUrl, peer_id: jsonData.peer_id }
               }
               // Update only the specific block fields, preserving existing mining_on data
-              miningNodeSet[baseUrl] = {
-                ...miningNodeSet[baseUrl],
+              miningNodeSet[nodeKey] = {
+                ...miningNodeSet[nodeKey],
                 hash: jsonData.hash,
                 height: jsonData.height,
                 timestamp: jsonData.timestamp,
@@ -128,15 +147,19 @@ export async function connectToP2PServer() {
                 receivedAt: new Date(),
               }
               miningNodes.set(miningNodeSet)
-            } else if (baseUrl && !miningNodeSet[baseUrl]) {
-              miningNodeSet[baseUrl] = {
-                base_url: baseUrl,
-                receivedAt: new Date(),
+            } else if (baseUrl && jsonData.peer_id) {
+              const nodeKey = jsonData.peer_id
+              if (!miningNodeSet[nodeKey]) {
+                miningNodeSet[nodeKey] = {
+                  base_url: baseUrl,
+                  peer_id: jsonData.peer_id,
+                  receivedAt: new Date(),
+                }
+                miningNodes.set(miningNodeSet)
+              } else {
+                miningNodeSet[nodeKey].receivedAt = new Date()
+                miningNodes.set(miningNodeSet)
               }
-              miningNodes.set(miningNodeSet)
-            } else if (miningNodeSet[baseUrl]) {
-              miningNodeSet[baseUrl].receivedAt = new Date()
-              miningNodes.set(miningNodeSet)
             }
 
             // Use update to modify the existing array instead of replacing it
@@ -154,6 +177,8 @@ export async function connectToP2PServer() {
           console.log(`p2pWS connection closed by server (${url})`)
           socket = null
           sock.set(null)
+          // Reset the current node peer ID on connection close
+          currentNodePeerID.set(null)
 
           const attempts = get(connectionAttempts) + 1
           connectionAttempts.set(attempts)

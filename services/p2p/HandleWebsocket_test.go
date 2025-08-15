@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,11 +30,40 @@ const (
 )
 
 func TestCreatePingMessage(t *testing.T) {
-	msg, err := createPingMessage(baseURL)
-	require.NoError(t, err)
-	assert.Equal(t, asset_api.Type_PING.String(), msg.Type)
-	assert.Equal(t, baseURL, msg.BaseURL)
-	assert.NotEmpty(t, msg.Timestamp)
+	t.Run("with P2PNode", func(t *testing.T) {
+		// Create a mock P2PNode
+		mockP2PNode := new(MockServerP2PNode)
+		testPeerID, _ := peer.Decode("QmTestPeerID123")
+		mockP2PNode.On("HostID").Return(testPeerID)
+
+		// Create server with mock P2PNode
+		server := &Server{
+			P2PNode: mockP2PNode,
+			logger:  ulogger.New("test-server"),
+		}
+
+		msg, err := server.createPingMessage(baseURL)
+		require.NoError(t, err)
+		assert.Equal(t, asset_api.Type_PING.String(), msg.Type)
+		assert.Equal(t, baseURL, msg.BaseURL)
+		assert.Equal(t, testPeerID.String(), msg.PeerID)
+		assert.NotEmpty(t, msg.Timestamp)
+	})
+
+	t.Run("without P2PNode", func(t *testing.T) {
+		// Create server without P2PNode
+		server := &Server{
+			P2PNode: nil,
+			logger:  ulogger.New("test-server"),
+		}
+
+		msg, err := server.createPingMessage(baseURL)
+		require.NoError(t, err)
+		assert.Equal(t, asset_api.Type_PING.String(), msg.Type)
+		assert.Equal(t, baseURL, msg.BaseURL)
+		assert.Empty(t, msg.PeerID) // PeerID should be empty when P2PNode is nil
+		assert.NotEmpty(t, msg.Timestamp)
+	})
 }
 
 func TestBroadcastMessage(t *testing.T) {

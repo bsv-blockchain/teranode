@@ -1,5 +1,6 @@
 import * as d3 from 'd3'
 import { humanTime } from '$internal/utils/format'
+import { calculateChainworkScores } from '$internal/components/page/network/connected-nodes-card/data'
 
 interface PeerNode {
   peer_id: string
@@ -15,6 +16,7 @@ interface PeerNode {
   fsm_state?: string
   miner_name?: string
   version?: string
+  chain_work?: string
   receivedAt?: string
   // From miningOn messages
   height?: number
@@ -545,6 +547,16 @@ export function drawPeerNetwork(
     .attr('y', 60)
     .attr('text-anchor', 'middle')
 
+  // Add chainwork score in bottom right corner
+  nodeEnter
+    .append('text')
+    .attr('class', 'chainwork-score')
+    .attr('x', nodeWidth / 2 - 10)
+    .attr('y', nodeHeight / 2 - 10)
+    .attr('text-anchor', 'end')
+    .style('font-size', '20px')
+    .style('font-weight', 'bold')
+
   // MERGE and UPDATE
   const nodeMerge = nodeEnter.merge(node as any)
 
@@ -578,6 +590,10 @@ export function drawPeerNetwork(
     return hasOutgoingSync || hasIncomingSync ? 'peer-node connected' : 'peer-node disconnected'
   })
 
+  // Calculate chainwork scores for all nodes
+  const chainworkScores = calculateChainworkScores(nodes)
+  const maxScore = Math.max(...Array.from(chainworkScores.values()))
+  
   // Update text content for all nodes
   nodeMerge.select('.uptime-text').text((d: any) => {
     if (d.start_time) {
@@ -626,6 +642,19 @@ export function drawPeerNetwork(
     .style('font-weight', 'bold')
     .style('fill', '#4a9eff')
 
+  // Update chainwork score
+  nodeMerge
+    .select('.chainwork-score')
+    .text((d: any) => {
+      const score = chainworkScores.get(d.peer_id) || 0
+      return score > 0 ? score.toString() : ''
+    })
+    .style('fill', (d: any) => {
+      const score = chainworkScores.get(d.peer_id) || 0
+      // Top score is green, others are yellow
+      return score === maxScore && score > 0 ? '#15B241' : '#FFD700'
+    })
+
   // Add hover effects
   nodeMerge
     .on('mouseover', function (event: any, d: any) {
@@ -646,6 +675,16 @@ export function drawPeerNetwork(
         <div class="label">Block Hash:</div>
         <div class="value">${d.best_block_hash || d.hash || 'N/A'}</div>
       `
+      
+      if (d.chain_work) {
+        const score = chainworkScores.get(d.peer_id) || 0
+        html += `
+          <div class="label">Chainwork:</div>
+          <div class="value">${d.chain_work}</div>
+          <div class="label">Chainwork Score:</div>
+          <div class="value">${score} / ${maxScore}</div>
+        `
+      }
 
       if (d.miner_name || d.miner) {
         html += `

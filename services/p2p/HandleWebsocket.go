@@ -44,6 +44,7 @@ type notificationMsg struct {
 	Uptime            float64 `json:"uptime,omitempty"`          // Node uptime in seconds
 	MinerName         string  `json:"miner_name,omitempty"`      // Miner name
 	ListenMode        string  `json:"listen_mode,omitempty"`     // Listen mode
+	ChainWork         string  `json:"chain_work,omitempty"`      // Chain work as hex string
 	// Sync peer fields
 	SyncPeerID        string `json:"sync_peer_id,omitempty"`         // ID of the peer we're syncing from
 	SyncPeerHeight    int32  `json:"sync_peer_height,omitempty"`     // Height of the sync peer
@@ -156,12 +157,19 @@ func (s *Server) broadcastMessage(data []byte, clientChannels *clientChannelMap)
 }
 
 // createPingMessage creates a ping notification message
-func createPingMessage(baseURL string) (*notificationMsg, error) {
-	return &notificationMsg{
+func (s *Server) createPingMessage(baseURL string) (*notificationMsg, error) {
+	msg := &notificationMsg{
 		Timestamp: time.Now().UTC().Format(isoFormat),
 		Type:      asset_api.Type_PING.String(),
 		BaseURL:   baseURL,
-	}, nil
+	}
+
+	// Add PeerID if P2PNode is available
+	if s.P2PNode != nil {
+		msg.PeerID = s.P2PNode.HostID().String()
+	}
+
+	return msg, nil
 }
 
 // handleClientMessages processes messages for a single websocket client
@@ -203,7 +211,7 @@ func (s *Server) startNotificationProcessor(
 		case deadClient := <-deadClientCh:
 			clientChannels.remove(deadClient)
 		case <-pingTimer.C:
-			msg, err := createPingMessage(baseURL)
+			msg, err := s.createPingMessage(baseURL)
 			if err != nil {
 				s.logger.Errorf("Failed to create ping message: %v", err)
 				continue

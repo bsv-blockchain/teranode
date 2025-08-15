@@ -7,7 +7,7 @@
   import TableToggle from '$internal/components/table-toggle/index.svelte'
   import i18n from '$internal/i18n'
   import { tableVariant } from '$internal/stores/nav'
-  import { getColDefs, renderCells } from './data'
+  import { getColDefs, renderCells, getRenderProps } from './data'
 
   const pageKey = 'page.network.nodes'
 
@@ -77,7 +77,7 @@
   <Table
     name="nodes"
     {variant}
-    idField="base_url"
+    idField="peer_id"
     {colDefs}
     {data}
     pagination={{
@@ -88,7 +88,7 @@
     pager={false}
     expandUp={true}
     {renderCells}
-    getRenderProps={null}
+    {getRenderProps}
     getRowIconActions={null}
     on:action={() => {}}
   />
@@ -141,5 +141,22 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  :global(.chainwork-score-top) {
+    color: #15b241 !important;
+    font-weight: bold;
+    font-size: 16px;
+  }
+
+  :global(.chainwork-score-other) {
+    color: #ffd700 !important;
+    font-weight: bold;
+    font-size: 16px;
+  }
+
+  :global(.current-node-row) {
+    background-color: rgba(74, 158, 255, 0.15) !important;
+    border-left: 4px solid #4a9eff !important;
   }
 </style>

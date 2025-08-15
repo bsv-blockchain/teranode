@@ -2,6 +2,9 @@
   import { onMount } from 'svelte'
   import { page } from '$app/stores'
   import { SvelteToast } from '@zerodevx/svelte-toast'
+  
+  // Accept params to suppress SvelteKit warning (not used but passed by router)
+  export let params: any = undefined
   import { createTippy } from '$lib/actions/tooltip'
   import { pageLinks, spinCount, contentLeft } from '$internal/stores/nav'
   import { query } from '$lib/actions'

@@ -994,6 +994,7 @@ type NodeStatusMessage struct {
 	Uptime            float64 `json:"uptime"`
 	MinerName         string  `json:"miner_name"`
 	ListenMode        string  `json:"listen_mode"`
+	ChainWork         string  `json:"chain_work"`                     // Chain work as hex string
 	SyncPeerID        string  `json:"sync_peer_id,omitempty"`         // ID of the peer we're syncing from
 	SyncPeerHeight    int32   `json:"sync_peer_height,omitempty"`     // Height of the sync peer
 	SyncPeerBlockHash string  `json:"sync_peer_block_hash,omitempty"` // Best block hash of the sync peer
@@ -1038,6 +1039,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from strin
 		Uptime:            nodeStatusMessage.Uptime,
 		MinerName:         nodeStatusMessage.MinerName,
 		ListenMode:        nodeStatusMessage.ListenMode,
+		ChainWork:         nodeStatusMessage.ChainWork,
 		SyncPeerID:        nodeStatusMessage.SyncPeerID,
 		SyncPeerHeight:    nodeStatusMessage.SyncPeerHeight,
 		SyncPeerBlockHash: nodeStatusMessage.SyncPeerBlockHash,
@@ -1475,6 +1477,12 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		height = bestBlockMeta.Height
 	}
 
+	// Get chainwork
+	chainWorkStr := ""
+	if bestBlockMeta != nil && bestBlockMeta.ChainWork != nil {
+		chainWorkStr = hex.EncodeToString(bestBlockMeta.ChainWork)
+	}
+
 	// Get sync peer information
 	syncPeerID := ""
 	syncPeerHeight := int32(0)
@@ -1532,6 +1540,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		Uptime:            uptime,
 		MinerName:         minerName,
 		ListenMode:        s.settings.P2P.ListenMode,
+		ChainWork:         chainWorkStr,
 		SyncPeerID:        syncPeerID,
 		SyncPeerHeight:    syncPeerHeight,
 		SyncPeerBlockHash: syncPeerBlockHash,
@@ -1566,6 +1575,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		Uptime:            nodeStatusMessage.Uptime,
 		MinerName:         nodeStatusMessage.MinerName,
 		ListenMode:        nodeStatusMessage.ListenMode,
+		ChainWork:         nodeStatusMessage.ChainWork,
 		SyncPeerID:        nodeStatusMessage.SyncPeerID,
 		SyncPeerHeight:    nodeStatusMessage.SyncPeerHeight,
 		SyncPeerBlockHash: nodeStatusMessage.SyncPeerBlockHash,
@@ -2407,7 +2417,6 @@ func (s *Server) disconnectBannedPeerByID(ctx context.Context, peerID peer.ID, r
 
 	s.logger.Debugf("[disconnectBannedPeerByID] Peer %s not found in connected peers", peerID)
 }
-
 
 func (s *Server) getIPFromMultiaddr(ctx context.Context, maddr ma.Multiaddr) (net.IP, error) {
 	// try to get the IP address component

@@ -27,8 +27,6 @@
           const exp = Math.floor(Math.log10(num))
           const base = (num / Math.pow(10, exp)).toFixed(2)
 
-          const result = `${base} × 10^${exp}`
-          console.log(num, base, exp, result)
           return { base, exp }
         }
 

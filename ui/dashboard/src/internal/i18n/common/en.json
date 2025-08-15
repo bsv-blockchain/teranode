@@ -359,6 +359,7 @@
           "version": "Version",
           "fsm_state": "State",
           "height": "Height",
+          "chainwork_score": "Chainwork",
           "tx_assembly": "TX Assembly",
           "uptime": "Uptime",
           "tx_count": "TX Count",
