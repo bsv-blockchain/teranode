@@ -16,6 +16,7 @@ package subtreeprocessor
 
 import (
 	"bufio"
+	"container/ring"
 	"context"
 	"encoding/binary"
 	"io"
@@ -154,6 +155,11 @@ type SubtreeProcessor struct {
 
 	// maxBlockSamples is the number of block samples to keep for averaging
 	maxBlockSamples int
+
+	// subtreeNodeCounts tracks the actual node count in recent subtrees using a ring buffer
+	// With ~10 min blocks, 18 samples = ~3 hours of history for good stability
+	subtreeNodeCounts     *ring.Ring
+	subtreeNodeCountsSize int // Size of the ring buffer
 
 	// txChan receives transaction batches for processing
 	txChan chan *[]TxIDAndFee
@@ -335,6 +341,14 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 	queue := NewLockFreeQueue()
 
+	// Calculate subtree sample size based on expected block time
+	// With ~10 min blocks, 18 samples = ~3 hours of history
+	// This provides good stability without excessive memory usage
+	// - Long enough to smooth out temporary fluctuations
+	// - Short enough to adapt to genuine load changes (e.g., day/night cycles)
+	// - Small memory footprint (18 * sizeof(int) = 144 bytes)
+	const subtreeSampleSize = 18
+
 	stp := &SubtreeProcessor{
 		settings:                  tSettings,
 		currentItemsPerFile:       initialItemsPerFile,
@@ -342,6 +356,8 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		subtreesInBlock:           0,
 		blockIntervals:            make([]time.Duration, 0, 10),
 		maxBlockSamples:           10,
+		subtreeNodeCounts:         ring.New(subtreeSampleSize),
+		subtreeNodeCountsSize:     subtreeSampleSize,
 		txChan:                    make(chan *[]TxIDAndFee, tSettings.SubtreeValidation.TxChanBufferSize),
 		getSubtreesChan:           make(chan chan []*subtreepkg.Subtree),
 		getSubtreeHashesChan:      make(chan chan []chainhash.Hash),
@@ -884,6 +900,81 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 		return
 	}
 
+	currentSize := stp.currentItemsPerFile
+
+	// First check if we have actual subtree utilization data
+	// Count non-nil values in the ring
+	count := 0
+	totalNodes := 0
+	stp.subtreeNodeCounts.Do(func(v interface{}) {
+		if v != nil {
+			count++
+			totalNodes += v.(int)
+		}
+	})
+
+	if count > 0 {
+		avgNodesPerSubtree := float64(totalNodes) / float64(count)
+
+		// Calculate utilization percentage
+		utilization := avgNodesPerSubtree / float64(currentSize)
+
+		stp.logger.Debugf("[adjustSubtreeSize] avgNodesPerSubtree=%.1f, currentSize=%d, utilization=%.2f%%\n",
+			avgNodesPerSubtree, currentSize, utilization*100)
+
+		// If subtrees are less than 10% full, we should decrease size
+		// If subtrees are more than 80% full, we should increase size
+		if utilization < 0.1 {
+			// Subtrees are mostly empty, decrease size
+			newSize := int(float64(currentSize) * 0.5)
+			stp.logger.Debugf("[adjustSubtreeSize] Low utilization (%.2f%%), decreasing size from %d to %d\n",
+				utilization*100, currentSize, newSize)
+
+			// Round to power of 2
+			newSize = int(math.Pow(2, math.Ceil(math.Log2(float64(newSize)))))
+
+			// Apply minimum size constraint
+			minSubtreeSize := stp.settings.BlockAssembly.MinimumMerkleItemsPerSubtree
+			if newSize < minSubtreeSize {
+				newSize = minSubtreeSize
+			}
+
+			if newSize != currentSize {
+				stp.logger.Debugf("[adjustSubtreeSize] setting new size from %d to %d (low utilization)\n", currentSize, newSize)
+				stp.currentItemsPerFile = newSize
+				prometheusSubtreeProcessorDynamicSubtreeSize.Set(float64(newSize))
+			}
+
+			// Reset counters for next adjustment
+			// Clear the ring buffer
+			stp.subtreeNodeCounts = ring.New(stp.subtreeNodeCountsSize)
+			stp.blockIntervals = make([]time.Duration, 0)
+			return
+		} else if utilization > 0.8 {
+			// Subtrees are nearly full, might need to increase size
+			// But only if we're also creating them too fast AND we have significant volume
+
+			// Don't increase size if average nodes per subtree is small (< 50)
+			// This prevents size creep with low transaction volumes
+			if avgNodesPerSubtree < 50 {
+				stp.logger.Debugf("[adjustSubtreeSize] High utilization (%.2f%%) but low volume (%.1f nodes/subtree), keeping size at %d\n",
+					utilization*100, avgNodesPerSubtree, currentSize)
+				// Reset counters but don't change size
+				stp.blockIntervals = make([]time.Duration, 0)
+				return
+			}
+
+			stp.logger.Debugf("[adjustSubtreeSize] High utilization (%.2f%%), checking timing...\n", utilization*100)
+		} else {
+			// Utilization is reasonable (10-80%), keep current size
+			stp.logger.Debugf("[adjustSubtreeSize] Utilization is reasonable (%.2f%%), keeping size at %d\n",
+				utilization*100, currentSize)
+			// Reset counters but don't change size
+			stp.blockIntervals = make([]time.Duration, 0)
+			return
+		}
+	}
+
 	// Calculate average interval between subtrees in this block
 	if len(stp.blockIntervals) == 0 {
 		return
@@ -910,15 +1001,14 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 
 	avgInterval := sum / time.Duration(len(validIntervals))
 
-	stp.logger.Debugf("avgInterval=%v, validIntervals=%v\n", avgInterval, validIntervals)
+	stp.logger.Debugf("[adjustSubtreeSize] avgInterval=%v, validIntervals=%v\n", avgInterval, validIntervals)
 
 	// Calculate ratio of target to actual interval
 	// If we're creating subtrees faster than target, ratio > 1 and size should increase
 	targetInterval := time.Second
 	ratio := float64(targetInterval) / float64(avgInterval)
-	currentSize := stp.currentItemsPerFile
 
-	stp.logger.Debugf("ratio=%v, currentSize=%d, newSize before rounding=%d\n",
+	stp.logger.Debugf("[adjustSubtreeSize] ratio=%v, currentSize=%d, newSize before rounding=%d\n",
 		ratio, currentSize, int(float64(currentSize)*ratio))
 
 	// Calculate new size based on ratio
@@ -926,19 +1016,19 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 
 	// Round to next power of 2
 	newSize = int(math.Pow(2, math.Ceil(math.Log2(float64(newSize)))))
-	stp.logger.Debugf("newSize after rounding=%d\n", newSize)
+	stp.logger.Debugf("[adjustSubtreeSize] newSize after rounding=%d\n", newSize)
 
 	// Cap the increase to 2x per block to avoid wild swings
 	if newSize > currentSize*2 {
 		newSize = currentSize * 2
-		stp.logger.Debugf("newSize capped at 2x=%d\n", newSize)
+		stp.logger.Debugf("[adjustSubtreeSize] newSize capped at 2x=%d\n", newSize)
 	}
 
 	// never go over maximum size
 	maxSubtreeSize := stp.settings.BlockAssembly.MaximumMerkleItemsPerSubtree
 	if newSize > maxSubtreeSize {
 		newSize = maxSubtreeSize
-		stp.logger.Debugf("newSize capped at maxSubtreeSize=%d\n", newSize)
+		stp.logger.Debugf("[adjustSubtreeSize] newSize capped at maxSubtreeSize=%d\n", newSize)
 	}
 
 	// Never go below minimum size
@@ -947,8 +1037,32 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 		newSize = minSubtreeSize
 	}
 
+	// Final check: if we have utilization data, don't increase size beyond what's needed
+	// This prevents size increases when transaction volume is low
+	maxNodes := 0
+	hasData := false
+	stp.subtreeNodeCounts.Do(func(v interface{}) {
+		if v != nil {
+			hasData = true
+			if nodeCount := v.(int); nodeCount > maxNodes {
+				maxNodes = nodeCount
+			}
+		}
+	})
+
+	if hasData && newSize > currentSize {
+		// Only increase if we've actually seen subtrees that would benefit
+		// Add some buffer (2x max seen) but round to power of 2
+		neededSize := int(math.Pow(2, math.Ceil(math.Log2(float64(maxNodes*2)))))
+		if neededSize < newSize {
+			stp.logger.Debugf("[adjustSubtreeSize] Limiting size increase based on actual usage: max nodes seen=%d, limiting to %d instead of %d\n",
+				maxNodes, neededSize, newSize)
+			newSize = neededSize
+		}
+	}
+
 	if newSize != currentSize {
-		stp.logger.Debugf("setting new size from %d to %d\n", currentSize, newSize)
+		stp.logger.Debugf("[adjustSubtreeSize] setting new size from %d to %d\n", currentSize, newSize)
 		stp.currentItemsPerFile = newSize
 	}
 
@@ -1024,6 +1138,18 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.SubtreeNode, parents *subtr
 func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err error) {
 	if !skipNotification {
 		stp.logger.Infof("[%s] append subtree", stp.currentSubtree.RootHash().String())
+	}
+
+	// Track the actual number of nodes in this subtree
+	// We don't exclude coinbase because:
+	// 1. Only the first subtree in a block has a coinbase
+	// 2. The coinbase is still a transaction that takes space
+	// 3. For sizing decisions, we care about total throughput
+	actualNodeCount := len(stp.currentSubtree.Nodes)
+	if actualNodeCount > 0 {
+		// Add to ring buffer (overwrites oldest value automatically)
+		stp.subtreeNodeCounts.Value = actualNodeCount
+		stp.subtreeNodeCounts = stp.subtreeNodeCounts.Next()
 	}
 
 	// Add the subtree to the chain
