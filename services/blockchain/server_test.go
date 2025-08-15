@@ -784,7 +784,7 @@ func Test_GetBlockHeadersFromCommonAncestor(t *testing.T) {
 			targetHash:    headers[99].Hash(),
 			locatorHashes: []chainhash.Hash{*headers[50].Hash()},
 			maxHeaders:    100,
-			expectedLen:   0, // Current implementation returns 0 due to bug
+			expectedLen:   50,
 			expectError:   false,
 		},
 	}
@@ -823,7 +823,7 @@ func Test_GetBlockHeadersFromCommonAncestor(t *testing.T) {
 					require.NoError(t, err2)
 
 					// Next header should have current header as its previous block
-					require.Equal(t, header1.Hash(), &header2.HashPrevBlock)
+					require.Equal(t, header1.Hash(), header2.HashPrevBlock)
 				}
 			}
 

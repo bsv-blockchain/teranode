@@ -213,10 +213,10 @@ func (c *LocalClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashT
 	return getBlockHeadersToCommonAncestor(ctx, c.store, hashTarget, blockLocatorHashes, maxHeaders)
 }
 
-func (c *LocalClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+func (c *LocalClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, chainTipHash *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	// This function is similar to GetBlockHeadersToCommonAncestor but retrieves headers
 	// starting from the common ancestor towards the target hash.
-	return getBlockHeadersFromCommonAncestor(ctx, c.store, hashTarget, blockLocatorHashes, maxHeaders)
+	return getBlockHeadersFromCommonAncestor(ctx, c.store, chainTipHash, blockLocatorHashes, maxHeaders)
 }
 
 // GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.

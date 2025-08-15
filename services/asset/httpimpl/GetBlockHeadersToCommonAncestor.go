@@ -195,8 +195,8 @@ func (h *HTTP) parseNumberOfHeaders(nStr string) (int, error) {
 		return 100, nil
 	}
 
-	if n > 1000 {
-		return 1000, nil
+	if n > 10_000 {
+		return 10_000, nil
 	}
 
 	return n, nil

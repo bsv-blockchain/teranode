@@ -115,7 +115,7 @@ func (h *HTTP) GetBlockHeadersFromCommonAncestor(mode ReadMode) func(c echo.Cont
 		)
 		defer deferFn()
 
-		hash, err := chainhash.NewHashFromStr(hashStr)
+		chainTipHash, err := chainhash.NewHashFromStr(hashStr)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash string", err).Error())
 		}
@@ -130,16 +130,12 @@ func (h *HTTP) GetBlockHeadersFromCommonAncestor(mode ReadMode) func(c echo.Cont
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 
-		if numberOfHeaders > 10_000 {
-			numberOfHeaders = 10_000
-		}
-
 		var (
 			headers     []*model.BlockHeader
 			headerMetas []*model.BlockHeaderMeta
 		)
 
-		headers, headerMetas, err = h.repository.GetBlockHeadersFromCommonAncestor(ctx, hash, hashes, uint32(numberOfHeaders)) // nolint:gosec
+		headers, headerMetas, err = h.repository.GetBlockHeadersFromCommonAncestor(ctx, chainTipHash, hashes, uint32(numberOfHeaders)) // nolint:gosec
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())

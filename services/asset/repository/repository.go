@@ -423,8 +423,8 @@ func (repo *Repository) GetBlockHeadersToCommonAncestor(ctx context.Context, has
 //   - []*model.BlockHeader: Array of block headers from common ancestor to target
 //   - []*model.BlockHeaderMeta: Array of corresponding block header metadata
 //   - error: Any error encountered during header retrieval or common ancestor detection
-func (repo *Repository) GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return repo.BlockchainClient.GetBlockHeadersFromCommonAncestor(ctx, hashTarget, blockLocatorHashes, maxHeaders)
+func (repo *Repository) GetBlockHeadersFromCommonAncestor(ctx context.Context, chainTipHash *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return repo.BlockchainClient.GetBlockHeadersFromCommonAncestor(ctx, chainTipHash, blockLocatorHashes, maxHeaders)
 }
 
 // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.

@@ -2558,15 +2558,15 @@ func (b *Blockchain) GetBlockHeadersFromCommonAncestor(ctx context.Context, requ
 	}, nil
 }
 
-func getBlockHeadersFromCommonAncestor(ctx context.Context, store blockchain_store.Store, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+func getBlockHeadersFromCommonAncestor(ctx context.Context, store blockchain_store.Store, chainTipHash *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	// first we need to get the common ancestor of the target hash and the block locator hashes
-	commonBlockHeader, _, err := store.GetLatestBlockHeaderFromBlockLocator(ctx, hashTarget, blockLocatorHashes)
+	commonBlockHeader, _, err := store.GetLatestBlockHeaderFromBlockLocator(ctx, chainTipHash, blockLocatorHashes)
 	if err != nil {
 		return nil, nil, errors.NewStorageError("failed to get latest block header from block locator", err)
 	}
 
 	// now get the headers from the common ancestor to the target hash
-	return store.GetBlockHeadersFromOldest(ctx, commonBlockHeader.Hash(), hashTarget, uint64(maxHeaders)) // golint:nolint
+	return store.GetBlockHeadersFromOldest(ctx, chainTipHash, commonBlockHeader.Hash(), uint64(maxHeaders)) // golint:nolint
 }
 
 func sliceFromRing[T any](ring *ring.Ring) []T {

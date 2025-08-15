@@ -108,7 +108,7 @@ func NewBlockHeaderFromString(headerHex string) (*BlockHeader, error) {
 	return NewBlockHeaderFromBytes(headerBytes)
 }
 
-// Helper function to create a BlockHeader from a json string that we get from RPC
+// NewBlockHeaderFromJSON Helper function to create a BlockHeader from a json string that we get from RPC
 func NewBlockHeaderFromJSON(jsonString string, coinbaseTx ...*bt.Tx) (*BlockHeader, error) {
 	var data map[string]interface{}
 
