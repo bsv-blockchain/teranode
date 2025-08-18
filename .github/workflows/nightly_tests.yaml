@@ -9,7 +9,7 @@ env:
   ECR_REGION: eu-north-1
   SETTINGS_CONTEXT_DEFAULT: default_context
   USE_ECR_IMAGE: true
-  GO_VERSION: '1.24.5'
+  GO_VERSION: '1.25.0'
   TEST_DIR: ./test/e2e/daemon
 
 permissions:

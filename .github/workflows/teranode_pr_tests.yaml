@@ -12,7 +12,7 @@ env:
   REPO: teranode
   ECR_REGION: eu-north-1
   SETTINGS_CONTEXT_DEFAULT: test
-  GO_VERSION: '1.24.5'
+  GO_VERSION: '1.25.0'
 
 jobs:
   golangci:
