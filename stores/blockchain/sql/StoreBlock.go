@@ -99,20 +99,19 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Extract miner before storing block
+	var miner string
+	if block.CoinbaseTx != nil && block.CoinbaseTx.OutputCount() != 0 {
+		var err error
+		miner, err = util.ExtractCoinbaseMiner(block.CoinbaseTx)
+		if err != nil {
+			s.logger.Errorf("error extracting miner from coinbase tx: %v", err)
+		}
+	}
+
 	newBlockID, height, chainWork, err := s.storeBlock(ctx, block, peerID, opts...)
 	if err != nil {
 		return 0, height, err
-	}
-
-	var miner string
-
-	if block.CoinbaseTx != nil && block.CoinbaseTx.OutputCount() != 0 {
-		var err error
-
-		miner, err = util.ExtractCoinbaseMiner(block.CoinbaseTx)
-		if err != nil {
-			s.logger.Errorf("error extracting mine from coinbase tx: %v", err)
-		}
 	}
 
 	newBlockIDUint32, err := safeconversion.Uint64ToUint32(newBlockID)

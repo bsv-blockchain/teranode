@@ -1013,7 +1013,8 @@ type NodeStatusMessage struct {
 	FSMState          string  `json:"fsm_state"`
 	StartTime         int64   `json:"start_time"`
 	Uptime            float64 `json:"uptime"`
-	MinerName         string  `json:"miner_name"`
+	ClientName        string  `json:"client_name"` // Name of this node client
+	MinerName         string  `json:"miner_name"`  // Name of the miner that mined the best block
 	ListenMode        string  `json:"listen_mode"`
 	ChainWork         string  `json:"chain_work"`                     // Chain work as hex string
 	SyncPeerID        string  `json:"sync_peer_id,omitempty"`         // ID of the peer we're syncing from
@@ -1033,7 +1034,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from strin
 	isSelf := from == s.P2PNode.HostID().String()
 
 	// Log all received node_status messages for debugging
-	s.logger.Infof("[handleNodeStatusTopic] Received node_status from %s (peer_id: %s, is_self: %v, version: %s, height: %d)",
+	s.logger.Debugf("[handleNodeStatusTopic] Received node_status from %s (peer_id: %s, is_self: %v, version: %s, height: %d)",
 		from, nodeStatusMessage.PeerID, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight)
 
 	// Store the node status message in the expiring map
@@ -1046,7 +1047,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from strin
 	// Skip further processing for our own messages (peer height updates, etc.)
 	// but still forward to WebSocket
 	if !isSelf {
-		s.logger.Infof("[handleNodeStatusTopic] Processing node_status from remote peer %s (peer_id: %s)", from, nodeStatusMessage.PeerID)
+		s.logger.Debugf("[handleNodeStatusTopic] Processing node_status from remote peer %s (peer_id: %s)", from, nodeStatusMessage.PeerID)
 	} else {
 		s.logger.Debugf("[handleNodeStatusTopic] forwarding our own node status (peer_id: %s) with is_self=true", nodeStatusMessage.PeerID)
 	}
@@ -1065,6 +1066,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from strin
 		FSMState:          nodeStatusMessage.FSMState,
 		StartTime:         nodeStatusMessage.StartTime,
 		Uptime:            nodeStatusMessage.Uptime,
+		ClientName:        nodeStatusMessage.ClientName,
 		MinerName:         nodeStatusMessage.MinerName,
 		ListenMode:        nodeStatusMessage.ListenMode,
 		ChainWork:         nodeStatusMessage.ChainWork,
@@ -1491,10 +1493,16 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// TODO: Get actual tx count from block assembly service when API is available
 	txCountInAssembly := 0
 
-	// Get miner name from coinbase configuration (safely handle nil settings)
-	minerName := ""
+	// Get client name from settings
+	clientName := ""
 	if s.settings != nil {
-		minerName = s.settings.Coinbase.ArbitraryText
+		clientName = s.settings.ClientName
+	}
+
+	// Get miner name from the best block metadata
+	minerName := ""
+	if bestBlockMeta != nil {
+		minerName = bestBlockMeta.Miner
 	}
 
 	// Get block hash string
@@ -1597,6 +1605,7 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		FSMState:          fsmState,
 		StartTime:         startTime,
 		Uptime:            uptime,
+		ClientName:        clientName,
 		MinerName:         minerName,
 		ListenMode:        listenMode,
 		ChainWork:         chainWorkStr,
@@ -1627,6 +1636,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		FSMState:          notificationMsg.FSMState,
 		StartTime:         notificationMsg.StartTime,
 		Uptime:            notificationMsg.Uptime,
+		ClientName:        notificationMsg.ClientName,
 		MinerName:         notificationMsg.MinerName,
 		ListenMode:        notificationMsg.ListenMode,
 		ChainWork:         notificationMsg.ChainWork,
@@ -1647,6 +1657,13 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		return errors.NewError("nodeStatusMessage - publish error: %w", err)
 	}
 	s.logger.Debugf("[handleNodeStatusNotification] Successfully published node_status message")
+
+	// Store our own node status in the map so it's available for new WebSocket clients
+	if nodeStatusMessage.PeerID != "" {
+		s.nodeStatusMap.Set(nodeStatusMessage.PeerID, &nodeStatusMessage)
+		s.logger.Debugf("[handleNodeStatusNotification] Stored our node_status in map (peer_id: %s, client_name: %s)",
+			nodeStatusMessage.PeerID, nodeStatusMessage.ClientName)
+	}
 
 	// Also send to local WebSocket clients
 	s.notificationCh <- notificationMsg

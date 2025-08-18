@@ -167,11 +167,12 @@ export async function connectToP2PServer() {
               // The very first node_status message we receive should be from our own node
               // (sent immediately upon WebSocket connection by the backend)
               let currentPeerID = get(currentNodePeerID)
-              if (!firstNodeStatusReceived && !currentPeerID) {
+              if (!firstNodeStatusReceived) {
+                // Always update on the first node_status of this connection,
+                // even if we have a stored value from a previous session
                 currentNodePeerID.set(jsonData.peer_id)
                 currentPeerID = jsonData.peer_id
                 firstNodeStatusReceived = true
-                console.log('🎯 Auto-detected current node from first node_status:', jsonData.peer_id)
               }
               
               const isCurrentNode = jsonData.peer_id === currentPeerID

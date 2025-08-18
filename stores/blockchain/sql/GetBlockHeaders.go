@@ -24,7 +24,9 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/model/time"
+	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 )
@@ -130,11 +132,11 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 
 func (s *SQL) processBlockHeadersRows(rows *sql.Rows, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	var (
-		err            error
 		hashPrevBlock  []byte
 		hashMerkleRoot []byte
 		nBits          []byte
 		insertedAt     time.CustomTime
+		coinbaseBytes  []byte
 	)
 
 	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
@@ -144,7 +146,14 @@ func (s *SQL) processBlockHeadersRows(rows *sql.Rows, numberOfHeaders uint64) ([
 		blockHeader := &model.BlockHeader{}
 		blockHeaderMeta := &model.BlockHeaderMeta{}
 
-		if err = rows.Scan(
+		// Check column count to determine if miner is included
+		columns, err := rows.Columns()
+		if err != nil {
+			return nil, nil, errors.NewStorageError("failed to get column names", err)
+		}
+
+		// Create scan targets
+		scanTargets := []interface{}{
 			&blockHeader.Version,
 			&blockHeader.Timestamp,
 			&blockHeader.Nonce,
@@ -159,8 +168,28 @@ func (s *SQL) processBlockHeadersRows(rows *sql.Rows, numberOfHeaders uint64) ([
 			&blockHeaderMeta.BlockTime,
 			&insertedAt,
 			&blockHeaderMeta.ChainWork,
-		); err != nil {
+		}
+
+		// Add coinbase_tx if it's in the columns (15th column)
+		hasCoinbaseColumn := len(columns) > 14
+
+		if hasCoinbaseColumn {
+			scanTargets = append(scanTargets, &coinbaseBytes)
+		}
+
+		if err = rows.Scan(scanTargets...); err != nil {
 			return nil, nil, errors.NewStorageError("failed to scan row", err)
+		}
+
+		// If miner is empty but we have coinbase_tx, extract miner from it
+		if blockHeaderMeta.Miner == "" && len(coinbaseBytes) > 0 {
+			coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
+			if err == nil {
+				extractedMiner, err := util.ExtractCoinbaseMiner(coinbaseTx)
+				if err == nil && extractedMiner != "" {
+					blockHeaderMeta.Miner = extractedMiner
+				}
+			}
 		}
 
 		bits, _ := model.NewNBitFromSlice(nBits)

@@ -67,6 +67,7 @@ type notificationMsg struct {
 	FSMState          string  `json:"fsm_state,omitempty"`
 	StartTime         int64   `json:"start_time,omitempty"`
 	Uptime            float64 `json:"uptime,omitempty"`
+	ClientName        string  `json:"client_name,omitempty"` // Added missing ClientName field
 	MinerName         string  `json:"miner_name,omitempty"`
 	ListenMode        string  `json:"listen_mode,omitempty"`
 	ChainWork         string  `json:"chain_work,omitempty"`

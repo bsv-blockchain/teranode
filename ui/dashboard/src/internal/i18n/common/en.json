@@ -349,12 +349,16 @@
       "menu-label": "Peers",
       "title": "Peer Network"
     },
+    "ancestors": {
+      "menu-label": "Ancestors"
+    },
     "network": {
       "menu-label": "Network",
       "live": "Live",
       "nodes": {
         "title": "Connected Nodes",
         "fields": {
+          "client_name": "Node",
           "base_url": "Address",
           "version": "Version",
           "fsm_state": "State",
@@ -367,6 +371,7 @@
           "miner": "Miner",
           "listen_mode": "Mode",
           "hash": "Latest hash",
+          "hash_and_miner": "Latest Block",
           "previousblockhash": "Previous hash",
           "receivedAt": "Last seen",
           "last_update": "Last Update"

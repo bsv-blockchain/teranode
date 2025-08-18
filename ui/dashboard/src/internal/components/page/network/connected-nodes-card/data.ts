@@ -5,6 +5,8 @@ import { valueSet } from '$lib/utils/types'
 // eslint-ignore-next-line
 import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
 import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
+import RenderSpanWithTooltip from '$lib/components/table/renderers/render-span-with-tooltip/index.svelte'
+import RenderHashWithMiner from '$lib/components/table/renderers/render-hash-with-miner/index.svelte'
 
 const pageKey = 'page.network.nodes'
 const fieldKey = `${pageKey}.fields`
@@ -52,11 +54,11 @@ export function calculateChainworkScores(nodes: any[]): Map<string, number> {
 export const getColDefs = (t) => {
   return [
     {
-      id: 'base_url',
-      name: t(`${fieldKey}.base_url`),
+      id: 'client_name',
+      name: t(`${fieldKey}.client_name`),
       type: 'string',
       props: {
-        width: '14%',
+        width: '16%',
       },
     },
     {
@@ -64,7 +66,7 @@ export const getColDefs = (t) => {
       name: t(`${fieldKey}.version`),
       type: 'string',
       props: {
-        width: '9%',
+        width: '12%',
       },
     },
     {
@@ -72,7 +74,7 @@ export const getColDefs = (t) => {
       name: t(`${fieldKey}.fsm_state`),
       type: 'string',
       props: {
-        width: '8%',
+        width: '10%',
       },
     },
     {
@@ -80,7 +82,15 @@ export const getColDefs = (t) => {
       name: t(`${fieldKey}.height`),
       type: 'number',
       props: {
-        width: '8%',
+        width: '10%',
+      },
+    },
+    {
+      id: 'best_block_hash',
+      name: t(`${fieldKey}.hash_and_miner`),
+      type: 'string',
+      props: {
+        width: '20%',
       },
     },
     {
@@ -108,14 +118,6 @@ export const getColDefs = (t) => {
       },
     },
     {
-      id: 'miner_name',
-      name: t(`${fieldKey}.miner`),
-      type: 'string',
-      props: {
-        width: '9%',
-      },
-    },
-    {
       id: 'listen_mode',
       name: t(`${fieldKey}.listen_mode`),
       type: 'string',
@@ -124,19 +126,11 @@ export const getColDefs = (t) => {
       },
     },
     {
-      id: 'best_block_hash',
-      name: t(`${fieldKey}.hash`),
-      type: 'string',
-      props: {
-        width: '14%',
-      },
-    },
-    {
       id: 'receivedAt',
       name: t(`${fieldKey}.last_update`),
       type: 'number',
       props: {
-        width: '14%',
+        width: '8%',
       },
     },
   ]
@@ -146,38 +140,46 @@ export const filters = {}
 
 // Function to get render props for cells and rows
 export const getRenderProps = (name: any, colDef: any, idField: any, item: any) => {
-  // Add special styling for the current node row
-  if (item?.isCurrentNode) {
-    return {
-      className: 'current-node-row'
-    }
-  }
+  // No special row styling needed
   return {}
 }
 
 export const renderCells = {
-  base_url: (idField, item, colId) => {
-    const url = item[colId] || '-'
+  client_name: (idField, item, colId) => {
+    const clientName = item[colId] || item.client_name || '(not set)'
+    const url = item.base_url || '-'
     const isCurrentNode = item.isCurrentNode === true
     
     return {
-      component: RenderSpan,
+      component: RenderSpanWithTooltip,
       props: {
-        value: url,
-        className: isCurrentNode ? 'current-node-url' : '',
-        title: isCurrentNode ? 'This is your node' : url,
+        value: clientName,
+        className: isCurrentNode ? 'current-node-name' : '',
+        tooltip: url,
       },
       value: '',
     }
   },
   version: (idField, item, colId) => {
-    const version = item.version || '-'
-    const commitHash = item.commit_hash ? ` (${item.commit_hash.slice(0, 7)})` : ''
+    const fullVersion = item.version || '-'
+    const commitHash = item.commit_hash || ''
+    
+    // Try to extract semantic version (e.g., "v1.2.3" from "v1.2.3-abc123")
+    const semverMatch = fullVersion.match(/^(v?\d+\.\d+\.\d+)/)
+    const displayVersion = semverMatch ? semverMatch[1] : fullVersion
+    
+    // Build tooltip with full version and commit
+    let tooltipText = fullVersion
+    if (commitHash) {
+      tooltipText = `${fullVersion} (commit: ${commitHash})`
+    }
+    
     return {
-      component: RenderSpan,
+      component: RenderSpanWithTooltip,
       props: {
-        value: version + commitHash,
+        value: displayVersion,
         className: '',
+        tooltip: tooltipText,
       },
       value: '',
     }
@@ -309,12 +311,19 @@ export const renderCells = {
   best_block_hash: (idField, item, colId) => {
     // Support both best_block_hash (from node_status) and hash (from mining_on)
     const hash = item[colId] || item.hash
+    const miner = item.miner_name || item.miner || ''
+    
     return {
-      component: hash ? RenderLink : null,
+      component: hash ? RenderHashWithMiner : null,
       props: {
-        href: getDetailsUrl(DetailType.block, hash),
-        external: false,
-        text: shortHash(hash),
+        hash: hash,
+        hashUrl: hash ? getDetailsUrl(DetailType.block, hash) : '',
+        shortHash: hash ? shortHash(hash) : '',
+        miner: miner,
+        className: '',
+        tooltip: hash ? `Full hash: ${hash}` : '',
+        showCopyButton: true,
+        copyTooltip: 'Copy hash',
       },
       value: '',
     }

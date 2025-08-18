@@ -18,6 +18,7 @@ interface PeerNode {
   version?: string
   chain_work?: string
   receivedAt?: string
+  client_name?: string
   // From miningOn messages
   height?: number
   hash?: string
@@ -507,17 +508,12 @@ export function drawPeerNetwork(
 
   nodeEnter
     .append('text')
-    .attr('class', 'peer-text peer-id')
+    .attr('class', 'peer-text client-name')
     .attr('x', 0)
-    .attr('y', -40)
+    .attr('y', -30)
     .attr('text-anchor', 'middle')
-
-  nodeEnter
-    .append('text')
-    .attr('class', 'peer-text label base-url')
-    .attr('x', 0)
-    .attr('y', -20)
-    .attr('text-anchor', 'middle')
+    .style('font-size', '14px')
+    .style('font-weight', 'bold')
 
   nodeEnter
     .append('text')
@@ -535,16 +531,18 @@ export function drawPeerNetwork(
 
   nodeEnter
     .append('text')
-    .attr('class', 'peer-text label fsm-state')
+    .attr('class', 'peer-text label block-miner')
     .attr('x', 0)
-    .attr('y', 40)
+    .attr('y', 35)
     .attr('text-anchor', 'middle')
+    .style('font-size', '11px')
+    .style('fill', 'rgba(255, 255, 255, 0.5)')
 
   nodeEnter
     .append('text')
-    .attr('class', 'peer-text label miner-name')
+    .attr('class', 'peer-text label fsm-state')
     .attr('x', 0)
-    .attr('y', 60)
+    .attr('y', 55)
     .attr('text-anchor', 'middle')
 
   // Add chainwork score in bottom right corner
@@ -611,9 +609,14 @@ export function drawPeerNetwork(
     return ''
   })
 
-  nodeMerge.select('.peer-id').text((d: any) => (d?.peer_id ? truncatePeerId(d.peer_id) : ''))
-
-  nodeMerge.select('.base-url').text((d: any) => d?.base_url || 'No URL')
+  nodeMerge.select('.client-name').text((d: any) => {
+    if (!d) return '(not set)'
+    // Display client_name if available, otherwise show (not set)
+    if (d.client_name && d.client_name !== '') {
+      return d.client_name
+    }
+    return '(not set)'
+  })
 
   nodeMerge.select('.block-height').text((d: any) => {
     if (!d) return 'Height: 0'
@@ -621,26 +624,26 @@ export function drawPeerNetwork(
     return `Height: ${height.toLocaleString()}`
   })
 
-  nodeMerge.select('.block-hash').text((d: any) => {
-    if (!d) return 'No hash'
-    const hash = d.best_block_hash || d.hash || ''
-    return hash ? `${hash.slice(0, 8)}...${hash.slice(-8)}` : 'No hash'
+  nodeMerge
+    .select('.block-hash')
+    .text((d: any) => {
+      if (!d) return 'No hash'
+      const hash = d.best_block_hash || d.hash || ''
+      return hash ? `${hash.slice(0, 8)}...${hash.slice(-8)}` : 'No hash'
+    })
+    .style('fill', '#4a9eff')  // Blue color like the link
+    .style('font-weight', '500')
+  
+  nodeMerge.select('.block-miner').text((d: any) => {
+    if (!d) return ''
+    const minerName = d.miner_name || d.miner || ''
+    if (minerName && minerName.length > 25) {
+      return minerName.slice(0, 22) + '...'
+    }
+    return minerName
   })
 
   nodeMerge.select('.fsm-state').text((d: any) => d?.fsm_state || '')
-
-  nodeMerge
-    .select('.miner-name')
-    .text((d: any) => {
-      if (!d) return ''
-      const minerName = d.miner_name || d.miner || ''
-      if (minerName && minerName.length > 20) {
-        return minerName.slice(0, 17) + '...'
-      }
-      return minerName
-    })
-    .style('font-weight', 'bold')
-    .style('fill', '#4a9eff')
 
   // Update chainwork score
   nodeMerge
@@ -665,7 +668,17 @@ export function drawPeerNetwork(
       // Show tooltip with full information
       tooltip!.transition().duration(200).style('opacity', 0.9)
 
-      let html = `
+      let html = ''
+      
+      // Show client name if available
+      if (d.client_name) {
+        html += `
+          <div class="label">Client Name:</div>
+          <div class="value">${d.client_name}</div>
+        `
+      }
+      
+      html += `
         <div class="label">Peer ID:</div>
         <div class="value">${d.peer_id || 'Unknown'}</div>
         <div class="label">Base URL:</div>

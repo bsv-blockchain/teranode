@@ -42,7 +42,8 @@ type notificationMsg struct {
 	FSMState          string  `json:"fsm_state,omitempty"`       // FSM state
 	StartTime         int64   `json:"start_time,omitempty"`      // Node start time
 	Uptime            float64 `json:"uptime,omitempty"`          // Node uptime in seconds
-	MinerName         string  `json:"miner_name,omitempty"`      // Miner name
+	ClientName        string  `json:"client_name,omitempty"`     // Client name of this node
+	MinerName         string  `json:"miner_name,omitempty"`      // Miner name that mined the best block
 	ListenMode        string  `json:"listen_mode,omitempty"`     // Listen mode
 	ChainWork         string  `json:"chain_work,omitempty"`      // Chain work as hex string
 	// Sync peer fields
@@ -264,6 +265,7 @@ func (s *Server) sendInitialNodeStatuses(clientCh chan []byte, _ string) {
 				FSMState:          storedStatus.FSMState,
 				StartTime:         storedStatus.StartTime,
 				Uptime:            storedStatus.Uptime,
+				ClientName:        storedStatus.ClientName, // Added missing ClientName field
 				MinerName:         storedStatus.MinerName,
 				ListenMode:        storedStatus.ListenMode,
 				ChainWork:         storedStatus.ChainWork,
@@ -320,6 +322,7 @@ func (s *Server) sendInitialNodeStatuses(clientCh chan []byte, _ string) {
 			FSMState:          status.FSMState,
 			StartTime:         status.StartTime,
 			Uptime:            status.Uptime,
+			ClientName:        status.ClientName, // Added missing ClientName field
 			MinerName:         status.MinerName,
 			ListenMode:        status.ListenMode,
 			ChainWork:         status.ChainWork,

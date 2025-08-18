@@ -133,6 +133,7 @@
             sync_peer_height: msg.sync_peer_height,
             sync_peer_block_hash: msg.sync_peer_block_hash,
             sync_connected_at: msg.sync_connected_at, // Now coming from server
+            client_name: msg.client_name || '', // Add client_name field
           })
           messageHashes.set(messageHash, Date.now())
           dataChanged = true

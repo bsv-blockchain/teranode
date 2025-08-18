@@ -3728,6 +3728,8 @@ func TestHandleBlockNotificationSuccess(t *testing.T) {
 		syncConnectionTimes: sync.Map{},
 		peerBlockHashes:     sync.Map{},
 		notificationCh:      make(chan *notificationMsg, 1),
+		nodeStatusMap:       expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
+		nodeStatusTopicName: "node-status-topic",
 	}
 
 	err := mockServer.handleBlockNotification(ctx, testHash)
@@ -3781,6 +3783,9 @@ func TestHandleMiningOnNotificationSuccess(t *testing.T) {
 		peerBlockHashes:     sync.Map{},
 		settings:            testSettings,
 		notificationCh:      make(chan *notificationMsg, 2),
+		nodeStatusMap:       expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
+		nodeStatusTopicName: "node-status-topic",
+		startTime:           time.Now(),
 	}
 
 	err := s.handleMiningOnNotification(ctx)

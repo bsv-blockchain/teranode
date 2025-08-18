@@ -6,7 +6,7 @@ import { getHumanReadableTime } from '$internal/utils/format'
 // eslint-ignore-next-line
 import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
 import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
-import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/index.svelte'
+import RenderHashWithMiner from '$lib/components/table/renderers/render-hash-with-miner/index.svelte'
 
 const pageKey = 'page.viewer'
 
@@ -25,7 +25,7 @@ export const getColDefs = (t) => {
       name: t(`${pageKey}.col-defs-label.hash`),
       type: 'string',
       props: {
-        width: '16%',
+        width: '26%',  // Increased width since miner is now included
       },
     },
     {
@@ -50,14 +50,6 @@ export const getColDefs = (t) => {
       type: 'number',
       props: {
         width: '7%',
-      },
-    },
-    {
-      id: 'miner',
-      name: t(`${pageKey}.col-defs-label.miner`),
-      type: 'string',
-      props: {
-        width: '10%',
       },
     },
     {
@@ -113,9 +105,19 @@ export const getRenderCells = (t) => {
       }
     },
     hash: (idField, item, colId) => {
+      const hash = item[colId]
+      const shortHash = hash ? (hash.length > 16 ? `${hash.slice(0, 8)}...${hash.slice(-8)}` : hash) : ''
       return {
-        component: item[colId] ? LinkHashCopy : null,
-        props: getHashLinkProps(DetailType.block, item.hash, t),
+        component: item[colId] ? RenderHashWithMiner : null,
+        props: {
+          hash: hash,
+          hashUrl: getDetailsUrl(DetailType.block, hash),
+          shortHash: shortHash,
+          miner: item.miner || '',
+          showCopyButton: true,
+          copyTooltip: t('tooltip.copy-hash-to-clipboard'),
+          tooltip: hash,
+        },
         value: '',
       }
     },

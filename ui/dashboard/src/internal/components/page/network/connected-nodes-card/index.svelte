@@ -144,19 +144,56 @@
   }
 
   
-  /* Highlight the current node URL */
-  :global(.current-node-url) {
+  /* Highlight the current node name */
+  :global(.current-node-name) {
     color: #4a9eff !important;
     font-weight: bold;
-    position: relative;
   }
   
-  :global(.current-node-url::after) {
-    content: ' (You)';
-    color: #4a9eff;
-    font-size: 12px;
-    font-weight: normal;
-    margin-left: 8px;
+  /* Column header alignments */
+  /* Version - explicitly left align */
+  :global(th:nth-child(2)),
+  :global(.th:nth-child(2)) {
+    text-align: left !important;
+  }
+  
+  :global(th:nth-child(2) .table-cell-row),
+  :global(.th:nth-child(2) .table-cell-row) {
+    text-align: left !important;
+    justify-content: flex-start !important;
+  }
+  
+  :global(th:nth-child(4)), /* Height - right align */
+  :global(.th:nth-child(4)),
+  :global(th:nth-child(6)), /* Chainwork - right align */
+  :global(.th:nth-child(6)),
+  :global(th:nth-child(7)), /* TX Assembly - right align */
+  :global(.th:nth-child(7)),
+  :global(th:nth-child(8)), /* Uptime - right align */
+  :global(.th:nth-child(8)),
+  :global(th:nth-child(10)), /* Last Update - right align */
+  :global(.th:nth-child(10)) {
+    text-align: right !important;
+  }
+  
+  :global(th:nth-child(4) .table-cell-row),
+  :global(.th:nth-child(4) .table-cell-row),
+  :global(th:nth-child(6) .table-cell-row),
+  :global(.th:nth-child(6) .table-cell-row),
+  :global(th:nth-child(7) .table-cell-row),
+  :global(.th:nth-child(7) .table-cell-row),
+  :global(th:nth-child(8) .table-cell-row),
+  :global(.th:nth-child(8) .table-cell-row),
+  :global(th:nth-child(10) .table-cell-row),
+  :global(.th:nth-child(10) .table-cell-row) {
+    justify-content: flex-end !important;
+  }
+  
+  /* Right-align numeric values */
+  :global(.num) {
+    text-align: right !important;
+    display: block !important;
+    width: 100% !important;
   }
   
   :global(.chainwork-score-top) {

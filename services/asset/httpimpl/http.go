@@ -221,6 +221,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/header/:hash/json", h.GetBlockHeader(JSON))
 
 	apiGroup.GET("/blocks", h.GetBlocks)
+	apiGroup.GET("/block_locator", h.GetBlockLocator)
 
 	apiGroup.GET("/blocks/:hash", h.GetNBlocks(BINARY_STREAM))
 	apiGroup.GET("/blocks/:hash/hex", h.GetNBlocks(HEX))

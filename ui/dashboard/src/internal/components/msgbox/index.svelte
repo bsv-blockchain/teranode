@@ -11,10 +11,35 @@
   export let collapse = false
   export let titleMinW = '120px'
   export let hidePeer = false
+  export let rawMode = false
 
   let age = ''
   let fields: MsgDisplayField[] = []
   let title = ''
+  
+  // Format JSON with syntax highlighting
+  function formatJSON(obj: any): string {
+    try {
+      let json = JSON.stringify(obj, null, 2)
+      
+      // Basic syntax highlighting
+      json = json
+        // Strings (but not property names)
+        .replace(/: "([^"]*)"/g, ': <span class="json-string">"$1"</span>')
+        // Numbers
+        .replace(/: (\d+)/g, ': <span class="json-number">$1</span>')
+        // Booleans
+        .replace(/: (true|false)/g, ': <span class="json-boolean">$1</span>')
+        // Null
+        .replace(/: (null)/g, ': <span class="json-null">$1</span>')
+        // Property names
+        .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
+        
+      return json
+    } catch (e) {
+      return '{}'
+    }
+  }
 
   function getMsgDateMillis(source: MessageSource, msg: Message) {
     if (source === 'p2p') {
@@ -67,17 +92,21 @@
   class:collapse
 >
   <div class="title">{title}</div>
-  <div class="content">
-    {#each updatedFields as field (field.label)}
-      <div class="entry">
-        <div class="label">
-          {field.label}
+  <div class="content" class:raw-mode={rawMode}>
+    {#if rawMode}
+      <pre class="json-display">{@html formatJSON(message)}</pre>
+    {:else}
+      {#each updatedFields as field (field.label)}
+        <div class="entry">
+          <div class="label">
+            {field.label}
+          </div>
+          <div class="value">
+            {field.value}
+          </div>
         </div>
-        <div class="value">
-          {field.value}
-        </div>
-      </div>
-    {/each}
+      {/each}
+    {/if}
   </div>
 </div>
 
@@ -139,6 +168,10 @@
   .msgbox.collapse .content {
     gap: 6px;
   }
+  .content.raw-mode {
+    gap: 0;
+    width: 100%;
+  }
 
   .entry {
     display: flex;
@@ -167,5 +200,38 @@
   .value {
     word-break: break-all;
     color: var(--msgbox-value-color);
+  }
+  
+  .json-display {
+    margin: 0;
+    padding: 0;
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #b4b4b4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    max-width: 100%;
+  }
+  
+  :global(.json-display .json-key) {
+    color: #a8c0ff;
+  }
+  
+  :global(.json-display .json-string) {
+    color: #98c379;
+  }
+  
+  :global(.json-display .json-number) {
+    color: #d19a66;
+  }
+  
+  :global(.json-display .json-boolean) {
+    color: #56b6c2;
+  }
+  
+  :global(.json-display .json-null) {
+    color: #abb2bf;
   }
 </style>

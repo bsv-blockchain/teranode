@@ -63,6 +63,7 @@
   $: actualCollapseState = byPeer ? true : collapseMsgContent
 
   let byPeer = false
+  let rawMode = false // Toggle for showing raw JSON
   let filter = ''
   let showLocalMessages = false // Toggle for showing local messages (off by default)
   let groupedMessages: any = {}
@@ -140,6 +141,7 @@
           message.base_url?.toLowerCase().includes(f) ||
           message.miner?.toLowerCase().includes(f) ||
           message.miner_name?.toLowerCase().includes(f) ||
+          message.client_name?.toLowerCase().includes(f) ||
           message.peer_id?.toLowerCase().includes(f) ||
           message.peerID?.toLowerCase().includes(f) ||
           message.peer?.toLowerCase().includes(f) ||
@@ -217,6 +219,15 @@
           labelAlignment="center"
         />
 
+        <Switch
+          size="small"
+          name="rawMode"
+          label="Raw JSON"
+          bind:checked={rawMode}
+          labelPlacement="left"
+          labelAlignment="center"
+        />
+
         <div class="filter-group">
           <span class="filter-label">Filter:</span>
           <Dropdown
@@ -262,6 +273,7 @@
                 collapse={actualCollapseState}
                 titleMinW={actualCollapseState ? 'auto' : '80px'}
                 hidePeer={true}
+                {rawMode}
               />
             {/each}
           </div>
@@ -278,6 +290,7 @@
               source="p2p"
               collapse={actualCollapseState}
               titleMinW={actualCollapseState ? 'auto' : '120px'}
+              {rawMode}
             />
           {/each}
         </div>

@@ -420,7 +420,16 @@
   }
   
   tr.current-node-row td:first-child {
-    border-left: 4px solid #4a9eff;
-    padding-left: 12px;
+    position: relative;
+  }
+  
+  tr.current-node-row td:first-child::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    background-color: #4a9eff;
   }
 </style>

@@ -52,8 +52,14 @@ export interface NodeStatusMessage extends P2PMessageBase {
   fsm_state: string
   start_time: number
   uptime: number
-  miner_name: string
+  client_name?: string
+  miner_name?: string
   listen_mode: string
+  chain_work?: string
+  sync_peer_id?: string
+  sync_peer_height?: number
+  sync_peer_block_hash?: string
+  sync_connected_at?: number
 }
 
 export type P2PMessage =
