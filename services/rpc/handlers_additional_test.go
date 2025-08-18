@@ -781,13 +781,105 @@ func TestHandleGenerateValidation(t *testing.T) {
 	})
 }
 
-// TestHandleHelpValidation tests the help command validation
-func TestHandleHelpValidation(t *testing.T) {
-	t.Run("unknown command", func(t *testing.T) {
-		logger := mocklogger.NewTestLogger()
+// TestHandleHelpComprehensive tests the handleHelp handler
+func TestHandleHelpComprehensive(t *testing.T) {
+	logger := mocklogger.NewTestLogger()
+
+	t.Run("general help when no command specified", func(t *testing.T) {
+		// Use real helpCacher to test actual functionality
 		s := &RPCServer{
 			logger:     logger,
-			helpCacher: &helpCacher{},
+			helpCacher: newHelpCacher(),
+		}
+
+		cmd := &bsvjson.HelpCmd{
+			Command: nil, // No specific command
+		}
+
+		result, err := handleHelp(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Verify it returns a string (the usage information)
+		usage, ok := result.(string)
+		require.True(t, ok)
+		// Should be a string, even if empty in some test environments
+		_ = usage
+	})
+
+	t.Run("general help when empty command specified", func(t *testing.T) {
+		s := &RPCServer{
+			logger:     logger,
+			helpCacher: newHelpCacher(),
+		}
+
+		emptyCmd := ""
+		cmd := &bsvjson.HelpCmd{
+			Command: &emptyCmd,
+		}
+
+		result, err := handleHelp(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Verify it returns a string (the usage information)
+		usage, ok := result.(string)
+		require.True(t, ok)
+		_ = usage
+	})
+
+	t.Run("specific command help - getbestblockhash", func(t *testing.T) {
+		s := &RPCServer{
+			logger:     logger,
+			helpCacher: newHelpCacher(),
+		}
+
+		// Initialize rpcHandlers for the test
+		err := s.Init(context.Background())
+		require.NoError(t, err)
+
+		specificCmd := "getbestblockhash" // This command exists in the handlers map
+		cmd := &bsvjson.HelpCmd{
+			Command: &specificCmd,
+		}
+
+		result, err := handleHelp(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		help, ok := result.(string)
+		require.True(t, ok)
+		_ = help
+	})
+
+	t.Run("specific command help - help", func(t *testing.T) {
+		s := &RPCServer{
+			logger:     logger,
+			helpCacher: newHelpCacher(),
+		}
+
+		// Initialize rpcHandlers for the test
+		err := s.Init(context.Background())
+		require.NoError(t, err)
+
+		specificCmd := "help"
+		cmd := &bsvjson.HelpCmd{
+			Command: &specificCmd,
+		}
+
+		result, err := handleHelp(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		help, ok := result.(string)
+		require.True(t, ok)
+		_ = help
+	})
+
+	t.Run("unknown command error", func(t *testing.T) {
+		s := &RPCServer{
+			logger:     logger,
+			helpCacher: newHelpCacher(),
 		}
 
 		unknownCmd := "nonexistentcommand"
@@ -795,13 +887,15 @@ func TestHandleHelpValidation(t *testing.T) {
 			Command: &unknownCmd,
 		}
 
-		_, err := handleHelp(context.Background(), s, cmd, nil)
+		result, err := handleHelp(context.Background(), s, cmd, nil)
 		require.Error(t, err)
+		require.Nil(t, result)
 
 		rpcErr, ok := err.(*bsvjson.RPCError)
-		assert.True(t, ok)
+		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
 		assert.Contains(t, rpcErr.Message, "Unknown command")
+		assert.Contains(t, rpcErr.Message, unknownCmd)
 	})
 }
 
@@ -1862,6 +1956,180 @@ func TestHandleGetpeerinfoValidation(t *testing.T) {
 // TestHandleGetRawMempoolComprehensive tests the handleGetRawMempool handler
 func TestHandleGetRawMempoolComprehensive(t *testing.T) {
 	logger := mocklogger.NewTestLogger()
+
+	t.Run("successful non-verbose mempool", func(t *testing.T) {
+		txHashes := []string{
+			"abc123def456",
+			"789ghi012jkl",
+		}
+
+		mockClient := &mockBlockAssemblyClient{
+			getTransactionHashesFunc: func(ctx context.Context) ([]string, error) {
+				return txHashes, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:              logger,
+			blockAssemblyClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		cmd := &bsvjson.GetRawMempoolCmd{
+			Verbose: func() *bool { v := false; return &v }(),
+		}
+
+		result, err := handleGetRawMempool(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		hashes, ok := result.([]string)
+		require.True(t, ok)
+		assert.Equal(t, txHashes, hashes)
+	})
+
+	t.Run("successful verbose mempool", func(t *testing.T) {
+		txHashes := []string{
+			"abc123def456",
+			"789ghi012jkl",
+		}
+
+		miningCandidate := &model.MiningCandidate{
+			Time:          1640995200, // Example timestamp
+			Height:        700000,
+			CoinbaseValue: 625000000, // 6.25 BSV in satoshis
+		}
+
+		mockClient := &mockBlockAssemblyClient{
+			getTransactionHashesFunc: func(ctx context.Context) ([]string, error) {
+				return txHashes, nil
+			},
+			getMiningCandidateFunc: func(ctx context.Context, includeSubtreeHashes ...bool) (*model.MiningCandidate, error) {
+				return miningCandidate, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:              logger,
+			blockAssemblyClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		cmd := &bsvjson.GetRawMempoolCmd{
+			Verbose: func() *bool { v := true; return &v }(),
+		}
+
+		result, err := handleGetRawMempool(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		verboseResult, ok := result.(bsvjson.GetRawMempoolVerboseResult)
+		require.True(t, ok)
+		assert.Equal(t, int32(2), verboseResult.Size)
+		assert.Equal(t, float64(625000000), verboseResult.Fee)
+		assert.Equal(t, int64(1640995200), verboseResult.Time)
+		assert.Equal(t, int64(700000), verboseResult.Height)
+		assert.Equal(t, txHashes, verboseResult.Depends)
+	})
+
+	t.Run("nil verbose flag defaults to non-verbose", func(t *testing.T) {
+		txHashes := []string{"abc123def456"}
+
+		mockClient := &mockBlockAssemblyClient{
+			getTransactionHashesFunc: func(ctx context.Context) ([]string, error) {
+				return txHashes, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:              logger,
+			blockAssemblyClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		cmd := &bsvjson.GetRawMempoolCmd{
+			Verbose: nil, // nil verbose flag
+		}
+
+		result, err := handleGetRawMempool(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		hashes, ok := result.([]string)
+		require.True(t, ok)
+		assert.Equal(t, txHashes, hashes)
+	})
+
+	t.Run("get transaction hashes error", func(t *testing.T) {
+		mockClient := &mockBlockAssemblyClient{
+			getTransactionHashesFunc: func(ctx context.Context) ([]string, error) {
+				return nil, errors.New(errors.ERR_ERROR, "failed to get tx hashes")
+			},
+		}
+
+		s := &RPCServer{
+			logger:              logger,
+			blockAssemblyClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		cmd := &bsvjson.GetRawMempoolCmd{
+			Verbose: func() *bool { v := false; return &v }(),
+		}
+
+		result, err := handleGetRawMempool(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+		require.Nil(t, result)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Error retrieving raw mempool")
+		assert.Contains(t, rpcErr.Message, "failed to get tx hashes")
+	})
+
+	t.Run("verbose mode - get mining candidate error", func(t *testing.T) {
+		txHashes := []string{"abc123def456"}
+
+		mockClient := &mockBlockAssemblyClient{
+			getTransactionHashesFunc: func(ctx context.Context) ([]string, error) {
+				return txHashes, nil
+			},
+			getMiningCandidateFunc: func(ctx context.Context, includeSubtreeHashes ...bool) (*model.MiningCandidate, error) {
+				return nil, errors.New(errors.ERR_ERROR, "failed to get mining candidate")
+			},
+		}
+
+		s := &RPCServer{
+			logger:              logger,
+			blockAssemblyClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		cmd := &bsvjson.GetRawMempoolCmd{
+			Verbose: func() *bool { v := true; return &v }(),
+		}
+
+		result, err := handleGetRawMempool(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+		require.Nil(t, result)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Error retrieving mining candidate")
+		assert.Contains(t, rpcErr.Message, "failed to get mining candidate")
+	})
 
 	t.Run("requires block assembly client", func(t *testing.T) {
 		s := &RPCServer{
@@ -3786,9 +4054,14 @@ type mockBlockchainClient struct {
 	getChainTipsFunc         func(context.Context) ([]*model.ChainTip, error)
 	invalidateBlockFunc      func(context.Context, *chainhash.Hash) error
 	revalidateBlockFunc      func(context.Context, *chainhash.Hash) error
+	healthFunc               func(context.Context, bool) (int, string, error)
+	getFSMCurrentStateFunc   func(context.Context) (*blockchain.FSMStateType, error)
 }
 
 func (m *mockBlockchainClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if m.healthFunc != nil {
+		return m.healthFunc(ctx, checkLiveness)
+	}
 	return 200, "OK", nil
 }
 
@@ -3938,7 +4211,12 @@ func (m *mockBlockchainClient) GetChainTips(ctx context.Context) ([]*model.Chain
 	return nil, nil
 }
 func (m *mockBlockchainClient) GetFSMCurrentState(ctx context.Context) (*blockchain.FSMStateType, error) {
-	return nil, nil
+	if m.getFSMCurrentStateFunc != nil {
+		return m.getFSMCurrentStateFunc(ctx)
+	}
+	// Return a default healthy state
+	state := blockchain_api.FSMStateType_RUNNING
+	return &state, nil
 }
 func (m *mockBlockchainClient) IsFSMCurrentState(ctx context.Context, state blockchain.FSMStateType) (bool, error) {
 	return false, nil
@@ -4898,6 +5176,8 @@ type mockBlockAssemblyClient struct {
 	generateBlocksFunc       func(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) error
 	getCurrentDifficultyFunc func(ctx context.Context) (float64, error)
 	getMiningCandidateFunc   func(ctx context.Context, includeSubtreeHashes ...bool) (*model.MiningCandidate, error)
+	getTransactionHashesFunc func(ctx context.Context) ([]string, error)
+	healthFunc               func(context.Context, bool) (int, string, error)
 	// Add other methods as needed
 }
 
@@ -4910,6 +5190,9 @@ func (m *mockBlockAssemblyClient) SubmitMiningSolution(ctx context.Context, solu
 
 // Implement other required interface methods with default behavior
 func (m *mockBlockAssemblyClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if m.healthFunc != nil {
+		return m.healthFunc(ctx, checkLiveness)
+	}
 	return 200, "OK", nil
 }
 func (m *mockBlockAssemblyClient) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
@@ -4949,6 +5232,9 @@ func (m *mockBlockAssemblyClient) GetBlockAssemblyBlockCandidate(ctx context.Con
 	return nil, nil
 }
 func (m *mockBlockAssemblyClient) GetTransactionHashes(ctx context.Context) ([]string, error) {
+	if m.getTransactionHashesFunc != nil {
+		return m.getTransactionHashesFunc(ctx)
+	}
 	return nil, nil
 }
 
