@@ -318,8 +318,6 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 			"-coinbase=1",
 			"-faucet=1",
 			"-legacy=1",
-			"-utxopersister=1",
-			"-blockpersister=1",
 		}, appSettings, readyCh)
 	}()
 

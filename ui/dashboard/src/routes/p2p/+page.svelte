@@ -69,6 +69,7 @@
   let groupedMessages: any = {}
   let filteredMessages: any[] = []
   let peers: string[] = []
+  let peerClientNames: { [key: string]: string } = {} // Map peer IDs to client names
 
   // Message type filter
   let messageTypeSet = new Set(['All'])
@@ -153,6 +154,7 @@
 
     if (byPeer) {
       let newGroupedMessages: any = {}
+      let newPeerClientNames: { [key: string]: string } = {}
 
       filteredMessages.forEach((message, index) => {
         // Compare with lowercase since we convert types to lowercase
@@ -164,6 +166,11 @@
             newGroupedMessages[peerId] = []
           }
           newGroupedMessages[peerId].push(message)
+          
+          // Extract client name if available and not already stored
+          if (!newPeerClientNames[peerId] && message.client_name) {
+            newPeerClientNames[peerId] = message.client_name
+          }
         } else {
         }
       })
@@ -177,6 +184,7 @@
       })
 
       groupedMessages = newGroupedMessages
+      peerClientNames = newPeerClientNames
     }
 
     peers = Object.keys(groupedMessages).length > 0 ? Object.keys(groupedMessages) : []
@@ -256,11 +264,11 @@
     <div class="container">
       {#each peers as peer}
         <div class="column">
-          <div class="peer">
+          <div class="peer" title={peer}>
             <Typo
               variant="text"
               size="sm"
-              value={peer}
+              value={peerClientNames[peer] || '(not set)'}
               color="rgba(255, 255, 255, 0.66)"
               wrap={false}
             />

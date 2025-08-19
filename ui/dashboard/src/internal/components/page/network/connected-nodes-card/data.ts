@@ -148,14 +148,18 @@ export const renderCells = {
   client_name: (idField, item, colId) => {
     const clientName = item[colId] || item.client_name || '(not set)'
     const url = item.base_url || '-'
+    const peerId = item.peer_id || '-'
     const isCurrentNode = item.isCurrentNode === true
+    
+    // Build tooltip with base URL and peer ID
+    const tooltip = `${url}\n${peerId}`
     
     return {
       component: RenderSpanWithTooltip,
       props: {
         value: clientName,
         className: isCurrentNode ? 'current-node-name' : '',
-        tooltip: url,
+        tooltip: tooltip,
       },
       value: '',
     }

@@ -6,7 +6,7 @@
   import Typo from '$internal/components/typo/index.svelte'
   import Icon from '$lib/components/icon/index.svelte'
   import { Button } from '$lib/components'
-  import { miningNodes, currentNodePeerID, sock } from '$internal/stores/p2pStore'
+  import { miningNodes, sock, currentNodePeerID } from '$internal/stores/p2pStore'
   import { calculateChainworkScores } from '$internal/components/page/network/connected-nodes-card/data'
   import i18n from '$internal/i18n'
   import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
@@ -95,8 +95,8 @@
     isLoadingLocator = true
     
     try {
-      // Use the Asset Server's block_locator API endpoint directly
-      const response = await fetch('/api/v1/block_locator')
+      // Use the SvelteKit API route that proxies to the Asset Server
+      const response = await fetch('/api/blockchain/locator')
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
@@ -363,14 +363,18 @@
     client_name: (idField, item, colId) => {
       const clientName = item[colId] || item.client_name || '(not set)'
       const url = item.base_url || '-'
+      const peerId = item.peer_id || '-'
       const isCurrentNode = item.isCurrentNode === true
+      
+      // Build tooltip with base URL and peer ID
+      const tooltip = `${url}\n${peerId}`
       
       return {
         component: RenderSpanWithTooltip,
         props: {
           value: clientName,
           className: isCurrentNode ? 'current-node-name' : '',
-          tooltip: url,
+          tooltip: tooltip,
         },
         value: '',
       }

@@ -36,7 +36,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr" // nolint:misspell
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -3451,7 +3450,6 @@ func TestServerHandleNodeStatusTopic(t *testing.T) {
 			logger:         logger,
 			P2PNode:        mockP2P,
 			notificationCh: notifCh,
-			nodeStatusMap:  expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
 		}
 
 		jsonMsg := `{
@@ -3500,7 +3498,6 @@ func TestServerHandleNodeStatusTopic(t *testing.T) {
 			logger:         logger,
 			P2PNode:        mockP2P,
 			notificationCh: notifCh,
-			nodeStatusMap:  expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
 		}
 
 		jsonMsg := fmt.Sprintf(`{
@@ -3728,7 +3725,6 @@ func TestHandleBlockNotificationSuccess(t *testing.T) {
 		syncConnectionTimes: sync.Map{},
 		peerBlockHashes:     sync.Map{},
 		notificationCh:      make(chan *notificationMsg, 1),
-		nodeStatusMap:       expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
 		nodeStatusTopicName: "node-status-topic",
 	}
 
@@ -3783,7 +3779,6 @@ func TestHandleMiningOnNotificationSuccess(t *testing.T) {
 		peerBlockHashes:     sync.Map{},
 		settings:            testSettings,
 		notificationCh:      make(chan *notificationMsg, 2),
-		nodeStatusMap:       expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
 		nodeStatusTopicName: "node-status-topic",
 		startTime:           time.Now(),
 	}

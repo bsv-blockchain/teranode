@@ -37,7 +37,7 @@ type notificationMsg struct {
 	Version           string  `json:"version,omitempty"`         // Node version
 	CommitHash        string  `json:"commit_hash,omitempty"`     // Git commit hash
 	BestBlockHash     string  `json:"best_block_hash,omitempty"` // Best block hash
-	BestHeight        uint32  `json:"best_height,omitempty"`     // Best block height
+	BestHeight        uint32  `json:"best_height"`               // Best block height
 	TxCountInAssembly int     `json:"tx_count_in_assembly"`      // Transaction count in block assembly
 	FSMState          string  `json:"fsm_state,omitempty"`       // FSM state
 	StartTime         int64   `json:"start_time,omitempty"`      // Node start time
@@ -210,7 +210,7 @@ func (s *Server) startNotificationProcessor(
 		case newClient := <-newClientCh:
 			clientChannels.add(newClient)
 			// Send initial node_status messages to the new client
-			s.sendInitialNodeStatuses(newClient, baseURL)
+			s.sendInitialNodeStatuses(newClient)
 		case deadClient := <-deadClientCh:
 			clientChannels.remove(deadClient)
 		case <-pingTimer.C:
@@ -239,110 +239,27 @@ func (s *Server) startNotificationProcessor(
 	}
 }
 
-// sendInitialNodeStatuses sends all known node_status messages to a newly connected client
-// It ensures the current node's status is sent first
-func (s *Server) sendInitialNodeStatuses(clientCh chan []byte, _ string) {
-	allStatuses := s.GetNodeStatuses()
-	ourPeerID := ""
-	if s.P2PNode != nil {
-		ourPeerID = s.P2PNode.HostID().String()
+// sendInitialNodeStatuses sends the current node's status to a newly connected client
+// This ensures the UI can identify which node is the current one
+func (s *Server) sendInitialNodeStatuses(clientCh chan []byte) {
+	// Always generate a fresh node_status message for our node
+	ourStatus := s.getNodeStatusMessage(context.Background())
+	if ourStatus == nil {
+		s.logger.Warnf("[sendInitialNodeStatuses] Failed to get current node status")
+		return
 	}
 
-	// First, send our own node's status if we have it in the map
-	if ourPeerID != "" {
-		if storedStatus, exists := allStatuses[ourPeerID]; exists {
-			// Use the stored status which has all fields populated
-			notificationMsg := &notificationMsg{
-				Timestamp:         time.Now().UTC().Format(isoFormat),
-				Type:              "node_status",
-				BaseURL:           storedStatus.BaseURL,
-				PeerID:            storedStatus.PeerID,
-				Version:           storedStatus.Version,
-				CommitHash:        storedStatus.CommitHash,
-				BestBlockHash:     storedStatus.BestBlockHash,
-				BestHeight:        storedStatus.BestHeight,
-				TxCountInAssembly: storedStatus.TxCountInAssembly,
-				FSMState:          storedStatus.FSMState,
-				StartTime:         storedStatus.StartTime,
-				Uptime:            storedStatus.Uptime,
-				ClientName:        storedStatus.ClientName, // Added missing ClientName field
-				MinerName:         storedStatus.MinerName,
-				ListenMode:        storedStatus.ListenMode,
-				ChainWork:         storedStatus.ChainWork,
-				SyncPeerID:        storedStatus.SyncPeerID,
-				SyncPeerHeight:    storedStatus.SyncPeerHeight,
-				SyncPeerBlockHash: storedStatus.SyncPeerBlockHash,
-				SyncConnectedAt:   storedStatus.SyncConnectedAt,
-			}
-
-			if data, err := json.Marshal(notificationMsg); err == nil {
-				select {
-				case clientCh <- data:
-					s.logger.Debugf("[sendInitialNodeStatuses] Sent current node status (peer_id: %s) to new client", ourPeerID)
-				default:
-					s.logger.Warnf("[sendInitialNodeStatuses] Failed to send current node status - channel full")
-				}
-			} else {
-				s.logger.Errorf("[sendInitialNodeStatuses] Failed to marshal current node status: %v", err)
-			}
-		} else {
-			// No stored status, use fresh status from getNodeStatusMessage
-			ourStatus := s.getNodeStatusMessage(context.Background())
-			if ourStatus != nil {
-				if data, err := json.Marshal(ourStatus); err == nil {
-					select {
-					case clientCh <- data:
-						s.logger.Debugf("[sendInitialNodeStatuses] Sent fresh current node status (peer_id: %s) to new client", ourPeerID)
-					default:
-						s.logger.Warnf("[sendInitialNodeStatuses] Failed to send current node status - channel full")
-					}
-				}
-			}
+	// Send our node's status as the first message
+	if data, err := json.Marshal(ourStatus); err == nil {
+		select {
+		case clientCh <- data:
+			s.logger.Debugf("[sendInitialNodeStatuses] Sent current node status (peer_id: %s) to new client", ourStatus.PeerID)
+		default:
+			s.logger.Warnf("[sendInitialNodeStatuses] Failed to send current node status - channel full")
 		}
+	} else {
+		s.logger.Errorf("[sendInitialNodeStatuses] Failed to marshal current node status: %v", err)
 	}
-
-	// Then send all other known node statuses
-	for peerID, status := range allStatuses {
-		// Skip our own status as we already sent it
-		if peerID == ourPeerID {
-			continue
-		}
-
-		// Convert to notification message format
-		notificationMsg := &notificationMsg{
-			Timestamp:         time.Now().UTC().Format(isoFormat),
-			Type:              "node_status",
-			BaseURL:           status.BaseURL,
-			PeerID:            status.PeerID,
-			Version:           status.Version,
-			CommitHash:        status.CommitHash,
-			BestBlockHash:     status.BestBlockHash,
-			BestHeight:        status.BestHeight,
-			TxCountInAssembly: status.TxCountInAssembly,
-			FSMState:          status.FSMState,
-			StartTime:         status.StartTime,
-			Uptime:            status.Uptime,
-			ClientName:        status.ClientName, // Added missing ClientName field
-			MinerName:         status.MinerName,
-			ListenMode:        status.ListenMode,
-			ChainWork:         status.ChainWork,
-			SyncPeerID:        status.SyncPeerID,
-			SyncPeerHeight:    status.SyncPeerHeight,
-			SyncPeerBlockHash: status.SyncPeerBlockHash,
-			SyncConnectedAt:   status.SyncConnectedAt,
-		}
-
-		if data, err := json.Marshal(notificationMsg); err == nil {
-			select {
-			case clientCh <- data:
-				s.logger.Debugf("[sendInitialNodeStatuses] Sent node_status for peer %s to new client", peerID)
-			default:
-				s.logger.Warnf("[sendInitialNodeStatuses] Failed to send node_status for peer %s - channel full", peerID)
-			}
-		}
-	}
-
-	s.logger.Infof("[sendInitialNodeStatuses] Sent %d node_status messages to new client", len(allStatuses))
 }
 
 func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseURL string) func(c echo.Context) error {

@@ -1,7 +1,9 @@
 #!/bin/sh
 
-# Create network - command will show output but continue even if network exists
-docker network create app-tier --driver bridge || true
+# Create network only if it doesn't exist
+if ! docker network ls | grep -q app-tier; then
+    docker network create app-tier --driver bridge
+fi
 
 docker run --rm -d -p 9092-9093:9092-9093 --name kafka-server --hostname localhost \
     --network app-tier \

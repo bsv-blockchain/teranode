@@ -16,7 +16,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -257,7 +256,6 @@ func (c *testWebSocketConn) ReadMessage() (messageType int, p []byte, err error)
 func TestStartNotificationProcessor(t *testing.T) {
 	s := &Server{
 		logger:        &ulogger.TestLogger{},
-		nodeStatusMap: expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
 	}
 
 	clientChannels := newClientChannelMap()
@@ -304,6 +302,17 @@ func TestStartNotificationProcessor(t *testing.T) {
 		// Wait for client to be added
 		time.Sleep(50 * time.Millisecond)
 		require.True(t, clientChannels.contains(clientCh), errClientNotAdded)
+
+		// First, drain the initial node_status message
+		select {
+		case msg := <-clientCh:
+			var initialMsg notificationMsg
+			err := json.Unmarshal(msg, &initialMsg)
+			require.NoError(t, err)
+			assert.Equal(t, "node_status", initialMsg.Type, "First message should be node_status")
+		case <-time.After(100 * time.Millisecond):
+			// No initial message is OK too if the server doesn't have a P2PNode
+		}
 
 		// Send our test notification
 		testNotification := &notificationMsg{
@@ -380,7 +389,6 @@ func TestHandleWebSocket(t *testing.T) {
 	// Create server with logger
 	s := &Server{
 		logger:        &ulogger.TestLogger{},
-		nodeStatusMap: expiringmap.New[string, *NodeStatusMessage](1 * time.Minute),
 	}
 
 	// Create notification channel
@@ -454,7 +462,21 @@ func TestHandleWebSocket(t *testing.T) {
 
 		t.Log("Connected to WebSocket server")
 
-		// Send test notification
+		// First, read the initial node_status message that's sent automatically
+		t.Log("Reading initial node_status message")
+		err = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+		require.NoError(t, err)
+
+		messageType, message, err := ws.ReadMessage()
+		require.NoError(t, err)
+		assert.Equal(t, websocket.TextMessage, messageType)
+
+		var initialMsg notificationMsg
+		err = json.Unmarshal(message, &initialMsg)
+		require.NoError(t, err)
+		assert.Equal(t, "node_status", initialMsg.Type, "First message should be node_status")
+
+		// Now send test notification
 		testNotification := &notificationMsg{
 			Type:    "test",
 			BaseURL: baseURL,
@@ -467,7 +489,7 @@ func TestHandleWebSocket(t *testing.T) {
 		err = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
 		require.NoError(t, err)
 
-		messageType, message, err := ws.ReadMessage()
+		messageType, message, err = ws.ReadMessage()
 		require.NoError(t, err)
 		assert.Equal(t, websocket.TextMessage, messageType)
 

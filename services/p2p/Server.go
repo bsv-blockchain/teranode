@@ -56,7 +56,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
-	"github.com/ordishs/go-utils/expiringmap"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -123,8 +122,7 @@ type Server struct {
 	startTime                         time.Time                                            // Server start time for uptime calculation
 	syncManager                       *SyncManager                                         // Manager for peer synchronization and best peer selection
 	peerBlockHashes                   sync.Map                                             // Map to track peer best block hashes (peerID -> hash string)
-	syncConnectionTimes               sync.Map                                             // Map to track when we first connected to each sync peer (peerID -> timestamp)
-	nodeStatusMap                     *expiringmap.ExpiringMap[string, *NodeStatusMessage] // Map to track node status messages with 1 minute TTL
+	syncConnectionTimes               sync.Map // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
 	// Cleanup configuration
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
@@ -435,9 +433,6 @@ func NewServer(
 
 	// Initialize the sync manager for peer selection
 	p2pServer.syncManager = NewSyncManager(logger, tSettings.ChainCfgParams)
-
-	// Initialize node status map with 1 minute expiry
-	p2pServer.nodeStatusMap = expiringmap.New[string, *NodeStatusMessage](1 * time.Minute)
 
 	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
 
@@ -1036,13 +1031,6 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from strin
 	// Log all received node_status messages for debugging
 	s.logger.Debugf("[handleNodeStatusTopic] Received node_status from %s (peer_id: %s, is_self: %v, version: %s, height: %d)",
 		from, nodeStatusMessage.PeerID, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight)
-
-	// Store the node status message in the expiring map
-	// Use the PeerID as the key (not the 'from' parameter which might be different)
-	if nodeStatusMessage.PeerID != "" {
-		s.nodeStatusMap.Set(nodeStatusMessage.PeerID, &nodeStatusMessage)
-		s.logger.Debugf("[handleNodeStatusTopic] Stored node_status for peer %s in map", nodeStatusMessage.PeerID)
-	}
 
 	// Skip further processing for our own messages (peer height updates, etc.)
 	// but still forward to WebSocket
@@ -1658,14 +1646,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	}
 	s.logger.Debugf("[handleNodeStatusNotification] Successfully published node_status message")
 
-	// Store our own node status in the map so it's available for new WebSocket clients
-	if nodeStatusMessage.PeerID != "" {
-		s.nodeStatusMap.Set(nodeStatusMessage.PeerID, &nodeStatusMessage)
-		s.logger.Debugf("[handleNodeStatusNotification] Stored our node_status in map (peer_id: %s, client_name: %s)",
-			nodeStatusMessage.PeerID, nodeStatusMessage.ClientName)
-	}
-
-	// Also send to local WebSocket clients
+	// Send to local WebSocket clients
 	s.notificationCh <- notificationMsg
 
 	return nil
@@ -3016,26 +2997,3 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
 }
 
-// GetNodeStatuses returns all current node status messages from the expiring map.
-// Only statuses that have been updated within the last minute are returned.
-func (s *Server) GetNodeStatuses() map[string]*NodeStatusMessage {
-	result := make(map[string]*NodeStatusMessage)
-
-	// Get all items from the expiring map
-	items := s.nodeStatusMap.Items()
-	for peerID, status := range items {
-		result[peerID] = status
-	}
-
-	return result
-}
-
-// GetNodeStatus returns the node status for a specific peer ID.
-// Returns nil if the peer's status is not found or has expired.
-func (s *Server) GetNodeStatus(peerID string) *NodeStatusMessage {
-	status, found := s.nodeStatusMap.Get(peerID)
-	if !found {
-		return nil
-	}
-	return status
-}

@@ -42,14 +42,15 @@ export const handle: Handle = async ({ event, resolve }) => {
     // Prevent MIME type sniffing
     response.headers.set('X-Content-Type-Options', 'nosniff')
 
-    // Strict Content Security Policy with allowances for the asset service and centrifuge websocket
+    // Content Security Policy with allowances for the asset service, centrifuge websocket, and external teranode instances
+    // Allow connections to any https:// URL for teranode instances, but restrict other resource types
     response.headers.set(
       'Content-Security-Policy',
       "default-src 'self'; " +
         "script-src 'self' 'unsafe-inline'; " +
         "style-src 'self' 'unsafe-inline'; " +
         "img-src 'self' data:; " +
-        "connect-src 'self' http://localhost:8090 ws://localhost:8090 wss://localhost:8090;",
+        "connect-src 'self' http://localhost:8090 ws://localhost:8090 wss://localhost:8090 https: wss:;",
     )
 
     // Referrer policy

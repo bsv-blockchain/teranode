@@ -90,10 +90,21 @@
     --msgbox-default-border-color: #3e4451;
     --msgbox-block-border-color: #4caf50;
     --msgbox-mining_on-border-color: #2196f3;
+    --msgbox-miningon-border-color: #2196f3;
     --msgbox-subtree-border-color: #ff9800;
     --msgbox-ping-border-color: #9c27b0;
     --msgbox-node_status-border-color: #00bcd4;
     --msgbox-getminingcandidate-border-color: #795548;
+    --msgbox-tx-border-color: #ff5722;
+    --msgbox-transaction-border-color: #ff5722;
+    --msgbox-inv-border-color: #e91e63;
+    --msgbox-getdata-border-color: #673ab7;
+    --msgbox-getheaders-border-color: #3f51b5;
+    --msgbox-headers-border-color: #009688;
+    --msgbox-version-border-color: #607d8b;
+    --msgbox-verack-border-color: #8bc34a;
+    --msgbox-addr-border-color: #ffc107;
+    --msgbox-getblocks-border-color: #cddc39;
 
     /* Message box background and text colors */
     --msgbox-bg-color: rgba(255, 255, 255, 0.04);

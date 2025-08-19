@@ -2,60 +2,28 @@ import { writable, get } from 'svelte/store'
 import type { Writable } from 'svelte/store'
 //import * as api from '$internal/api'
 
-export const messages = writable([])
+export const messages: Writable<any[]> = writable([])
 export const miningNodes: any = writable({})
 export const wsUrl: Writable<URL | string> = writable('')
 export const error: Writable<any> = writable(null)
 export const sock: Writable<any> = writable(null)
 export const connectionAttempts: Writable<number> = writable(0)
-// Create a persistent store for current node peer ID
+// Create a simple store for current node peer ID (no localStorage)
 function createCurrentNodePeerIDStore() {
-  const STORAGE_KEY = 'teranode_current_node_peer_id'
-  
-  // Initialize from localStorage if available
-  let initialValue: string | null = null
-  if (typeof window !== 'undefined') {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      initialValue = stored || null
-    } catch (e) {
-      console.warn('Failed to read currentNodePeerID from localStorage:', e)
-    }
-  }
-  
-  const { subscribe, set, update } = writable<string | null>(initialValue)
+  const { subscribe, set, update } = writable<string | null>(null)
   
   return {
     subscribe,
     set: (value: string | null) => {
       set(value)
-      // Persist to localStorage
-      if (typeof window !== 'undefined') {
-        try {
-          if (value) {
-            localStorage.setItem(STORAGE_KEY, value)
-          } else {
-            localStorage.removeItem(STORAGE_KEY)
-          }
-        } catch (e) {
-          console.warn('Failed to save currentNodePeerID to localStorage:', e)
-        }
-      }
     },
     clear: () => {
       set(null)
-      if (typeof window !== 'undefined') {
-        try {
-          localStorage.removeItem(STORAGE_KEY)
-        } catch (e) {
-          console.warn('Failed to clear currentNodePeerID from localStorage:', e)
-        }
-      }
     }
   }
 }
 
-export const currentNodePeerID = createCurrentNodePeerIDStore() // Track our own node's peer ID persistently
+export const currentNodePeerID = createCurrentNodePeerIDStore() // Track our own node's peer ID
 
 const maxMessages = 500
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -96,8 +64,8 @@ export async function connectToP2PServer() {
         socket.onopen = () => {
           error.set(null)
           sock.set(socket)
-          // Don't reset the current node peer ID on reconnection - it should persist
-          // unless we're connecting to a different backend
+          // Reset firstNodeStatusReceived flag for new connection
+          firstNodeStatusReceived = false
           // This is required to trigger connect on server side since server expects
           // initial connect request from a WebSocket unidirectional client.
           socket.send(JSON.stringify({}))
@@ -168,11 +136,11 @@ export async function connectToP2PServer() {
               // (sent immediately upon WebSocket connection by the backend)
               let currentPeerID = get(currentNodePeerID)
               if (!firstNodeStatusReceived) {
-                // Always update on the first node_status of this connection,
-                // even if we have a stored value from a previous session
+                // Set the current node from the first node_status message
                 currentNodePeerID.set(jsonData.peer_id)
                 currentPeerID = jsonData.peer_id
                 firstNodeStatusReceived = true
+                console.log(`Current node identified: ${jsonData.peer_id}`)
               }
               
               const isCurrentNode = jsonData.peer_id === currentPeerID
@@ -238,8 +206,6 @@ export async function connectToP2PServer() {
           console.log(`p2pWS connection closed by server (${url})`)
           socket = null
           sock.set(null)
-          // Don't reset the current node peer ID on connection close - it should persist
-          // across reconnections unless we're connecting to a different backend
           // Reset the first node status flag so we can detect it again on reconnection
           firstNodeStatusReceived = false
 

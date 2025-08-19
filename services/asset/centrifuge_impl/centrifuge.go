@@ -44,7 +44,8 @@ type Centrifuge struct {
 	blockchainClient        blockchain.ClientI
 	centrifugeNode          *centrifuge.Node
 	cachedCurrentNodeStatus *notificationMsg // Cached current node status for new clients
-	statusMutex             sync.RWMutex     // Protects cachedCurrentNodeStatus
+	currentNodePeerID       string           // Track the current node's peer ID
+	statusMutex             sync.RWMutex     // Protects cachedCurrentNodeStatus and currentNodePeerID
 }
 
 // notificationMsg represents a P2P notification message that will be relayed to clients
@@ -330,6 +331,7 @@ func (c *Centrifuge) readMessages(ctx context.Context, client *atomic.Pointer[we
 					if c.cachedCurrentNodeStatus != nil {
 						c.logger.Infof("[Centrifuge] P2P connection lost - clearing cached current node status")
 						c.cachedCurrentNodeStatus = nil
+						c.currentNodePeerID = ""
 					}
 					c.statusMutex.Unlock()
 
@@ -345,23 +347,25 @@ func (c *Centrifuge) readMessages(ctx context.Context, client *atomic.Pointer[we
 					continue
 				}
 
-				// Cache the first node_status message (this is the current node from p2p)
+				// Handle node_status messages - cache first one and update if from same peer
 				if mType.Type == "node_status" {
-					c.statusMutex.RLock()
-					needsCache := (c.cachedCurrentNodeStatus == nil)
-					c.statusMutex.RUnlock()
+					var nodeStatus notificationMsg
+					if err := json.Unmarshal(message, &nodeStatus); err == nil {
+						c.statusMutex.Lock()
 
-					if needsCache {
-						var nodeStatus notificationMsg
-						if json.Unmarshal(message, &nodeStatus) == nil {
-							c.statusMutex.Lock()
-							// Double-check in case another goroutine cached it
-							if c.cachedCurrentNodeStatus == nil {
-								c.cachedCurrentNodeStatus = &nodeStatus
-								c.logger.Infof("[Centrifuge] Asset service ready - cached current node status from peer: %s", nodeStatus.PeerID)
-							}
-							c.statusMutex.Unlock()
+						// First node_status: cache it and remember the peer ID
+						if c.cachedCurrentNodeStatus == nil {
+							c.cachedCurrentNodeStatus = &nodeStatus
+							c.currentNodePeerID = nodeStatus.PeerID
+							c.logger.Infof("[Centrifuge] Asset service ready - cached current node status from peer: %s", nodeStatus.PeerID)
+						} else if c.currentNodePeerID == nodeStatus.PeerID {
+							// Update cache if this is from the same current node (keeps data fresh)
+							c.cachedCurrentNodeStatus = &nodeStatus
+							c.logger.Debugf("[Centrifuge] Updated cached node status for current node: %s (height: %d, uptime: %.0fs)",
+								nodeStatus.PeerID, nodeStatus.BestHeight, nodeStatus.Uptime)
 						}
+
+						c.statusMutex.Unlock()
 					}
 				}
 

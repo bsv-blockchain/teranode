@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit'
+import { dev } from '$app/environment'
 import type { RequestHandler } from './$types'
 
 /**
@@ -7,9 +8,13 @@ import type { RequestHandler } from './$types'
  */
 export const GET: RequestHandler = async ({ fetch }) => {
   try {
-    // Call the asset server to get the block locator using a relative path
-    // This will work both in development (proxied) and production (same origin)
-    const response = await fetch('/api/v1/block_locator', {
+    // In development, proxy to the Asset Server running on localhost:8090
+    // In production, use the relative path (same origin)
+    const assetServerUrl = dev 
+      ? 'http://localhost:8090/api/v1/block_locator'
+      : '/api/v1/block_locator'
+    
+    const response = await fetch(assetServerUrl, {
       headers: {
         'Accept': 'application/json'
       }

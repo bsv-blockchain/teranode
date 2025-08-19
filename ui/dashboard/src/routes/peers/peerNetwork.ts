@@ -679,10 +679,10 @@ export function drawPeerNetwork(
       }
       
       html += `
-        <div class="label">Peer ID:</div>
-        <div class="value">${d.peer_id || 'Unknown'}</div>
         <div class="label">Base URL:</div>
         <div class="value">${d.base_url || 'N/A'}</div>
+        <div class="label">Peer ID:</div>
+        <div class="value">${d.peer_id || 'Unknown'}</div>
         <div class="label">Block Height:</div>
         <div class="value">${(d.best_height || d.height || 0).toLocaleString()}</div>
         <div class="label">Block Hash:</div>

@@ -12,7 +12,7 @@
   let syncConnectionMap = new Map() // Store when we first connected to each sync peer
   let processedMessageCount = 0 // Track how many messages we've processed
   let hasReceivedMessages = false // Track if we've ever received any messages
-  // currentNodePeerID is now imported from the reactive store
+  // currentNodePeerID is imported from the p2pStore
   let messageHashes = new Map() // Track message hashes to detect duplicates
   let mounted = false // Track if component is mounted
 
