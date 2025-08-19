@@ -5,14 +5,11 @@ import type { RequestHandler } from './$types'
  * API endpoint to get the block locator from the blockchain service
  * This calls the asset server's API which in turn calls the blockchain gRPC service
  */
-export const GET: RequestHandler = async () => {
+export const GET: RequestHandler = async ({ fetch }) => {
   try {
-    // Get the node base URL from environment or config
-    const nodeBaseUrl = process.env.NODE_BASE_URL || 'http://localhost:8090'
-    
-    // Call the asset server to get the block locator
-    // The asset server will call the blockchain gRPC service's GetBlockLocator method
-    const response = await fetch(`${nodeBaseUrl}/api/v1/block_locator`, {
+    // Call the asset server to get the block locator using a relative path
+    // This will work both in development (proxied) and production (same origin)
+    const response = await fetch('/api/v1/block_locator', {
       headers: {
         'Accept': 'application/json'
       }

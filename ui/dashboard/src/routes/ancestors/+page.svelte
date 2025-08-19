@@ -95,8 +95,8 @@
     isLoadingLocator = true
     
     try {
-      // Use the blockchain locator API endpoint
-      const response = await fetch('/api/blockchain/locator')
+      // Use the Asset Server's block_locator API endpoint directly
+      const response = await fetch('/api/v1/block_locator')
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
@@ -190,25 +190,22 @@
     }
     
     try {
-      // Call the peer's DataHub to find common ancestor
-      const url = `/api/proxy/datahub`
+      // Call the peer's DataHub directly (CORS is enabled on all nodes)
       // base_url already includes /api/v1
       const targetUrl = `${dataHubUrl}/headers_from_common_ancestor/${peer.best_block_hash}/json?block_locator_hashes=${blockLocatorHashesStr}&n=1`
       
       // Debug: uncomment to see request details
-      // console.log(`Calling proxy for peer ${peer.peer_id}:`, {
-      //   proxyUrl: url,
+      // console.log(`Calling peer ${peer.peer_id} directly:`, {
       //   targetUrl: targetUrl,
       //   blockLocatorLength: blockLocator.length,
       //   blockLocatorHashesLength: blockLocatorHashesStr.length
       // })
       
-      const response = await fetch(url, {
-        method: 'POST',
+      const response = await fetch(targetUrl, {
+        method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
-        body: JSON.stringify({ targetUrl: targetUrl }),
       })
       
       if (!response.ok) {
@@ -218,7 +215,7 @@
         if (response.status === 404) {
           try {
             const errorData = JSON.parse(errorText)
-            // Check both 'error' and 'message' fields as the proxy might reformat
+            // Check for error message in the response
             const errorMessage = errorData.error || errorData.message || ''
             if (errorMessage.includes('BLOCK_NOT_FOUND') || 
                 errorMessage.includes('not found') || 
@@ -243,7 +240,7 @@
         }
           
         // Debug: uncomment to see error details
-        // console.error(`Proxy request failed for peer ${peer.peer_id}:`, {
+        // console.error(`Request failed for peer ${peer.peer_id}:`, {
         //   status: response.status,
         //   statusText: response.statusText,
         //   errorBody: errorText,
