@@ -50,6 +50,7 @@ kustomization.yaml.bak
 
 # Local Claude configuration (user-specific)
 CLAUDE.local.md
+.claude/settings.local.json
 
 *.log
 
