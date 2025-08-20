@@ -1137,7 +1137,7 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.SubtreeNode, parents *subtr
 
 func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err error) {
 	if !skipNotification {
-		stp.logger.Infof("[%s] append subtree", stp.currentSubtree.RootHash().String())
+		stp.logger.Debugf("[%s] append subtree", stp.currentSubtree.RootHash().String())
 	}
 
 	// Track the actual number of nodes in this subtree

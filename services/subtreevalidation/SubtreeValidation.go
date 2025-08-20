@@ -1285,19 +1285,32 @@ func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingT
 			continue
 		}
 
+		maxParentLevel := uint32(0)
+
+		// Check each input of the transaction to find its parents
+		// and determine the maximum level of those parents
+		// This is done to ensure that we can process transactions in the correct order
 		for _, input := range wrapper.missingTx.tx.Inputs {
 			parentHash := *input.PreviousTxIDChainHash()
 
 			// check if parentHash exists in the map, which means it is part of the subtree and already processed
 			if parentWrapper, exists := txMap[parentHash]; exists {
 				wrapper.someParentsInBlock = true
-				wrapper.childLevelInBlock = parentWrapper.childLevelInBlock + 1
-				sizePerLevel[wrapper.childLevelInBlock]++
-
-				if wrapper.childLevelInBlock > maxLevel {
-					maxLevel = wrapper.childLevelInBlock
+				// Update the maximum parent level found
+				if parentWrapper.childLevelInBlock >= maxParentLevel {
+					maxParentLevel = parentWrapper.childLevelInBlock + 1 // Increment to account for the current transaction level
 				}
 			}
+		}
+
+		wrapper.childLevelInBlock = maxParentLevel
+
+		// increment the sizePerLevel for the current level
+		sizePerLevel[maxParentLevel]++
+
+		// Update the transaction's level in the block
+		if maxParentLevel > maxLevel {
+			maxLevel = maxParentLevel
 		}
 	}
 

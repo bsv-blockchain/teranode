@@ -415,10 +415,9 @@ func TestExtractAndCollectTransactions(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test extraction
-		var mutex sync.Mutex
 		var allTransactions []*bt.Tx
 
-		err = server.extractAndCollectTransactions(context.Background(), subtreeHash, &mutex, &allTransactions)
+		err = server.extractAndCollectTransactions(context.Background(), subtreeHash, &allTransactions)
 		require.NoError(t, err)
 
 		assert.Len(t, allTransactions, 2)
@@ -434,10 +433,9 @@ func TestExtractAndCollectTransactions(t *testing.T) {
 		subtreeHash := chainhash.Hash{}
 		copy(subtreeHash[:], []byte("non_existent_hash_32_bytes_long!"))
 
-		var mutex sync.Mutex
 		var allTransactions []*bt.Tx
 
-		err := server.extractAndCollectTransactions(context.Background(), subtreeHash, &mutex, &allTransactions)
+		err := server.extractAndCollectTransactions(context.Background(), subtreeHash, &allTransactions)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get subtreeData from store")
 	})
@@ -455,10 +453,9 @@ func TestExtractAndCollectTransactions(t *testing.T) {
 		err := server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtreeData, invalidData)
 		require.NoError(t, err)
 
-		var mutex sync.Mutex
 		var allTransactions []*bt.Tx
 
-		err = server.extractAndCollectTransactions(context.Background(), subtreeHash, &mutex, &allTransactions)
+		err = server.extractAndCollectTransactions(context.Background(), subtreeHash, &allTransactions)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to read transactions from subtreeData")
 	})
@@ -485,10 +482,9 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 		subtreeHash := chainhash.Hash{}
 		copy(subtreeHash[:], []byte("test_subtree_hash_32_bytes_long!"))
 
-		var mutex sync.Mutex
 		var allTransactions []*bt.Tx
 
-		err = server.processSubtreeDataStream(context.Background(), subtreeHash, body, &mutex, &allTransactions)
+		err = server.processSubtreeDataStream(context.Background(), subtreeHash, body, &allTransactions)
 		require.NoError(t, err)
 
 		// Verify transactions were collected
@@ -524,10 +520,9 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 		subtreeHash := chainhash.Hash{}
 		copy(subtreeHash[:], []byte("test_subtree_hash_32_bytes_long!"))
 
-		var mutex sync.Mutex
 		var allTransactions []*bt.Tx
 
-		err = server.processSubtreeDataStream(context.Background(), subtreeHash, body, &mutex, &allTransactions)
+		err = server.processSubtreeDataStream(context.Background(), subtreeHash, body, &allTransactions)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to store subtree data")
 		// Verify transaction was still collected before storage error
@@ -545,10 +540,9 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 		subtreeHash := chainhash.Hash{}
 		copy(subtreeHash[:], []byte("test_subtree_hash_32_bytes_long!"))
 
-		var mutex sync.Mutex
 		var allTransactions []*bt.Tx
 
-		err := server.processSubtreeDataStream(context.Background(), subtreeHash, body, &mutex, &allTransactions)
+		err := server.processSubtreeDataStream(context.Background(), subtreeHash, body, &allTransactions)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "error reading transaction")
 	})
@@ -571,10 +565,9 @@ func TestReadTransactionsFromSubtreeDataStream(t *testing.T) {
 		subtreeData.Write(tx1.Bytes())
 		subtreeData.Write(tx2.Bytes())
 
-		var mutex sync.Mutex
 		var allTransactions []*bt.Tx
 
-		count, err := server.readTransactionsFromSubtreeDataStream(&subtreeData, &mutex, &allTransactions)
+		count, err := server.readTransactionsFromSubtreeDataStream(&subtreeData, &allTransactions)
 		require.NoError(t, err)
 
 		assert.Equal(t, 2, count)
@@ -588,10 +581,9 @@ func TestReadTransactionsFromSubtreeDataStream(t *testing.T) {
 		defer cleanup()
 
 		emptyBuffer := bytes.Buffer{}
-		var mutex sync.Mutex
 		var allTransactions []*bt.Tx
 
-		count, err := server.readTransactionsFromSubtreeDataStream(&emptyBuffer, &mutex, &allTransactions)
+		count, err := server.readTransactionsFromSubtreeDataStream(&emptyBuffer, &allTransactions)
 		require.NoError(t, err)
 
 		assert.Equal(t, 0, count)
@@ -1116,7 +1108,6 @@ func TestExtractAndCollectTransactions_ConcurrentAccess(t *testing.T) {
 	require.NoError(t, err)
 
 	// Shared resources
-	var mutex sync.Mutex
 	var allTransactions []*bt.Tx
 
 	// Extract from multiple subtrees concurrently
@@ -1125,13 +1116,13 @@ func TestExtractAndCollectTransactions_ConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		err := server.extractAndCollectTransactions(context.Background(), subtreeHash1, &mutex, &allTransactions)
+		err := server.extractAndCollectTransactions(context.Background(), subtreeHash1, &allTransactions)
 		assert.NoError(t, err)
 	}()
 
 	go func() {
 		defer wg.Done()
-		err := server.extractAndCollectTransactions(context.Background(), subtreeHash2, &mutex, &allTransactions)
+		err := server.extractAndCollectTransactions(context.Background(), subtreeHash2, &allTransactions)
 		assert.NoError(t, err)
 	}()
 

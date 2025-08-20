@@ -117,18 +117,20 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 	// Shared collection for all transactions across subtrees
 	var (
-		allTransactionsMutex sync.Mutex
-		subtree              *subtreepkg.Subtree
+		subtree         *subtreepkg.Subtree
+		subtreeTxs      = make([][]*bt.Tx, len(missingSubtrees))
+		allTransactions = make([]*bt.Tx, 0, block.TransactionCount)
 	)
-
-	allTransactions := make([]*bt.Tx, 0, block.TransactionCount)
 
 	// get all the subtrees that are missing from the peer in parallel
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, 32)
 
-	for _, subtreeHash := range missingSubtrees {
+	for subtreeIdx, subtreeHash := range missingSubtrees {
 		subtreeHash := subtreeHash
+		subtreeIdx := subtreeIdx
+
+		subtreeTxs[subtreeIdx] = make([]*bt.Tx, 0, 1024) // Pre-allocate space for transactions in this subtree
 
 		g.Go(func() (err error) {
 			subtreeDataExists, err := u.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeData)
@@ -146,7 +148,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 				}
 
 				// Process transactions directly from the stream while storing to disk
-				err = u.processSubtreeDataStream(gCtx, subtreeHash, body, &allTransactionsMutex, &allTransactions)
+				err = u.processSubtreeDataStream(gCtx, subtreeHash, body, &subtreeTxs[subtreeIdx])
 				_ = body.Close()
 
 				if err != nil {
@@ -154,7 +156,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 				}
 			} else {
 				// SubtreeData exists, extract transactions from stored file
-				err = u.extractAndCollectTransactions(gCtx, subtreeHash, &allTransactionsMutex, &allTransactions)
+				err = u.extractAndCollectTransactions(gCtx, subtreeHash, &subtreeTxs[subtreeIdx])
 				if err != nil {
 					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to extract transactions: %v", subtreeHash.String(), err)
 				}
@@ -167,6 +169,15 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	if err = g.Wait(); err != nil {
 		return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to get subtree tx hashes", err)
 	}
+
+	// Collect all transactions from all subtrees into a single slice for processing
+	for _, txs := range subtreeTxs {
+		if len(txs) > 0 {
+			allTransactions = append(allTransactions, txs...)
+		}
+	}
+
+	subtreeTxs = nil // Clear the slice to free memory
 
 	// get the previous block headers on this chain and pass into the validation
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()))
@@ -277,8 +288,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 // extractAndCollectTransactions extracts all transactions from a subtree's data file
 // and adds them to the shared collection for block-wide processing
-func (u *Server) extractAndCollectTransactions(ctx context.Context, subtreeHash chainhash.Hash,
-	mutex *sync.Mutex, allTransactions *[]*bt.Tx) error {
+func (u *Server) extractAndCollectTransactions(ctx context.Context, subtreeHash chainhash.Hash, subtreeTransactions *[]*bt.Tx) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "extractAndCollectTransactions",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[extractAndCollectTransactions] called for subtree %s", subtreeHash.String()),
@@ -296,7 +306,7 @@ func (u *Server) extractAndCollectTransactions(ctx context.Context, subtreeHash 
 	bufferedReader := bufio.NewReaderSize(subtreeDataReader, 4*1024*1024) // 4MB buffer size
 
 	// Read transactions directly into the shared collection
-	txCount, err := u.readTransactionsFromSubtreeDataStream(bufferedReader, mutex, allTransactions)
+	txCount, err := u.readTransactionsFromSubtreeDataStream(bufferedReader, subtreeTransactions)
 	if err != nil {
 		return errors.NewProcessingError("[extractAndCollectTransactions] failed to read transactions from subtreeData", err)
 	}
@@ -309,7 +319,7 @@ func (u *Server) extractAndCollectTransactions(ctx context.Context, subtreeHash 
 // processSubtreeDataStream processes subtreeData directly from HTTP stream while storing to disk
 // This avoids the inefficiency of writing to disk and immediately reading back
 func (u *Server) processSubtreeDataStream(ctx context.Context, subtreeHash chainhash.Hash,
-	body io.ReadCloser, mutex *sync.Mutex, allTransactions *[]*bt.Tx) error {
+	body io.ReadCloser, allTransactions *[]*bt.Tx) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processSubtreeDataStream",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[processSubtreeDataStream] called for subtree %s", subtreeHash.String()),
@@ -323,7 +333,7 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtreeHash chain
 	teeReader := io.TeeReader(body, &buffer)
 
 	// Read transactions directly into the shared collection from the stream
-	txCount, err := u.readTransactionsFromSubtreeDataStream(teeReader, mutex, allTransactions)
+	txCount, err := u.readTransactionsFromSubtreeDataStream(teeReader, allTransactions)
 	if err != nil {
 		return errors.NewProcessingError("[processSubtreeDataStream] failed to read transactions from stream", err)
 	}
@@ -342,10 +352,7 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtreeHash chain
 
 // readTransactionsFromSubtreeDataStream reads transactions directly from subtreeData stream
 // This follows the same pattern as go-subtree's serializeFromReader but appends directly to the shared collection
-func (u *Server) readTransactionsFromSubtreeDataStream(reader io.Reader, mutex *sync.Mutex, allTransactions *[]*bt.Tx) (int, error) {
-	// Collect transactions locally first, then bulk append
-	// Pre-allocate local buffer                                                                                                                                            │ │
-	localTxs := make([]*bt.Tx, 0, 1024) // Adjust size as needed
+func (u *Server) readTransactionsFromSubtreeDataStream(reader io.Reader, subtreeTransactions *[]*bt.Tx) (int, error) {
 	txCount := 0
 
 	for {
@@ -362,23 +369,8 @@ func (u *Server) readTransactionsFromSubtreeDataStream(reader io.Reader, mutex *
 
 		tx.SetTxHash(tx.TxIDChainHash()) // Cache the transaction hash to avoid recomputing it
 
-		localTxs = append(localTxs, tx)
+		*subtreeTransactions = append(*subtreeTransactions, tx)
 		txCount++
-
-		if len(localTxs) >= 1024 {
-			// Lock and append to shared collection in bulk
-			mutex.Lock()
-			*allTransactions = append(*allTransactions, localTxs...)
-			mutex.Unlock()
-			localTxs = localTxs[:0] // Reset local buffer
-		}
-	}
-
-	// Append any remaining transactions in local buffer
-	if len(localTxs) > 0 {
-		mutex.Lock()
-		*allTransactions = append(*allTransactions, localTxs...)
-		mutex.Unlock()
 	}
 
 	return txCount, nil
@@ -457,37 +449,31 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 				// Use existing blessMissingTransaction logic for validation
 				txMeta, err := u.blessMissingTransaction(gCtx, chainhash.Hash{}, tx, blockHeight, blockIds, processedValidatorOptions)
 				if err != nil {
-					u.logger.Debugf("[processTransactionsInLevels] Failed to validate transaction %s: %v",
-						tx.TxIDChainHash().String(), err)
+					u.logger.Debugf("[processTransactionsInLevels] Failed to validate transaction %s: %v", tx.TxIDChainHash().String(), err)
 					errorsFound.Add(1)
 
 					// Handle missing parent transactions by adding to orphanage
 					if errors.Is(err, errors.ErrTxMissingParent) {
 						isRunning, runningErr := u.blockchainClient.IsFSMCurrentState(gCtx, blockchain.FSMStateRUNNING)
 						if runningErr == nil && isRunning {
-							u.logger.Debugf("[processTransactionsInLevels] Transaction %s missing parent, adding to orphanage",
-								tx.TxIDChainHash().String())
+							u.logger.Debugf("[processTransactionsInLevels] Transaction %s missing parent, adding to orphanage", tx.TxIDChainHash().String())
 							u.orphanage.Set(*tx.TxIDChainHash(), tx)
 							addedToOrphanage.Add(1)
 						}
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Log truly invalid transactions
-						u.logger.Warnf("[processTransactionsInLevels] Invalid transaction detected: %s: %v",
-							tx.TxIDChainHash().String(), err)
+						u.logger.Warnf("[processTransactionsInLevels] Invalid transaction detected: %s: %v", tx.TxIDChainHash().String(), err)
 					} else {
-						u.logger.Errorf("[processTransactionsInLevels] Processing error for transaction %s: %v",
-							tx.TxIDChainHash().String(), err)
+						u.logger.Errorf("[processTransactionsInLevels] Processing error for transaction %s: %v", tx.TxIDChainHash().String(), err)
 					}
 
 					return nil // Don't fail the entire level
 				}
 
 				if txMeta == nil {
-					u.logger.Debugf("[processTransactionsInLevels] Transaction metadata is nil for %s",
-						tx.TxIDChainHash().String())
+					u.logger.Debugf("[processTransactionsInLevels] Transaction metadata is nil for %s", tx.TxIDChainHash().String())
 				} else {
-					u.logger.Debugf("[processTransactionsInLevels] Successfully validated transaction %s",
-						tx.TxIDChainHash().String())
+					u.logger.Debugf("[processTransactionsInLevels] Successfully validated transaction %s", tx.TxIDChainHash().String())
 				}
 
 				return nil
@@ -503,8 +489,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	}
 
 	if errorsFound.Load() > 0 {
-		u.logger.Warnf("[processTransactionsInLevels] Completed processing with %d errors, %d transactions added to orphanage",
-			errorsFound.Load(), addedToOrphanage.Load())
+		u.logger.Warnf("[processTransactionsInLevels] Completed processing with %d errors, %d transactions added to orphanage", errorsFound.Load(), addedToOrphanage.Load())
 	} else {
 		u.logger.Infof("[processTransactionsInLevels] Successfully processed all %d transactions", len(allTransactions))
 	}
