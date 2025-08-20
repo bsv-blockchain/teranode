@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { dev } from '$app/environment'
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import Table from '$lib/components/table/index.svelte'
@@ -95,8 +96,12 @@
     isLoadingLocator = true
     
     try {
-      // Use the SvelteKit API route that proxies to the Asset Server
-      const response = await fetch('/api/blockchain/locator')
+      // In dev, use proxy; in production, call asset server directly
+      const url = dev 
+        ? '/api/blockchain/locator'  // Proxy in development
+        : '/api/v1/block_locator'     // Direct in production
+        
+      const response = await fetch(url)
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
