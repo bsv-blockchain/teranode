@@ -311,7 +311,12 @@
           "confirmations_value": "{{ count }} Confirmations",
           "sizeInBytes": "Tx Size",
           "fee_rate": "Fee Rate",
-          "fee_paid": "Fee Paid"
+          "fee_paid": "Fee Paid",
+          "blockHeight": "Block Height",
+          "subtree": "Subtree",
+          "fee": "Fee",
+          "lockTime": "Lock Time",
+          "type": "Transaction Type"
         }
       },
       "txs": {
@@ -426,6 +431,6 @@
   },
   "global": {
     "warning": "",
-    "warning_2": "---- Alpha Testing in Progress  Expect Breaks & Resets! ----"
+    "warning_2": ""
   }
 }

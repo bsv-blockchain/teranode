@@ -111,6 +111,40 @@
               {dataSize(d?.sizeInBytes)}
             </div>
           </div>
+          {#if d?.blockHeights && d?.blockHeights.length > 0 && d?.blockHashes && d?.blockHashes.length > 0}
+            <div class="entry">
+              <div class="label">{t(`${fieldKey}.blockHeight`)}</div>
+              <div class="value block-links">
+                {#each d.blockHeights as height, i}
+                  {#if d.blockHashes[i]}
+                    <a href={`/viewer/block/${d.blockHashes[i]}`} class="block-link">
+                      {height}
+                    </a>
+                    {#if i < d.blockHeights.length - 1}
+                      <span>, </span>
+                    {/if}
+                  {:else}
+                    {height}{#if i < d.blockHeights.length - 1}, {/if}
+                  {/if}
+                {/each}
+              </div>
+            </div>
+          {:else if d?.blockHeights && d?.blockHeights.length > 0}
+            <div class="entry">
+              <div class="label">{t(`${fieldKey}.blockHeight`)}</div>
+              <div class="value">
+                {d.blockHeights.join(', ')}
+              </div>
+            </div>
+          {/if}
+          {#if d?.subtreeIdxs && d?.subtreeIdxs.length > 0}
+            <div class="entry">
+              <div class="label">{t(`${fieldKey}.subtree`)}</div>
+              <div class="value">
+                {d.subtreeIdxs.map(idx => `Subtree ${idx}`).join(', ')}
+              </div>
+            </div>
+          {/if}
         </div>
         <div>
           <!-- <div class="entry">
@@ -129,6 +163,24 @@
             <div class="label">{t(`${fieldKey}.fee_paid`)}</div>
             <div class="value">TBD</div>
           </div> -->
+          {#if d?.fee !== undefined}
+            <div class="entry">
+              <div class="label">{t(`${fieldKey}.fee`)}</div>
+              <div class="value">{addNumCommas(d.fee)} satoshis</div>
+            </div>
+          {/if}
+          {#if d?.lockTime !== undefined}
+            <div class="entry">
+              <div class="label">{t(`${fieldKey}.lockTime`)}</div>
+              <div class="value">{d.lockTime}</div>
+            </div>
+          {/if}
+          {#if d?.isCoinbase !== undefined}
+            <div class="entry">
+              <div class="label">{t(`${fieldKey}.type`)}</div>
+              <div class="value">{d.isCoinbase ? 'Coinbase' : 'Regular'}</div>
+            </div>
+          {/if}
         </div>
       </div>
     {:else if isJson}
@@ -232,5 +284,22 @@
     border: none;
     color: inherit;
     font: inherit;
+  }
+
+  .block-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .block-link {
+    color: #1778ff;
+    text-decoration: none;
+    transition: opacity 0.2s;
+  }
+
+  .block-link:hover {
+    opacity: 0.8;
+    text-decoration: underline;
   }
 </style>

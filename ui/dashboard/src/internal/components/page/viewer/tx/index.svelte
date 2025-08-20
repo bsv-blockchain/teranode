@@ -59,9 +59,13 @@
       tmpData = {
         ...tmpData,
         blockHashes: r2.data.blockHashes,
+        blockHeights: r2.data.blockHeights,
+        subtreeIdxs: r2.data.subtreeIdxs,
         fee: r2.data.fee,
         parentTxHashes: r2.data.parentTxHashes,
         sizeInBytes: r2.data.sizeInBytes,
+        isCoinbase: r2.data.isCoinbase,
+        lockTime: r2.data.lockTime,
       }
     } else {
       failed = true

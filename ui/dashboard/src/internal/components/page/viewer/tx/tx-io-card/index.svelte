@@ -5,6 +5,8 @@
   import { DetailType, getHashLinkProps } from '$internal/utils/urls'
   import LinkHashCopy from '$internal/components/item-renderers/link-hash-copy/index.svelte'
   import i18n from '$internal/i18n'
+  import { detectScriptType, scriptToAsm, extractOpReturnData, getScriptTypeDescription, ScriptType, extractAddress } from '$internal/utils/bitcoin-scripts'
+  import { onMount } from 'svelte'
 
   const baseKey = 'page.viewer-tx.txs'
 
@@ -15,13 +17,44 @@
   export let data: any = []
 
   let sliceCount = 10
+  let outputViewModes: { [key: number]: 'default' | 'asm' | 'hex' } = {}
+  let inputViewModes: { [key: number]: 'default' | 'hex' } = {}
+  let outputAddresses: { [key: number]: string | null } = {}
 
   function increaseSlize() {
     sliceCount += 10
   }
 
+  function toggleOutputView(index: number) {
+    const current = outputViewModes[index] || 'default'
+    const modes = ['default', 'asm', 'hex'] as const
+    const currentIndex = modes.indexOf(current)
+    outputViewModes[index] = modes[(currentIndex + 1) % modes.length]
+    outputViewModes = { ...outputViewModes } // Trigger reactivity
+  }
+
+  function toggleInputView(index: number) {
+    const current = inputViewModes[index] || 'default'
+    inputViewModes[index] = current === 'default' ? 'hex' : 'default'
+    inputViewModes = { ...inputViewModes } // Trigger reactivity
+  }
+
   $: inputSlice = data.inputs.slice(0, sliceCount)
   $: outputSlice = data.outputs.slice(0, sliceCount)
+
+  // Extract addresses for outputs when component mounts or data changes
+  $: if (data.outputs) {
+    data.outputs.forEach(async (output, index) => {
+      const scriptType = detectScriptType(output.lockingScript)
+      if (scriptType === ScriptType.P2PKH || scriptType === ScriptType.P2SH) {
+        const address = await extractAddress(output.lockingScript, scriptType)
+        if (address) {
+          outputAddresses[index] = address
+          outputAddresses = { ...outputAddresses } // Trigger reactivity
+        }
+      }
+    })
+  }
 </script>
 
 <div class="io" class:collapse>
@@ -43,12 +76,29 @@
             {i}
           </div>
           <div class="values">
-            <div class="copy-link">
-              <LinkHashCopy {...getHashLinkProps(DetailType.tx, input.txid, t, false)} />
-            </div>
+            {#if input.txid && input.txid !== '0000000000000000000000000000000000000000000000000000000000000000'}
+              <div class="copy-link">
+                <LinkHashCopy {...getHashLinkProps(DetailType.tx, input.txid, t, false)} />
+                <span class="output-ref">:{input.vout || 0}</span>
+              </div>
+            {:else}
+              <div class="coinbase-input">Coinbase Input</div>
+            {/if}
             <span
               >{`${input.previousTxSatoshis ? formatSatoshi(input.previousTxSatoshis) : '-'} BSV`}</span
             >
+            {#if input.unlockingScript}
+              <button 
+                class="view-toggle"
+                on:click={() => toggleInputView(i)}
+                type="button"
+              >
+                {inputViewModes[i] === 'hex' ? 'Show Default' : 'Show Hex'}
+              </button>
+              {#if inputViewModes[i] === 'hex'}
+                <div class="script-hex">{input.unlockingScript}</div>
+              {/if}
+            {/if}
           </div>
         </div>
       {/each}
@@ -70,15 +120,45 @@
     </div>
     <div class="items">
       {#each outputSlice as output, i}
+        {@const scriptType = detectScriptType(output.lockingScript)}
+        {@const viewMode = outputViewModes[i] || 'default'}
         <div class="entry">
           <div class="index">
             {i}
           </div>
           <div class="values">
-            <div class="copy-link">
-              <LinkHashCopy {...getHashLinkProps(DetailType.tx, output.lockingScript, t, false)} />
+            <div class="script-type">
+              <span class="type-badge {scriptType.toLowerCase()}">{scriptType}</span>
+              <span class="type-desc">{getScriptTypeDescription(scriptType)}</span>
             </div>
-            <span>{`${formatSatoshi(output.satoshis)} BSV`}</span>
+            {#if outputAddresses[i] && (scriptType === ScriptType.P2PKH || scriptType === ScriptType.P2SH)}
+              <div class="address">
+                <span class="address-label">Address:</span>
+                <span class="address-value">{outputAddresses[i]}</span>
+              </div>
+            {/if}
+            <span class="amount">{`${formatSatoshi(output.satoshis)} BSV`}</span>
+            
+            <button 
+              class="view-toggle"
+              on:click={() => toggleOutputView(i)}
+              type="button"
+            >
+              {viewMode === 'default' ? 'Show Script' : viewMode === 'asm' ? 'Show Hex' : 'Show Default'}
+            </button>
+            
+            {#if viewMode === 'asm'}
+              <div class="script-asm">{scriptToAsm(output.lockingScript)}</div>
+            {:else if viewMode === 'hex'}
+              <div class="script-hex">{output.lockingScript}</div>
+            {:else if scriptType === ScriptType.OP_RETURN}
+              {@const opReturnData = extractOpReturnData(output.lockingScript)}
+              {#if opReturnData}
+                <div class="op-return-data">
+                  <span class="data-label">Data:</span> {opReturnData}
+                </div>
+              {/if}
+            {/if}
           </div>
         </div>
       {/each}
@@ -202,5 +282,130 @@
     display: block;
     width: 100%;
     text-align: left;
+  }
+
+  .script-type {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .type-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .type-badge.p2pkh {
+    background: rgba(23, 120, 255, 0.2);
+    color: #1778ff;
+  }
+
+  .type-badge.p2sh {
+    background: rgba(255, 193, 7, 0.2);
+    color: #ffc107;
+  }
+
+  .type-badge.op_return {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4caf50;
+  }
+
+  .type-badge.p2pk {
+    background: rgba(156, 39, 176, 0.2);
+    color: #9c27b0;
+  }
+
+  .type-badge.p2ms {
+    background: rgba(255, 87, 34, 0.2);
+    color: #ff5722;
+  }
+
+  .type-desc {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.66);
+  }
+
+  .amount {
+    font-weight: 500;
+    margin: 4px 0;
+  }
+
+  .view-toggle {
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.66);
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    margin: 8px 0;
+    transition: all 0.2s;
+  }
+
+  .view-toggle:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.88);
+  }
+
+  .script-asm,
+  .script-hex {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 8px;
+    border-radius: 4px;
+    word-break: break-all;
+    margin-top: 8px;
+    color: rgba(255, 255, 255, 0.88);
+  }
+
+  .op-return-data {
+    background: rgba(76, 175, 80, 0.1);
+    padding: 8px;
+    border-radius: 4px;
+    margin-top: 8px;
+    word-break: break-all;
+  }
+
+  .data-label {
+    font-weight: 700;
+    color: #4caf50;
+  }
+
+  .output-ref {
+    color: rgba(255, 255, 255, 0.66);
+    margin-left: 2px;
+  }
+
+  .coinbase-input {
+    color: #ffc107;
+    font-weight: 500;
+  }
+
+  .address {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0;
+    padding: 8px;
+    background: rgba(23, 120, 255, 0.1);
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+  }
+
+  .address-label {
+    color: rgba(255, 255, 255, 0.66);
+    font-weight: 500;
+  }
+
+  .address-value {
+    color: #1778ff;
+    word-break: break-all;
   }
 </style>
