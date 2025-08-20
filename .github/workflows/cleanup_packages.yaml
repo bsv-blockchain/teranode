@@ -1,0 +1,113 @@
+name: Cleanup Package Versions
+
+on:
+#  schedule:
+#    # Run daily at 2 AM UTC
+#    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run mode (no actual deletions)'
+        required: false
+        default: true
+        type: boolean
+      keep_n_tagged:
+        description: 'Number of tagged images to keep'
+        required: false
+        default: '300'
+        type: string
+      older_than:
+        description: 'Only delete images older than (e.g., "30 days")'
+        required: false
+        default: '30 days'
+        type: string
+      validate_only:
+        description: 'Only validate multi-arch images (no deletion)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  cleanup:
+    name: Cleanup Container Images
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Multi-Arch Images
+        if: ${{ github.event.inputs.validate_only == 'true' }}
+        uses: dataaxiom/ghcr-cleanup-action@v1.0.16
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          validate: true
+          dry-run: true
+
+      - name: Cleanup Old Images
+        if: ${{ github.event.inputs.validate_only != 'true' }}
+        uses: dataaxiom/ghcr-cleanup-action@v1.0.16
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+          # IMPORTANT: exclude-tags takes priority over all other options
+          # These tags will NEVER be deleted regardless of age or keep-n-tagged
+          exclude-tags: v*,latest*
+
+          # Use regex mode for more precise matching
+          use-regex: false  # Set to true if you want regex patterns
+
+          # Retention settings for non-excluded tags
+          # This keeps the last 300 non-excluded tagged images (commit hashes)
+          keep-n-tagged: ${{ github.event.inputs.keep_n_tagged || '300' }}
+          keep-n-untagged: 1000  # Keep plenty of manifest layers
+          older-than: ${{ github.event.inputs.older_than || '30 days' }}
+
+          # Multi-arch handling
+          validate: true
+          delete-ghost-images: true  # Delete broken multi-arch images
+          delete-partial-images: false  # Keep partially broken images for investigation
+          delete-orphaned-images: true  # Clean up orphaned platform images
+
+          # Execution mode
+          dry-run: ${{ github.event.inputs.dry_run == 'true' || github.event.inputs.dry_run == '' }}
+
+          # Logging
+          log-level: info
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## 📦 Package Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ github.event.inputs.validate_only }}" == "true" ]]; then
+            echo "### ✅ Validation Mode" >> $GITHUB_STEP_SUMMARY
+            echo "Checked multi-architecture image integrity only." >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ github.event.inputs.dry_run }}" == "true" ]] || [[ -z "${{ github.event.inputs.dry_run }}" ]]; then
+            echo "### 🔍 Dry Run Mode" >> $GITHUB_STEP_SUMMARY
+            echo "No images were actually deleted - this was a simulation." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ✅ Cleanup Executed" >> $GITHUB_STEP_SUMMARY
+            echo "Old images have been removed according to retention policy." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Configuration Used:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Keep Tagged Images**: ${{ github.event.inputs.keep_n_tagged || '300' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Keep Untagged Layers**: 1000" >> $GITHUB_STEP_SUMMARY
+          echo "- **Delete If Older Than**: ${{ github.event.inputs.older_than || '30 days' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🛡️ Protected Tags:" >> $GITHUB_STEP_SUMMARY
+          echo "- `v*` - All semantic versions" >> $GITHUB_STEP_SUMMARY
+          echo "- `latest*` - Latest and architecture variants" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🏗️ Multi-Architecture Support:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Validates multi-arch image integrity" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Protects manifest layers of kept images" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Cleans up ghost images (broken multi-arch)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Removes orphaned platform images" >> $GITHUB_STEP_SUMMARY
