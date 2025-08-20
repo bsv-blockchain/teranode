@@ -11,12 +11,12 @@ import (
 // TestSighashEnforcementByHeight verifies that go-bdk properly enforces SIGHASH_FORKID based on block height
 func TestSighashEnforcementByHeight(t *testing.T) {
 	keyData := NewKeyData()
-	
+
 	// Create a simple P2PK script
 	script := &bscript.Script{}
-	script.AppendPushData(keyData.Pubkey0)
-	script.AppendOpcodes(bscript.OpCHECKSIG)
-	
+	_ = script.AppendPushData(keyData.Pubkey0)
+	_ = script.AppendOpcodes(bscript.OpCHECKSIG)
+
 	tests := []struct {
 		name        string
 		blockHeight uint32
@@ -99,18 +99,18 @@ func TestSighashEnforcementByHeight(t *testing.T) {
 			description: "At Genesis, FORKID is required",
 		},
 	}
-	
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Logf("Test: %s", test.description)
-			
+
 			// Build test with specific block height
 			tb := NewTestBuilder(script, test.name, SCRIPT_VERIFY_NONE, false, 100000000)
 			tb.blockHeight = test.blockHeight
-			
+
 			// Create signature with specified sighash type
 			tb.PushSig(keyData.Key0, test.sighashType, 32, 32)
-			
+
 			if test.shouldPass {
 				tb.SetScriptError(SCRIPT_ERR_OK)
 			} else {
@@ -122,21 +122,21 @@ func TestSighashEnforcementByHeight(t *testing.T) {
 					tb.SetScriptError(SCRIPT_ERR_EVAL_FALSE)
 				}
 			}
-			
+
 			// Execute test
 			err := tb.DoTest()
-			
+
 			// Log the actual result for debugging
 			if err != nil {
 				t.Logf("DoTest returned error: %v", err)
-				
+
 				// If this is a known issue where we expect failure but get success
 				// at pre-UAHF heights with FORKID, skip the test
 				if test.blockHeight < 478559 && test.sighashType == sighash.AllForkID && !test.shouldPass {
 					t.Skip("Known issue: go-bdk may not properly reject FORKID before UAHF activation")
 				}
 			}
-			
+
 			require.NoError(t, err)
 		})
 	}
@@ -146,28 +146,28 @@ func TestSighashEnforcementByHeight(t *testing.T) {
 // the appropriate sighash type for the block height
 func TestBIP66WithCorrectSighash(t *testing.T) {
 	keyData := NewKeyData()
-	
+
 	// Create a P2PK script
 	script := &bscript.Script{}
-	script.AppendPushData(keyData.Pubkey0)
-	script.AppendOpcodes(bscript.OpCHECKSIG)
-	
+	_ = script.AppendPushData(keyData.Pubkey0)
+	_ = script.AppendOpcodes(bscript.OpCHECKSIG)
+
 	t.Run("Pre-UAHF: Valid DER with SIGHASH_ALL", func(t *testing.T) {
 		tb := NewTestBuilder(script, "Pre-UAHF valid DER", SCRIPT_VERIFY_DERSIG, false, 100000000)
 		tb.blockHeight = 100000 // Pre-UAHF height
 		tb.PushSig(keyData.Key0, sighash.All, 32, 32)
 		tb.SetScriptError(SCRIPT_ERR_OK)
-		
+
 		err := tb.DoTest()
 		require.NoError(t, err)
 	})
-	
+
 	t.Run("Post-UAHF: Valid DER with SIGHASH_ALL|FORKID", func(t *testing.T) {
 		tb := NewTestBuilder(script, "Post-UAHF valid DER", SCRIPT_VERIFY_DERSIG, false, 100000000)
 		tb.blockHeight = 500000 // Post-UAHF height
 		tb.PushSig(keyData.Key0, sighash.AllForkID, 32, 32)
 		tb.SetScriptError(SCRIPT_ERR_OK)
-		
+
 		err := tb.DoTest()
 		require.NoError(t, err)
 	})

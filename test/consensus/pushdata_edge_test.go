@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/stretchr/testify/require"
 )
@@ -184,10 +185,10 @@ func TestPushDataBoundaries(t *testing.T) {
 			},
 			validateBytes: func(result []byte) error {
 				if len(result) != 76 { // 1 byte push opcode + 75 bytes data
-					return fmt.Errorf("expected 76 bytes, got %d", len(result))
+					return errors.NewProcessingError("expected 76 bytes, got %d", len(result))
 				}
 				if result[0] != 0x4b { // Direct push of 75 bytes
-					return fmt.Errorf("expected direct push opcode 0x4b, got 0x%02x", result[0])
+					return errors.NewProcessingError("expected direct push opcode 0x4b, got 0x%02x", result[0])
 				}
 				return nil
 			},
@@ -200,13 +201,13 @@ func TestPushDataBoundaries(t *testing.T) {
 			},
 			validateBytes: func(result []byte) error {
 				if len(result) != 78 { // 1 byte PUSHDATA1 + 1 byte length + 76 bytes data
-					return fmt.Errorf("expected 78 bytes, got %d", len(result))
+					return errors.NewProcessingError("expected 78 bytes, got %d", len(result))
 				}
 				if result[0] != 0x4c { // PUSHDATA1
-					return fmt.Errorf("expected PUSHDATA1 opcode 0x4c, got 0x%02x", result[0])
+					return errors.NewProcessingError("expected PUSHDATA1 opcode 0x4c, got 0x%02x", result[0])
 				}
 				if result[1] != 0x4c { // Length 76
-					return fmt.Errorf("expected length 76 (0x4c), got 0x%02x", result[1])
+					return errors.NewProcessingError("expected length 76 (0x4c), got 0x%02x", result[1])
 				}
 				return nil
 			},
@@ -219,13 +220,13 @@ func TestPushDataBoundaries(t *testing.T) {
 			},
 			validateBytes: func(result []byte) error {
 				if len(result) != 257 { // 1 byte PUSHDATA1 + 1 byte length + 255 bytes data
-					return fmt.Errorf("expected 257 bytes, got %d", len(result))
+					return errors.NewProcessingError("expected 257 bytes, got %d", len(result))
 				}
 				if result[0] != 0x4c { // PUSHDATA1
-					return fmt.Errorf("expected PUSHDATA1 opcode 0x4c, got 0x%02x", result[0])
+					return errors.NewProcessingError("expected PUSHDATA1 opcode 0x4c, got 0x%02x", result[0])
 				}
 				if result[1] != 0xff { // Length 255
-					return fmt.Errorf("expected length 255 (0xff), got 0x%02x", result[1])
+					return errors.NewProcessingError("expected length 255 (0xff), got 0x%02x", result[1])
 				}
 				return nil
 			},
@@ -238,14 +239,14 @@ func TestPushDataBoundaries(t *testing.T) {
 			},
 			validateBytes: func(result []byte) error {
 				if len(result) != 259 { // 1 byte PUSHDATA2 + 2 bytes length + 256 bytes data
-					return fmt.Errorf("expected 259 bytes, got %d", len(result))
+					return errors.NewProcessingError("expected 259 bytes, got %d", len(result))
 				}
 				if result[0] != 0x4d { // PUSHDATA2
-					return fmt.Errorf("expected PUSHDATA2 opcode 0x4d, got 0x%02x", result[0])
+					return errors.NewProcessingError("expected PUSHDATA2 opcode 0x4d, got 0x%02x", result[0])
 				}
 				// Check little-endian length
 				if result[1] != 0x00 || result[2] != 0x01 { // 256 = 0x0100 little-endian
-					return fmt.Errorf("expected length 256 (0x0001), got 0x%02x%02x", result[1], result[2])
+					return errors.NewProcessingError("expected length 256 (0x0001), got 0x%02x%02x", result[1], result[2])
 				}
 				return nil
 			},

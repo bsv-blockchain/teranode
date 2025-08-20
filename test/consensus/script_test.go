@@ -575,8 +575,7 @@ func TestScriptTests(t *testing.T) {
 			name: "Invalid stack operation",
 			build: func() *TestBuilder {
 				script := &bscript.Script{}
-				script.AppendOpcodes(bscript.OpDUP)
-				
+				_ = script.AppendOpcodes(bscript.OpDUP)
 				tb := NewTestBuilder(script, "Invalid stack operation", SCRIPT_VERIFY_NONE, false, 0)
 				// Empty stack
 				return tb

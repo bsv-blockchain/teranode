@@ -10,7 +10,7 @@ import (
 
 func TestScriptParser_BasicOpcodes(t *testing.T) {
 	parser := NewScriptParser()
-	
+
 	tests := []struct {
 		name     string
 		script   string
@@ -47,12 +47,12 @@ func TestScriptParser_BasicOpcodes(t *testing.T) {
 			expected: "",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := parser.ParseScript(tt.script)
 			require.NoError(t, err)
-			
+
 			actual := hex.EncodeToString(result)
 			assert.Equal(t, tt.expected, actual)
 		})
@@ -61,7 +61,7 @@ func TestScriptParser_BasicOpcodes(t *testing.T) {
 
 func TestScriptParser_HexValues(t *testing.T) {
 	parser := NewScriptParser()
-	
+
 	tests := []struct {
 		name     string
 		script   string
@@ -73,7 +73,7 @@ func TestScriptParser_HexValues(t *testing.T) {
 			expected: "0151",
 		},
 		{
-			name:     "Hex with opcode", 
+			name:     "Hex with opcode",
 			script:   "0x51 ADD 0x60",
 			expected: "0151930160",
 		},
@@ -93,12 +93,12 @@ func TestScriptParser_HexValues(t *testing.T) {
 			expected: "0105",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := parser.ParseScript(tt.script)
 			require.NoError(t, err, "Failed to parse script: %s", tt.script)
-			
+
 			actual := hex.EncodeToString(result)
 			assert.Equal(t, tt.expected, actual, "Script: %s", tt.script)
 		})
@@ -107,7 +107,7 @@ func TestScriptParser_HexValues(t *testing.T) {
 
 func TestScriptParser_Numbers(t *testing.T) {
 	parser := NewScriptParser()
-	
+
 	tests := []struct {
 		name     string
 		script   string
@@ -144,12 +144,12 @@ func TestScriptParser_Numbers(t *testing.T) {
 			expected: "01e4", // Push 1 byte: 0xe4 (100 with sign bit)
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := parser.ParseScript(tt.script)
 			require.NoError(t, err)
-			
+
 			actual := hex.EncodeToString(result)
 			assert.Equal(t, tt.expected, actual)
 		})
@@ -158,7 +158,7 @@ func TestScriptParser_Numbers(t *testing.T) {
 
 func TestScriptParser_Strings(t *testing.T) {
 	parser := NewScriptParser()
-	
+
 	tests := []struct {
 		name     string
 		script   string
@@ -185,12 +185,12 @@ func TestScriptParser_Strings(t *testing.T) {
 			expected: "00",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := parser.ParseScript(tt.script)
 			require.NoError(t, err)
-			
+
 			actual := hex.EncodeToString(result)
 			assert.Equal(t, tt.expected, actual)
 		})
@@ -199,7 +199,7 @@ func TestScriptParser_Strings(t *testing.T) {
 
 func TestScriptParser_PushData(t *testing.T) {
 	parser := NewScriptParser()
-	
+
 	tests := []struct {
 		name     string
 		script   string
@@ -221,12 +221,12 @@ func TestScriptParser_PushData(t *testing.T) {
 			expected: "4e0100000009",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := parser.ParseScript(tt.script)
 			require.NoError(t, err)
-			
+
 			actual := hex.EncodeToString(result)
 			assert.Equal(t, tt.expected, actual)
 		})
@@ -235,7 +235,7 @@ func TestScriptParser_PushData(t *testing.T) {
 
 func TestScriptParser_ComplexScripts(t *testing.T) {
 	parser := NewScriptParser()
-	
+
 	tests := []struct {
 		name     string
 		script   string
@@ -247,7 +247,7 @@ func TestScriptParser_ComplexScripts(t *testing.T) {
 			expected: "76a91489abcdefabbaabbaabbaabbaabbaabbaabbaabba88ac",
 		},
 		{
-			name:     "Complex with numbers", 
+			name:     "Complex with numbers",
 			script:   "1 2 ADD 3 EQUAL",
 			expected: "5152935387",
 		},
@@ -257,12 +257,12 @@ func TestScriptParser_ComplexScripts(t *testing.T) {
 			expected: "015193016087",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := parser.ParseScript(tt.script)
 			require.NoError(t, err)
-			
+
 			actual := hex.EncodeToString(result)
 			assert.Equal(t, tt.expected, actual)
 		})
@@ -271,7 +271,7 @@ func TestScriptParser_ComplexScripts(t *testing.T) {
 
 func TestScriptParser_RealScriptTests(t *testing.T) {
 	parser := NewScriptParser()
-	
+
 	// Test some real scripts from the script_tests.json
 	tests := []struct {
 		name   string
@@ -294,15 +294,15 @@ func TestScriptParser_RealScriptTests(t *testing.T) {
 			script: "0x51 0x5f ADD 0x60 EQUAL",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := parser.ParseScript(tt.script)
 			require.NoError(t, err, "Failed to parse: %s", tt.script)
-			
+
 			t.Logf("Script: %s", tt.script)
 			t.Logf("Result: %x", result)
-			
+
 			// Basic validation - should produce some bytecode
 			assert.NotEmpty(t, result, "Should produce non-empty bytecode")
 		})
@@ -311,7 +311,7 @@ func TestScriptParser_RealScriptTests(t *testing.T) {
 
 func TestScriptParser_ErrorCases(t *testing.T) {
 	parser := NewScriptParser()
-	
+
 	tests := []struct {
 		name        string
 		script      string
@@ -338,7 +338,7 @@ func TestScriptParser_ErrorCases(t *testing.T) {
 			expectError: true,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := parser.ParseScript(tt.script)
@@ -364,7 +364,7 @@ func TestGetOpcodeValue(t *testing.T) {
 		{"CHECKSIG", 0xac, true},
 		{"INVALID", 0x00, false},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			value, err := GetOpcodeValue(tt.name)

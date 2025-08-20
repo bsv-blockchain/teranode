@@ -103,6 +103,9 @@ func New(
 	blockchainClient blockchain.ClientI,
 
 ) *Server {
+	if blockStore == nil {
+		logger.Errorf("[UTXOPersister] Warning: Block store is nil during initialization")
+	}
 	return &Server{
 		logger:           logger,
 		settings:         tSettings,
@@ -462,6 +465,9 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	}
 
 	// At the end of this, we have a rollup of deletions and additions.  Add these to the last UTXOSet
+	if s.blockStore == nil {
+		return 0, errors.NewStorageError("[UTXOPersister] Block store is not initialized")
+	}
 	us, err := GetUTXOSet(ctx, s.logger, s.settings, s.blockStore, lastWrittenUTXOSetHash)
 	if err != nil {
 		return 0, errors.NewProcessingError("[UTXOPersister] Error getting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, metas[0].Height, err)

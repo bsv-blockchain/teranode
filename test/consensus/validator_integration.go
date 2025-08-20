@@ -3,6 +3,7 @@ package consensus
 import (
 	"fmt"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -59,7 +60,7 @@ func (vi *ValidatorIntegration) ValidateScript(validatorType ValidatorType, tx *
 		factory, exists := validator.TxScriptInterpreterFactory[validator.TxInterpreterGoBT]
 		if !exists {
 			result.Success = false
-			result.Error = fmt.Errorf("go-bt validator not registered")
+			result.Error = errors.NewProcessingError("go-bt validator not registered")
 			return result
 		}
 		scriptInterpreter = factory(vi.logger, vi.policy, vi.params)
@@ -68,7 +69,7 @@ func (vi *ValidatorIntegration) ValidateScript(validatorType ValidatorType, tx *
 		factory, exists := validator.TxScriptInterpreterFactory[validator.TxInterpreterGoSDK]
 		if !exists {
 			result.Success = false
-			result.Error = fmt.Errorf("go-sdk validator not registered")
+			result.Error = errors.NewProcessingError("go-sdk validator not registered")
 			return result
 		}
 		scriptInterpreter = factory(vi.logger, vi.policy, vi.params)
@@ -77,14 +78,14 @@ func (vi *ValidatorIntegration) ValidateScript(validatorType ValidatorType, tx *
 		factory, exists := validator.TxScriptInterpreterFactory[validator.TxInterpreterGoBDK]
 		if !exists {
 			result.Success = false
-			result.Error = fmt.Errorf("go-bdk validator not registered")
+			result.Error = errors.NewProcessingError("go-bdk validator not registered")
 			return result
 		}
 		scriptInterpreter = factory(vi.logger, vi.policy, vi.params)
 
 	default:
 		result.Success = false
-		result.Error = fmt.Errorf("unknown validator type: %s", validatorType)
+		result.Error = errors.NewProcessingError("unknown validator type: %s", validatorType)
 		return result
 	}
 
@@ -127,7 +128,7 @@ func CompareResults(results map[ValidatorType]ValidatorResult) (bool, string) {
 		} else {
 			if firstResult.Success != result.Success {
 				allAgree = false
-				diff := fmt.Sprintf("%s: success=%v, %s: success=%v", 
+				diff := fmt.Sprintf("%s: success=%v, %s: success=%v",
 					firstResult.ValidatorType, firstResult.Success,
 					validatorType, result.Success)
 				differences = append(differences, diff)

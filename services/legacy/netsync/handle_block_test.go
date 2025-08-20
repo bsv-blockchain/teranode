@@ -5,7 +5,6 @@ import (
 	"context"
 	"os"
 	"testing"
-
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"

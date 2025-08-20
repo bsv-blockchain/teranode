@@ -255,7 +255,7 @@ func (c *testWebSocketConn) ReadMessage() (messageType int, p []byte, err error)
 
 func TestStartNotificationProcessor(t *testing.T) {
 	s := &Server{
-		logger:        &ulogger.TestLogger{},
+		logger: &ulogger.TestLogger{},
 	}
 
 	clientChannels := newClientChannelMap()
@@ -388,7 +388,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 func TestHandleWebSocket(t *testing.T) {
 	// Create server with logger
 	s := &Server{
-		logger:        &ulogger.TestLogger{},
+		logger: &ulogger.TestLogger{},
 	}
 
 	// Create notification channel

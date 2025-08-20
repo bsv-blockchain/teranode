@@ -207,6 +207,7 @@ func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 		settings:  tSettings,
 		blockHash: *blockHash,
 		store:     store,
+		stats:     gocore.NewStat("utxopersister"),
 	}, nil
 }
 
@@ -237,6 +238,7 @@ func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSetti
 		settings:  tSettings,
 		blockHash: *blockHash,
 		store:     store,
+		stats:     gocore.NewStat("utxopersister"),
 	}
 
 	// Check to see if the utxo-set already exists
@@ -466,6 +468,10 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 // with coordinated error handling to ensure data integrity. Tracing is used for
 // performance monitoring and diagnostics throughout the operation.
 func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err error) {
+	if us == nil {
+		return errors.NewStorageError("UTXOSet is nil")
+	}
+
 	createStat := gocore.NewStat("utxopersister.CreateUTXOSet")
 
 	ctx, _, endSpan := tracing.Tracer("utxopersister").Start(ctx, "CreateUTXOSet",
@@ -475,6 +481,23 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 	defer endSpan()
 
 	us.logger.Infof("[CreateUTXOSet] Creating UTXOSet for block %s height %d", c.lastBlockHash, c.lastBlockHeight)
+
+	if us.store == nil {
+		us.logger.Errorf("[CreateUTXOSet] FATAL: store is nil, cannot create UTXO set file")
+		return errors.NewStorageError("store is nil, cannot create UTXO set file")
+	}
+
+	if c == nil {
+		return errors.NewStorageError("consolidator is nil")
+	}
+
+	if us.logger == nil {
+		return errors.NewStorageError("logger is nil")
+	}
+
+	if us.settings == nil {
+		return errors.NewStorageError("settings is nil")
+	}
 
 	storer, err := filestorer.NewFileStorer(ctx, us.logger, us.settings, us.store, c.lastBlockHash[:], fileformat.FileTypeUtxoSet)
 	if err != nil {

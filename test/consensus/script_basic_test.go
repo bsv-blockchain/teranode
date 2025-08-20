@@ -11,12 +11,12 @@ import (
 func TestBasicScriptTests(t *testing.T) {
 	testFile := filepath.Join(GetTestDataPath(), "script_tests.json")
 	tests := LoadScriptTests(t, testFile)
-	
+
 	t.Logf("Loaded %d script tests total", len(tests))
-	
+
 	// Test that we can parse various script formats
 	parser := NewScriptParser()
-	
+
 	// Count different types of scripts
 	stats := map[string]int{
 		"empty":        0,
@@ -26,16 +26,16 @@ func TestBasicScriptTests(t *testing.T) {
 		"mixed":        0,
 		"parse_errors": 0,
 	}
-	
+
 	// Sample first 100 tests
 	sampleSize := 100
 	if len(tests) < sampleSize {
 		sampleSize = len(tests)
 	}
-	
+
 	for i := 0; i < sampleSize; i++ {
 		test := tests[i]
-		
+
 		// Categorize script type
 		if test.ScriptSig == "" && test.ScriptPubKey == "" {
 			stats["empty"]++
@@ -48,7 +48,7 @@ func TestBasicScriptTests(t *testing.T) {
 		} else {
 			stats["mixed"]++
 		}
-		
+
 		// Try parsing both scripts
 		if test.ScriptSig != "" {
 			_, err := parser.ParseScript(test.ScriptSig)
@@ -56,7 +56,7 @@ func TestBasicScriptTests(t *testing.T) {
 				stats["parse_errors"]++
 			}
 		}
-		
+
 		if test.ScriptPubKey != "" {
 			_, err := parser.ParseScript(test.ScriptPubKey)
 			if err != nil && test.ScriptSig == "" { // Don't double count
@@ -64,12 +64,12 @@ func TestBasicScriptTests(t *testing.T) {
 			}
 		}
 	}
-	
+
 	t.Logf("Script type statistics (first %d tests):", sampleSize)
 	for k, v := range stats {
 		t.Logf("  %s: %d", k, v)
 	}
-	
+
 	// Test a few specific interesting scripts
 	interestingTests := []struct {
 		name         string
@@ -92,7 +92,7 @@ func TestBasicScriptTests(t *testing.T) {
 			scriptPubKey: "DUP HASH160 0x14 0x89abcdefabbaabbaabbaabbaabbaabbaabbaabba EQUALVERIFY CHECKSIG",
 		},
 	}
-	
+
 	for _, tt := range interestingTests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.scriptSig != "" {
@@ -100,7 +100,7 @@ func TestBasicScriptTests(t *testing.T) {
 				require.NoError(t, err, "Failed to parse scriptSig")
 				t.Logf("ScriptSig: %s -> %x", tt.scriptSig, sigBytes)
 			}
-			
+
 			if tt.scriptPubKey != "" {
 				pubKeyBytes, err := parser.ParseScript(tt.scriptPubKey)
 				require.NoError(t, err, "Failed to parse scriptPubKey")
@@ -114,14 +114,14 @@ func TestBasicScriptTests(t *testing.T) {
 func TestEmptyScripts(t *testing.T) {
 	testFile := filepath.Join(GetTestDataPath(), "script_tests.json")
 	tests := LoadScriptTests(t, testFile)
-	
+
 	emptyCount := 0
 	for _, test := range tests {
 		if test.ScriptSig == "" && test.ScriptPubKey == "" {
 			emptyCount++
 		}
 	}
-	
+
 	t.Logf("Found %d tests with both scripts empty out of %d total", emptyCount, len(tests))
 }
 
@@ -129,28 +129,28 @@ func TestEmptyScripts(t *testing.T) {
 func TestScriptStatistics(t *testing.T) {
 	testFile := filepath.Join(GetTestDataPath(), "script_tests.json")
 	tests := LoadScriptTests(t, testFile)
-	
+
 	stats := map[string]int{
-		"total":         len(tests),
-		"ok_expected":   0,
-		"err_expected":  0,
-		"has_comment":   0,
-		"p2sh_flag":     0,
+		"total":          len(tests),
+		"ok_expected":    0,
+		"err_expected":   0,
+		"has_comment":    0,
+		"p2sh_flag":      0,
 		"strictenc_flag": 0,
-		"utxo_flag":     0,
+		"utxo_flag":      0,
 	}
-	
+
 	for _, test := range tests {
 		if test.Expected == "OK" {
 			stats["ok_expected"]++
 		} else {
 			stats["err_expected"]++
 		}
-		
+
 		if test.Comment != "" {
 			stats["has_comment"]++
 		}
-		
+
 		for _, flag := range test.Flags {
 			switch flag {
 			case "P2SH":
@@ -162,7 +162,7 @@ func TestScriptStatistics(t *testing.T) {
 			}
 		}
 	}
-	
+
 	t.Logf("Script test statistics:")
 	for k, v := range stats {
 		if k != "total" {

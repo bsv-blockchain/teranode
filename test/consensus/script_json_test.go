@@ -90,27 +90,27 @@ func TestScriptJSON(t *testing.T) {
 		t.Run(tc.Description, func(t *testing.T) {
 			// Parse scripts
 			parser := NewScriptParser()
-			
+
 			var scriptSigBytes []byte
 			var err error
 			if tc.ScriptSig != "" {
 				scriptSigBytes, err = parser.ParseScript(tc.ScriptSig)
 				require.NoError(t, err, "Failed to parse scriptSig")
 			}
-			
+
 			scriptPubKeyBytes, err := parser.ParseScript(tc.ScriptPubKey)
 			require.NoError(t, err, "Failed to parse scriptPubKey")
-			
+
 			// Parse flags
 			flags := parseScriptFlags(tc.Flags)
-			
+
 			// Create scripts
 			// scriptSig := bscript.NewFromBytes(scriptSigBytes) // Not used directly
 			scriptPubKey := bscript.NewFromBytes(scriptPubKeyBytes)
-			
+
 			// Build and execute test
 			tb := NewTestBuilder(scriptPubKey, tc.Description, flags, false, 0)
-			
+
 			// Add scriptSig elements in reverse order (stack behavior)
 			if len(scriptSigBytes) > 0 {
 				elements := parseScriptElements(scriptSigBytes)
@@ -120,11 +120,11 @@ func TestScriptJSON(t *testing.T) {
 					tb.havePush = true
 				}
 			}
-			
+
 			// Set expected error
 			expectedErr := parseExpectedResult(tc.ExpectedResult)
 			tb.SetScriptError(expectedErr)
-			
+
 			// Execute test
 			err = tb.DoTest()
 			if err != nil {
@@ -139,10 +139,10 @@ func parseScriptFlags(flagStr string) uint32 {
 	if flagStr == "" {
 		return SCRIPT_VERIFY_NONE
 	}
-	
+
 	var flags uint32
 	parts := strings.Split(flagStr, ",")
-	
+
 	for _, part := range parts {
 		switch strings.TrimSpace(part) {
 		case "P2SH":
@@ -177,7 +177,7 @@ func parseScriptFlags(flagStr string) uint32 {
 			flags |= SCRIPT_ENABLE_SIGHASH_FORKID
 		}
 	}
-	
+
 	return flags
 }
 
@@ -213,12 +213,12 @@ func parseExpectedResult(result string) ScriptError {
 func parseScriptElements(script []byte) [][]byte {
 	var elements [][]byte
 	i := 0
-	
+
 	for i < len(script) {
 		// Handle push operations
 		opcode := script[i]
 		i++
-		
+
 		if opcode <= bscript.OpPUSHDATA4 {
 			var dataLen int
 			if opcode < bscript.OpPUSHDATA1 {
@@ -242,11 +242,11 @@ func parseScriptElements(script []byte) [][]byte {
 				dataLen = int(script[i]) | int(script[i+1])<<8 | int(script[i+2])<<16 | int(script[i+3])<<24
 				i += 4
 			}
-			
+
 			if i+dataLen > len(script) {
 				break
 			}
-			
+
 			element := make([]byte, dataLen+1)
 			element[0] = opcode
 			if dataLen > 0 {
@@ -259,14 +259,14 @@ func parseScriptElements(script []byte) [][]byte {
 			elements = append(elements, []byte{opcode})
 		}
 	}
-	
+
 	return elements
 }
 
 // TestLoadJSONTests demonstrates how to load tests from JSON file
 func TestLoadJSONTests(t *testing.T) {
 	t.Skip("Skipping JSON file test - implement when test vectors are available")
-	
+
 	// This shows how you would load tests from a JSON file
 	testFile := filepath.Join("testdata", "script_tests.json")
 	data, err := ioutil.ReadFile(testFile)
@@ -274,51 +274,51 @@ func TestLoadJSONTests(t *testing.T) {
 		t.Skipf("Test file not found: %v", err)
 		return
 	}
-	
+
 	var tests [][]interface{}
 	err = json.Unmarshal(data, &tests)
 	require.NoError(t, err)
-	
+
 	for i, test := range tests {
 		// Skip comments
 		if len(test) == 1 {
 			continue
 		}
-		
+
 		// Parse test vector
 		// Format: [scriptSig, scriptPubKey, flags, expected_result, description]
 		if len(test) < 4 {
 			t.Logf("Skipping malformed test %d", i)
 			continue
 		}
-		
+
 		scriptSig, ok := test[0].(string)
 		if !ok {
 			continue
 		}
-		
+
 		scriptPubKey, ok := test[1].(string)
 		if !ok {
 			continue
 		}
-		
+
 		flags, ok := test[2].(string)
 		if !ok {
 			continue
 		}
-		
+
 		expectedResult, ok := test[3].(string)
 		if !ok {
 			continue
 		}
-		
+
 		description := fmt.Sprintf("Test %d", i)
 		if len(test) >= 5 {
 			if desc, ok := test[4].(string); ok {
 				description = desc
 			}
 		}
-		
+
 		t.Run(description, func(t *testing.T) {
 			// Run the test
 			tc := JSONScriptTest{
@@ -328,7 +328,7 @@ func TestLoadJSONTests(t *testing.T) {
 				Flags:          flags,
 				ExpectedResult: expectedResult,
 			}
-			
+
 			// Execute test (same as above)
 			runScriptTest(t, tc)
 		})
@@ -339,7 +339,7 @@ func TestLoadJSONTests(t *testing.T) {
 func runScriptTest(t *testing.T, tc JSONScriptTest) {
 	// Parse scripts
 	parser := NewScriptParser()
-	
+
 	var scriptSigBytes []byte
 	var err error
 	if tc.ScriptSig != "" {
@@ -349,22 +349,22 @@ func runScriptTest(t *testing.T, tc JSONScriptTest) {
 			return
 		}
 	}
-	
+
 	scriptPubKeyBytes, err := parser.ParseScript(tc.ScriptPubKey)
 	if err != nil {
 		t.Logf("Failed to parse scriptPubKey: %v", err)
 		return
 	}
-	
+
 	// Parse flags
 	flags := parseScriptFlags(tc.Flags)
-	
+
 	// Create scripts
 	scriptPubKey := bscript.NewFromBytes(scriptPubKeyBytes)
-	
+
 	// Build and execute test
 	tb := NewTestBuilder(scriptPubKey, tc.Description, flags, false, 0)
-	
+
 	// Add scriptSig elements
 	if len(scriptSigBytes) > 0 {
 		elements := parseScriptElements(scriptSigBytes)
@@ -374,11 +374,11 @@ func runScriptTest(t *testing.T, tc JSONScriptTest) {
 			tb.havePush = true
 		}
 	}
-	
+
 	// Set expected error
 	expectedErr := parseExpectedResult(tc.ExpectedResult)
 	tb.SetScriptError(expectedErr)
-	
+
 	// Execute test
 	err = tb.DoTest()
 	if err != nil {

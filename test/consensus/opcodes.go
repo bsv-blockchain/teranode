@@ -1,9 +1,10 @@
 package consensus
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/bitcoin-sv/teranode/errors"
 )
 
 // Bitcoin Script Opcodes - Complete mapping from opcode names to byte values
@@ -36,16 +37,16 @@ var OpcodeMap = map[string]byte{
 	"OP_16":        0x60,
 
 	// Control
-	"OP_NOP":    0x61,
-	"OP_VER":    0x62,
-	"OP_IF":     0x63,
-	"OP_NOTIF":  0x64,
-	"OP_VERIF":  0x65,
+	"OP_NOP":      0x61,
+	"OP_VER":      0x62,
+	"OP_IF":       0x63,
+	"OP_NOTIF":    0x64,
+	"OP_VERIF":    0x65,
 	"OP_VERNOTIF": 0x66,
-	"OP_ELSE":   0x67,
-	"OP_ENDIF":  0x68,
-	"OP_VERIFY": 0x69,
-	"OP_RETURN": 0x6a,
+	"OP_ELSE":     0x67,
+	"OP_ENDIF":    0x68,
+	"OP_VERIFY":   0x69,
+	"OP_RETURN":   0x6a,
 
 	// Stack ops
 	"OP_TOALTSTACK":   0x6b,
@@ -69,50 +70,50 @@ var OpcodeMap = map[string]byte{
 	"OP_TUCK":         0x7d,
 
 	// String ops
-	"OP_CAT":    0x7e,
-	"OP_SPLIT":  0x7f, // After monolith upgrade (May 2018)
+	"OP_CAT":     0x7e,
+	"OP_SPLIT":   0x7f, // After monolith upgrade (May 2018)
 	"OP_NUM2BIN": 0x80, // After monolith upgrade (May 2018)
 	"OP_BIN2NUM": 0x81, // After monolith upgrade (May 2018)
-	"OP_SIZE":   0x82,
+	"OP_SIZE":    0x82,
 
 	// Bitwise logic
-	"OP_INVERT": 0x83,
-	"OP_AND":    0x84,
-	"OP_OR":     0x85,
-	"OP_XOR":    0x86,
+	"OP_INVERT":      0x83,
+	"OP_AND":         0x84,
+	"OP_OR":          0x85,
+	"OP_XOR":         0x86,
 	"OP_EQUAL":       0x87,
 	"OP_EQUALVERIFY": 0x88,
 	"OP_RESERVED1":   0x89,
 	"OP_RESERVED2":   0x8a,
 
 	// Numeric
-	"OP_1ADD":      0x8b,
-	"OP_1SUB":      0x8c,
-	"OP_2MUL":      0x8d,
-	"OP_2DIV":      0x8e,
-	"OP_NEGATE":    0x8f,
-	"OP_ABS":       0x90,
-	"OP_NOT":       0x91,
-	"OP_0NOTEQUAL": 0x92,
-	"OP_ADD":       0x93,
-	"OP_SUB":       0x94,
-	"OP_MUL":       0x95, // After monolith upgrade (May 2018)
-	"OP_DIV":       0x96, // After monolith upgrade (May 2018)
-	"OP_MOD":       0x97, // After monolith upgrade (May 2018)
-	"OP_LSHIFT":    0x98, // After monolith upgrade (May 2018)
-	"OP_RSHIFT":    0x99, // After monolith upgrade (May 2018)
-	"OP_BOOLAND":        0x9a,
-	"OP_BOOLOR":         0x9b,
-	"OP_NUMEQUAL":       0x9c,
-	"OP_NUMEQUALVERIFY": 0x9d,
-	"OP_NUMNOTEQUAL":    0x9e,
-	"OP_LESSTHAN":       0x9f,
-	"OP_GREATERTHAN":    0xa0,
+	"OP_1ADD":               0x8b,
+	"OP_1SUB":               0x8c,
+	"OP_2MUL":               0x8d,
+	"OP_2DIV":               0x8e,
+	"OP_NEGATE":             0x8f,
+	"OP_ABS":                0x90,
+	"OP_NOT":                0x91,
+	"OP_0NOTEQUAL":          0x92,
+	"OP_ADD":                0x93,
+	"OP_SUB":                0x94,
+	"OP_MUL":                0x95, // After monolith upgrade (May 2018)
+	"OP_DIV":                0x96, // After monolith upgrade (May 2018)
+	"OP_MOD":                0x97, // After monolith upgrade (May 2018)
+	"OP_LSHIFT":             0x98, // After monolith upgrade (May 2018)
+	"OP_RSHIFT":             0x99, // After monolith upgrade (May 2018)
+	"OP_BOOLAND":            0x9a,
+	"OP_BOOLOR":             0x9b,
+	"OP_NUMEQUAL":           0x9c,
+	"OP_NUMEQUALVERIFY":     0x9d,
+	"OP_NUMNOTEQUAL":        0x9e,
+	"OP_LESSTHAN":           0x9f,
+	"OP_GREATERTHAN":        0xa0,
 	"OP_LESSTHANOREQUAL":    0xa1,
 	"OP_GREATERTHANOREQUAL": 0xa2,
-	"OP_MIN": 0xa3,
-	"OP_MAX": 0xa4,
-	"OP_WITHIN": 0xa5,
+	"OP_MIN":                0xa3,
+	"OP_MAX":                0xa4,
+	"OP_WITHIN":             0xa5,
 
 	// Crypto
 	"OP_RIPEMD160":           0xa6,
@@ -127,18 +128,18 @@ var OpcodeMap = map[string]byte{
 	"OP_CHECKMULTISIGVERIFY": 0xaf,
 
 	// Expansion
-	"OP_NOP1":  0xb0,
+	"OP_NOP1":                0xb0,
 	"OP_CHECKLOCKTIMEVERIFY": 0xb1, // OP_NOP2
-	"OP_NOP2":  0xb1,
+	"OP_NOP2":                0xb1,
 	"OP_CHECKSEQUENCEVERIFY": 0xb2, // OP_NOP3
-	"OP_NOP3":  0xb2,
-	"OP_NOP4":  0xb3,
-	"OP_NOP5":  0xb4,
-	"OP_NOP6":  0xb5,
-	"OP_NOP7":  0xb6,
-	"OP_NOP8":  0xb7,
-	"OP_NOP9":  0xb8,
-	"OP_NOP10": 0xb9,
+	"OP_NOP3":                0xb2,
+	"OP_NOP4":                0xb3,
+	"OP_NOP5":                0xb4,
+	"OP_NOP6":                0xb5,
+	"OP_NOP7":                0xb6,
+	"OP_NOP8":                0xb7,
+	"OP_NOP9":                0xb8,
+	"OP_NOP10":               0xb9,
 }
 
 // Additional mappings without OP_ prefix for convenience
@@ -169,16 +170,16 @@ var OpcodeMapShort = map[string]byte{
 	"16":        0x60,
 
 	// Control
-	"NOP":    0x61,
-	"VER":    0x62,
-	"IF":     0x63,
-	"NOTIF":  0x64,
-	"VERIF":  0x65,
+	"NOP":      0x61,
+	"VER":      0x62,
+	"IF":       0x63,
+	"NOTIF":    0x64,
+	"VERIF":    0x65,
 	"VERNOTIF": 0x66,
-	"ELSE":   0x67,
-	"ENDIF":  0x68,
-	"VERIFY": 0x69,
-	"RETURN": 0x6a,
+	"ELSE":     0x67,
+	"ENDIF":    0x68,
+	"VERIFY":   0x69,
+	"RETURN":   0x6a,
 
 	// Stack ops
 	"TOALTSTACK":   0x6b,
@@ -202,50 +203,50 @@ var OpcodeMapShort = map[string]byte{
 	"TUCK":         0x7d,
 
 	// String ops
-	"CAT":    0x7e,
-	"SPLIT":  0x7f,
+	"CAT":     0x7e,
+	"SPLIT":   0x7f,
 	"NUM2BIN": 0x80,
 	"BIN2NUM": 0x81,
-	"SIZE":   0x82,
+	"SIZE":    0x82,
 
 	// Bitwise logic
-	"INVERT": 0x83,
-	"AND":    0x84,
-	"OR":     0x85,
-	"XOR":    0x86,
+	"INVERT":      0x83,
+	"AND":         0x84,
+	"OR":          0x85,
+	"XOR":         0x86,
 	"EQUAL":       0x87,
 	"EQUALVERIFY": 0x88,
 	"RESERVED1":   0x89,
 	"RESERVED2":   0x8a,
 
 	// Numeric
-	"1ADD":      0x8b,
-	"1SUB":      0x8c,
-	"2MUL":      0x8d,
-	"2DIV":      0x8e,
-	"NEGATE":    0x8f,
-	"ABS":       0x90,
-	"NOT":       0x91,
-	"0NOTEQUAL": 0x92,
-	"ADD":       0x93,
-	"SUB":       0x94,
-	"MUL":       0x95,
-	"DIV":       0x96,
-	"MOD":       0x97,
-	"LSHIFT":    0x98,
-	"RSHIFT":    0x99,
-	"BOOLAND":        0x9a,
-	"BOOLOR":         0x9b,
-	"NUMEQUAL":       0x9c,
-	"NUMEQUALVERIFY": 0x9d,
-	"NUMNOTEQUAL":    0x9e,
-	"LESSTHAN":       0x9f,
-	"GREATERTHAN":    0xa0,
+	"1ADD":               0x8b,
+	"1SUB":               0x8c,
+	"2MUL":               0x8d,
+	"2DIV":               0x8e,
+	"NEGATE":             0x8f,
+	"ABS":                0x90,
+	"NOT":                0x91,
+	"0NOTEQUAL":          0x92,
+	"ADD":                0x93,
+	"SUB":                0x94,
+	"MUL":                0x95,
+	"DIV":                0x96,
+	"MOD":                0x97,
+	"LSHIFT":             0x98,
+	"RSHIFT":             0x99,
+	"BOOLAND":            0x9a,
+	"BOOLOR":             0x9b,
+	"NUMEQUAL":           0x9c,
+	"NUMEQUALVERIFY":     0x9d,
+	"NUMNOTEQUAL":        0x9e,
+	"LESSTHAN":           0x9f,
+	"GREATERTHAN":        0xa0,
 	"LESSTHANOREQUAL":    0xa1,
 	"GREATERTHANOREQUAL": 0xa2,
-	"MIN": 0xa3,
-	"MAX": 0xa4,
-	"WITHIN": 0xa5,
+	"MIN":                0xa3,
+	"MAX":                0xa4,
+	"WITHIN":             0xa5,
 
 	// Crypto
 	"RIPEMD160":           0xa6,
@@ -260,40 +261,40 @@ var OpcodeMapShort = map[string]byte{
 	"CHECKMULTISIGVERIFY": 0xaf,
 
 	// Expansion
-	"NOP1":  0xb0,
+	"NOP1":                0xb0,
 	"CHECKLOCKTIMEVERIFY": 0xb1,
-	"NOP2":  0xb1,
+	"NOP2":                0xb1,
 	"CHECKSEQUENCEVERIFY": 0xb2,
-	"NOP3":  0xb2,
-	"NOP4":  0xb3,
-	"NOP5":  0xb4,
-	"NOP6":  0xb5,
-	"NOP7":  0xb6,
-	"NOP8":  0xb7,
-	"NOP9":  0xb8,
-	"NOP10": 0xb9,
+	"NOP3":                0xb2,
+	"NOP4":                0xb3,
+	"NOP5":                0xb4,
+	"NOP6":                0xb5,
+	"NOP7":                0xb6,
+	"NOP8":                0xb7,
+	"NOP9":                0xb8,
+	"NOP10":               0xb9,
 }
 
 // GetOpcodeValue returns the byte value for an opcode name
 func GetOpcodeValue(name string) (byte, error) {
 	name = strings.TrimSpace(strings.ToUpper(name))
-	
+
 	// Try with OP_ prefix first
 	if val, exists := OpcodeMap["OP_"+name]; exists {
 		return val, nil
 	}
-	
+
 	// Try direct lookup
 	if val, exists := OpcodeMap[name]; exists {
 		return val, nil
 	}
-	
+
 	// Try without OP_ prefix
 	if val, exists := OpcodeMapShort[name]; exists {
 		return val, nil
 	}
-	
-	return 0, fmt.Errorf("unknown opcode: %s", name)
+
+	return 0, errors.NewProcessingError("unknown opcode: %s", name)
 }
 
 // IsValidOpcode checks if a string represents a valid opcode
@@ -305,12 +306,12 @@ func IsValidOpcode(name string) bool {
 // IsNumericLiteral checks if a string represents a numeric literal (0-16)
 func IsNumericLiteral(s string) (byte, bool) {
 	s = strings.TrimSpace(s)
-	
+
 	// Handle negative numbers
 	if s == "-1" {
 		return 0x4f, true // OP_1NEGATE
 	}
-	
+
 	// Parse as integer
 	if num, err := strconv.Atoi(s); err == nil {
 		if num >= 0 && num <= 16 {
@@ -319,22 +320,22 @@ func IsNumericLiteral(s string) (byte, bool) {
 			}
 			return byte(0x50 + num), true // OP_1 through OP_16
 		}
-		
+
 		// For larger numbers, we need to create a push operation
 		// This is more complex and handled by the parser
 	}
-	
+
 	return 0, false
 }
 
 // CreatePushOp creates a push operation for arbitrary data
 func CreatePushOp(data []byte) []byte {
 	length := len(data)
-	
+
 	if length == 0 {
 		return []byte{0x00} // OP_0
 	}
-	
+
 	if length <= 75 {
 		// Direct push: <length> <data>
 		result := make([]byte, 1+length)
@@ -342,7 +343,7 @@ func CreatePushOp(data []byte) []byte {
 		copy(result[1:], data)
 		return result
 	}
-	
+
 	if length <= 0xff {
 		// OP_PUSHDATA1: 0x4c <length> <data>
 		result := make([]byte, 2+length)
@@ -351,7 +352,7 @@ func CreatePushOp(data []byte) []byte {
 		copy(result[2:], data)
 		return result
 	}
-	
+
 	if length <= 0xffff {
 		// OP_PUSHDATA2: 0x4d <length_le> <data>
 		result := make([]byte, 3+length)
@@ -361,7 +362,7 @@ func CreatePushOp(data []byte) []byte {
 		copy(result[3:], data)
 		return result
 	}
-	
+
 	// OP_PUSHDATA4: 0x4e <length_le> <data>
 	result := make([]byte, 5+length)
 	result[0] = 0x4e

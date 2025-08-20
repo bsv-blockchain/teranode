@@ -2,7 +2,7 @@ package consensus
 
 import (
 	"strings"
-	
+
 	"github.com/bitcoin-sv/teranode/errors"
 )
 
@@ -11,9 +11,9 @@ func MapValidatorError(err error) ScriptError {
 	if err == nil {
 		return SCRIPT_ERR_OK
 	}
-	
+
 	errStr := err.Error()
-	
+
 	// Check for specific error patterns
 	switch {
 	// Transaction errors
@@ -25,7 +25,7 @@ func MapValidatorError(err error) ScriptError {
 		return SCRIPT_ERR_UNKNOWN_ERROR
 	case strings.Contains(errStr, "zero-satoshi outputs require 'OP_FALSE OP_RETURN' prefix"):
 		return SCRIPT_ERR_UNKNOWN_ERROR
-		
+
 	// Script validation errors
 	case strings.Contains(errStr, "Script evaluated without error but finished with a false/empty top stack element"):
 		return SCRIPT_ERR_EVAL_FALSE
@@ -49,7 +49,7 @@ func MapValidatorError(err error) ScriptError {
 		return SCRIPT_ERR_SIG_COUNT
 	case strings.Contains(errStr, "pubkey count"):
 		return SCRIPT_ERR_PUBKEY_COUNT
-		
+
 	// Operation errors
 	case strings.Contains(errStr, "invalid operand size"):
 		return SCRIPT_ERR_INVALID_OPERAND_SIZE
@@ -61,7 +61,7 @@ func MapValidatorError(err error) ScriptError {
 		return SCRIPT_ERR_SCRIPTNUM_OVERFLOW
 	case strings.Contains(errStr, "not minimally encoded"):
 		return SCRIPT_ERR_SCRIPTNUM_MINENCODE
-		
+
 	// Verification errors
 	case strings.Contains(errStr, "script failed an OP_VERIFY operation"):
 		return SCRIPT_ERR_VERIFY
@@ -75,7 +75,7 @@ func MapValidatorError(err error) ScriptError {
 		return SCRIPT_ERR_CHECKSIGVERIFY
 	case strings.Contains(errStr, "script failed an OP_NUMEQUALVERIFY operation"):
 		return SCRIPT_ERR_NUMEQUALVERIFY
-		
+
 	// Opcode errors
 	case strings.Contains(errStr, "bad opcode") || strings.Contains(errStr, "opcode missing"):
 		return SCRIPT_ERR_BAD_OPCODE
@@ -95,13 +95,13 @@ func MapValidatorError(err error) ScriptError {
 		return SCRIPT_ERR_UNBALANCED_CONDITIONAL
 	case strings.Contains(errStr, "end of script reached in conditional execution"):
 		return SCRIPT_ERR_UNBALANCED_CONDITIONAL
-		
+
 	// Locktime errors
 	case strings.Contains(errStr, "negative locktime"):
 		return SCRIPT_ERR_NEGATIVE_LOCKTIME
 	case strings.Contains(errStr, "locktime requirement not satisfied"):
 		return SCRIPT_ERR_UNSATISFIED_LOCKTIME
-		
+
 	// Signature errors
 	case strings.Contains(errStr, "signature hash type"):
 		return SCRIPT_ERR_SIG_HASHTYPE
@@ -131,13 +131,13 @@ func MapValidatorError(err error) ScriptError {
 		return SCRIPT_ERR_ILLEGAL_FORKID
 	case strings.Contains(errStr, "must use SIGHASH_FORKID"):
 		return SCRIPT_ERR_MUST_USE_FORKID
-		
+
 	// Math errors
 	case strings.Contains(errStr, "division by zero"):
 		return SCRIPT_ERR_DIV_BY_ZERO
 	case strings.Contains(errStr, "modulo by zero"):
 		return SCRIPT_ERR_MOD_BY_ZERO
-		
+
 	default:
 		return SCRIPT_ERR_UNKNOWN_ERROR
 	}
@@ -148,19 +148,19 @@ func ExtractScriptError(err error) ScriptError {
 	if err == nil {
 		return SCRIPT_ERR_OK
 	}
-	
+
 	// First try direct mapping
 	scriptErr := MapValidatorError(err)
 	if scriptErr != SCRIPT_ERR_UNKNOWN_ERROR {
 		return scriptErr
 	}
-	
+
 	// Check if it's a wrapped error
 	if terranodeErr, ok := err.(*errors.Error); ok {
 		// Try to extract the actual message from the teranode error
 		return MapValidatorError(terranodeErr)
 	}
-	
+
 	return SCRIPT_ERR_UNKNOWN_ERROR
 }
 
@@ -169,11 +169,11 @@ func CompareScriptError(validatorErr error, expectedErr ScriptError) bool {
 	if expectedErr == SCRIPT_ERR_OK {
 		return validatorErr == nil
 	}
-	
+
 	if validatorErr == nil {
 		return false
 	}
-	
+
 	actualErr := ExtractScriptError(validatorErr)
 	return actualErr == expectedErr
 }

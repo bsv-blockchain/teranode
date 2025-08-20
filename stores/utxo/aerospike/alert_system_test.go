@@ -59,7 +59,6 @@ func TestReAssignUTXOBasic(t *testing.T) {
 	assert.Equal(t, oldUtxo.Vout, newUtxo.Vout)
 }
 
-
 // Test constants are accessible
 func TestLuaConstants(t *testing.T) {
 	assert.Contains(t, LuaPackage, "teranode_v")

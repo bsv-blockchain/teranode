@@ -1,11 +1,11 @@
 package consensus
 
 import (
-	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/sighash"
@@ -199,7 +199,7 @@ func TestMultithreadedValidation(t *testing.T) {
 	totalValidations := numGoroutines * numIterations * len(scripts)
 	
 	// Check for errors
-	var allErrors []error
+	allErrors := make([]error, 0, 100)
 	for err := range errors {
 		allErrors = append(allErrors, err)
 	}
@@ -388,7 +388,7 @@ func TestParallelBlockValidation(t *testing.T) {
 	close(errors)
 	
 	// Check for errors
-	var allErrors []error
+	allErrors := make([]error, 0, 100)
 	for err := range errors {
 		allErrors = append(allErrors, err)
 	}
@@ -413,7 +413,7 @@ func MakeSignature(key interface{}, sigHashType sighash.Flag) ([]byte, error) {
 	default:
 		// For compressed keys, we need to handle them differently
 		// This is a simplified version
-		return nil, fmt.Errorf("unsupported key type: %T", key)
+		return nil, errors.NewProcessingError("unsupported key type: %T", key)
 	}
 }
 

@@ -112,17 +112,17 @@ type Server struct {
 	subtreeTopicName                  string
 	miningOnTopicName                 string
 	rejectedTxTopicName               string
-	invalidBlocksTopicName            string                                               // Kafka topic for invalid blocks
-	invalidSubtreeTopicName           string                                               // Kafka topic for invalid subtrees
-	handshakeTopicName                string                                               // pubsub topic for version/verack
-	nodeStatusTopicName               string                                               // pubsub topic for node status messages
-	topicPrefix                       string                                               // Chain identifier prefix for topic validation
-	blockPeerMap                      sync.Map                                             // Map to track which peer sent each block (hash -> peerMapEntry)
-	subtreePeerMap                    sync.Map                                             // Map to track which peer sent each subtree (hash -> peerMapEntry)
-	startTime                         time.Time                                            // Server start time for uptime calculation
-	syncManager                       *SyncManager                                         // Manager for peer synchronization and best peer selection
-	peerBlockHashes                   sync.Map                                             // Map to track peer best block hashes (peerID -> hash string)
-	syncConnectionTimes               sync.Map // Map to track when we first connected to each sync peer (peerID -> timestamp)
+	invalidBlocksTopicName            string       // Kafka topic for invalid blocks
+	invalidSubtreeTopicName           string       // Kafka topic for invalid subtrees
+	handshakeTopicName                string       // pubsub topic for version/verack
+	nodeStatusTopicName               string       // pubsub topic for node status messages
+	topicPrefix                       string       // Chain identifier prefix for topic validation
+	blockPeerMap                      sync.Map     // Map to track which peer sent each block (hash -> peerMapEntry)
+	subtreePeerMap                    sync.Map     // Map to track which peer sent each subtree (hash -> peerMapEntry)
+	startTime                         time.Time    // Server start time for uptime calculation
+	syncManager                       *SyncManager // Manager for peer synchronization and best peer selection
+	peerBlockHashes                   sync.Map     // Map to track peer best block hashes (peerID -> hash string)
+	syncConnectionTimes               sync.Map     // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
 	// Cleanup configuration
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
@@ -2996,4 +2996,3 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
 }
-

@@ -9,13 +9,13 @@ import (
 type TestContext struct {
 	// Previous transaction that creates the output being spent
 	creditTx *bt.Tx
-	
+
 	// The transaction being tested
 	spendTx *bt.Tx
-	
+
 	// UTXO heights for each input
 	utxoHeights []uint32
-	
+
 	// Block height for validation
 	blockHeight uint32
 }
@@ -26,28 +26,28 @@ func NewTestContext(scriptPubKey *bscript.Script, amount uint64) *TestContext {
 	creditTx := bt.NewTx()
 	creditTx.Version = 1
 	creditTx.LockTime = 0
-	
+
 	// Add a dummy input to make it valid
 	creditTx.Inputs = []*bt.Input{{
 		PreviousTxOutIndex: 0xffffffff,
 		UnlockingScript:    &bscript.Script{},
 		SequenceNumber:     0xffffffff,
 	}}
-	
+
 	// Add output with the script we want to test
 	creditTx.Outputs = []*bt.Output{{
 		Satoshis:      amount,
 		LockingScript: scriptPubKey,
 	}}
-	
+
 	// Create spending transaction
 	spendTx := bt.NewTx()
 	spendTx.Version = 1
 	spendTx.LockTime = 0
-	
+
 	// Create input that spends the credit tx output
 	creditTxID := creditTx.TxID()
-	
+
 	input := &bt.Input{
 		PreviousTxOutIndex: 0,
 		UnlockingScript:    &bscript.Script{},
@@ -56,20 +56,20 @@ func NewTestContext(scriptPubKey *bscript.Script, amount uint64) *TestContext {
 		PreviousTxScript:   scriptPubKey,
 	}
 	_ = input.PreviousTxIDAddStr(creditTxID)
-	
+
 	spendTx.Inputs = []*bt.Input{input}
-	
+
 	// Add a dummy output
 	spendTx.Outputs = []*bt.Output{{
 		Satoshis:      amount - 1000, // Leave some for fee
 		LockingScript: &bscript.Script{},
 	}}
-	
+
 	return &TestContext{
 		creditTx:    creditTx,
 		spendTx:     spendTx,
 		utxoHeights: []uint32{0}, // Default to height 0
-		blockHeight: 1,            // Default to block 1
+		blockHeight: 1,           // Default to block 1
 	}
 }
 

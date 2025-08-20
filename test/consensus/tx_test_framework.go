@@ -4,19 +4,20 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 )
 
 // TxTestContext holds context for transaction validation tests
 type TxTestContext struct {
-	Tx          *bt.Tx
-	Inputs      []TxTestInput
-	Flags       []string
-	Comment     string
-	ShouldPass  bool
-	Parser      *ScriptParser
-	Validator   *ValidatorIntegration
+	Tx         *bt.Tx
+	Inputs     []TxTestInput
+	Flags      []string
+	Comment    string
+	ShouldPass bool
+	Parser     *ScriptParser
+	Validator  *ValidatorIntegration
 }
 
 // TxTestResult holds the result of transaction validation
@@ -40,20 +41,20 @@ func (ctx *TxTestContext) LoadFromTxTest(test TxTest, shouldPass bool) error {
 	ctx.Flags = test.Flags
 	ctx.Comment = test.Comment
 	ctx.ShouldPass = shouldPass
-	
+
 	// Parse the raw transaction
 	txBytes, err := hex.DecodeString(test.RawTx)
 	if err != nil {
-		return fmt.Errorf("failed to decode transaction hex: %w", err)
+		return errors.NewProcessingError("failed to decode transaction hex", err)
 	}
-	
+
 	tx, err := bt.NewTxFromBytes(txBytes)
 	if err != nil {
-		return fmt.Errorf("failed to parse transaction: %w", err)
+		return errors.NewProcessingError("failed to parse transaction", err)
 	}
-	
+
 	ctx.Tx = tx
-	
+
 	// Extend the transaction with previous output information
 	return ctx.extendTransaction()
 }
@@ -61,33 +62,33 @@ func (ctx *TxTestContext) LoadFromTxTest(test TxTest, shouldPass bool) error {
 // extendTransaction adds previous output information to transaction inputs
 func (ctx *TxTestContext) extendTransaction() error {
 	if len(ctx.Inputs) != len(ctx.Tx.Inputs) {
-		return fmt.Errorf("input count mismatch: test has %d inputs, tx has %d", 
+		return errors.NewProcessingError("input count mismatch: test has %d inputs, tx has %d",
 			len(ctx.Inputs), len(ctx.Tx.Inputs))
 	}
-	
+
 	for i, testInput := range ctx.Inputs {
 		if i >= len(ctx.Tx.Inputs) {
-			return fmt.Errorf("test input index %d out of range", i)
+			return errors.NewProcessingError("test input index %d out of range", i)
 		}
-		
+
 		// Parse the previous output script
 		prevScript, err := ctx.Parser.ParseScript(testInput.ScriptPubKey)
 		if err != nil {
-			return fmt.Errorf("failed to parse previous output script at index %d: %w", i, err)
+			return errors.NewProcessingError("failed to parse previous output script at index %d", i, err)
 		}
-		
+
 		// Set previous output information
 		script := bscript.Script(prevScript)
 		ctx.Tx.Inputs[i].PreviousTxScript = &script
 		ctx.Tx.Inputs[i].PreviousTxSatoshis = 100000000 // 1 BTC default
-		
+
 		// Set previous transaction ID if provided
 		if testInput.TxID != "" && testInput.TxID != "0000000000000000000000000000000000000000000000000000000000000000" {
 			txIDBytes, err := hex.DecodeString(testInput.TxID)
 			if err != nil {
-				return fmt.Errorf("invalid txid at input %d: %w", i, err)
+				return errors.NewProcessingError("invalid txid at input %d", i, err)
 			}
-			
+
 			if len(txIDBytes) == 32 {
 				// Reverse bytes for little-endian
 				for j := 0; j < 16; j++ {
@@ -97,14 +98,14 @@ func (ctx *TxTestContext) extendTransaction() error {
 				// We'll work with the bytes we have for now
 			}
 		}
-		
+
 		// Verify output index matches
 		if ctx.Tx.Inputs[i].PreviousTxOutIndex != testInput.Vout {
-			return fmt.Errorf("output index mismatch at input %d: got %d, expected %d", 
+			return errors.NewProcessingError("output index mismatch at input %d: got %d, expected %d",
 				i, ctx.Tx.Inputs[i].PreviousTxOutIndex, testInput.Vout)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -112,10 +113,10 @@ func (ctx *TxTestContext) extendTransaction() error {
 func (ctx *TxTestContext) Validate() TxTestResult {
 	// Run validation with all validators
 	results := ctx.Validator.ValidateWithAllValidators(ctx.Tx, 0, make([]uint32, len(ctx.Tx.Inputs)))
-	
+
 	// Check if all validators agree
 	allAgree, differences := CompareResults(results)
-	
+
 	// Determine overall validity
 	// Consider valid if at least one validator says it's valid
 	valid := false
@@ -128,7 +129,7 @@ func (ctx *TxTestContext) Validate() TxTestResult {
 			firstError = result.Error
 		}
 	}
-	
+
 	details := fmt.Sprintf("Validators: ")
 	for validatorType, result := range results {
 		if result.Success {
@@ -137,11 +138,11 @@ func (ctx *TxTestContext) Validate() TxTestResult {
 			details += fmt.Sprintf("%s=FAIL ", validatorType)
 		}
 	}
-	
+
 	if !allAgree {
 		details += fmt.Sprintf("(Disagreement: %s)", differences)
 	}
-	
+
 	return TxTestResult{
 		Valid:   valid,
 		Error:   firstError,
@@ -152,7 +153,7 @@ func (ctx *TxTestContext) Validate() TxTestResult {
 // ValidateWithValidator runs validation with a specific validator
 func (ctx *TxTestContext) ValidateWithValidator(validatorType ValidatorType) TxTestResult {
 	result := ctx.Validator.ValidateScript(validatorType, ctx.Tx, 0, make([]uint32, len(ctx.Tx.Inputs)))
-	
+
 	return TxTestResult{
 		Valid:   result.Success,
 		Error:   result.Error,
@@ -163,7 +164,7 @@ func (ctx *TxTestContext) ValidateWithValidator(validatorType ValidatorType) TxT
 // GetScriptFlags converts string flags to flag values
 func (ctx *TxTestContext) GetScriptFlags() uint32 {
 	var flags uint32
-	
+
 	for _, flag := range ctx.Flags {
 		switch flag {
 		case "P2SH":
@@ -194,7 +195,7 @@ func (ctx *TxTestContext) GetScriptFlags() uint32 {
 			// flags |= SCRIPT_VERIFY_FORKID
 		}
 	}
-	
+
 	return flags
 }
 
@@ -211,7 +212,7 @@ func (ctx *TxTestContext) IsExtended() bool {
 // GetTransactionInfo returns information about the transaction
 func (ctx *TxTestContext) GetTransactionInfo() map[string]interface{} {
 	info := make(map[string]interface{})
-	
+
 	info["txid"] = ctx.Tx.TxID()
 	info["version"] = ctx.Tx.Version
 	info["locktime"] = ctx.Tx.LockTime
@@ -221,7 +222,7 @@ func (ctx *TxTestContext) GetTransactionInfo() map[string]interface{} {
 	info["is_extended"] = ctx.IsExtended()
 	info["flags"] = ctx.Flags
 	info["should_pass"] = ctx.ShouldPass
-	
+
 	// Calculate total input and output values
 	var totalInput, totalOutput uint64
 	for _, input := range ctx.Tx.Inputs {
@@ -230,40 +231,40 @@ func (ctx *TxTestContext) GetTransactionInfo() map[string]interface{} {
 	for _, output := range ctx.Tx.Outputs {
 		totalOutput += output.Satoshis
 	}
-	
+
 	info["total_input"] = totalInput
 	info["total_output"] = totalOutput
 	info["fee"] = int64(totalInput) - int64(totalOutput)
-	
+
 	return info
 }
 
 // GetInputScripts returns the unlocking and locking scripts for each input
 func (ctx *TxTestContext) GetInputScripts() []map[string]string {
-	var scripts []map[string]string
-	
+	scripts := make([]map[string]string, 0, len(ctx.Tx.Inputs))
+
 	for i, input := range ctx.Tx.Inputs {
 		scriptInfo := make(map[string]string)
-		
+
 		if input.UnlockingScript != nil {
 			scriptInfo["unlocking_script"] = hex.EncodeToString(*input.UnlockingScript)
 		} else {
 			scriptInfo["unlocking_script"] = ""
 		}
-		
+
 		if input.PreviousTxScript != nil {
 			scriptInfo["locking_script"] = hex.EncodeToString(*input.PreviousTxScript)
 		} else {
 			scriptInfo["locking_script"] = ""
 		}
-		
+
 		if i < len(ctx.Inputs) {
 			scriptInfo["original_locking_script"] = ctx.Inputs[i].ScriptPubKey
 		}
-		
+
 		scripts = append(scripts, scriptInfo)
 	}
-	
+
 	return scripts
 }
 
@@ -272,19 +273,19 @@ func CreateTestTransaction(inputs []TxTestInput, outputs []TestOutput) (*bt.Tx, 
 	tx := bt.NewTx()
 	tx.Version = 1
 	tx.LockTime = 0
-	
+
 	parser := NewScriptParser()
-	
+
 	// Add inputs
 	tx.Inputs = make([]*bt.Input, len(inputs))
 	for i, input := range inputs {
 		// Parse previous output script
 		prevScript, err := parser.ParseScript(input.ScriptPubKey)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse previous output script for input %d: %w", i, err)
+			return nil, errors.NewProcessingError("failed to parse previous output script for input %d", i, err)
 		}
 		script := bscript.Script(prevScript)
-		
+
 		tx.Inputs[i] = &bt.Input{
 			PreviousTxOutIndex: input.Vout,
 			UnlockingScript:    &bscript.Script{}, // Will be set later
@@ -292,27 +293,27 @@ func CreateTestTransaction(inputs []TxTestInput, outputs []TestOutput) (*bt.Tx, 
 			PreviousTxSatoshis: 100000000, // 1 BTC default
 			PreviousTxScript:   &script,
 		}
-		
+
 		// TODO: Set previous transaction ID if needed
 		// The go-bt library handles this differently
 	}
-	
+
 	// Add outputs
 	tx.Outputs = make([]*bt.Output, len(outputs))
 	for i, output := range outputs {
 		// Parse locking script
 		lockingScript, err := parser.ParseScript(output.Script)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse locking script for output %d: %w", i, err)
+			return nil, errors.NewProcessingError("failed to parse locking script for output %d", i, err)
 		}
 		script := bscript.Script(lockingScript)
-		
+
 		tx.Outputs[i] = &bt.Output{
 			Satoshis:      output.Satoshis,
 			LockingScript: &script,
 		}
 	}
-	
+
 	return tx, nil
 }
 
