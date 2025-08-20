@@ -12,12 +12,6 @@ import (
 	"github.com/bitcoin-sv/teranode/util/retry"
 )
 
-const (
-	// maxBlocksBehind is the maximum number of blocks that block assembly
-	// can be behind before we consider it not ready
-	maxBlocksBehind uint32 = 1
-)
-
 // WaitForBlockAssemblyReady waits for the block assembly service to be ready to process
 // a block at the given height. This ensures that all necessary data (such as coinbase
 // transactions) has been processed before allowing block validation to proceed.
@@ -30,6 +24,7 @@ const (
 //   - logger: Logger for recording operations
 //   - blockAssemblyClient: Client interface to the block assembly service
 //   - blockHeight: The height of the block to be processed
+//   - maxBlocksBehind: Maximum number of blocks the block assembly can be behind the target height
 //
 // Returns:
 //   - error: nil if block assembly is ready, error if timeout or other failure
@@ -38,6 +33,7 @@ func WaitForBlockAssemblyReady(
 	logger ulogger.Logger,
 	blockAssemblyClient blockassembly.ClientI,
 	blockHeight uint32,
+	maxBlocksBehind uint32,
 ) error {
 	// Skip if block assembly client is not available (e.g., in tests)
 	if blockAssemblyClient == nil {

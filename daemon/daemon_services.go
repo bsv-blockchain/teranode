@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"net/http"
+	"net/http/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/kafka"
 	"github.com/bitcoin-sv/teranode/util/servicemanager"
 	"github.com/bitcoin-sv/teranode/util/tracing"
+	"github.com/felixge/fgprof"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -171,7 +173,20 @@ func startProfiler(logger ulogger.Logger, appSettings *settings.Settings) {
 				IdleTimeout:  120 * time.Second,
 			}
 
-			// http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
+			// register pprof handlers
+			mux := http.NewServeMux()
+			mux.HandleFunc("/debug/pprof/", pprof.Index)
+			mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+			mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+			mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+			mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+			// fgprof support
+			mux.Handle("/debug/fgprof", fgprof.Handler())
+
+			// add mux to the server
+			server.Handler = mux
+
 			logger.Fatalf("%v", server.ListenAndServe())
 		}()
 	}

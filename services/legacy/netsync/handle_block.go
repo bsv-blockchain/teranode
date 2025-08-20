@@ -151,7 +151,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}()
 
 	// Wait for block assembly to be ready
-	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight); err != nil {
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight, uint32(sm.settings.ChainCfgParams.CoinbaseMaturity/2)); err != nil {
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
@@ -904,13 +904,12 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 
 // prepareTxsPerLevel prepares the transactions per level for processing
 // levels are determined by the number of parents in the block
-func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Block, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) (uint32, map[uint32][]*bt.Tx) {
+func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Block, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) (uint32, [][]*bt.Tx) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "prepareTxsPerLevel")
 	defer deferFn()
 
 	maxLevel := uint32(0)
 	sizePerLevel := make(map[uint32]uint64)
-	blockTxsPerLevel := make(map[uint32][]*bt.Tx)
 
 	for _, wireTx := range block.Transactions() {
 		txHash := *wireTx.Hash()
@@ -935,6 +934,8 @@ func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Bl
 			sizePerLevel[txWrapper.ChildLevelInBlock] += 1
 		}
 	}
+
+	blockTxsPerLevel := make([][]*bt.Tx, maxLevel+1)
 
 	// pre-allocation of the blockTxsPerLevel map
 	for i := uint32(0); i <= maxLevel; i++ {

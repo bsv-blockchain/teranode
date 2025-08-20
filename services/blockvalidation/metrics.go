@@ -39,6 +39,13 @@ var (
 	prometheusBlockValidationLastValidatedBlocksCache prometheus.Gauge
 	prometheusBlockValidationBlockExistsCache         prometheus.Gauge
 	prometheusBlockValidationSubtreeExistsCache       prometheus.Gauge
+
+	// catchup operation metrics
+	prometheusCatchupDuration       *prometheus.HistogramVec
+	prometheusCatchupBlocksFetched  *prometheus.CounterVec
+	prometheusCatchupHeadersFetched *prometheus.CounterVec
+	prometheusCatchupErrors         *prometheus.CounterVec
+	prometheusCatchupActive         prometheus.Gauge
 )
 
 var (
@@ -175,6 +182,57 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockvalidation",
 			Name:      "subtree_exists_cache",
 			Help:      "Number of subtrees in the subtree exists cache",
+		},
+	)
+
+	// Initialize catchup operation metrics
+	prometheusCatchupDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_duration_seconds",
+			Help:      "Duration of catchup operations in seconds",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+		[]string{"peer", "success"},
+	)
+
+	prometheusCatchupBlocksFetched = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_blocks_fetched_total",
+			Help:      "Total number of blocks fetched during catchup",
+		},
+		[]string{"peer"},
+	)
+
+	prometheusCatchupHeadersFetched = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_headers_fetched_total",
+			Help:      "Total number of headers fetched during catchup",
+		},
+		[]string{"peer"},
+	)
+
+	prometheusCatchupErrors = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_errors_total",
+			Help:      "Total number of errors during catchup operations",
+		},
+		[]string{"peer", "error_type"},
+	)
+
+	prometheusCatchupActive = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_active",
+			Help:      "Number of active catchup operations (0 or 1)",
 		},
 	)
 }

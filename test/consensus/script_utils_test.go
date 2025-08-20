@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 // TestGetScriptAsm tests script disassembly
 func TestGetScriptAsm(t *testing.T) {
 	tests := []struct {
@@ -27,8 +26,8 @@ func TestGetScriptAsm(t *testing.T) {
 			name: "Simple opcodes",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpDUP)
-				s.AppendOpcodes(bscript.OpHASH160)
+				_ = s.AppendOpcodes(bscript.OpDUP)
+				_ = s.AppendOpcodes(bscript.OpHASH160)
 				return s
 			}(),
 			expected: "OP_DUP OP_HASH160",
@@ -37,7 +36,7 @@ func TestGetScriptAsm(t *testing.T) {
 			name: "Push data",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendPushData([]byte{0x01, 0x02, 0x03})
+				_ = s.AppendPushData([]byte{0x01, 0x02, 0x03})
 				return s
 			}(),
 			expected: "010203",
@@ -46,9 +45,9 @@ func TestGetScriptAsm(t *testing.T) {
 			name: "Mixed opcodes and data",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpDUP)
-				s.AppendPushData([]byte{0xaa, 0xbb})
-				s.AppendOpcodes(bscript.OpEQUAL)
+				_ = s.AppendOpcodes(bscript.OpDUP)
+				_ = s.AppendPushData([]byte{0xaa, 0xbb})
+				_ = s.AppendOpcodes(bscript.OpEQUAL)
 				return s
 			}(),
 			expected: "OP_DUP aabb OP_EQUAL",
@@ -57,10 +56,10 @@ func TestGetScriptAsm(t *testing.T) {
 			name: "Numbers",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.Op1)
-				s.AppendOpcodes(bscript.Op2)
-				s.AppendOpcodes(bscript.Op16)
-				s.AppendOpcodes(bscript.Op1NEGATE)
+				_ = s.AppendOpcodes(bscript.Op1)
+				_ = s.AppendOpcodes(bscript.Op2)
+				_ = s.AppendOpcodes(bscript.Op16)
+				_ = s.AppendOpcodes(bscript.Op1NEGATE)
 				return s
 			}(),
 			expected: "OP_1 OP_2 OP_16 OP_1NEGATE",
@@ -70,7 +69,7 @@ func TestGetScriptAsm(t *testing.T) {
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
 				// PUSHDATA1
-				s.AppendPushData(make([]byte, 76))
+				_ = s.AppendPushData(make([]byte, 76))
 				return s
 			}(),
 			expected: strings.Repeat("00", 76),
@@ -79,11 +78,11 @@ func TestGetScriptAsm(t *testing.T) {
 			name: "P2PKH script",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpDUP)
-				s.AppendOpcodes(bscript.OpHASH160)
-				s.AppendPushData(make([]byte, 20))
-				s.AppendOpcodes(bscript.OpEQUALVERIFY)
-				s.AppendOpcodes(bscript.OpCHECKSIG)
+				_ = s.AppendOpcodes(bscript.OpDUP)
+				_ = s.AppendOpcodes(bscript.OpHASH160)
+				_ = s.AppendPushData(make([]byte, 20))
+				_ = s.AppendOpcodes(bscript.OpEQUALVERIFY)
+				_ = s.AppendOpcodes(bscript.OpCHECKSIG)
 				return s
 			}(),
 			expected: "OP_DUP OP_HASH160 " + strings.Repeat("00", 20) + " OP_EQUALVERIFY OP_CHECKSIG",
@@ -92,12 +91,12 @@ func TestGetScriptAsm(t *testing.T) {
 			name: "Multisig script",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.Op2)
-				s.AppendPushData(make([]byte, 33))
-				s.AppendPushData(make([]byte, 33))
-				s.AppendPushData(make([]byte, 33))
-				s.AppendOpcodes(bscript.Op3)
-				s.AppendOpcodes(bscript.OpCHECKMULTISIG)
+				_ = s.AppendOpcodes(bscript.Op2)
+				_ = s.AppendPushData(make([]byte, 33))
+				_ = s.AppendPushData(make([]byte, 33))
+				_ = s.AppendPushData(make([]byte, 33))
+				_ = s.AppendOpcodes(bscript.Op3)
+				_ = s.AppendOpcodes(bscript.OpCHECKMULTISIG)
 				return s
 			}(),
 			expected: "OP_2 " + strings.Repeat("00", 33) + " " + strings.Repeat("00", 33) + " " + strings.Repeat("00", 33) + " OP_3 OP_CHECKMULTISIG",
@@ -106,8 +105,8 @@ func TestGetScriptAsm(t *testing.T) {
 			name: "OP_RETURN data",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpRETURN)
-				s.AppendPushData([]byte("Hello, Bitcoin!"))
+				_ = s.AppendOpcodes(bscript.OpRETURN)
+				_ = s.AppendPushData([]byte("Hello, Bitcoin!"))
 				return s
 			}(),
 			expected: "OP_RETURN 48656c6c6f2c20426974636f696e21",
@@ -116,11 +115,11 @@ func TestGetScriptAsm(t *testing.T) {
 			name: "Control flow",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpIF)
-				s.AppendOpcodes(bscript.Op1)
-				s.AppendOpcodes(bscript.OpELSE)
-				s.AppendOpcodes(bscript.Op0)
-				s.AppendOpcodes(bscript.OpENDIF)
+				_ = s.AppendOpcodes(bscript.OpIF)
+				_ = s.AppendOpcodes(bscript.Op1)
+				_ = s.AppendOpcodes(bscript.OpELSE)
+				_ = s.AppendOpcodes(bscript.Op0)
+				_ = s.AppendOpcodes(bscript.OpENDIF)
 				return s
 			}(),
 			expected: "OP_IF OP_1 OP_ELSE OP_0 OP_ENDIF",
@@ -462,7 +461,7 @@ func TestIsPushOnly(t *testing.T) {
 			name: "Single push",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendPushData([]byte{0x01, 0x02})
+				_ = s.AppendPushData([]byte{0x01, 0x02})
 				return s
 			}(),
 			isPushOnly: true,
@@ -471,9 +470,9 @@ func TestIsPushOnly(t *testing.T) {
 			name: "Multiple pushes",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendPushData([]byte{0x01})
-				s.AppendPushData([]byte{0x02, 0x03})
-				s.AppendPushData([]byte{0x04, 0x05, 0x06})
+				_ = s.AppendPushData([]byte{0x01})
+				_ = s.AppendPushData([]byte{0x02, 0x03})
+				_ = s.AppendPushData([]byte{0x04, 0x05, 0x06})
 				return s
 			}(),
 			isPushOnly: true,
@@ -482,8 +481,8 @@ func TestIsPushOnly(t *testing.T) {
 			name: "Push with opcode",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendPushData([]byte{0x01})
-				s.AppendOpcodes(bscript.OpCHECKSIG)
+				_ = s.AppendPushData([]byte{0x01})
+				_ = s.AppendOpcodes(bscript.OpCHECKSIG)
 				return s
 			}(),
 			isPushOnly: false,
@@ -492,8 +491,8 @@ func TestIsPushOnly(t *testing.T) {
 			name: "Only opcodes",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpDUP)
-				s.AppendOpcodes(bscript.OpHASH160)
+				_ = s.AppendOpcodes(bscript.OpDUP)
+				_ = s.AppendOpcodes(bscript.OpHASH160)
 				return s
 			}(),
 			isPushOnly: false,
@@ -502,9 +501,9 @@ func TestIsPushOnly(t *testing.T) {
 			name: "Number pushes",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.Op1)
-				s.AppendOpcodes(bscript.Op2)
-				s.AppendOpcodes(bscript.Op16)
+				_ = s.AppendOpcodes(bscript.Op1)
+				_ = s.AppendOpcodes(bscript.Op2)
+				_ = s.AppendOpcodes(bscript.Op16)
 				return s
 			}(),
 			isPushOnly: true,
@@ -513,7 +512,7 @@ func TestIsPushOnly(t *testing.T) {
 			name: "OP_1NEGATE",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.Op1NEGATE)
+				_ = s.AppendOpcodes(bscript.Op1NEGATE)
 				return s
 			}(),
 			isPushOnly: true,
@@ -523,11 +522,11 @@ func TestIsPushOnly(t *testing.T) {
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
 				// Small push
-				s.AppendPushData(make([]byte, 75))
+				_ = s.AppendPushData(make([]byte, 75))
 				// PUSHDATA1
-				s.AppendPushData(make([]byte, 76))
+				_ = s.AppendPushData(make([]byte, 76))
 				// PUSHDATA2
-				s.AppendPushData(make([]byte, 256))
+				_ = s.AppendPushData(make([]byte, 256))
 				return s
 			}(),
 			isPushOnly: true,
@@ -781,7 +780,7 @@ func TestScriptStandardPush(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			script := &bscript.Script{}
 			AppendPushInt(script, test.value)
-			
+
 			result := []byte(*script)
 			require.True(t, bytes.Equal(result, test.expected),
 				"For value %d, expected %x, got %x", test.value, test.expected, result)
@@ -792,65 +791,65 @@ func TestScriptStandardPush(t *testing.T) {
 // TestIsUnspendable tests script unspendability detection
 func TestIsUnspendable(t *testing.T) {
 	tests := []struct {
-		name         string
-		script       *bscript.Script
-		isGenesis    bool
+		name          string
+		script        *bscript.Script
+		isGenesis     bool
 		isUnspendable bool
 	}{
 		{
 			name: "OP_RETURN only",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpRETURN)
+				_ = s.AppendOpcodes(bscript.OpRETURN)
 				return s
 			}(),
-			isGenesis:    false,
+			isGenesis:     false,
 			isUnspendable: true,
 		},
 		{
 			name: "OP_FALSE OP_RETURN",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpFALSE)
-				s.AppendOpcodes(bscript.OpRETURN)
+				_ = s.AppendOpcodes(bscript.OpFALSE)
+				_ = s.AppendOpcodes(bscript.OpRETURN)
 				return s
 			}(),
-			isGenesis:    false,
+			isGenesis:     false,
 			isUnspendable: true,
 		},
 		{
 			name: "OP_RETURN with data",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpRETURN)
-				s.AppendPushData([]byte("data"))
+				_ = s.AppendOpcodes(bscript.OpRETURN)
+				_ = s.AppendPushData([]byte("data"))
 				return s
 			}(),
-			isGenesis:    false,
+			isGenesis:     false,
 			isUnspendable: true,
 		},
 		{
 			name: "OP_RETURN in Genesis",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpRETURN)
+				_ = s.AppendOpcodes(bscript.OpRETURN)
 				return s
 			}(),
-			isGenesis:    true,
+			isGenesis:     true,
 			isUnspendable: false, // OP_RETURN is spendable in Genesis
 		},
 		{
 			name: "Normal P2PKH",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpDUP)
-				s.AppendOpcodes(bscript.OpHASH160)
-				s.AppendPushData(make([]byte, 20))
-				s.AppendOpcodes(bscript.OpEQUALVERIFY)
-				s.AppendOpcodes(bscript.OpCHECKSIG)
+				_ = s.AppendOpcodes(bscript.OpDUP)
+				_ = s.AppendOpcodes(bscript.OpHASH160)
+				_ = s.AppendPushData(make([]byte, 20))
+				_ = s.AppendOpcodes(bscript.OpEQUALVERIFY)
+				_ = s.AppendOpcodes(bscript.OpCHECKSIG)
 				return s
 			}(),
-			isGenesis:    false,
+			isGenesis:     false,
 			isUnspendable: false,
 		},
 		{
@@ -860,7 +859,7 @@ func TestIsUnspendable(t *testing.T) {
 				s := bscript.NewFromBytes(make([]byte, 10001))
 				return s
 			}(),
-			isGenesis:    false,
+			isGenesis:     false,
 			isUnspendable: true,
 		},
 		{
@@ -870,13 +869,13 @@ func TestIsUnspendable(t *testing.T) {
 				s := bscript.NewFromBytes(make([]byte, 10001))
 				return s
 			}(),
-			isGenesis:    true,
+			isGenesis:     true,
 			isUnspendable: false,
 		},
 		{
 			name:          "Empty script",
 			script:        &bscript.Script{},
-			isGenesis:    false,
+			isGenesis:     false,
 			isUnspendable: false,
 		},
 	}

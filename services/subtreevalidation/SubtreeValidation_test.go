@@ -263,55 +263,167 @@ func TestBlockValidationValidateSubtreeInternalLegacy(t *testing.T) {
 }
 
 func TestServer_prepareTxsPerLevel(t *testing.T) {
-	testCases := []struct {
-		name             string
-		blockFilePath    string
-		expectedLevels   uint32
-		expectedTxMapLen int
-	}{
-		{
-			name:             "Block1",
-			blockFilePath:    "../legacy/testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.bin",
-			expectedLevels:   15,
-			expectedTxMapLen: 563,
-		},
+	t.Run("per block", func(t *testing.T) {
+		testCases := []struct {
+			name             string
+			blockFilePath    string
+			expectedLevels   uint32
+			expectedTxMapLen int
+		}{
+			{
+				name:             "Block1",
+				blockFilePath:    "../legacy/testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.bin",
+				expectedLevels:   15,
+				expectedTxMapLen: 563,
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				block, err := testdata.ReadBlockFromFile(tc.blockFilePath)
+				require.NoError(t, err)
+
+				s := &Server{}
+
+				transactions := make([]missingTx, 0)
+
+				for _, wireTx := range block.Transactions() {
+					// Serialize the tx
+					var txBytes bytes.Buffer
+					err = wireTx.MsgTx().Serialize(&txBytes)
+					require.NoError(t, err)
+
+					tx, err := bt.NewTxFromBytes(txBytes.Bytes())
+					require.NoError(t, err)
+
+					if tx.IsCoinbase() {
+						continue
+					}
+
+					transactions = append(transactions, missingTx{
+						tx: tx,
+					})
+				}
+
+				maxLevel, blockTXsPerLevel, err := s.prepareTxsPerLevel(context.Background(), transactions)
+				require.NoError(t, err)
+				assert.Equal(t, tc.expectedLevels, maxLevel)
+
+				allParents := 0
+
+				for i := range blockTXsPerLevel {
+					allParents += len(blockTXsPerLevel[i])
+				}
+
+				assert.Equal(t, tc.expectedTxMapLen, allParents)
+			})
+		}
+	})
+
+	t.Run("from subtree", func(t *testing.T) {
+		s := &Server{}
+
+		subtreeBytes, err := os.ReadFile("testdata/4d22d3ea8d618c6de784855bf4facd0760f4012852242adfd399cff700665f3d.subtree")
+		require.NoError(t, err)
+
+		subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeBytes[8:]) // trim the magic bytes
+		require.NoError(t, err)
+
+		subtreeDataBytes, err := os.ReadFile("testdata/4d22d3ea8d618c6de784855bf4facd0760f4012852242adfd399cff700665f3d.subtreeData")
+		require.NoError(t, err)
+
+		subtreeData, err := subtreepkg.NewSubtreeDataFromBytes(subtree, subtreeDataBytes)
+		require.NoError(t, err)
+
+		transactions := make([]missingTx, 0, len(subtreeData.Txs))
+		for idx, tx := range subtreeData.Txs {
+			if tx == nil {
+				continue
+			}
+
+			transactions = append(transactions, missingTx{
+				tx:  tx,
+				idx: idx,
+			})
+		}
+
+		maxLevel, blockTXsPerLevel, err := s.prepareTxsPerLevel(context.Background(), transactions)
+		require.NoError(t, err)
+		assert.Equal(t, uint32(330), maxLevel)
+
+		allParents := 0
+
+		for i := range blockTXsPerLevel {
+			allParents += len(blockTXsPerLevel[i])
+		}
+
+		assert.Equal(t, len(subtreeData.Txs)-1, allParents) // ignore coinbase placeholder tx
+
+		// parenTxHash, err := chainhash.NewHashFromStr("061245c112df5b66778698c4d96f2e1a82051094f084207c38cd4b0076e6ab3c")
+		// require.NoError(t, err)
+		//
+		// childTxHash, err := chainhash.NewHashFromStr("c3595a5877702baa8fbddbf38ae67d43a4f06105d5a9bbf26ef23eab98784d1d")
+		// require.NoError(t, err)
+
+		levelsMap := make(map[chainhash.Hash]int)
+
+		// make sure the child is found in a higher level than the parent
+		for level, txs := range blockTXsPerLevel {
+			for _, tx := range txs {
+				levelsMap[*tx.tx.TxIDChainHash()] = level
+			}
+		}
+
+		// check all transactions that the parents of the transaction are either not in the map, or at a lower level
+		for _, tx := range transactions {
+			if tx.tx == nil {
+				continue
+			}
+
+			txLevel := levelsMap[*tx.tx.TxIDChainHash()]
+			for _, input := range tx.tx.Inputs {
+				parentHash := *input.PreviousTxIDChainHash()
+
+				if level, ok := levelsMap[parentHash]; ok {
+					assert.Less(t, level, txLevel, "Parent transaction should be at a lower level than the child transaction")
+				}
+			}
+		}
+	})
+}
+
+func Benchmark_prepareTxsPerLevel(b *testing.B) {
+	s := &Server{}
+
+	subtreeBytes, err := os.ReadFile("testdata/4d22d3ea8d618c6de784855bf4facd0760f4012852242adfd399cff700665f3d.subtree")
+	require.NoError(b, err)
+
+	subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeBytes[8:]) // trim the magic bytes
+	require.NoError(b, err)
+
+	subtreeDataBytes, err := os.ReadFile("testdata/4d22d3ea8d618c6de784855bf4facd0760f4012852242adfd399cff700665f3d.subtreeData")
+	require.NoError(b, err)
+
+	subtreeData, err := subtreepkg.NewSubtreeDataFromBytes(subtree, subtreeDataBytes)
+	require.NoError(b, err)
+
+	transactions := make([]missingTx, 0, len(subtreeData.Txs))
+	for idx, tx := range subtreeData.Txs {
+		if tx == nil {
+			continue
+		}
+
+		tx.SetTxHash(tx.TxIDChainHash()) // ensure the tx hash is set, as the tx id is not mutated in the benchmark
+		transactions = append(transactions, missingTx{
+			tx:  tx,
+			idx: idx,
+		})
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			block, err := testdata.ReadBlockFromFile(tc.blockFilePath)
-			require.NoError(t, err)
+	b.ResetTimer()
 
-			s := &Server{}
-
-			transactions := make([]missingTx, 0)
-
-			for _, wireTx := range block.Transactions() {
-				// Serialize the tx
-				var txBytes bytes.Buffer
-				err = wireTx.MsgTx().Serialize(&txBytes)
-				require.NoError(t, err)
-
-				tx, err := bt.NewTxFromBytes(txBytes.Bytes())
-				require.NoError(t, err)
-
-				transactions = append(transactions, missingTx{
-					tx: tx,
-				})
-			}
-
-			maxLevel, blockTXsPerLevel, err := s.prepareTxsPerLevel(context.Background(), transactions)
-			require.NoError(t, err)
-			assert.Equal(t, tc.expectedLevels, maxLevel)
-
-			allParents := 0
-
-			for i := range blockTXsPerLevel {
-				allParents += len(blockTXsPerLevel[i])
-			}
-
-			assert.Equal(t, tc.expectedTxMapLen, allParents)
-		})
+	for i := 0; i < b.N; i++ {
+		_, _, _ = s.prepareTxsPerLevel(context.Background(), transactions)
 	}
 }
 

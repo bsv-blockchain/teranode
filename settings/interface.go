@@ -277,6 +277,20 @@ type BlockValidationSettings struct {
 	ArePreviousBlocksProcessedMaxRetry               int
 	ArePreviousBlocksProcessedRetryBackoffMultiplier int
 	PreviousBlockHeaderCount                         uint64
+	// Catchup configuration
+	CatchupMaxRetries            int // Maximum number of retries for catchup operations
+	CatchupIterationTimeout      int // Timeout in seconds for each catchup iteration
+	CatchupOperationTimeout      int // Timeout in seconds for the entire catchup operation
+	CatchupMaxAccumulatedHeaders int // Maximum headers to accumulate during catchup (default: 100000)
+	// Circuit breaker configuration
+	CircuitBreakerFailureThreshold int // Number of consecutive failures before opening circuit
+	CircuitBreakerSuccessThreshold int // Number of consecutive successes before closing circuit
+	CircuitBreakerTimeoutSeconds   int // Timeout in seconds before transitioning from open to half-open
+	// Block fetching configuration
+	FetchLargeBatchSize     int // Large batches for maximum HTTP efficiency (default: 100, peer limit)
+	FetchNumWorkers         int // Number of worker goroutines for parallel processing (default: 16)
+	FetchBufferSize         int // Buffer size for channels (default: 500)
+	SubtreeFetchConcurrency int // Concurrent subtree fetches per block (default: 8)
 }
 
 type ValidatorSettings struct {
@@ -402,6 +416,11 @@ type P2PSettings struct {
 
 	BanThreshold int
 	BanDuration  time.Duration
+
+	// Sync manager configuration
+	InitialSyncDelay   time.Duration // Initial delay before starting sync operations
+	MinPeersForSync    int           // Minimum number of peers needed before selecting sync peer
+	MaxWaitForMinPeers time.Duration // Maximum time to wait for minimum peers
 
 	// Address sharing configuration
 	// SharePrivateAddresses controls whether to advertise private/local IP addresses to peers.

@@ -93,6 +93,7 @@ type TestOptions struct {
 	SettingsOverrideFunc    func(*settings.Settings)
 	SkipRemoveDataDir       bool
 	StartDaemonDependencies bool
+	FSMState                blockchain.FSMStateType
 }
 
 // JSONError represents a JSON error response from the RPC server.
@@ -217,6 +218,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	// Disable both NAT services to avoid libp2p "multiple NATManagers" error
 	appSettings.P2P.EnableNATService = false
 	appSettings.P2P.EnableNATPortMap = false
+
+	appSettings.P2P.InitialSyncDelay = 0
+	appSettings.P2P.MinPeersForSync = 0
+	appSettings.P2P.MaxWaitForMinPeers = 0
 
 	if opts.EnableP2P {
 		_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "p2p", "", ":0")
@@ -412,6 +417,20 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	p2pClient, err = p2p.NewClient(ctx, logger, appSettings)
 	require.NoError(t, err)
 
+	if opts.FSMState.String() != "" {
+		switch opts.FSMState {
+		case blockchain.FSMStateRUNNING:
+			err = blockchainClient.Run(ctx, "test")
+			require.NoError(t, err)
+		case blockchain.FSMStateCATCHINGBLOCKS:
+			err = blockchainClient.CatchUpBlocks(ctx)
+			require.NoError(t, err)
+		case blockchain.FSMStateLEGACYSYNCING:
+			err = blockchainClient.LegacySync(ctx)
+			require.NoError(t, err)
+		}
+	}
+
 	assert.NotNil(t, blockchainClient)
 	assert.NotNil(t, blockAssemblyClient)
 	assert.NotNil(t, propagationClient)
@@ -589,7 +608,7 @@ func (td *TestDaemon) CallRPC(ctx context.Context, method string, params []inter
 	}
 
 	// Set the appropriate headers
-	req.SetBasicAuth("bitcoin", "bitcoin")
+	req.SetBasicAuth(td.Settings.RPC.RPCUser, td.Settings.RPC.RPCPass)
 	req.Header.Set("Content-Type", "application/json")
 
 	// Inject OpenTelemetry trace context into HTTP headers

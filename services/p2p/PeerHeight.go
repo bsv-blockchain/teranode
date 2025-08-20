@@ -29,7 +29,7 @@ import (
 type PeerHeight struct {
 	logger                ulogger.Logger     // Logger instance for peer height operations
 	settings              *settings.Settings // Global Teranode configuration settings
-	P2PNode               p2p.Node           // P2P node instance for network communication
+	P2PNode               *p2p.Node          // P2P node instance for network communication
 	numberOfExpectedPeers int                // Expected number of peers for synchronization operations
 	lastMsgByPeerID       sync.Map           // Thread-safe map of last messages received from each peer
 	defaultTimeout        time.Duration      // Default timeout for synchronization operations
@@ -98,7 +98,7 @@ func NewPeerHeight(logger ulogger.Logger, tSettings *settings.Settings, processN
 	peerStatus := &PeerHeight{
 		logger:                logger,
 		settings:              tSettings,
-		P2PNode:               *peerConnection, //nolint:govet // this needs to be refactored to pass
+		P2PNode:               peerConnection,
 		numberOfExpectedPeers: numberOfExpectedPeers,
 		lastMsgByPeerID:       sync.Map{},
 		defaultTimeout:        defaultTimeout,
@@ -149,9 +149,16 @@ func (p *PeerHeight) blockHandler(ctx context.Context, msg []byte, from string) 
 	err := json.Unmarshal(msg, &blockMessage)
 	if err != nil {
 		p.logger.Errorf("[PeerHeight] Received block message from %s: %v", from, err)
-	} else {
-		p.logger.Debugf("[PeerHeight] Received block message from %s: %v", from, blockMessage)
+		return
 	}
+
+	// Ignore our own messages - check if the message originator is this node
+	if p.P2PNode != nil && blockMessage.PeerID == p.P2PNode.HostID().String() {
+		p.logger.Debugf("[PeerHeight] Ignoring own block message from %s", blockMessage.PeerID)
+		return
+	}
+
+	p.logger.Debugf("[PeerHeight] Received block message from %s: %v", from, blockMessage)
 
 	before := 0
 

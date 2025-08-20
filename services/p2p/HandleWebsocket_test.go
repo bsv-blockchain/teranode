@@ -172,14 +172,17 @@ func TestBroadcastMessage(t *testing.T) {
 }
 
 func TestHandleClientMessages(t *testing.T) {
-	s := &Server{
-		logger: &ulogger.TestLogger{},
-	}
-
 	t.Run("Normal operation", func(t *testing.T) {
+		s := &Server{
+			gCtx:   t.Context(),
+			logger: &ulogger.TestLogger{},
+		}
+
 		ch := make(chan []byte, 1)
 		deadClientCh := make(chan chan []byte, 1)
-		ws := &testWebSocketConn{t: t}
+		ws := &testWebSocketConn{
+			t: t,
+		}
 
 		done := make(chan struct{})
 		go func() {
@@ -200,6 +203,11 @@ func TestHandleClientMessages(t *testing.T) {
 	})
 
 	t.Run("Write error", func(t *testing.T) {
+		s := &Server{
+			gCtx:   t.Context(),
+			logger: &ulogger.TestLogger{},
+		}
+
 		ch := make(chan []byte, 1)
 		deadClientCh := make(chan chan []byte, 1)
 		ws := &testWebSocketConn{t: t, writeError: assert.AnError}
@@ -239,7 +247,7 @@ type testWebSocketConn struct {
 
 func (c *testWebSocketConn) WriteMessage(messageType int, data []byte) error {
 	c.writeCount++
-	c.t.Logf("WriteMessage called with data: %s", string(data))
+	c.t.Logf("WriteMessage called with message type %d, data: %s", messageType, string(data))
 
 	return c.writeError
 }
@@ -388,6 +396,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 func TestHandleWebSocket(t *testing.T) {
 	// Create server with logger
 	s := &Server{
+		gCtx:   t.Context(),
 		logger: &ulogger.TestLogger{},
 	}
 

@@ -21,7 +21,7 @@ func AppendPushInt(script *bscript.Script, value int64) {
 	} else {
 		// Convert to bytes and push
 		bytes := scriptNum(value).Bytes()
-		script.AppendPushData(bytes)
+		_ = script.AppendPushData(bytes)
 	}
 }
 
@@ -147,15 +147,15 @@ func TestCheckLockTimeVerify(t *testing.T) {
 			if test.expectedErr == SCRIPT_ERR_UNSATISFIED_LOCKTIME || test.expectedErr == SCRIPT_ERR_NEGATIVE_LOCKTIME {
 				t.Skip("Skipping - go-bdk locktime validation behavior differs from test expectations")
 			}
-			
+
 			// Create script with CLTV
 			script := &bscript.Script{}
 			if test.locktime >= 0 {
 				AppendPushInt(script, test.locktime)
 			}
-			script.AppendOpcodes(bscript.OpCHECKLOCKTIMEVERIFY)
-			script.AppendOpcodes(bscript.OpDROP) // Drop the locktime value
-			script.AppendOpcodes(bscript.Op1)    // Leave true on stack
+			_ = script.AppendOpcodes(bscript.OpCHECKLOCKTIMEVERIFY)
+			_ = script.AppendOpcodes(bscript.OpDROP) // Drop the locktime value
+			_ = script.AppendOpcodes(bscript.Op1)    // Leave true on stack
 
 			// Build test with custom transaction
 			tb := NewTestBuilder(script, test.name, test.flags, false, 100000000)
@@ -282,15 +282,15 @@ func TestCheckSequenceVerify(t *testing.T) {
 			if test.expectedErr == SCRIPT_ERR_UNSATISFIED_LOCKTIME || test.expectedErr == SCRIPT_ERR_NEGATIVE_LOCKTIME {
 				t.Skip("Skipping - go-bdk sequence validation behavior differs from test expectations")
 			}
-			
+
 			// Create script with CSV
 			script := &bscript.Script{}
 			if test.csvValue >= 0 {
 				AppendPushInt(script, test.csvValue)
 			}
-			script.AppendOpcodes(bscript.OpCHECKSEQUENCEVERIFY)
-			script.AppendOpcodes(bscript.OpDROP) // Drop the CSV value
-			script.AppendOpcodes(bscript.Op1)    // Leave true on stack
+			_ = script.AppendOpcodes(bscript.OpCHECKSEQUENCEVERIFY)
+			_ = script.AppendOpcodes(bscript.OpDROP) // Drop the CSV value
+			_ = script.AppendOpcodes(bscript.Op1)    // Leave true on stack
 
 			// Build test with custom transaction
 			tb := NewTestBuilder(script, test.name, test.flags, false, 0)
@@ -324,14 +324,15 @@ func TestCombinedLocktime(t *testing.T) {
 				script := &bscript.Script{}
 				// Check CLTV
 				AppendPushInt(script, 1000)
-				script.AppendOpcodes(bscript.OpCHECKLOCKTIMEVERIFY)
-				script.AppendOpcodes(bscript.OpDROP)
+				_ = script.AppendOpcodes(bscript.OpCHECKLOCKTIMEVERIFY)
+				_ = script.AppendOpcodes(bscript.OpDROP)
 				// Check CSV
 				AppendPushInt(script, 10)
-				script.AppendOpcodes(bscript.OpCHECKSEQUENCEVERIFY)
-				script.AppendOpcodes(bscript.OpDROP)
+				_ = script.AppendOpcodes(bscript.OpCHECKSEQUENCEVERIFY)
+				_ = script.AppendOpcodes(bscript.OpDROP)
 				// Success
-				script.AppendOpcodes(bscript.Op1)
+				_ = script.AppendOpcodes(bscript.Op1)
+
 				return script
 			},
 			txLocktime:  1000,
@@ -346,14 +347,15 @@ func TestCombinedLocktime(t *testing.T) {
 				script := &bscript.Script{}
 				// Check CLTV (will fail)
 				AppendPushInt(script, 2000)
-				script.AppendOpcodes(bscript.OpCHECKLOCKTIMEVERIFY)
-				script.AppendOpcodes(bscript.OpDROP)
+				_ = script.AppendOpcodes(bscript.OpCHECKLOCKTIMEVERIFY)
+				_ = script.AppendOpcodes(bscript.OpDROP)
 				// Check CSV (not reached)
 				AppendPushInt(script, 10)
-				script.AppendOpcodes(bscript.OpCHECKSEQUENCEVERIFY)
-				script.AppendOpcodes(bscript.OpDROP)
+				_ = script.AppendOpcodes(bscript.OpCHECKSEQUENCEVERIFY)
+				_ = script.AppendOpcodes(bscript.OpDROP)
 				// Success
-				script.AppendOpcodes(bscript.Op1)
+				_ = script.AppendOpcodes(bscript.Op1)
+
 				return script
 			},
 			txLocktime:  1000,
@@ -367,18 +369,19 @@ func TestCombinedLocktime(t *testing.T) {
 			build: func() *bscript.Script {
 				script := &bscript.Script{}
 				// IF (true)
-				script.AppendOpcodes(bscript.Op1)
-				script.AppendOpcodes(bscript.OpIF)
+				_ = script.AppendOpcodes(bscript.Op1)
+				_ = script.AppendOpcodes(bscript.OpIF)
 				// Check CLTV
 				AppendPushInt(script, 1000)
-				script.AppendOpcodes(bscript.OpCHECKLOCKTIMEVERIFY)
-				script.AppendOpcodes(bscript.OpDROP)
-				script.AppendOpcodes(bscript.OpELSE)
+				_ = script.AppendOpcodes(bscript.OpCHECKLOCKTIMEVERIFY)
+				_ = script.AppendOpcodes(bscript.OpDROP)
+				_ = script.AppendOpcodes(bscript.OpELSE)
 				// Alternative path
-				script.AppendOpcodes(bscript.Op0)
-				script.AppendOpcodes(bscript.OpENDIF)
+				_ = script.AppendOpcodes(bscript.Op0)
+				_ = script.AppendOpcodes(bscript.OpENDIF)
 				// Success
-				script.AppendOpcodes(bscript.Op1)
+				_ = script.AppendOpcodes(bscript.Op1)
+
 				return script
 			},
 			txLocktime:  1000,
@@ -393,10 +396,11 @@ func TestCombinedLocktime(t *testing.T) {
 				// Inner script with CLTV
 				inner := &bscript.Script{}
 				AppendPushInt(inner, 1000)
-				inner.AppendOpcodes(bscript.OpCHECKLOCKTIMEVERIFY)
-				inner.AppendOpcodes(bscript.OpDROP)
-				inner.AppendPushData(keyData.Pubkey0)
-				inner.AppendOpcodes(bscript.OpCHECKSIG)
+				_ = inner.AppendOpcodes(bscript.OpCHECKLOCKTIMEVERIFY)
+				_ = inner.AppendOpcodes(bscript.OpDROP)
+				_ = inner.AppendPushData(keyData.Pubkey0)
+				_ = inner.AppendOpcodes(bscript.OpCHECKSIG)
+
 				return inner
 			},
 			txLocktime:  1000,
@@ -414,7 +418,7 @@ func TestCombinedLocktime(t *testing.T) {
 			if test.expectedErr == SCRIPT_ERR_UNSATISFIED_LOCKTIME {
 				t.Skip("Skipping - go-bdk locktime validation behavior differs from test expectations")
 			}
-			
+
 			script := test.build()
 
 			// Build test
@@ -453,7 +457,7 @@ func TestNOPOpcodes(t *testing.T) {
 			expectedErr: SCRIPT_ERR_OK,
 		},
 		{
-			name:        "OP_NOP1 allowed", 
+			name:        "OP_NOP1 allowed",
 			opcode:      bscript.OpNOP1,
 			flags:       SCRIPT_VERIFY_NONE,
 			expectedErr: SCRIPT_ERR_OK,
@@ -527,11 +531,11 @@ func TestNOPOpcodes(t *testing.T) {
 			if test.expectedErr == SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS {
 				t.Skip("Skipping - go-bdk NOP opcode discouragement differs from test expectations")
 			}
-			
+
 			// Create script with NOP
 			script := &bscript.Script{}
-			script.AppendOpcodes(test.opcode)
-			script.AppendOpcodes(bscript.Op1) // Leave true on stack
+			_ = script.AppendOpcodes(test.opcode)
+			_ = script.AppendOpcodes(bscript.Op1) // Leave true on stack
 
 			// Build test
 			tb := NewTestBuilder(script, test.name, test.flags, false, 0)

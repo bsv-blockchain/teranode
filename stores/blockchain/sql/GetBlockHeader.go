@@ -102,7 +102,8 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 
 	q := `
 		SELECT
-	   	 b.version
+		 b.id
+	   	,b.version
 		,b.block_time
 		,b.n_bits
 		,b.nonce
@@ -130,6 +131,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 	)
 
 	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
+		&blockHeaderMeta.ID,
 		&blockHeader.Version,
 		&blockHeader.Timestamp,
 		&nBits,

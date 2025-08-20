@@ -29,6 +29,7 @@ func TestNodeStatusWithSyncPeer(t *testing.T) {
 		tSettings.Commit = "abc123"
 		tSettings.P2P.ListenMode = "both"
 		tSettings.Coinbase.ArbitraryText = "TestMiner"
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
 		// Mock blockchain client
 		blockchainClient := new(blockchain.Mock)
@@ -73,7 +74,7 @@ func TestNodeStatusWithSyncPeer(t *testing.T) {
 			blockchainClient:    blockchainClient,
 			P2PNode:             mockP2PNode,
 			gCtx:                ctx,
-			syncManager:         NewSyncManager(ulogger.New("test-sync"), &chaincfg.MainNetParams),
+			syncManager:         NewSyncManager(ulogger.New("test-sync"), tSettings),
 			startTime:           time.Now(),
 			notificationCh:      make(chan *notificationMsg, 1),
 			nodeStatusTopicName: "test/node_status",
@@ -138,6 +139,7 @@ func TestNodeStatusWithSyncPeer(t *testing.T) {
 		// Setup
 		ctx := context.Background()
 		tSettings := createBaseTestSettings()
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
 		// Mock blockchain client
 		blockchainClient := new(blockchain.Mock)
@@ -173,7 +175,7 @@ func TestNodeStatusWithSyncPeer(t *testing.T) {
 			blockchainClient:    blockchainClient,
 			P2PNode:             mockP2PNode,
 			gCtx:                ctx,
-			syncManager:         NewSyncManager(ulogger.New("test-sync"), &chaincfg.MainNetParams),
+			syncManager:         NewSyncManager(ulogger.New("test-sync"), tSettings),
 			startTime:           time.Now(),
 			notificationCh:      make(chan *notificationMsg, 1),
 			nodeStatusTopicName: "test/node_status",

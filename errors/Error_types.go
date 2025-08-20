@@ -57,6 +57,11 @@ var (
 	ErrTxPolicy                   = New(ERR_TX_POLICY, "tx policy error")
 	ErrTxLocked                   = New(ERR_TX_LOCKED, "tx locked")
 	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
+	ErrNetworkError               = New(ERR_NETWORK_ERROR, "network error")
+	ErrNetworkTimeout             = New(ERR_NETWORK_TIMEOUT, "network timeout")
+	ErrNetworkConnectionRefused   = New(ERR_NETWORK_CONNECTION_REFUSED, "network connection refused")
+	ErrNetworkInvalidResponse     = New(ERR_NETWORK_INVALID_RESPONSE, "network invalid response")
+	ErrNetworkPeerMalicious       = New(ERR_NETWORK_PEER_MALICIOUS, "network peer malicious")
 )
 
 // NewUnknownError creates a new error with the unknown error code.
@@ -281,4 +286,29 @@ func NewBlobError(message string, params ...interface{}) *Error {
 // NewBlobFooterSizeMismatchError creates a new error with the blob footer size mismatch error code.
 func NewBlobFooterSizeMismatchError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOB_FOOTER_SIZE_MISMATCH, message, params...)
+}
+
+// NewNetworkError creates a new error with the network error code.
+func NewNetworkError(message string, params ...interface{}) *Error {
+	return New(ERR_NETWORK_ERROR, message, params...)
+}
+
+// NewNetworkTimeoutError creates a new error with the network timeout error code.
+func NewNetworkTimeoutError(message string, params ...interface{}) *Error {
+	return New(ERR_NETWORK_TIMEOUT, message, params...)
+}
+
+// NewNetworkConnectionRefusedError creates a new error with the network connection refused error code.
+func NewNetworkConnectionRefusedError(message string, params ...interface{}) *Error {
+	return New(ERR_NETWORK_CONNECTION_REFUSED, message, params...)
+}
+
+// NewNetworkInvalidResponseError creates a new error with the network invalid response error code.
+func NewNetworkInvalidResponseError(message string, params ...interface{}) *Error {
+	return New(ERR_NETWORK_INVALID_RESPONSE, message, params...)
+}
+
+// NewNetworkPeerMaliciousError creates a new error with the network peer malicious error code.
+func NewNetworkPeerMaliciousError(message string, params ...interface{}) *Error {
+	return New(ERR_NETWORK_PEER_MALICIOUS, message, params...)
 }

@@ -11,7 +11,7 @@ import (
 const (
 	// UAHF (Bitcoin Cash fork) - SIGHASH_FORKID becomes mandatory
 	UAHFHeight = 478559
-	
+
 	// Genesis activation - many script limits removed
 	GenesisHeight = 620539
 )
@@ -19,12 +19,12 @@ const (
 // TestSighashForkIDActivation tests that SIGHASH_FORKID is enforced correctly based on block height
 func TestSighashForkIDActivation(t *testing.T) {
 	keyData := NewKeyData()
-	
+
 	// Create a simple P2PK script
 	script := &bscript.Script{}
-	script.AppendPushData(keyData.Pubkey0)
-	script.AppendOpcodes(bscript.OpCHECKSIG)
-	
+	_ = script.AppendPushData(keyData.Pubkey0)
+	_ = script.AppendOpcodes(bscript.OpCHECKSIG)
+
 	tests := []struct {
 		name        string
 		blockHeight uint32
@@ -68,26 +68,26 @@ func TestSighashForkIDActivation(t *testing.T) {
 			expectedErr: SCRIPT_ERR_OK,
 		},
 	}
-	
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			// Build test with specific block height
 			tb := NewTestBuilder(script, test.name, SCRIPT_VERIFY_NONE, false, 100000000)
-			
+
 			// Override the block height in the validator call
 			// We'll need to modify the test builder to support this
 			tb.blockHeight = test.blockHeight
-			
+
 			// Create signature with specified sighash type
 			tb.PushSig(keyData.Key0, test.sighashType, 32, 32)
 			tb.SetScriptError(test.expectedErr)
-			
+
 			// Execute test
 			err := tb.DoTest()
 			if err != nil {
 				t.Logf("Test result: %v", err)
 			}
-			
+
 			// For now, skip these tests as they expose the underlying issue
 			// TODO: Enable once go-bdk properly implements height-based activation
 			if test.expectedErr == SCRIPT_ERR_MUST_USE_FORKID {
@@ -100,15 +100,15 @@ func TestSighashForkIDActivation(t *testing.T) {
 // TestBIP66ActivationHeight tests BIP66 enforcement at different heights
 func TestBIP66ActivationHeight(t *testing.T) {
 	keyData := NewKeyData()
-	
+
 	// BIP66 was activated much earlier in Bitcoin history
 	const BIP66Height = 363725
-	
+
 	// Create a P2PK script
 	script := &bscript.Script{}
-	script.AppendPushData(keyData.Pubkey0)
-	script.AppendOpcodes(bscript.OpCHECKSIG)
-	
+	_ = script.AppendPushData(keyData.Pubkey0)
+	_ = script.AppendOpcodes(bscript.OpCHECKSIG)
+
 	tests := []struct {
 		name        string
 		blockHeight uint32
@@ -149,25 +149,25 @@ func TestBIP66ActivationHeight(t *testing.T) {
 			expectedErr: SCRIPT_ERR_OK,
 		},
 	}
-	
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			tb := NewTestBuilder(script, test.name, test.flags, false, 100000000)
 			tb.blockHeight = test.blockHeight
-			
+
 			// Create and push signature
 			sig := test.makeSig(tb)
 			tb.DoPush()
 			tb.push = sig
 			tb.havePush = true
-			
+
 			tb.SetScriptError(test.expectedErr)
-			
+
 			err := tb.DoTest()
 			if err != nil {
 				t.Logf("Test result: %v", err)
 			}
-			
+
 			// Skip tests expecting specific errors as go-bdk may not return them
 			if test.expectedErr == SCRIPT_ERR_SIG_DER {
 				t.Skip("Skipping - go-bdk returns EVAL_FALSE instead of SIG_DER")

@@ -36,12 +36,6 @@ func extractCoinbaseHeightAndText(sigScript bscript.Script) (uint32, string, err
 
 	serializedLen := int(sigScript[0])
 
-	// Support both 2-byte and 3-byte height encodings for compatibility
-	// Most blocks use 3-byte encoding, but some CPU miners use 2-byte
-	if serializedLen != 2 && serializedLen != 3 {
-		return 0, "", errors.NewBlockCoinbaseMissingHeightError("the coinbase signature script must start with the length of the serialized block height (0x02 or 0x03)")
-	}
-
 	if len(sigScript[1:]) < serializedLen {
 		return 0, "", errors.NewBlockCoinbaseMissingHeightError("the coinbase signature script must start with the serialized block height")
 	}

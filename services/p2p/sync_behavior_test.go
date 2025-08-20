@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ func TestNewSyncBehavior(t *testing.T) {
 		// Setup
 		ctx := context.Background()
 		tSettings := createBaseTestSettings()
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		blockchainClient := new(blockchain.Mock)
 		fsmState := blockchain_api.FSMStateType_RUNNING
@@ -58,7 +60,8 @@ func TestNewSyncBehavior(t *testing.T) {
 			blocksKafkaProducerClient: mockBlocksProducer,
 			P2PNode:                   mockP2PNode,
 			gCtx:                      ctx,
-			syncManager:               NewSyncManager(ulogger.New("test-sync"), &chaincfg.MainNetParams),
+			syncManager:               NewSyncManager(ulogger.New("test-sync"), tSettings),
+			peerBlockHashes:           sync.Map{},
 		}
 
 		// Set up SyncManager callbacks
@@ -77,14 +80,17 @@ func TestNewSyncBehavior(t *testing.T) {
 		server.syncManager.SetPeerIPsCallback(func(peerID peer.ID) []string {
 			return []string{"127.0.0.1"}
 		})
+		server.syncManager.initialSelectionDone = true // Simulate initial selection done
 
 		// Add peers to sync manager
 		server.syncManager.AddPeer(peer1ID)
 		server.syncManager.AddPeer(peer2ID)
 		server.syncManager.AddPeer(peer3ID)
 
-		// Give the sync manager time to select a sync peer
-		time.Sleep(50 * time.Millisecond)
+		// Mark initial selection as done so sync peer can be selected
+		server.syncManager.mu.Lock()
+		server.syncManager.initialSelectionDone = true
+		server.syncManager.mu.Unlock()
 
 		localHeight := uint32(100)
 
@@ -171,6 +177,7 @@ func TestNewSyncBehavior(t *testing.T) {
 		// Setup
 		ctx := context.Background()
 		tSettings := createBaseTestSettings()
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		blockchainClient := new(blockchain.Mock)
 		fsmState := blockchain_api.FSMStateType_RUNNING
@@ -192,8 +199,14 @@ func TestNewSyncBehavior(t *testing.T) {
 			blocksKafkaProducerClient: mockBlocksProducer,
 			P2PNode:                   mockP2PNode,
 			gCtx:                      ctx,
-			syncManager:               NewSyncManager(ulogger.New("test-sync"), &chaincfg.MainNetParams),
+			syncManager:               NewSyncManager(ulogger.New("test-sync"), tSettings),
+			peerBlockHashes:           sync.Map{},
 		}
+
+		// Mark initial selection as done
+		server.syncManager.mu.Lock()
+		server.syncManager.initialSelectionDone = true
+		server.syncManager.mu.Unlock()
 
 		localHeight := uint32(100)
 

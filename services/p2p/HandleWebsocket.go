@@ -175,18 +175,32 @@ func (s *Server) createPingMessage(baseURL string) (*notificationMsg, error) {
 
 // handleClientMessages processes messages for a single websocket client
 func (s *Server) handleClientMessages(ws WebSocketConn, ch chan []byte, deadClientCh chan<- chan []byte) {
-	for data := range ch {
-		err := ws.WriteMessage(websocket.TextMessage, data)
-		if err != nil {
-			deadClientCh <- ch
-
-			if err.Error() == "write: connection reset by peer" {
-				s.logger.Infof("Connection Lost: %v", err)
-			} else {
-				s.logger.Errorf("Failed to Send notification WS message: %v", err)
+ClientMessageLoop:
+	for {
+		select {
+		case <-s.gCtx.Done():
+			// Global context is done, close the WebSocket connection
+			s.logger.Infof("Closing WebSocket connection due to global context cancellation")
+			return
+		case data := <-ch:
+			if data == nil {
+				s.logger.Warnf("Received nil data on client channel, closing connection")
+				deadClientCh <- ch
+				return
 			}
 
-			break
+			err := ws.WriteMessage(websocket.TextMessage, data)
+			if err != nil {
+				deadClientCh <- ch
+
+				if err.Error() == "write: connection reset by peer" {
+					s.logger.Infof("Connection Lost: %v", err)
+				} else {
+					s.logger.Errorf("Failed to Send notification WS message: %v", err)
+				}
+
+				break ClientMessageLoop
+			}
 		}
 	}
 }

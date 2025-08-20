@@ -442,6 +442,14 @@ func TestPeerHeightBlockHandlerReal(t *testing.T) {
 		// Create a minimal PeerHeight instance for testing
 		logger := ulogger.New("test-peerheight", ulogger.WithLevel("ERROR"))
 
+		p2pConfig := p2p.Config{
+			ProcessName:     "test-process",
+			ListenAddresses: []string{},
+			Port:            0, // Use default port
+		}
+		p2pNode, err := p2p.NewNode(t.Context(), logger, p2pConfig)
+		require.NoError(t, err, "Failed to create P2PNode for testing")
+
 		// Create a PeerHeight with expected peers = 2 for testing
 		peerHeight := &PeerHeight{
 			logger:                logger,
@@ -449,7 +457,10 @@ func TestPeerHeightBlockHandlerReal(t *testing.T) {
 			numberOfExpectedPeers: 2,
 			lastMsgByPeerID:       sync.Map{},
 			defaultTimeout:        time.Millisecond * 10,
+			P2PNode:               p2pNode,
 		}
+
+		peerHeight.P2PNode.HostID()
 
 		ctx := context.Background()
 

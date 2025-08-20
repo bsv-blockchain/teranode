@@ -339,14 +339,15 @@ message RevalidateBlockRequest {
 // GetBlockHeaderResponse contains detailed block header information.
 message GetBlockHeaderResponse {
   bytes blockHeader = 1;      // Serialized block header
-  uint32 height = 2;          // Block height
-  uint64 tx_count = 3;        // Transaction count
-  uint64 size_in_bytes = 4;   // Block size
-  string miner = 5;           // Miner identifier
-  string peer_id = 6;       // Peer identifier
-  uint32 block_time = 7;      // Block timestamp
-  uint32 timestamp = 8;       // Processing timestamp
-  bytes chain_work = 9;       // Accumulated chain work
+  uint32 id = 2;              // Block identifier
+  uint32 height = 3;          // Block height
+  uint64 tx_count = 4;        // Transaction count
+  uint64 size_in_bytes = 5;   // Block size
+  string miner = 6;           // Miner identifier
+  string peer_id = 7;         // Peer identifier
+  uint32 block_time = 8;      // Block timestamp
+  uint32 timestamp = 9;       // Processing timestamp
+  bytes chain_work = 10;      // Accumulated chain work
 }
 
 // CheckBlockIsCurrentChainResponse indicates if blocks are in the main chain.

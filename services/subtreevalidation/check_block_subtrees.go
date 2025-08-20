@@ -1,6 +1,7 @@
 package subtreevalidation
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -28,17 +29,71 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block from blockchain client", err)
 	}
 
-	// stop processing subtrees until this is done
-	u.pauseSubtreeProcessing.Store(true)
-
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "CheckBlockSubtrees",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
 		tracing.WithLogMessage(u.logger, "[CheckBlockSubtrees] called for block %s at height %d", block.Hash().String(), block.Height),
 	)
+	defer deferFn()
+
+	// Check if the block is on our chain or will become part of our chain
+	// Only pause subtree processing if this block is on our chain or extending our chain
+	shouldPauseProcessing := false
+
+	bestBlockHeader, _, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get best block header", err)
+	}
+
+	if bestBlockHeader.Hash().IsEqual(block.Header.HashPrevBlock) {
+		// If the block's parent is the best block, we can safely assume this block
+		// is extending our chain and should pause subtree processing
+		u.logger.Infof("[CheckBlockSubtrees] Block %s is extending our chain - pausing subtree processing", block.Hash().String())
+		shouldPauseProcessing = true
+	} else {
+		// First check if the block's parent exists
+		parentExists, err := u.blockchainClient.GetBlockExists(ctx, block.Header.HashPrevBlock)
+		if err != nil {
+			u.logger.Warnf("[CheckBlockSubtrees] Failed to check if parent block exists: %v", err)
+			// On error, default to pausing for safety
+			shouldPauseProcessing = true
+		} else if parentExists {
+			// If the parent exists, check if it's on our current chain
+			_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
+			if err != nil {
+				u.logger.Warnf("[CheckBlockSubtrees] Failed to get parent block header: %v", err)
+				// On error, default to pausing for safety
+				shouldPauseProcessing = true
+			} else if parentMeta != nil && parentMeta.ID > 0 {
+				// Check if the parent is on the current chain
+				isOnChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{parentMeta.ID})
+				if err != nil {
+					u.logger.Warnf("[CheckBlockSubtrees] Failed to check if parent is on current chain: %v", err)
+					// On error, default to pausing for safety
+					shouldPauseProcessing = true
+				} else {
+					shouldPauseProcessing = isOnChain
+				}
+			}
+		} else {
+			// Parent doesn't exist - this could be a block from a different fork
+			// Don't pause processing for blocks from different forks
+			u.logger.Infof("[CheckBlockSubtrees] Block %s parent %s not found - likely from different fork, not pausing subtree processing", block.Hash().String(), block.Header.HashPrevBlock.String())
+			shouldPauseProcessing = false
+		}
+	}
+
+	if shouldPauseProcessing {
+		u.logger.Infof("[CheckBlockSubtrees] Block %s is on our chain or extending it - pausing subtree processing", block.Hash().String())
+		u.pauseSubtreeProcessing.Store(true)
+	} else {
+		u.logger.Infof("[CheckBlockSubtrees] Block %s is on a different fork - not pausing subtree processing", block.Hash().String())
+	}
+
 	defer func() {
-		u.pauseSubtreeProcessing.Store(false)
-		deferFn()
+		if u.pauseSubtreeProcessing.Load() {
+			u.pauseSubtreeProcessing.Store(false)
+		}
 	}()
 
 	// validate all the subtrees in the block
@@ -129,11 +184,9 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	if len(allTransactions) == 0 {
 		u.logger.Infof("[CheckBlockSubtrees] No transactions to validate")
 	} else {
-		u.logger.Infof("[CheckBlockSubtrees] Processing %d transactions from %d subtrees using level-based validation",
-			len(allTransactions), len(missingSubtrees))
+		u.logger.Infof("[CheckBlockSubtrees] Processing %d transactions from %d subtrees using level-based validation", len(allTransactions), len(missingSubtrees))
 
-		err = u.processTransactionsInLevels(ctx, allTransactions, block.Height, blockIds)
-		if err != nil {
+		if err = u.processTransactionsInLevels(ctx, allTransactions, block.Height, blockIds); err != nil {
 			return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to process transactions in levels: %v", err)
 		}
 
@@ -239,14 +292,16 @@ func (u *Server) extractAndCollectTransactions(ctx context.Context, subtreeHash 
 	}
 	defer subtreeDataReader.Close()
 
+	// create buffered reader to accelerate reading from the stream
+	bufferedReader := bufio.NewReaderSize(subtreeDataReader, 4*1024*1024) // 4MB buffer size
+
 	// Read transactions directly into the shared collection
-	txCount, err := u.readTransactionsFromSubtreeDataStream(subtreeDataReader, mutex, allTransactions)
+	txCount, err := u.readTransactionsFromSubtreeDataStream(bufferedReader, mutex, allTransactions)
 	if err != nil {
 		return errors.NewProcessingError("[extractAndCollectTransactions] failed to read transactions from subtreeData", err)
 	}
 
-	u.logger.Debugf("[extractAndCollectTransactions] Extracted %d transactions from subtree %s",
-		txCount, subtreeHash.String())
+	u.logger.Debugf("[extractAndCollectTransactions] Extracted %d transactions from subtree %s", txCount, subtreeHash.String())
 
 	return nil
 }
@@ -288,6 +343,9 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtreeHash chain
 // readTransactionsFromSubtreeDataStream reads transactions directly from subtreeData stream
 // This follows the same pattern as go-subtree's serializeFromReader but appends directly to the shared collection
 func (u *Server) readTransactionsFromSubtreeDataStream(reader io.Reader, mutex *sync.Mutex, allTransactions *[]*bt.Tx) (int, error) {
+	// Collect transactions locally first, then bulk append
+	// Pre-allocate local buffer                                                                                                                                            │ │
+	localTxs := make([]*bt.Tx, 0, 1024) // Adjust size as needed
 	txCount := 0
 
 	for {
@@ -302,12 +360,25 @@ func (u *Server) readTransactionsFromSubtreeDataStream(reader io.Reader, mutex *
 			return txCount, errors.NewProcessingError("[readTransactionsFromSubtreeDataStream] error reading transaction: %v", err)
 		}
 
-		// Add transaction directly to shared collection with proper locking
-		mutex.Lock()
-		*allTransactions = append(*allTransactions, tx)
-		mutex.Unlock()
+		tx.SetTxHash(tx.TxIDChainHash()) // Cache the transaction hash to avoid recomputing it
 
+		localTxs = append(localTxs, tx)
 		txCount++
+
+		if len(localTxs) >= 1024 {
+			// Lock and append to shared collection in bulk
+			mutex.Lock()
+			*allTransactions = append(*allTransactions, localTxs...)
+			mutex.Unlock()
+			localTxs = localTxs[:0] // Reset local buffer
+		}
+	}
+
+	// Append any remaining transactions in local buffer
+	if len(localTxs) > 0 {
+		mutex.Lock()
+		*allTransactions = append(*allTransactions, localTxs...)
+		mutex.Unlock()
 	}
 
 	return txCount, nil
@@ -335,9 +406,10 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		if tx == nil {
 			return errors.NewProcessingError("[processTransactionsInLevels] transaction is nil at index %d", i)
 		}
+
 		missingTxs[i] = missingTx{
 			tx:  tx,
-			idx: 0, // Index not needed for block-wide processing
+			idx: i,
 		}
 	}
 

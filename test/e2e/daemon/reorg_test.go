@@ -6,6 +6,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/daemon"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
+	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -22,6 +23,7 @@ func TestMoveUp(t *testing.T) {
 		EnableP2P: true,
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode2.daemon",
+		FSMState:        blockchain.FSMStateRUNNING,
 	})
 	defer node2.Stop(t)
 
@@ -33,6 +35,7 @@ func TestMoveUp(t *testing.T) {
 		EnableP2P: true,
 		// EnableFullLogging: true,
 		SettingsContext: "docker.host.teranode1.daemon",
+		FSMState:        blockchain.FSMStateRUNNING,
 	})
 	defer node1.Stop(t)
 
@@ -65,7 +68,9 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
+			s.ChainCfgParams.CoinbaseMaturity = 4
 		},
+		FSMState: blockchain.FSMStateRUNNING,
 	})
 	defer node2.Stop(t)
 
@@ -86,6 +91,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
+			s.ChainCfgParams.CoinbaseMaturity = 4
 		},
 	})
 	defer node1.Stop(t)
@@ -126,7 +132,9 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
+			s.ChainCfgParams.CoinbaseMaturity = 4
 		},
+		FSMState: blockchain.FSMStateRUNNING,
 	})
 	defer node2.Stop(t)
 
@@ -143,6 +151,7 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
+			s.ChainCfgParams.CoinbaseMaturity = 4
 		},
 	})
 	defer node1.Stop(t)

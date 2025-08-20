@@ -1192,6 +1192,8 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 					logger,
 					findSubtree,
 					retry.WithMessage(fmt.Sprintf("[BLOCK][%s][ID %d] failed to get subtree %s", blockHash, blockID, subtreeHash)),
+					retry.WithRetryCount(3),
+					retry.WithBackoffDurationType(100*time.Millisecond),
 				)
 
 				if err != nil {

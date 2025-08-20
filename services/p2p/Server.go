@@ -432,7 +432,7 @@ func NewServer(
 	}
 
 	// Initialize the sync manager for peer selection
-	p2pServer.syncManager = NewSyncManager(logger, tSettings.ChainCfgParams)
+	p2pServer.syncManager = NewSyncManager(logger, tSettings)
 
 	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
 
@@ -701,6 +701,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 		// Start the SyncManager
 		s.syncManager.Start(ctx)
+
+		// Start a goroutine to process buffered announcements after initial sync period
+		go s.processBufferedAnnouncementsWhenReady(ctx)
 	}
 
 	// Send initial handshake (version)
@@ -1018,7 +1021,7 @@ type NodeStatusMessage struct {
 	SyncConnectedAt   int64   `json:"sync_connected_at,omitempty"`    // Unix timestamp when we first connected to this sync peer
 }
 
-func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from string) {
+func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string) {
 	var nodeStatusMessage NodeStatusMessage
 	if err := json.Unmarshal(m, &nodeStatusMessage); err != nil {
 		s.logger.Errorf("[handleNodeStatusTopic] json unmarshal error: %v", err)
@@ -1068,6 +1071,11 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, from strin
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
 		if peerID, err := peer.Decode(nodeStatusMessage.PeerID); err == nil {
 			s.P2PNode.UpdatePeerHeight(peerID, int32(nodeStatusMessage.BestHeight)) //nolint:gosec
+
+			// Update sync manager with peer height from node status
+			if s.syncManager != nil {
+				s.syncManager.UpdatePeerHeight(peerID, int32(nodeStatusMessage.BestHeight))
+			}
 		}
 	}
 }
@@ -1105,6 +1113,11 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 			s.logger.Debugf("[handleHandshakeTopic] Peer %s already has starting height set", peerID2.String())
 		}
 		s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
+
+		// Update sync manager with peer height
+		if s.syncManager != nil {
+			s.syncManager.UpdatePeerHeight(peerID2, int32(hs.BestHeight))
+		}
 	}
 
 	s.logger.Infof("[handleHandshakeTopic] Message type: %s, from peer: %s, height: %d", hs.Type, hs.PeerID, hs.BestHeight)
@@ -1196,6 +1209,12 @@ func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32
 		return
 	}
 
+	// Skip sending to Kafka during initial sync period - wait for sync peer selection to complete
+	if s.syncManager != nil && !s.syncManager.IsInitialSyncComplete() {
+		s.logger.Debugf("[checkAndTriggerSync] skipping height sync, initial sync period not complete")
+		return
+	}
+
 	// update peer height and store starting height if first time seeing this peer
 	peerID2, err := peer.Decode(hs.PeerID)
 	if err != nil {
@@ -1212,16 +1231,20 @@ func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32
 	}
 	s.P2PNode.UpdatePeerHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
 
+	// Store the peer's best block hash for node status reporting
+	if hs.BestHash != "" {
+		s.peerBlockHashes.Store(peerID2, hs.BestHash)
+	}
+
 	// Update SyncManager with new peer height
 	// This will evaluate sync candidacy and potentially select this peer as sync peer
 	wasSelectedAsSyncPeer := false
 	if s.syncManager != nil {
 		wasSelectedAsSyncPeer = s.syncManager.UpdatePeerHeight(peerID2, int32(hs.BestHeight))
-	}
-
-	// Store the peer's best block hash for node status reporting
-	if hs.BestHash != "" {
-		s.peerBlockHashes.Store(peerID2, hs.BestHash)
+		// Log current sync state for debugging
+		if syncPeer := s.syncManager.GetSyncPeer(); syncPeer != "" {
+			s.logger.Debugf("[checkAndTriggerSync] Current sync peer: %s", syncPeer)
+		}
 	}
 
 	// Send to Kafka if this peer is ahead of us AND is our sync peer
@@ -1230,8 +1253,7 @@ func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32
 		isSyncPeer := wasSelectedAsSyncPeer || (s.syncManager != nil && s.syncManager.IsSyncPeer(peerID2))
 
 		if isSyncPeer {
-			s.logger.Infof("[checkAndTriggerSync] Sync peer %s has higher block (%s) at height %d > %d, triggering sync via Kafka",
-				hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
+			s.logger.Infof("[checkAndTriggerSync] Sync peer %s has higher block (%s) at height %d > %d, triggering sync via Kafka", hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 
 			// Send peer's block info to Kafka if we have a producer client
 			if s.blocksKafkaProducerClient != nil {
@@ -1256,12 +1278,10 @@ func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32
 			}
 		} else {
 			// Peer is ahead but not our sync peer
-			s.logger.Debugf("[checkAndTriggerSync] Peer %s has higher block (%s) at height %d > %d, but is not sync peer",
-				hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
+			s.logger.Debugf("[checkAndTriggerSync] Peer %s has higher block (%s) at height %d > %d, but is not sync peer", hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 		}
 	} else if hs.BestHash != "" && hs.BestHeight > 0 {
-		s.logger.Debugf("[checkAndTriggerSync] peer %s has block %s at height %d (our height: %d), not requesting",
-			hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
+		s.logger.Debugf("[checkAndTriggerSync] peer %s has block %s at height %d (our height: %d), not requesting", hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 	}
 }
 
@@ -1884,7 +1904,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		return
 	}
 
-	s.logger.Debugf("[handleBlockTopic] got p2p block notification for %s from %s", blockMessage.Hash, blockMessage.PeerID)
+	s.logger.Debugf("[handleBlockTopic] got p2p block notification for %s from %s (originator: %s)", blockMessage.Hash, from, blockMessage.PeerID)
 
 	s.notificationCh <- &notificationMsg{
 		Timestamp: time.Now().UTC().Format(isoFormat),
@@ -1895,7 +1915,9 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		PeerID:    blockMessage.PeerID,
 	}
 
-	if from == s.P2PNode.HostID().String() {
+	// Ignore our own messages - check both the immediate sender and the original peer
+	if from == s.P2PNode.HostID().String() || blockMessage.PeerID == s.P2PNode.HostID().String() {
+		s.logger.Debugf("[handleBlockTopic] ignoring own block message for %s", blockMessage.Hash)
 		return
 	}
 
@@ -1903,6 +1925,30 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 	if s.banManager.IsBanned(from) {
 		s.logger.Debugf("[handleBlockTopic] ignoring block notification from banned peer %s", from)
 		return
+	}
+
+	// Check if we should buffer this announcement during initial sync period
+	if s.syncManager != nil && !s.syncManager.IsInitialSyncComplete() {
+		s.logger.Infof("[handleBlockTopic] Initial sync not complete, buffering block announcement for %s from %s", blockMessage.Hash, from)
+		announcement := &BlockAnnouncement{
+			Hash:       blockMessage.Hash,
+			Height:     blockMessage.Height,
+			DataHubURL: blockMessage.DataHubURL,
+			PeerID:     blockMessage.PeerID,
+			From:       from,
+			Timestamp:  time.Now(),
+		}
+
+		if s.syncManager.BufferBlockAnnouncement(announcement) {
+			// Announcement was buffered, don't process it now
+			s.logger.Infof("[handleBlockTopic] Block announcement for %s buffered successfully", blockMessage.Hash)
+			return
+		}
+		s.logger.Warnf("[handleBlockTopic] Failed to buffer block announcement for %s", blockMessage.Hash)
+	} else if s.syncManager == nil {
+		s.logger.Debugf("[handleBlockTopic] SyncManager not initialized, processing block announcement normally")
+	} else {
+		s.logger.Debugf("[handleBlockTopic] Initial sync complete, processing block announcement normally")
 	}
 
 	hash, err = chainhash.NewHashFromStr(blockMessage.Hash)
@@ -1918,6 +1964,32 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 	}
 	s.blockPeerMap.Store(blockMessage.Hash, entry)
 	s.logger.Debugf("[handleBlockTopic] storing peer %s for block %s", from, blockMessage.Hash)
+
+	// Check if we're syncing and should discard this announcement
+	if s.syncManager != nil {
+		syncPeer := s.syncManager.GetSyncPeer()
+		if syncPeer != "" {
+			// We have a sync peer, check if we're syncing
+			if syncing, err := s.isBlockchainSynchingOrCatchingUp(s.gCtx); err == nil && syncing {
+				// Get sync peer's height through the sync manager
+				syncPeerHeight := s.syncManager.GetPeerHeight(syncPeer)
+
+				// Discard announcements from peers that are behind our sync peer
+				if blockMessage.Height < uint32(syncPeerHeight) {
+					s.logger.Debugf("[handleBlockTopic] Discarding block announcement at height %d from %s (below sync peer height %d)",
+						blockMessage.Height, from, syncPeerHeight)
+					return
+				}
+
+				// Also skip if it's not from our sync peer
+				peerID, err := peer.Decode(blockMessage.PeerID)
+				if err != nil || peerID != syncPeer {
+					s.logger.Debugf("[handleBlockTopic] Skipping block announcement for %s during sync (not from sync peer)", blockMessage.Hash)
+					return
+				}
+			}
+		}
+	}
 
 	// send block to kafka, if configured
 	if s.blocksKafkaProducerClient != nil {
@@ -1954,7 +2026,7 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		return
 	}
 
-	s.logger.Debugf("[handleSubtreeTopic] got p2p subtree notification for %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
+	s.logger.Debugf("[handleSubtreeTopic] got p2p subtree notification for %s from %s (originator: %s)", subtreeMessage.Hash, from, subtreeMessage.PeerID)
 
 	if s.isBlacklistedBaseURL(subtreeMessage.DataHubURL) {
 		s.logger.Errorf("[handleSubtreeTopic] Blocked subtree notification from blacklisted baseURL: %s", subtreeMessage.DataHubURL)
@@ -1969,7 +2041,9 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		PeerID:    subtreeMessage.PeerID,
 	}
 
-	if from == s.P2PNode.HostID().String() {
+	// Ignore our own messages - check both the immediate sender and the original peer
+	if from == s.P2PNode.HostID().String() || subtreeMessage.PeerID == s.P2PNode.HostID().String() {
+		s.logger.Debugf("[handleSubtreeTopic] ignoring own subtree message for %s", subtreeMessage.Hash)
 		return
 	}
 
@@ -2075,7 +2149,7 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 		return
 	}
 
-	s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification for %s from %s", miningOnMessage.Hash, miningOnMessage.PeerID)
+	s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification for %s from %s (originator: %s)", miningOnMessage.Hash, from, miningOnMessage.PeerID)
 
 	// Send to notification channel first (including our own messages for WebSocket clients)
 	s.logger.Debugf("[handleMiningOnTopic] sending mining_on message to notificationCh for WebSocket clients")
@@ -2092,18 +2166,72 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 		TxCount:      miningOnMessage.TxCount,
 	}
 
-	// Skip further processing for our own messages
-	if from == s.P2PNode.HostID().String() {
+	// Skip further processing for our own messages - check both the immediate sender and the original peer
+	if from == s.P2PNode.HostID().String() || miningOnMessage.PeerID == s.P2PNode.HostID().String() {
+		s.logger.Debugf("[handleMiningOnTopic] ignoring own mining_on message for %s", miningOnMessage.Hash)
 		return
 	}
 
 	// add height to peer info
 	s.P2PNode.UpdatePeerHeight(peer.ID(miningOnMessage.PeerID), int32(miningOnMessage.Height)) //nolint:gosec
 
+	// Update sync manager with peer height from mining message
+	if s.syncManager != nil {
+		if peerID, err := peer.Decode(miningOnMessage.PeerID); err == nil {
+			s.syncManager.UpdatePeerHeight(peerID, int32(miningOnMessage.Height))
+		}
+	}
+
 	// Skip notifications from banned peers by PeerID
 	if s.banManager.IsBanned(from) {
 		s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification from banned peer %s", from)
 		return
+	}
+
+	// Check if we should buffer this announcement during initial sync period
+	if s.syncManager != nil && !s.syncManager.IsInitialSyncComplete() {
+		s.logger.Infof("[handleMiningOnTopic] Initial sync not complete, buffering mining_on announcement for %s from %s", miningOnMessage.Hash, from)
+		announcement := &BlockAnnouncement{
+			Hash:       miningOnMessage.Hash,
+			Height:     miningOnMessage.Height,
+			DataHubURL: miningOnMessage.DataHubURL,
+			PeerID:     miningOnMessage.PeerID,
+			From:       from,
+			Timestamp:  time.Now(),
+		}
+
+		if s.syncManager.BufferBlockAnnouncement(announcement) {
+			// Announcement was buffered, don't process it now
+			s.logger.Infof("[handleMiningOnTopic] Mining_on announcement for %s buffered successfully", miningOnMessage.Hash)
+			return
+		}
+		s.logger.Warnf("[handleMiningOnTopic] Failed to buffer mining_on announcement for %s", miningOnMessage.Hash)
+	}
+
+	// Check if we're syncing and should discard this announcement
+	if s.syncManager != nil {
+		syncPeer := s.syncManager.GetSyncPeer()
+		if syncPeer != "" {
+			// We have a sync peer, check if we're syncing
+			if syncing, err := s.isBlockchainSynchingOrCatchingUp(s.gCtx); err == nil && syncing {
+				// Get sync peer's height through the sync manager
+				syncPeerHeight := s.syncManager.GetPeerHeight(syncPeer)
+
+				// Discard announcements from peers that are behind our sync peer
+				if miningOnMessage.Height < uint32(syncPeerHeight) {
+					s.logger.Debugf("[handleMiningOnTopic] Discarding mining_on announcement at height %d from %s (below sync peer height %d)",
+						miningOnMessage.Height, from, syncPeerHeight)
+					return
+				}
+
+				// Also skip if it's not from our sync peer
+				peerID, err := peer.Decode(miningOnMessage.PeerID)
+				if err != nil || peerID != syncPeer {
+					s.logger.Debugf("[handleMiningOnTopic] Skipping mining_on announcement for %s during sync (not from sync peer)", miningOnMessage.Hash)
+					return
+				}
+			}
+		}
 	}
 
 	// Send peer's block info to Kafka if we have a producer client
@@ -2758,6 +2886,105 @@ func (s *Server) startInvalidBlockConsumer(ctx context.Context) error {
 	consumer.Start(ctx, s.processInvalidBlockMessage)
 
 	return nil
+}
+
+// processBufferedAnnouncementsWhenReady waits for initial sync period to complete
+// then processes buffered block announcements based on whether we need a sync peer
+func (s *Server) processBufferedAnnouncementsWhenReady(ctx context.Context) {
+	// Wait for initial sync period to complete
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(1 * time.Second):
+			if s.syncManager.IsInitialSyncComplete() {
+				// Initial sync period is complete
+				announcements := s.syncManager.GetBufferedAnnouncements()
+
+				if len(announcements) == 0 {
+					s.logger.Debugf("[processBufferedAnnouncements] No buffered announcements to process")
+					return
+				}
+
+				// Check if we need a sync peer (meaning we're behind)
+				if s.syncManager.NeedsSyncPeer() {
+					syncPeer := s.syncManager.GetSyncPeer()
+
+					// Find the best block (highest height) from the sync peer
+					var bestAnnouncement *BlockAnnouncement
+					for _, announcement := range announcements {
+						if peer.ID(announcement.PeerID) == syncPeer {
+							if bestAnnouncement == nil || announcement.Height > bestAnnouncement.Height {
+								bestAnnouncement = announcement
+							}
+						}
+					}
+
+					if bestAnnouncement != nil {
+						s.logger.Infof("[processBufferedAnnouncements] Sending sync peer %s best block at height %d to Kafka (discarding %d other announcements)", syncPeer, bestAnnouncement.Height, len(announcements)-1)
+
+						// Send only the best block to Kafka
+						if s.blocksKafkaProducerClient != nil {
+							msg := &kafkamessage.KafkaBlockTopicMessage{
+								Hash: bestAnnouncement.Hash,
+								URL:  bestAnnouncement.DataHubURL,
+							}
+
+							value, err := proto.Marshal(msg)
+							if err != nil {
+								s.logger.Errorf("[processBufferedAnnouncements] error marshaling sync peer's best block: %v", err)
+							} else {
+								s.blocksKafkaProducerClient.Publish(&kafka.Message{
+									Value: value,
+								})
+
+								// Store in blockPeerMap
+								entry := peerMapEntry{
+									peerID:    bestAnnouncement.From,
+									timestamp: bestAnnouncement.Timestamp,
+								}
+								s.blockPeerMap.Store(bestAnnouncement.Hash, entry)
+							}
+						}
+					} else {
+						s.logger.Infof("[processBufferedAnnouncements] No announcements from sync peer %s in %d buffered announcements", syncPeer, len(announcements))
+					}
+				} else {
+					// We're caught up, process the buffered announcements
+					s.logger.Infof("[processBufferedAnnouncements] Processing %d buffered announcements", len(announcements))
+
+					for _, announcement := range announcements {
+						// Send to Kafka
+						if s.blocksKafkaProducerClient != nil {
+							msg := &kafkamessage.KafkaBlockTopicMessage{
+								Hash: announcement.Hash,
+								URL:  announcement.DataHubURL,
+							}
+
+							value, err := proto.Marshal(msg)
+							if err != nil {
+								s.logger.Errorf("[processBufferedAnnouncements] error marshaling KafkaBlockTopicMessage: %v", err)
+								continue
+							}
+
+							s.blocksKafkaProducerClient.Publish(&kafka.Message{
+								Value: value,
+							})
+
+							// Also store in blockPeerMap
+							entry := peerMapEntry{
+								peerID:    announcement.From,
+								timestamp: announcement.Timestamp,
+							}
+							s.blockPeerMap.Store(announcement.Hash, entry)
+						}
+					}
+				}
+
+				return
+			}
+		}
+	}
 }
 
 func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {

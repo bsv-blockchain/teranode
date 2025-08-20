@@ -91,9 +91,13 @@ const (
 	ERR_STATE_INITIALIZATION ERR = 100
 	ERR_STATE_ERROR          ERR = 109
 	// Network errors 110-119
-	ERR_NETWORK_ERROR  ERR = 110
-	ERR_INVALID_SUBNET ERR = 111
-	ERR_INVALID_IP     ERR = 112
+	ERR_NETWORK_ERROR              ERR = 110
+	ERR_INVALID_SUBNET             ERR = 111
+	ERR_INVALID_IP                 ERR = 112
+	ERR_NETWORK_TIMEOUT            ERR = 113
+	ERR_NETWORK_CONNECTION_REFUSED ERR = 114
+	ERR_NETWORK_INVALID_RESPONSE   ERR = 115
+	ERR_NETWORK_PEER_MALICIOUS     ERR = 116
 )
 
 // Enum value maps for ERR.
@@ -158,6 +162,10 @@ var (
 		110: "NETWORK_ERROR",
 		111: "INVALID_SUBNET",
 		112: "INVALID_IP",
+		113: "NETWORK_TIMEOUT",
+		114: "NETWORK_CONNECTION_REFUSED",
+		115: "NETWORK_INVALID_RESPONSE",
+		116: "NETWORK_PEER_MALICIOUS",
 	}
 	ERR_value = map[string]int32{
 		"UNKNOWN":                       0,
@@ -219,6 +227,10 @@ var (
 		"NETWORK_ERROR":                 110,
 		"INVALID_SUBNET":                111,
 		"INVALID_IP":                    112,
+		"NETWORK_TIMEOUT":               113,
+		"NETWORK_CONNECTION_REFUSED":    114,
+		"NETWORK_INVALID_RESPONSE":      115,
+		"NETWORK_PEER_MALICIOUS":        116,
 	}
 )
 
@@ -353,7 +365,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\xbc\t\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\xab\n" +
+	"\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -420,7 +433,11 @@ const file_errors_error_proto_rawDesc = "" +
 	"\rNETWORK_ERROR\x10n\x12\x12\n" +
 	"\x0eINVALID_SUBNET\x10o\x12\x0e\n" +
 	"\n" +
-	"INVALID_IP\x10pB'Z%github.com/bitcoin-sv/teranode/errorsb\x06proto3"
+	"INVALID_IP\x10p\x12\x13\n" +
+	"\x0fNETWORK_TIMEOUT\x10q\x12\x1e\n" +
+	"\x1aNETWORK_CONNECTION_REFUSED\x10r\x12\x1c\n" +
+	"\x18NETWORK_INVALID_RESPONSE\x10s\x12\x1a\n" +
+	"\x16NETWORK_PEER_MALICIOUS\x10tB'Z%github.com/bitcoin-sv/teranode/errorsb\x06proto3"
 
 var (
 	file_errors_error_proto_rawDescOnce sync.Once

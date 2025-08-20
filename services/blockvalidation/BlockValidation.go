@@ -48,6 +48,23 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// ValidateBlockOptions provides optional parameters for block validation.
+// This is primarily used during catchup to optimize performance by reusing
+// cached data rather than fetching it repeatedly.
+type ValidateBlockOptions struct {
+	// CachedHeaders provides pre-fetched headers to avoid redundant database queries.
+	// When provided, ValidateBlock will use these headers instead of fetching them.
+	CachedHeaders []*model.BlockHeader
+
+	// IsCatchupMode indicates the block is being validated during catchup.
+	// This enables optimizations like reduced logging and header reuse.
+	IsCatchupMode bool
+
+	// DisableOptimisticMining overrides the global optimistic mining setting.
+	// This is typically set to true during catchup for better performance.
+	DisableOptimisticMining bool
+}
+
 // revalidateBlockData contains information needed to revalidate a block
 // that previously failed validation or requires additional verification.
 type revalidateBlockData struct {
@@ -749,6 +766,30 @@ func (u *BlockValidation) isParentMined(ctx context.Context, blockHeader *model.
 //
 // Returns an error if validation fails or nil on success.
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error {
+	// Convert legacy parameters to options
+	opts := &ValidateBlockOptions{}
+	if len(disableOptimisticMining) > 0 {
+		opts.DisableOptimisticMining = disableOptimisticMining[0]
+	}
+	return u.ValidateBlockWithOptions(ctx, block, baseURL, bloomStats, opts)
+}
+
+// ValidateBlockWithOptions performs comprehensive validation of a Bitcoin block with additional options.
+// This method provides the same functionality as ValidateBlock but allows for performance optimizations
+// during catchup operations by accepting cached data.
+//
+// Parameters:
+//   - ctx: Context for the validation operation
+//   - block: Block to validate
+//   - baseURL: Source URL for additional data retrieval
+//   - bloomStats: Statistics collector for bloom filter operations
+//   - opts: Optional parameters for validation optimization
+//
+// Returns an error if validation fails or nil on success.
+func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *model.Block, baseURL string, bloomStats *model.BloomStats, opts *ValidateBlockOptions) error {
+	if opts == nil {
+		opts = &ValidateBlockOptions{}
+	}
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "ValidateBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationValidateBlock),
@@ -762,8 +803,6 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		u.logger.Warnf("[ValidateBlock][%s] tried to validate existing block", block.Header.Hash().String())
 		return nil
 	}
-
-	u.logger.Infof("[ValidateBlock][%s] called", block.Header.Hash().String())
 
 	// check the size of the block
 	// 0 is unlimited so don't check the size
@@ -787,17 +826,34 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		return errors.NewBlockInvalidError("[ValidateBlock][%s] bad coinbase length", block.Header.Hash().String())
 	}
 
-	u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+	// Use cached headers if available (during catchup), otherwise fetch from blockchain
+	var blockHeaders []*model.BlockHeader
+	if opts.CachedHeaders != nil && len(opts.CachedHeaders) > 0 {
+		// Use provided cached headers
+		blockHeaders = opts.CachedHeaders
+		if opts.IsCatchupMode {
+			u.logger.Debugf("[ValidateBlock][%s] using %d cached headers", block.Header.Hash().String(), len(blockHeaders))
+		} else {
+			u.logger.Infof("[ValidateBlock][%s] using %d cached headers", block.Header.Hash().String(), len(blockHeaders))
+		}
+	} else {
+		// Fetch headers from blockchain service
+		if opts.IsCatchupMode {
+			u.logger.Debugf("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+		} else {
+			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+		}
 
-	// get all X previous block headers, 100 is the default
-	previousBlockHeaderCount := u.settings.BlockValidation.PreviousBlockHeaderCount
+		// get all X previous block headers, 100 is the default
+		previousBlockHeaderCount := u.settings.BlockValidation.PreviousBlockHeaderCount
 
-	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, previousBlockHeaderCount)
-	if err != nil {
-		u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
-		u.ReValidateBlock(block, baseURL)
+		blockHeaders, _, err = u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, previousBlockHeaderCount)
+		if err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
+			u.ReValidateBlock(block, baseURL)
 
-		return errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err)
+			return errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err)
+		}
 	}
 
 	// Wait for reValidationBlock to do its thing
@@ -835,10 +891,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
 	useOptimisticMining := u.settings.BlockValidation.OptimisticMining
-	if len(disableOptimisticMining) > 0 {
+	if opts.DisableOptimisticMining {
 		// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
-		useOptimisticMining = useOptimisticMining && !disableOptimisticMining[0]
-		u.logger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
+		useOptimisticMining = false
+		if !opts.IsCatchupMode {
+			u.logger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
+		}
 	}
 
 	var optimisticMiningWg sync.WaitGroup

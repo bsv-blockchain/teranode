@@ -14,6 +14,13 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
+
+const (
+	StartTime contextKey = "startTime"
+)
+
 // Options func represents a functional option for configuring tracing
 type Options func(s *TraceOptions)
 
@@ -39,6 +46,7 @@ type TraceOptions struct {
 	Counter          prometheus.Counter      // counter to be incremented when the span is finished
 	Logger           ulogger.Logger          // logger to be used when starting the span and when the span is finished
 	LogMessages      []logMessage            // log messages to be added to the span
+	Timeout          time.Duration           // timeout for the span, if set
 }
 
 // addLogMessage adds a log message to the trace options
@@ -58,6 +66,13 @@ func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level strin
 func WithSpanStartOptions(options ...trace.SpanStartOption) Options {
 	return func(s *TraceOptions) {
 		s.SpanStartOptions = options
+	}
+}
+
+// WithContextTimeout sets the parent context timeout for the trace.
+func WithContextTimeout(timeout time.Duration) Options {
+	return func(s *TraceOptions) {
+		s.Timeout = timeout
 	}
 }
 
@@ -187,6 +202,12 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 	// Start OpenTelemetry span
 	ctx, span := u.tracer.Start(ctx, spanName, options.SpanStartOptions...)
 
+	// check whether the context has a timeout set
+	var cancelCtx context.CancelFunc
+	if options.Timeout > 0 {
+		ctx, cancelCtx = context.WithTimeout(ctx, options.Timeout)
+	}
+
 	// Create gocore.Stat (only if enabled)
 	var (
 		start time.Time
@@ -198,6 +219,9 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 	} else {
 		start, stat, ctx = NewStatFromContext(ctx, spanName, defaultStat)
 	}
+
+	// add the start time to the context
+	ctx = context.WithValue(ctx, StartTime, start)
 
 	// Set span attributes from tags
 	if len(options.Tags) > 0 {
@@ -244,6 +268,11 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 
 		u.recordMetrics(options, start)
 		u.logEndMessage(options, start, err)
+
+		// Ensure the cancelCtx function is called when the span ends
+		if cancelCtx != nil {
+			cancelCtx()
+		}
 	}
 
 	return ctx, span, endFn

@@ -32,8 +32,8 @@ func TestScriptSolver(t *testing.T) {
 			name: "P2PK script",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendPushData(make([]byte, 33)) // Compressed pubkey
-				s.AppendOpcodes(bscript.OpCHECKSIG)
+				_ = s.AppendPushData(make([]byte, 33)) // Compressed pubkey
+				_ = s.AppendOpcodes(bscript.OpCHECKSIG)
 				return s
 			}(),
 			expectedType: TX_PUBKEY,
@@ -43,11 +43,11 @@ func TestScriptSolver(t *testing.T) {
 			name: "P2PKH script",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpDUP)
-				s.AppendOpcodes(bscript.OpHASH160)
-				s.AppendPushData(make([]byte, 20))
-				s.AppendOpcodes(bscript.OpEQUALVERIFY)
-				s.AppendOpcodes(bscript.OpCHECKSIG)
+				_ = s.AppendOpcodes(bscript.OpDUP)
+				_ = s.AppendOpcodes(bscript.OpHASH160)
+				_ = s.AppendPushData(make([]byte, 20))
+				_ = s.AppendOpcodes(bscript.OpEQUALVERIFY)
+				_ = s.AppendOpcodes(bscript.OpCHECKSIG)
 				return s
 			}(),
 			expectedType: TX_PUBKEYHASH,
@@ -57,9 +57,9 @@ func TestScriptSolver(t *testing.T) {
 			name: "P2SH script",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpHASH160)
-				s.AppendPushData(make([]byte, 20))
-				s.AppendOpcodes(bscript.OpEQUAL)
+				_ = s.AppendOpcodes(bscript.OpHASH160)
+				_ = s.AppendPushData(make([]byte, 20))
+				_ = s.AppendOpcodes(bscript.OpEQUAL)
 				return s
 			}(),
 			expectedType: TX_SCRIPTHASH,
@@ -69,11 +69,11 @@ func TestScriptSolver(t *testing.T) {
 			name: "1-of-2 multisig",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.Op1)
-				s.AppendPushData(make([]byte, 33))
-				s.AppendPushData(make([]byte, 33))
-				s.AppendOpcodes(bscript.Op2)
-				s.AppendOpcodes(bscript.OpCHECKMULTISIG)
+				_ = s.AppendOpcodes(bscript.Op1)
+				_ = s.AppendPushData(make([]byte, 33))
+				_ = s.AppendPushData(make([]byte, 33))
+				_ = s.AppendOpcodes(bscript.Op2)
+				_ = s.AppendOpcodes(bscript.OpCHECKMULTISIG)
 				return s
 			}(),
 			expectedType: TX_MULTISIG,
@@ -88,16 +88,16 @@ func TestScriptSolver(t *testing.T) {
 			name: "OP_RETURN data",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpRETURN)
-				s.AppendPushData([]byte("Hello Bitcoin"))
+				_ = s.AppendOpcodes(bscript.OpRETURN)
+				_ = s.AppendPushData([]byte("Hello Bitcoin"))
 				return s
 			}(),
 			expectedType: TX_NULL_DATA,
 			solutions:    [][]byte{[]byte("Hello Bitcoin")},
 		},
 		{
-			name: "Empty script",
-			script: &bscript.Script{},
+			name:         "Empty script",
+			script:       &bscript.Script{},
 			expectedType: TX_NONSTANDARD,
 			solutions:    nil,
 		},
@@ -105,7 +105,7 @@ func TestScriptSolver(t *testing.T) {
 			name: "OP_TRUE only",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpTRUE)
+				_ = s.AppendOpcodes(bscript.OpTRUE)
 				return s
 			}(),
 			expectedType: TX_NONSTANDARD,
@@ -115,9 +115,9 @@ func TestScriptSolver(t *testing.T) {
 			name: "Non-standard script",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpDUP)
-				s.AppendOpcodes(bscript.OpDUP)
-				s.AppendOpcodes(bscript.OpDUP)
+				_ = s.AppendOpcodes(bscript.OpDUP)
+				_ = s.AppendOpcodes(bscript.OpDUP)
+				_ = s.AppendOpcodes(bscript.OpDUP)
 				return s
 			}(),
 			expectedType: TX_NONSTANDARD,
@@ -127,11 +127,11 @@ func TestScriptSolver(t *testing.T) {
 			name: "Invalid P2PKH - wrong length",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpDUP)
-				s.AppendOpcodes(bscript.OpHASH160)
-				s.AppendPushData(make([]byte, 19)) // Wrong length
-				s.AppendOpcodes(bscript.OpEQUALVERIFY)
-				s.AppendOpcodes(bscript.OpCHECKSIG)
+				_ = s.AppendOpcodes(bscript.OpDUP)
+				_ = s.AppendOpcodes(bscript.OpHASH160)
+				_ = s.AppendPushData(make([]byte, 19)) // Wrong length
+				_ = s.AppendOpcodes(bscript.OpEQUALVERIFY)
+				_ = s.AppendOpcodes(bscript.OpCHECKSIG)
 				return s
 			}(),
 			expectedType: TX_NONSTANDARD,
@@ -141,12 +141,12 @@ func TestScriptSolver(t *testing.T) {
 			name: "3-of-3 multisig",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.Op3)
-				s.AppendPushData(make([]byte, 33))
-				s.AppendPushData(make([]byte, 65)) // Uncompressed
-				s.AppendPushData(make([]byte, 33))
-				s.AppendOpcodes(bscript.Op3)
-				s.AppendOpcodes(bscript.OpCHECKMULTISIG)
+				_ = s.AppendOpcodes(bscript.Op3)
+				_ = s.AppendPushData(make([]byte, 33))
+				_ = s.AppendPushData(make([]byte, 65)) // Uncompressed
+				_ = s.AppendPushData(make([]byte, 33))
+				_ = s.AppendOpcodes(bscript.Op3)
+				_ = s.AppendOpcodes(bscript.OpCHECKMULTISIG)
 				return s
 			}(),
 			expectedType: TX_MULTISIG,
@@ -162,9 +162,9 @@ func TestScriptSolver(t *testing.T) {
 			name: "OP_FALSE OP_RETURN",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpFALSE)
-				s.AppendOpcodes(bscript.OpRETURN)
-				s.AppendPushData([]byte("data"))
+				_ = s.AppendOpcodes(bscript.OpFALSE)
+				_ = s.AppendOpcodes(bscript.OpRETURN)
+				_ = s.AppendPushData([]byte("data"))
 				return s
 			}(),
 			expectedType: TX_NULL_DATA,
@@ -174,8 +174,8 @@ func TestScriptSolver(t *testing.T) {
 			name: "Large OP_RETURN",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpRETURN)
-				s.AppendPushData(make([]byte, 100000)) // Large data
+				_ = s.AppendOpcodes(bscript.OpRETURN)
+				_ = s.AppendPushData(make([]byte, 100000)) // Large data
 				return s
 			}(),
 			expectedType: TX_NULL_DATA,
@@ -187,7 +187,7 @@ func TestScriptSolver(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			txType, solutions := Solver(test.script)
 			require.Equal(t, test.expectedType, txType)
-			
+
 			if test.solutions == nil {
 				require.Nil(t, solutions)
 			} else {
@@ -237,22 +237,22 @@ func Solver(script *bscript.Script) (TxType, [][]byte) {
 	if IsNullData(script) {
 		s := *script
 		var data []byte
-		
+
 		if len(s) == 1 {
 			// Just OP_RETURN
 			return TX_NULL_DATA, [][]byte{}
 		}
-		
+
 		startIdx := 1
 		if s[0] == bscript.OpFALSE && len(s) > 1 && s[1] == bscript.OpRETURN {
 			startIdx = 2
 		}
-		
+
 		// Extract data after OP_RETURN
 		if startIdx < len(s) {
 			data = extractPushData(s[startIdx:])
 		}
-		
+
 		return TX_NULL_DATA, [][]byte{data}
 	}
 
@@ -283,17 +283,17 @@ func IsP2PK(script *bscript.Script) bool {
 		return false
 	}
 	s := *script
-	
+
 	// Compressed: 33 byte pubkey + CHECKSIG
 	if len(s) == 35 && s[0] == 33 && s[34] == bscript.OpCHECKSIG {
 		return true
 	}
-	
+
 	// Uncompressed: 65 byte pubkey + CHECKSIG
 	if len(s) == 67 && s[0] == 65 && s[66] == bscript.OpCHECKSIG {
 		return true
 	}
-	
+
 	return false
 }
 
@@ -314,17 +314,17 @@ func IsNullData(script *bscript.Script) bool {
 		return false
 	}
 	s := *script
-	
+
 	// Standard OP_RETURN
 	if s[0] == bscript.OpRETURN {
 		return true
 	}
-	
+
 	// OP_FALSE OP_RETURN pattern
 	if len(s) >= 2 && s[0] == bscript.OpFALSE && s[1] == bscript.OpRETURN {
 		return true
 	}
-	
+
 	return false
 }
 
@@ -334,17 +334,17 @@ func IsMultisig(script *bscript.Script) bool {
 		return false
 	}
 	s := *script
-	
+
 	// Must end with CHECKMULTISIG
 	if s[len(s)-1] != bscript.OpCHECKMULTISIG {
 		return false
 	}
-	
+
 	// Basic length check
 	if len(s) < 5 { // Minimum: OP_1 <pubkey> OP_1 OP_CHECKMULTISIG
 		return false
 	}
-	
+
 	return true
 }
 
@@ -352,18 +352,18 @@ func IsMultisig(script *bscript.Script) bool {
 func parseMultisig(script *bscript.Script) (TxType, [][]byte) {
 	s := *script
 	solutions := [][]byte{}
-	
+
 	// First byte should be OP_1 through OP_16 for n
 	if s[0] < bscript.Op1 || s[0] > bscript.Op16 {
 		return TX_NONSTANDARD, nil
 	}
 	n := s[0] - bscript.Op1 + 1
 	solutions = append(solutions, []byte{byte(n)})
-	
+
 	// Parse pubkeys
 	idx := 1
 	pubkeyCount := 0
-	
+
 	for idx < len(s)-2 { // Leave room for m and CHECKMULTISIG
 		if s[idx] == 33 && idx+33 < len(s) {
 			// Compressed pubkey
@@ -379,14 +379,14 @@ func parseMultisig(script *bscript.Script) (TxType, [][]byte) {
 			break
 		}
 	}
-	
+
 	// Next byte should be OP_1 through OP_16 for m
 	if idx >= len(s)-1 || s[idx] < bscript.Op1 || s[idx] > bscript.Op16 {
 		return TX_NONSTANDARD, nil
 	}
 	m := s[idx] - bscript.Op1 + 1
 	solutions = append(solutions, []byte{byte(m)})
-	
+
 	// Verify constraints
 	// In Bitcoin script, for m-of-n multisig:
 	// - First number (n) is the required signatures
@@ -395,7 +395,7 @@ func parseMultisig(script *bscript.Script) (TxType, [][]byte) {
 	if int(m) != pubkeyCount || n > m || m > 16 {
 		return TX_NONSTANDARD, nil
 	}
-	
+
 	return TX_MULTISIG, solutions
 }
 
@@ -404,12 +404,12 @@ func extractPushData(script []byte) []byte {
 	if len(script) == 0 {
 		return []byte{}
 	}
-	
+
 	opcode := script[0]
 	if opcode <= bscript.OpPUSHDATA4 {
 		var dataLen int
 		offset := 1
-		
+
 		if opcode < bscript.OpPUSHDATA1 {
 			dataLen = int(opcode)
 		} else if opcode == bscript.OpPUSHDATA1 && len(script) > 1 {
@@ -422,30 +422,30 @@ func extractPushData(script []byte) []byte {
 			dataLen = int(script[1]) | int(script[2])<<8 | int(script[3])<<16 | int(script[4])<<24
 			offset = 5
 		}
-		
+
 		if offset+dataLen <= len(script) {
 			return script[offset : offset+dataLen]
 		}
 	}
-	
+
 	return []byte{}
 }
 
 // TestExtractPubKeys tests public key extraction from scripts
 func TestExtractPubKeys(t *testing.T) {
 	keyData := NewKeyData()
-	
+
 	tests := []struct {
-		name           string
-		script         *bscript.Script
+		name            string
+		script          *bscript.Script
 		expectedPubKeys [][]byte
 	}{
 		{
 			name: "P2PK compressed",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendPushData(keyData.Pubkey0)
-				s.AppendOpcodes(bscript.OpCHECKSIG)
+				_ = s.AppendPushData(keyData.Pubkey0)
+				_ = s.AppendOpcodes(bscript.OpCHECKSIG)
 				return s
 			}(),
 			expectedPubKeys: [][]byte{keyData.Pubkey0},
@@ -454,8 +454,8 @@ func TestExtractPubKeys(t *testing.T) {
 			name: "P2PK uncompressed",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendPushData(keyData.Pubkey0U)
-				s.AppendOpcodes(bscript.OpCHECKSIG)
+				_ = s.AppendPushData(keyData.Pubkey0U)
+				_ = s.AppendOpcodes(bscript.OpCHECKSIG)
 				return s
 			}(),
 			expectedPubKeys: [][]byte{keyData.Pubkey0U},
@@ -464,12 +464,12 @@ func TestExtractPubKeys(t *testing.T) {
 			name: "2-of-3 multisig mixed",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.Op2)
-				s.AppendPushData(keyData.Pubkey0)
-				s.AppendPushData(keyData.Pubkey1U)
-				s.AppendPushData(keyData.Pubkey2C)
-				s.AppendOpcodes(bscript.Op3)
-				s.AppendOpcodes(bscript.OpCHECKMULTISIG)
+				_ = s.AppendOpcodes(bscript.Op2)
+				_ = s.AppendPushData(keyData.Pubkey0)
+				_ = s.AppendPushData(keyData.Pubkey1U)
+				_ = s.AppendPushData(keyData.Pubkey2C)
+				_ = s.AppendOpcodes(bscript.Op3)
+				_ = s.AppendOpcodes(bscript.OpCHECKMULTISIG)
 				return s
 			}(),
 			expectedPubKeys: [][]byte{keyData.Pubkey0, keyData.Pubkey1U, keyData.Pubkey2C},
@@ -478,22 +478,22 @@ func TestExtractPubKeys(t *testing.T) {
 			name: "P2PKH - no direct pubkeys",
 			script: func() *bscript.Script {
 				s := &bscript.Script{}
-				s.AppendOpcodes(bscript.OpDUP)
-				s.AppendOpcodes(bscript.OpHASH160)
-				s.AppendPushData(keyData.Pubkey0Hash)
-				s.AppendOpcodes(bscript.OpEQUALVERIFY)
-				s.AppendOpcodes(bscript.OpCHECKSIG)
+				_ = s.AppendOpcodes(bscript.OpDUP)
+				_ = s.AppendOpcodes(bscript.OpHASH160)
+				_ = s.AppendPushData(keyData.Pubkey0Hash)
+				_ = s.AppendOpcodes(bscript.OpEQUALVERIFY)
+				_ = s.AppendOpcodes(bscript.OpCHECKSIG)
 				return s
 			}(),
 			expectedPubKeys: [][]byte{},
 		},
 	}
-	
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			pubkeys := ExtractPubKeys(test.script)
 			require.Equal(t, len(test.expectedPubKeys), len(pubkeys))
-			
+
 			for i, pk := range pubkeys {
 				require.True(t, bytes.Equal(test.expectedPubKeys[i], pk),
 					"Pubkey %d mismatch", i)
@@ -507,11 +507,11 @@ func ExtractPubKeys(script *bscript.Script) [][]byte {
 	if script == nil {
 		return nil
 	}
-	
+
 	var pubkeys [][]byte
 	s := *script
 	i := 0
-	
+
 	for i < len(s) {
 		// Check for pubkey push
 		if s[i] == 33 && i+33 < len(s) {
@@ -532,7 +532,7 @@ func ExtractPubKeys(script *bscript.Script) [][]byte {
 			i++
 		}
 	}
-	
+
 	return pubkeys
 }
 

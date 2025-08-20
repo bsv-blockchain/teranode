@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,8 +14,11 @@ import (
 )
 
 func TestSyncManager_SelectSyncPeer(t *testing.T) {
+	tSettings := createBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
+
 	t.Run("selects_peer_with_highest_block", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		// Mock peer heights
 		peerHeights := map[peer.ID]int32{
@@ -36,29 +40,20 @@ func TestSyncManager_SelectSyncPeer(t *testing.T) {
 			sm.peerStates.AddPeer(peerID, true)
 		}
 
-		// Select sync peer multiple times
-		selections := make(map[peer.ID]int)
+		// Select sync peer multiple times - should always be deterministic
 		for i := 0; i < 10; i++ {
 			selected := sm.selectSyncPeer()
-			selections[selected]++
-		}
-
-		// All selections should be from peers ahead (peer1, peer2, peer3)
-		// Since they're all ahead, any could be selected
-		for peerID, count := range selections {
-			if count > 0 {
-				height := peerHeights[peerID]
-				assert.Greater(t, height, int32(90), "Selected peer should be ahead of local height")
-			}
+			// Should always select peer2 (highest at 150)
+			assert.Equal(t, peer.ID("peer2"), selected, "Should always select the peer with highest height")
 		}
 	})
 
 	t.Run("prefers_peers_ahead_over_same_height", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		peerHeights := map[peer.ID]int32{
 			peer.ID("peer1"): 100, // Same as local
-			peer.ID("peer2"): 105, // Ahead
+			peer.ID("peer2"): 105, // Ahead (should be selected)
 			peer.ID("peer3"): 100, // Same as local
 		}
 
@@ -74,21 +69,16 @@ func TestSyncManager_SelectSyncPeer(t *testing.T) {
 			sm.peerStates.AddPeer(peerID, true)
 		}
 
-		// Select multiple times
-		selections := make(map[peer.ID]int)
+		// Select multiple times - should be deterministic
 		for i := 0; i < 20; i++ {
 			selected := sm.selectSyncPeer()
-			selections[selected]++
+			// peer2 should always be selected (only peer ahead)
+			assert.Equal(t, peer.ID("peer2"), selected, "Should always select the peer ahead")
 		}
-
-		// peer2 should always be selected (only peer ahead)
-		assert.Equal(t, 20, selections[peer.ID("peer2")], "Should always select the peer ahead")
-		assert.Equal(t, 0, selections[peer.ID("peer1")], "Should not select peer at same height when better option exists")
-		assert.Equal(t, 0, selections[peer.ID("peer3")], "Should not select peer at same height when better option exists")
 	})
 
 	t.Run("falls_back_to_same_height_peers", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		peerHeights := map[peer.ID]int32{
 			peer.ID("peer1"): 100, // Same as local
@@ -108,22 +98,19 @@ func TestSyncManager_SelectSyncPeer(t *testing.T) {
 			sm.peerStates.AddPeer(peerID, true)
 		}
 
-		// Select multiple times
-		selections := make(map[peer.ID]int)
-		for i := 0; i < 20; i++ {
-			selected := sm.selectSyncPeer()
-			if selected != "" {
-				selections[selected]++
-			}
-		}
+		// Should select deterministically - peer with highest ID at same height
+		selected := sm.selectSyncPeer()
+		assert.Equal(t, peer.ID("peer2"), selected, "Should select peer with highest ID at same height")
 
-		// Should only select from peer1 and peer2 (at same height)
-		assert.Greater(t, selections[peer.ID("peer1")]+selections[peer.ID("peer2")], 0)
-		assert.Equal(t, 0, selections[peer.ID("peer3")], "Should never select peer behind us")
+		// Verify consistency
+		for i := 0; i < 10; i++ {
+			selected := sm.selectSyncPeer()
+			assert.Equal(t, peer.ID("peer2"), selected, "Should consistently select the same peer")
+		}
 	})
 
 	t.Run("ignores_peers_behind", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		peerHeights := map[peer.ID]int32{
 			peer.ID("peer1"): 90, // Behind
@@ -149,7 +136,7 @@ func TestSyncManager_SelectSyncPeer(t *testing.T) {
 	})
 
 	t.Run("handles_no_sync_candidates", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
 			return 150
@@ -165,11 +152,73 @@ func TestSyncManager_SelectSyncPeer(t *testing.T) {
 		selected := sm.selectSyncPeer()
 		assert.Equal(t, peer.ID(""), selected, "Should not select non-candidates")
 	})
+
+	t.Run("selects_highest_among_multiple_ahead", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		peerHeights := map[peer.ID]int32{
+			peer.ID("peer1"): 110,
+			peer.ID("peer2"): 120,
+			peer.ID("peer3"): 115,
+			peer.ID("peer4"): 125, // Highest
+			peer.ID("peer5"): 105,
+		}
+
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			return peerHeights[p]
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 100
+		})
+
+		// Add all peers
+		for peerID := range peerHeights {
+			sm.peerStates.AddPeer(peerID, true)
+		}
+
+		// Should always select peer4 (highest at 125)
+		for i := 0; i < 10; i++ {
+			selected := sm.selectSyncPeer()
+			assert.Equal(t, peer.ID("peer4"), selected, "Should select peer with highest height")
+		}
+	})
+
+	t.Run("uses_peer_id_as_tiebreaker", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// All peers at same height
+		peerHeights := map[peer.ID]int32{
+			peer.ID("peer_b"): 110,
+			peer.ID("peer_a"): 110,
+			peer.ID("peer_c"): 110,
+		}
+
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			return peerHeights[p]
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 100
+		})
+
+		// Add all peers
+		for peerID := range peerHeights {
+			sm.peerStates.AddPeer(peerID, true)
+		}
+
+		// Should select peer_c (highest peer ID alphabetically)
+		for i := 0; i < 10; i++ {
+			selected := sm.selectSyncPeer()
+			assert.Equal(t, peer.ID("peer_c"), selected, "Should use peer ID as tiebreaker")
+		}
+	})
 }
 
 func TestSyncManager_PeerManagement(t *testing.T) {
+	tSettings := createBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
 	t.Run("adds_and_removes_peers", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		peerID := peer.ID("test-peer")
 
@@ -190,7 +239,7 @@ func TestSyncManager_PeerManagement(t *testing.T) {
 	})
 
 	t.Run("removes_sync_peer_triggers_new_selection", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		// Manually set a sync peer
 		syncPeerID := peer.ID("sync-peer")
@@ -209,8 +258,52 @@ func TestSyncManager_PeerManagement(t *testing.T) {
 }
 
 func TestSyncManager_HealthChecks(t *testing.T) {
+	tSettings := createBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	t.Run("clears_sync_peer_when_caught_up", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Set up callbacks
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			if p == peer.ID("sync-peer") {
+				return 100 // Sync peer at height 100
+			}
+			return 95
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 100 // We've caught up
+		})
+
+		// Set up a sync peer
+		sm.syncPeer = peer.ID("sync-peer")
+		sm.syncPeerState = &syncPeerState{
+			lastBlockTime: time.Now(),
+			violations:    0,
+			ticks:         1,
+		}
+
+		// Run health check
+		sm.checkSyncPeer()
+
+		// Should have cleared sync peer because we caught up
+		assert.Equal(t, peer.ID(""), sm.syncPeer)
+		assert.Nil(t, sm.syncPeerState)
+	})
+
 	t.Run("switches_peer_on_network_violations", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Set up callbacks - peer is still ahead
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			if p == peer.ID("slow-peer") {
+				return 110
+			}
+			return 95
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 100
+		})
 
 		// Set up a sync peer with violations
 		sm.syncPeer = peer.ID("slow-peer")
@@ -229,7 +322,18 @@ func TestSyncManager_HealthChecks(t *testing.T) {
 	})
 
 	t.Run("switches_peer_on_stale_blocks", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Set up callbacks - peer is still ahead
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			if p == peer.ID("stale-peer") {
+				return 110
+			}
+			return 95
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 100
+		})
 
 		// Set up a sync peer with old last block time
 		sm.syncPeer = peer.ID("stale-peer")
@@ -248,7 +352,18 @@ func TestSyncManager_HealthChecks(t *testing.T) {
 	})
 
 	t.Run("keeps_healthy_peer", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Set up callbacks - peer is still ahead
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			if p == peer.ID("healthy-peer") {
+				return 110
+			}
+			return 95
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 100
+		})
 
 		healthyPeer := peer.ID("healthy-peer")
 		sm.syncPeer = healthyPeer
@@ -268,8 +383,11 @@ func TestSyncManager_HealthChecks(t *testing.T) {
 }
 
 func TestSyncManager_IsSyncCandidate(t *testing.T) {
+	tSettings := createBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
 	t.Run("regtest_accepts_all_peers", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.RegressionNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		sm.SetPeerIPsCallback(func(p peer.ID) []string {
 			if p == peer.ID("local-peer") {
@@ -284,7 +402,7 @@ func TestSyncManager_IsSyncCandidate(t *testing.T) {
 	})
 
 	t.Run("mainnet_all_peers", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		// All peers should be candidates on mainnet
 		assert.True(t, sm.isSyncCandidate(peer.ID("any-peer")))
@@ -292,9 +410,12 @@ func TestSyncManager_IsSyncCandidate(t *testing.T) {
 }
 
 func TestSyncManager_Lifecycle(t *testing.T) {
+	tSettings := createBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
 	t.Run("start_and_stop", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		// Start the sync manager
 		sm.Start(ctx)
@@ -312,11 +433,358 @@ func TestSyncManager_Lifecycle(t *testing.T) {
 		// Give it time to shut down
 		time.Sleep(50 * time.Millisecond)
 	})
+
+	t.Run("delays_initial_sync_peer_selection", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		sm.Start(ctx)
+
+		// Set up callbacks
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			return 150
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 100
+		})
+
+		// Add peers as candidates
+		peer1 := peer.ID("peer1")
+		peer2 := peer.ID("peer2")
+		sm.peerStates.AddPeer(peer1, true)
+		sm.peerStates.AddPeer(peer2, true)
+
+		// Try to update peer height immediately - should not select sync peer
+		selected := sm.UpdatePeerHeight(peer1, 150)
+		assert.False(t, selected, "Should not select sync peer during grace period")
+		assert.Equal(t, peer.ID(""), sm.GetSyncPeer(), "No sync peer should be selected yet")
+
+		// Wait for grace period to pass
+		time.Sleep(6 * time.Second)
+
+		// After the timer, the sync peer should have been selected
+		assert.NotEqual(t, peer.ID(""), sm.GetSyncPeer(), "Sync peer should be selected by timer")
+
+		// Verify initial selection is complete
+		assert.True(t, sm.IsInitialSyncComplete(), "Initial sync should be complete")
+	})
+
+	t.Run("requires_minimum_peers", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+		sm.Start(context.Background())
+		sm.startTime = time.Now().Add(-10 * time.Second) // Bypass time delay but not max wait
+
+		// Set up callbacks
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			return 150
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 100
+		})
+
+		// Add only one peer (less than minimum)
+		peer1 := peer.ID("peer1")
+		sm.peerStates.AddPeer(peer1, true)
+
+		// Should not select sync peer with insufficient peers
+		selected := sm.UpdatePeerHeight(peer1, 150)
+		assert.False(t, selected, "Should not select sync peer with insufficient peers")
+
+		// Add second peer to meet minimum
+		peer2 := peer.ID("peer2")
+		sm.peerStates.AddPeer(peer2, true)
+
+		// Now should allow selection
+		selected = sm.UpdatePeerHeight(peer2, 150)
+		assert.True(t, selected, "Should select sync peer with minimum peers")
+	})
+
+	t.Run("proceeds_after_max_wait_time", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+		sm.Start(context.Background())
+		// Set start time to exceed max wait but with only 1 peer
+		sm.startTime = time.Now().Add(-25 * time.Second) // Exceeds maxWaitForMinPeers
+
+		// Set up callbacks
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			return 150
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 100
+		})
+
+		// Add only one peer (less than minimum)
+		peer1 := peer.ID("peer1")
+		sm.peerStates.AddPeer(peer1, true)
+
+		// Should now select sync peer despite insufficient peers due to max wait exceeded
+		selected := sm.UpdatePeerHeight(peer1, 150)
+		assert.True(t, selected, "Should select sync peer after max wait time even with insufficient peers")
+		assert.Equal(t, peer1, sm.GetSyncPeer(), "Peer1 should be selected as sync peer")
+	})
+}
+
+func TestSyncManager_ClearSyncPeer(t *testing.T) {
+	tSettings := createBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	t.Run("clears_existing_sync_peer", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Set up a sync peer
+		sm.syncPeer = peer.ID("test-peer")
+		sm.syncPeerState = &syncPeerState{
+			lastBlockTime: time.Now(),
+		}
+
+		// Clear sync peer
+		sm.ClearSyncPeer()
+
+		// Should be cleared
+		assert.Equal(t, peer.ID(""), sm.syncPeer)
+		assert.Nil(t, sm.syncPeerState)
+	})
+
+	t.Run("handles_no_sync_peer", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// No sync peer set
+		assert.Equal(t, peer.ID(""), sm.syncPeer)
+
+		// Should not panic when clearing non-existent sync peer
+		sm.ClearSyncPeer()
+
+		// Should still be empty
+		assert.Equal(t, peer.ID(""), sm.syncPeer)
+		assert.Nil(t, sm.syncPeerState)
+	})
+}
+
+func TestSyncManager_BlockAnnouncementBuffering(t *testing.T) {
+	tSettings := createBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	t.Run("buffers_announcements_during_initial_period", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Create test announcement
+		announcement := &BlockAnnouncement{
+			Hash:       "test-hash-1",
+			Height:     100,
+			DataHubURL: "http://test.com",
+			PeerID:     "peer1",
+			From:       "from1",
+			Timestamp:  time.Now(),
+		}
+
+		// Should buffer during initial period
+		buffered := sm.BufferBlockAnnouncement(announcement)
+		assert.True(t, buffered, "Should buffer announcement during initial period")
+
+		// Verify announcement was buffered
+		announcements := sm.GetBufferedAnnouncements()
+		assert.Len(t, announcements, 1)
+		assert.Equal(t, "test-hash-1", announcements[0].Hash)
+	})
+
+	t.Run("does_not_buffer_after_initial_period", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Mark initial selection as done
+		sm.initialSelectionDone = true
+
+		// Create test announcement
+		announcement := &BlockAnnouncement{
+			Hash:       "test-hash-2",
+			Height:     100,
+			DataHubURL: "http://test.com",
+			PeerID:     "peer2",
+			From:       "from2",
+			Timestamp:  time.Now(),
+		}
+
+		// Should not buffer after initial period
+		buffered := sm.BufferBlockAnnouncement(announcement)
+		assert.False(t, buffered, "Should not buffer announcement after initial period")
+
+		// Verify nothing was buffered
+		announcements := sm.GetBufferedAnnouncements()
+		assert.Len(t, announcements, 0)
+	})
+
+	t.Run("clears_buffer_when_getting_announcements", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Buffer multiple announcements
+		for i := 0; i < 5; i++ {
+			announcement := &BlockAnnouncement{
+				Hash:       fmt.Sprintf("test-hash-%d", i),
+				Height:     uint32(100 + i),
+				DataHubURL: "http://test.com",
+				PeerID:     fmt.Sprintf("peer%d", i),
+				From:       fmt.Sprintf("from%d", i),
+				Timestamp:  time.Now(),
+			}
+			sm.BufferBlockAnnouncement(announcement)
+		}
+
+		// Get buffered announcements
+		announcements := sm.GetBufferedAnnouncements()
+		assert.Len(t, announcements, 5)
+
+		// Buffer should be cleared
+		announcements2 := sm.GetBufferedAnnouncements()
+		assert.Len(t, announcements2, 0)
+	})
+
+	t.Run("correctly_reports_initial_sync_status", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Initially not complete
+		assert.False(t, sm.IsInitialSyncComplete())
+
+		// Mark as complete
+		sm.initialSelectionDone = true
+		assert.True(t, sm.IsInitialSyncComplete())
+	})
+
+	t.Run("correctly_reports_sync_peer_need", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// No sync peer initially
+		assert.False(t, sm.NeedsSyncPeer())
+
+		// Set a sync peer
+		sm.syncPeer = peer.ID("test-peer")
+		assert.True(t, sm.NeedsSyncPeer())
+
+		// Clear sync peer
+		sm.syncPeer = ""
+		assert.False(t, sm.NeedsSyncPeer())
+	})
+}
+
+func TestSyncManager_InitialSyncBufferingIntegration(t *testing.T) {
+	tSettings := createBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	t.Run("buffers_multiple_announcements_until_sync_complete", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Initial sync should not be complete
+		assert.False(t, sm.IsInitialSyncComplete())
+		assert.False(t, sm.NeedsSyncPeer())
+
+		// Buffer multiple announcements from different peers
+		announcements := make([]*BlockAnnouncement, 0)
+		for i := 0; i < 10; i++ {
+			announcement := &BlockAnnouncement{
+				Hash:       fmt.Sprintf("hash-%d", i),
+				Height:     uint32(100 + i),
+				DataHubURL: fmt.Sprintf("http://peer%d.com", i),
+				PeerID:     fmt.Sprintf("peer%d", i),
+				From:       fmt.Sprintf("from%d", i),
+				Timestamp:  time.Now(),
+			}
+			announcements = append(announcements, announcement)
+
+			// Should buffer during initial period
+			buffered := sm.BufferBlockAnnouncement(announcement)
+			assert.True(t, buffered, "Should buffer announcement %d during initial period", i)
+		}
+
+		// Mark initial sync as complete
+		sm.initialSelectionDone = true
+		assert.True(t, sm.IsInitialSyncComplete())
+
+		// Get buffered announcements
+		retrieved := sm.GetBufferedAnnouncements()
+		assert.Len(t, retrieved, 10, "Should retrieve all 10 buffered announcements")
+
+		// Verify announcements are in order
+		for i, ann := range retrieved {
+			assert.Equal(t, fmt.Sprintf("hash-%d", i), ann.Hash)
+			assert.Equal(t, uint32(100+i), ann.Height)
+		}
+
+		// Buffer should be cleared after retrieval
+		retrieved2 := sm.GetBufferedAnnouncements()
+		assert.Len(t, retrieved2, 0, "Buffer should be empty after retrieval")
+
+		// New announcements after initial sync shouldn't be buffered
+		newAnn := &BlockAnnouncement{
+			Hash:       "new-hash",
+			Height:     200,
+			DataHubURL: "http://new.com",
+			PeerID:     "new-peer",
+			From:       "new-from",
+			Timestamp:  time.Now(),
+		}
+		buffered := sm.BufferBlockAnnouncement(newAnn)
+		assert.False(t, buffered, "Should not buffer after initial sync complete")
+	})
+
+	t.Run("handles_sync_peer_selection_with_buffering", func(t *testing.T) {
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+		sm.Start(context.Background())
+
+		// Set up callbacks
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			switch p {
+			case peer.ID("peer1"):
+				return 100
+			case peer.ID("peer2"):
+				return 150 // Highest
+			case peer.ID("peer3"):
+				return 120
+			default:
+				return 0
+			}
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 90
+		})
+
+		// Add peers
+		sm.peerStates.AddPeer(peer.ID("peer1"), true)
+		sm.peerStates.AddPeer(peer.ID("peer2"), true)
+		sm.peerStates.AddPeer(peer.ID("peer3"), true)
+
+		// Buffer some announcements during initial period
+		for i := 0; i < 5; i++ {
+			announcement := &BlockAnnouncement{
+				Hash:       fmt.Sprintf("hash-%d", i),
+				Height:     uint32(100 + i),
+				DataHubURL: "http://test.com",
+				PeerID:     "peer1",
+				From:       "from1",
+				Timestamp:  time.Now(),
+			}
+			buffered := sm.BufferBlockAnnouncement(announcement)
+			assert.True(t, buffered, "Should buffer during initial period")
+		}
+
+		// Force initial sync completion
+		sm.startTime = time.Now().Add(-25 * time.Second) // Exceed max wait
+		sm.UpdatePeerHeight(peer.ID("peer2"), 150)
+
+		// Should have selected peer2 as sync peer (highest)
+		assert.Equal(t, peer.ID("peer2"), sm.GetSyncPeer())
+		assert.True(t, sm.NeedsSyncPeer())
+
+		// Get buffered announcements - they should be discarded if we need sync
+		announcements := sm.GetBufferedAnnouncements()
+		assert.Len(t, announcements, 5, "Should still have buffered announcements")
+	})
 }
 
 func TestSyncManager_UpdateCallbacks(t *testing.T) {
+	tSettings := createBaseTestSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
 	t.Run("update_peer_height_triggers_sync", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		sm.SetLocalHeightCallback(func() uint32 {
 			return 100
@@ -333,7 +801,7 @@ func TestSyncManager_UpdateCallbacks(t *testing.T) {
 	})
 
 	t.Run("update_sync_peer_network", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		syncPeer := peer.ID("sync-peer")
 		sm.syncPeer = syncPeer
@@ -349,7 +817,7 @@ func TestSyncManager_UpdateCallbacks(t *testing.T) {
 	})
 
 	t.Run("update_sync_peer_block_time", func(t *testing.T) {
-		sm := NewSyncManager(ulogger.New("test"), &chaincfg.MainNetParams)
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
 
 		syncPeer := peer.ID("sync-peer")
 		sm.syncPeer = syncPeer

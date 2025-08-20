@@ -568,18 +568,31 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 		// The function was called by BlockFound, and we had not already blessed the subtree, so we load the subtree from the store to get the hashes
 		// get subtree from network over http using the baseUrl
-		for retries := uint(0); retries < 3; retries++ {
-			txHashes, err = u.getSubtreeTxHashes(ctx, stat, &v.SubtreeHash, v.BaseURL)
-			if err != nil {
-				if retries < 2 {
-					backoff := time.Duration(1<<retries) * time.Second
-					u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to get subtree from network (try %d), will retry in %s", v.SubtreeHash.String(), retries, backoff.String())
-					time.Sleep(backoff)
+		retries := uint(0)
+
+	RetryLoop:
+		for retries < 3 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				txHashes, err = u.getSubtreeTxHashes(ctx, stat, &v.SubtreeHash, v.BaseURL)
+				if err != nil {
+					if retries < 2 {
+						backoff := time.Duration(1<<retries) * time.Second
+						u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to get subtree from network (try %d), will retry in %s", v.SubtreeHash.String(), retries, backoff.String())
+						select {
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						case <-time.After(backoff):
+						}
+						retries++
+					} else {
+						return nil, errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String(), err)
+					}
 				} else {
-					return nil, errors.NewServiceError("[ValidateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String(), err)
+					break RetryLoop
 				}
-			} else {
-				break
 			}
 		}
 	}
@@ -1238,7 +1251,7 @@ type txMapWrapper struct {
 //   - uint32: The maximum dependency level found
 //   - map[uint32][]missingTx: Map of dependency levels to transactions at that level
 //   - error: Any error encountered during the processing
-func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, map[uint32][]missingTx, error) {
+func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, [][]missingTx, error) {
 	_, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "prepareTxsPerLevel",
 		tracing.WithDebugLogMessage(u.logger, "[prepareTxsPerLevel] preparing %d transactions per level", len(transactions)),
 	)
@@ -1246,106 +1259,62 @@ func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingT
 	defer deferFn()
 
 	// Build dependency graph with adjacency lists for efficient lookups
-	txMap := make(map[chainhash.Hash]*txMapWrapper)
-	inDegree := make(map[chainhash.Hash]int)
-	// Adjacency list: parentHash -> []childHashes
-	children := make(map[chainhash.Hash][]chainhash.Hash)
+	txMap := make(map[chainhash.Hash]*txMapWrapper, len(transactions))
+	maxLevel := uint32(0)
+	sizePerLevel := make(map[uint32]uint64)
 
 	// First pass: create all nodes and initialize structures
 	for _, mTx := range transactions {
-		if !mTx.tx.IsCoinbase() {
+		if mTx.tx != nil && !mTx.tx.IsCoinbase() {
 			hash := *mTx.tx.TxIDChainHash()
 			txMap[hash] = &txMapWrapper{
 				missingTx:         mTx,
 				childLevelInBlock: 0,
 			}
-			inDegree[hash] = 0
 		}
 	}
 
 	// Second pass: build dependency graph
-	for hash, wrapper := range txMap {
+	for _, mTx := range transactions {
+		if mTx.tx == nil {
+			continue
+		}
+
+		wrapper := txMap[*mTx.tx.TxIDChainHash()]
+		if wrapper == nil {
+			continue
+		}
+
 		for _, input := range wrapper.missingTx.tx.Inputs {
 			parentHash := *input.PreviousTxIDChainHash()
 
-			if _, exists := txMap[parentHash]; exists {
-				inDegree[hash]++
+			// check if parentHash exists in the map, which means it is part of the subtree and already processed
+			if parentWrapper, exists := txMap[parentHash]; exists {
 				wrapper.someParentsInBlock = true
-				// Add this transaction as a child of its parent
-				children[parentHash] = append(children[parentHash], hash)
-			}
-		}
-	}
+				wrapper.childLevelInBlock = parentWrapper.childLevelInBlock + 1
+				sizePerLevel[wrapper.childLevelInBlock]++
 
-	// Kahn's algorithm for topological sort with levels
-	queue := []chainhash.Hash{}
-	for hash, degree := range inDegree {
-		if degree == 0 {
-			queue = append(queue, hash)
-		}
-	}
-
-	maxLevel := uint32(0)
-	processed := 0
-
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		processed++
-
-		currentLevel := txMap[current].childLevelInBlock
-
-		// Process only direct children using adjacency list
-		if childHashes, exists := children[current]; exists {
-			for _, childHash := range childHashes {
-				inDegree[childHash]--
-
-				// Update child's level
-				wrapper := txMap[childHash]
-				newLevel := currentLevel + 1
-				if newLevel > wrapper.childLevelInBlock {
-					wrapper.childLevelInBlock = newLevel
-					if newLevel > maxLevel {
-						maxLevel = newLevel
-					}
-				}
-
-				// Add to queue if all dependencies processed
-				if inDegree[childHash] == 0 {
-					queue = append(queue, childHash)
+				if wrapper.childLevelInBlock > maxLevel {
+					maxLevel = wrapper.childLevelInBlock
 				}
 			}
 		}
 	}
 
-	// Check for cycles
-	if processed != len(txMap) {
-		u.logger.Errorf("[prepareTxsPerLevel] Circular dependency detected! Processed %d of %d transactions",
-			processed, len(txMap))
-		return 0, nil, errors.NewProcessingError("[prepareTxsPerLevel] Circular dependency detected! Processed %d of %d transactions",
-			processed, len(txMap))
-	}
-
-	// Pre-allocate result slices for better performance
-	sizePerLevel := make(map[uint32]int)
-	for _, wrapper := range txMap {
-		sizePerLevel[wrapper.childLevelInBlock]++
-	}
-
-	blockTxsPerLevel := make(map[uint32][]missingTx)
-	for level := uint32(0); level <= maxLevel; level++ {
-		if size, exists := sizePerLevel[level]; exists {
-			blockTxsPerLevel[level] = make([]missingTx, 0, size)
-		}
-	}
+	blocksPerLevelSlice := make([][]missingTx, maxLevel+1)
 
 	// Build result map with pre-allocated slices
 	for _, wrapper := range txMap {
 		level := wrapper.childLevelInBlock
-		blockTxsPerLevel[level] = append(blockTxsPerLevel[level], wrapper.missingTx)
+		if blocksPerLevelSlice[level] == nil {
+			// Initialize the slice for this level if it doesn't exist
+			blocksPerLevelSlice[level] = make([]missingTx, 0, sizePerLevel[level])
+		}
+
+		blocksPerLevelSlice[level] = append(blocksPerLevelSlice[level], wrapper.missingTx)
 	}
 
-	return maxLevel, blockTxsPerLevel, nil
+	return maxLevel, blocksPerLevelSlice, nil
 }
 
 // getMissingTransactionsFromPeer retrieves missing transactions from either the network or local store.

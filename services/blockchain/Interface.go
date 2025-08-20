@@ -799,7 +799,10 @@ type ClientI interface {
 	// - Error if the event triggering fails or if the event is invalid for the current state
 	SendFSMEvent(ctx context.Context, event FSMEventType) error
 
+	//
 	// Legacy endpoints
+	//
+
 	// GetBlockLocator retrieves a block locator for blockchain synchronization.
 	//
 	// This method generates a block locator, which is a compact representation of the
@@ -816,6 +819,7 @@ type ClientI interface {
 	// - Array of hashes forming the block locator sequence
 	// - Error if the locator generation fails
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error)
+
 	// LocateBlockHeaders locates block headers using a block locator.
 	//
 	// This method uses a block locator to efficiently find where two blockchain states

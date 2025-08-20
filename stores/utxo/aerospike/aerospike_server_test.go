@@ -888,14 +888,14 @@ func TestCoinbase(t *testing.T) {
 
 	cleanDB(t, client)
 
-	txMeta, err := store.Create(ctx, coinbaseTx, 1)
+	txMeta, err := store.Create(ctx, coinbaseTx, 2)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 	assert.True(t, txMeta.IsCoinbase)
 
 	var tErr *errors.Error
 
-	err = store.SetBlockHeight(0) // coinbase is immature
+	err = store.SetBlockHeight(1) // coinbase is immature
 	require.NoError(t, err)
 
 	spends, err := store.Spend(ctx, spendCoinbaseTx)

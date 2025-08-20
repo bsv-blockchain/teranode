@@ -350,6 +350,17 @@ func (ba *BlockAssembly) processSubtreeRetry(ctx context.Context, subtreeRetry *
 		return
 	}
 
+	isRunning, err := ba.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
+	if err != nil {
+		ba.logger.Errorf("[BlockAssembly:Init][%s] failed to check FSM state: %s", subtreeRetry.subtreeHash.String(), err)
+		return
+	}
+
+	if !isRunning {
+		ba.logger.Debugf("[BlockAssembly:Init][%s] FSM is not running, skipping notification", subtreeRetry.subtreeHash.String())
+		return
+	}
+
 	// Send notification after successful storage
 	ba.sendSubtreeNotification(ctx, subtreeRetry.subtreeHash)
 }

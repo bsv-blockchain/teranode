@@ -85,6 +85,7 @@ func TestNewBlockHeaderFromBytes(t *testing.T) {
 			t.Error(err)
 		}
 
+		assert.Equal(t, "4c74e0128fef1a01469380c05b215afaf4cfe51183461f4a7996a84295b6925a", blockHeader.Hash().String())
 		assert.Equal(t, uint32(0x20000000), blockHeader.Version)
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", blockHeader.HashPrevBlock.String())
 		assert.Equal(t, "6a6c0ec8d4adfe242b17153b4f2723b0cb6f783b1ca0f1e17cbdaf699a813316", blockHeader.HashMerkleRoot.String())

@@ -2,10 +2,10 @@ package p2p
 
 import (
 	"context"
-	"math/rand/v2"
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -34,13 +34,23 @@ const (
 	defaultMinSyncPeerNetworkSpeed = 10 * 1024
 )
 
+// BlockAnnouncement represents a buffered block announcement
+type BlockAnnouncement struct {
+	Hash       string
+	Height     uint32
+	DataHubURL string
+	PeerID     string
+	From       string
+	Timestamp  time.Time
+}
+
 // SyncManager manages peer synchronization for the P2P service
 // It ensures we sync from the best available peer and handles
 // peer switching when the current sync peer becomes unhealthy
 type SyncManager struct {
 	mu                      sync.RWMutex
 	logger                  ulogger.Logger
-	chainParams             *chaincfg.Params
+	settings                *settings.Settings
 	peerStates              *PeerStateManager
 	syncPeer                peer.ID
 	syncPeerState           *syncPeerState
@@ -48,6 +58,12 @@ type SyncManager struct {
 	minSyncPeerNetworkSpeed uint64
 	headersFirstMode        bool
 	shutdown                int32
+	startTime               time.Time
+	initialSelectionDone    bool
+
+	// Block announcement buffering during initial sync period
+	announcementBuffer []*BlockAnnouncement
+	bufferMu           sync.Mutex
 
 	// Callbacks for getting peer information
 	getPeerHeight  func(peer.ID) int32
@@ -56,12 +72,13 @@ type SyncManager struct {
 }
 
 // NewSyncManager creates a new sync manager
-func NewSyncManager(logger ulogger.Logger, chainParams *chaincfg.Params) *SyncManager {
+func NewSyncManager(logger ulogger.Logger, settings *settings.Settings) *SyncManager {
 	return &SyncManager{
 		logger:                  logger,
-		chainParams:             chainParams,
+		settings:                settings,
 		peerStates:              NewPeerStateManager(),
 		minSyncPeerNetworkSpeed: defaultMinSyncPeerNetworkSpeed,
+		initialSelectionDone:    settings.P2P.MinPeersForSync == 0, // Only do initial selection if we expect peers
 	}
 }
 
@@ -111,7 +128,7 @@ func (sm *SyncManager) RemovePeer(peerID peer.ID) {
 func (sm *SyncManager) isSyncCandidate(peerID peer.ID) bool {
 	// In regtest, accept all peers as sync candidates
 	// This is for local testing where nodes connect via localhost
-	if sm.chainParams == &chaincfg.RegressionNetParams {
+	if sm.settings.ChainCfgParams == &chaincfg.RegressionNetParams {
 		// For regtest, accept all peers regardless of IP
 		// This fixes issues where peers might advertise 0.0.0.0 or have no IPs yet
 		return true
@@ -157,17 +174,14 @@ func (sm *SyncManager) selectSyncPeer() peer.ID {
 		if peerHeight > localHeight {
 			// Peer is ahead of us - good candidate
 			bestPeers = append(bestPeers, peerID)
-			sm.logger.Debugf("[SyncManager] Peer %s at height %d > local %d (bestPeer)",
-				peerID, peerHeight, localHeight)
+			sm.logger.Debugf("[SyncManager] Peer %s at height %d > local %d (bestPeer)", peerID, peerHeight, localHeight)
 		} else if peerHeight == localHeight {
 			// Peer at same height - acceptable candidate
 			okPeers = append(okPeers, peerID)
-			sm.logger.Debugf("[SyncManager] Peer %s at height %d == local %d (okPeer)",
-				peerID, peerHeight, localHeight)
+			sm.logger.Debugf("[SyncManager] Peer %s at height %d == local %d (okPeer)", peerID, peerHeight, localHeight)
 		} else {
 			// Peer behind us - skip
-			sm.logger.Debugf("[SyncManager] Peer %s at height %d < local %d (skipping)",
-				peerID, peerHeight, localHeight)
+			sm.logger.Debugf("[SyncManager] Peer %s at height %d < local %d (skipping)", peerID, peerHeight, localHeight)
 		}
 	}
 
@@ -175,17 +189,33 @@ func (sm *SyncManager) selectSyncPeer() peer.ID {
 	var selectedPeer peer.ID
 
 	if len(bestPeers) > 0 {
-		// Randomly select from peers ahead of us
-		// #nosec G404 - Using weak random is acceptable for peer selection
-		selectedPeer = bestPeers[rand.IntN(len(bestPeers))]
-		sm.logger.Infof("[SyncManager] Selected best peer %s from %d peers ahead of us",
-			selectedPeer, len(bestPeers))
+		// Select the peer with the highest block height
+		var highestPeer peer.ID
+		highestHeight := int32(-1)
+
+		for _, peerID := range bestPeers {
+			peerHeight := sm.getPeerHeight(peerID)
+			if peerHeight > highestHeight {
+				highestHeight = peerHeight
+				highestPeer = peerID
+			} else if peerHeight == highestHeight && peerID.String() > highestPeer.String() {
+				// Use peer ID as tiebreaker for deterministic selection
+				highestPeer = peerID
+			}
+		}
+
+		selectedPeer = highestPeer
+		sm.logger.Infof("[SyncManager] Selected highest peer %s at height %d from %d peers ahead of us", selectedPeer, highestHeight, len(bestPeers))
 	} else if len(okPeers) > 0 {
-		// No peers ahead, randomly select from peers at same height
-		// #nosec G404 - Using weak random is acceptable for peer selection
-		selectedPeer = okPeers[rand.IntN(len(okPeers))]
-		sm.logger.Infof("[SyncManager] No peers ahead, selected ok peer %s from %d peers at same height",
-			selectedPeer, len(okPeers))
+		// No peers ahead, select peer with highest ID for deterministic behavior
+		var highestPeer peer.ID
+		for _, peerID := range okPeers {
+			if highestPeer == "" || peerID.String() > highestPeer.String() {
+				highestPeer = peerID
+			}
+		}
+		selectedPeer = highestPeer
+		sm.logger.Infof("[SyncManager] No peers ahead, selected peer %s from %d peers at same height", selectedPeer, len(okPeers))
 	} else {
 		sm.logger.Warnf("[SyncManager] No suitable sync peers found")
 	}
@@ -238,6 +268,19 @@ func (sm *SyncManager) checkSyncPeer() {
 		return
 	}
 
+	// Check if we've caught up to our sync peer
+	if sm.getLocalHeight != nil && sm.getPeerHeight != nil {
+		localHeight := int32(sm.getLocalHeight())
+		syncPeerHeight := sm.getPeerHeight(sm.syncPeer)
+
+		if localHeight >= syncPeerHeight {
+			sm.logger.Infof("[SyncManager] Caught up to sync peer %s (local height %d >= peer height %d), clearing sync peer", sm.syncPeer, localHeight, syncPeerHeight)
+			sm.syncPeer = ""
+			sm.syncPeerState = nil
+			return
+		}
+	}
+
 	// Check network speed violations
 	violations := sm.syncPeerState.validNetworkSpeed(sm.minSyncPeerNetworkSpeed, syncPeerTickerInterval)
 
@@ -272,9 +315,16 @@ func (sm *SyncManager) checkSyncPeer() {
 func (sm *SyncManager) Start(ctx context.Context) {
 	sm.mu.Lock()
 	sm.syncPeerTicker = time.NewTicker(syncPeerTickerInterval)
+	sm.startTime = time.Now()
 	sm.mu.Unlock()
 
+	sm.logger.Infof("[SyncManager] Started with %v initial delay, %d minimum peers, %v max wait", sm.settings.P2P.InitialSyncDelay, sm.settings.P2P.MinPeersForSync, sm.settings.P2P.MaxWaitForMinPeers)
+
 	go func() {
+		// Add initial delay for first sync peer selection check
+		initialTimer := time.NewTimer(sm.settings.P2P.InitialSyncDelay)
+		defer initialTimer.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -285,6 +335,16 @@ func (sm *SyncManager) Start(ctx context.Context) {
 				}
 				sm.mu.Unlock()
 				return
+			case <-initialTimer.C:
+				// After initial delay, try to select sync peer if we haven't already
+				sm.mu.Lock()
+				if sm.syncPeer == "" && !sm.initialSelectionDone {
+					sm.initialSelectionDone = true
+					sm.logger.Infof("[SyncManager] Initial delay complete, attempting first sync peer selection")
+					sm.selectSyncPeerLocked()
+					// Buffered announcements will be processed by the Server
+				}
+				sm.mu.Unlock()
 			case <-sm.syncPeerTicker.C:
 				sm.checkSyncPeer()
 			}
@@ -297,6 +357,17 @@ func (sm *SyncManager) GetSyncPeer() peer.ID {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.syncPeer
+}
+
+// GetPeerHeight returns the height of a given peer
+func (sm *SyncManager) GetPeerHeight(peerID peer.ID) int32 {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	if sm.getPeerHeight == nil {
+		return 0
+	}
+	return sm.getPeerHeight(peerID)
 }
 
 // IsSyncPeer checks if a given peer is the current sync peer
@@ -313,19 +384,52 @@ func (sm *SyncManager) UpdatePeerHeight(peerID peer.ID, height int32) bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Update sync candidacy now that we have height
-	if state, exists := sm.peerStates.GetPeerState(peerID); exists {
-		// Re-evaluate sync candidacy with height information
+	// Add peer if it doesn't exist yet
+	if _, exists := sm.peerStates.GetPeerState(peerID); !exists {
+		// Add the peer and evaluate sync candidacy
 		isSyncCandidate := sm.isSyncCandidate(peerID)
-		if isSyncCandidate != state.syncCandidate {
-			sm.peerStates.SetSyncCandidate(peerID, isSyncCandidate)
-			sm.logger.Debugf("[SyncManager] Peer %s sync candidate status updated to %v (height: %d)",
-				peerID, isSyncCandidate, height)
+		sm.peerStates.AddPeer(peerID, isSyncCandidate)
+		sm.logger.Infof("[SyncManager] Added peer %s with height %d (sync candidate: %v)", peerID, height, isSyncCandidate)
+	} else {
+		// Update sync candidacy now that we have height
+		if state, exists := sm.peerStates.GetPeerState(peerID); exists {
+			// Re-evaluate sync candidacy with height information
+			isSyncCandidate := sm.isSyncCandidate(peerID)
+			if isSyncCandidate != state.syncCandidate {
+				sm.peerStates.SetSyncCandidate(peerID, isSyncCandidate)
+				sm.logger.Debugf("[SyncManager] Peer %s sync candidate status updated to %v (height: %d)", peerID, isSyncCandidate, height)
+			}
 		}
 	}
 
 	// Check if we should select a sync peer (only if we don't have one)
 	if sm.syncPeer == "" && sm.getLocalHeight != nil {
+		// Check if we're still in the initial grace period
+		if !sm.initialSelectionDone {
+			timeSinceStart := time.Since(sm.startTime)
+			if timeSinceStart < sm.settings.P2P.InitialSyncDelay {
+				sm.logger.Debugf("[SyncManager] Delaying sync peer selection (%.1fs of %v grace period)", timeSinceStart.Seconds(), sm.settings.P2P.InitialSyncDelay)
+				return false
+			}
+
+			// Check if we have enough peers or max wait time has passed
+			candidates := sm.peerStates.GetSyncCandidates()
+			if len(candidates) < sm.settings.P2P.MinPeersForSync && timeSinceStart < sm.settings.P2P.MaxWaitForMinPeers {
+				sm.logger.Infof("[SyncManager] Waiting for more peers before initial selection (%d/%d, waited %.1fs of max %v)", len(candidates), sm.settings.P2P.MinPeersForSync, timeSinceStart.Seconds(), sm.settings.P2P.MaxWaitForMinPeers)
+				return false
+			}
+
+			sm.initialSelectionDone = true
+			if len(candidates) < sm.settings.P2P.MinPeersForSync {
+				sm.logger.Warnf("[SyncManager] Maximum wait time reached (%v), proceeding with %d peers (wanted %d)", sm.settings.P2P.MaxWaitForMinPeers, len(candidates), sm.settings.P2P.MinPeersForSync)
+			} else {
+				sm.logger.Infof("[SyncManager] Initial grace period complete with %d peers, proceeding with sync peer selection", len(candidates))
+			}
+
+			// Initial selection is done, process buffered announcements if appropriate
+			// This will be handled by the Server when it checks IsInitialSyncComplete()
+		}
+
 		localHeight := int32(sm.getLocalHeight())
 
 		// If this peer is ahead of us, try to select a sync peer
@@ -356,4 +460,67 @@ func (sm *SyncManager) UpdateSyncPeerBlockTime(peerID peer.ID) {
 	if sm.syncPeer == peerID && sm.syncPeerState != nil {
 		sm.syncPeerState.updateLastBlockTime()
 	}
+}
+
+// ClearSyncPeer clears the current sync peer when we've caught up to the network
+func (sm *SyncManager) ClearSyncPeer() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.syncPeer != "" {
+		sm.logger.Infof("[SyncManager] Clearing sync peer %s as we've caught up to the network", sm.syncPeer)
+		sm.syncPeer = ""
+		sm.syncPeerState = nil
+	}
+}
+
+// BufferBlockAnnouncement buffers a block announcement during the initial sync period
+// Returns true if the announcement was buffered, false if it should be processed immediately
+func (sm *SyncManager) BufferBlockAnnouncement(announcement *BlockAnnouncement) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	// Only buffer during initial sync period
+	if !sm.initialSelectionDone {
+		sm.bufferMu.Lock()
+		defer sm.bufferMu.Unlock()
+
+		sm.announcementBuffer = append(sm.announcementBuffer, announcement)
+		sm.logger.Debugf("[SyncManager] Buffered block announcement for %s (total buffered: %d)", announcement.Hash, len(sm.announcementBuffer))
+		return true
+	}
+
+	return false
+}
+
+// GetBufferedAnnouncements returns and clears the buffered announcements
+// This should be called after determining whether we need a sync peer
+func (sm *SyncManager) GetBufferedAnnouncements() []*BlockAnnouncement {
+	sm.bufferMu.Lock()
+	defer sm.bufferMu.Unlock()
+
+	announcements := sm.announcementBuffer
+	sm.announcementBuffer = nil
+
+	if len(announcements) > 0 {
+		sm.logger.Infof("[SyncManager] Returning %d buffered announcements", len(announcements))
+	}
+
+	return announcements
+}
+
+// IsInitialSyncComplete returns true if the initial sync period is complete
+func (sm *SyncManager) IsInitialSyncComplete() bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	return sm.initialSelectionDone
+}
+
+// NeedsSyncPeer returns true if we have a sync peer (meaning we're behind)
+func (sm *SyncManager) NeedsSyncPeer() bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	return sm.syncPeer != ""
 }

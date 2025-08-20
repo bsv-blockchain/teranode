@@ -267,8 +267,22 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CheckSubtreeFromBlockTimeout:                     getDuration("blockvalidation_check_subtree_from_block_timeout", 5*time.Minute),
 			CheckSubtreeFromBlockRetries:                     getInt("blockvalidation_check_subtree_from_block_retries", 5, alternativeContext...),
 			CheckSubtreeFromBlockRetryBackoffDuration:        getDuration("blockvalidation_check_subtree_from_block_retry_backoff_duration", 30*time.Second),
-			SecretMiningThreshold:                            getUint32("blockvalidation_secret_mining_threshold", 10, alternativeContext...),
+			SecretMiningThreshold:                            getUint32("blockvalidation_secret_mining_threshold", uint32(params.CoinbaseMaturity-1), alternativeContext...), // golint:nolint
 			PreviousBlockHeaderCount:                         getUint64("blockvalidation_previous_block_header_count", 100, alternativeContext...),
+			// Catchup configuration
+			CatchupMaxRetries:            getInt("blockvalidation_catchup_max_retries", 3, alternativeContext...),
+			CatchupIterationTimeout:      getInt("blockvalidation_catchup_iteration_timeout", 30, alternativeContext...),
+			CatchupOperationTimeout:      getInt("blockvalidation_catchup_operation_timeout", 300, alternativeContext...),
+			CatchupMaxAccumulatedHeaders: getInt("blockvalidation_max_accumulated_headers", 100000, alternativeContext...),
+			// Catchup circuit breaker configuration
+			CircuitBreakerFailureThreshold: getInt("blockvalidation_circuit_breaker_failure_threshold", 5, alternativeContext...),
+			CircuitBreakerSuccessThreshold: getInt("blockvalidation_circuit_breaker_success_threshold", 2, alternativeContext...),
+			CircuitBreakerTimeoutSeconds:   getInt("blockvalidation_circuit_breaker_timeout_seconds", 30, alternativeContext...),
+			// Block fetching configuration
+			FetchLargeBatchSize:     getInt("blockvalidation_fetch_large_batch_size", 100, alternativeContext...),
+			FetchNumWorkers:         getInt("blockvalidation_fetch_num_workers", 16, alternativeContext...),
+			FetchBufferSize:         getInt("blockvalidation_fetch_buffer_size", 500, alternativeContext...),
+			SubtreeFetchConcurrency: getInt("blockvalidation_subtree_fetch_concurrency", 8, alternativeContext...),
 		},
 		Validator: ValidatorSettings{
 			GRPCAddress:               getString("validator_grpcAddress", "localhost:8081", alternativeContext...),
@@ -366,12 +380,16 @@ func NewSettings(alternativeContext ...string) *Settings {
 			EnableConnGater:   getBool("p2p_enable_conn_gater", false, alternativeContext...), // OFF: Only needed for strict control
 			MaxConnsPerPeer:   getInt("p2p_max_conns_per_peer", 3, alternativeContext...),
 			// Peer persistence
-			EnablePeerCache:       getBool("p2p_enable_peer_cache", true, alternativeContext...), // ON: Faster network recovery
-			PeerCacheDir:          getString("p2p_peer_cache_dir", "", alternativeContext...),    // Empty = binary directory
-			MaxCachedPeers:        getInt("p2p_max_cached_peers", 100, alternativeContext...),
-			PeerCacheTTL:          getDuration("p2p_peer_cache_ttl", 30*24*time.Hour),
-			BanThreshold:          getInt("p2p_ban_threshold", 100, alternativeContext...),
-			BanDuration:           getDuration("p2p_ban_duration", 24*time.Hour),
+			EnablePeerCache: getBool("p2p_enable_peer_cache", true, alternativeContext...), // ON: Faster network recovery
+			PeerCacheDir:    getString("p2p_peer_cache_dir", "", alternativeContext...),    // Empty = binary directory
+			MaxCachedPeers:  getInt("p2p_max_cached_peers", 100, alternativeContext...),
+			PeerCacheTTL:    getDuration("p2p_peer_cache_ttl", 30*24*time.Hour),
+			BanThreshold:    getInt("p2p_ban_threshold", 100, alternativeContext...),
+			BanDuration:     getDuration("p2p_ban_duration", 24*time.Hour),
+			// Sync manager configuration
+			InitialSyncDelay:      getDuration("p2p_initial_sync_delay", 5*time.Second),
+			MinPeersForSync:       getInt("p2p_min_peers_for_sync", 2, alternativeContext...),
+			MaxWaitForMinPeers:    getDuration("p2p_max_wait_for_min_peers", 20*time.Second),
 			HandshakeTopic:        getString("p2p_handshake_topic", "", alternativeContext...),
 			HandshakeTopicSize:    getInt("p2p_handshake_topic_size", 1, alternativeContext...),
 			HandshakeTopicTimeout: getDuration("p2p_handshake_topic_timeout", 5*time.Second),

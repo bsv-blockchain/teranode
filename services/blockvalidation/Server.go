@@ -15,13 +15,11 @@
 package blockvalidation
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
-	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +29,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockassembly"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation/blockvalidation_api"
+	"github.com/bitcoin-sv/teranode/services/blockvalidation/catchup"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -44,7 +43,6 @@ import (
 	kafkamessage "github.com/bitcoin-sv/teranode/util/kafka/kafka_message"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/go-utils"
@@ -140,6 +138,48 @@ type Server struct {
 
 	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
+
+	// peerCircuitBreakers manages circuit breakers for each peer to prevent
+	// cascading failures and protect against misbehaving peers
+	peerCircuitBreakers *catchup.PeerCircuitBreakers
+
+	// peerMetrics tracks performance and reputation metrics for each peer
+	peerMetrics *catchup.CatchupMetrics
+
+	// headerChainCache provides efficient access to block headers during catchup
+	// with proper chain validation to avoid redundant fetches during block validation
+	headerChainCache *catchup.HeaderChainCache
+
+	// isCatchingUp is an atomic flag to prevent concurrent catchup operations.
+	// When true, indicates that a catchup operation is currently in progress.
+	// This flag ensures only one catchup can run at a time to prevent resource contention.
+	isCatchingUp atomic.Bool
+
+	// catchupStatsMu protects concurrent access to lastCatchupTime and lastCatchupResult.
+	// Always acquire this mutex when reading or writing these fields.
+	catchupStatsMu sync.RWMutex
+
+	// lastCatchupTime records the timestamp of the most recent catchup attempt completion.
+	// Zero value indicates no catchup has been attempted since server start.
+	// This field is written at the end of each catchup operation and read during health checks.
+	// Protected by catchupStatsMu for thread-safe access.
+	lastCatchupTime time.Time
+
+	// lastCatchupResult indicates whether the most recent catchup succeeded (true) or failed (false).
+	// This value is undefined if no catchup has been attempted (check lastCatchupTime.IsZero()).
+	// Protected by catchupStatsMu for thread-safe access.
+	lastCatchupResult bool
+
+	// catchupAttempts tracks the total number of catchup operations initiated since server start.
+	// This counter is incremented at the beginning of each catchup attempt, regardless of outcome.
+	// The value persists for the lifetime of the server and is never reset.
+	catchupAttempts atomic.Int64
+
+	// catchupSuccesses tracks the total number of successful catchup operations since server start.
+	// This counter is incremented only when a catchup completes without error.
+	// The success rate can be calculated as: catchupSuccesses / catchupAttempts.
+	// The value persists for the lifetime of the server and is never reset.
+	catchupSuccesses atomic.Int64
 }
 
 // New creates a new block validation server with the provided dependencies.
@@ -170,6 +210,14 @@ func New(
 	subtreeGroup := errgroup.Group{}
 	util.SafeSetLimit(&subtreeGroup, tSettings.BlockValidation.SubtreeGroupConcurrency)
 
+	// Initialize circuit breakers for peer management
+	cbConfig := &catchup.CircuitBreakerConfig{
+		FailureThreshold:    tSettings.BlockValidation.CircuitBreakerFailureThreshold,
+		SuccessThreshold:    tSettings.BlockValidation.CircuitBreakerSuccessThreshold,
+		Timeout:             time.Duration(tSettings.BlockValidation.CircuitBreakerTimeoutSeconds) * time.Second,
+		MaxHalfOpenRequests: 1,
+	}
+
 	bVal := &Server{
 		logger:               logger,
 		settings:             tSettings,
@@ -183,6 +231,11 @@ func New(
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		stats:                gocore.NewStat("blockvalidation"),
 		kafkaConsumerClient:  kafkaConsumerClient,
+		peerCircuitBreakers:  catchup.NewPeerCircuitBreakers(*cbConfig),
+		peerMetrics: &catchup.CatchupMetrics{
+			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
+		},
+		headerChainCache: catchup.NewHeaderChainCache(logger), // Chain-aware cache for efficient catchup
 	}
 
 	return bVal
@@ -234,7 +287,10 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		})
 	}
 
-	checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
+	// Only check Kafka if we have a consumer client configured
+	if u.kafkaConsumerClient != nil {
+		checks = append(checks, health.Check{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)})
+	}
 
 	if u.blockchainClient != nil {
 		checks = append(checks, health.Check{Name: "BlockchainClient", Check: u.blockchainClient.Health})
@@ -252,6 +308,43 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	if u.utxoStore != nil {
 		checks = append(checks, health.Check{Name: "UTXOStore", Check: u.utxoStore.Health})
 	}
+
+	// Add catchup status check
+	checks = append(checks, health.Check{
+		Name: "CatchupStatus",
+		Check: func(ctx context.Context, _ bool) (int, string, error) {
+			attempts := u.catchupAttempts.Load()
+			successes := u.catchupSuccesses.Load()
+
+			var successRate float64
+			if attempts > 0 {
+				successRate = float64(successes) / float64(attempts)
+			}
+
+			// Read protected fields with mutex
+			u.catchupStatsMu.RLock()
+			lastTime := u.lastCatchupTime
+			lastResult := u.lastCatchupResult
+			u.catchupStatsMu.RUnlock()
+
+			// Format time safely
+			timeStr := "never"
+			if !lastTime.IsZero() {
+				timeStr = lastTime.Format(time.RFC3339)
+			}
+
+			status := fmt.Sprintf("active=%v, last_time=%s, last_success=%v, attempts=%d, successes=%d, rate=%.2f",
+				u.isCatchingUp.Load(),
+				timeStr,
+				lastResult,
+				attempts,
+				successes,
+				successRate,
+			)
+
+			return http.StatusOK, status, nil
+		},
+	})
 
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
@@ -293,6 +386,19 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, subtreeValidationClient)
 	}
 
+	// if our FSM state is CATCHINGBLOCKS, this is probably a remnant of a crash, put the node back in RUNNING state
+	isCatchingBlocks, err := u.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateCATCHINGBLOCKS)
+	if err != nil {
+		u.logger.Errorf("[Init] failed to check if FSM currently catching blocks: %v", err)
+	}
+
+	if isCatchingBlocks {
+		u.logger.Infof("[Init] FSM is in CATCHINGBLOCKS state, setting it to RUNNING")
+		if err = u.blockchainClient.Run(ctx, "blockvalidation"); err != nil {
+			return errors.NewServiceError("[Init] failed to set FSM state to RUNNING", err)
+		}
+	}
+
 	go u.processSubtreeNotify.Start()
 
 	// process blocks found from channel
@@ -305,55 +411,51 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 			case c := <-u.catchupCh:
 				{
-					if err := u.processCatchupChannel(ctx, c); err != nil {
-						u.logger.Errorf("[Init] failed to process catchup signal for block [%s] [%v]", c.block.Hash().String(), err)
+					if err := u.catchup(ctx, c.block, c.baseURL); err != nil {
+						var (
+							peerMetric        *catchup.PeerCatchupMetrics
+							reputationScore   float64
+							maliciousAttempts int64
+						)
+
+						// this should be moved into the catchup directly...
+						if u.peerMetrics != nil {
+							peerMetric = u.peerMetrics.GetOrCreatePeerMetrics(c.baseURL)
+							if peerMetric != nil {
+								peerMetric.RecordFailure()
+								reputationScore = peerMetric.ReputationScore
+								maliciousAttempts = peerMetric.MaliciousAttempts
+
+								if !peerMetric.IsTrusted() {
+									u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", c.block.Hash().String(), c.baseURL, peerMetric.ReputationScore, peerMetric.MaliciousAttempts)
+								}
+							}
+						}
+
+						u.logger.Errorf("[Init] failed to process catchup signal for block [%s], peer reputation: %.2f, malicious attempts: %d, [%v]", c.block.Hash().String(), reputationScore, maliciousAttempts, err)
 					}
 				}
 
 			case blockFound := <-u.blockFoundCh:
 				{
 					if err := u.processBlockFoundChannel(ctx, blockFound); err != nil {
+						if u.peerMetrics != nil {
+							peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(blockFound.baseURL)
+							if peerMetric != nil {
+								peerMetric.RecordFailure()
+							}
+
+							if !peerMetric.IsTrusted() {
+								u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", blockFound.hash.String(), blockFound.baseURL, peerMetric.ReputationScore, peerMetric.MaliciousAttempts)
+							}
+						}
+
 						u.logger.Errorf("[Init] failed to process block found [%s] [%v]", blockFound.hash.String(), err)
 					}
 				}
 			}
 		}
 	}()
-
-	return nil
-}
-
-func (u *Server) processCatchupChannel(ctx context.Context, c processBlockCatchup) (err error) {
-	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processCatchupChannel",
-		tracing.WithParentStat(u.stats),
-		tracing.WithHistogram(prometheusBlockValidationCatchup),
-		tracing.WithDebugLogMessage(u.logger, "[processCatchupChannel][%s] processing catchup on channel", c.block.String()),
-	)
-
-	defer func() {
-		state, err := u.blockchainClient.GetFSMCurrentState(ctx)
-		if err != nil {
-			u.logger.Errorf("[processCatchupChannel] failed to get FSM current state: %v", err)
-		} else if state != nil && *state == blockchain.FSMStateCATCHINGBLOCKS {
-			u.logger.Infof("[processCatchupChannel][%s] catch up complete, ready to mine, sending RUN event", c.block.String())
-
-			// start mining again, we are caught up
-			if err = u.blockchainClient.Run(ctx, "blockvalidation/Server"); err != nil {
-				u.logger.Errorf("[processCatchupChannel][%s] failed to send RUN event: %v", c.block.String(), err)
-			}
-		}
-
-		deferFn()
-	}()
-
-	// stop mining while we are catching up
-	if err = u.blockchainClient.CatchUpBlocks(ctx); err != nil {
-		return errors.NewProcessingError("[processCatchupChannel][%s] failed to send CATCHUPBLOCKS event", c.block.String(), err)
-	}
-
-	if err = u.catchup(ctx, c.block, c.baseURL); err != nil {
-		return errors.NewProcessingError("[processCatchupChannel][%s] failed to catchup", c.block.String(), err)
-	}
 
 	return nil
 }
@@ -414,6 +516,16 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 		return err
 	}
 
+	if u.peerMetrics != nil {
+		peerMetrics := u.peerMetrics.GetOrCreatePeerMetrics(baseURL.String())
+
+		if peerMetrics != nil && peerMetrics.IsMalicious() {
+			u.logger.Warnf("[BlockFound][%s] peer is malicious, skipping [%s]", hash.String(), baseURL.String())
+			// do not return for now
+			// return nil
+		}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -438,6 +550,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 	errCh := make(chan error, 1)
 
 	u.logger.Infof("[BlockFound][%s] add on channel", hash.String())
+
 	u.blockFoundCh <- processBlockFound{
 		hash:    hash,
 		baseURL: baseURL.String(),
@@ -470,7 +583,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		u.logger.Infof("[Init] peerBlocks: %v", peerBlocks)
 		// add that latest block of each peer to the catchup channel
 		for _, pb := range peerBlocks {
-			block, err := u.getBlock(ctx, pb.hash, pb.baseURL)
+			block, err := u.fetchSingleBlock(ctx, pb.hash, pb.baseURL)
 			if err != nil {
 				return errors.NewProcessingError("[Init] failed to get block [%s]", pb.hash.String(), err)
 			}
@@ -710,7 +823,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 	defer deferFn()
 
 	// Wait for block assembly to be ready before processing the block
-	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height); err != nil {
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, uint32(u.settings.ChainCfgParams.CoinbaseMaturity/2)); err != nil {
 		// block-assembly is still behind, so we cannot process this block
 		return nil, errors.WrapGRPC(err)
 	}
@@ -770,7 +883,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	if len(useBlock) > 0 {
 		block = useBlock[0]
 	} else {
-		block, err = u.getBlock(ctx, hash, baseURL)
+		block, err = u.fetchSingleBlock(ctx, hash, baseURL)
 		if err != nil {
 			return err
 		}
@@ -792,14 +905,15 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 				block:   block,
 				baseURL: baseURL,
 			}
-			prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 		}()
 
 		return nil
 	}
 
+	waitForBlockHeight := math.Ceil(float64(u.settings.ChainCfgParams.CoinbaseMaturity) / 2)
+
 	// Wait for block assembly to be ready before processing the block
-	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height); err != nil {
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, uint32(waitForBlockHeight)); err != nil {
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
@@ -883,360 +997,4 @@ func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model
 			retries++
 		}
 	}
-}
-
-func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseURL string) (*model.Block, error) {
-	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "getBlock",
-		tracing.WithParentStat(u.stats),
-	)
-	defer deferFn()
-
-	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseURL, hash.String()))
-	if err != nil {
-		return nil, errors.NewProcessingError("[getBlock][%s] failed to get block from peer", hash.String(), err)
-	}
-
-	block, err := model.NewBlockFromBytes(blockBytes, u.settings)
-	if err != nil {
-		return nil, errors.NewProcessingError("[getBlock][%s] failed to create block from bytes", hash.String(), err)
-	}
-
-	if block == nil {
-		return nil, errors.NewProcessingError("[getBlock][%s] block could not be created from bytes: %v", hash.String(), blockBytes)
-	}
-
-	return block, nil
-}
-
-func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, baseURL string) ([]*model.Block, error) {
-	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "getBlocks",
-		tracing.WithParentStat(u.stats),
-	)
-	defer deferFn()
-
-	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/blocks/%s?n=%d", baseURL, hash.String(), n))
-	if err != nil {
-		return nil, errors.NewProcessingError("[getBlocks][%s] failed to get blocks from peer", hash.String(), err)
-	}
-
-	blockReader := bytes.NewReader(blockBytes)
-
-	blocks := make([]*model.Block, 0)
-
-	for {
-		block, err := model.NewBlockFromReader(blockReader, u.settings)
-		if err != nil {
-			if strings.Contains(err.Error(), "EOF") {
-				// if strings.Contains(err.Error(), "EOF") || errors.Is(err, io.ErrUnexpectedEOF) { // doesn't catch the EOF!!!! //TODO
-				break
-			}
-
-			return nil, errors.NewProcessingError("[getBlocks][%s] failed to create block from bytes", hash.String(), err)
-		}
-
-		blocks = append(blocks, block)
-	}
-
-	return blocks, nil
-}
-
-func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, _ uint32, baseURL string) ([]*model.BlockHeader, error) {
-	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "getBlockHeaders",
-		tracing.WithParentStat(u.stats),
-	)
-	defer deferFn()
-
-	bestBlockHeader, bestBlockMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
-	if err != nil {
-		return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to get best block", hash.String(), err)
-	}
-
-	locatorHashes, err := u.blockchainClient.GetBlockLocator(ctx, bestBlockHeader.Hash(), bestBlockMeta.Height)
-	if err != nil {
-		return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to get block locator", hash.String(), err)
-	}
-
-	blockLocatorStr := ""
-	for _, locatorHash := range locatorHashes {
-		blockLocatorStr += locatorHash.String()
-	}
-
-	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers_to_common_ancestor/%s?block_locator_hashes=%s&n=1000", baseURL, hash.String(), blockLocatorStr))
-	if err != nil {
-		return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to get block headers from peer", hash.String(), err)
-	}
-
-	blockHeaders := make([]*model.BlockHeader, 0, len(blockHeadersBytes)/model.BlockHeaderSize)
-
-	var blockHeader *model.BlockHeader
-	for i := 0; i < len(blockHeadersBytes); i += model.BlockHeaderSize {
-		blockHeader, err = model.NewBlockHeaderFromBytes(blockHeadersBytes[i : i+model.BlockHeaderSize])
-		if err != nil {
-			return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to create block header from bytes", hash.String(), err)
-		}
-
-		blockHeaders = append(blockHeaders, blockHeader)
-	}
-
-	return blockHeaders, nil
-}
-
-func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL string) error {
-	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "catchup",
-		tracing.WithParentStat(u.stats),
-		tracing.WithHistogram(prometheusBlockValidationCatchup),
-		tracing.WithLogMessage(u.logger, "[catchup][%s] catching up on server %s", blockUpTo.Hash().String(), baseURL),
-	)
-	defer deferFn()
-
-	validateBlocksChan := make(chan *model.Block, 10) // max blocks in-flight
-
-	size := atomic.Uint32{}
-
-	// process the catchup block headers in reverse order and put them on the channel
-	// this will allow the blocks to be validated while getting them from the other node
-	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, u.settings.BlockValidation.CatchupConcurrency)
-	g.Go(func() error {
-		defer func() {
-			// close the channel to signal that all blocks have been processed
-			close(validateBlocksChan)
-		}()
-
-		for { // catchGetBlocks is limited in the number of headers returned hence the loop
-			catchupBlockHeaders, err := u.catchupGetBlocks(ctx, blockUpTo, baseURL)
-			if err != nil {
-				return err
-			}
-
-			if len(catchupBlockHeaders) == 0 {
-				return nil
-			}
-
-			lastCommonAncestorBlockHash := catchupBlockHeaders[len(catchupBlockHeaders)-1].HashPrevBlock
-			if secretMining, err := u.checkSecretMining(ctx, lastCommonAncestorBlockHash); err != nil {
-				return err
-			} else if secretMining {
-				u.logger.Infof("[catchup][%s] ignoring catchup, last common ancestor block %s is too far behind current head", blockUpTo.Hash().String(), lastCommonAncestorBlockHash.String())
-				return nil
-			}
-
-			u.logger.Infof("[catchup][%s] catching up (%d blocks) from [%s] to [%s]", blockUpTo.Hash().String(), len(catchupBlockHeaders), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
-
-			slices.Reverse(catchupBlockHeaders)
-			batches := getBlockBatchGets(catchupBlockHeaders, 100)
-
-			u.logger.Debugf("[catchup][%s] getting %d batches", blockUpTo.Hash().String(), len(batches))
-
-			blockCount := 0
-			i := 0
-
-			var blocks []*model.Block
-
-			for _, batch := range batches {
-				batch := batch
-				i++
-				u.logger.Debugf("[catchup][%s] [batch %d] getting %d blocks from %s", blockUpTo.Hash().String(), i, batch.size, batch.hash.String())
-
-				size.Add(batch.size)
-
-				blocks, err = u.getBlocks(gCtx, &batch.hash, batch.size, baseURL)
-				if err != nil {
-					u.logger.Errorf("[catchup][%s] failed to get %d blocks [%s]:%v", blockUpTo.Hash().String(), batch.size, batch.hash.String(), err)
-					return errors.NewProcessingError("[catchup][%s] failed to get %d blocks [%s]", blockUpTo.Hash().String(), batch.size, batch.hash.String(), err)
-				}
-
-				u.logger.Debugf("[catchup][%s] got %d blocks from %s", blockUpTo.Hash().String(), len(blocks), batch.hash.String())
-
-				// reverse the blocks, so they are in the correct order, we get them newest to oldest from the other node
-				slices.Reverse(blocks)
-
-				for _, block := range blocks {
-					blockCount++
-					validateBlocksChan <- block
-				}
-			}
-
-			u.logger.Infof("[catchup][%s] added %d blocks for validating", blockUpTo.Hash().String(), blockCount)
-
-			if catchupBlockHeaders[len(catchupBlockHeaders)-1].Hash().String() == blockUpTo.Hash().String() {
-				// no more catching up to do
-				return nil
-			}
-		}
-	})
-
-	i := 0
-	// validate the blocks while getting them from the other node
-	// this will block until all blocks are validated
-	for block := range validateBlocksChan {
-		i++
-		u.logger.Infof("[catchup][%s] validating block %d/%d", block.Hash().String(), i, size.Load())
-
-		// Wait for block assembly to be ready before processing the block
-		if err := blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height); err != nil {
-			// block-assembly is still behind, so we cannot process this block
-			return err
-		}
-
-		// error is returned from validate block:
-
-		if err := u.blockValidation.ValidateBlock(ctx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
-			return errors.NewServiceError("[catchup][%s] failed to validate block [%s]", blockUpTo.Hash().String(), block.String(), err)
-		}
-
-		u.logger.Debugf("[catchup][%s] validated block %d/%d", block.Hash().String(), i, size.Load())
-	}
-
-	u.logger.Infof("[catchup][%s] done validating catchup blocks", blockUpTo.Hash().String())
-
-	return nil
-}
-
-func (u *Server) checkSecretMining(ctx context.Context, lastCommonAncestorBlockHash *chainhash.Hash) (bool, error) {
-	if u.utxoStore.GetBlockHeight() <= u.settings.BlockValidation.SecretMiningThreshold {
-		return false, nil
-	}
-
-	// check whether we are catching up to very old blocks, while we are ahead
-	// this could mean we are catching up on a secretly mined chain, which we should ignore
-	lastCommonAncestorBlock, err := u.blockchainClient.GetBlock(ctx, lastCommonAncestorBlockHash)
-	if err != nil {
-		return false, errors.NewProcessingError("[checkSecretMining] failed to get last common ancestor block from db %s", lastCommonAncestorBlockHash.String(), err)
-	}
-
-	if lastCommonAncestorBlock == nil {
-		return false, errors.NewProcessingError("[checkSecretMining] failed to get last common ancestor block %s", lastCommonAncestorBlockHash.String())
-	}
-
-	if u.utxoStore.GetBlockHeight() < u.settings.BlockValidation.SecretMiningThreshold {
-		// if we are not far enough in the chain, we can ignore this check
-		return false, nil
-	}
-
-	// the last common ancestor block should not be more than X blocks behind the current block height in the utxo store
-	if lastCommonAncestorBlock.Height < u.utxoStore.GetBlockHeight()-u.settings.BlockValidation.SecretMiningThreshold {
-		return true, nil
-	}
-
-	return false, nil
-}
-
-func (u *Server) catchupGetBlocks(ctx context.Context, blockUpTo *model.Block, baseURL string) ([]*model.BlockHeader, error) {
-	// first check whether this block already exists, which would mean we caught up from another peer
-	exists, err := u.blockValidation.GetBlockExists(ctx, blockUpTo.Hash())
-	if err != nil {
-		return nil, errors.NewServiceError("[catchup][%s] failed to check if block exists", blockUpTo.Hash().String(), err)
-	}
-
-	if exists {
-		return nil, nil
-	}
-
-	catchupBlockHeaders := []*model.BlockHeader{}
-
-	blockHeaderHashUpTo := blockUpTo.Hash()
-	blockHeaderHeightUpTo := blockUpTo.Height
-
-	var blockHeaders []*model.BlockHeader
-LOOP:
-	for {
-		u.logger.Debugf("[catchup][%s] getting block headers for catchup up to [%s]", blockUpTo.Hash().String(), blockHeaderHashUpTo.String())
-		blockHeaders, err = u.getBlockHeaders(ctx, blockHeaderHashUpTo, blockHeaderHeightUpTo, baseURL)
-		if err != nil {
-			return nil, err
-		}
-
-		blockHeadersLength := len(blockHeaders)
-		if blockHeadersLength == 0 {
-			return nil, errors.NewServiceError("[catchup][%s] failed to get block headers up to [%s]", blockUpTo.Hash().String(), blockHeaderHashUpTo.String())
-		}
-
-		for i, blockHeader := range blockHeaders {
-			// Always add the block to catchup list first, before checking if we should stop
-			u.logger.Debugf("[catchup][%s] [%d/%d] adding block [%s] to catchup list", blockUpTo.Hash().String(), i, blockHeadersLength, blockHeader.String())
-			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
-
-			// Now check if the parent exists - if it does, we can stop searching for more blocks
-			if u.parentExistsAndIsValidated(ctx, blockHeader, blockUpTo) {
-				u.logger.Debugf("[catchup][%s] parent exists for block %s, stopping search", blockUpTo.Hash().String(), blockHeader.Hash().String())
-				break LOOP
-			}
-
-			blockHeaderHashUpTo = blockHeader.HashPrevBlock
-		}
-	}
-
-	return catchupBlockHeaders, nil
-}
-
-func (u *Server) parentExistsAndIsValidated(ctx context.Context, blockHeader *model.BlockHeader, blockUpTo *model.Block) bool {
-	blockBeingFinalized := u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock)
-
-	if blockBeingFinalized {
-		u.logger.Infof("[catchup][%s] parent block is being validated (hash: %s), waiting for it to finish: %v", blockUpTo.Hash().String(), blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock))
-
-		retries := 0
-
-		for {
-			blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock)
-
-			if !blockBeingFinalized {
-				break
-			}
-
-			if (retries % 10) == 0 {
-				u.logger.Infof("[catchup][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: validated %v", blockUpTo.Hash().String(), retries, blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock))
-			}
-
-			time.Sleep(1 * time.Second)
-
-			retries++
-		}
-
-		u.logger.Infof("[catchup][%s] parent block is done being validated", blockUpTo.Hash().String())
-	}
-
-	exists, err := u.blockValidation.GetBlockExists(ctx, blockHeader.HashPrevBlock)
-	if err != nil {
-		u.logger.Errorf("[catchup][%s] failed to check if parent block exists", blockUpTo.Hash().String(), err)
-	}
-
-	return exists
-}
-
-type blockBatchGet struct {
-	hash chainhash.Hash
-	size uint32
-}
-
-func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) []blockBatchGet {
-	batches := make([]blockBatchGet, 0)
-
-	var useBlockHeaders []*model.BlockHeader
-
-	for i := 0; i < len(catchupBlockHeaders); i += batchSize {
-		start := i
-
-		end := i + batchSize
-		if end > len(catchupBlockHeaders)-1 {
-			useBlockHeaders = catchupBlockHeaders[start:]
-		} else {
-			useBlockHeaders = catchupBlockHeaders[start:end]
-		}
-
-		lastHash := useBlockHeaders[len(useBlockHeaders)-1].Hash()
-
-		useBlockHeadersSizeUint32, err := safeconversion.IntToUint32(len(useBlockHeaders))
-		if err != nil {
-			return nil
-		}
-
-		batches = append(batches, blockBatchGet{
-			hash: *lastHash,
-			size: useBlockHeadersSizeUint32,
-		})
-	}
-
-	return batches
 }

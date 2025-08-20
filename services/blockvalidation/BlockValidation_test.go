@@ -342,10 +342,6 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 		}
 
 		blockHeader.Nonce++
-
-		if blockHeader.Nonce%1000000 == 0 {
-			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
-		}
 	}
 
 	block, err := model.NewBlock(
@@ -472,10 +468,6 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 		}
 
 		blockHeader.Nonce++
-
-		if blockHeader.Nonce%1000000 == 0 {
-			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
-		}
 	}
 
 	tSettings := test.CreateBaseTestSettings()
@@ -570,10 +562,6 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 		}
 
 		blockHeader.Nonce++
-
-		if blockHeader.Nonce%1000000 == 0 {
-			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
-		}
 	}
 
 	tSettings := test.CreateBaseTestSettings()
@@ -659,10 +647,6 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 		}
 
 		blockHeader.Nonce++
-
-		if blockHeader.Nonce%1000000 == 0 {
-			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
-		}
 	}
 
 	tSettings := test.CreateBaseTestSettings()
@@ -777,10 +761,6 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 		}
 
 		blockHeader.Nonce++
-
-		if blockHeader.Nonce%1000000 == 0 {
-			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
-		}
 	}
 
 	tSettings := test.CreateBaseTestSettings()
@@ -896,10 +876,6 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 			}
 
 			blockHeader.Nonce++
-
-			if blockHeader.Nonce%1000000 == 0 {
-				fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
-			}
 		}
 
 		block, err := model.NewBlock(
@@ -1030,9 +1006,6 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 		}
 
 		blockHeader.Nonce++
-		if blockHeader.Nonce%1000000 == 0 {
-			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
-		}
 	}
 
 	// Create the block with valid merkle root
@@ -1080,9 +1053,6 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 		}
 
 		invalidBlockHeader.Nonce++
-		if invalidBlockHeader.Nonce%1000000 == 0 {
-			fmt.Printf("mining invalid block Nonce: %d, hash: %s\n", invalidBlockHeader.Nonce, invalidBlockHeader.Hash().String())
-		}
 	}
 
 	invalidBlock, err := model.NewBlock(
@@ -1662,8 +1632,6 @@ func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore ut
 }
 
 func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
-	t.SkipNow()
-
 	initPrometheusMetrics()
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup()
@@ -1728,10 +1696,17 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	// Subtree with both double-spend txs
-	subtree, _ := subtreepkg.NewTreeByLeafCount(4)
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+
 	_ = subtree.AddCoinbaseNode()
 	_ = subtree.AddNode(*tx1.TxIDChainHash(), uint64(tx1.Size()), 0) //nolint:gosec
 	_ = subtree.AddNode(*tx2.TxIDChainHash(), uint64(tx2.Size()), 1) //nolint:gosec
+
+	require.NoError(t, subtreeData.AddTx(tx1, 1))
+	require.NoError(t, subtreeData.AddTx(tx2, 2))
 
 	nodeBytes, err := subtree.SerializeNodes()
 	require.NoError(t, err)
@@ -1743,6 +1718,11 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 
 	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes)
 	require.NoError(t, err)
+
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+
+	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes))
 
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 

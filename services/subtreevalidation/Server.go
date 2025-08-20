@@ -192,7 +192,8 @@ func New(
 	var err error
 
 	u.orphanage.WithEvictionFunction(func(hash chainhash.Hash, tx *bt.Tx) bool {
-		u.logger.Warnf("[SubtreeValidation] Orphanage eviction for tx %s", hash.String())
+		u.logger.Debugf("[SubtreeValidation] Orphanage eviction for tx %s", hash.String())
+
 		return false
 	})
 
@@ -804,7 +805,7 @@ func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, b
 						u.orphanage.Delete(*tx.TxIDChainHash())
 						processedOrphans.Add(1)
 					} else {
-						u.logger.Warnf("[CheckSubtreeFromBlock] Failed to bless orphaned transaction %s: %v", tx.TxIDChainHash().String(), txErr)
+						u.logger.Debugf("[CheckSubtreeFromBlock] Failed to bless orphaned transaction %s: %v", tx.TxIDChainHash().String(), txErr)
 					}
 
 					return nil

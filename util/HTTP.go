@@ -25,12 +25,27 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 
 	defer bodyReaderCloser.Close()
 
-	blockBytes, err := io.ReadAll(bodyReaderCloser)
-	if err != nil {
-		return nil, errors.NewServiceError("http request [%s] failed to read body", url, err)
-	}
+	// Read body with context deadline support
+	// Create a channel to handle the read operation
+	done := make(chan struct{})
+	var blockBytes []byte
+	var readErr error
 
-	return blockBytes, nil
+	go func() {
+		blockBytes, readErr = io.ReadAll(bodyReaderCloser)
+		close(done)
+	}()
+
+	// Wait for either read completion or context timeout
+	select {
+	case <-ctx.Done():
+		return nil, errors.NewNetworkTimeoutError("http request [%s] timed out while reading body", url)
+	case <-done:
+		if readErr != nil {
+			return nil, errors.NewServiceError("http request [%s] failed to read body", url, readErr)
+		}
+		return blockBytes, nil
+	}
 }
 
 func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
@@ -52,7 +67,7 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(httpRequestTimeout)*time.Second)
 	}
 
-	httpClient := &http.Client{}
+	httpClient := http.DefaultClient
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

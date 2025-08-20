@@ -26,6 +26,7 @@ func TestCurrentSyncBehavior(t *testing.T) {
 		// Setup
 		ctx := context.Background()
 		tSettings := createBaseTestSettings()
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		blockchainClient := new(blockchain.Mock)
 		fsmState := blockchain_api.FSMStateType_RUNNING
@@ -40,7 +41,7 @@ func TestCurrentSyncBehavior(t *testing.T) {
 		mockP2PNode.On("SetPeerStartingHeight", mock.Anything, mock.Anything).Return()
 
 		// Create sync manager with initial setup
-		syncManager := NewSyncManager(ulogger.New("test-sync"), &chaincfg.MainNetParams)
+		syncManager := NewSyncManager(ulogger.New("test-sync"), tSettings)
 
 		server := &Server{
 			settings:                  tSettings,
@@ -97,6 +98,7 @@ func TestCurrentSyncBehavior(t *testing.T) {
 		// Setup
 		ctx := context.Background()
 		tSettings := createBaseTestSettings()
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		blockchainClient := new(blockchain.Mock)
 		fsmState := blockchain_api.FSMStateType_RUNNING
@@ -117,7 +119,7 @@ func TestCurrentSyncBehavior(t *testing.T) {
 			blocksKafkaProducerClient: mockBlocksProducer,
 			P2PNode:                   mockP2PNode,
 			gCtx:                      ctx,
-			syncManager:               NewSyncManager(ulogger.New("test-sync"), &chaincfg.MainNetParams),
+			syncManager:               NewSyncManager(ulogger.New("test-sync"), tSettings),
 		}
 
 		localHeight := uint32(100)
@@ -152,6 +154,7 @@ func TestCurrentSyncBehavior(t *testing.T) {
 		// Setup
 		ctx := context.Background()
 		tSettings := createBaseTestSettings()
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		blockchainClient := new(blockchain.Mock)
 		fsmState := blockchain_api.FSMStateType_CATCHINGBLOCKS
@@ -172,7 +175,7 @@ func TestCurrentSyncBehavior(t *testing.T) {
 			blocksKafkaProducerClient: mockBlocksProducer,
 			P2PNode:                   mockP2PNode,
 			gCtx:                      ctx,
-			syncManager:               NewSyncManager(ulogger.New("test-sync"), &chaincfg.MainNetParams),
+			syncManager:               NewSyncManager(ulogger.New("test-sync"), tSettings),
 		}
 
 		localHeight := uint32(100)
@@ -204,6 +207,7 @@ func TestPeerSelectionLogic(t *testing.T) {
 
 		ctx := context.Background()
 		tSettings := createBaseTestSettings()
+		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 		blockchainClient := new(blockchain.Mock)
 		fsmState := blockchain_api.FSMStateType_RUNNING
@@ -224,7 +228,7 @@ func TestPeerSelectionLogic(t *testing.T) {
 			blocksKafkaProducerClient: mockBlocksProducer,
 			P2PNode:                   mockP2PNode,
 			gCtx:                      ctx,
-			syncManager:               NewSyncManager(ulogger.New("test-sync"), &chaincfg.MainNetParams),
+			syncManager:               NewSyncManager(ulogger.New("test-sync"), tSettings),
 		}
 
 		localHeight := uint32(100)

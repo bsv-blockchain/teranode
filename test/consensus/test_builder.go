@@ -51,9 +51,9 @@ func NewTestBuilder(script *bscript.Script, comment string, flags uint32, p2sh b
 		scriptBytes := scriptPubKey.Bytes()
 		scriptHash := bsvutil.Hash160(scriptBytes)
 		p2shScript := &bscript.Script{}
-		p2shScript.AppendOpcodes(bscript.OpHASH160)
-		p2shScript.AppendPushData(scriptHash)
-		p2shScript.AppendOpcodes(bscript.OpEQUAL)
+		_ = p2shScript.AppendOpcodes(bscript.OpHASH160)
+		_ = p2shScript.AppendPushData(scriptHash)
+		_ = p2shScript.AppendOpcodes(bscript.OpEQUAL)
 		scriptPubKey = p2shScript
 	}
 
@@ -121,7 +121,7 @@ func (tb *TestBuilder) SetScriptError(err ScriptError) *TestBuilder {
 // DoPush executes any pending push operation
 func (tb *TestBuilder) DoPush() {
 	if tb.havePush {
-		tb.spendTx.Inputs[0].UnlockingScript.AppendPushData(tb.push)
+		_ = tb.spendTx.Inputs[0].UnlockingScript.AppendPushData(tb.push)
 		tb.havePush = false
 	}
 }
@@ -132,18 +132,18 @@ func (tb *TestBuilder) Num(num int64) *TestBuilder {
 
 	// Convert number to script number format
 	if num == 0 {
-		tb.spendTx.Inputs[0].UnlockingScript.AppendOpcodes(bscript.Op0)
+		_ = tb.spendTx.Inputs[0].UnlockingScript.AppendOpcodes(bscript.Op0)
 	} else if num == -1 || (num >= 1 && num <= 16) {
 		// Use OP_1NEGATE or OP_1 through OP_16
 		if num == -1 {
-			tb.spendTx.Inputs[0].UnlockingScript.AppendOpcodes(bscript.Op1NEGATE)
+			_ = tb.spendTx.Inputs[0].UnlockingScript.AppendOpcodes(bscript.Op1NEGATE)
 		} else {
-			tb.spendTx.Inputs[0].UnlockingScript.AppendOpcodes(uint8(bscript.Op1 - 1 + byte(num)))
+			_ = tb.spendTx.Inputs[0].UnlockingScript.AppendOpcodes(uint8(bscript.Op1 - 1 + byte(num)))
 		}
 	} else {
 		// Push as data
 		numBytes := scriptNumBytes(num)
-		tb.spendTx.Inputs[0].UnlockingScript.AppendPushData(numBytes)
+		_ = tb.spendTx.Inputs[0].UnlockingScript.AppendPushData(numBytes)
 	}
 
 	return tb
@@ -301,7 +301,7 @@ func (tb *TestBuilder) PushSeparatorSigs(keys []*bec.PrivateKey, sigHashType sig
 		if opcode == bscript.OpCODESEPARATOR {
 			// Start new script segment
 			separatedScripts = append([]*bscript.Script{bscript.NewFromBytes(currentScript.Bytes())}, separatedScripts...)
-			currentScript.AppendOpcodes(bscript.OpCODESEPARATOR)
+			_ = currentScript.AppendOpcodes(bscript.OpCODESEPARATOR)
 		} else {
 			// Add to current script
 			if opcode <= bscript.OpPUSHDATA4 {
@@ -324,11 +324,11 @@ func (tb *TestBuilder) PushSeparatorSigs(keys []*bec.PrivateKey, sigHashType sig
 				}
 
 				if pos+headerLen+dataLen <= len(scriptBytes) {
-					currentScript.AppendPushData(scriptBytes[pos+headerLen : pos+headerLen+dataLen])
+					_ = currentScript.AppendPushData(scriptBytes[pos+headerLen : pos+headerLen+dataLen])
 					pos += headerLen + dataLen - 1
 				}
 			} else {
-				currentScript.AppendOpcodes(opcode)
+				_ = currentScript.AppendOpcodes(opcode)
 			}
 		}
 		pos++
@@ -568,7 +568,7 @@ func (tb *TestBuilder) DoTest() error {
 
 	// If we have a redeem script (P2SH), push it last
 	if tb.redeemScript != nil {
-		tb.spendTx.Inputs[0].UnlockingScript.AppendPushData(tb.redeemScript.Bytes())
+		_ = tb.spendTx.Inputs[0].UnlockingScript.AppendPushData(tb.redeemScript.Bytes())
 	}
 
 	// Set up extended format

@@ -1297,6 +1297,7 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 
 	return &blockchain_api.GetBlockHeaderResponse{
 		BlockHeader: blockHeader.Bytes(),
+		Id:          meta.ID,
 		Height:      meta.Height,
 		TxCount:     meta.TxCount,
 		SizeInBytes: meta.SizeInBytes,
@@ -2464,8 +2465,8 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 
 func getBlockHeadersToCommonAncestor(ctx context.Context, store blockchain_store.Store, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	const (
-		numberOfHeaders = 100
-		searchLimit     = 10000
+		numberOfHeaders = 1_000
+		searchLimit     = 10_000
 	)
 
 	var (
@@ -2562,7 +2563,7 @@ func getBlockHeadersFromCommonAncestor(ctx context.Context, store blockchain_sto
 	// first we need to get the common ancestor of the target hash and the block locator hashes
 	commonBlockHeader, _, err := store.GetLatestBlockHeaderFromBlockLocator(ctx, chainTipHash, blockLocatorHashes)
 	if err != nil {
-		return nil, nil, errors.NewStorageError("failed to get latest block header from block locator", err)
+		return nil, nil, errors.NewProcessingError("failed to get latest block header from block locator", err)
 	}
 
 	// now get the headers from the common ancestor to the target hash

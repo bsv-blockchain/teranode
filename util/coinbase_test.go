@@ -27,6 +27,12 @@ func TestExtractHeightAndMiner(t *testing.T) {
 			expectedMiner:  "/m5-cc1/",
 		},
 		{
+			name:           "2 byte teratestnet-v2 miner",
+			tx:             "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1201240f222f47616c74732d47756c63682f22ffffffff0100f2052a010000001976a914042848a901a9f0d79eb42c52813a7646c4a81bfd88ac00000000",
+			expectedHeight: 36,
+			expectedMiner:  "/Galts-Gulch/",
+		},
+		{
 			name:           "block 514587 with binary miner data",
 			tx:             "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff14031bda07074125205a6ad8648d3b00009de70700ffffffff017777954a000000001976a9144770c259bc03c8dc36b853ed19fbb3514190be2e88ac00000000",
 			expectedHeight: 514587,
@@ -49,14 +55,6 @@ func TestExtractHeightAndMiner(t *testing.T) {
 			tx:             "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17032a120d2f71646c6e6b2ffa3e9e2068b1e1743dc80d00ffffffff014864a012000000001976a91417db35d440a673a218e70a5b9d07f895facf50d288ac00000000",
 			expectedHeight: 856618,
 			expectedMiner:  "/qdlnk/",
-		},
-		{
-			name:           "old-style 4-byte push (unsupported)",
-			tx:             "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff3504eae0041a0127522cfabe6d6d620af8ed2d63d1c7ad3a61afe44ef47d3acf88f45d4936621a238ba23355f8ea0800000000000000ffffffff01d06e44950000000043410427d214c2e4907d96f67f545fe4f84b8d71856e52bb3d7738890003985a8e0271bd12bf98c6050878c1e3e2684faaad9b5efb2a1e912177e4e1c200dde79806eeac00000000",
-			expectedHeight: 0,
-			expectedMiner:  "",
-			heightError:    true,
-			minerError:     false, // Error is suppressed for ExtractCoinbaseMiner
 		},
 		{
 			name:           "testnet pre-BIP34 transaction",
@@ -132,9 +130,10 @@ func TestExtractCoinbaseHeightAndText_Scripts(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:        "unsupported 4-byte length",
-			script:      "0401020304",
-			expectError: true,
+			name:           "unsupported 4-byte length",
+			script:         "0401020304",
+			expectedHeight: 0x4030201,
+			expectError:    false,
 		},
 	}
 

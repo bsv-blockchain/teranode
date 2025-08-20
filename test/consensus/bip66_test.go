@@ -172,8 +172,8 @@ func TestBIP66(t *testing.T) {
 
 			// Create a simple script that checks a signature
 			script := bscript.NewFromBytes([]byte{})
-			script.AppendPushData(keyData.Pubkey0)
-			script.AppendOpcodes(bscript.OpCHECKSIG)
+			_ = script.AppendPushData(keyData.Pubkey0)
+			_ = script.AppendOpcodes(bscript.OpCHECKSIG)
 
 			// Build the test
 			tb := NewTestBuilder(script, test.name, test.flags, false, 100000000) // Set amount
@@ -198,8 +198,8 @@ func TestBIP66Activation(t *testing.T) {
 
 	// Create a script with non-DER signature
 	script := bscript.NewFromBytes([]byte{})
-	script.AppendPushData(keyData.Pubkey0)
-	script.AppendOpcodes(bscript.OpCHECKSIG)
+	_ = script.AppendPushData(keyData.Pubkey0)
+	_ = script.AppendOpcodes(bscript.OpCHECKSIG)
 
 	// Create TestBuilder
 	tb := NewTestBuilder(script, "BIP66 activation test", SCRIPT_VERIFY_DERSIG, false, 0)
@@ -284,8 +284,8 @@ func TestBIP66EdgeCases(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			// Create a simple script that checks a signature
 			script := bscript.NewFromBytes([]byte{})
-			script.AppendPushData(keyData.Pubkey0)
-			script.AppendOpcodes(bscript.OpCHECKSIG)
+			_ = script.AppendPushData(keyData.Pubkey0)
+			_ = script.AppendOpcodes(bscript.OpCHECKSIG)
 
 			// Build the test
 			tb := NewTestBuilder(script, test.name, test.flags, false, 0)
