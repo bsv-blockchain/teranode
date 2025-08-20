@@ -1234,11 +1234,17 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	// get all X previous block headers, 100 is the default
 	previousBlockHeaderCount := u.settings.BlockValidation.PreviousBlockHeaderCount
 
-	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, blockData.block.Header.HashPrevBlock, previousBlockHeaderCount)
+	blockHeaders, blockHeadersMeta, err := u.blockchainClient.GetBlockHeaders(ctx, blockData.block.Header.HashPrevBlock, previousBlockHeaderCount)
 	if err != nil {
 		u.logger.Errorf("[reValidateBlock][%s] failed to get block headers: %s", blockData.block.String(), err)
 
 		return errors.NewServiceError("[reValidateBlock][%s] failed to get block headers", blockData.block.String(), err)
+	}
+
+	// Extract block header IDs from the fresh block headers metadata
+	blockHeaderIDs := make([]uint32, len(blockHeadersMeta))
+	for i, blockHeaderMeta := range blockHeadersMeta {
+		blockHeaderIDs[i] = blockHeaderMeta.ID
 	}
 
 	// only get the bloom filters for the current chain
@@ -1258,7 +1264,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
+	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		if errors.Is(err, errors.ErrBlockInvalid) {
