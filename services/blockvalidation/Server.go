@@ -880,13 +880,6 @@ func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model
 				delay = maxDelay
 			}
 
-			time.Sleep(delay)
-
-			delay *= 2
-			if delay > maxDelay {
-				delay = maxDelay
-			}
-
 			retries++
 		}
 	}
