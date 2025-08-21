@@ -122,15 +122,6 @@ The startup process of the node involves the `main.go` file calling the `p2p.New
 
         - `readPrivateKey` calls `blockchainClient.GetState(ctx, "p2p.privateKey")` to retrieve the serialized key data
         - If found, it deserializes the key using `crypto.UnmarshalPrivateKey()`
-
-    - If no key is specified in the configuration and no key exists in the blockchain store, it generates a new one using the `generatePrivateKey()` function:
-
-        - `generatePrivateKey` creates a new Ed25519 key pair using `crypto.GenerateEd25519Key()`
-        - It serializes the private key with `crypto.MarshalPrivateKey()`
-        - It stores the serialized key in the blockchain store using `blockchainClient.SetState(ctx, "p2p.privateKey", privBytes)`
-
-        - `readPrivateKey` calls `blockchainClient.GetState(ctx, "p2p.privateKey")` to retrieve the serialized key data
-        - If found, it deserializes the key using `crypto.UnmarshalPrivateKey()`
     - If no key is specified in the configuration and no key exists in the blockchain store, it automatically generates and stores a new one using the `generateAndStorePrivateKey()` function:
 
       - `generateAndStorePrivateKey` creates a new Ed25519 key pair using `crypto.GenerateEd25519Key()`
@@ -618,6 +609,7 @@ The P2P service serves as the communication backbone of the Teranode network, en
 ## Configuration Validation Rules
 
 The P2P service enforces several validation rules during startup:
+
 
 ### Required Configuration
 
