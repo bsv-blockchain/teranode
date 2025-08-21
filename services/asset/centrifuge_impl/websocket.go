@@ -483,7 +483,7 @@ func sameHostOriginCheck() func(r *http.Request) bool {
 //
 // Returns:
 //   - error: Error if origin check fails
-func checkSameHost(r *http.Request) error {
+func checkSameHost(_ *http.Request) error {
 	return nil
 	// origin := r.Header.Get("Origin")
 	//

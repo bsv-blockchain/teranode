@@ -14,7 +14,8 @@ import (
 const (
 	// minInFlightBlocks is the minimum number of blocks that should be
 	// in the request queue for headers-first mode before requesting more
-	minInFlightBlocks = 10
+
+	// minInFlightBlocks = 10
 
 	// maxNetworkViolations is the max number of network violations a
 	// sync peer can have before a new sync peer is found
@@ -32,6 +33,8 @@ const (
 	// minSyncPeerNetworkSpeed is the minimum network speed in bytes/second
 	// Default to 10KB/s
 	defaultMinSyncPeerNetworkSpeed = 10 * 1024
+
+	emptyPeerID = peer.ID("")
 )
 
 // BlockAnnouncement represents a buffered block announcement
@@ -60,6 +63,7 @@ type SyncManager struct {
 	shutdown                int32
 	startTime               time.Time
 	initialSelectionDone    bool
+	forceSyncPeer           peer.ID // Force sync from specific peer, overrides automatic selection
 
 	// Block announcement buffering during initial sync period
 	announcementBuffer []*BlockAnnouncement
@@ -80,6 +84,50 @@ func NewSyncManager(logger ulogger.Logger, settings *settings.Settings) *SyncMan
 		minSyncPeerNetworkSpeed: defaultMinSyncPeerNetworkSpeed,
 		initialSelectionDone:    settings.P2P.MinPeersForSync == 0, // Only do initial selection if we expect peers
 	}
+}
+
+// SetForceSyncPeer sets a forced sync peer that overrides automatic selection
+// If peerID is empty, automatic selection is restored
+func (sm *SyncManager) SetForceSyncPeer(peerID string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if peerID == "" {
+		sm.logger.Infof("[SyncManager] Clearing forced sync peer, returning to automatic selection")
+		sm.forceSyncPeer = emptyPeerID
+		// If we had a sync peer that was forced, clear it so automatic selection can take over
+		if sm.syncPeer != emptyPeerID {
+			sm.syncPeer = emptyPeerID
+			sm.syncPeerState = nil
+			sm.selectSyncPeerLocked()
+		}
+		return nil
+	}
+
+	// Validate the peer ID format
+	pid, err := peer.Decode(peerID)
+	if err != nil {
+		return err // peer.Decode returns descriptive error
+	}
+
+	sm.forceSyncPeer = pid
+	sm.logger.Infof("[SyncManager] Setting forced sync peer to %s", pid)
+
+	// If this peer exists and is connected, set it as sync peer immediately
+	if _, exists := sm.peerStates.GetPeerState(pid); exists {
+		sm.syncPeer = pid
+		sm.syncPeerState = &syncPeerState{
+			lastBlockTime: time.Now(),
+			recvBytes:     0,
+			violations:    0,
+			ticks:         0,
+		}
+		sm.logger.Infof("[SyncManager] Forced sync peer %s is connected and set as active sync peer", pid)
+	} else {
+		sm.logger.Warnf("[SyncManager] Forced sync peer %s is not currently connected", pid)
+	}
+
+	return nil
 }
 
 // SetPeerHeightCallback sets the callback for getting peer height
@@ -118,14 +166,26 @@ func (sm *SyncManager) RemovePeer(peerID peer.ID) {
 	// If this was our sync peer, we need to find a new one
 	if sm.syncPeer == peerID {
 		sm.logger.Infof("[SyncManager] Sync peer %s removed, finding new sync peer", peerID)
-		sm.syncPeer = ""
+		sm.syncPeer = emptyPeerID
 		sm.syncPeerState = nil
-		sm.selectSyncPeerLocked()
+
+		// Only select a new peer if we're not using a forced peer
+		switch sm.forceSyncPeer {
+		case emptyPeerID:
+			sm.selectSyncPeerLocked()
+		case peerID:
+			sm.logger.Infof("[SyncManager] Forced sync peer %s disconnected, will wait for reconnection", peerID)
+		default:
+			// This was not the forced peer, so we can ignore its removal
+			sm.logger.Debugf("[SyncManager] Non-forced peer %s removed, continuing to wait for forced peer %s", peerID, sm.forceSyncPeer)
+		}
 	}
 }
 
 // isSyncCandidate determines if a peer is eligible for syncing
 func (sm *SyncManager) isSyncCandidate(peerID peer.ID) bool {
+	_ = peerID
+
 	// In regtest, accept all peers as sync candidates
 	// This is for local testing where nodes connect via localhost
 	if sm.settings.ChainCfgParams == &chaincfg.RegressionNetParams {
@@ -141,15 +201,28 @@ func (sm *SyncManager) isSyncCandidate(peerID peer.ID) bool {
 
 // selectSyncPeer selects the best peer to sync from
 // This implements the bitcoin-sv peer selection logic:
-// 1. Group peers by height relative to ours
-// 2. Prefer peers ahead of us (bestPeers)
-// 3. Fallback to peers at same height (okPeers)
-// 4. Ignore peers behind us
-// 5. Random selection within the chosen group
+// 1. If a forced sync peer is configured and connected, use it
+// 2. Otherwise, group peers by height relative to ours
+// 3. Prefer peers ahead of us (bestPeers)
+// 4. Fallback to peers at same height (okPeers)
+// 5. Ignore peers behind us
+// 6. Random selection within the chosen group
 func (sm *SyncManager) selectSyncPeer() peer.ID {
+	// If we have a forced sync peer configured, only use that peer
+	if sm.forceSyncPeer != emptyPeerID {
+		if _, exists := sm.peerStates.GetPeerState(sm.forceSyncPeer); exists {
+			sm.logger.Infof("[SyncManager] Using forced sync peer %s", sm.forceSyncPeer)
+			return sm.forceSyncPeer
+		}
+		// Forced peer not connected - wait for it rather than using another peer
+		sm.logger.Infof("[SyncManager] Waiting for forced sync peer %s to connect (ignoring %d available peers)",
+			sm.forceSyncPeer, len(sm.peerStates.GetSyncCandidates()))
+		return emptyPeerID // Return empty to indicate no sync peer should be used
+	}
+
 	if sm.getLocalHeight == nil || sm.getPeerHeight == nil {
 		sm.logger.Warnf("[SyncManager] Height callbacks not set, cannot select sync peer")
-		return ""
+		return emptyPeerID
 	}
 
 	localHeight := int32(sm.getLocalHeight())
@@ -157,7 +230,7 @@ func (sm *SyncManager) selectSyncPeer() peer.ID {
 
 	if len(candidates) == 0 {
 		sm.logger.Debugf("[SyncManager] No sync candidates available")
-		return ""
+		return emptyPeerID
 	}
 
 	var bestPeers []peer.ID // Peers ahead of us
@@ -227,14 +300,32 @@ func (sm *SyncManager) selectSyncPeer() peer.ID {
 // It assumes the lock is already held. Returns true if a sync peer was selected.
 func (sm *SyncManager) selectSyncPeerLocked() bool {
 	// Already syncing
-	if sm.syncPeer != "" {
+	if sm.syncPeer != emptyPeerID {
 		sm.logger.Debugf("[SyncManager] Already have a sync peer, skipping selection")
+		return false
+	}
+
+	// If forced peer is configured, don't select any other peer
+	if sm.forceSyncPeer != emptyPeerID {
+		// Check if forced peer is now available
+		if _, exists := sm.peerStates.GetPeerState(sm.forceSyncPeer); exists {
+			sm.syncPeer = sm.forceSyncPeer
+			sm.syncPeerState = &syncPeerState{
+				lastBlockTime: time.Now(),
+				recvBytes:     0,
+				violations:    0,
+				ticks:         0,
+			}
+			sm.logger.Infof("[SyncManager] Forced sync peer %s is now available, selecting it", sm.forceSyncPeer)
+			return true
+		}
+		sm.logger.Debugf("[SyncManager] Waiting for forced sync peer %s to connect", sm.forceSyncPeer)
 		return false
 	}
 
 	// Select the best peer
 	bestPeer := sm.selectSyncPeer()
-	if bestPeer == "" {
+	if bestPeer == emptyPeerID {
 		sm.logger.Warnf("[SyncManager] No sync peer available")
 		return false
 	}
@@ -257,14 +348,19 @@ func (sm *SyncManager) checkSyncPeer() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if sm.syncPeer == "" {
-		// No sync peer, next peer that's ahead will be selected automatically
+	if sm.syncPeer == emptyPeerID {
+		// If we have a forced peer configured, keep waiting for it
+		if sm.forceSyncPeer != emptyPeerID {
+			sm.logger.Debugf("[SyncManager] Still waiting for forced sync peer %s to connect", sm.forceSyncPeer)
+			return
+		}
+		// No sync peer and no forced peer, next peer that's ahead will be selected automatically
 		return
 	}
 
 	if sm.syncPeerState == nil {
 		sm.logger.Errorf("[SyncManager] Sync peer set but no state, resetting")
-		sm.syncPeer = ""
+		sm.syncPeer = emptyPeerID
 		return
 	}
 
@@ -294,6 +390,19 @@ func (sm *SyncManager) checkSyncPeer() {
 	needSwitch := false
 	switchReason := ""
 
+	// If using a forced sync peer, be more lenient
+	if sm.forceSyncPeer != emptyPeerID && sm.syncPeer == sm.forceSyncPeer {
+		// For forced peers, only switch if disconnected (handled in RemovePeer)
+		// Log warnings but don't auto-switch
+		if violations >= maxNetworkViolations {
+			sm.logger.Warnf("[SyncManager] Forced sync peer %s has %d network violations but keeping as forced", sm.syncPeer, violations)
+		}
+		if timeSinceLastBlock > maxLastBlockTime {
+			sm.logger.Warnf("[SyncManager] Forced sync peer %s hasn't sent blocks for %v but keeping as forced", sm.syncPeer, timeSinceLastBlock)
+		}
+		return
+	}
+
 	if violations >= maxNetworkViolations {
 		needSwitch = true
 		switchReason = "too many network speed violations"
@@ -304,7 +413,7 @@ func (sm *SyncManager) checkSyncPeer() {
 
 	if needSwitch {
 		sm.logger.Infof("[SyncManager] Switching sync peer %s due to: %s", sm.syncPeer, switchReason)
-		sm.syncPeer = ""
+		sm.syncPeer = emptyPeerID
 		sm.syncPeerState = nil
 		// Try to find a new sync peer using bitcoin-sv selection logic
 		sm.selectSyncPeerLocked()

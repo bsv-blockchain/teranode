@@ -2,6 +2,7 @@
 .history/**
 *.tar.gz
 build/
+data
 data/
 *.run
 .DS_Store
@@ -99,3 +100,4 @@ plantuml.jar
 teranode_peers.json
 *.key
 logs/
+teranode.logrotate

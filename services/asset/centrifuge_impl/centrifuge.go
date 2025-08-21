@@ -545,7 +545,7 @@ func (c *Centrifuge) authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check if asset service is ready (has cached current node status)
 		c.statusMutex.RLock()
-		ready := (c.cachedCurrentNodeStatus != nil)
+		ready := c.cachedCurrentNodeStatus != nil
 		c.statusMutex.RUnlock()
 
 		if !ready {

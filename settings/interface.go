@@ -421,6 +421,7 @@ type P2PSettings struct {
 	InitialSyncDelay   time.Duration // Initial delay before starting sync operations
 	MinPeersForSync    int           // Minimum number of peers needed before selecting sync peer
 	MaxWaitForMinPeers time.Duration // Maximum time to wait for minimum peers
+	ForceSyncPeer      string        // Force sync from specific peer ID, overrides automatic selection
 
 	// Address sharing configuration
 	// SharePrivateAddresses controls whether to advertise private/local IP addresses to peers.

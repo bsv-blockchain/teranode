@@ -390,6 +390,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			InitialSyncDelay:      getDuration("p2p_initial_sync_delay", 5*time.Second),
 			MinPeersForSync:       getInt("p2p_min_peers_for_sync", 2, alternativeContext...),
 			MaxWaitForMinPeers:    getDuration("p2p_max_wait_for_min_peers", 20*time.Second),
+			ForceSyncPeer:         getString("p2p_force_sync_peer", "", alternativeContext...),
 			HandshakeTopic:        getString("p2p_handshake_topic", "", alternativeContext...),
 			HandshakeTopicSize:    getInt("p2p_handshake_topic_size", 1, alternativeContext...),
 			HandshakeTopicTimeout: getDuration("p2p_handshake_topic_timeout", 5*time.Second),

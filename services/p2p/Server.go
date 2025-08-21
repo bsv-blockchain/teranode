@@ -434,6 +434,15 @@ func NewServer(
 	// Initialize the sync manager for peer selection
 	p2pServer.syncManager = NewSyncManager(logger, tSettings)
 
+	// Set forced sync peer if configured
+	if tSettings.P2P.ForceSyncPeer != "" {
+		if err := p2pServer.syncManager.SetForceSyncPeer(tSettings.P2P.ForceSyncPeer); err != nil {
+			logger.Warnf("Failed to set forced sync peer %s: %v", tSettings.P2P.ForceSyncPeer, err)
+		} else {
+			logger.Infof("Forced sync peer set to: %s", tSettings.P2P.ForceSyncPeer)
+		}
+	}
+
 	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
 
 	return p2pServer, nil
@@ -1122,12 +1131,12 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 
 	s.logger.Infof("[handleHandshakeTopic] Message type: %s, from peer: %s, height: %d", hs.Type, hs.PeerID, hs.BestHeight)
 
-	if hs.Type == "version" {
-		err := s.sendVerack(ctx, from, hs)
-		if err != nil {
+	switch hs.Type {
+	case "version":
+		if err := s.sendVerack(ctx, from, hs); err != nil {
 			s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] error sending verack: %v", err)
 		}
-	} else if hs.Type == "verack" {
+	case "verack":
 		s.logger.Infof("[handleHandshakeTopic][p2p-handshake] received verack from %s height=%d hash=%s agent=%s services=%d",
 			hs.PeerID, hs.BestHeight, hs.BestHash, hs.UserAgent, hs.Services)
 

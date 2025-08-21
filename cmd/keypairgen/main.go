@@ -7,7 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
-	"golang.org/x/crypto/ripemd160"
+	"golang.org/x/crypto/ripemd160" //nolint:gosec // this is a known safe use of ripemd160 for Bitcoin address generation
 )
 
 func main() {
@@ -25,7 +25,7 @@ func main() {
 	// Print public key hash (SHA256 + RIPEMD160)
 	pubKeyBytes := privateKey.PubKey().Compressed()
 	sha256Hash := sha256.Sum256(pubKeyBytes)
-	ripemd160Hasher := ripemd160.New()
+	ripemd160Hasher := ripemd160.New() //nolint:gosec // this is a known safe use of ripemd160 for Bitcoin address generation
 	ripemd160Hasher.Write(sha256Hash[:])
 	pubKeyHash := ripemd160Hasher.Sum(nil)
 	fmt.Printf("Public key hash:     %x\n", pubKeyHash)

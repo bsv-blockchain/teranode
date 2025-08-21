@@ -254,8 +254,7 @@ func TestServerHandlers(t *testing.T) {
 	t.Run("Test stream handler behaviour", func(t *testing.T) {
 		// Create a minimal Server for testing
 		server := &Server{
-			logger: ulogger.New("test-server", ulogger.WithLevel("ERROR")),
-			gCtx:   context.Background(),
+			gCtx: context.Background(),
 		}
 
 		// Set up a flag to track if handleBlockTopic was called
@@ -264,7 +263,7 @@ func TestServerHandlers(t *testing.T) {
 		blockTopicSender := ""
 
 		// Set up a test handler function to capture calls
-		blockHandler := func(ctx context.Context, msg []byte, from string) {
+		blockHandler := func(_ context.Context, msg []byte, from string) {
 			blockTopicHandlerCalled = true
 			blockTopicMsg = msg
 			blockTopicSender = from

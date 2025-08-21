@@ -834,3 +834,207 @@ func TestSyncManager_UpdateCallbacks(t *testing.T) {
 		assert.True(t, newTime.After(oldTime))
 	})
 }
+
+func TestSyncManager_ForcedSyncPeer(t *testing.T) {
+	t.Run("set_forced_sync_peer_valid", func(t *testing.T) {
+		tSettings := createBaseTestSettings()
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Valid peer ID
+		validPeerID := "12D3KooWG6aCkDmi5tqx4G4AvVDTQdSVvTSzzQvk1vh9CtSR8KEW"
+
+		// Set forced sync peer
+		err := sm.SetForceSyncPeer(validPeerID)
+		require.NoError(t, err)
+
+		// Verify it was set
+		expectedPeer, _ := peer.Decode(validPeerID)
+		assert.Equal(t, expectedPeer, sm.forceSyncPeer)
+	})
+
+	t.Run("set_forced_sync_peer_invalid", func(t *testing.T) {
+		tSettings := createBaseTestSettings()
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Invalid peer ID
+		invalidPeerID := "invalid-peer-id"
+
+		// Try to set forced sync peer
+		err := sm.SetForceSyncPeer(invalidPeerID)
+		assert.Error(t, err)
+
+		// Verify it was not set
+		assert.Equal(t, peer.ID(""), sm.forceSyncPeer)
+	})
+
+	t.Run("clear_forced_sync_peer", func(t *testing.T) {
+		tSettings := createBaseTestSettings()
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		// Set a forced sync peer first
+		validPeerID := "12D3KooWG6aCkDmi5tqx4G4AvVDTQdSVvTSzzQvk1vh9CtSR8KEW"
+		err := sm.SetForceSyncPeer(validPeerID)
+		require.NoError(t, err)
+
+		// Clear it
+		err = sm.SetForceSyncPeer("")
+		require.NoError(t, err)
+
+		// Verify it was cleared
+		assert.Equal(t, peer.ID(""), sm.forceSyncPeer)
+	})
+
+	t.Run("forced_peer_overrides_selection", func(t *testing.T) {
+		tSettings := createBaseTestSettings()
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		forcedPeerID := peer.ID("forced-peer")
+		higherPeerID := peer.ID("higher-peer")
+
+		// Set up peer heights
+		peerHeights := map[peer.ID]int32{
+			forcedPeerID: 100, // Lower height
+			higherPeerID: 150, // Higher height
+		}
+
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			return peerHeights[p]
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 90
+		})
+
+		// Add both peers
+		sm.peerStates.AddPeer(forcedPeerID, true)
+		sm.peerStates.AddPeer(higherPeerID, true)
+
+		// Set forced sync peer
+		sm.forceSyncPeer = forcedPeerID
+
+		// Select sync peer - should return forced peer even though higher peer exists
+		selected := sm.selectSyncPeer()
+		assert.Equal(t, forcedPeerID, selected)
+	})
+
+	t.Run("forced_peer_not_connected_waits", func(t *testing.T) {
+		tSettings := createBaseTestSettings()
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		forcedPeerID := peer.ID("forced-peer")
+		availablePeerID := peer.ID("available-peer")
+
+		// Set up peer heights
+		peerHeights := map[peer.ID]int32{
+			availablePeerID: 120,
+		}
+
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			return peerHeights[p]
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 90
+		})
+
+		// Only add available peer (forced peer not connected)
+		sm.peerStates.AddPeer(availablePeerID, true)
+
+		// Set forced sync peer that's not connected
+		sm.forceSyncPeer = forcedPeerID
+
+		// Select sync peer - should return empty (waiting for forced peer)
+		selected := sm.selectSyncPeer()
+		assert.Equal(t, peer.ID(""), selected, "Should not select any peer when waiting for forced peer")
+
+		// Verify sync peer was not set in selectSyncPeerLocked either
+		wasSet := sm.selectSyncPeerLocked()
+		assert.False(t, wasSet, "Should not set sync peer when forced peer is not available")
+		assert.Equal(t, peer.ID(""), sm.syncPeer, "Sync peer should remain empty")
+	})
+
+	t.Run("forced_peer_reconnects", func(t *testing.T) {
+		tSettings := createBaseTestSettings()
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		forcedPeerID := peer.ID("forced-peer")
+		sm.forceSyncPeer = forcedPeerID
+
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 90
+		})
+
+		// Add forced peer (simulating reconnection)
+		sm.peerStates.AddPeer(forcedPeerID, true)
+
+		// Update height - should trigger selection of forced peer
+		wasSelected := sm.UpdatePeerHeight(forcedPeerID, 100)
+		assert.True(t, wasSelected)
+		assert.Equal(t, forcedPeerID, sm.syncPeer)
+	})
+
+	t.Run("forced_peer_health_check_lenient", func(t *testing.T) {
+		tSettings := createBaseTestSettings()
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		forcedPeerID := peer.ID("forced-peer")
+		sm.forceSyncPeer = forcedPeerID
+		sm.syncPeer = forcedPeerID
+		sm.syncPeerState = &syncPeerState{
+			lastBlockTime: time.Now().Add(-5 * time.Minute), // Past normal timeout
+			violations:    5,                                // Past normal violation limit
+			ticks:         1,
+		}
+
+		// Run health check
+		sm.checkSyncPeer()
+
+		// Should keep the forced peer despite violations
+		assert.Equal(t, forcedPeerID, sm.syncPeer)
+		assert.NotNil(t, sm.syncPeerState)
+	})
+
+	t.Run("does_not_select_other_peers_when_waiting_for_forced", func(t *testing.T) {
+		tSettings := createBaseTestSettings()
+		sm := NewSyncManager(ulogger.New("test"), tSettings)
+
+		forcedPeerID := peer.ID("forced-peer")
+		otherPeer1 := peer.ID("other-peer-1")
+		otherPeer2 := peer.ID("other-peer-2")
+
+		// Set forced sync peer
+		sm.forceSyncPeer = forcedPeerID
+
+		// Set up peer heights - other peers are ahead
+		peerHeights := map[peer.ID]int32{
+			otherPeer1: 150,
+			otherPeer2: 160,
+		}
+
+		sm.SetPeerHeightCallback(func(p peer.ID) int32 {
+			return peerHeights[p]
+		})
+		sm.SetLocalHeightCallback(func() uint32 {
+			return 100
+		})
+
+		// Add other peers (but not the forced peer)
+		sm.peerStates.AddPeer(otherPeer1, true)
+		sm.peerStates.AddPeer(otherPeer2, true)
+
+		// Try to select a sync peer - should not select any
+		selected := sm.selectSyncPeer()
+		assert.Equal(t, peer.ID(""), selected, "Should not select any peer when waiting for forced peer")
+
+		// Try using selectSyncPeerLocked - should also not select
+		wasSet := sm.selectSyncPeerLocked()
+		assert.False(t, wasSet)
+		assert.Equal(t, peer.ID(""), sm.syncPeer, "Should not have any sync peer")
+
+		// Now add the forced peer
+		sm.peerStates.AddPeer(forcedPeerID, true)
+		peerHeights[forcedPeerID] = 105 // Lower than other peers but still ahead
+
+		// Now selection should work and choose the forced peer
+		selected = sm.selectSyncPeer()
+		assert.Equal(t, forcedPeerID, selected, "Should select forced peer once available")
+	})
+}
