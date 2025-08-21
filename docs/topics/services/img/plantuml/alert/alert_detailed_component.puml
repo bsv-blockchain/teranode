@@ -1,0 +1,168 @@
+skinparam defaultTextAlignment center
+skinparam rectangle {
+  BackgroundColor #e6f0ff
+  BorderColor #3366cc
+  FontColor black
+  RoundCorner 10
+}
+skinparam component {
+  BackgroundColor #e6f0ff
+  BorderColor #3366cc
+  FontColor black
+  RoundCorner 10
+}
+skinparam database {
+  BackgroundColor #f2f2f2
+  BorderColor #999999
+  FontColor black
+  RoundCorner 10
+}
+skinparam shadowing false
+skinparam ArrowColor #666666
+
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title Alert Service - Component Diagram
+
+Container_Boundary(alert_service, "Alert Service") {
+
+Component(grpc_server, "gRPC Server", "Go gRPC", "Alert API endpoints")
+
+Component(http_server, "HTTP Server", "Go HTTP", "Administrative endpoints")
+
+
+
+Component(alert_handler, "Alert Handler", "Go", "Processes alert messages from P2P network")
+
+Component(utxo_manager, "UTXO Manager", "Go", "Handles UTXO freeze/unfreeze/reassign operations")
+
+Component(peer_manager, "Peer Manager", "Go", "Manages peer banning and unbanning")
+
+Component(block_invalidator, "Block Invalidator", "Go", "Handles block invalidation and re-validation")
+
+
+
+Component(p2p_alert_client, "P2P Alert Client", "Go", "Interface to alert P2P network")
+
+Component(blockchain_client, "Blockchain Client", "Go gRPC", "Interface to Blockchain service")
+
+Component(block_assembly_client, "Block Assembly Client", "Go gRPC", "Interface to Block Assembly service")
+
+Component(p2p_client, "P2P Client", "Go gRPC", "Interface to P2P service")
+
+Component(legacy_peer_client, "Legacy Peer Client", "Go gRPC", "Interface to Legacy Peer service")
+
+
+
+Component(utxo_store_client, "UTXO Store Client", "Go", "Interface to UTXO database")
+
+Component(alert_datastore_client, "Alert Datastore Client", "Go", "Interface to alert database")
+
+
+
+Component(metrics_collector, "Metrics Collector", "Prometheus", "Collects alert performance metrics")
+
+Component(health_monitor, "Health Monitor", "Go", "Monitors service and dependency health")
+
+}
+
+Container_Boundary(external_services, "External Services") {
+
+Container(blockchain, "Blockchain Service", "Go", "Blockchain state management")
+
+Container(block_assembly, "Block Assembly Service", "Go", "Block creation and mining")
+
+Container(p2p_service, "P2P Service", "Go", "P2P network management")
+
+Container(legacy_peer, "Legacy Peer Service", "Go", "Legacy peer management")
+
+ContainerDb(utxo_store, "UTXO Store", "Database", "UTXO database")
+
+ContainerDb(alert_datastore, "Alert Datastore", "Database", "Alert system database")
+
+}
+
+System_Ext(alert_p2p_network, "Alert P2P Network", "Private P2P network for alert messages")
+
+Person(admin, "Administrator", "Node operator or regulatory authority")
+
+' External API interactions
+
+Rel(admin, grpc_server, "Alert operations", "gRPC")
+
+Rel(admin, http_server, "Administrative operations", "HTTP")
+
+' Alert message processing
+
+Rel(alert_p2p_network, p2p_alert_client, "Alert messages", "P2P Protocol")
+
+Rel(p2p_alert_client, alert_handler, "Process alert messages")
+
+Rel(alert_handler, utxo_manager, "UTXO operations")
+
+Rel(alert_handler, peer_manager, "Peer operations")
+
+Rel(alert_handler, block_invalidator, "Block invalidation")
+
+' API request processing
+
+Rel(grpc_server, utxo_manager, "UTXO operations")
+
+Rel(grpc_server, peer_manager, "Peer operations")
+
+Rel(grpc_server, block_invalidator, "Block operations")
+
+Rel(http_server, utxo_manager, "Administrative UTXO ops")
+
+' Service client connections
+
+Rel(block_invalidator, blockchain_client, "Invalidate blocks")
+
+Rel(block_invalidator, block_assembly_client, "Re-validate transactions")
+
+Rel(peer_manager, p2p_client, "Ban/unban peers")
+
+Rel(peer_manager, legacy_peer_client, "Legacy peer management")
+
+Rel(utxo_manager, utxo_store_client, "UTXO operations")
+
+Rel(alert_handler, alert_datastore_client, "Store alert data")
+
+' External service connections
+
+Rel(blockchain_client, blockchain, "gRPC calls", "gRPC")
+
+Rel(block_assembly_client, block_assembly, "gRPC calls", "gRPC")
+
+Rel(p2p_client, p2p_service, "gRPC calls", "gRPC")
+
+Rel(legacy_peer_client, legacy_peer, "gRPC calls", "gRPC")
+
+Rel(utxo_store_client, utxo_store, "Database operations", "Direct")
+
+Rel(alert_datastore_client, alert_datastore, "Database operations", "Direct")
+
+' Health and monitoring
+
+Rel(health_monitor, blockchain_client, "Health checks")
+
+Rel(health_monitor, block_assembly_client, "Health checks")
+
+Rel(health_monitor, p2p_client, "Health checks")
+
+Rel(health_monitor, utxo_store_client, "Health checks")
+
+' Metrics collection
+
+Rel(utxo_manager, metrics_collector, "UTXO operation metrics")
+
+Rel(peer_manager, metrics_collector, "Peer operation metrics")
+
+Rel(block_invalidator, metrics_collector, "Block operation metrics")
+
+SHOW_LEGEND()
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

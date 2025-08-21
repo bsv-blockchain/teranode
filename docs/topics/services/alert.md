@@ -64,6 +64,10 @@ The Alert Service interacts with several core components of Teranode:
 
 Additionally, a P2P private network is used for peer management, allowing the Alert Service to ban and unban peers based on IP addresses.
 
+The following diagram provides a deeper level of detail into the Alert Service's internal components and their interactions:
+
+![alert_detailed_component.svg](img/plantuml/alert/alert_detailed_component.svg)
+
 ## 2. Functionality
 
 ### 2.1. Initialization
@@ -261,21 +265,21 @@ The Alert Service can be configured using various settings that control its beha
 ### 6.1 Core Alert Service Configuration
 
 - **Alert Store URL (`alert_store`)**: The URL for connecting to the alert system's data store.
-    - Type: `string` (converted to `*url.URL` internally)
-    - Impact: Determines the database backend and connection parameters
-    - Example: `alert_store = sqlite:///alert` or `alert_store = postgres://user:pass@host:5432/database?sslmode=disable`
+  - Type: `string` (converted to `*url.URL` internally)
+  - Impact: Determines the database backend and connection parameters
+  - Example: `alert_store = sqlite:///alert` or `alert_store = postgres://user:pass@host:5432/database?sslmode=disable`
 
 - **Genesis Keys (`alert_genesis_keys`)**: A pipe-separated list of public keys used for genesis alerts.
-    - Type: `[]string`
-    - Impact: **Critical** - The service will not start without valid genesis keys
-    - Purpose: These keys determine which alerts are valid; only alerts signed by these keys will be processed
-    - Example: `alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768 | 03aec1d40f02ac7f6df701ef8f629515812f1bcd949b6aa6c7a8dd778b748b2433"`
+  - Type: `[]string`
+  - Impact: **Critical** - The service will not start without valid genesis keys
+  - Purpose: These keys determine which alerts are valid; only alerts signed by these keys will be processed
+  - Example: `alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768 | 03aec1d40f02ac7f6df701ef8f629515812f1bcd949b6aa6c7a8dd778b748b2433"`
 
 - **P2P Private Key (`alert_p2p_private_key`)**: Private key for P2P communication.
-    - Type: `string`
-    - Impact: Establishes node identity in the P2P network
-    - Note: If not provided, a default key will be created in the data directory
-    - Example: `alert_p2p_private_key = "08c7fec91e75046d0ac6a2b4edb2daaae34b1e4c3c25a48b1ebdffe5955e33bc"`
+  - Type: `string`
+  - Impact: Establishes node identity in the P2P network
+  - Note: If not provided, a default key will be created in the data directory
+  - Example: `alert_p2p_private_key = "08c7fec91e75046d0ac6a2b4edb2daaae34b1e4c3c25a48b1ebdffe5955e33bc"`
 
 - **Protocol ID (`alert_protocol_id`)**: Protocol identifier for the P2P alert network.
     - Type: `string`
@@ -310,8 +314,8 @@ The SQLite database will be stored in the `DataFolder` directory specified in th
 - **Parameters**: None
 - **Connection Pool Settings (hardcoded)**:
 
-    - Max Idle Connections: 1
-    - Max Open Connections: 1
+  - Max Idle Connections: 1
+  - Max Open Connections: 1
 - **Table Prefix**: Uses the database name as prefix
 
 #### 6.2.2 In-Memory SQLite
@@ -322,6 +326,7 @@ sqlitememory:///database_name
 
 - **Parameters**: None
 - **Connection Pool Settings (hardcoded)**:
+
 
     - Max Idle Connections: 1
     - Max Open Connections: 1
@@ -336,14 +341,14 @@ postgres://username:password@host:port/database?param1=value1&param2=value2
 
 - **Parameters**:
 
-    - `sslmode`: SSL mode for the connection (default: `disable`)
+  - `sslmode`: SSL mode for the connection (default: `disable`)
 - **Connection Pool Settings (hardcoded)**:
 
-    - Max Idle Connections: 2
-    - Max Open Connections: 5
-    - Max Connection Idle Time: 20 seconds
-    - Max Connection Time: 20 seconds
-    - Transaction Timeout: 20 seconds
+  - Max Idle Connections: 2
+  - Max Open Connections: 5
+  - Max Connection Idle Time: 20 seconds
+  - Max Connection Time: 20 seconds
+  - Transaction Timeout: 20 seconds
 - **Table Prefix**: "alert_system"
 
 #### 6.2.4 MySQL
@@ -354,7 +359,7 @@ mysql://username:password@host:port/database?param1=value1&param2=value2
 
 - **Parameters**:
 
-    - `sslmode`: SSL mode for the connection (default: `disable`)
+  - `sslmode`: SSL mode for the connection (default: `disable`)
 - **Connection Pool Settings (hardcoded)**: Same as PostgreSQL
 - **Table Prefix**: "alert_system"
 
@@ -365,27 +370,27 @@ The following settings are hardcoded in the service and cannot be configured ext
 **Core Processing Settings:**
 
 - **Alert Processing Interval**: 5 minutes
-    - Controls how frequently alerts are processed
+  - Controls how frequently alerts are processed
 
 - **Request Logging**: Enabled (true)
-    - Controls HTTP request logging
+  - Controls HTTP request logging
 
 - **Auto Migrate**: Enabled (true)
-    - Automatically migrates the database schema on startup
+  - Automatically migrates the database schema on startup
 
 - **Database Table Prefix**: "alert_system" for PostgreSQL/MySQL, database name for SQLite
-    - Prefix used for database tables
+  - Prefix used for database tables
 
 - **DHT Mode**: "client"
-    - Sets the node as a DHT client for peer discovery
+  - Sets the node as a DHT client for peer discovery
 
 - **Peer Discovery Interval**: Uses system default
-    - Controls how frequently peers are discovered
+  - Controls how frequently peers are discovered
 
 **Database Settings:**
 
 - **Table Prefix**: "alert_system" for PostgreSQL/MySQL, database name for SQLite
-    - Prefix used for database tables
+  - Prefix used for database tables
 
 ### 6.4 Service Dependencies
 
