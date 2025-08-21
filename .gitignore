@@ -92,6 +92,8 @@ test/longtest/services/validator/mainnet_14207txs_b886413.csv
 test/longtest/services/validator/testnet_18869txs_b1682153.csv
 .sonarlint/
 
+CLAUDE.local.md
+
 plantuml.jar
 teranode_peers.json
 *.key

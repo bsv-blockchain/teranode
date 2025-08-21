@@ -25,7 +25,7 @@
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
-    - [7.1. How to run](#71-how-to-run)
+    - [7.1 How to run](#71-how-to-run)
     - [7.2 Configuration Options (Settings Flags)](#72-configuration-options-settings-flags)
     - [7.3 Configuration Examples](#73-configuration-examples)
     - [7.4 FSM Configuration](#74-fsm-configuration)
@@ -34,27 +34,21 @@
     - [7.7 Block Validation](#77-block-validation)
 8. [Other Resources](#8-other-resources)
 
-
 ## 1. Description
 
 The Asset Service acts as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
 
 - **Transactions (TX)**.
 
-
 - **SubTrees**.
-
 
 - **Blocks and Block Headers**.
 
-
 - **Unspent Transaction Outputs (UTXO)**.
-
 
 The server uses HTTP as communication protocol:
 
 - **HTTP**: A ubiquitous protocol that allows the server to be accessible from the web, enabling other nodes or clients to interact with the server using standard web requests.
-
 
 The server being externally accessible implies that it is designed to communicate with other nodes and external clients across the network, to share blockchain data or synchronize states.
 
@@ -74,23 +68,23 @@ Here we can see the Asset Server's relationship with other Teranode components i
 
 ![Asset_Server_System_Container_Diagram.png](img/Asset_Server_System_Container_Diagram.png)
 
-
 The Asset Server is composed of the following components:
 
 ![Asset_Server_System_Component_Diagram.png](img/Asset_Server_System_Component_Diagram.png)
 
+The detailed internal component architecture of the Asset Server shows how the various handlers, clients, and data access layers interact:
 
-* **UTXO Store**: Provides UTXO data to the Asset Server.
-* **Blob Store**: Provides Subtree and Extended TX data to the Asset Server, referred here as Subtree Store and TX Store.
-* **Blockchain Server**: Provides blockchain data (blocks and block headers) to the Asset Server.
+![Asset_Server_Component.svg](img/plantuml/assetserver/Asset_Server_Component.svg)
 
+- **UTXO Store**: Provides UTXO data to the Asset Server.
+- **Blob Store**: Provides Subtree and Extended TX data to the Asset Server, referred here as Subtree Store and TX Store.
+- **Blockchain Server**: Provides blockchain data (blocks and block headers) to the Asset Server.
 
 Finally, note that the Asset Server benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
 ![lustre_fs.svg](img/plantuml/lustre_fs.svg)
-
 
 ## 3. Data Model
 
@@ -101,7 +95,6 @@ The following data types are provided by the Asset Server:
 - [Subtree Data Model](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
 - [Extended Transaction Data Model](../datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
 - [UTXO Data Model](../datamodel/utxo_data_model.md): Include additional metadata to facilitate processing.
-
 
 ## 4. Use Cases
 
@@ -163,10 +156,9 @@ The Asset Service exposes the following HTTP methods:
 
 ![asset_server_http_get_utxo.svg](img/plantuml/assetserver/asset_server_http_get_utxo.svg)
 
-* For specific UTXO by hash requests (/utxo/:hash), the HTTP Server requests UTXO data from the UtxoStore using a hash.
+- For specific UTXO by hash requests (/utxo/:hash), the HTTP Server requests UTXO data from the UtxoStore using a hash.
 
-
-* For getting UTXOs by a transaction ID (/utxos/:hash/json), the HTTP Server requests transaction meta data from the UTXO Store using a transaction hash. Then for each output in the transaction, it queries the UtxoStore to get UTXO data for the corresponding output hash.
+- For getting UTXOs by a transaction ID (/utxos/:hash/json), the HTTP Server requests transaction meta data from the UTXO Store using a transaction hash. Then for each output in the transaction, it queries the UtxoStore to get UTXO data for the corresponding output hash.
 
 ### 4.1.7. Search()
 
@@ -267,7 +259,6 @@ The Asset Server offers endpoints for block validation control:
 - **POST /api/v1/block/revalidate**: Revalidates a previously invalidated block
 - **GET /api/v1/blocks/invalid**: Retrieves a list of invalid blocks
 
-
 ## 5. Technology
 
 Key technologies involved:
@@ -293,10 +284,9 @@ Key technologies involved:
     - A lightweight data-interchange format, easy for humans to read and write, and easy for machines to parse and generate.
     - Used for structuring data sent to and from clients, especially in contexts where HTTP is used.
 
-
 ## 6. Directory Structure and Main Files
 
-```
+```text
 ./services/asset
 ├── Server.go                  # Server logic for the Asset Service.
 ├── Server_test.go             # Tests for the server functionality.
@@ -346,21 +336,19 @@ Key technologies involved:
     ├── GetLegacyBlock_test.go # Tests for GetLegacyBlock functionality.
     ├── repository.go          # Core repository implementation.
     └── repository_test.go     # Tests for the repository implementation.
-```
-
+```text
 
 ## 7. How to run
 
-### 7.1. How to run
+### 7.1 How to run
 
 To run the Asset Server locally, you can execute the following command:
 
 ```shell
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Asset=1
-```
+```text
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Asset Server locally.
-
 
 ### 7.2 Configuration Options (Settings Flags)
 
@@ -511,30 +499,30 @@ Centrifuge supports the following subscription channels:
 
 **Configuration Errors from Code:**
 
-```
+```text
 Error: "no asset_httpListenAddress setting found"
 Cause: Missing or empty asset_httpListenAddress setting
-```
+```text
 
-```
+```text
 Error: "asset_httpAddress not found in config"
 Cause: Missing asset_httpAddress when Centrifuge is enabled
-```
+```text
 
-```
+```text
 Error: "asset_httpAddress is not a valid URL"
 Cause: Invalid URL format in asset_httpAddress setting
-```
+```text
 
-```
+```text
 Error: "server_certFile is required for HTTPS"
 Cause: Missing server_certFile when securityLevelHTTP is non-zero
-```
+```text
 
-```
+```text
 Error: "server_keyFile is required for HTTPS"
 Cause: Missing server_keyFile when securityLevelHTTP is non-zero
-```
+```text
 
 #### 7.2.6 Environment Variables
 
@@ -557,7 +545,6 @@ Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 - `ECHO_DEBUG` - Echo framework debug mode
 - `ASSET_HTTP_PORT` - HTTP port (configuration placeholder)
 
-
 #### 7.2.7 Dependency Configuration
 
 The Asset Server depends on several services for data access. These must be properly configured for the Asset Server to function:
@@ -571,13 +558,14 @@ The Asset Server depends on several services for data access. These must be prop
 | Blockchain Client | `blockchain_grpcAddress` | gRPC connection for blockchain service | Yes |
 
 **Example Dependency Configuration:**
-```
+
+```bash
 utxostore=aerospike://localhost:3000/test?set=utxo
 txstore=blob://localhost:8080/tx
 subtreestore=blob://localhost:8080/subtree
 block_persisterStore=blob://localhost:8080/blocks
 blockchain_grpcAddress=localhost:8082
-```
+```text
 
 #### 7.2.8 Environment Variable Examples
 
@@ -587,10 +575,9 @@ All configuration options can be set using environment variables with the prefix
 export TERANODE_ASSET_HTTP_LISTEN_ADDRESS=:8090
 export TERANODE_SECURITY_LEVEL_HTTP=1
 export TERANODE_SERVER_CERT_FILE=/path/to/cert.pem
-```
+```text
 
 ### 7.3 Configuration Examples
-
 
 **HTTP/HTTPS Mode:**
 The `securityLevelHTTP` setting determines whether the server runs in HTTP or HTTPS mode:
@@ -609,20 +596,20 @@ When response signing is enabled (`asset_signHTTPResponses=true`):
 
 - `p2p_private_key` must be set with a valid Ed25519 private key in hexadecimal format
 
-```
+```bash
 asset_httpListenAddress=:8443
 securityLevelHTTP=1
 server_certFile=/path/to/cert.pem
 server_keyFile=/path/to/key.pem
-```
+```text
 
 #### Centrifuge Configuration Example
 
-```
+```bash
 asset_centrifugeDisable=false
 asset_centrifugeListenAddress=:8101
 asset_httpAddress=http://localhost:8090
-```
+```text
 
 ### 7.4 FSM Configuration
 
@@ -644,8 +631,6 @@ asset_httpAddress=http://localhost:8090
 ### 7.7 Block Validation
 
 - **Block Management**: The Asset Server provides endpoints to invalidate and revalidate blocks, which is useful for managing forks and recovering from errors.
-
-
 
 ## 8. Other Resources
 

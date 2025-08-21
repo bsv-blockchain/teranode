@@ -1,0 +1,179 @@
+skinparam defaultTextAlignment center
+skinparam rectangle {
+  BackgroundColor #e6f0ff
+  BorderColor #3366cc
+  FontColor black
+  RoundCorner 10
+}
+skinparam component {
+  BackgroundColor #e6f0ff
+  BorderColor #3366cc
+  FontColor black
+  RoundCorner 10
+}
+skinparam database {
+  BackgroundColor #f2f2f2
+  BorderColor #999999
+  FontColor black
+  RoundCorner 10
+}
+skinparam shadowing false
+skinparam ArrowColor #666666
+
+@startuml Asset_Server_Component
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title Asset Server - Component Diagram
+
+Container_Boundary(asset_server, "Asset Server") {
+
+Component(http_server, "HTTP Server", "Go HTTP", "REST API endpoints")
+
+Component(websocket_server, "WebSocket Server", "Go WebSocket", "Real-time notification endpoints")
+
+Component(grpc_server, "gRPC Server", "Go gRPC", "Internal service API")
+
+
+
+Component(http_handlers, "HTTP Handlers", "Go", "HTTP request processors")
+
+Component(websocket_handlers, "WebSocket Handlers", "Go", "WebSocket connection managers")
+
+Component(grpc_handlers, "gRPC Handlers", "Go", "gRPC request processors")
+
+
+
+Component(repository, "Repository", "Go", "Data access abstraction layer")
+
+Component(centrifuge_manager, "Centrifuge Manager", "Go", "Real-time notification management")
+
+
+
+Component(blockchain_client, "Blockchain Client", "Go gRPC", "Interface to Blockchain service")
+
+Component(utxo_store_client, "UTXO Store Client", "Go", "Interface to UTXO database")
+
+Component(tx_store_client, "Transaction Store Client", "Go", "Interface to transaction storage")
+
+Component(subtree_store_client, "Subtree Store Client", "Go", "Interface to subtree storage")
+
+Component(block_store_client, "Block Store Client", "Go", "Interface to block storage")
+
+Component(lustre_fs_client, "Lustre FS Client", "Go", "Interface to distributed filesystem")
+
+
+
+Component(metrics_collector, "Metrics Collector", "Prometheus", "Collects asset server performance metrics")
+
+Component(health_monitor, "Health Monitor", "Go", "Monitors service and dependency health")
+
+}
+
+Container_Boundary(external_services, "External Services") {
+
+Container(blockchain, "Blockchain Service", "Go", "Blockchain state management")
+
+Container(p2p_service, "P2P Service", "Go", "P2P network notifications")
+
+ContainerDb(utxo_store, "UTXO Store", "Database", "UTXO database")
+
+ContainerDb(tx_store, "Tx Store", "Blob Storage", "Transaction blob storage")
+
+ContainerDb(subtree_store, "Subtree Store", "Blob Storage", "Subtree blob storage")
+
+ContainerDb(block_persister_store, "Block Persister Store", "Blob Storage", "Block blob storage")
+
+Container(lustre_fs, "Lustre FS", "Distributed Filesystem", "Shared data storage")
+
+}
+
+Person(external_client, "External Client", "Web applications, dashboards, other nodes")
+
+Person(admin, "Administrator", "Node operator")
+
+System_Ext(teranode_services, "Other Teranode Services", "Internal service consumers")
+
+' External API interactions
+
+Rel(external_client, http_server, "HTTP requests", "HTTP")
+
+Rel(external_client, websocket_server, "WebSocket connections", "WebSocket")
+
+Rel(admin, http_server, "Administrative operations", "HTTP")
+
+Rel(teranode_services, grpc_server, "Internal API calls", "gRPC")
+
+' Request processing flow
+
+Rel(http_server, http_handlers, "Route HTTP requests")
+
+Rel(websocket_server, websocket_handlers, "Handle WebSocket connections")
+
+Rel(grpc_server, grpc_handlers, "Process gRPC requests")
+
+' Data access layer
+
+Rel(http_handlers, repository, "Data queries")
+
+Rel(grpc_handlers, repository, "Data queries")
+
+Rel(websocket_handlers, centrifuge_manager, "Manage subscriptions")
+
+' Repository to storage clients
+
+Rel(repository, blockchain_client, "Blockchain operations")
+
+Rel(repository, utxo_store_client, "UTXO queries")
+
+Rel(repository, tx_store_client, "Transaction data")
+
+Rel(repository, subtree_store_client, "Subtree data")
+
+Rel(repository, block_store_client, "Block data")
+
+Rel(repository, lustre_fs_client, "Filesystem access")
+
+' Real-time notifications
+
+Rel(p2p_service, centrifuge_manager, "P2P notifications", "WebSocket")
+
+Rel(centrifuge_manager, websocket_handlers, "Broadcast notifications")
+
+' External service connections
+
+Rel(blockchain_client, blockchain, "gRPC calls", "gRPC")
+
+Rel(utxo_store_client, utxo_store, "Database queries", "Direct")
+
+Rel(tx_store_client, tx_store, "Blob operations", "Direct")
+
+Rel(subtree_store_client, subtree_store, "Blob operations", "Direct")
+
+Rel(block_store_client, block_persister_store, "Blob operations", "Direct")
+
+Rel(lustre_fs_client, lustre_fs, "Filesystem operations", "Filesystem")
+
+' Health and monitoring
+
+Rel(health_monitor, blockchain_client, "Health checks")
+
+Rel(health_monitor, utxo_store_client, "Health checks")
+
+Rel(health_monitor, tx_store_client, "Health checks")
+
+Rel(health_monitor, subtree_store_client, "Health checks")
+
+' Metrics collection
+
+Rel(http_handlers, metrics_collector, "HTTP request metrics")
+
+Rel(grpc_handlers, metrics_collector, "gRPC request metrics")
+
+Rel(websocket_handlers, metrics_collector, "WebSocket metrics")
+
+Rel(repository, metrics_collector, "Data access metrics")
+
+SHOW_LEGEND()
+
+@enduml
