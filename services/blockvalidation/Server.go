@@ -572,11 +572,16 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		// we are multiple blocks behind, process all the blocks per peer on the catchup channel
 		u.logger.Infof("[Init] processing block found on channel [%s] - too many blocks behind", blockFound.hash.String())
 
+		// collect all drained items to acknowledge their errCh channels
+		allDrainedItems := make([]processBlockFound, 0)
+		allDrainedItems = append(allDrainedItems, blockFound)
+
 		peerBlocks := make(map[string]processBlockFound)
 		peerBlocks[blockFound.baseURL] = blockFound
 		// get the newest block per peer, emptying the block found channel
 		for len(u.blockFoundCh) > 0 {
 			pb := <-u.blockFoundCh
+			allDrainedItems = append(allDrainedItems, pb)
 			peerBlocks[pb.baseURL] = pb
 		}
 
@@ -585,6 +590,12 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		for _, pb := range peerBlocks {
 			block, err := u.fetchSingleBlock(ctx, pb.hash, pb.baseURL)
 			if err != nil {
+				// acknowledge all errCh channels before returning error
+				for _, item := range allDrainedItems {
+					if item.errCh != nil {
+						item.errCh <- err
+					}
+				}
 				return errors.NewProcessingError("[Init] failed to get block [%s]", pb.hash.String(), err)
 			}
 
@@ -594,8 +605,11 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 			}
 		}
 
-		if blockFound.errCh != nil {
-			blockFound.errCh <- nil
+		// acknowledge all errCh channels for all drained items
+		for _, item := range allDrainedItems {
+			if item.errCh != nil {
+				item.errCh <- nil
+			}
 		}
 
 		return nil
