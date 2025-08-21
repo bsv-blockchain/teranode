@@ -344,6 +344,15 @@ Some key handlers include:
     - **`rpc_tls_key_file`**: Path to TLS private key file
     - **`rpc_auth_timeouts_seconds`**: Timeout for authentication in seconds (default: 10)
 
+    **Timeout Settings:**
+
+    - **`rpc_timeout`**: Maximum time allowed for an RPC call to complete (default: 30s)
+        - Prevents resource exhaustion from long-running operations
+        - Returns error code -30 (ErrRPCTimeout) on timeout
+    - **`rpc_client_call_timeout`**: Timeout for internal client calls to other services (default: 5s)
+        - Used when RPC handlers call P2P, Legacy peer, or other internal services
+        - Prevents hanging when dependent services are unresponsive
+
     **Compatibility Settings:**
 
     - **`rpc_quirks`**: Enables compatibility quirks for legacy clients (default: false)
@@ -1862,6 +1871,7 @@ Standard error codes include:
 - -25: Transaction or block validation error
 - -26: Transaction rejected by policy rules
 - -27: Transaction already in chain
+- -30: RPC timeout - request exceeded configured timeout limit
 - -32600: Invalid JSON-RPC request
 - -32601: Method not found
 - -32602: Invalid parameters

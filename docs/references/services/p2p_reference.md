@@ -13,10 +13,10 @@ The P2P Server is implemented through the Server struct, which coordinates all p
 ```go
 type Server struct {
     p2p_api.UnimplementedPeerServiceServer
-    P2PNode                           P2PNodeI           // The P2P network node instance - using interface instead of concrete type
+    P2PNode                           p2p.NodeI          // The P2P network node instance from github.com/bsv-blockchain/go-p2p
     logger                            ulogger.Logger     // Logger instance for the server
     settings                          *settings.Settings // Configuration settings
-    bitcoinProtocolID                 string             // Bitcoin protocol identifier
+    bitcoinProtocolID                 string             // Bitcoin protocol identifier (format: "teranode/bitcoin/{version}")
     blockchainClient                  blockchain.ClientI // Client for blockchain interactions
     blockValidationClient             blockvalidation.Interface
     AssetHTTPAddressURL               string                    // HTTP address URL for assets
@@ -45,17 +45,18 @@ type Server struct {
 
 The server manages several key components, each serving a specific purpose in the P2P network:
 
-- The P2PNode handles direct peer connections and message routing through the P2PNodeI interface
+- The P2PNode handles direct peer connections and message routing through the p2p.NodeI interface from the public github.com/bsv-blockchain/go-p2p package
+- The bitcoinProtocolID contains the node's user agent string in format "teranode/bitcoin/{version}" where version is dynamically determined at build time from Git tags (e.g., "v1.2.3") or generated as a pseudo-version (e.g., "v0.0.0-20250731141601-18714b9")
 - The various Kafka clients manage message distribution across the network
 - The ban system maintains network security by managing peer access through BanListI and PeerBanManager
 - The notification channel handles real-time event propagation
 
-### P2PNodeI Interface
+### p2p.NodeI Interface
 
-The P2P Server uses a P2PNodeI interface rather than a concrete P2PNode implementation to enable better testability:
+The P2P Server uses the p2p.NodeI interface from the public github.com/bsv-blockchain/go-p2p package. This interface-based design enables better testability and allows external developers to create custom P2P implementations:
 
 ```go
-type P2PNodeI interface {
+type NodeI interface {
     // Core lifecycle methods
     Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error
     Stop(ctx context.Context) error
@@ -247,11 +248,111 @@ Peer scores automatically decay over time to allow for recovery from temporary i
 
 ### Message Handlers
 
-- `handleHandshakeTopic`: Handles incoming handshake messages.
+- `handleHandshakeTopic`: Handles incoming handshake messages including version and verack exchanges.
 - `handleBlockTopic`: Handles incoming block messages.
 - `handleSubtreeTopic`: Handles incoming subtree messages.
 - `handleMiningOnTopic`: Handles incoming mining-on messages.
 - `handleBanEvent`: Handles banning and unbanning events.
+
+### Message Structures
+
+The P2P service uses JSON-encoded messages for network communication:
+
+#### BlockMessage
+
+Announces the availability of a new block to the network:
+
+```json
+{
+  "Hash": "block_hash_hex",
+  "Height": 123456,
+  "DataHubURL": "http://node-address:port",
+  "PeerID": "peer_identifier",
+  "Header": "block_header_hex"  // NEW: Raw block header in hexadecimal format
+}
+```
+
+The `Header` field was added to enable peers to quickly validate block properties without fetching the full block data. This reduces network latency and allows for faster block propagation decisions.
+
+#### SubtreeMessage
+
+Announces the availability of a subtree (transaction batch):
+
+```json
+{
+  "Hash": "subtree_hash_hex",
+  "DataHubURL": "http://node-address:port",
+  "PeerID": "peer_identifier"
+}
+```
+
+#### BestBlockMessage
+
+Requests or announces the current best block:
+
+```json
+{
+  "Height": 123456,
+  "Hash": "best_block_hash_hex"
+}
+```
+
+#### MiningOnMessage
+
+Notifies that mining has started on a new block:
+
+```json
+{
+  "Height": 123457,
+  "PreviousHash": "previous_block_hash_hex"
+}
+```
+
+#### HandshakeMessage
+
+Used for version/verack exchanges during peer connection:
+
+```json
+{
+  "type": "version",  // or "verack"
+  "peerID": "peer_identifier",
+  "bestHeight": 123456,
+  "bestHash": "best_block_hash_hex",
+  "dataHubURL": "http://node-address:port",
+  "userAgent": "teranode/bitcoin/v1.0.0",
+  "services": 1,
+  "topicPrefix": "mainnet"  // Chain identifier for network isolation
+}
+```
+
+The `topicPrefix` field ensures that nodes only connect to peers on the same chain (e.g., mainnet, testnet). This prevents accidental cross-chain connections and maintains network integrity.
+
+### Handshake Protocol
+
+The P2P handshake protocol establishes connections between peers and exchanges version information:
+
+1. **Version Message**: When a peer connects, it sends a version message containing:
+
+    - `UserAgent`: The node's identifier in format "teranode/bitcoin/{version}"
+    - `BestHeight`: The peer's current blockchain height
+    - `BestHash`: The hash of the peer's best block
+    - `PeerID`: The peer's unique identifier
+    - `TopicPrefix`: The chain identifier prefix (e.g., "mainnet", "testnet") for network isolation
+    - `DataHubURL`: The URL where the peer's data can be accessed
+    - `Services`: Bitmap of services offered by the peer
+
+2. **Verack Message**: Upon receiving a version message, the peer responds with a verack (version acknowledgment) containing similar information.
+
+3. **Topic Prefix Validation**: During handshake, peers validate that they share the same `TopicPrefix`:
+
+    - If topic prefixes don't match, the handshake is rejected
+    - This ensures nodes on different chains (mainnet vs testnet) don't accidentally connect
+    - The topic prefix is configured via `ChainCfgParams.TopicPrefix` in the settings
+
+4. **Dynamic Version**: The version in the UserAgent field is automatically determined at build time:
+
+    - Tagged releases use the Git tag (e.g., "teranode/bitcoin/v1.2.3")
+    - Development builds use a pseudo-version (e.g., "teranode/bitcoin/v0.0.0-20250731141601-18714b9")
 
 ## Key Processes
 
@@ -265,11 +366,21 @@ The server interacts with the blockchain client to retrieve and validate block i
 
 ### Kafka Integration
 
-The server uses Kafka producers and consumers for efficient distribution of block and subtree data across the network.
+The server uses Kafka producers and consumers for efficient distribution of block and subtree data across the network. Kafka connections support TLS/SSL encryption for secure communication in production environments (see Kafka TLS Configuration section for details).
 
 ## Configuration
 
 The following settings can be configured for the p2p service:
+
+### Chain Configuration
+
+- `ChainCfgParams.TopicPrefix`: **REQUIRED** - Chain identifier prefix (e.g., "mainnet", "testnet", "stn")
+  - Used during P2P handshake to ensure network isolation
+  - Peers with different topic prefixes will reject connections
+  - Prevents accidental cross-chain connections
+  - Must match across all nodes in the same network
+
+### Network Configuration
 
 - `p2p_listen_addresses`: Specifies the IP addresses for the P2P service to bind to.
 - `p2p_advertise_addresses`: Addresses to advertise to other peers in the network. Each address can be specified with or without a port (e.g., `192.168.1.1` or `example.com:9906`). When a port is not specified, the system will use the value from `p2p_port` as the default. Both IP addresses and domain names are supported. Format examples: `192.168.1.1`, `example.com:9906`, `node.local:8001`.
@@ -305,10 +416,16 @@ The P2P Server depends on several components:
 
 - `blockchain.ClientI`: Interface for blockchain operations
 - `blockvalidation.Client`: Client for block validation operations
-- `p2p.P2PNode`: Node for P2P communication
+- `p2p.NodeI`: P2P node interface from the public `github.com/bsv-blockchain/go-p2p` package
 - Kafka producers and consumers for message distribution
 
 These dependencies are injected into the `Server` struct during initialization.
+
+The use of the public go-p2p package enables external developers to:
+
+- Create custom P2P node implementations that are compatible with Teranode
+- Build applications that can directly integrate with Teranode's P2P network
+- Extend P2P functionality while maintaining compatibility with the standard interface
 
 ## Error Handling
 

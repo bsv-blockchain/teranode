@@ -58,6 +58,7 @@ nav:
               - Sync the Node: howto/miners/minersHowToSyncTheNode.md
               - Teranode CLI: howto/miners/minersHowToTeranodeCLI.md
               - Managing Disk Space: howto/miners/minersManagingDiskSpace.md
+              - Using Listen Mode: howto/miners/minersHowToUseListenMode.md
               - Backup (Kubernetes): howto/miners/kubernetes/minersHowToBackup.md
   - Key Topics:
       - Teranode Introduction: topics/teranodeIntro.md

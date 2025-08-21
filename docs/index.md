@@ -83,6 +83,7 @@
 7. [Aerospike Configuration Considerations](./howto/miners/minersHowToAerospikeTuning.md)
 8. [How To Reset Teranode](./howto/miners/minersHowToResetTeranode.md)
 9. [Blockchain Synchronization](./howto/miners/minersHowToSyncTheNode.md)
+10. [Using Listen Mode](./howto/miners/minersHowToUseListenMode.md)
 
 -----
 

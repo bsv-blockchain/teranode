@@ -44,7 +44,7 @@
 
 ## 1. Description
 
-The p2p package implements a peer-to-peer (P2P) server using `libp2p` (`github.com/libp2p/go-libp2p`, `https://libp2p.io`), a modular network stack that allows for direct peer-to-peer communication. The implementation follows an interface-based design pattern with `P2PNodeI` abstracting the concrete `P2PNode` implementation to allow for better testability and modularity.
+The p2p package implements a peer-to-peer (P2P) server using `libp2p` (`github.com/libp2p/go-libp2p`, `https://libp2p.io`), a modular network stack that allows for direct peer-to-peer communication. The implementation follows an interface-based design pattern using the public `github.com/bsv-blockchain/go-p2p` package, with `p2p.NodeI` interface abstracting the concrete P2P node implementation to allow for better testability and modularity. This public package enables external developers to create custom P2P implementations that integrate with Teranode.
 
 The p2p service allows peers to subscribe and receive blockchain notifications, effectively allowing nodes to receive notifications about new blocks and subtrees in the network.
 
@@ -59,12 +59,14 @@ The p2p peers are part of a private network. This private network is managed by 
 2. **Message Types**:
 
     - There are several message types (`BestBlockMessage`, `MiningOnMessage`, `BlockMessage`, `SubtreeMessage`, `RejectedTxMessage`) used for communicating different types of data over the network.
+    - The `BlockMessage` includes a `Header` field containing the raw block header in hexadecimal format, allowing peers to validate block properties without downloading the full block.
 
 3. **Networking and Communication**:
 
     - The server uses `libp2p` for network communication. It sets up a host with given IP and port and handles different topics for publishing and subscribing to messages.
     - The server uses Kademlia for peer discovery, implementing both standard and private DHT (Distributed Hash Table) modes based on configuration.
     - The server uses GossipSub for PubSub messaging, with automated topic subscription and management.
+    - Peers identify themselves using a user agent string in format `teranode/bitcoin/{version}` where the version is dynamically determined at build time from Git tags (e.g., "v1.2.3") or generated as a pseudo-version (e.g., "v0.0.0-20250731141601-18714b9").
     - `handleBlockchainMessage`, `handleBestBlockTopic`, `handleBlockTopic`, `handleSubtreeTopic`, and `handleMiningOnTopic` are functions to handle incoming messages for different topics.
     - `sendBestBlockMessage` and `sendPeerMessage` are used for sending messages to peers in the network.
     - The implementation includes error handling and retry mechanisms for peer connections to enhance network resilience.
@@ -275,9 +277,11 @@ When a node creates a new subtree, or finds a new block hashing solution, it wil
 
     - Node 1 listens for blockchain notifications.
     - If a new block notification is detected, it publishes the block message to the PubSub System.
+    - The block message includes the block hash, height, data hub URL, peer ID, and the raw block header in hexadecimal format.
     - The PubSub System then delivers this message to Node 2.
-    - Node 2 receives the message on the block topic, **submits the block message to its own Block Validation Service**, and notifies the block message on its notification channel.
-        - Note that the Block Validation Service might be configured to either receive gRPC notifications or listen to a Kafka producer. In the diagram above, the gRPC method is described. Please check the [Block Validation Service](blockValidation.md) documentation for more details
+    - Node 2 receives the message on the block topic, can quickly validate the block header, then **submits the block message to its own Block Validation Service**, and notifies the block message on its notification channel.
+     - Note that the Block Validation Service might be configured to either receive gRPC notifications or listen to a Kafka producer. In the diagram above, the gRPC method is described. Please check the [Block Validation Service](blockValidation.md) documentation for more details
+
 
 3. **New Mined Block Notification**:
 
@@ -422,7 +426,13 @@ Ban-related settings in the configuration:
 
     - A utility library for configuration management and other core functionalities.
 
-12. **Environmental Configuration**:
+12. **go-p2p (github.com/bsv-blockchain/go-p2p)**:
+
+    - Public P2P networking package that provides the core P2P node implementation
+    - Offers standardized interfaces for P2P communication in Bitcoin SV applications
+    - Enables external developers to build compatible P2P solutions
+
+13. **Environmental Configuration**:
 
     - Configuration management using environment variables, required for setting up network parameters, topic names, etc.
 
@@ -535,8 +545,8 @@ The P2P service serves as the communication backbone of the Teranode network, en
 | `p2p_subtree_topic` | string | "" | Topic name for subtree announcements | Controls subscription and publication to the subtree channel |
 | `p2p_mining_on_topic` | string | "" | Topic name for mining status announcements | Controls subscription and publication to the mining status channel |
 | `p2p_rejected_tx_topic` | string | "" | Topic name for rejected transaction announcements | Controls subscription to rejected transaction notifications |
-| `p2p_handshake_topic` | string | "" | Topic name for peer handshake messages | Used for version and verack exchanges between peers |
-| `p2p_handshake_topic_size` | int | 1 | Minimum topic size for handshake publishing | Controls reliability of handshake message delivery |
+| `p2p_handshake_topic` | string | "" | **REQUIRED** - Topic name for peer handshake messages | Used for version and verack exchanges between peers. During handshake, peers exchange their user agent (format: `teranode/bitcoin/{version}`), best block height, topic prefix for chain validation, and other connection metadata. Service will fail to start if not configured. |
+ `p2p_handshake_topic_size` | int | 1 | Minimum topic size for handshake publishing | Controls reliability of handshake message delivery |
 | `p2p_handshake_topic_timeout` | duration | 5s | Timeout for handshake topic operations | Maximum wait time for handshake topic readiness |
 | `p2p_node_status_topic` | string | "" | Topic name for node status messages | Controls subscription and publication to the node status channel |
 
@@ -565,6 +575,12 @@ The P2P service serves as the communication backbone of the Teranode network, en
 |---------|------|---------|-------------|--------|
 | `p2p_ban_threshold` | int | 100 | Score threshold at which peers are banned | Controls how aggressively misbehaving peers are banned |
 | `p2p_ban_duration` | duration | 24h | Duration for which peers remain banned | Controls how long banned peers are excluded from the network |
+
+### Operation Mode Settings
+
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `listen_mode` | string | full | Operation mode for the P2P service (`full` or `listen_only`) | Controls whether the node participates fully in the network or only receives data without propagating. `listen_only` mode is useful for monitoring nodes that need to stay synchronized without contributing to network traffic. See [Using Listen Mode](../../howto/miners/minersHowToUseListenMode.md) for detailed usage. |
 
 ### External Service Dependencies
 
@@ -614,6 +630,9 @@ The P2P service enforces several validation rules during startup:
 ### Required Configuration
 
 - `p2p_handshake_topic` - Must be set or service will fail with "p2p_handshake_topic not set in config"
+- `ChainCfgParams.TopicPrefix` - Must be set or service will fail with "missing config ChainCfgParams.TopicPrefix"
+  - This chain identifier ensures network isolation between different chains (mainnet, testnet, etc.)
+  - Peers validate topic prefix during handshake and reject connections from different chains
 
 ### Network Address Validation
 

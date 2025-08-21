@@ -299,12 +299,12 @@ For UTXO freeze, unfreeze, and reassignment operations:
 
 - **UTXO Identifiers**:
 
-  - Transaction hashes (txid)
-  - Output indices (vout)
-- **Block Height**: Target block height for UTXO operations
-- **Operation Type**: Freeze, unfreeze, or reassign
-- **New Address**: For UTXO reassignment operations (destination address)
-- **Execution Status**: Whether the UTXO operation has been applied
+    - **Transaction hashes (txid)**
+    - **Output indices (vout)**
+    - **Block Height**: Target block height for UTXO operations
+    - **Operation Type**: Freeze, unfreeze, or reassign
+    - **New Address**: For UTXO reassignment operations (destination address)
+    - **Execution Status**: Whether the UTXO operation has been applied
 
 #### 4. Peer Management Alert Data
 
