@@ -39,6 +39,10 @@
   $tippy = createTippy({
     animation: 'perspective-subtle',
     arrow: false,
+    interactive: true,
+    interactiveBorder: 20,
+    interactiveDebounce: 100,
+    appendTo: () => document.body,
   })
 
   $: {

@@ -18,9 +18,11 @@
     <div class="hash-row">
       {#if hash && hashUrl}
         {#if tooltip && $tippy}
-          <a href={hashUrl} class="hash-link" use:$tippy={{ content: tooltip }}>
-            {shortHash || hash}
-          </a>
+          <div class="hash-link-wrapper" use:$tippy={{ content: tooltip, interactive: false, trigger: 'mouseenter' }}>
+            <a href={hashUrl} class="hash-link">
+              {shortHash || hash}
+            </a>
+          </div>
         {:else}
           <a href={hashUrl} class="hash-link">
             {shortHash || hash}
@@ -64,6 +66,10 @@
     display: flex;
     align-items: center;
     gap: 4px;
+  }
+  
+  .hash-link-wrapper {
+    display: inline-flex;
   }
   
   .hash-link {

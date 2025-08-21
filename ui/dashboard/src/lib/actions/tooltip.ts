@@ -1,5 +1,8 @@
 import tippy from 'tippy.js'
 
+// Track the currently visible tooltip globally
+let currentTooltip: any = null
+
 export const tooltip = (node, params: any = {}) => {
   if (!params.content) {
     return null
@@ -23,18 +26,75 @@ export const tooltip = (node, params: any = {}) => {
   // showing up on hover.
   node.title = ''
 
+  // Add onShow handler to hide previous tooltip
+  const enhancedParams = {
+    ...params,
+    content,
+    onShow(instance) {
+      // Hide the currently visible tooltip if it's different
+      if (currentTooltip && currentTooltip !== instance) {
+        currentTooltip.hide()
+      }
+      currentTooltip = instance
+      
+      // Call original onShow if provided
+      if (params.onShow) {
+        params.onShow(instance)
+      }
+    },
+    onHidden(instance) {
+      // Clear reference if this was the current tooltip
+      if (currentTooltip === instance) {
+        currentTooltip = null
+      }
+      
+      // Call original onHidden if provided
+      if (params.onHidden) {
+        params.onHidden(instance)
+      }
+    },
+  }
+
   // Support any of the Tippy props by forwarding all "params":
   // https://atomiks.github.io/tippyjs/v6/all-props/
-  const tip: any = tippy(node, { content, ...params })
+  const tip: any = tippy(node, enhancedParams)
 
   return {
     // If the props change, let's update the Tippy instance:
-    update: (newParams) => tip.setProps({ content, ...newParams }),
+    update: (newParams) => {
+      const updatedParams = {
+        ...newParams,
+        content,
+        onShow(instance) {
+          if (currentTooltip && currentTooltip !== instance) {
+            currentTooltip.hide()
+          }
+          currentTooltip = instance
+          if (newParams.onShow) {
+            newParams.onShow(instance)
+          }
+        },
+        onHidden(instance) {
+          if (currentTooltip === instance) {
+            currentTooltip = null
+          }
+          if (newParams.onHidden) {
+            newParams.onHidden(instance)
+          }
+        },
+      }
+      tip.setProps(updatedParams)
+    },
 
     // Clean up the Tippy instance on unmount:
-    destroy: () => tip.destroy(),
+    destroy: () => {
+      if (currentTooltip === tip) {
+        currentTooltip = null
+      }
+      tip.destroy()
+    },
   }
 }
 
 export const createTippy = (defaultProps) => (element, props) =>
-  tooltip(element, { ...props, ...defaultProps })
+  tooltip(element, { ...defaultProps, ...props })

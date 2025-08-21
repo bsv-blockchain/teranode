@@ -403,7 +403,7 @@
         component: value ? RenderHashWithMiner : null,
         props: {
           hash: value,
-          hashUrl: '',  // No link for ancestors page
+          hashUrl: value ? `/viewer/block/${value}` : '',  // Link to block viewer
           shortHash: shortHash,
           miner: miner,
           showCopyButton: true,
@@ -458,7 +458,7 @@
         component: value ? RenderHashWithMiner : null,
         props: {
           hash: value,
-          hashUrl: '',  // No link for ancestors page
+          hashUrl: value ? `/viewer/block/${value}` : '',  // Link to block viewer
           shortHash: shortHash,
           miner: miner,  // Use miner if available from the common block metadata
           showCopyButton: true,
