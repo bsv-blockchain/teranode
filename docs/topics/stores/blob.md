@@ -119,6 +119,10 @@ func getSubtreeStore(logger ulogger.Logger) blob.Store {
 
 ```
 
+The following diagram provides a deeper level of detail into the Blob Store's internal components and their interactions:
+
+![blob_store_detailed_component.svg](../services/img/plantuml/blobserver/blob_store_detailed_component.svg)
+
 ## 3. Technology
 
 ### 3.1 Overview

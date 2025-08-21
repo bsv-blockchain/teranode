@@ -1,0 +1,167 @@
+skinparam defaultTextAlignment center
+skinparam rectangle {
+  BackgroundColor #e6f0ff
+  BorderColor #3366cc
+  FontColor black
+  RoundCorner 10
+}
+skinparam component {
+  BackgroundColor #e6f0ff
+  BorderColor #3366cc
+  FontColor black
+  RoundCorner 10
+}
+skinparam database {
+  BackgroundColor #f2f2f2
+  BorderColor #999999
+  FontColor black
+  RoundCorner 10
+}
+skinparam shadowing false
+skinparam ArrowColor #666666
+
+@startuml Blob_Store_Component
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title Blob Store - Component Diagram
+
+Container_Boundary(blob_store, "Blob Store System") {
+
+Component(store_interface, "Store Interface", "Go Interface", "Defines common blob store operations")
+
+Component(factory, "Store Factory", "Go", "Creates store instances based on URL configuration")
+
+
+
+Component(memory_impl, "Memory Implementation", "Go", "In-memory blob storage with concurrent access")
+
+Component(file_impl, "File Implementation", "Go", "Local filesystem storage with multi-tier support")
+
+Component(s3_impl, "S3 Implementation", "Go", "AWS S3 compatible storage with caching")
+
+Component(http_impl, "HTTP Implementation", "Go", "Remote HTTP blob storage client")
+
+Component(localdah_impl, "LocalDAH Implementation", "Go", "Two-tier caching implementation")
+
+
+
+Component(batcher_component, "Batcher Component", "Go", "Batches operations for performance optimization")
+
+Component(logger_component, "Logger Component", "Go", "Wraps stores with operation logging")
+
+Component(file_format_component, "File Format Component", "Go", "Manages file headers and type identification")
+
+Component(options_component, "Options Component", "Go", "Handles store and file operation options")
+
+
+
+Component(s3_client, "S3 Client", "AWS SDK", "AWS S3 API client with upload/download managers")
+
+Component(http_client, "HTTP Client", "Go net/http", "HTTP client for remote blob operations")
+
+Component(file_manager, "File Manager", "Go os", "Local file system operations and I/O")
+
+Component(memory_manager, "Memory Manager", "Go sync", "Concurrent in-memory data management")
+
+
+
+Component(dah_manager, "DAH Manager", "Go", "Delete-After-Height retention management")
+
+Component(cache_manager, "Cache Manager", "Go", "Multi-level caching with TTL support")
+
+Component(compression_manager, "Compression Manager", "Go", "Data compression and decompression")
+
+Component(checksum_manager, "Checksum Manager", "Go", "SHA256 checksum generation and verification")
+
+}
+
+Container_Boundary(external_storage, "External Storage") {
+
+ComponentDb(s3_storage, "S3 Storage", "AWS S3", "Cloud object storage")
+
+ComponentDb(local_filesystem, "Local Filesystem", "File System", "Local file storage")
+
+ComponentDb(memory_storage, "Memory Storage", "RAM", "In-memory storage")
+
+Component(remote_blob_api, "Remote Blob API", "HTTP", "Remote blob storage service")
+
+}
+
+Container_Boundary(monitoring, "Monitoring & Observability") {
+
+Component(prometheus_metrics, "Prometheus Metrics", "Prometheus", "Operation metrics and performance counters")
+
+Component(tracing_component, "Tracing Component", "OpenTelemetry", "Distributed tracing for operations")
+
+Component(health_checker, "Health Checker", "Go", "Health check implementation")
+
+}
+
+' Core interface relationships
+
+Rel(store_interface, factory, "Created by", "URL-based configuration")
+
+Rel(factory, memory_impl, "Creates", "memory:// URLs")
+
+Rel(factory, file_impl, "Creates", "file:// URLs")
+
+Rel(factory, s3_impl, "Creates", "s3:// URLs")
+
+Rel(factory, http_impl, "Creates", "http:// URLs")
+
+Rel(factory, localdah_impl, "Creates", "Composite stores")
+
+' Implementation to component relationships
+
+Rel(memory_impl, memory_manager, "Uses", "Concurrent access")
+
+Rel(file_impl, file_manager, "Uses", "File I/O operations")
+
+Rel(s3_impl, s3_client, "Uses", "AWS API calls")
+
+Rel(http_impl, http_client, "Uses", "HTTP requests")
+
+Rel(localdah_impl, dah_manager, "Uses", "Retention policies")
+
+' Cross-cutting component relationships
+
+Rel(store_interface, batcher_component, "Enhanced by", "Batch processing")
+
+Rel(store_interface, logger_component, "Wrapped by", "Operation logging")
+
+Rel(store_interface, file_format_component, "Uses", "File type management")
+
+Rel(store_interface, options_component, "Configured by", "Store options")
+
+' Storage backend relationships
+
+Rel(memory_impl, memory_storage, "Stores in", "Direct memory access")
+
+Rel(file_impl, local_filesystem, "Stores in", "File operations")
+
+Rel(s3_impl, s3_storage, "Stores in", "HTTPS/AWS API")
+
+Rel(http_impl, remote_blob_api, "Stores in", "HTTP API")
+
+' Utility component relationships
+
+Rel(file_impl, cache_manager, "Uses", "Local caching")
+
+Rel(s3_impl, cache_manager, "Uses", "Response caching")
+
+Rel(file_impl, compression_manager, "Uses", "Data compression")
+
+Rel(s3_impl, checksum_manager, "Uses", "Data integrity")
+
+Rel(localdah_impl, dah_manager, "Uses", "Block height retention")
+
+' Monitoring relationships
+
+Rel(store_interface, prometheus_metrics, "Reports to", "Metrics collection")
+
+Rel(store_interface, tracing_component, "Traced by", "Operation tracing")
+
+Rel(store_interface, health_checker, "Checked by", "Health monitoring")
+
+@enduml
