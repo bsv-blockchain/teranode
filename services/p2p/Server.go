@@ -2026,7 +2026,7 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
 	}
 }
 
-func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) {
+func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, from string) {
 	var (
 		subtreeMessage p2p.SubtreeMessage
 		hash           *chainhash.Hash

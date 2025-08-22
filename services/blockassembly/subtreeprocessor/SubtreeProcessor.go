@@ -1210,7 +1210,14 @@ func (stp *SubtreeProcessor) AddDirectly(node subtreepkg.SubtreeNode, txInpoints
 		return errors.NewInvalidArgumentError("transaction already exists in currentTxMap")
 	}
 
-	return stp.addNode(node, &txInpoints, skipNotification)
+	err := stp.addNode(node, &txInpoints, skipNotification)
+	if err != nil {
+		return errors.NewProcessingError("error adding node directly to subtree", err)
+	}
+
+	stp.txCount.Add(1)
+
+	return nil
 }
 
 // Remove prevents a transaction from being processed from the queue into a subtree, and removes it if already present.
