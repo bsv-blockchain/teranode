@@ -792,8 +792,12 @@ func (b *BlockAssembler) Reset() {
 //   - error: Any error encountered during retrieval
 func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, []*subtree.Subtree, error) {
 	// make sure we call this on the select, so we don't get a candidate when we found a new block
-
-	startTime := time.Now()
+	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "GetMiningCandidate",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockAssemblyGetMiningCandidateDuration),
+		tracing.WithDebugLogMessage(b.logger, "[GetMiningCandidate] called"),
+	)
+	defer deferFn()
 
 	// Try to get from cache first
 	b.cachedCandidate.mu.RLock()
@@ -810,9 +814,8 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 
 		// Record cache hit metrics
 		prometheusBlockAssemblerCacheHits.Inc()
-		prometheusBlockAssemblyGetMiningCandidateDuration.Observe(time.Since(startTime).Seconds())
 
-		b.logger.Debugf("[BlockAssembler] Returning cached mining candidate in %v", time.Since(startTime))
+		b.logger.Debugf("[BlockAssembler] Returning cached mining candidate %s", candidate.Id)
 
 		return candidate, subtrees, nil
 	}
@@ -891,13 +894,6 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	}
 	b.cachedCandidate.mu.Unlock()
 
-	// Record total generation time
-	prometheusBlockAssemblyGetMiningCandidateDuration.Observe(time.Since(startTime).Seconds())
-
-	if err == nil {
-		b.logger.Debugf("[BlockAssembler] Generated new mining candidate in %v", time.Since(startTime))
-	}
-
 	return candidate, subtrees, err
 }
 
@@ -959,7 +955,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 	if len(subtrees) == 0 {
 		txCount = 1
 
-		b.logger.Infof("No subtrees to include, creating empty block with coinbase only")
+		b.logger.Debugf("No subtrees to include, creating empty block with coinbase only")
 	} else {
 		currentBlockSize := uint64(0)
 		totalFees := uint64(0)
@@ -970,7 +966,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 			return nil, nil, errors.NewProcessingError("error creating top tree", err)
 		}
 
-		b.logger.Infof("Processing %d subtrees for inclusion", len(subtrees))
+		b.logger.Debugf("Processing %d subtrees for inclusion", len(subtrees))
 
 		for _, subtree := range subtrees {
 			if b.settings.Policy.BlockMaxSize == 0 || currentBlockSize+subtree.SizeInBytes <= blockMaxSizeUint64 {
@@ -997,7 +993,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 			}
 		}
 
-		b.logger.Infof("Fee accumulation complete: included %d subtrees, total_fees=%d satoshis (%.8f BSV)", subtreeCount, totalFees, float64(totalFees)/1e8)
+		b.logger.Debugf("Fee accumulation complete: included %d subtrees, total_fees=%d satoshis (%.8f BSV)", subtreeCount, totalFees, float64(totalFees)/1e8)
 
 		if len(subtreesToInclude) > 0 {
 			coinbaseMerkleProof, err := subtree.GetMerkleProofForCoinbase(subtreesToInclude)
@@ -1051,11 +1047,11 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 
 	// Log coinbase value before adding subsidy
 	feesOnly := coinbaseValue
-	b.logger.Infof("Before adding subsidy: coinbase_value=%d satoshis (%.8f BSV) from transaction fees", feesOnly, float64(feesOnly)/1e8)
+	b.logger.Debugf("Before adding subsidy: coinbase_value=%d satoshis (%.8f BSV) from transaction fees", feesOnly, float64(feesOnly)/1e8)
 
 	// Critical subsidy calculation - add comprehensive logging
 	subsidyHeight := b.bestBlockHeight.Load() + 1
-	b.logger.Infof("Calculating block subsidy for height %d", subsidyHeight)
+	b.logger.Debugf("Calculating block subsidy for height %d", subsidyHeight)
 
 	// Validate ChainCfgParams before using
 	if b.settings.ChainCfgParams == nil {
@@ -1064,13 +1060,12 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 	}
 
 	blockSubsidy := util.GetBlockSubsidyForHeight(subsidyHeight, b.settings.ChainCfgParams)
-	b.logger.Infof("Block subsidy calculated: %d satoshis (%.8f BSV) for height %d", blockSubsidy, float64(blockSubsidy)/1e8, subsidyHeight)
+	b.logger.Debugf("Block subsidy calculated: %d satoshis (%.8f BSV) for height %d", blockSubsidy, float64(blockSubsidy)/1e8, subsidyHeight)
 
 	coinbaseValue += blockSubsidy
 
 	// Log final coinbase value
-	b.logger.Infof("Final coinbase value: fees=%d + subsidy=%d = total=%d satoshis (%.8f BSV)",
-		feesOnly, blockSubsidy, coinbaseValue, float64(coinbaseValue)/1e8)
+	b.logger.Debugf("Final coinbase value: fees=%d + subsidy=%d = total=%d satoshis (%.8f BSV)", feesOnly, blockSubsidy, coinbaseValue, float64(coinbaseValue)/1e8)
 
 	// Additional validation - check for suspicious values
 	if blockSubsidy == 0 && subsidyHeight < 6930000 {
@@ -1261,7 +1256,7 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 	}
 
 FoundAncestor:
-	if commonAncestor == nil {
+	if commonAncestor == nil || commonAncestorMeta == nil {
 		return nil, nil, errors.NewProcessingError("common ancestor not found, reorg not possible")
 	}
 

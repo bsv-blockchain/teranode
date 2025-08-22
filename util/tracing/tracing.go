@@ -298,7 +298,7 @@ func (span *USpan) Stat() *gocore.Stat {
 	return span.stat
 }
 
-// // DecoupleTracingSpan creates a new context with the current span for decoupled tracing
+// DecoupleTracingSpan creates a new context with the current span for decoupled tracing
 func DecoupleTracingSpan(ctx context.Context, name string, spanName string) (context.Context, trace.Span, func(...error)) {
 	// Extract the current span from context
 	currentSpan := trace.SpanFromContext(ctx)
@@ -319,6 +319,10 @@ func (u *UTracer) logEndMessage(options *TraceOptions, start time.Time, err erro
 		return
 	}
 
+	// Duplicate the logger to ensure the skip frame is correct, since we are calling this from
+	// a closure and we want to skip the frame of this function
+	logger := options.Logger.Duplicate(ulogger.WithSkipFrameIncrement(1))
+
 	var done string
 	if err != nil {
 		done = fmt.Sprintf(" DONE in %s with error: %v", time.Since(start), err)
@@ -329,22 +333,22 @@ func (u *UTracer) logEndMessage(options *TraceOptions, start time.Time, err erro
 	for _, l := range options.LogMessages {
 		switch l.level {
 		case "WARN":
-			if err != nil && options.Logger.LogLevel() == ulogger.LogLevelWarning {
-				options.Logger.Errorf(l.message+done, l.args...)
+			if err != nil && logger.LogLevel() == ulogger.LogLevelWarning {
+				logger.Errorf(l.message+done, l.args...)
 			} else {
-				options.Logger.Warnf(l.message+done, l.args...)
+				logger.Warnf(l.message+done, l.args...)
 			}
 		case "DEBUG":
-			if err != nil && options.Logger.LogLevel() == ulogger.LogLevelDebug {
-				options.Logger.Errorf(l.message+done, l.args...)
+			if err != nil && logger.LogLevel() == ulogger.LogLevelDebug {
+				logger.Errorf(l.message+done, l.args...)
 			} else {
-				options.Logger.Debugf(l.message+done, l.args...)
+				logger.Debugf(l.message+done, l.args...)
 			}
 		default:
 			if err != nil {
-				options.Logger.Errorf(l.message+done, l.args...)
+				logger.Errorf(l.message+done, l.args...)
 			} else {
-				options.Logger.Infof(l.message+done, l.args...)
+				logger.Infof(l.message+done, l.args...)
 			}
 		}
 	}

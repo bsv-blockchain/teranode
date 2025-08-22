@@ -213,6 +213,10 @@ func (z *ZLoggerWrapper) Duplicate(options ...Option) Logger {
 		newLogger.skipFrame = opts.skip
 	}
 
+	if opts.skipIncrement > 0 {
+		newLogger.skipFrame += opts.skipIncrement
+	}
+
 	return newLogger
 }
 

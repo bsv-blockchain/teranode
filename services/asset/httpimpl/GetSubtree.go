@@ -10,7 +10,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/go-subtree"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/labstack/echo/v4"
 )
 
@@ -133,8 +133,6 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 				}
 			}
 
-			h.logger.Infof("[GetSubtree][%s] sending to client in json (%d nodes)", hash.String(), subtree.Length())
-
 			return c.JSONPretty(200, subtree, "  ")
 		}
 
@@ -151,19 +149,15 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		var b []byte
 
 		// Deserialize the nodes from the reader will return a byte slice of the nodes directly
-		if b, err = subtree.DeserializeNodesFromReader(subtreeReader); err != nil {
+		if b, err = subtreepkg.DeserializeNodesFromReader(subtreeReader); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
 		switch mode {
 		case BINARY_STREAM:
-			h.logger.Infof("[GetSubtree][%s] sending to client in binary (%d bytes)", hash.String(), len(b))
-
 			return c.Blob(200, echo.MIMEOctetStream, b)
 
 		case HEX:
-			h.logger.Infof("[GetSubtree][%s] sending to client in hex (%d bytes)", hash.String(), len(b))
-
 			return c.String(200, hex.EncodeToString(b))
 
 		default:

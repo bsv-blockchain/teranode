@@ -10,11 +10,12 @@ import (
 )
 
 type Options struct {
-	logLevel   string
-	loggerType string
-	writer     io.Writer
-	filepath   string
-	skip       int
+	logLevel      string
+	loggerType    string
+	writer        io.Writer
+	filepath      string
+	skip          int
+	skipIncrement int // Used when duplicating a logger to increment the skip value
 }
 
 type Option func(*Options)
@@ -68,6 +69,14 @@ func WithFilePath(filePath string) Option {
 func WithSkipFrame(skip int) Option {
 	return func(o *Options) {
 		o.skip = skip
+	}
+}
+
+// WithSkipFrameIncrement sets the number of frames to skip additionally to the default skip value
+// This is only used when duplicating a logger
+func WithSkipFrameIncrement(skip int) Option {
+	return func(o *Options) {
+		o.skipIncrement = skip
 	}
 }
 

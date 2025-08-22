@@ -1090,7 +1090,7 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 }
 
 func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string) {
-	s.logger.Infof("[handleHandshakeTopic] Received handshake from %s, message: %s", from, string(m))
+	s.logger.Debugf("[handleHandshakeTopic] Received handshake from %s, message: %s", from, string(m))
 
 	var hs p2p.HandshakeMessage
 	if err := json.Unmarshal(m, &hs); err != nil {
@@ -1098,8 +1098,8 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 		return
 	}
 
-	s.logger.Infof("[handleHandshakeTopic] Parsed handshake: Type=%s, PeerID=%s, BestHeight=%d, TopicPrefix=%s", hs.Type, hs.PeerID, hs.BestHeight, hs.TopicPrefix)
-	s.logger.Infof("[handleHandshakeTopic] Our HostID=%s, Message from=%s, Message PeerID=%s", s.P2PNode.HostID().String(), from, hs.PeerID)
+	s.logger.Debugf("[handleHandshakeTopic] Parsed handshake: Type=%s, PeerID=%s, BestHeight=%d, TopicPrefix=%s", hs.Type, hs.PeerID, hs.BestHeight, hs.TopicPrefix)
+	s.logger.Debugf("[handleHandshakeTopic] Our HostID=%s, Message from=%s, Message PeerID=%s", s.P2PNode.HostID().String(), from, hs.PeerID)
 
 	if hs.PeerID == s.P2PNode.HostID().String() {
 		s.logger.Debugf("[handleHandshakeTopic] Ignoring self handshake (PeerID matches our HostID)")
@@ -1129,7 +1129,7 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 		}
 	}
 
-	s.logger.Infof("[handleHandshakeTopic] Message type: %s, from peer: %s, height: %d", hs.Type, hs.PeerID, hs.BestHeight)
+	s.logger.Debugf("[handleHandshakeTopic] Message type: %s, from peer: %s, height: %d", hs.Type, hs.PeerID, hs.BestHeight)
 
 	switch hs.Type {
 	case "version":
@@ -1137,8 +1137,7 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 			s.logger.Errorf("[handleHandshakeTopic][p2p-handshake] error sending verack: %v", err)
 		}
 	case "verack":
-		s.logger.Infof("[handleHandshakeTopic][p2p-handshake] received verack from %s height=%d hash=%s agent=%s services=%d",
-			hs.PeerID, hs.BestHeight, hs.BestHash, hs.UserAgent, hs.Services)
+		s.logger.Infof("[handleHandshakeTopic][p2p-handshake] received verack from %s height=%d hash=%s agent=%s services=%d", hs.PeerID, hs.BestHeight, hs.BestHash, hs.UserAgent, hs.Services)
 
 		// Get our best block for comparison
 		localHeight := uint32(0)
@@ -1151,8 +1150,7 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 
 			// If we have a higher block than the peer who just connected
 			if localHeight > hs.BestHeight {
-				s.logger.Infof("[handleHandshakeTopic][p2p-handshake] our height (%d) is higher than peer %s (%d)",
-					localHeight, hs.PeerID, hs.BestHeight)
+				s.logger.Debugf("[handleHandshakeTopic][p2p-handshake] our height (%d) is higher than peer %s (%d)", localHeight, hs.PeerID, hs.BestHeight)
 			}
 		}
 
@@ -1233,7 +1231,7 @@ func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32
 
 	// store starting height if we haven't seen this peer before
 	if _, exists := s.P2PNode.GetPeerStartingHeight(peerID2); !exists {
-		s.logger.Infof("[checkAndTriggerSync] Setting starting height for peer %s to %d", peerID2.String(), hs.BestHeight)
+		s.logger.Debugf("[checkAndTriggerSync] Setting starting height for peer %s to %d", peerID2.String(), hs.BestHeight)
 		s.P2PNode.SetPeerStartingHeight(peerID2, int32(hs.BestHeight)) //nolint:gosec
 	} else {
 		s.logger.Debugf("[checkAndTriggerSync] Peer %s already has starting height set", peerID2.String())
@@ -1296,7 +1294,7 @@ func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32
 
 func (s *Server) receiveHandshakeStreamHandler(ns network.Stream) {
 	defer ns.Close()
-	s.logger.Infof("[streamHandler][%s][p2p-handshake]", s.P2PNode.GetProcessName())
+	s.logger.Debugf("[streamHandler][%s][p2p-handshake]", s.P2PNode.GetProcessName())
 
 	var (
 		buf []byte
@@ -1316,12 +1314,12 @@ func (s *Server) receiveHandshakeStreamHandler(ns network.Stream) {
 		_ = ns.Close()
 
 		if len(buf) > 0 {
-			s.logger.Infof("[streamHandler][%s][p2p-handshake] Received message: %s", s.P2PNode.GetProcessName(), string(buf))
+			s.logger.Debugf("[streamHandler][%s][p2p-handshake] Received message: %s", s.P2PNode.GetProcessName(), string(buf))
 
 			break
 		}
 
-		s.logger.Infof("[streamHandler][%s][p2p-handshake] No message received, waiting...", s.P2PNode.GetProcessName())
+		s.logger.Debugf("[streamHandler][%s][p2p-handshake] No message received, waiting...", s.P2PNode.GetProcessName())
 
 		time.Sleep(1 * time.Second)
 	}
@@ -1333,7 +1331,7 @@ func (s *Server) receiveHandshakeStreamHandler(ns network.Stream) {
 
 func (s *Server) P2PNodeConnected(ctx context.Context, peerID peer.ID) {
 	s.logger.Infof("[P2PNodeConnected] Peer connected: %s", peerID.String())
-	s.logger.Infof("[P2PNodeConnected] Total connected peers: %d", len(s.P2PNode.ConnectedPeers()))
+	s.logger.Debugf("[P2PNodeConnected] Total connected peers: %d", len(s.P2PNode.ConnectedPeers()))
 
 	// Add peer to SyncManager
 	if s.syncManager != nil {
@@ -1352,7 +1350,7 @@ func (s *Server) P2PNodeConnected(ctx context.Context, peerID peer.ID) {
 			if peerInfo.ID == peerID {
 				// if we don't have a starting height yet, use current height as starting height
 				if _, exists := s.P2PNode.GetPeerStartingHeight(peerID); !exists && peerInfo.CurrentHeight > 0 {
-					s.logger.Infof("[P2PNodeConnected] Setting starting height for peer %s to %d (from initial connection data)", peerID.String(), peerInfo.CurrentHeight)
+					s.logger.Debugf("[P2PNodeConnected] Setting starting height for peer %s to %d (from initial connection data)", peerID.String(), peerInfo.CurrentHeight)
 					s.P2PNode.SetPeerStartingHeight(peerID, peerInfo.CurrentHeight)
 				}
 				break
@@ -1361,7 +1359,7 @@ func (s *Server) P2PNodeConnected(ctx context.Context, peerID peer.ID) {
 	}()
 
 	// send handshake (version) when a new peer connects using direct stream (no timing issues)
-	s.logger.Infof("[P2PNodeConnected] Sending direct handshake in response to new peer connection")
+	s.logger.Debugf("[P2PNodeConnected] Sending direct handshake in response to new peer connection")
 	go s.sendDirectHandshake(ctx, peerID)
 }
 
@@ -1386,12 +1384,12 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("blockMessage - json marshal error: %w", err)
 	}
 
-	if err := s.P2PNode.Publish(ctx, s.blockTopicName, msgBytes); err != nil {
+	if err = s.P2PNode.Publish(ctx, s.blockTopicName, msgBytes); err != nil {
 		return errors.NewError("blockMessage - publish error: %w", err)
 	}
 
 	// Also send a node_status update when best block changes
-	if err := s.handleNodeStatusNotification(ctx); err != nil {
+	if err = s.handleNodeStatusNotification(ctx); err != nil {
 		// Log the error but don't fail the block notification
 		s.logger.Warnf("[handleBlockNotification] error sending node status update: %v", err)
 	}
@@ -1635,32 +1633,32 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	// Get the node status message
-	notificationMsg := s.getNodeStatusMessage(ctx)
-	if notificationMsg == nil {
+	msg := s.getNodeStatusMessage(ctx)
+	if msg == nil {
 		return errors.NewError("failed to get node status message", nil)
 	}
 
 	// Create the NodeStatusMessage for P2P publishing
 	nodeStatusMessage := NodeStatusMessage{
 		Type:              "node_status",
-		BaseURL:           notificationMsg.BaseURL,
-		PeerID:            notificationMsg.PeerID,
-		Version:           notificationMsg.Version,
-		CommitHash:        notificationMsg.CommitHash,
-		BestBlockHash:     notificationMsg.BestBlockHash,
-		BestHeight:        notificationMsg.BestHeight,
-		TxCountInAssembly: notificationMsg.TxCountInAssembly,
-		FSMState:          notificationMsg.FSMState,
-		StartTime:         notificationMsg.StartTime,
-		Uptime:            notificationMsg.Uptime,
-		ClientName:        notificationMsg.ClientName,
-		MinerName:         notificationMsg.MinerName,
-		ListenMode:        notificationMsg.ListenMode,
-		ChainWork:         notificationMsg.ChainWork,
-		SyncPeerID:        notificationMsg.SyncPeerID,
-		SyncPeerHeight:    notificationMsg.SyncPeerHeight,
-		SyncPeerBlockHash: notificationMsg.SyncPeerBlockHash,
-		SyncConnectedAt:   notificationMsg.SyncConnectedAt,
+		BaseURL:           msg.BaseURL,
+		PeerID:            msg.PeerID,
+		Version:           msg.Version,
+		CommitHash:        msg.CommitHash,
+		BestBlockHash:     msg.BestBlockHash,
+		BestHeight:        msg.BestHeight,
+		TxCountInAssembly: msg.TxCountInAssembly,
+		FSMState:          msg.FSMState,
+		StartTime:         msg.StartTime,
+		Uptime:            msg.Uptime,
+		ClientName:        msg.ClientName,
+		MinerName:         msg.MinerName,
+		ListenMode:        msg.ListenMode,
+		ChainWork:         msg.ChainWork,
+		SyncPeerID:        msg.SyncPeerID,
+		SyncPeerHeight:    msg.SyncPeerHeight,
+		SyncPeerBlockHash: msg.SyncPeerBlockHash,
+		SyncConnectedAt:   msg.SyncConnectedAt,
 	}
 
 	msgBytes, err := json.Marshal(nodeStatusMessage)
@@ -1668,15 +1666,16 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		return errors.NewError("nodeStatusMessage - json marshal error: %w", err)
 	}
 
-	s.logger.Infof("[handleNodeStatusNotification] P2P publishing nodeStatusMessage to topic %s (height: %d, version: %s)",
-		s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version)
+	s.logger.Debugf("[handleNodeStatusNotification] P2P publishing nodeStatusMessage to topic %s (height: %d, version: %s)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version)
+
 	if err = s.P2PNode.Publish(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
 		return errors.NewError("nodeStatusMessage - publish error: %w", err)
 	}
+
 	s.logger.Debugf("[handleNodeStatusNotification] Successfully published node_status message")
 
 	// Send to local WebSocket clients
-	s.notificationCh <- notificationMsg
+	s.notificationCh <- msg
 
 	return nil
 }
@@ -1895,9 +1894,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
-	s.logger.Debugf("[handleBlockTopic] got p2p block notification")
-
+func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
 	var (
 		blockMessage p2p.BlockMessage
 		hash         *chainhash.Hash
@@ -1913,7 +1910,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		return
 	}
 
-	s.logger.Debugf("[handleBlockTopic] got p2p block notification for %s from %s (originator: %s)", blockMessage.Hash, from, blockMessage.PeerID)
+	s.logger.Infof("[handleBlockTopic] got p2p block notification for %s from %s (originator: %s)", blockMessage.Hash, from, blockMessage.PeerID)
 
 	s.notificationCh <- &notificationMsg{
 		Timestamp: time.Now().UTC().Format(isoFormat),
@@ -1985,8 +1982,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 
 				// Discard announcements from peers that are behind our sync peer
 				if blockMessage.Height < uint32(syncPeerHeight) {
-					s.logger.Debugf("[handleBlockTopic] Discarding block announcement at height %d from %s (below sync peer height %d)",
-						blockMessage.Height, from, syncPeerHeight)
+					s.logger.Debugf("[handleBlockTopic] Discarding block announcement at height %d from %s (below sync peer height %d)", blockMessage.Height, from, syncPeerHeight)
 					return
 				}
 
@@ -2199,7 +2195,7 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 
 	// Check if we should buffer this announcement during initial sync period
 	if s.syncManager != nil && !s.syncManager.IsInitialSyncComplete() {
-		s.logger.Infof("[handleMiningOnTopic] Initial sync not complete, buffering mining_on announcement for %s from %s", miningOnMessage.Hash, from)
+		s.logger.Debugf("[handleMiningOnTopic] Initial sync not complete, buffering mining_on announcement for %s from %s", miningOnMessage.Hash, from)
 		announcement := &BlockAnnouncement{
 			Hash:       miningOnMessage.Hash,
 			Height:     miningOnMessage.Height,
@@ -2211,7 +2207,7 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 
 		if s.syncManager.BufferBlockAnnouncement(announcement) {
 			// Announcement was buffered, don't process it now
-			s.logger.Infof("[handleMiningOnTopic] Mining_on announcement for %s buffered successfully", miningOnMessage.Hash)
+			s.logger.Debugf("[handleMiningOnTopic] Mining_on announcement for %s buffered successfully", miningOnMessage.Hash)
 			return
 		}
 		s.logger.Warnf("[handleMiningOnTopic] Failed to buffer mining_on announcement for %s", miningOnMessage.Hash)
@@ -2390,8 +2386,7 @@ func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreReques
 	}
 
 	score, banned := s.banManager.AddScore(req.PeerId, reason)
-	s.logger.Infof("[AddBanScore] Added score to peer %s for reason %s. New score: %d, Banned: %t",
-		req.PeerId, req.Reason, score, banned)
+	s.logger.Infof("[AddBanScore] Added score to peer %s for reason %s. New score: %d, Banned: %t", req.PeerId, req.Reason, score, banned)
 
 	return &p2p_api.AddBanScoreResponse{Ok: true}, nil
 }

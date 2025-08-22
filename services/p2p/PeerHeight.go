@@ -218,7 +218,7 @@ func (p *PeerHeight) HaveAllPeersReachedMinHeight(height uint32, testAllPeers bo
 
 		/* we need the other nodes to be at least at the same height as us, it's ok if they are ahead */
 		if height > block.Height {
-			p.logger.Infof("[PeerHeight][%s] Not at same block height, %s=%d vs %d", block.PeerID, block.DataHubURL, block.Height, height)
+			p.logger.Debugf("[PeerHeight][%s] Not at same block height, %s=%d vs %d", block.PeerID, block.DataHubURL, block.Height, height)
 
 			result = false
 
