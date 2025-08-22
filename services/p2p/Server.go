@@ -35,6 +35,8 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
+	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation"
@@ -96,6 +98,7 @@ type Server struct {
 	bitcoinProtocolID                 string             // Bitcoin protocol identifier
 	blockchainClient                  blockchain.ClientI // Client for blockchain interactions
 	blockValidationClient             blockvalidation.Interface
+	blockAssemblyClient               blockassembly.ClientI     // Client for block assembly operations
 	AssetHTTPAddressURL               string                    // HTTP address URL for assets
 	e                                 *echo.Echo                // Echo server instance
 	notificationCh                    chan *notificationMsg     // Channel for notifications
@@ -167,6 +170,7 @@ func NewServer(
 	logger ulogger.Logger,
 	tSettings *settings.Settings,
 	blockchainClient blockchain.ClientI,
+	blockAssemblyClient blockassembly.ClientI,
 	rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI,
 	invalidBlocksKafkaConsumerClient kafka.KafkaConsumerGroupI,
 	invalidSubtreeKafkaConsumerClient kafka.KafkaConsumerGroupI,
@@ -392,14 +396,15 @@ func NewServer(
 	// when peers connect and tell us what address they see us from
 
 	p2pServer := &Server{
-		P2PNode:           p2pNode,
-		logger:            logger,
-		settings:          tSettings,
-		bitcoinProtocolID: fmt.Sprintf("teranode/bitcoin/%s", tSettings.Version),
-		notificationCh:    make(chan *notificationMsg, 1_000),
-		blockchainClient:  blockchainClient,
-		banList:           banlist,
-		banChan:           banChan,
+		P2PNode:             p2pNode,
+		logger:              logger,
+		settings:            tSettings,
+		bitcoinProtocolID:   fmt.Sprintf("teranode/bitcoin/%s", tSettings.Version),
+		notificationCh:      make(chan *notificationMsg, 1_000),
+		blockchainClient:    blockchainClient,
+		blockAssemblyClient: blockAssemblyClient,
+		banList:             banlist,
+		banChan:             banChan,
 
 		rejectedTxKafkaConsumerClient:     rejectedTxKafkaConsumerClient,
 		invalidBlocksKafkaConsumerClient:  invalidBlocksKafkaConsumerClient,
@@ -762,7 +767,7 @@ func (s *Server) invalidSubtreeHandler(ctx context.Context) func(msg *kafka.Kafk
 			err     error
 		)
 
-		if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
+		if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
 			return err
 		}
 
@@ -796,7 +801,7 @@ func (s *Server) invalidBlockHandler(ctx context.Context) func(msg *kafka.KafkaM
 			err     error
 		)
 
-		if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
+		if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
 			return err
 		}
 
@@ -830,7 +835,7 @@ func (s *Server) rejectedHandler(ctx context.Context) func(msg *kafka.KafkaMessa
 			err     error
 		)
 
-		if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
+		if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
 			return err
 		}
 
@@ -1009,25 +1014,25 @@ func (s *Server) sendHandshakeToPeer(ctx context.Context, peerID peer.ID, msgByt
 
 // NodeStatusMessage represents a node status update message
 type NodeStatusMessage struct {
-	Type              string  `json:"type"`
-	BaseURL           string  `json:"base_url"`
-	PeerID            string  `json:"peer_id"`
-	Version           string  `json:"version"`
-	CommitHash        string  `json:"commit_hash"`
-	BestBlockHash     string  `json:"best_block_hash"`
-	BestHeight        uint32  `json:"best_height"`
-	TxCountInAssembly int     `json:"tx_count_in_assembly"`
-	FSMState          string  `json:"fsm_state"`
-	StartTime         int64   `json:"start_time"`
-	Uptime            float64 `json:"uptime"`
-	ClientName        string  `json:"client_name"` // Name of this node client
-	MinerName         string  `json:"miner_name"`  // Name of the miner that mined the best block
-	ListenMode        string  `json:"listen_mode"`
-	ChainWork         string  `json:"chain_work"`                     // Chain work as hex string
-	SyncPeerID        string  `json:"sync_peer_id,omitempty"`         // ID of the peer we're syncing from
-	SyncPeerHeight    int32   `json:"sync_peer_height,omitempty"`     // Height of the sync peer
-	SyncPeerBlockHash string  `json:"sync_peer_block_hash,omitempty"` // Best block hash of the sync peer
-	SyncConnectedAt   int64   `json:"sync_connected_at,omitempty"`    // Unix timestamp when we first connected to this sync peer
+	Type                 string                          `json:"type"`
+	BaseURL              string                          `json:"base_url"`
+	PeerID               string                          `json:"peer_id"`
+	Version              string                          `json:"version"`
+	CommitHash           string                          `json:"commit_hash"`
+	BestBlockHash        string                          `json:"best_block_hash"`
+	BestHeight           uint32                          `json:"best_height"`
+	BlockAssemblyDetails *blockassembly_api.StateMessage `json:"block_assembly_details,omitempty"` // Details about the current block assembly state
+	FSMState             string                          `json:"fsm_state"`
+	StartTime            int64                           `json:"start_time"`
+	Uptime               float64                         `json:"uptime"`
+	ClientName           string                          `json:"client_name"` // Name of this node client
+	MinerName            string                          `json:"miner_name"`  // Name of the miner that mined the best block
+	ListenMode           string                          `json:"listen_mode"`
+	ChainWork            string                          `json:"chain_work"`                     // Chain work as hex string
+	SyncPeerID           string                          `json:"sync_peer_id,omitempty"`         // ID of the peer we're syncing from
+	SyncPeerHeight       int32                           `json:"sync_peer_height,omitempty"`     // Height of the sync peer
+	SyncPeerBlockHash    string                          `json:"sync_peer_block_hash,omitempty"` // Best block hash of the sync peer
+	SyncConnectedAt      int64                           `json:"sync_connected_at,omitempty"`    // Unix timestamp when we first connected to this sync peer
 }
 
 func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string) {
@@ -1054,26 +1059,26 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 
 	// Send to notification channel for WebSocket clients
 	s.notificationCh <- &notificationMsg{
-		Timestamp:         time.Now().UTC().Format(isoFormat),
-		Type:              "node_status",
-		BaseURL:           nodeStatusMessage.BaseURL,
-		PeerID:            nodeStatusMessage.PeerID,
-		Version:           nodeStatusMessage.Version,
-		CommitHash:        nodeStatusMessage.CommitHash,
-		BestBlockHash:     nodeStatusMessage.BestBlockHash,
-		BestHeight:        nodeStatusMessage.BestHeight,
-		TxCountInAssembly: nodeStatusMessage.TxCountInAssembly,
-		FSMState:          nodeStatusMessage.FSMState,
-		StartTime:         nodeStatusMessage.StartTime,
-		Uptime:            nodeStatusMessage.Uptime,
-		ClientName:        nodeStatusMessage.ClientName,
-		MinerName:         nodeStatusMessage.MinerName,
-		ListenMode:        nodeStatusMessage.ListenMode,
-		ChainWork:         nodeStatusMessage.ChainWork,
-		SyncPeerID:        nodeStatusMessage.SyncPeerID,
-		SyncPeerHeight:    nodeStatusMessage.SyncPeerHeight,
-		SyncPeerBlockHash: nodeStatusMessage.SyncPeerBlockHash,
-		SyncConnectedAt:   nodeStatusMessage.SyncConnectedAt,
+		Timestamp:            time.Now().UTC().Format(isoFormat),
+		Type:                 "node_status",
+		BaseURL:              nodeStatusMessage.BaseURL,
+		PeerID:               nodeStatusMessage.PeerID,
+		Version:              nodeStatusMessage.Version,
+		CommitHash:           nodeStatusMessage.CommitHash,
+		BestBlockHash:        nodeStatusMessage.BestBlockHash,
+		BestHeight:           nodeStatusMessage.BestHeight,
+		BlockAssemblyDetails: nodeStatusMessage.BlockAssemblyDetails,
+		FSMState:             nodeStatusMessage.FSMState,
+		StartTime:            nodeStatusMessage.StartTime,
+		Uptime:               nodeStatusMessage.Uptime,
+		ClientName:           nodeStatusMessage.ClientName,
+		MinerName:            nodeStatusMessage.MinerName,
+		ListenMode:           nodeStatusMessage.ListenMode,
+		ChainWork:            nodeStatusMessage.ChainWork,
+		SyncPeerID:           nodeStatusMessage.SyncPeerID,
+		SyncPeerHeight:       nodeStatusMessage.SyncPeerHeight,
+		SyncPeerBlockHash:    nodeStatusMessage.SyncPeerBlockHash,
+		SyncConnectedAt:      nodeStatusMessage.SyncConnectedAt,
 	}
 
 	// Update peer height if provided (but not for our own messages)
@@ -1210,7 +1215,7 @@ func (s *Server) sendVerack(ctx context.Context, from string, hs p2p.HandshakeMe
 // checkAndTriggerSync evaluates if the peer should trigger blockchain sync.
 // It sends a Kafka message to blockchain service if the peer is our sync peer and ahead of us.
 func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32) {
-	if syncing, err := s.isBlockchainSynchingOrCatchingUp(s.gCtx); err != nil || syncing {
+	if syncing, err := s.isBlockchainSyncingOrCatchingUp(s.gCtx); err != nil || syncing {
 		s.logger.Debugf("[checkAndTriggerSync] skipping height sync, blockchain is syncing or catching up: %v", err)
 
 		return
@@ -1505,8 +1510,14 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		}
 	}
 
-	// TODO: Get actual tx count from block assembly service when API is available
-	txCountInAssembly := 0
+	// Get current block assembly details
+	blockAssemblyDetails := &blockassembly_api.StateMessage{}
+	if s.blockAssemblyClient != nil {
+		blockAssemblyDetails, err = s.blockAssemblyClient.GetBlockAssemblyState(ctx)
+		if err != nil {
+			s.logger.Warnf("[handleNodeStatusNotification] error getting block assembly details: %s", err)
+		}
+	}
 
 	// Get client name from settings
 	clientName := ""
@@ -1608,26 +1619,26 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 
 	// Return the notification message
 	return &notificationMsg{
-		Timestamp:         time.Now().UTC().Format(isoFormat),
-		Type:              "node_status",
-		BaseURL:           s.AssetHTTPAddressURL,
-		PeerID:            peerID,
-		Version:           version,
-		CommitHash:        commit,
-		BestBlockHash:     blockHashStr,
-		BestHeight:        height,
-		TxCountInAssembly: txCountInAssembly,
-		FSMState:          fsmState,
-		StartTime:         startTime,
-		Uptime:            uptime,
-		ClientName:        clientName,
-		MinerName:         minerName,
-		ListenMode:        listenMode,
-		ChainWork:         chainWorkStr,
-		SyncPeerID:        syncPeerID,
-		SyncPeerHeight:    syncPeerHeight,
-		SyncPeerBlockHash: syncPeerBlockHash,
-		SyncConnectedAt:   syncConnectedAt,
+		Timestamp:            time.Now().UTC().Format(isoFormat),
+		Type:                 "node_status",
+		BaseURL:              s.AssetHTTPAddressURL,
+		PeerID:               peerID,
+		Version:              version,
+		CommitHash:           commit,
+		BestBlockHash:        blockHashStr,
+		BestHeight:           height,
+		BlockAssemblyDetails: blockAssemblyDetails,
+		FSMState:             fsmState,
+		StartTime:            startTime,
+		Uptime:               uptime,
+		ClientName:           clientName,
+		MinerName:            minerName,
+		ListenMode:           listenMode,
+		ChainWork:            chainWorkStr,
+		SyncPeerID:           syncPeerID,
+		SyncPeerHeight:       syncPeerHeight,
+		SyncPeerBlockHash:    syncPeerBlockHash,
+		SyncConnectedAt:      syncConnectedAt,
 	}
 }
 
@@ -1640,25 +1651,25 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 
 	// Create the NodeStatusMessage for P2P publishing
 	nodeStatusMessage := NodeStatusMessage{
-		Type:              "node_status",
-		BaseURL:           msg.BaseURL,
-		PeerID:            msg.PeerID,
-		Version:           msg.Version,
-		CommitHash:        msg.CommitHash,
-		BestBlockHash:     msg.BestBlockHash,
-		BestHeight:        msg.BestHeight,
-		TxCountInAssembly: msg.TxCountInAssembly,
-		FSMState:          msg.FSMState,
-		StartTime:         msg.StartTime,
-		Uptime:            msg.Uptime,
-		ClientName:        msg.ClientName,
-		MinerName:         msg.MinerName,
-		ListenMode:        msg.ListenMode,
-		ChainWork:         msg.ChainWork,
-		SyncPeerID:        msg.SyncPeerID,
-		SyncPeerHeight:    msg.SyncPeerHeight,
-		SyncPeerBlockHash: msg.SyncPeerBlockHash,
-		SyncConnectedAt:   msg.SyncConnectedAt,
+		Type:                 "node_status",
+		BaseURL:              msg.BaseURL,
+		PeerID:               msg.PeerID,
+		Version:              msg.Version,
+		CommitHash:           msg.CommitHash,
+		BestBlockHash:        msg.BestBlockHash,
+		BestHeight:           msg.BestHeight,
+		BlockAssemblyDetails: msg.BlockAssemblyDetails,
+		FSMState:             msg.FSMState,
+		StartTime:            msg.StartTime,
+		Uptime:               msg.Uptime,
+		ClientName:           msg.ClientName,
+		MinerName:            msg.MinerName,
+		ListenMode:           msg.ListenMode,
+		ChainWork:            msg.ChainWork,
+		SyncPeerID:           msg.SyncPeerID,
+		SyncPeerHeight:       msg.SyncPeerHeight,
+		SyncPeerBlockHash:    msg.SyncPeerBlockHash,
+		SyncConnectedAt:      msg.SyncConnectedAt,
 	}
 
 	msgBytes, err := json.Marshal(nodeStatusMessage)
@@ -1744,7 +1755,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainS
 				err     error
 			)
 
-			if syncing, err = s.isBlockchainSynchingOrCatchingUp(ctx); err != nil {
+			if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
 				s.logger.Errorf("[blockchainSubscriptionListener] error getting blockchain FSM state: %v", err)
 
 				continue
@@ -1976,7 +1987,7 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
 		syncPeer := s.syncManager.GetSyncPeer()
 		if syncPeer != "" {
 			// We have a sync peer, check if we're syncing
-			if syncing, err := s.isBlockchainSynchingOrCatchingUp(s.gCtx); err == nil && syncing {
+			if syncing, err := s.isBlockchainSyncingOrCatchingUp(s.gCtx); err == nil && syncing {
 				// Get sync peer's height through the sync manager
 				syncPeerHeight := s.syncManager.GetPeerHeight(syncPeer)
 
@@ -2218,7 +2229,7 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 		syncPeer := s.syncManager.GetSyncPeer()
 		if syncPeer != "" {
 			// We have a sync peer, check if we're syncing
-			if syncing, err := s.isBlockchainSynchingOrCatchingUp(s.gCtx); err == nil && syncing {
+			if syncing, err := s.isBlockchainSyncingOrCatchingUp(s.gCtx); err == nil && syncing {
 				// Get sync peer's height through the sync manager
 				syncPeerHeight := s.syncManager.GetPeerHeight(syncPeer)
 
@@ -3039,49 +3050,50 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 	return nil
 }
 
-func (s *Server) isBlockchainSynchingOrCatchingUp(ctx context.Context) (bool, error) {
-	if s.blockchainClient != nil {
-		var (
-			state *blockchain.FSMStateType
-			err   error
-		)
+func (s *Server) isBlockchainSyncingOrCatchingUp(ctx context.Context) (bool, error) {
+	if s.blockchainClient == nil {
+		return false, nil
+	}
+	var (
+		state *blockchain.FSMStateType
+		err   error
+	)
 
-		// Retry for up to 15 seconds if we get an error getting FSM state
-		// This handles the case where blockchain service isn't ready yet
-		retryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
+	// Retry for up to 15 seconds if we get an error getting FSM state
+	// This handles the case where blockchain service isn't ready yet
+	retryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 
-		retryCount := 0
-		for {
-			state, err = s.blockchainClient.GetFSMCurrentState(retryCtx)
-			if err == nil {
-				// Successfully got state
-				if retryCount > 0 {
-					s.logger.Infof("[isBlockchainSynchingOrCatchingUp] successfully got FSM state after %d retries", retryCount)
-				}
-				break
+	retryCount := 0
+	for {
+		state, err = s.blockchainClient.GetFSMCurrentState(retryCtx)
+		if err == nil {
+			// Successfully got state
+			if retryCount > 0 {
+				s.logger.Infof("[isBlockchainSyncingOrCatchingUp] successfully got FSM state after %d retries", retryCount)
 			}
-
-			retryCount++
-
-			// Check if context is done (timeout or cancellation)
-			select {
-			case <-retryCtx.Done():
-				s.logger.Errorf("[isBlockchainSynchingOrCatchingUp] timeout after 15s getting blockchain FSM state (tried %d times): %v", retryCount, err)
-				// On timeout, allow sync to proceed rather than blocking
-				return false, nil
-			case <-time.After(1 * time.Second):
-				// Retry after short delay
-				if retryCount == 1 || retryCount%10 == 0 {
-					s.logger.Infof("[isBlockchainSynchingOrCatchingUp] retrying FSM state check (attempt %d) after error: %v", retryCount, err)
-				}
-			}
+			break
 		}
 
-		if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
-			// ignore notifications while syncing or catching up
-			return true, nil
+		retryCount++
+
+		// Check if context is done (timeout or cancellation)
+		select {
+		case <-retryCtx.Done():
+			s.logger.Errorf("[isBlockchainSyncingOrCatchingUp] timeout after 15s getting blockchain FSM state (tried %d times): %v", retryCount, err)
+			// On timeout, allow sync to proceed rather than blocking
+			return false, nil
+		case <-time.After(1 * time.Second):
+			// Retry after short delay
+			if retryCount == 1 || retryCount%10 == 0 {
+				s.logger.Infof("[isBlockchainSyncingOrCatchingUp] retrying FSM state check (attempt %d) after error: %v", retryCount, err)
+			}
 		}
+	}
+
+	if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
+		// ignore notifications while syncing or catching up
+		return true, nil
 	}
 
 	return false, nil
@@ -3163,7 +3175,7 @@ func (s *Server) cleanupPeerMaps() {
 	}
 
 	// Log current sizes
-	s.logger.Debugf("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d",
+	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d",
 		remainingBlockCount, remainingSubtreeCount)
 }
 

@@ -42,13 +42,28 @@ export interface PingMessage {
   receivedAt: Date
 }
 
+// BlockAssembly details structure - matches blockassembly_api.StateMessage
+export interface BlockAssemblyDetails {
+  blockAssemblyState?: string      // State of the block assembly service
+  subtreeProcessorState?: string   // State of the block assembly subtree processor
+  resetWaitCount?: number          // Number of blocks the reset has to wait for
+  resetWaitTime?: number           // Time in seconds the reset has to wait for
+  subtreeCount?: number            // Number of subtrees
+  txCount?: number                 // Number of transactions
+  queueCount?: number              // Size of the queue
+  currentHeight?: number           // Height of the chaintip
+  currentHash?: string             // Hash of the chaintip
+  removeMapCount?: number          // Number of transactions in the remove map
+  subtrees?: string[]              // Hashes of the current subtrees
+}
+
 export interface NodeStatusMessage extends P2PMessageBase {
   type: MessageType.node_status
   version: string
   commit_hash: string
   best_block_hash: string
   best_height: number
-  tx_count_in_assembly: number
+  block_assembly_details?: BlockAssemblyDetails // New field
   fsm_state: string
   start_time: number
   uptime: number

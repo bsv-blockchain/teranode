@@ -258,6 +258,10 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 	if err != nil {
 		return err
 	}
+	blockAssemblyClient, err := blockassembly.NewClient(ctx, createLogger(loggerBlockAssembly), appSettings)
+	if err != nil {
+		return err
+	}
 
 	// Create a Kafka consumer group for rejected transactions
 	var rejectedTxKafkaConsumerClient *kafka.KafkaConsumerGroup
@@ -307,6 +311,7 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 
 	p2pService, err = p2p.NewServer(
 		ctx, p2pLogger, appSettings, blockchainClient,
+		blockAssemblyClient,
 		rejectedTxKafkaConsumerClient,
 		invalidBlocksKafkaConsumerClient,
 		invalidSubtreeKafkaConsumerClient,

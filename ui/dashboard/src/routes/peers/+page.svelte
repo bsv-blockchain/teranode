@@ -122,7 +122,7 @@
             commit_hash: msg.commit_hash,
             best_block_hash: msg.best_block_hash,
             best_height: msg.best_height,
-            tx_count_in_assembly: msg.tx_count_in_assembly,
+            block_assembly_details: msg.block_assembly_details || null,
             fsm_state: msg.fsm_state,
             start_time: msg.start_time,
             uptime: msg.uptime,

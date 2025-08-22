@@ -8,6 +8,7 @@ import type {
   MessageSource,
   PingMessage,
   NodeStatusMessage,
+  BlockAssemblyDetails,
 } from './types'
 import i18n from '../../i18n'
 import { humanTime } from '$internal/utils/format'
@@ -99,10 +100,73 @@ export const getMessageFields = (
         // Dynamic data
         fields.push({ label: t(`${key}.best_height`), value: nodeStatusMsg.best_height })
         fields.push({ label: t(`${key}.best_block_hash`), value: nodeStatusMsg.best_block_hash })
-        fields.push({
-          label: t(`${key}.tx_count_in_assembly`),
-          value: nodeStatusMsg.tx_count_in_assembly,
-        })
+        
+        // Block Assembly details - display new structure
+        if (nodeStatusMsg.block_assembly_details) {
+          const assembly = nodeStatusMsg.block_assembly_details
+          
+          // Main assembly info
+          if (assembly.txCount !== undefined) {
+            fields.push({ 
+              label: 'Block Assembly TXs', 
+              value: assembly.txCount.toLocaleString() 
+            })
+          }
+          
+          if (assembly.blockAssemblyState) {
+            fields.push({ 
+              label: 'Assembly State', 
+              value: assembly.blockAssemblyState 
+            })
+          }
+          
+          if (assembly.subtreeCount !== undefined) {
+            fields.push({ 
+              label: 'Subtree Count', 
+              value: assembly.subtreeCount.toLocaleString() 
+            })
+          }
+          
+          if (assembly.currentHeight !== undefined) {
+            fields.push({ 
+              label: 'Assembly Height', 
+              value: assembly.currentHeight.toLocaleString() 
+            })
+          }
+          
+          if (assembly.currentHash) {
+            // Show truncated hash for readability
+            const shortHash = assembly.currentHash.substring(0, 12) + '...'
+            fields.push({ 
+              label: 'Assembly Hash', 
+              value: shortHash
+            })
+          }
+          
+          // Show number of subtrees if array exists
+          if (assembly.subtrees && assembly.subtrees.length > 0) {
+            fields.push({ 
+              label: 'Subtrees in Assembly', 
+              value: `${assembly.subtrees.length} subtrees` 
+            })
+          }
+          
+          // Show additional state info if available
+          if (assembly.subtreeProcessorState) {
+            fields.push({
+              label: 'Subtree Processor State',
+              value: assembly.subtreeProcessorState
+            })
+          }
+          
+          if (assembly.queueCount !== undefined && assembly.queueCount > 0) {
+            fields.push({
+              label: 'Queue Size',
+              value: assembly.queueCount.toLocaleString()
+            })
+          }
+        }
+        
         fields.push({ label: t(`${key}.fsm_state`), value: nodeStatusMsg.fsm_state })
         fields.push({ label: t(`${key}.listen_mode`), value: nodeStatusMsg.listen_mode })
 

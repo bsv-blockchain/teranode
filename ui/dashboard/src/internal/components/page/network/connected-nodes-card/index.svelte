@@ -5,6 +5,7 @@
   import Card from '$internal/components/card/index.svelte'
   import Typo from '$internal/components/typo/index.svelte'
   import TableToggle from '$internal/components/table-toggle/index.svelte'
+  import BlockAssemblyModal from '$internal/components/block-assembly-modal/index.svelte'
   import i18n from '$internal/i18n'
   import { tableVariant } from '$internal/stores/nav'
   import { getColDefs, renderCells, getRenderProps } from './data'
@@ -110,6 +111,8 @@
   </div>
 </Card>
 
+<BlockAssemblyModal />
+
 <style>
   .live {
     display: flex;
@@ -206,5 +209,12 @@
     color: #ffd700 !important;
     font-weight: bold;
     font-size: 16px;
+  }
+
+  /* Style for clickable TX Assembly */
+  :global(.clickable-span.num) {
+    text-align: right !important;
+    display: block !important;
+    width: 100% !important;
   }
 </style>

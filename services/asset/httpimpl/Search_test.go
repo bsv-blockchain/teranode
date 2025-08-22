@@ -279,14 +279,14 @@ func TestSearch(t *testing.T) {
 		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", response["hash"])
 	})
 
-	t.Run("Search find utxo", func(t *testing.T) {
+	t.Run("Search utxo not supported", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
-		// set mock response
+		// set mock response - UTXO search is no longer supported
 		mockRepo.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, errors.NewBlockNotFoundError("block header not found"))
 		mockRepo.On("GetTransactionMeta", mock.Anything, mock.Anything).Return(nil, errors.NewTxNotFoundError("transaction not found"))
 		mockRepo.On("GetSubtreeExists", mock.Anything, mock.Anything).Return(false, errors.NewNotFoundError("subtree does not exist"))
-		mockRepo.On("GetUtxo", mock.Anything, mock.Anything).Return(testUtxo, nil)
+		// GetUtxo should not be called anymore
 
 		// set echo context
 		echoContext.SetPath("/search")
@@ -298,8 +298,8 @@ func TestSearch(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Check response status code
-		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+		// Check response status code - should be not found since UTXO search is not supported
+		assert.Equal(t, http.StatusNotFound, responseRecorder.Code)
 
 		// Check response body
 		var response map[string]interface{}
@@ -307,10 +307,11 @@ func TestSearch(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Check response fields
+		// Check error response
 		require.NotNil(t, response)
-		assert.Equal(t, "utxo", response["type"])
-		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", response["hash"])
+		assert.Equal(t, float64(404), response["status"])
+		assert.Equal(t, float64(errors.ERR_NOT_FOUND), response["code"])
+		assert.Contains(t, response["error"], "no matching entity found")
 	})
 
 	t.Run("Search by block height error", func(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/services/blockassembly"
+	"github.com/bitcoin-sv/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -33,9 +35,24 @@ func TestNodeStatusWithSyncPeer(t *testing.T) {
 
 		// Mock blockchain client
 		blockchainClient := new(blockchain.Mock)
+		blockAssemblyClient := new(blockassembly.Mock)
 		fsmState := blockchain_api.FSMStateType_RUNNING
+		basmState := &blockassembly_api.StateMessage{
+			BlockAssemblyState: "running",
+			CurrentHash:        "00000000ec43df22050847b5a5992d5484458fd49a77d775411f28b64198d518",
+			CurrentHeight:      110,
+			TxCount:            1000,
+			SubtreeCount:       3,
+			Subtrees: []string{
+				"d433534730f3d24bda1ecec478fb44411fd596b056bce5513f40036a1863edbb",
+				"6f00bb8845234c1db7d932b9cfdd7ac0b00751fe42022a7698a1b4401ccf5bf8",
+				"6bd64f75737fceb324076c27550a54761c6ea68b5d2d4d4a0278e7f05e1e7d7d",
+			},
+		}
+
 		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
 		blockchainClient.On("GetBestHeightAndTime", mock.Anything).Return(100, 0, nil)
+		blockAssemblyClient.On("GetBlockAssemblyState", mock.Anything).Return(basmState, nil)
 
 		// Mock best block header - create a proper header with a hash
 		bestBlockHeader := &model.BlockHeader{
@@ -72,6 +89,7 @@ func TestNodeStatusWithSyncPeer(t *testing.T) {
 			settings:            tSettings,
 			logger:              ulogger.New("test-server"),
 			blockchainClient:    blockchainClient,
+			blockAssemblyClient: blockAssemblyClient,
 			P2PNode:             mockP2PNode,
 			gCtx:                ctx,
 			syncManager:         NewSyncManager(ulogger.New("test-sync"), tSettings),
@@ -129,6 +147,19 @@ func TestNodeStatusWithSyncPeer(t *testing.T) {
 			assert.Equal(t, int32(110), nodeStatus.SyncPeerHeight, "Should include sync peer height")
 			assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000110",
 				nodeStatus.SyncPeerBlockHash, "Should include sync peer block hash")
+
+			// Verify block assembly state
+			assert.Equal(t, uint32(110), nodeStatus.BlockAssemblyDetails.CurrentHeight, "Should include current height")
+			assert.Equal(t, "running", nodeStatus.BlockAssemblyDetails.BlockAssemblyState, "Should include block assembly state")
+			assert.Equal(t, uint64(1000), nodeStatus.BlockAssemblyDetails.TxCount, "Should include transaction count")
+			assert.Equal(t, uint32(3), nodeStatus.BlockAssemblyDetails.SubtreeCount, "Should include subtree count")
+			assert.Equal(t, 3, len(nodeStatus.BlockAssemblyDetails.Subtrees), "Should include 3 subtrees")
+			assert.Equal(t, "d433534730f3d24bda1ecec478fb44411fd596b056bce5513f40036a1863edbb",
+				nodeStatus.BlockAssemblyDetails.Subtrees[0], "Should include first subtree hash")
+			assert.Equal(t, "6f00bb8845234c1db7d932b9cfdd7ac0b00751fe42022a7698a1b4401ccf5bf8",
+				nodeStatus.BlockAssemblyDetails.Subtrees[1], "Should include second subtree hash")
+			assert.Equal(t, "6bd64f75737fceb324076c27550a54761c6ea68b5d2d4d4a0278e7f05e1e7d7d",
+				nodeStatus.BlockAssemblyDetails.Subtrees[2], "Should include third subtree hash")
 
 		case <-time.After(100 * time.Millisecond):
 			t.Fatal("No message published")

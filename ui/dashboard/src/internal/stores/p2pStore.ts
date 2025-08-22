@@ -129,6 +129,20 @@ export async function connectToP2PServer() {
               }
               miningNodes.set(miningNodeSet)
             } else if (jsonData.type === 'node_status') {
+              // Debug logging for node_status messages
+              console.log('=== NODE_STATUS MESSAGE RECEIVED ===')
+              console.log('Full message:', jsonData)
+              console.log('block_assembly_details:', jsonData.block_assembly_details)
+              if (jsonData.block_assembly_details) {
+                console.log('  - txCount:', jsonData.block_assembly_details.txCount)
+                console.log('  - blockAssemblyState:', jsonData.block_assembly_details.blockAssemblyState)
+                console.log('  - subtreeCount:', jsonData.block_assembly_details.subtreeCount)
+                console.log('  - currentHeight:', jsonData.block_assembly_details.currentHeight)
+                console.log('  - currentHash:', jsonData.block_assembly_details.currentHash)
+                console.log('  - subtrees:', jsonData.block_assembly_details.subtrees)
+              }
+              console.log('=====================================')
+              
               // Handle node_status messages - these provide comprehensive node information
               const nodeKey = jsonData.peer_id
               
@@ -145,9 +159,15 @@ export async function connectToP2PServer() {
               
               const isCurrentNode = jsonData.peer_id === currentPeerID
               
+              // Extract txCount from the new block_assembly_details structure
+              // for backward compatibility with the table display
+              const txCountInAssembly = jsonData.block_assembly_details?.txCount || 0
+              
               miningNodeSet[nodeKey] = {
                 ...miningNodeSet[nodeKey],
                 ...jsonData,
+                tx_count_in_assembly: txCountInAssembly, // Map for backward compatibility
+                block_assembly: jsonData.block_assembly_details, // Store full details for future use
                 base_url: baseUrl,
                 receivedAt: new Date(),
                 isCurrentNode: isCurrentNode,

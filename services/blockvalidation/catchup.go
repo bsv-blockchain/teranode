@@ -618,7 +618,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 
 			// Wait for block assembly to be ready if needed
 			if err := blockassemblyutil.WaitForBlockAssemblyReady(gCtx, u.logger, u.blockAssemblyClient, block.Height, uint32(u.settings.ChainCfgParams.CoinbaseMaturity/2)); err != nil {
-				return errors.NewProcessingError("[catcup:validateBlocksOnChannel][%s] failed to wait for block assembly for block %s: %v", blockUpTo.Hash().String(), block.Hash().String(), err)
+				return errors.NewProcessingError("[catchup:validateBlocksOnChannel][%s] failed to wait for block assembly for block %s: %v", blockUpTo.Hash().String(), block.Hash().String(), err)
 			}
 
 			// Get cached headers for validation

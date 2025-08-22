@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/teranode/errors"
-	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
@@ -20,7 +19,7 @@ type res struct {
 }
 
 // Search creates an HTTP handler that searches for blockchain entities by hash or block height.
-// It supports finding blocks, transactions, subtrees, and UTXOs.
+// It supports finding blocks, transactions, and subtrees.
 //
 // Parameters:
 //   - c: Echo context containing the HTTP request and response
@@ -41,7 +40,7 @@ type res struct {
 //	Content-Type: application/json
 //	Body: Entity type and hash:
 //	  {
-//	    "type": "<string>",  // One of: "block", "tx", "subtree", "utxo"
+//	    "type": "<string>",  // One of: "block", "tx", "subtree"
 //	    "hash": "<string>"   // Hash of the found entity
 //	  }
 //
@@ -51,7 +50,6 @@ type res struct {
 //	1. Tries to find as block hash
 //	2. If not found, tries as transaction hash
 //	3. If not found, tries as subtree hash
-//	4. If not found, tries as UTXO hash
 //
 //	For numeric searches:
 //	1. Validates block height is within range
@@ -147,16 +145,8 @@ func (h *HTTP) Search(c echo.Context) error {
 			return c.JSONPretty(200, &res{"subtree", hash.String()}, "  ")
 		}
 
-		// Check if it's a utxo
-		u, err := h.repository.GetUtxo(ctx, &utxo.Spend{UTXOHash: hash})
-		if err != nil && !errors.Is(err, errors.ErrNotFound) {
-			return sendError(c, http.StatusInternalServerError, int32(errors.ERR_SERVICE_ERROR), errors.NewServiceError("error searching for utxo", err))
-		}
-
-		if u != nil {
-			// It's a utxo
-			return c.JSONPretty(http.StatusOK, &res{"utxo", hash.String()}, "  ")
-		}
+		// Note: UTXO search by hash is not supported as it requires TxID and Vout to locate in the store
+		// The UTXOHash alone cannot be used to retrieve a UTXO from Aerospike
 
 		return sendError(c, http.StatusNotFound, int32(errors.ERR_NOT_FOUND), errors.NewNotFoundError("no matching entity found"))
 	}
