@@ -939,6 +939,12 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	)
 	defer endSpan()
 
+	// Check if unmined transactions are still being loaded
+	if ba.blockAssembler.unminedTransactionsLoading.Load() {
+		ba.logger.Warnf("[SubmitMiningSolution] service not ready - unmined transactions are still being loaded")
+		return nil, errors.NewServiceError("service not ready - unmined transactions are still being loaded")
+	}
+
 	var responseChan chan error
 
 	if ba.settings.BlockAssembly.SubmitMiningSolutionWaitForResponse {
@@ -1324,6 +1330,12 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 	)
 	defer deferFn()
 
+	// Check if unmined transactions are still being loaded
+	if ba.blockAssembler.unminedTransactionsLoading.Load() {
+		ba.logger.Warnf("[ResetBlockAssembly] service not ready - unmined transactions are still being loaded")
+		return nil, errors.NewServiceError("service not ready - unmined transactions are still being loaded")
+	}
+
 	ba.blockAssembler.Reset()
 
 	return &blockassembly_api.EmptyMessage{}, nil
@@ -1472,6 +1484,12 @@ func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_
 		tracing.WithLogMessage(ba.logger, "[generateBlocks] called"),
 	)
 	defer deferFn()
+
+	// Check if unmined transactions are still being loaded
+	if ba.blockAssembler.unminedTransactionsLoading.Load() {
+		ba.logger.Warnf("[GenerateBlocks] service not ready - unmined transactions are still being loaded")
+		return nil, errors.NewServiceError("service not ready - unmined transactions are still being loaded")
+	}
 
 	if !ba.blockAssembler.settings.ChainCfgParams.GenerateSupported {
 		return nil, errors.NewProcessingError("generate is not supported")

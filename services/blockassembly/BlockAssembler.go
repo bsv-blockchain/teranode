@@ -166,6 +166,9 @@ type BlockAssembler struct {
 
 	// skipWaitForPendingBlocks allows tests to skip waiting for pending blocks during startup
 	skipWaitForPendingBlocks bool
+
+	// unminedTransactionsLoading indicates if unmined transactions are currently being loaded
+	unminedTransactionsLoading atomic.Bool
 }
 
 // CachedMiningCandidate holds a cached mining candidate with expiration
@@ -1332,6 +1335,14 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 // Returns:
 //   - error: Any error encountered during transaction loading or processing
 func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) (err error) {
+	// Set flag to indicate unmined transactions are being loaded
+	b.unminedTransactionsLoading.Store(true)
+	defer func() {
+		// Clear flag when loading is complete
+		b.unminedTransactionsLoading.Store(false)
+		b.logger.Infof("[loadUnminedTransactions] unmined transaction loading completed")
+	}()
+
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "loadUnminedTransactions",
 		tracing.WithParentStat(b.stats),
 		tracing.WithLogMessage(b.logger, "[loadUnminedTransactions] starting cleanup of old unmined transactions before loading"),
