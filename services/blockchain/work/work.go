@@ -11,6 +11,7 @@
 package work
 
 import (
+	"encoding/binary"
 	"math/big"
 
 	"github.com/bitcoin-sv/teranode/model"
@@ -26,8 +27,16 @@ import (
 // to the difficulty target. A lower target (higher difficulty) requires more work to find
 // a valid block hash. The formula used is:
 //
-//	work = 2^256 / target
+//	work = 2^256 / (target + 1)
 //	cumulative_work = previous_work + work
+//
+// This matches the bitcoin-sv GetBlockProof function which calculates:
+//
+//	return (~bnTarget / (bnTarget + 1)) + 1;
+//
+// Which simplifies to: 2^256 / (target + 1)
+//
+// The +1 in the denominator prevents division by zero and handles edge cases.
 //
 // This cumulative work value is used by the consensus algorithm to determine which chain
 // has the most proof-of-work and should be considered the main chain.
@@ -40,10 +49,9 @@ import (
 //   - *chainhash.Hash: The new cumulative work value as a hash
 //   - error: Any error encountered during the calculation (currently always nil)
 func CalculateWork(prevWork *chainhash.Hash, nBits model.NBit) (*chainhash.Hash, error) {
-	target := nBits.CalculateTarget()
-
-	// Work done is proportional to 1/difficulty
-	work := new(big.Int).Div(new(big.Int).Lsh(big.NewInt(1), 256), target)
+	// Calculate work for this block using CalcBlockWork
+	bits := binary.LittleEndian.Uint32(nBits.CloneBytes())
+	work := CalcBlockWork(bits)
 
 	// Add to previous work
 	newWork := new(big.Int).Add(new(big.Int).SetBytes(bt.ReverseBytes(prevWork.CloneBytes())), work)
@@ -53,4 +61,44 @@ func CalculateWork(prevWork *chainhash.Hash, nBits model.NBit) (*chainhash.Hash,
 	copy(hash[:], b)
 
 	return hash, nil
+}
+
+// CalcBlockWork calculates the work value for a single block from its difficulty bits.
+// This is equivalent to bitcoin-sv's GetBlockProof function.
+//
+// The formula used is: work = 2^256 / (target + 1)
+//
+// This function is useful for calculating the work contribution of a single block
+// without needing to know the previous cumulative work.
+//
+// Parameters:
+//   - bits: The difficulty target in compact representation
+//
+// Returns:
+//   - *big.Int: The work value for this block
+func CalcBlockWork(bits uint32) *big.Int {
+	// Convert compact bits to NBit
+	bytesLittleEndian := make([]byte, 4)
+	bytesLittleEndian[0] = byte(bits)
+	bytesLittleEndian[1] = byte(bits >> 8)
+	bytesLittleEndian[2] = byte(bits >> 16)
+	bytesLittleEndian[3] = byte(bits >> 24)
+
+	nBit, err := model.NewNBitFromSlice(bytesLittleEndian)
+	if err != nil {
+		return big.NewInt(0)
+	}
+
+	target := nBit.CalculateTarget()
+
+	// Return zero if target is negative or zero (invalid block)
+	if target.Sign() <= 0 {
+		return big.NewInt(0)
+	}
+
+	// Calculate work: 2^256 / (target + 1)
+	denominator := new(big.Int).Add(target, big.NewInt(1))
+	work := new(big.Int).Div(new(big.Int).Lsh(big.NewInt(1), 256), denominator)
+
+	return work
 }

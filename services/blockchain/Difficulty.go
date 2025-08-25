@@ -20,16 +20,8 @@ import (
 // DifficultyAdjustmentWindow defines the number of blocks to consider for difficulty adjustment.
 const DifficultyAdjustmentWindow = 144
 
-var (
-	// bigOne is 1 represented as a big.Int.  It is defined here to avoid
-	// the overhead of creating it multiple times.
-	bigOne = big.NewInt(1)
-
-	// oneLsh256 is 1 shifted left 256 bits.  It is defined here to avoid
-	// the overhead of creating it multiple times.
-	oneLsh256 = new(big.Int).Lsh(bigOne, 256)
-	_         = oneLsh256
-)
+// Removed global variables bigOne and oneLsh256 as they are no longer needed
+// The CalcWork function has been moved to the work package as CalcBlockWork
 
 // Difficulty handles the calculation and management of blockchain mining difficulty.
 type Difficulty struct {
@@ -148,11 +140,9 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 }
 
 // computeTarget calculates the target difficulty based on the first and last suitable blocks.
-// calcNextRequiredDifficulty calculates the required difficulty for the block
-// after the passed previous block node based on the difficulty retarget rules.
-// This function differs from the exported CalcNextRequiredDifficulty in that
-// the exported version uses the current best chain as the previous block node
-// while this function accepts any block node.
+// This implements the DAA (Difficulty Adjustment Algorithm) as used in bitcoin-sv.
+// The algorithm uses chainwork differences to calculate the new target, similar to
+// the ComputeTarget function in bitcoin-sv's pow.cpp.
 // Parameters:
 //   - suitableFirstBlock: First block in the difficulty adjustment window
 //   - suitableLastBlock: Last block in the difficulty adjustment window
@@ -203,11 +193,13 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 		return nil, errors.NewProcessingError("testnetArgs not supported for this network")
 	}
 
+	// Implement the DAA algorithm using chainwork (similar to bitcoin-sv's ComputeTarget)
 	firstChainwork := new(big.Int).SetBytes(suitableFirstBlock.ChainWork)
 	lastChainwork := new(big.Int).SetBytes(suitableLastBlock.ChainWork)
 
 	work := new(big.Int).Sub(lastChainwork, firstChainwork)
 	d.logger.Debugf("work: %s", work.String())
+
 	// In order to avoid difficulty cliffs, we bound the amplitude of the
 	// adjustment we are going to do.
 	d.logger.Debugf("suitableLastBlock.Height: %d, suitableFirstBlock.Height: %d", suitableLastBlock.Height, suitableFirstBlock.Height)
@@ -224,6 +216,7 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 
 	// Calculate the projected work by multiplying the current work by the target time per block (in seconds).
 	projectedWork := new(big.Int).Mul(work, big.NewInt(int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())))
+
 	// Divide the projected work by the actual time duration between the blocks to get the adjusted work.
 	// check if duration is zero
 	if duration == 0 {
@@ -232,10 +225,19 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	}
 
 	pw := new(big.Int).Div(projectedWork, big.NewInt(duration))
+
+	// Calculate the new difficulty target using the formula: target = (2^256 - work) / work
+	// This is mathematically equivalent to the C++ implementation in bitcoin-sv's pow.cpp
+	// which uses: return (-work) / work;
+	// In 256-bit unsigned arithmetic, -work is equivalent to 2^256 - work (two's complement)
+	// This formula effectively computes the inverse of work scaled to fit within 256 bits
+
 	// Calculate 2^256, which is the maximum possible value in a 256-bit space (used for Bitcoin's difficulty target).
 	e := new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil)
+
 	// Subtract the adjusted work from 2^256 to get the new numerator for the target calculation.
 	nt := new(big.Int).Sub(e, pw)
+
 	// Calculate the new target by dividing the result by the adjusted work. This gives the new difficulty target.
 	// check if pw is zero
 	if pw.Sign() == 0 {
@@ -245,9 +247,9 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 
 	newTarget := new(big.Int).Div(nt, pw)
 
-	precision := big.NewInt(10000000000) // 16 decimal places
-
-	newTarget.Div(newTarget.Mul(newTarget, precision), precision)
+	// NOTE: The squaring bug that was here has been removed (issue #3772)
+	// The buggy lines were: newTarget.Div(newTarget.Mul(newTarget, precision), precision)
+	// This was incorrectly squaring the target, making it much larger (easier difficulty)
 
 	// clip again if above minimum target (too easy)
 	if newTarget.Cmp(d.settings.ChainCfgParams.PowLimit) > 0 {
@@ -255,6 +257,7 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 		newTarget.Set(d.settings.ChainCfgParams.PowLimit)
 	}
 
+	// Convert back to compact format
 	nBitsUint, err := BigToCompact(newTarget)
 	if err != nil {
 		return nil, err
@@ -345,30 +348,8 @@ func uint32ToBytes(value uint32) []byte {
 	return bytes
 }
 
-// CalcWork calculates a work value from difficulty bits.  Bitcoin increases
-// the difficulty for generating a block by decreasing the value which the
-// generated hash must be less than.  This difficulty target is stored in each
-// block header using a compact representation as described in the documentation
-// for CompactToBig.  The main chain is selected by choosing the chain that has
-// the most proof of work (highest difficulty).  Since a lower target difficulty
-// value equates to higher actual difficulty, the work value which will be
-// accumulated must be the inverse of the difficulty.  Also, in order to avoid
-// potential division by zero and really small floating point numbers, the
-// result adds 1 to the denominator and multiplies the numerator by 2^256.
-func CalcWork(bits uint32) *big.Int {
-	// Return a work value of zero if the passed difficulty bits represent
-	// a negative number. Note this should not happen in practice with valid
-	// blocks, but an invalid block could trigger it.
-	difficultyNum := CompactToBig(bits)
-	if difficultyNum.Sign() <= 0 {
-		return big.NewInt(0)
-	}
-
-	// (1 << 256) / (difficultyNum + 1)
-	denominator := new(big.Int).Add(difficultyNum, bigOne)
-
-	return new(big.Int).Div(oneLsh256, denominator)
-}
+// CalcWork has been moved to the work package as CalcBlockWork.
+// Use work.CalcBlockWork(bits) instead.
 
 // CompactToBig converts a compact representation of a whole number N to an
 // unsigned 32-bit number.  The representation is similar to IEEE754 floating

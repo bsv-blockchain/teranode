@@ -39,6 +39,8 @@ type MockStore struct {
 	BlockByHeight map[uint32]*model.Block
 	// BestBlock represents the current best block in the chain (highest height)
 	BestBlock *model.Block
+	// BlockChainWork maps block hashes to their cumulative chain work (for difficulty calculations)
+	BlockChainWork map[chainhash.Hash][]byte
 	// state tracks the current state of the mock store (e.g., IDLE)
 	state string
 	// mu provides thread-safe access to all MockStore fields
@@ -52,10 +54,11 @@ type MockStore struct {
 //   - *MockStore: A new, initialized MockStore instance with empty block maps and IDLE state
 func NewMockStore() *MockStore {
 	return &MockStore{
-		Blocks:        map[chainhash.Hash]*model.Block{},
-		BlockExists:   map[chainhash.Hash]bool{},
-		BlockByHeight: map[uint32]*model.Block{},
-		state:         "IDLE",
+		Blocks:         map[chainhash.Hash]*model.Block{},
+		BlockExists:    map[chainhash.Hash]bool{},
+		BlockByHeight:  map[uint32]*model.Block{},
+		BlockChainWork: map[chainhash.Hash][]byte{},
+		state:          "IDLE",
 	}
 }
 
@@ -184,12 +187,120 @@ func (m *MockStore) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*mode
 	panic(implementMe)
 }
 
+// GetSuitableBlock retrieves a suitable block for mining/difficulty calculation.
+// This implements the blockchain.Store.GetSuitableBlock interface method.
+//
+// The method simulates the SQL implementation by:
+// 1. Getting the block at the given hash
+// 2. Getting its two ancestors (parent and grandparent)
+// 3. Sorting them by timestamp
+// 4. Returning the median block
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - blockHash: Hash of the block to start from
+//
+// Returns:
+//   - *model.SuitableBlock: The median block from the set of 3 blocks
+//   - error: Error if block not found or insufficient ancestors
 func (m *MockStore) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
-	panic(implementMe)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Get the block at the given hash
+	block, exists := m.Blocks[*blockHash]
+	if !exists {
+		return nil, errors.NewBlockNotFoundError("block not found", blockHash)
+	}
+
+	// Collect 3 blocks: current, parent, grandparent
+	candidates := make([]*model.SuitableBlock, 0, 3)
+
+	// Add current block
+	candidates = append(candidates, &model.SuitableBlock{
+		Hash:      blockHash[:],
+		Height:    block.Height,
+		NBits:     block.Header.Bits.CloneBytes(),
+		Time:      block.Header.Timestamp,
+		ChainWork: m.BlockChainWork[*blockHash],
+	})
+
+	// Add parent if exists
+	if block.Header.HashPrevBlock != nil && !block.Header.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+		if parentBlock, exists := m.Blocks[*block.Header.HashPrevBlock]; exists {
+			candidates = append(candidates, &model.SuitableBlock{
+				Hash:      block.Header.HashPrevBlock[:],
+				Height:    parentBlock.Height,
+				NBits:     parentBlock.Header.Bits.CloneBytes(),
+				Time:      parentBlock.Header.Timestamp,
+				ChainWork: m.BlockChainWork[*block.Header.HashPrevBlock],
+			})
+
+			// Add grandparent if exists
+			if parentBlock.Header.HashPrevBlock != nil && !parentBlock.Header.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+				if grandparentBlock, exists := m.Blocks[*parentBlock.Header.HashPrevBlock]; exists {
+					candidates = append(candidates, &model.SuitableBlock{
+						Hash:      parentBlock.Header.HashPrevBlock[:],
+						Height:    grandparentBlock.Height,
+						NBits:     grandparentBlock.Header.Bits.CloneBytes(),
+						Time:      grandparentBlock.Header.Timestamp,
+						ChainWork: m.BlockChainWork[*parentBlock.Header.HashPrevBlock],
+					})
+				}
+			}
+		}
+	}
+
+	// If we don't have 3 blocks, use what we have
+	if len(candidates) < 3 {
+		// Pad with the same block if needed (for genesis or early blocks)
+		for len(candidates) < 3 {
+			candidates = append(candidates, candidates[len(candidates)-1])
+		}
+	}
+
+	// Sort by timestamp using the same function as production
+	util.SortForDifficultyAdjustment(candidates)
+
+	// Return the median (middle) block
+	return candidates[1], nil
 }
 
+// GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specified depth.
+// This implements the blockchain.Store.GetHashOfAncestorBlock interface method.
+//
+// The method walks back through the chain using parent block references,
+// going back 'depth' blocks from the starting block.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - blockHash: Hash of the starting block
+//   - depth: Number of blocks to go back (144 for difficulty adjustment)
+//
+// Returns:
+//   - *chainhash.Hash: Hash of the ancestor block
+//   - error: Error if ancestor at specified depth doesn't exist
 func (m *MockStore) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
-	panic(implementMe)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	currentHash := blockHash
+	for i := 0; i < depth; i++ {
+		block, exists := m.Blocks[*currentHash]
+		if !exists {
+			return nil, errors.NewBlockNotFoundError("block not found while traversing ancestors", currentHash)
+		}
+
+		// Check if we've reached genesis
+		if block.Header.HashPrevBlock == nil || block.Header.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+			// Can't go back further
+			return nil, errors.NewProcessingError("insufficient chain depth for ancestor at depth %d", depth)
+		}
+
+		currentHash = block.Header.HashPrevBlock
+	}
+
+	return currentHash, nil
 }
 
 func (m *MockStore) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
