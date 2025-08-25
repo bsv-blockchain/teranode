@@ -2862,6 +2862,7 @@ func TestPrivateKeyHandling(t *testing.T) {
 		mockClient := &blockchain.Mock{}
 
 		settings := createBaseTestSettings()
+		settings.P2P.PeerCacheDir = ""
 		settings.P2P.PrivateKey = "" // No key in settings
 		settings.P2P.StaticPeers = []string{}
 		settings.P2P.ListenAddresses = []string{"127.0.0.1"}
