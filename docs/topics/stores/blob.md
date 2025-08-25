@@ -2,37 +2,35 @@
 
 ## Index
 
-- [🗂️ Blob Server](#blob-server)
-  - [Index](#index)
-  - [1. Description](#1-description)
-  - [2. Architecture](#2-architecture)
-  - [3. Technology](#3-technology)
+- [1. Description](#1-description)
+- [2. Architecture](#2-architecture)
+- [3. Technology](#3-technology)
     - [3.1 Overview](#31-overview)
     - [3.2 Store Options](#32-store-options)
     - [3.3 Concurrent Access Patterns](#33-concurrent-access-patterns)
     - [3.4 HTTP REST API Server](#34-http-rest-api-server)
-  - [4. Data Model](#4-data-model)
-  - [5. Use Cases](#5-use-cases)
+- [4. Data Model](#4-data-model)
+- [5. Use Cases](#5-use-cases)
     - [5.1. Asset Server (HTTP): Get Transactions](#51-asset-server-http-get-transactions)
     - [5.2. Asset Server (HTTP): Get Subtrees](#52-asset-server-http-get-subtrees)
     - [5.3. Block Assembly](#53-block-assembly)
     - [5.4. Block Validation](#54-block-validation)
     - [5.5 Propagation: TXStore Set()](#55-propagation-txstore-set)
-  - [6. Directory Structure and Main Files](#6-directory-structure-and-main-files)
-  - [7. Locally Running the store](#7-locally-running-the-store)
-  - [8. Configuration Options](#8-configuration-options)
+- [6. Directory Structure and Main Files](#6-directory-structure-and-main-files)
+- [7. Locally Running the store](#7-locally-running-the-store)
+- [8. Configuration Options](#8-configuration-options)
     - [8.1. URL Format](#81-url-format)
     - [8.2. Store URL Settings](#82-store-url-settings)
-      - [8.2.1. Common URL Parameters](#821-common-url-parameters)
-      - [8.2.2. File Backend Parameters](#822-file-backend-parameters)
-      - [8.2.3. S3 Backend Parameters](#823-s3-backend-parameters)
-      - [8.2.4. HTTP Backend Parameters](#824-http-backend-parameters)
-    - [8.3. Store Options](#83-store-options)
-    - [8.4. File Operation Options](#84-file-operation-options)
+        - [8.2.1. Common URL Parameters](#821-common-url-parameters)
+        - [8.2.2. File Backend Parameters](#822-file-backend-parameters)
+        - [8.2.3. S3 Backend Parameters](#823-s3-backend-parameters)
+        - [8.2.4. HTTP Backend Parameters](#824-http-backend-parameters)
+    - [8.3. Store Options](#83-store-options-optionsoptions)
+    - [8.4. File Operation Options](#84-file-operation-options-functional-options)
     - [8.5. TX Store Configuration Examples](#85-tx-store-configuration-examples)
     - [8.6. SubTree Store Configuration Examples](#86-subtree-store-configuration-examples)
     - [8.7. Configuration Interactions](#87-configuration-interactions)
-  - [9. Other Resources](#9-other-resources)
+- [9. Other Resources](#9-other-resources)
 
 ## 1. Description
 
@@ -253,7 +251,7 @@ gRPC endpoints:
 
 ## 6. Directory Structure and Main Files
 
-```
+```text
 ./stores/blob/
 ├── Interface.go                # Interface definitions for the project.
 ├── batcher                     # Batching functionality for efficient processing.
@@ -291,7 +289,7 @@ The Blob Server can be configured through URL-based settings and option paramete
 
 Blob store configurations use URLs that follow this general structure:
 
-```
+```text
 <scheme>://<path>[?<parameter1>=<value1>&<parameter2>=<value2>...]
 ```
 
@@ -307,13 +305,16 @@ Components:
 
 | Parameter | Type | Default | Description | Impact |
 |-----------|------|---------|-------------|--------|
+| `hashPrefix` | Integer | 2 | Number of characters from hash to use for directory organization | Improves file organization and lookup performance; affects directory structure |
 | `batch` | Boolean | false | Enables batch operations | Improves performance by batching operations |
 | `sizeInBytes` | Integer | 4194304 | Maximum batch size in bytes (4MB default) | Controls batch size; larger values increase throughput but use more memory |
 | `writeKeys` | Boolean | false | Whether to write keys along with blob data | Enables key storage alongside blob content |
 | `batch_size` | Integer | 1000 | Maximum items in a batch | Controls batch size; larger values increase throughput but use more memory |
 | `batch_duration` | Integer (ms) | 50 | Maximum time before processing a batch | Balances throughput vs. latency |
-| `localDAHStore` | String | "" | Path to local DAH store for Delete-At-Height functionality | Enables automatic expiry of data based on blockchain height |
-| `localDAHStorePath` | String | "./" | Path for local DAH store metadata | Directory for DAH metadata storage |
+| `localDAHStore` | String | "" | Local Delete-At-Height store backend type | Enables automatic expiry of data based on blockchain height |
+| `localDAHStorePath` | String | "/tmp/localDAH" | Path for local DAH store metadata | Directory for DAH metadata storage |
+| `localTTLStore` | String | "" | Local TTL store type for time-based expiration | Enables time-based data expiration |
+| `localTTLStorePath` | String | "" | Local TTL store path for metadata | Directory for TTL metadata storage |
 | `logger` | Boolean | false | Enables debug logging for all blob operations | Adds detailed logging for troubleshooting |
 
 #### 8.2.2. File Backend Parameters
@@ -322,8 +323,8 @@ Components:
 |-----------|------|---------|-------------|
 | Path component | String | None (required) | Base directory for file storage |
 | `dahCleanerInterval` | Duration | "1m" | Frequency of expired blob cleanup operations |
-| `header` | String | "" | Custom header prepended to all stored blobs |
-| `eofmarker` | String | "" | Custom footer appended to all stored blobs |
+| `header` | String | `(empty)` | Custom header prepended to all stored blobs |
+| `eofmarker` | String | `(empty)` | Custom footer appended to all stored blobs |
 
 #### 8.2.3. S3 Backend Parameters
 
@@ -333,7 +334,7 @@ Components:
 | `region` | String | "us-east-1" | AWS region for S3 bucket |
 | `endpoint` | String | AWS S3 endpoint | Custom endpoint for S3-compatible storage |
 | `forcePathStyle` | Boolean | false | Force path-style addressing |
-| `subDirectory` | String | "" | S3 object key prefix for organization |
+| `subDirectory` | String | `(none)` | S3 object key prefix for organization |
 | `MaxIdleConns` | Integer | 100 | Maximum number of idle HTTP connections |
 | `MaxIdleConnsPerHost` | Integer | 100 | Maximum idle connections per host |
 | `IdleConnTimeoutSeconds` | Integer | 100 | Idle connection timeout in seconds |
@@ -347,28 +348,39 @@ Components:
 | Host+Path | String | None (required) | Remote HTTP blob server endpoint |
 | `timeout` | Integer (ms) | 30000 | HTTP request timeout |
 
-### 8.3. Store Options
+### 8.3. Store Options (options.Options)
 
 Additional configuration is provided through Store Options when creating a store:
 
+| Option | Type | Default | Description | Impact |
+|--------|------|---------|-------------|--------|
+| `BlockHeightRetention` | uint32 | 0 | Default block height retention for all files | Controls automatic deletion after specified blockchain height |
+| `DAH` | uint32 | 0 | Default Delete-At-Height value for individual files | Sets blockchain height for automatic file deletion |
+| `Filename` | string | `(hash-based)` | Custom filename override | Overrides default hash-based file naming |
+| `SubDirectory` | string | `(none)` | Subdirectory within main path | Organizes data in storage hierarchy |
+| `HashPrefix` | int | 2 | Number of hash characters for directory organization | Improves file organization and lookup performance |
+| `AllowOverwrite` | bool | false | Allow overwriting existing files | Controls file replacement behavior |
+| `SkipHeader` | bool | false | Skip file headers for CLI readability | Enables CLI-friendly file formats |
+| `PersistSubDir` | string | `(none)` | Subdirectory for persistent storage | Directory for persistent data organization |
+| `LongtermStoreURL` | *url.URL | nil | URL for longterm storage backend | Enables three-tier storage (memory, local, longterm) |
+| `BlockHeightCh` | chan uint32 | nil | Block height tracking channel for DAH functionality | **Required for DAH-enabled stores** |
+
+### 8.4. File Operation Options (Functional Options)
+
+These options can be specified per operation using functional option pattern:
+
 | Option | Type | Description | Impact |
 |--------|------|-------------|--------|
-| `WithDefaultBlockHeightRetention` | uint32 | Sets block height retention | Controls automatic deletion after specified blockchain height |
-| `WithDefaultSubDirectory` | String | Sets subdirectory within main path | Organizes data in storage hierarchy |
-| `WithHashPrefix` | Integer | Number of characters from hash to use in filenames | Improves file organization and lookup performance |
-| `WithSHA256Checksum` | Boolean | Enables SHA256 checksum generation | Adds data integrity verification |
-| `WithLongtermStorage` | String, URL | Configures persistent storage options | Enables three-tier storage (memory, local, longterm) |
-
-### 8.4. File Operation Options
-
-These options can be specified per operation:
-
-| Option | Type | Description | Impact |
-|--------|------|-------------|--------|
-| `WithDeleteAt` | uint32 | Sets blockchain height for automatic deletion | Controls per-file data retention |
-| `WithFilename` | String | Sets specific filename | Overrides default hash-based naming |
-| `WithFileExtension` | String | Sets file extension | Useful for identifying file types |
-| `WithAllowOverwrite` | Boolean | Controls overwriting of existing files | Prevents accidental data loss when false |
+| `WithBlockHeightRetention(uint32)` | uint32 | Sets block height retention for this file | Controls per-file automatic deletion |
+| `WithDAH(uint32)` | uint32 | Sets Delete-At-Height value for this file | Controls per-file data retention based on blockchain height |
+| `WithFilename(string)` | string | Sets specific filename | Overrides default hash-based naming |
+| `WithSubDirectory(string)` | string | Sets subdirectory for this file | Organizes individual files in storage hierarchy |
+| `WithHashPrefix(int)` | int | Sets hash prefix for this file | Controls directory organization for this file |
+| `WithAllowOverwrite(bool)` | bool | Controls overwriting of existing files | Prevents accidental data loss when false |
+| `WithSkipHeader(bool)` | bool | Skip file headers for this operation | Enables CLI-friendly file formats |
+| `WithPersistSubDir(string)` | string | Sets persistent subdirectory | Directory for persistent storage of this file |
+| `WithLongtermStoreURL(*url.URL)` | *url.URL | Sets longterm storage URL for this file | Enables per-file longterm storage configuration |
+| `WithBlockHeightCh(chan uint32)` | chan uint32 | Sets block height channel for DAH | **Required for DAH functionality** |
 
 ### 8.5. TX Store Configuration Examples
 
@@ -424,21 +436,21 @@ These options can be specified per operation:
 
 ### 8.7. Configuration Interactions
 
-#### 8.7.1. Storage Backend Selection
+#### Storage Backend Selection
 
-The URL scheme determines which backend is used, which in turn determines which parameters are relevant. For example, `region` is only relevant for S3 storage.
+The URL scheme determines which backend is used, which in turn determines which parameters are relevant. For example, `region` is only relevant for S3 storage, while `hashPrefix` applies to all backends that support directory organization.
 
-#### 8.7.2. Batching Configuration
+#### Batching Configuration
 
-When batching is enabled (`batch=true`), the `batch_size` and `batch_duration` parameters control batch behavior. Operations are batched until either the size limit is reached or the duration expires, whichever happens first.
+When batching is enabled (`batch=true`), the `sizeInBytes` parameter controls batch behavior. Operations are batched until the size limit is reached, then the batch is written to the underlying store.
 
-#### 8.7.3. Delete-At-Height Functionality
+#### Delete-At-Height Functionality
 
-When `localDAHStore` is enabled, the store maintains metadata about when items should be deleted based on blockchain height. This metadata is stored at the path specified by `localDAHStorePath`. Individual files can set their own DAH values using the `WithDeleteAt` option.
+When `localDAHStore` is enabled, the store maintains metadata about when items should be deleted based on blockchain height. This metadata is stored at the path specified by `localDAHStorePath`. Individual files can set their own DAH values using the `WithDAH` option.
 
-#### 8.7.4. Block Height Retention
+#### Block Height Retention
 
-The `BlockHeightRetention` setting (via `WithDefaultBlockHeightRetention`) interacts with the `DAH` setting (via `WithDeleteAt`). The store-level setting provides a default, while the file-level setting allows per-file control.
+The `BlockHeightRetention` setting (via `WithDefaultBlockHeightRetention`) interacts with the `DAH` setting (via `WithDAH`). The store-level setting provides a default, while the file-level setting allows per-file control.
 
 ## 9. Other Resources
 

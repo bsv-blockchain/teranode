@@ -385,7 +385,6 @@ The UTXO Store tracks unmined transactions to support transaction recovery and c
 ### 5.1. Language and Libraries
 
 1. **Go Programming Language (Golang)**:
-
 A statically typed, compiled language known for its simplicity and efficiency, especially in concurrent operations and networked services.
 The primary language used for implementing the service's logic.
 
@@ -435,7 +434,7 @@ Stored data is automatically purged a certain TTL (Time To Live) period after it
 
 ## 6. Directory Structure and Main Files
 
-```
+```text
 UTXO Store Package Structure (stores/utxo)
 ├── Interface.go                    # Defines the interface for the UTXO Store
 ├── _factory                        # Contains different store implementations
@@ -514,13 +513,13 @@ The `utxostore` setting determines which datastore implementation to use. The co
 
 #### 8.1.1 Aerospike
 
-```
-aerosike://host:port/namespace?param1=value1&param2=value2
+```text
+aerospike://host:port/namespace?param1=value1&param2=value2
 ```
 
 Example:
 
-```
+```text
 utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.teranode.dev:3000/teranode-store?set=txmeta&externalStore=blob://blobserver:8080/utxo
 ```
 
@@ -535,37 +534,37 @@ utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.teranode.dev:3000/tera
 
 **PostgreSQL:**
 
-```
+```text
 postgres://username:password@host:port/dbname?param1=value1&param2=value2
 ```
 
 Example:
 
-```
+```text
 utxostore.dev.[YOUR_USERNAME]=postgres://miner1:miner1@postgresserver.teranode.dev:5432/teranode-store?expiration=24h
 ```
 
 **SQLite:**
 
-```
+```text
 sqlite:///path/to/file.sqlite?param1=value1&param2=value2
 ```
 
 Example:
 
-```
+```text
 utxostore.dev.[YOUR_USERNAME]=sqlite:///data/utxo.sqlite?expiration=24h
 ```
 
 **In-memory SQLite:**
 
-```
+```text
 sqlitememory:///name?param1=value1&param2=value2
 ```
 
 Example:
 
-```
+```text
 utxostore.dev.[YOUR_USERNAME]=sqlitememory:///utxo?expiration=24h
 ```
 
@@ -576,13 +575,13 @@ utxostore.dev.[YOUR_USERNAME]=sqlitememory:///utxo?expiration=24h
 
 #### 8.1.3 Memory
 
-```
+```text
 memory://host:port/mode
 ```
 
 Example:
 
-```
+```text
 utxostore.dev.[YOUR_USERNAME]=memory://localhost:${UTXO_STORE_GRPC_PORT}/splitbyhash
 ```
 
@@ -593,39 +592,43 @@ utxostore.dev.[YOUR_USERNAME]=memory://localhost:${UTXO_STORE_GRPC_PORT}/splitby
 
 #### 8.1.4 Nullstore
 
-```
+```text
 null:///
 ```
 
 Example:
 
-```
+```text
 utxostore.dev.[YOUR_USERNAME]=null:///
 ```
 
 ### 8.2 Configuration Parameters
 
-The UTXO Store can be configured through the `UtxoStoreSettings` struct which contains various parameters to control the behavior of the store. These settings can be specified in your configuration file or through environment variables.
+The UTXO Store can be configured through the `UtxoStoreSettings` struct which contains various parameters to control the behavior of the store.
 
 #### 8.2.1 General Settings
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|--------|
-| `UtxoStore` | *url.URL | Connection URL for the UTXO store | - |
-| `BlockHeightRetention` | uint32 | Number of blocks to retain data for | - |
+| `UtxoStore` | *url.URL | Connection URL for the UTXO store | "" (must be configured) |
+| `BlockHeightRetention` | uint32 | Number of blocks to retain data for | 288 blocks (~2 days) |
+| `BlockHeightRetentionAdjustment` | int32 | Adjustment to global block height retention (can be positive or negative) | 0 |
+| `UnminedTxRetention` | uint32 | Retention period for unmined transactions in blocks | 1008 blocks (~7 days) |
+| `ParentPreservationBlocks` | uint32 | Parent transaction preservation period in blocks | 1440 blocks (~10 days) |
 | `UtxoBatchSize` | int | Batch size for UTXOs (critical - do not change after initial setup) | 128 |
 | `DBTimeout` | time.Duration | Timeout for database operations | 5s |
 | `UseExternalTxCache` | bool | Whether to use external transaction cache | true |
 | `ExternalizeAllTransactions` | bool | Whether to externalize all transactions | false |
 | `VerboseDebug` | bool | Enable verbose debugging | false |
 | `UpdateTxMinedStatus` | bool | Whether to update transaction mined status | true |
+| `DisableDAHCleaner` | bool | Disable Delete-At-Height cleaner process | false |
 
 #### 8.2.2 SQL-specific Settings
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|--------|
 | `PostgresMaxIdleConns` | int | Maximum number of idle connections to the PostgreSQL database | 10 |
-| `PostgresMaxOpenConns` | int | Maximum number of open connections to the PostgreSQL database | 100 |
+| `PostgresMaxOpenConns` | int | Maximum number of open connections to the PostgreSQL database | 80 |
 
 #### 8.2.3 Batch Processing Settings
 
@@ -633,12 +636,10 @@ The UTXO Store uses batch processing to improve performance. The following setti
 
 | Parameter | Type | Description                                                               | Default |
 |-----------|------|---------------------------------------------------------------------------|--------|
-| `StoreBatcherSize` | int | Batch size for store operations                                           | 256 |
-| `StoreBatcherDurationMillis` | int | Maximum duration in milliseconds for store batching                       | 10 |
-| `StoreBatcherConcurrency` | int | Number of concurrent store batcher goroutines                             | 32 |
+| `StoreBatcherSize` | int | Batch size for store operations                                           | 100 |
+| `StoreBatcherDurationMillis` | int | Maximum duration in milliseconds for store batching                       | 100 |
 | `SpendBatcherSize` | int | Batch size for spend operations                                           | 100 |
 | `SpendBatcherDurationMillis` | int | Maximum duration in milliseconds for spend batching                       | 100 |
-| `SpendBatcherConcurrency` | int | Number of concurrent spend batcher goroutines                             | 32 |
 | `OutpointBatcherSize` | int | Batch size for outpoint operations                                        | 100 |
 | `OutpointBatcherDurationMillis` | int | Maximum duration in milliseconds for outpoint batching                    | 10 |
 | `IncrementBatcherSize` | int | Batch size for increment operations                                       | 256 |
@@ -652,14 +653,11 @@ The UTXO Store uses batch processing to improve performance. The following setti
 | `MaxMinedRoutines` | int | Maximum number of concurrent goroutines for processing mined transactions | 128 |
 | `MaxMinedBatchSize` | int | Maximum number of mined transactions processed in a batch                 | 1024 |
 
-### 8.3 Environment Variables
+### 8.3 Important Notes
 
-Many of the settings can also be configured through environment variables. The variables follow the pattern of uppercasing the parameter name with underscores, prefixed with `TERANODE_`.
+**Critical Setting Warning:** The `UtxoBatchSize` setting must not be changed after the UTXO store has been running. It is used to calculate the offset for transaction outputs, and changing it would break the store's integrity.
 
-For example:
-
-- `TERANODE_UTXO_STORE_BLOCK_HEIGHT_RETENTION` sets the `BlockHeightRetention` parameter
-- `TERANODE_UTXO_STORE_UTXO_BATCH_SIZE` sets the `UtxoBatchSize` parameter
+**Block Height Retention:** The effective block height retention for the UTXO store is calculated as `GlobalBlockHeightRetention + BlockHeightRetentionAdjustment`. The global value defaults to 288 blocks (~2 days), and the adjustment can be positive or negative to fine-tune retention per store.
 
 ### 8.4 Configuration Interactions and Best Practices
 
@@ -693,10 +691,6 @@ For SQL backends (PostgreSQL), the `PostgresMaxIdleConns` and `PostgresMaxOpenCo
 
 - Set `PostgresMaxOpenConns` based on your database server capacity and expected load
 - Set `PostgresMaxIdleConns` to a value that balances connection reuse with server resource usage
-
-#### 8.4.4 Critical Settings
-
-**Important:** The `UtxoBatchSize` setting is critical and must not be changed after the UTXO store has been running. It is used to calculate the offset for transaction outputs, and changing it would break the store's integrity.
 
 ## 9. Other Resources
 
