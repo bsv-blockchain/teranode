@@ -39,7 +39,7 @@ The recommended CPU miner for Teranode is the BSV CPU miner available as a Docke
 docker run -it \
   --network my-teranode-network \
   ghcr.io/bitcoin-sv/cpuminer:latest \
-  --algo=sha256d --debug --always-gmc --retries=10 \
+  --algo=sha256d --debug --always-gmc --retries=1 --retry-pause=5 \
   --url=http://rpc:9292 --userpass=bitcoin:bitcoin \
   --coinbase-addr=mgqipciCS56nCYSjB1vTcDGskN82yxfo1G \
   --threads=2 --coinbase-sig="Teranode us-1"
@@ -52,7 +52,7 @@ If your Teranode RPC service is not on the same Docker network:
 ```bash
 docker run -it \
   ghcr.io/bitcoin-sv/cpuminer:latest \
-  --algo=sha256d --debug --always-gmc --retries=10 \
+  --algo=sha256d --debug --always-gmc --retries=1 --retry-pause=5 \
   --url=http://YOUR_TERANODE_IP:9292 --userpass=bitcoin:bitcoin \
   --coinbase-addr=YOUR_BSV_ADDRESS \
   --threads=4 --coinbase-sig="Your Mining Pool"
@@ -95,7 +95,7 @@ docker run -it \
 docker run -it \
   --network teranode-testnet \
   ghcr.io/bitcoin-sv/cpuminer:latest \
-  --algo=sha256d \
+  --algo=sha256d --always-gmc --retries=1 --retry-pause=5 \
   --url=http://rpc:9292 \
   --userpass=bitcoin:bitcoin \
   --coinbase-addr=mgqipciCS56nCYSjB1vTcDGskN82yxfo1G \
@@ -112,13 +112,12 @@ For systems with many CPU cores:
 docker run -it \
   --network my-teranode-network \
   ghcr.io/bitcoin-sv/cpuminer:latest \
-  --algo=sha256d \
+  --algo=sha256d --always-gmc --retries=1 --retry-pause=5 \
   --url=http://rpc:9292 \
   --userpass=bitcoin:bitcoin \
   --coinbase-addr=YOUR_BSV_ADDRESS \
   --threads=16 \
   --scantime=60 \
-  --retries=20 \
   --coinbase-sig="High Performance Miner"
 ```
 
@@ -128,7 +127,7 @@ docker run -it \
 docker run -it \
   --network my-teranode-network \
   ghcr.io/bitcoin-sv/cpuminer:latest \
-  --algo=sha256d \
+  --algo=sha256d --always-gmc --retries=1 --retry-pause=5 \
   --url=http://rpc:9292 \
   --userpass=bitcoin:bitcoin \
   --coinbase-addr=YOUR_BSV_ADDRESS \
