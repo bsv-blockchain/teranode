@@ -1,3 +1,19 @@
+// Package localdah provides Delete-At-Height (DAH) functionality for blob storage.
+// This package implements a wrapper around blob stores that adds automatic cleanup
+// of expired blobs based on blockchain height. When a blob is stored with a DAH value,
+// it will be automatically deleted when the blockchain reaches that height.
+//
+// The LocalDAH wrapper maintains a local store for DAH metadata and coordinates
+// with the underlying blob store to provide seamless DAH functionality. This is
+// particularly useful for blockchain applications where data has a natural expiration
+// based on block height, such as transaction data that only needs to be retained
+// for a certain number of blocks.
+//
+// Key features:
+// - Automatic cleanup of expired blobs based on blockchain height
+// - Transparent integration with any blob.Store implementation
+// - Efficient metadata storage for DAH values
+// - Background cleanup processes to remove expired data
 package localdah
 
 import (
@@ -11,6 +27,9 @@ import (
 	"github.com/ordishs/go-utils"
 )
 
+// blobStore defines the interface that underlying blob storage implementations must satisfy
+// to be compatible with LocalDAH wrapper functionality. This interface encompasses all
+// standard blob operations plus DAH-specific methods for metadata management.
 type blobStore interface {
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error)
@@ -25,6 +44,16 @@ type blobStore interface {
 	SetCurrentBlockHeight(height uint32)
 }
 
+// LocalDAH implements Delete-At-Height functionality as a wrapper around blob stores.
+// It maintains DAH metadata in a separate store and coordinates automatic cleanup
+// of expired blobs when the blockchain reaches specified heights.
+//
+// The LocalDAH wrapper uses two underlying stores:
+// - dahStore: Stores DAH metadata and expiration information
+// - blobStore: Stores the actual blob data
+//
+// This separation allows for efficient DAH operations without affecting the
+// performance of the main blob storage operations.
 type LocalDAH struct {
 	logger    ulogger.Logger
 	dahStore  blobStore
@@ -32,6 +61,17 @@ type LocalDAH struct {
 	options   *options.Options
 }
 
+// New creates a new LocalDAH wrapper that adds Delete-At-Height functionality to blob stores.
+//
+// Parameters:
+//   - logger: Logger instance for DAH operations
+//   - dahStore: Store for DAH metadata and expiration tracking
+//   - blobStore: Store for actual blob data
+//   - opts: Optional store configuration options
+//
+// Returns:
+//   - *LocalDAH: Configured LocalDAH wrapper instance
+//   - error: Any error that occurred during initialization
 func New(logger ulogger.Logger, dahStore, blobStore blobStore, opts ...options.StoreOption) (*LocalDAH, error) {
 	options := options.NewStoreOptions(opts...)
 

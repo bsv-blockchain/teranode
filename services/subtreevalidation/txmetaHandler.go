@@ -14,8 +14,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// txmetaHandler processes Kafka messages containing transaction metadata.
-// It handles both addition and deletion of transaction metadata in the cache.
+// txmetaHandler processes Kafka messages for transaction metadata cache operations.
+//
+// Processing errors (ErrProcessing) are logged and the message is marked as completed
+// to prevent infinite retry loops on malformed data.
 func (u *Server) txmetaHandler(msg *kafka.KafkaMessage) error {
 	if msg == nil || len(msg.ConsumerMessage.Value) <= chainhash.HashSize {
 		return nil

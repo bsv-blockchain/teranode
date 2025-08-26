@@ -3223,6 +3223,9 @@ func pickNoun(n uint64, singular, plural string) string {
 	return plural
 }
 
+// listenForBanEvents continuously listens for ban events from the P2P service
+// and handles them by disconnecting banned peers. This method runs in a goroutine
+// and will exit when the context is canceled.
 func (s *server) listenForBanEvents(ctx context.Context) {
 	for {
 		select {
@@ -3234,6 +3237,9 @@ func (s *server) listenForBanEvents(ctx context.Context) {
 	}
 }
 
+// handleBanEvent processes a ban event from the P2P service by disconnecting
+// peers that match the banned IP address or subnet. Only "add" ban actions
+// are processed; other actions are ignored.
 func (s *server) handleBanEvent(_ context.Context, event p2p.BanEvent) {
 	if event.Action != "add" {
 		return // We only care about new bans

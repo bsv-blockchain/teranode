@@ -5,13 +5,22 @@ import (
 	"github.com/bitcoin-sv/teranode/ulogger"
 )
 
-// MockLogger provides a mock implementation of ulogger.Logger for testing
+// MockLogger provides a mock implementation of ulogger.Logger for testing.
+// It records all logging calls made to it, allowing tests to verify that the correct
+// logging methods were called with the expected format strings. This is essential
+// for testing Logger wrapper functionality without producing actual log output.
 type MockLogger struct {
+	// DebugCalls records all format strings passed to Debugf calls
 	DebugCalls    []string
+	// InfoCalls records all format strings passed to Infof calls
 	InfoCalls     []string
+	// WarnCalls records all format strings passed to Warnf calls
 	WarnCalls     []string
+	// ErrorCalls records all format strings passed to Errorf calls
 	ErrorCalls    []string
+	// FatalCalls records all format strings passed to Fatalf calls
 	FatalCalls    []string
+	// LogLevelValue stores the configured log level for testing LogLevel() method
 	LogLevelValue int
 }
 

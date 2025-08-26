@@ -23,10 +23,12 @@ const (
 )
 
 // OnSeed is the signature of the callback function which is invoked when DNS
-// seeding is succesfull.
+// seeding is successful. The callback receives a slice of network addresses
+// discovered through DNS seeding.
 type OnSeed func(addrs []*wire.NetAddress)
 
-// LookupFunc is the signature of the DNS lookup function.
+// LookupFunc is the signature of the DNS lookup function used to resolve
+// DNS seed hostnames to IP addresses.
 type LookupFunc func(string) ([]net.IP, error)
 
 // SeedFromDNS uses DNS seeding to populate the address manager with peers.

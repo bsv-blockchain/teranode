@@ -1,3 +1,6 @@
+// Package main provides a utility to generate Mermaid state diagrams for the blockchain service FSM.
+// This tool creates a visual representation of the finite state machine used by the blockchain service,
+// outputting the diagram in Mermaid format for documentation purposes.
 package main
 
 import (

@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestInitPrometheusMetrics validates the idempotent initialization of Prometheus metrics,
+// ensuring multiple calls don't cause conflicts and metrics are properly registered.
 func TestInitPrometheusMetrics(t *testing.T) {
 	// Call initPrometheusMetrics multiple times to ensure it's idempotent
 	initPrometheusMetrics()
@@ -60,6 +62,8 @@ func TestPrometheusHealthMetric(t *testing.T) {
 	require.Equal(t, newValue+2, finalValue)
 }
 
+// TestPrometheusMetricLabels validates the metric labeling and naming structure,
+// ensuring proper namespace, subsystem, and name construction.
 func TestPrometheusMetricLabels(t *testing.T) {
 	// Initialize metrics
 	initPrometheusMetrics()
@@ -130,6 +134,8 @@ func TestConcurrentMetricInitialization(t *testing.T) {
 	require.Greater(t, value, 0.0)
 }
 
+// TestMetricNamespacing validates naming convention compliance for alert service metrics,
+// ensuring all metrics follow the proper teranode_alert_ prefix structure.
 func TestMetricNamespacing(t *testing.T) {
 	// Initialize metrics
 	initPrometheusMetrics()

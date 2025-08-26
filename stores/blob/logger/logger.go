@@ -1,3 +1,19 @@
+// Package logger provides a debugging wrapper for blob.Store implementations.
+//
+// The logger package implements a transparent logging wrapper that intercepts
+// all blob store operations and logs detailed debug information including
+// operation parameters, results, and call stack traces. This is primarily
+// used for development, debugging, and troubleshooting blob storage issues.
+//
+// Key features:
+//   - Transparent wrapper preserving all blob.Store interface behavior
+//   - Detailed debug logging with operation parameters and results
+//   - Call stack tracing to identify operation origins
+//   - Configurable via store URL query parameter: logger=true
+//   - Zero performance impact when debug logging is disabled
+//
+// The wrapper is typically applied automatically by the blob store factory
+// when the logger=true parameter is specified in the store URL.
 package logger
 
 import (
@@ -14,6 +30,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 )
 
+// blobStore defines the interface contract for blob storage backends.
+// This interface mirrors the main blob.Store interface to enable transparent wrapping.
 type blobStore interface {
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error)
@@ -28,11 +46,33 @@ type blobStore interface {
 	SetCurrentBlockHeight(height uint32)
 }
 
+// Logger is a debugging wrapper that logs all blob store operations.
+//
+// It implements the blobStore interface by wrapping an underlying store
+// and logging detailed information about each operation including parameters,
+// results, errors, and call stack traces. The wrapper is transparent and
+// preserves all original functionality while adding comprehensive logging.
+//
+// All log messages are emitted at DEBUG level with structured formatting
+// that includes operation type, key (reversed for readability), file type,
+// and relevant parameters or results.
 type Logger struct {
 	logger ulogger.Logger
 	store  blobStore
 }
 
+// New creates a new Logger wrapper that adds debug logging to blob store operations.
+//
+// The returned wrapper implements the blobStore interface and logs all operations
+// with detailed parameter and result information. Logging is performed at DEBUG
+// level, so it can be controlled via logger configuration.
+//
+// Parameters:
+//   - logger: Logger instance for debug output
+//   - store: Underlying blob store to wrap
+//
+// Returns:
+//   - blobStore: Logger wrapper implementing the blob store interface
 func New(logger ulogger.Logger, store blobStore) blobStore {
 	s := &Logger{
 		logger: logger,
@@ -42,6 +82,14 @@ func New(logger ulogger.Logger, store blobStore) blobStore {
 	return s
 }
 
+// caller generates a formatted call stack trace for debugging purposes.
+//
+// It walks up the call stack to identify the origin of blob store operations,
+// providing context about which code triggered each operation. The trace
+// includes function names, file paths, and line numbers formatted for readability.
+//
+// Returns:
+//   - string: Formatted call stack trace with up to 5 levels of depth
 func caller() string {
 	var callers []string
 

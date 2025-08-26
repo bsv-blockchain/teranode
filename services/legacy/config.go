@@ -50,15 +50,41 @@ const (
 	defaultMinRelayTxFee           = bsvutil.Amount(1)
 )
 
+// Config provides a unified interface for accessing configuration values from various sources.
+// It supports type-safe retrieval of configuration parameters with optional default values
+// and handles common data types used in legacy protocol configuration.
 type Config interface {
+	// Set stores a configuration value for the specified key and returns the previous value.
 	Set(key string, value string) string
+
+	// Unset removes a configuration value for the specified key and returns the previous value.
 	Unset(key string) string
+
+	// Get retrieves a string configuration value for the specified key.
+	// Returns the value and true if found, or the default value and false if not found.
 	Get(key string, defaultValue ...string) (string, bool)
+
+	// GetMulti retrieves a multi-value string configuration, splitting by the specified separator.
+	// Returns the slice of values and true if found, or the default slice and false if not found.
 	GetMulti(key string, sep string, defaultValue ...[]string) ([]string, bool)
+
+	// GetInt retrieves an integer configuration value for the specified key.
+	// Returns the parsed integer and true if found and valid, or the default value and false otherwise.
 	GetInt(key string, defaultValue ...int) (int, bool)
+
+	// GetBool retrieves a boolean configuration value for the specified key.
+	// Returns the parsed boolean, using the default value if the key is not found.
 	GetBool(key string, defaultValue ...bool) bool
+
+	// GetDuration retrieves a time.Duration configuration value for the specified key.
+	// Returns the parsed duration, any parsing error, and true if found.
 	GetDuration(key string, defaultValue ...time.Duration) (time.Duration, error, bool)
+
+	// GetURL retrieves a URL configuration value for the specified key.
+	// Returns the parsed URL, any parsing error, and true if found.
 	GetURL(key string, defaultValue ...string) (*url.URL, error, bool)
+
+	// GetAll returns a copy of all configuration key-value pairs as a map.
 	GetAll() map[string]string
 }
 
@@ -697,6 +723,10 @@ func bsvdLookup(host string) ([]net.IP, error) {
 	return cfg.lookup(host)
 }
 
+// setConfigValuesFromSettings applies configuration values from the settings map to the config struct
+// using reflection. It processes keys with the "legacy_config_" prefix, removing the prefix and
+// mapping the remaining key to the corresponding config struct field. Supports various data types
+// including bool, int, uint32, uint64, int64 (as time.Duration), float64, uint, string, and slices.
 func setConfigValuesFromSettings(logger ulogger.Logger, settings map[string]string, cfg *config) {
 	for k, v := range settings {
 		// check whether the key is of the form "legacy_config_" + configKey

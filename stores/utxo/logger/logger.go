@@ -1,3 +1,15 @@
+// Package logger provides a logging wrapper for UTXO store implementations.
+//
+// The logger package implements a decorator pattern that wraps any utxo.Store
+// implementation with comprehensive logging capabilities. It logs all store
+// operations including method calls, parameters, return values, and execution
+// times for debugging and monitoring purposes.
+//
+// This is particularly useful for:
+//   - Debugging UTXO store operations
+//   - Performance monitoring and profiling
+//   - Audit trails for transaction processing
+//   - Development and testing environments
 package logger
 
 import (
@@ -16,11 +28,16 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
+// Store wraps a utxo.Store implementation with logging capabilities.
+// It implements the decorator pattern to add comprehensive logging to all store operations.
 type Store struct {
 	logger ulogger.Logger
 	store  utxo.Store
 }
 
+// New creates a new logging wrapper around the provided UTXO store.
+// All operations on the returned store will be logged with detailed information
+// including method names, parameters, return values, and execution times.
 func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) utxo.Store {
 	s := &Store{
 		logger: logger,

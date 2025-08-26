@@ -55,6 +55,8 @@ func TestServer_Health(t *testing.T) {
 
 }
 
+// TestServer_HealthGRPC validates the gRPC health check endpoint functionality,
+// verifying that it returns the expected response structure with timestamp and status.
 func TestServer_HealthGRPC(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
@@ -98,6 +100,8 @@ func TestServer_Init_basic(t *testing.T) {
 	require.NotNil(t, server.appConfig.Services.Datastore)
 }
 
+// TestServer_requireP2P validates P2P configuration processing and default value assignment,
+// ensuring proper protocol ID, topic name, and discovery interval setup.
 func TestServer_requireP2P(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings()
@@ -202,6 +206,8 @@ func TestServer_loadDatastore(t *testing.T) {
 // TestServer_Stop is omitted as it requires a fully initialized p2pServer
 // which would require extensive setup beyond the scope of unit testing
 
+// TestServer_basic_functionality performs an integration test of the complete server workflow,
+// testing initialization, configuration setup, and basic operational readiness.
 func TestServer_basic_functionality(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)

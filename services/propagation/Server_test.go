@@ -453,6 +453,10 @@ func TestPropagationServer_HealthGRPC(t *testing.T) {
 	})
 }
 
+// TestStartHTTPServer tests the HTTP server startup functionality of the propagation service.
+// This test validates that the HTTP server can be properly initialized, started, and responds
+// to health check requests with appropriate status codes and response formats. It also tests
+// rate limiting functionality to ensure the server properly enforces request limits.
 func TestStartHTTPServer(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -708,6 +712,9 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 	})
 }
 
+// Test_processTransactionInternalAerospike tests the processTransactionInternal function using Aerospike as the UTXO store backend.
+// This test initializes an Aerospike container, configures the test environment with the Aerospike UTXO store,
+// and validates transaction processing functionality against the distributed database backend.
 func Test_processTransactionInternalAerospike(t *testing.T) {
 	utxoStore, teardown, err := aerospike.InitAerospikeContainer()
 	require.NoError(t, err)
@@ -719,6 +726,9 @@ func Test_processTransactionInternalAerospike(t *testing.T) {
 	testProcessTransactionInternal(t, utxoStore)
 }
 
+// Test_processTransactionInternalPostgres tests the processTransactionInternal function using PostgreSQL as the UTXO store backend.
+// This test initializes a PostgreSQL container, configures the test environment with the PostgreSQL UTXO store,
+// and validates transaction processing functionality against the relational database backend.
 func Test_processTransactionInternalPostgres(t *testing.T) {
 	container, err := postgres.RunPostgresTestContainer(context.Background(), "propagation-test")
 	require.NoError(t, err)

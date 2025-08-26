@@ -168,6 +168,15 @@ func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeig
 	return nil
 }
 
+// ValidateBlock performs comprehensive validation of a block using the validation service.
+// It submits the complete block data for validation including transaction verification,
+// consensus rule checking, and integration with the current blockchain state.
+//
+// Parameters:
+//   - ctx: Context for the validation operation
+//   - block: Complete block data to validate including header and transactions
+//
+// Returns an error if block validation fails or service communication errors occur
 func (s *Client) ValidateBlock(ctx context.Context, block *model.Block) error {
 	blockBytes, err := block.Bytes()
 	if err != nil {

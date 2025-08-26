@@ -49,10 +49,19 @@ type ConnState uint8
 // established or failed depending on the connection result.  An established
 // connection which was disconnected is categorized as disconnected.
 const (
+	// ConnPending indicates a connection attempt is in progress but not yet completed.
 	ConnPending ConnState = iota
+
+	// ConnFailing indicates a connection attempt has failed and may be retried.
 	ConnFailing
+
+	// ConnCanceled indicates a connection attempt was canceled before completion.
 	ConnCanceled
+
+	// ConnEstablished indicates a connection has been successfully established.
 	ConnEstablished
+
+	// ConnDisconnected indicates a previously established connection has been disconnected.
 	ConnDisconnected
 )
 
@@ -102,6 +111,8 @@ func (c *ConnReq) String() string {
 	return fmt.Sprintf("%s (reqid %d)", addr, atomic.LoadUint64(&c.id))
 }
 
+// SetAddr sets the network address for the connection request.
+// This method is thread-safe and can be called concurrently.
 func (c *ConnReq) SetAddr(addr net.Addr) {
 	c.stateMtx.Lock()
 	defer c.stateMtx.Unlock()

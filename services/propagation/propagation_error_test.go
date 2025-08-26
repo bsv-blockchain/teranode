@@ -18,6 +18,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// TestPropagationServiceErrors tests error handling when the validator service fails.
+// This test uses a null validator that always returns errors to validate proper
+// error propagation and service behavior under validation failure conditions.
 func TestPropagationServiceErrors(t *testing.T) {
 	// Create test settings
 	tSettings := test.CreateBaseTestSettings()

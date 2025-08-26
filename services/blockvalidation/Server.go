@@ -370,6 +370,14 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMes
 	}, errors.WrapGRPC(err)
 }
 
+// Init initializes the block validation server with required dependencies and services.
+// It establishes connections to subtree validation services, configures UTXO store access,
+// and starts background processing components. This method must be called before Start().
+//
+// Parameters:
+//   - ctx: Context for initialization operations and service setup
+//
+// Returns an error if initialization fails due to configuration issues or service unavailability
 func (u *Server) Init(ctx context.Context) (err error) {
 	subtreeValidationClient, err := subtreevalidation.NewClient(ctx, u.logger, u.settings, "blockvalidation")
 	if err != nil {
@@ -566,6 +574,15 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 	return nil
 }
 
+// processBlockFoundChannel processes newly found blocks from the block found channel.
+// It implements intelligent routing between normal processing and catchup mode based
+// on the current backlog depth to optimize validation performance.
+//
+// Parameters:
+//   - ctx: Context for processing operations and cancellation
+//   - blockFound: Block found request containing hash and processing metadata
+//
+// Returns an error if block processing fails or validation encounters issues
 func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound processBlockFound) error {
 	// TODO GOKHAN: parameterize this
 	if u.settings.BlockValidation.UseCatchupWhenBehind && len(u.blockFoundCh) > 3 {
@@ -639,9 +656,15 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 	return nil
 }
 
-// Start initiates the block validation service, starting Kafka consumers
-// and HTTP/gRPC servers. It begins processing blocks and handling validation
-// requests.
+// Start begins the block validation service operations including gRPC server startup
+// and Kafka consumer initialization. It waits for the blockchain FSM to transition
+// from IDLE state before starting validation operations to ensure proper sequencing.
+//
+// Parameters:
+//   - ctx: Context for service lifecycle management and cancellation
+//   - readyCh: Channel to signal when the service is ready to accept requests
+//
+// Returns an error if service startup fails due to configuration or dependency issues
 func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
@@ -668,6 +691,14 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	return nil
 }
 
+// Stop gracefully shuts down the block validation server by stopping background
+// processing components and waiting for ongoing validation operations to complete.
+// It ensures clean termination of all service resources and connections.
+//
+// Parameters:
+//   - ctx: Context for shutdown operations (currently unused)
+//
+// Returns an error if shutdown encounters issues, though typically returns nil
 func (u *Server) Stop(_ context.Context) error {
 	u.processSubtreeNotify.Stop()
 
@@ -874,6 +905,17 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 	}, nil
 }
 
+// processBlockFound processes a newly discovered block by validating it and managing
+// parent block dependencies. It handles block retrieval, validation sequencing,
+// and ensures proper processing order for blockchain consistency.
+//
+// Parameters:
+//   - ctx: Context for tracing and operation management
+//   - hash: Hash of the block to process
+//   - baseURL: Base URL for block retrieval operations
+//   - useBlock: Optional pre-loaded block to avoid retrieval (variadic parameter)
+//
+// Returns an error if block processing, validation, or dependency management fails
 func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseURL string, useBlock ...*model.Block) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockFound",
 		tracing.WithParentStat(u.stats),

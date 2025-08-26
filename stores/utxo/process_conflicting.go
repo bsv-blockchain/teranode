@@ -1,5 +1,9 @@
 // //go:build aerospike
 
+// Package utxo provides UTXO (Unspent Transaction Output) management for the Bitcoin SV Teranode implementation.
+//
+// This file implements conflicting transaction processing functionality for handling double-spend scenarios
+// and transaction conflicts in the UTXO store. It requires the aerospike build tag.
 package utxo
 
 import (

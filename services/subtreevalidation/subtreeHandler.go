@@ -18,8 +18,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// consumerMessageHandler returns a function that processes Kafka messages for subtree validation.
-// It handles both recoverable and unrecoverable errors appropriately.
+// consumerMessageHandler returns a Kafka message handler for subtree validation.
+//
+// The handler pauses all subtree processing during execution, skips processing when
+// blockchain FSM is in CATCHINGBLOCKS state, and classifies errors to prevent
+// infinite retry loops on unrecoverable failures.
 func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
 	return func(msg *kafka.KafkaMessage) error {
 	WAITFORPAUSE:

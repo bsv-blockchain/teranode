@@ -23,6 +23,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// CheckBlockSubtrees validates that all subtrees referenced in a block exist in storage.
+//
+// Pauses subtree processing during validation to avoid conflicts and returns missing
+// subtree information for blocks that reference unavailable subtrees.
 func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest) (*subtreevalidation_api.CheckBlockSubtreesResponse, error) {
 	block, err := model.NewBlockFromBytes(request.Block, nil)
 	if err != nil {

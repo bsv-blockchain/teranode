@@ -1,3 +1,12 @@
+// Package nullstore provides a null implementation of the UTXO store interface.
+//
+// The NullStore is a no-op implementation that discards all operations and returns
+// empty results. It is primarily used for testing scenarios where UTXO storage
+// functionality needs to be disabled or mocked out without affecting the rest
+// of the system.
+//
+// All store operations succeed immediately without performing any actual storage,
+// making it useful for performance testing or when UTXO tracking is not required.
 package nullstore
 
 import (
@@ -14,6 +23,9 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
+// NullStore implements the utxo.Store interface with no-op operations.
+// All methods succeed immediately without performing any actual storage operations.
+// This is useful for testing scenarios or when UTXO tracking needs to be disabled.
 type NullStore struct {
 	blockHeight     uint32
 	medianBlockTime uint32
@@ -24,6 +36,8 @@ func (m *NullStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice [
 	return nil
 }
 
+// NewNullStore creates a new NullStore instance.
+// Returns a null UTXO store that implements all interface methods as no-ops.
 func NewNullStore() (*NullStore, error) {
 	return &NullStore{}, nil
 }

@@ -1,4 +1,8 @@
-// Package blockchain provides functionality for managing the Bitcoin blockchain.
+// Package blockchain provides Bitcoin blockchain management functionality for Teranode.
+//
+// The service handles block validation, storage, retrieval, and state management
+// with FSM coordination. It operates as both gRPC server and client for
+// distributed blockchain operations across Teranode instances.
 package blockchain
 
 import (

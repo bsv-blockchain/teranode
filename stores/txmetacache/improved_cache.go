@@ -525,6 +525,18 @@ func (c *ImprovedCache) UpdateStats(s *Stats) {
 	}
 }
 
+// bucketTrimmed implements a cache bucket with on-demand memory allocation and automatic trimming.
+//
+// This bucket type allocates memory chunks as needed and automatically trims expired entries
+// when the cache wraps around. It uses a generation-based approach to track entry validity
+// and employs a lock-free map for high-performance concurrent access.
+//
+// Key characteristics:
+// - Memory allocated on-demand using mmap for off-heap storage
+// - Automatic cleanup of expired entries when cache wraps
+// - Generation tracking to determine entry validity
+// - Lock-free map implementation for improved concurrent performance
+// - Ring buffer design for efficient memory reuse
 type bucketTrimmed struct {
 	mu sync.RWMutex
 
@@ -882,9 +894,19 @@ func (b *bucketTrimmed) getMapSize() uint64 {
 	return uint64(b.m.Length()) // nolint:gosec
 }
 
-// bucketPreallocated is a bucket with preallocated memory for chunks.
-// it allocates memory at the beginning, and then uses it for the entire lifetime of the bucket.
-// it als operforms trimming
+// bucketPreallocated implements a cache bucket with fully preallocated memory and intelligent trimming.
+//
+// This bucket type allocates all required memory upfront using mmap for off-heap storage,
+// providing predictable memory usage and optimal performance for high-throughput scenarios.
+// When the cache fills up, it employs a configurable trimming strategy that removes a
+// percentage of the oldest entries to make room for new data.
+//
+// Key characteristics:
+// - All memory allocated upfront for predictable resource usage
+// - Configurable trim ratio for memory management when cache fills
+// - Off-heap storage using mmap to reduce GC pressure
+// - Optimized for high-throughput, predictable workloads
+// - Simple map-based indexing for fast lookups
 type bucketPreallocated struct {
 	mu sync.RWMutex
 
@@ -1159,6 +1181,9 @@ func (b *bucketPreallocated) Del(h uint64) {
 	b.mu.Unlock()
 }
 
+// bucketUnallocated implements a cache bucket with on-demand memory allocation.
+// When full, it wraps around and overwrites oldest entries without trimming.
+// Suitable for unpredictable workloads where trimming overhead should be avoided.
 type bucketUnallocated struct {
 	mu sync.RWMutex
 

@@ -71,6 +71,10 @@ func (m *MockPropagationAPIClient) ProcessTransactionBatch(ctx context.Context, 
 	return response, nil
 }
 
+// TestClientLargeTransactionFallback tests the client-side HTTP fallback mechanism for large transactions.
+// This test verifies that the propagation client automatically switches from gRPC to HTTP transport
+// when transactions exceed the gRPC message size limit. It validates client fallback logic, HTTP request
+// handling, and ensures seamless transaction delivery regardless of size constraints.
 func TestClientLargeTransactionFallback(t *testing.T) {
 	// Setup mock validator HTTP server
 	validatorHTTPCalls := 0
