@@ -3865,15 +3865,15 @@ func TestServerP2PNodeConnected(t *testing.T) {
 	mockP2P.On("ConnectedPeers").Return([]p2p.PeerInfo{peerInfo})
 	mockP2P.On("GetPeerStartingHeight", testPeerID).Return(int32(0), false).Maybe()
 	mockP2P.On("SetPeerStartingHeight", testPeerID, int32(100)).Return().Maybe()
-	mockP2P.On("HostID").Return(testPeerID)
+	mockP2P.On("HostID").Return(testPeerID).Once()
 	mockP2P.
 		On("Publish", mock.Anything, "test-prefix-handshake", mock.AnythingOfType("[]uint8")).
 		Run(func(args mock.Arguments) {
 			handshakeCalled <- struct{}{}
 		}).
 		Return(nil).
-		Maybe()
-	mockP2P.On("SendToPeer", mock.Anything, mock.Anything, mock.Anything).Return(errors.NewConfigurationError("stream failed"))
+		Once()
+	mockP2P.On("SendToPeer", mock.Anything, testPeerID, mock.AnythingOfType("[]uint8")).Return(errors.NewConfigurationError("stream failed")).Once()
 
 	server := &Server{
 		P2PNode:            mockP2P,
@@ -3887,19 +3887,16 @@ func TestServerP2PNodeConnected(t *testing.T) {
 	// Act
 	server.P2PNodeConnected(ctx, testPeerID)
 
-	// Assert: wait for SetPeerStartingHeight to be called
-	require.Eventually(t, func() bool {
-		mockP2P.AssertExpectations(t)
-		return true
-	}, 2*time.Second, 100*time.Millisecond)
-
-	// Assert: wait for sendDirectHandshake to be called
+	// Assert: wait for sendDirectHandshake to be called (Publish happens after 2s delay)
 	select {
 	case <-handshakeCalled:
 		// OK
-	case <-time.After(2 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("sendDirectHandshake was not called")
 	}
+
+	// Assert: verify all mock expectations were met
+	mockP2P.AssertExpectations(t)
 }
 
 func TestHandleBlockNotificationSuccess(t *testing.T) {

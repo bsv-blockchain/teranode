@@ -340,10 +340,16 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 		block.Header.Nonce++
 	}
 
+	// Create a channel to signal when InvalidateBlock is called
+	invalidateBlockCalled := make(chan struct{})
+
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
-	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return(nil)
+	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return(nil).Run(func(args mock.Arguments) {
+		// Signal that InvalidateBlock was called
+		close(invalidateBlockCalled)
+	})
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	subChan := make(chan *blockchain_api.Notification, 1)
@@ -395,9 +401,12 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for the goroutine to call InvalidateBlock
-	require.Eventually(t, func() bool {
-		return mockBlockchain.AssertCalled(t, "InvalidateBlock", mock.Anything, block.Header.Hash())
-	}, 2*time.Second, 100*time.Millisecond, "InvalidateBlock should be called in background goroutine")
+	select {
+	case <-invalidateBlockCalled:
+		// Successfully received signal that InvalidateBlock was called
+	case <-time.After(2 * time.Second):
+		t.Fatal("InvalidateBlock should be called in background goroutine")
+	}
 
 	// Verify that Publish was called on the Kafka producer
 	require.True(t, mockKafka.IsPublishCalled(), "Kafka Publish should be called for invalid block")
