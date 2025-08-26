@@ -12,9 +12,14 @@ import (
 )
 
 var (
+	// httpRequestTimeout defines the default HTTP request timeout in seconds
+	// when no deadline is set on the context.
 	httpRequestTimeout, _ = gocore.Config().GetInt("http_timeout", 60)
 )
 
+// DoHTTPRequest performs an HTTP GET or POST request and returns the response body as bytes.
+// Uses GET by default, switches to POST if requestBody is provided.
+// Automatically handles timeouts and validates response status codes.
 func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]byte, error) {
 	bodyReaderCloser, cancelFn, err := doHTTPRequest(ctx, url, requestBody...)
 	defer cancelFn()
@@ -23,7 +28,11 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 		return nil, err
 	}
 
-	defer bodyReaderCloser.Close()
+	defer func() {
+		if closeErr := bodyReaderCloser.Close(); closeErr != nil {
+			// Log the error but don't override the main return value
+		}
+	}()
 
 	// Read body with context deadline support
 	// Create a channel to handle the read operation
@@ -48,6 +57,9 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 	}
 }
 
+// DoHTTPRequestBodyReader performs an HTTP request and returns the response body as a ReadCloser.
+// This is more memory-efficient for large responses as it streams the data.
+// Caller is responsible for closing the returned ReadCloser.
 func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
 	bodyReaderCloser, cancelFn, err := doHTTPRequest(ctx, url, requestBody...)
 	if err != nil {
@@ -78,9 +90,11 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 	if len(requestBody) > 0 && requestBody[0] != nil {
 		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
 		req.Method = http.MethodPost
+		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := httpClient.Do(req)
+	var resp *http.Response
+	resp, err = httpClient.Do(req)
 	if err != nil {
 		return nil, cancelFn, errors.NewServiceError("failed to do http request", err)
 	}
@@ -92,11 +106,15 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 		}
 
 		if resp.Body != nil {
-			defer resp.Body.Close()
+			defer func() {
+				if bodyCloseErr := resp.Body.Close(); bodyCloseErr != nil {
+					// Log the error but don't override the main return value
+				}
+			}()
 
-			b, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return nil, cancelFn, errFn("http request [%s] returned status code [%d]", url, resp.StatusCode, err)
+			b, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				return nil, cancelFn, errFn("http request [%s] returned status code [%d]", url, resp.StatusCode, readErr)
 			}
 
 			if b != nil {

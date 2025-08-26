@@ -29,9 +29,11 @@ type serviceWrapper struct {
 var (
 	once      sync.Once
 	mu        sync.RWMutex
-	listeners []string = make([]string, 0)
+	listeners []string
 )
 
+// ServiceManager manages the lifecycle and dependencies of multiple services,
+// providing coordinated startup, shutdown, and signal handling capabilities.
 type ServiceManager struct {
 	services              []serviceWrapper
 	dependencyChannelsMux sync.Mutex
@@ -43,7 +45,9 @@ type ServiceManager struct {
 	// statusClient       status.ClientI
 }
 
-// NewServiceManager creates a new service manager or returns the existing instance
+// NewServiceManager creates a new service manager with the provided context and logger.
+// It sets up signal handling for SIGINT and SIGTERM to trigger graceful shutdown,
+// and initializes an HTTP handler for the /services endpoint to expose listener information.
 func NewServiceManager(ctx context.Context, logger ulogger.Logger) *ServiceManager {
 	ctx, cancelFunc := context.WithCancel(ctx)
 	g, ctx := errgroup.WithContext(ctx)
@@ -77,6 +81,8 @@ func NewServiceManager(ctx context.Context, logger ulogger.Logger) *ServiceManag
 	return sm
 }
 
+// AddListenerInfo adds a listener name to the global listeners list in a thread-safe manner.
+// This function is used to track active listeners for monitoring and debugging purposes.
 func AddListenerInfo(name string) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -84,6 +90,9 @@ func AddListenerInfo(name string) {
 	listeners = append(listeners, name)
 }
 
+// GetListenerInfos returns a sorted copy of all registered listener names.
+// This function provides thread-safe access to the listeners list and ensures
+// the returned slice is sorted alphabetically for consistent output.
 func GetListenerInfos() []string {
 	mu.RLock()
 	defer mu.RUnlock()
@@ -96,12 +105,19 @@ func GetListenerInfos() []string {
 	return sortedListeners
 }
 
+// ResetContext creates a new context and cancel function for the service manager,
+// replacing the existing ones. This is useful for reinitializing the manager
+// after a previous shutdown or for testing scenarios.
 func (sm *ServiceManager) ResetContext() error {
 	sm.Ctx, sm.cancelFunc = context.WithCancel(context.Background())
 
 	return nil
 }
 
+// AddService adds a service to the manager with the given name.
+// It initializes the service, sets up dependency channels for ordered startup,
+// and starts the service in a goroutine. Services are started sequentially
+// based on their registration order, with each service waiting for the previous one.
 func (sm *ServiceManager) AddService(name string, service Service) error {
 	sm.dependencyChannelsMux.Lock()
 	sm.dependencyChannels = append(sm.dependencyChannels, make(chan bool))
@@ -153,6 +169,9 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 	return nil
 }
 
+// WaitForServiceToBeReady blocks until all registered services signal they are ready.
+// It launches a goroutine for each service to wait on its ready channel and
+// uses a WaitGroup to ensure all services are ready before returning.
 func (sm *ServiceManager) WaitForServiceToBeReady() {
 	var wg sync.WaitGroup
 
@@ -168,6 +187,9 @@ func (sm *ServiceManager) WaitForServiceToBeReady() {
 	wg.Wait()
 }
 
+// ServicesNotReady returns a list of service names that are not yet ready.
+// It performs a non-blocking check on each service's ready channel to determine
+// which services haven't signaled readiness yet.
 func (sm *ServiceManager) ServicesNotReady() []string {
 	var notReadyServices []string
 
@@ -186,6 +208,9 @@ func (sm *ServiceManager) ServicesNotReady() []string {
 	return notReadyServices
 }
 
+// waitForPreviousServiceToStart waits for the previous service in the dependency chain
+// to signal it has started. It implements a timeout mechanism (5 seconds) to prevent
+// indefinite blocking if a service fails to start properly.
 func (sm *ServiceManager) waitForPreviousServiceToStart(sw serviceWrapper, channel chan bool) error {
 	timer := time.NewTimer(5 * time.Second)
 
@@ -199,11 +224,14 @@ func (sm *ServiceManager) waitForPreviousServiceToStart(sw serviceWrapper, chann
 	}
 }
 
+// ForceShutdown triggers an immediate shutdown of all services by calling
+// the context cancel function. This bypasses graceful shutdown procedures
+// and should be used only in emergency situations.
 func (sm *ServiceManager) ForceShutdown() {
 	sm.cancelFunc()
 }
 
-// StartAllAndWait starts all services and waits for them to complete or error.
+// Wait starts all services and waits for them to complete or error.
 // If any service errors, all other services are stopped gracefully and the error is returned.
 func (sm *ServiceManager) Wait() error {
 	// Wait for all services to complete or error
@@ -220,7 +248,7 @@ func (sm *ServiceManager) Wait() error {
 
 		sm.logger.Infof("🟠 Stopping service %s...", service.name)
 
-		if err := service.instance.Stop(stopCtx); err != nil {
+		if err = service.instance.Stop(stopCtx); err != nil {
 			sm.logger.Warnf("[%s] Failed to stop service: %v", service.name, err)
 		} else {
 			sm.logger.Infof("[%s] Service stopped gracefully", service.name)
@@ -238,6 +266,10 @@ func (sm *ServiceManager) Wait() error {
 	return err // This is the original error
 }
 
+// HealthHandler aggregates health status from all registered services and returns
+// an overall health status code, JSON response, and error. It checks each service's
+// health and returns HTTP 503 if any service is unhealthy, otherwise HTTP 200.
+// The JSON response includes individual service health details.
 func (sm *ServiceManager) HealthHandler(ctx context.Context, checkLiveness bool) (int, string, error) {
 	overallStatus := http.StatusOK
 	msgs := make([]string, 0, len(sm.services))

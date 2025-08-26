@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestCheckHTTPServer_HealthyServer tests the health check against a healthy HTTP server
-func TestCheckHTTPServer_HealthyServer(t *testing.T) {
+// TestCheckHTTPServerHealthyServer tests the health check against a healthy HTTP server
+func TestCheckHTTPServerHealthyServer(t *testing.T) {
 	// Create a test HTTP server that returns 200 OK
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
@@ -39,8 +39,8 @@ func TestCheckHTTPServer_HealthyServer(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestCheckHTTPServer_UnhealthyServer tests the health check against an unhealthy HTTP server
-func TestCheckHTTPServer_UnhealthyServer(t *testing.T) {
+// TestCheckHTTPServerUnhealthyServer tests the health check against an unhealthy HTTP server
+func TestCheckHTTPServerUnhealthyServer(t *testing.T) {
 	// Create a test HTTP server that returns 503 Service Unavailable
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -62,8 +62,8 @@ func TestCheckHTTPServer_UnhealthyServer(t *testing.T) {
 	assert.NoError(t, err) // No error, just unhealthy status
 }
 
-// TestCheckHTTPServer_ServerNotRunning tests the health check when the server is not running
-func TestCheckHTTPServer_ServerNotRunning(t *testing.T) {
+// TestCheckHTTPServerServerNotRunning tests the health check when the server is not running
+func TestCheckHTTPServerServerNotRunning(t *testing.T) {
 	// Create the health check for a non-existent server
 	check := health.CheckHTTPServer("http://localhost:59999", "/health")
 
@@ -79,8 +79,8 @@ func TestCheckHTTPServer_ServerNotRunning(t *testing.T) {
 	assert.Contains(t, err.Error(), "connection refused")
 }
 
-// TestCheckHTTPServer_VariousStatusCodes tests different HTTP status codes
-func TestCheckHTTPServer_VariousStatusCodes(t *testing.T) {
+// TestCheckHTTPServerVariousStatusCodes tests different HTTP status codes
+func TestCheckHTTPServerVariousStatusCodes(t *testing.T) {
 	tests := []struct {
 		name           string
 		statusCode     int
@@ -165,8 +165,8 @@ func TestCheckHTTPServer_VariousStatusCodes(t *testing.T) {
 	}
 }
 
-// TestCheckHTTPServer_URLFormatting tests various URL formatting scenarios
-func TestCheckHTTPServer_URLFormatting(t *testing.T) {
+// TestCheckHTTPServerURLFormatting tests various URL formatting scenarios
+func TestCheckHTTPServerURLFormatting(t *testing.T) {
 	// Create a test HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Respond based on the path
@@ -240,8 +240,8 @@ func TestCheckHTTPServer_URLFormatting(t *testing.T) {
 	}
 }
 
-// TestCheckHTTPServer_Timeout tests that the health check times out appropriately
-func TestCheckHTTPServer_Timeout(t *testing.T) {
+// TestCheckHTTPServerTimeout tests that the health check times out appropriately
+func TestCheckHTTPServerTimeout(t *testing.T) {
 	// Create a test HTTP server that delays responses
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Delay longer than the client timeout (2 seconds)
@@ -265,12 +265,12 @@ func TestCheckHTTPServer_Timeout(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, status)
 	assert.Contains(t, message, "not accepting connections")
 	assert.Error(t, err)
-	// Should timeout within the context timeout + some buffer
+	// Should the timeout within the context timeout + some buffer
 	assert.Less(t, duration, 500*time.Millisecond, "Should timeout quickly")
 }
 
-// TestCheckHTTPServer_ContextCancellation tests context cancellation
-func TestCheckHTTPServer_ContextCancellation(t *testing.T) {
+// TestCheckHTTPServerContextCancellation tests context cancellation
+func TestCheckHTTPServerContextCancellation(t *testing.T) {
 	// Create a test HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)
@@ -295,8 +295,8 @@ func TestCheckHTTPServer_ContextCancellation(t *testing.T) {
 	assert.Contains(t, err.Error(), "context canceled")
 }
 
-// TestCheckHTTPServer_LivenessCheck tests the liveness check parameter
-func TestCheckHTTPServer_LivenessCheck(t *testing.T) {
+// TestCheckHTTPServerLivenessCheck tests the liveness check parameter
+func TestCheckHTTPServerLivenessCheck(t *testing.T) {
 	// Create a test HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -327,8 +327,8 @@ func TestCheckHTTPServer_LivenessCheck(t *testing.T) {
 	})
 }
 
-// TestCheckHTTPServer_RequestCreationError tests error handling when request creation fails
-func TestCheckHTTPServer_RequestCreationError(t *testing.T) {
+// TestCheckHTTPServerRequestCreationError tests error handling when request creation fails
+func TestCheckHTTPServerRequestCreationError(t *testing.T) {
 	// Create the health check with an invalid URL that will cause NewRequestWithContext to fail
 	// Using a URL with invalid characters
 	check := health.CheckHTTPServer("http://[::1", "/health") // Invalid IPv6 address format
@@ -343,8 +343,8 @@ func TestCheckHTTPServer_RequestCreationError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestCheckHTTPServer_LargeResponseBody tests that the health check handles large response bodies
-func TestCheckHTTPServer_LargeResponseBody(t *testing.T) {
+// TestCheckHTTPServerLargeResponseBody tests that the health check handles large response bodies
+func TestCheckHTTPServerLargeResponseBody(t *testing.T) {
 	// Create a test HTTP server that returns a large response
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -370,8 +370,8 @@ func TestCheckHTTPServer_LargeResponseBody(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestCheckHTTPServer_HTTPSServer tests the health check with HTTPS server
-func TestCheckHTTPServer_HTTPSServer(t *testing.T) {
+// TestCheckHTTPServerHTTPSServer tests the health check with HTTPS server
+func TestCheckHTTPServerHTTPSServer(t *testing.T) {
 	// Create a test HTTPS server
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -395,8 +395,8 @@ func TestCheckHTTPServer_HTTPSServer(t *testing.T) {
 	// The error will be about certificate verification
 }
 
-// TestCheckHTTPServer_RedirectHandling tests how the health check handles redirects
-func TestCheckHTTPServer_RedirectHandling(t *testing.T) {
+// TestCheckHTTPServerRedirectHandling tests how the health check handles redirects
+func TestCheckHTTPServerRedirectHandling(t *testing.T) {
 	// Create a chain of servers for redirect testing
 	finalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -423,8 +423,8 @@ func TestCheckHTTPServer_RedirectHandling(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestCheckHTTPServer_MethodNotAllowed tests when server doesn't accept GET requests
-func TestCheckHTTPServer_MethodNotAllowed(t *testing.T) {
+// TestCheckHTTPServerMethodNotAllowed tests when server doesn't accept GET requests
+func TestCheckHTTPServerMethodNotAllowed(t *testing.T) {
 	// Create a test HTTP server that only accepts POST requests
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -450,8 +450,8 @@ func TestCheckHTTPServer_MethodNotAllowed(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestCheckHTTPServer_EmptyPath tests with empty health path
-func TestCheckHTTPServer_EmptyPath(t *testing.T) {
+// TestCheckHTTPServerEmptyPath tests with empty health path
+func TestCheckHTTPServerEmptyPath(t *testing.T) {
 	// Create a test HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" || r.URL.Path == "" {

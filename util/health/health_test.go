@@ -54,7 +54,7 @@ func assertDependencyCount(t *testing.T, jsonData map[string]interface{}, want i
 }
 
 // Core functionality tests
-func TestCheckAll_EmptyChecks(t *testing.T) {
+func TestCheckAllEmptyChecks(t *testing.T) {
 	status, response, err := CheckAll(context.Background(), false, []Check{})
 
 	if err != nil {
@@ -68,7 +68,7 @@ func TestCheckAll_EmptyChecks(t *testing.T) {
 	assertDependencyCount(t, result, 0)
 }
 
-func TestCheckAll_SingleHealthyCheck(t *testing.T) {
+func TestCheckAllSingleHealthyCheck(t *testing.T) {
 	checks := []Check{{
 		Name: "database",
 		Check: func(ctx context.Context, liveness bool) (int, string, error) {
@@ -95,7 +95,7 @@ func TestCheckAll_SingleHealthyCheck(t *testing.T) {
 	assertJSONField(t, dep, "message", "connected")
 }
 
-func TestCheckAll_SingleFailedCheck(t *testing.T) {
+func TestCheckAllSingleFailedCheck(t *testing.T) {
 	checks := []Check{{
 		Name: "database",
 		Check: func(ctx context.Context, liveness bool) (int, string, error) {
@@ -123,7 +123,7 @@ func TestCheckAll_SingleFailedCheck(t *testing.T) {
 	}
 }
 
-func TestCheckAll_MixedHealthStatuses(t *testing.T) {
+func TestCheckAllMixedHealthStatuses(t *testing.T) {
 	checks := []Check{
 		{
 			Name: "healthy-service",
@@ -152,7 +152,7 @@ func TestCheckAll_MixedHealthStatuses(t *testing.T) {
 	assertDependencyCount(t, result, 2)
 }
 
-func TestCheckAll_JSONDependencies(t *testing.T) {
+func TestCheckAllJSONDependencies(t *testing.T) {
 	tests := []struct {
 		name           string
 		dependencyJSON string
@@ -202,7 +202,7 @@ func TestCheckAll_JSONDependencies(t *testing.T) {
 	}
 }
 
-func TestCheckAll_JSONDependenciesWithError(t *testing.T) {
+func TestCheckAllJSONDependenciesWithError(t *testing.T) {
 	checks := []Check{{
 		Name: "api-gateway",
 		Check: func(ctx context.Context, liveness bool) (int, string, error) {
@@ -228,7 +228,7 @@ func TestCheckAll_JSONDependenciesWithError(t *testing.T) {
 	}
 }
 
-func TestCheckAll_LivenessVsReadiness(t *testing.T) {
+func TestCheckAllLivenessVsReadiness(t *testing.T) {
 	var capturedLiveness bool
 	checks := []Check{{
 		Name: "service",
@@ -262,7 +262,7 @@ func TestCheckAll_LivenessVsReadiness(t *testing.T) {
 	assertJSONField(t, dep, "message", "ready")
 }
 
-func TestCheckAll_ContextCancellation(t *testing.T) {
+func TestCheckAllContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
@@ -290,7 +290,7 @@ func TestCheckAll_ContextCancellation(t *testing.T) {
 	assertJSONField(t, dep, "message", "cancelled")
 }
 
-func TestCheckAll_ContextWithTimeout(t *testing.T) {
+func TestCheckAllContextWithTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
@@ -320,7 +320,7 @@ func TestCheckAll_ContextWithTimeout(t *testing.T) {
 	assertJSONField(t, dep, "message", "completed")
 }
 
-func TestCheckAll_EdgeCases(t *testing.T) {
+func TestCheckAllEdgeCases(t *testing.T) {
 	tests := []struct {
 		name           string
 		check          func(context.Context, bool) (int, string, error)
@@ -393,7 +393,7 @@ func TestCheckAll_EdgeCases(t *testing.T) {
 	}
 }
 
-func TestCheckAll_ErrorConditions(t *testing.T) {
+func TestCheckAllErrorConditions(t *testing.T) {
 	tests := []struct {
 		name           string
 		checks         []Check
@@ -469,7 +469,7 @@ func TestCheckAll_ErrorConditions(t *testing.T) {
 	}
 }
 
-func TestCheckAll_RealWorldScenario(t *testing.T) {
+func TestCheckAllRealWorldScenario(t *testing.T) {
 	// Simulate a microservice with various dependencies
 	checks := []Check{
 		{

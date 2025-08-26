@@ -1,6 +1,7 @@
 package util
 
-// Calculate the number of bytes required to store a value as a varint.
+// VarintSize calculates the number of bytes required to store a value as a Bitcoin variable-length integer.
+// Returns 1, 3, 5, or 9 bytes depending on the value size.
 func VarintSize(x uint64) uint64 {
 	if x < 0xfd {
 		return 1

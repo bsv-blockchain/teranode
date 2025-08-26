@@ -20,6 +20,8 @@ type ExpiringConcurrentCache[K comparable, V any] struct {
 	ZeroValue V
 }
 
+// NewExpiringConcurrentCache creates a new thread-safe cache with automatic expiration.
+// Items expire after the specified duration and are automatically cleaned up.
 func NewExpiringConcurrentCache[K comparable, V any](expiration time.Duration) *ExpiringConcurrentCache[K, V] {
 	return &ExpiringConcurrentCache[K, V]{
 		cache: expiringmap.New[K, V](expiration),
@@ -27,6 +29,9 @@ func NewExpiringConcurrentCache[K comparable, V any](expiration time.Duration) *
 	}
 }
 
+// GetOrSet retrieves a value from the cache or fetches it using the provided function.
+// If multiple goroutines request the same key simultaneously, only one fetch operation occurs.
+// The fetchFunc returns (value, shouldCache, error) where shouldCache determines if the result is cached.
 func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, bool, error)) (V, error) {
 	var (
 		val        V

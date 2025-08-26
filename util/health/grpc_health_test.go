@@ -22,7 +22,7 @@ type mockHealthServer struct {
 	healthy bool
 }
 
-func (m *mockHealthServer) Check(ctx context.Context, req *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
+func (m *mockHealthServer) Check(context.Context, *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
 	if m.healthy {
 		return &grpc_health_v1.HealthCheckResponse{
 			Status: grpc_health_v1.HealthCheckResponse_SERVING,
@@ -34,11 +34,11 @@ func (m *mockHealthServer) Check(ctx context.Context, req *grpc_health_v1.Health
 }
 
 // TestCheckGRPCServerWithSettings_HealthyServer tests the health check against a healthy gRPC server
-func TestCheckGRPCServerWithSettings_HealthyServer(t *testing.T) {
+func TestCheckGRPCServerWithSettingsHealthyServer(t *testing.T) {
 	// Start a test gRPC server
 	listener, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	server := grpc.NewServer()
 	healthServer := &mockHealthServer{healthy: true}
@@ -58,9 +58,9 @@ func TestCheckGRPCServerWithSettings_HealthyServer(t *testing.T) {
 	// Create the health check function
 	healthCheckFunc := func(ctx context.Context, conn *grpc.ClientConn) error {
 		client := grpc_health_v1.NewHealthClient(conn)
-		resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
-		if err != nil {
-			return err
+		resp, checkErr := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+		if checkErr != nil {
+			return checkErr
 		}
 		if resp.Status != grpc_health_v1.HealthCheckResponse_SERVING {
 			return errors.NewServiceError("server not serving")
@@ -83,11 +83,11 @@ func TestCheckGRPCServerWithSettings_HealthyServer(t *testing.T) {
 }
 
 // TestCheckGRPCServerWithSettings_UnhealthyServer tests the health check against an unhealthy gRPC server
-func TestCheckGRPCServerWithSettings_UnhealthyServer(t *testing.T) {
+func TestCheckGRPCServerWithSettingsUnhealthyServer(t *testing.T) {
 	// Start a test gRPC server that reports as unhealthy
 	listener, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	server := grpc.NewServer()
 	healthServer := &mockHealthServer{healthy: false}
@@ -107,9 +107,9 @@ func TestCheckGRPCServerWithSettings_UnhealthyServer(t *testing.T) {
 	// Create the health check function
 	healthCheckFunc := func(ctx context.Context, conn *grpc.ClientConn) error {
 		client := grpc_health_v1.NewHealthClient(conn)
-		resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
-		if err != nil {
-			return err
+		resp, checkErr := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+		if checkErr != nil {
+			return checkErr
 		}
 		if resp.Status != grpc_health_v1.HealthCheckResponse_SERVING {
 			return errors.NewServiceError("server not serving")
@@ -132,15 +132,15 @@ func TestCheckGRPCServerWithSettings_UnhealthyServer(t *testing.T) {
 }
 
 // TestCheckGRPCServerWithSettings_ServerNotRunning tests the health check when the server is not running
-func TestCheckGRPCServerWithSettings_ServerNotRunning(t *testing.T) {
+func TestCheckGRPCServerWithSettingsServerNotRunning(t *testing.T) {
 	// Create test settings
 	tSettings := settings.NewSettings()
 
 	// Create the health check function
 	healthCheckFunc := func(ctx context.Context, conn *grpc.ClientConn) error {
 		client := grpc_health_v1.NewHealthClient(conn)
-		_, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
-		return err
+		_, checkErr := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+		return checkErr
 	}
 
 	// Create the health check for a non-existent server
@@ -159,11 +159,11 @@ func TestCheckGRPCServerWithSettings_ServerNotRunning(t *testing.T) {
 }
 
 // TestCheckGRPCServerWithSettings_CircularDependencyPrevention tests that circular dependency is prevented
-func TestCheckGRPCServerWithSettings_CircularDependencyPrevention(t *testing.T) {
+func TestCheckGRPCServerWithSettingsCircularDependencyPrevention(t *testing.T) {
 	// Start a test gRPC server
 	listener, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	server := grpc.NewServer()
 	healthServer := &mockHealthServer{healthy: true}
@@ -183,9 +183,9 @@ func TestCheckGRPCServerWithSettings_CircularDependencyPrevention(t *testing.T) 
 	// Create the health check function
 	healthCheckFunc := func(ctx context.Context, conn *grpc.ClientConn) error {
 		client := grpc_health_v1.NewHealthClient(conn)
-		resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
-		if err != nil {
-			return err
+		resp, checkErr := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+		if checkErr != nil {
+			return checkErr
 		}
 		if resp.Status != grpc_health_v1.HealthCheckResponse_SERVING {
 			return errors.NewServiceError("server not serving")
@@ -207,7 +207,7 @@ func TestCheckGRPCServerWithSettings_CircularDependencyPrevention(t *testing.T) 
 }
 
 // TestCheckGRPCServerWithSettings_AddressFormatting tests various address formats
-func TestCheckGRPCServerWithSettings_AddressFormatting(t *testing.T) {
+func TestCheckGRPCServerWithSettingsAddressFormatting(t *testing.T) {
 	tests := []struct {
 		name            string
 		inputAddress    string
@@ -233,7 +233,7 @@ func TestCheckGRPCServerWithSettings_AddressFormatting(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create test settings
-			tSettings := settings.NewSettings()
+			testSettings := settings.NewSettings()
 
 			// Create a health check function that always fails
 			healthCheckFunc := func(ctx context.Context, conn *grpc.ClientConn) error {
@@ -241,7 +241,7 @@ func TestCheckGRPCServerWithSettings_AddressFormatting(t *testing.T) {
 			}
 
 			// Create the health check
-			check := health.CheckGRPCServerWithSettings(tt.inputAddress, tSettings, healthCheckFunc)
+			check := health.CheckGRPCServerWithSettings(tt.inputAddress, testSettings, healthCheckFunc)
 
 			// Execute the health check
 			ctx := context.Background()
@@ -255,15 +255,15 @@ func TestCheckGRPCServerWithSettings_AddressFormatting(t *testing.T) {
 }
 
 // TestCheckGRPCServerWithSettings_Timeout tests that the health check times out appropriately
-func TestCheckGRPCServerWithSettings_Timeout(t *testing.T) {
+func TestCheckGRPCServerWithSettingsTimeout(t *testing.T) {
 	// Start a test gRPC server that delays responses
 	listener, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	server := grpc.NewServer()
-	slowHealthServer := &slowHealthServer{delay: 10 * time.Second}
-	grpc_health_v1.RegisterHealthServer(server, slowHealthServer)
+	slowServer := &slowHealthServer{delay: 10 * time.Second}
+	grpc_health_v1.RegisterHealthServer(server, slowServer)
 
 	go func() {
 		_ = server.Serve(listener)
@@ -279,8 +279,8 @@ func TestCheckGRPCServerWithSettings_Timeout(t *testing.T) {
 	// Create the health check function
 	healthCheckFunc := func(ctx context.Context, conn *grpc.ClientConn) error {
 		client := grpc_health_v1.NewHealthClient(conn)
-		_, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
-		return err
+		_, checkErr := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+		return checkErr
 	}
 
 	// Create the health check
@@ -301,7 +301,7 @@ func TestCheckGRPCServerWithSettings_Timeout(t *testing.T) {
 	assert.Error(t, err)
 	// The error should mention deadline exceeded or timeout
 	assert.Contains(t, err.Error(), "DeadlineExceeded")
-	// Should timeout within the 100ms context timeout + some buffer
+	// Should the timeout be within the 100ms context timeout + some buffer
 	assert.Less(t, duration, 500*time.Millisecond, "Should timeout quickly")
 }
 
@@ -311,7 +311,7 @@ type slowHealthServer struct {
 	delay time.Duration
 }
 
-func (s *slowHealthServer) Check(ctx context.Context, req *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
+func (s *slowHealthServer) Check(context.Context, *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
 	time.Sleep(s.delay)
 	return &grpc_health_v1.HealthCheckResponse{
 		Status: grpc_health_v1.HealthCheckResponse_SERVING,
@@ -319,14 +319,14 @@ func (s *slowHealthServer) Check(ctx context.Context, req *grpc_health_v1.Health
 }
 
 // TestCheckGRPCServerWithSettings_WithTLS tests the health check with TLS settings
-func TestCheckGRPCServerWithSettings_WithTLS(t *testing.T) {
+func TestCheckGRPCServerWithSettingsWithTLS(t *testing.T) {
 	// Note: This test uses insecure credentials as configured in the actual implementation
 	// when TLS is not explicitly configured in settings
 
 	// Start a test gRPC server without TLS
 	listener, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	server := grpc.NewServer()
 	healthServer := &mockHealthServer{healthy: true}
@@ -348,9 +348,9 @@ func TestCheckGRPCServerWithSettings_WithTLS(t *testing.T) {
 	// Create the health check function
 	healthCheckFunc := func(ctx context.Context, conn *grpc.ClientConn) error {
 		client := grpc_health_v1.NewHealthClient(conn)
-		resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
-		if err != nil {
-			return err
+		resp, checkErr := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+		if checkErr != nil {
+			return checkErr
 		}
 		if resp.Status != grpc_health_v1.HealthCheckResponse_SERVING {
 			return errors.NewServiceError("server not serving")
@@ -372,11 +372,11 @@ func TestCheckGRPCServerWithSettings_WithTLS(t *testing.T) {
 }
 
 // TestCheckGRPCServerWithSettings_CustomHealthCheckFunc tests with different health check functions
-func TestCheckGRPCServerWithSettings_CustomHealthCheckFunc(t *testing.T) {
+func TestCheckGRPCServerWithSettingsCustomHealthCheckFunc(t *testing.T) {
 	// Start a test gRPC server
-	listener, err := net.Listen("tcp", "localhost:0")
-	require.NoError(t, err)
-	defer listener.Close()
+	listener, listenErr := net.Listen("tcp", "localhost:0")
+	require.NoError(t, listenErr)
+	defer func() { _ = listener.Close() }()
 
 	server := grpc.NewServer()
 	healthServer := &mockHealthServer{healthy: true}
@@ -435,11 +435,11 @@ func TestCheckGRPCServerWithSettings_CustomHealthCheckFunc(t *testing.T) {
 }
 
 // TestCheckGRPCServerWithSettings_LivenessCheck tests the liveness check parameter
-func TestCheckGRPCServerWithSettings_LivenessCheck(t *testing.T) {
+func TestCheckGRPCServerWithSettingsLivenessCheck(t *testing.T) {
 	// Start a test gRPC server
 	listener, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	server := grpc.NewServer()
 	healthServer := &mockHealthServer{healthy: true}
@@ -459,9 +459,9 @@ func TestCheckGRPCServerWithSettings_LivenessCheck(t *testing.T) {
 	// Create the health check function
 	healthCheckFunc := func(ctx context.Context, conn *grpc.ClientConn) error {
 		client := grpc_health_v1.NewHealthClient(conn)
-		resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
-		if err != nil {
-			return err
+		resp, checkErr := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+		if checkErr != nil {
+			return checkErr
 		}
 		if resp.Status != grpc_health_v1.HealthCheckResponse_SERVING {
 			return errors.NewServiceError("server not serving")

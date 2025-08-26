@@ -11,6 +11,8 @@ var (
 	stat = gocore.NewStat("SQL")
 )
 
+// DB is a wrapper around sql.DB that provides performance instrumentation
+// and statistics tracking for all SQL operations.
 type DB struct {
 	*sql.DB
 }

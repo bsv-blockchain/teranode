@@ -6,7 +6,20 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 )
 
-// GetBlockSubsidyForHeight func
+const (
+	// initialSubsidy is the initial block subsidy in satoshis (50 BTC)
+	initialSubsidy = 50 * 1e8
+	// maxHalvings is the maximum number of halvings before subsidy becomes 0
+	maxHalvings = 64
+	// minReasonableSubsidy is the minimum reasonable subsidy for early halvings (0.01 BTC)
+	minReasonableSubsidy = 1000000
+	// maxReasonableHalvings is the maximum number of halvings for validation warnings
+	maxReasonableHalvings = 10
+)
+
+// GetBlockSubsidyForHeight calculates the block subsidy (coinbase reward) for a given block height.
+// The subsidy starts at 50 BTC and halves every SubsidyReductionInterval blocks (typically 210,000).
+// Returns 0 if the halvings exceed 64 or if chain parameters are invalid.
 func GetBlockSubsidyForHeight(height uint32, params *chaincfg.Params) uint64 {
 	// Validate input parameters
 	if params == nil {
@@ -22,17 +35,17 @@ func GetBlockSubsidyForHeight(height uint32, params *chaincfg.Params) uint64 {
 	halvings := height / params.SubsidyReductionInterval
 
 	// Force block reward to zero when right shift is undefined.
-	if halvings >= 64 {
+	if halvings >= maxHalvings {
 		return 0
 	}
 
-	subsidy := uint64(50 * 1e8)
+	subsidy := uint64(initialSubsidy)
 
 	// Subsidy is cut in half every 210,000 blocks which will occur approximately every 4 years.
 	subsidy >>= halvings
 
 	// Additional validation - check for unexpected low values
-	if subsidy < 1000000 && halvings < 10 { // Less than 0.01 BTC for early halvings is suspicious
+	if subsidy < minReasonableSubsidy && halvings < maxReasonableHalvings {
 		log.Printf("WARNING: Suspicious low subsidy %d for height %d (halvings=%d) - potential bug!", subsidy, height, halvings)
 	}
 

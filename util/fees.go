@@ -4,6 +4,9 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 )
 
+// GetFees calculates the transaction fees for a Bitcoin transaction.
+// For coinbase transactions, returns the sum of all output values.
+// For regular transactions, returns input_sum - output_sum.
 func GetFees(btTx *bt.Tx) (uint64, error) {
 	fees := uint64(0)
 

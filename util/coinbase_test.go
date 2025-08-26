@@ -93,7 +93,7 @@ func TestExtractHeightAndMiner(t *testing.T) {
 }
 
 // TestExtractCoinbaseHeightAndText_Scripts tests direct script parsing
-func TestExtractCoinbaseHeightAndText_Scripts(t *testing.T) {
+func TestExtractCoinbaseHeightAndTextScripts(t *testing.T) {
 	testCases := []struct {
 		name           string
 		script         string
@@ -296,7 +296,7 @@ func TestExtractMinerEdgeCases(t *testing.T) {
 	}
 }
 
-func TestExtractCoinbaseMiner_ErrorHandling(t *testing.T) {
+func TestExtractCoinbaseMinerErrorHandling(t *testing.T) {
 	// Test error suppression for missing height (returns empty miner instead of error)
 	emptyScript := bscript.Script{}
 	tx := &bt.Tx{

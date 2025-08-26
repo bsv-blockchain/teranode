@@ -26,6 +26,9 @@ type AuthOptions struct {
 	ProtectedMethods map[string]bool
 }
 
+// StartGRPCServer starts a gRPC server with the specified configuration and registration function.
+// It handles TLS setup, authentication, metrics, tracing, and graceful shutdown.
+// The server will listen on the provided address and register services via the callback function.
 func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.Settings, serviceName string, grpcListenerAddress string, register func(server *grpc.Server), authOptions *AuthOptions, maxConnectionAge ...time.Duration) error {
 	listener, address, _, err := GetListener(tSettings.Context, serviceName, "", grpcListenerAddress)
 	if err != nil {
@@ -102,6 +105,9 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 
 var listeners sync.Map
 
+// GetListener creates or retrieves a cached TCP listener for the specified service.
+// Returns the listener, listen address, client address, and any error.
+// Listeners are cached by context, service name, and schema to enable reuse.
 func GetListener(settingsContext string, serviceName string, schema string, listenerAddress string) (net.Listener, string, string, error) {
 	key := listenerKey(settingsContext, serviceName, schema)
 
@@ -128,18 +134,23 @@ func GetListener(settingsContext string, serviceName string, schema string, list
 	return lis, listenAddress, clientAddress, nil
 }
 
+// RemoveListener closes and removes a cached listener from the internal map.
+// This should be called during service shutdown to clean up resources.
 func RemoveListener(settingsContext string, serviceName string, schema string) {
 	key := listenerKey(settingsContext, serviceName, schema)
 
 	if val, ok := listeners.Load(key); ok {
 		lis, ok := val.(net.Listener)
 		if ok {
-			lis.Close()
+			_ = lis.Close()
 		}
 		listeners.Delete(key)
 	}
 }
 
+// CleanupListeners closes and removes all listeners associated with a settings context.
+// Returns the keys of the listeners that were cleaned up.
+// Used during shutdown to ensure all listeners for a context are properly closed.
 func CleanupListeners(settingsContext string) []string {
 	var keys []string
 	listeners.Range(func(k, v interface{}) bool {
@@ -148,7 +159,7 @@ func CleanupListeners(settingsContext string) []string {
 		}
 
 		if lis, ok := v.(net.Listener); ok {
-			lis.Close()
+			_ = lis.Close()
 		}
 
 		keys = append(keys, k.(string))

@@ -28,7 +28,7 @@ func assertNoError(t *testing.T, err error) {
 }
 
 // Core functionality tests
-func TestParse_BasicUnits(t *testing.T) {
+func TestParseBasicUnits(t *testing.T) {
 	tests := []struct {
 		input string
 		want  ByteSize
@@ -69,7 +69,7 @@ func TestParse_BasicUnits(t *testing.T) {
 	}
 }
 
-func TestParse_DecimalValues(t *testing.T) {
+func TestParseDecimalValues(t *testing.T) {
 	tests := []struct {
 		input string
 		want  ByteSize
@@ -92,7 +92,7 @@ func TestParse_DecimalValues(t *testing.T) {
 	}
 }
 
-func TestParse_Whitespace(t *testing.T) {
+func TestParseWhitespace(t *testing.T) {
 	tests := []struct {
 		input string
 		want  ByteSize
@@ -115,7 +115,7 @@ func TestParse_Whitespace(t *testing.T) {
 	}
 }
 
-func TestParse_CaseInsensitive(t *testing.T) {
+func TestParseCaseInsensitive(t *testing.T) {
 	tests := []struct {
 		input string
 		want  ByteSize
@@ -143,7 +143,7 @@ func TestParse_CaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestParse_InvalidInput(t *testing.T) {
+func TestParseInvalidInput(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -175,7 +175,7 @@ func TestParse_InvalidInput(t *testing.T) {
 	}
 }
 
-func TestString_Formatting(t *testing.T) {
+func TestStringFormatting(t *testing.T) {
 	tests := []struct {
 		input ByteSize
 		want  string
@@ -228,7 +228,7 @@ func TestString_Formatting(t *testing.T) {
 	}
 }
 
-func TestString_BoundaryValues(t *testing.T) {
+func TestStringBoundaryValues(t *testing.T) {
 	tests := []struct {
 		name  string
 		input ByteSize
@@ -257,7 +257,7 @@ func TestString_BoundaryValues(t *testing.T) {
 	}
 }
 
-func TestInt_Conversion(t *testing.T) {
+func TestIntConversion(t *testing.T) {
 	tests := []struct {
 		input ByteSize
 		want  int
@@ -343,7 +343,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
-func TestParse_EdgeCases(t *testing.T) {
+func TestParseEdgeCases(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string

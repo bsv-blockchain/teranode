@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestInMemoryBroker_ProduceConsume(t *testing.T) {
+func TestInMemoryBrokerProduceConsume(t *testing.T) {
 	broker := NewInMemoryBroker()
 	topic := "test-topic"
 	messageValue := []byte("hello world")
@@ -91,7 +91,7 @@ func TestInMemoryBroker_ProduceConsume(t *testing.T) {
 	}
 }
 
-func TestInMemoryBroker_ProduceToNewTopic(t *testing.T) {
+func TestInMemoryBrokerProduceToNewTopic(t *testing.T) {
 	broker := NewInMemoryBroker()
 	topic := "new-topic"
 	messageValue := []byte("message for new topic")
@@ -121,7 +121,7 @@ func TestInMemoryBroker_ProduceToNewTopic(t *testing.T) {
 	}
 }
 
-func TestInMemoryBroker_ConsumeFromNewTopic(t *testing.T) {
+func TestInMemoryBrokerConsumeFromNewTopic(t *testing.T) {
 	broker := NewInMemoryBroker()
 	topic := "another-new-topic"
 
@@ -143,7 +143,7 @@ func TestInMemoryBroker_ConsumeFromNewTopic(t *testing.T) {
 	}
 }
 
-func TestInMemoryConsumer_ConsumePartitionError(t *testing.T) {
+func TestInMemoryConsumerConsumePartitionError(t *testing.T) {
 	broker := NewInMemoryBroker()
 	topic := "test-topic-partition"
 
@@ -175,7 +175,7 @@ func TestInMemoryConsumer_ConsumePartitionError(t *testing.T) {
 	}
 }
 
-func TestInMemorySyncProducer_UnimplementedMethods(t *testing.T) {
+func TestInMemorySyncProducerUnimplementedMethods(t *testing.T) {
 	broker := NewInMemoryBroker()
 	producer := NewInMemorySyncProducer(broker)
 
@@ -196,7 +196,7 @@ func TestInMemorySyncProducer_UnimplementedMethods(t *testing.T) {
 	}
 }
 
-func TestInMemoryAsyncProducer_ProduceSuccess(t *testing.T) {
+func TestInMemoryAsyncProducerProduceSuccess(t *testing.T) {
 	broker := NewInMemoryBroker()
 	topic := "async-test-success"
 	messageValue := "hello async world"
@@ -272,7 +272,7 @@ func TestInMemoryAsyncProducer_ProduceSuccess(t *testing.T) {
 	wgConsumer.Wait()
 }
 
-func TestInMemoryAsyncProducer_ProduceError(t *testing.T) {
+func TestInMemoryAsyncProducerProduceError(t *testing.T) {
 	broker := NewInMemoryBroker()
 	producer := NewInMemoryAsyncProducer(broker, 1)
 
@@ -309,7 +309,7 @@ func TestInMemoryAsyncProducer_ProduceError(t *testing.T) {
 	wg.Wait()
 }
 
-func TestInMemoryAsyncProducer_Close(t *testing.T) {
+func TestInMemoryAsyncProducerClose(t *testing.T) {
 	broker := NewInMemoryBroker()
 	producer := NewInMemoryAsyncProducer(broker, 10) // Larger buffer
 
@@ -346,9 +346,12 @@ func TestInMemoryAsyncProducer_Close(t *testing.T) {
 
 type FaultyEncoder struct{}
 
+// Encode simulates a faulty encoding process that always returns an error.
 func (fe FaultyEncoder) Encode() ([]byte, error) {
 	return nil, errors.New(errors.ERR_UNKNOWN, "failed to encode")
 }
+
+// Length returns 0, simulating a faulty encoder that does not produce valid output.
 func (fe FaultyEncoder) Length() int {
 	return 0
 }

@@ -203,7 +203,7 @@ func TestIsTransactionFinal(t *testing.T) {
 	}
 }
 
-func Test_IsTransactionFinal_FromRequirements(t *testing.T) {
+func TestIsTransactionFinalFromRequirements(t *testing.T) {
 	// Sequence nr							0xfff	!=0xfff
 	txFinal := &bt.Tx{Inputs: []*bt.Input{{SequenceNumber: 0xffffffff}}, LockTime: 500000005}
 	txNonFinal := &bt.Tx{Inputs: []*bt.Input{{SequenceNumber: 0xfffffff0}}, LockTime: 500000005}

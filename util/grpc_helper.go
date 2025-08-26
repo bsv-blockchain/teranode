@@ -13,7 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
-	prometheus_golang "github.com/prometheus/client_golang/prometheus"
+	prometheusgolang "github.com/prometheus/client_golang/prometheus"
 	"github.com/sercand/kuberesolver/v6"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -32,9 +32,13 @@ const (
 	authenticatedKey contextKey = "authenticated"
 
 	apiKeyHeader = "x-api-key"
+
+	// Default retry configuration
+	defaultRetryBackoff = 100 * time.Millisecond
 )
 
-// contextKey is a custom type for context keys to avoid collisions
+// contextKey is a custom type for context keys to avoid collisions.
+// Using a custom type prevents accidental key collisions when storing values in contexts.
 type contextKey string
 
 // PasswordCredentials -----------------------------------------------
@@ -43,20 +47,26 @@ type contextKey string
 // credentials to downstream middleware
 type PasswordCredentials map[string]string
 
+// NewPassCredentials creates a new PasswordCredentials instance from a map of key-value pairs.
+// These credentials are passed as metadata with each gRPC request for downstream authentication.
 func NewPassCredentials(m map[string]string) PasswordCredentials {
-	return PasswordCredentials(m)
+	return m
 }
 
-func (pc PasswordCredentials) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+// GetRequestMetadata retrieves the request metadata for the gRPC call.
+func (pc PasswordCredentials) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
 	return pc, nil
 }
 
+// RequireTransportSecurity indicates whether the credentials require transport security.
 func (PasswordCredentials) RequireTransportSecurity() bool {
 	return false
 }
 
 // ---------------------------------------------------------------------
 
+// ConnectionOptions contains configuration parameters for establishing gRPC client connections,
+// including security settings, authentication, retries, and message size limits.
 type ConnectionOptions struct {
 	MaxMessageSize   int                 // Max message size in bytes
 	SecurityLevel    int                 // 0 = insecure, 1 = secure, 2 = secure with client cert
@@ -77,7 +87,10 @@ func init() {
 	resolver.SetDefaultScheme("dns")
 }
 
-func GetGRPCClient(ctx context.Context, address string, connectionOptions *ConnectionOptions, tSettings *settings.Settings) (*grpc.ClientConn, error) {
+// GetGRPCClient creates a new gRPC client connection with the specified options.
+// Handles TLS configuration, authentication, retries, metrics, and tracing based on settings.
+// Returns a connection that should be closed by the caller when no longer needed.
+func GetGRPCClient(_ context.Context, address string, connectionOptions *ConnectionOptions, tSettings *settings.Settings) (*grpc.ClientConn, error) {
 	if address == "" {
 		return nil, errors.NewInvalidArgumentError("address is required")
 	}
@@ -108,8 +121,9 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 
 	opts = append(opts, grpc.WithTransportCredentials(tlsCredentials))
 
-	unaryClientInterceptors := make([]grpc.UnaryClientInterceptor, 0)
-	streamClientInterceptors := make([]grpc.StreamClientInterceptor, 0)
+	// Preallocate interceptor slices with reasonable capacity
+	unaryClientInterceptors := make([]grpc.UnaryClientInterceptor, 0, 3)
+	streamClientInterceptors := make([]grpc.StreamClientInterceptor, 0, 3)
 
 	if connectionOptions.APIKey != "" {
 		unaryClientInterceptors = append(unaryClientInterceptors,
@@ -144,7 +158,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 		streamClientInterceptors = append(streamClientInterceptors, prometheusClientMetrics.StreamClientInterceptor())
 
 		prometheusRegisterClientOnce.Do(func() {
-			prometheus_golang.MustRegister(prometheusClientMetrics)
+			prometheusgolang.MustRegister(prometheusClientMetrics)
 		})
 	}
 
@@ -163,7 +177,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 	// Retry interceptor...
 	if connectionOptions.MaxRetries > 0 {
 		if connectionOptions.RetryBackoff == 0 {
-			connectionOptions.RetryBackoff = 100 * time.Millisecond
+			connectionOptions.RetryBackoff = defaultRetryBackoff
 		}
 
 		opts = append(opts, grpc.WithChainUnaryInterceptor(retryInterceptor(connectionOptions.MaxRetries, connectionOptions.RetryBackoff)))
@@ -184,6 +198,18 @@ var prometheusMetrics = prometheus.NewServerMetrics(
 	prometheus.WithServerHandlingTimeHistogram(),
 )
 
+// getGRPCServer creates a new gRPC server with the specified options.
+// Configures message size limits, keepalive parameters, TLS credentials, and interceptors
+// for metrics and tracing based on settings. This is a private helper function used internally.
+//
+// Parameters:
+//   - connectionOptions: Configuration for the server connection
+//   - opts: Additional gRPC server options to apply
+//   - tSettings: Settings for enabling features like tracing and metrics
+//
+// Returns:
+//   - *grpc.Server: Configured gRPC server instance
+//   - error: Configuration error if TLS setup or other initialization fails
 func getGRPCServer(connectionOptions *ConnectionOptions, opts []grpc.ServerOption, tSettings *settings.Settings) (*grpc.Server, error) {
 	if connectionOptions.MaxMessageSize == 0 {
 		connectionOptions.MaxMessageSize = oneGigabyte
@@ -201,8 +227,8 @@ func getGRPCServer(connectionOptions *ConnectionOptions, opts []grpc.ServerOptio
 	}
 
 	// Interceptors.  The order may be important here.
-	unaryInterceptors := make([]grpc.UnaryServerInterceptor, 0)
-	streamInterceptors := make([]grpc.StreamServerInterceptor, 0)
+	unaryInterceptors := make([]grpc.UnaryServerInterceptor, 0, 2)
+	streamInterceptors := make([]grpc.StreamServerInterceptor, 0, 2)
 
 	if tSettings.TracingEnabled {
 		opts = append(opts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
@@ -238,12 +264,25 @@ func getGRPCServer(connectionOptions *ConnectionOptions, opts []grpc.ServerOptio
 	return server, nil
 }
 
+// RegisterPrometheusMetrics registers the gRPC server metrics with the global Prometheus registry.
+// This should be called once during application startup to enable gRPC metrics collection.
 func RegisterPrometheusMetrics() {
 	prometheusRegisterServerOnce.Do(func() {
-		prometheus_golang.MustRegister(prometheusMetrics)
+		prometheusgolang.MustRegister(prometheusMetrics)
 	})
 }
 
+// retryInterceptor creates a gRPC unary client interceptor that implements retry logic
+// for transient errors. It retries requests that fail with codes.Unavailable or
+// codes.DeadlineExceeded up to the specified maximum number of times, with a fixed
+// backoff delay between attempts.
+//
+// Parameters:
+//   - maxRetries: Maximum number of retry attempts
+//   - retryBackoff: Time to wait between retry attempts
+//
+// Returns:
+//   - grpc.UnaryClientInterceptor: Interceptor function that wraps requests with retry logic
 func retryInterceptor(maxRetries int, retryBackoff time.Duration) grpc.UnaryClientInterceptor {
 	return func(
 		ctx context.Context,
@@ -274,6 +313,23 @@ func retryInterceptor(maxRetries int, retryBackoff time.Duration) grpc.UnaryClie
 	}
 }
 
+// loadTLSCredentials configures TLS transport credentials based on the specified security level.
+// Supports four security levels:
+//   - Level 0: No security (insecure connection)
+//   - Level 1: TLS with no client certificate required
+//   - Level 2: TLS with any client certificate accepted
+//   - Level 3: TLS with client certificate required and verified
+//
+// The function behaves differently for client vs server configurations, loading appropriate
+// certificates and CA trust stores as needed.
+//
+// Parameters:
+//   - connectionData: Connection options containing security level and certificate paths
+//   - isServer: True if configuring server credentials, false for client credentials
+//
+// Returns:
+//   - credentials.TransportCredentials: Configured TLS credentials
+//   - error: Configuration error if certificate loading or validation fails
 func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (credentials.TransportCredentials, error) {
 	switch connectionData.SecurityLevel {
 	case 0:
@@ -394,6 +450,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 //
 // Parameters:
 //   - logger: Logger for resolver configuration messages
+//   - grpcResolver: The resolver type to configure
 func InitGRPCResolver(logger ulogger.Logger, grpcResolver string) {
 	switch grpcResolver {
 	case "k8s":
@@ -409,7 +466,9 @@ func InitGRPCResolver(logger ulogger.Logger, grpcResolver string) {
 	}
 }
 
-// CreateAuthInterceptor creates a gRPC interceptor that handles authentication for protected methods
+// CreateAuthInterceptor creates a gRPC interceptor that handles authentication for protected methods.
+// It validates API keys in request metadata and only applies authentication to specified methods.
+// Non-protected methods bypass authentication entirely.
 func CreateAuthInterceptor(apiKey string, protectedMethods map[string]bool) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		// Skip authentication for non-protected methods

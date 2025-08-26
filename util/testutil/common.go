@@ -42,7 +42,8 @@ func NewSQLiteMemoryUTXOStore(ctx context.Context, logger ulogger.Logger, settin
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
 
-	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	var utxoStore utxo.Store
+	utxoStore, err = sql.New(ctx, logger, settings, utxoStoreURL)
 	require.NoError(t, err)
 
 	return utxoStore
@@ -54,10 +55,12 @@ func NewMemorySQLiteBlockchainClient(logger ulogger.Logger, settings *settings.S
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
 
-	blockchainStore, err := blockchainstore.NewStore(logger, storeURL, settings)
+	var blockchainStore blockchainstore.Store
+	blockchainStore, err = blockchainstore.NewStore(logger, storeURL, settings)
 	require.NoError(t, err)
 
-	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
+	var blockchainClient blockchain.ClientI
+	blockchainClient, err = blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
 	return blockchainClient

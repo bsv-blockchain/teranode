@@ -23,6 +23,9 @@ const (
 	SqliteMemory SQLEngine = "sqlitememory"
 )
 
+// InitSQLDB initializes a SQL database connection based on the provided URL scheme.
+// Supports PostgreSQL, SQLite, and in-memory SQLite databases.
+// Returns a configured database connection with appropriate settings applied.
 func InitSQLDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*usql.DB, error) {
 	switch storeURL.Scheme {
 	case "postgres":
@@ -34,6 +37,9 @@ func InitSQLDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Set
 	return nil, errors.NewConfigurationError("db: unknown scheme: %s", storeURL.Scheme)
 }
 
+// InitPostgresDB initializes a PostgreSQL database connection with connection pooling.
+// Extracts connection parameters from the URL and applies SSL mode configuration.
+// Sets up connection limits based on the provided settings.
 func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*usql.DB, error) {
 	dbHost := storeURL.Hostname()
 	port := storeURL.Port()
@@ -71,6 +77,9 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 	return db, nil
 }
 
+// InitSQLiteDB initializes a SQLite database connection with WAL mode and shared cache.
+// Supports both file-based and in-memory databases based on the URL scheme.
+// Enables foreign keys and configures pragmas for optimal performance.
 func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*usql.DB, error) {
 	var filename string
 

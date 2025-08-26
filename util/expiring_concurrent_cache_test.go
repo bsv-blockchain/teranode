@@ -15,7 +15,7 @@ import (
 
 // go test -v -tags test_util ./test/...
 
-func TestExpiringConcurrentCache_GetOrSet(t *testing.T) {
+func TestExpiringConcurrentCacheGetOrSet(t *testing.T) {
 	t.Run("value is already in the cache", func(t *testing.T) {
 		cache := NewExpiringConcurrentCache[chainhash.Hash, int](120 * time.Second)
 		key, err := chainhash.NewHashFromStr("1")

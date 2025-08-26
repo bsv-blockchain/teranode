@@ -153,7 +153,7 @@ func TestWaitForBlockAssemblyReady(t *testing.T) {
 }
 
 // TestWaitForBlockAssemblyReady_ContextCancellation tests that the function respects context cancellation
-func TestWaitForBlockAssemblyReady_ContextCancellation(t *testing.T) {
+func TestWaitForBlockAssemblyReadyContextCancellation(t *testing.T) {
 	mockClient := &blockassembly.Mock{}
 
 	// Make block assembly always behind

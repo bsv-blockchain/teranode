@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+// Check represents a health check with a name and a function that performs the check,
+// returning HTTP status code, message, and optional error.
 type Check struct {
 	Name  string
 	Check func(context.Context, bool) (int, string, error)

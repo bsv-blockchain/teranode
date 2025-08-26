@@ -16,7 +16,7 @@ import (
 var previousTxScript, _ = hex.DecodeString("76a914d687c76d6ee133c9cc42bd96e3947d8a84bdf60288ac")
 var hash, _ = chainhash.NewHashFromStr("8ef53bb4c9c4b849c30ec75243bad8a7eafd83f407407a154a6d9ec80d83dd00")
 
-func Test_getInputUtxoHash(t *testing.T) {
+func TestGetInputUtxoHash(t *testing.T) {
 	type args struct {
 		input *bt.Input
 	}
@@ -59,7 +59,7 @@ func Test_getInputUtxoHash(t *testing.T) {
 	}
 }
 
-func Test_getOutputUtxoHash(t *testing.T) {
+func TestGetOutputUtxoHash(t *testing.T) {
 	type args struct {
 		txID   []byte
 		output *bt.Output

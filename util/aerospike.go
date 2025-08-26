@@ -52,6 +52,9 @@ func init() {
 	aerospikeConnections = make(map[string]*uaerospike.Client)
 }
 
+// GetAerospikeClient creates or retrieves a cached Aerospike client for the given URL.
+// It configures connection policies, authentication, and connection pooling based on settings.
+// Returns a thread-safe client instance that can be shared across goroutines.
 func GetAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings.Settings) (*uaerospike.Client, error) {
 	logger = logger.New("uaero")
 
@@ -92,7 +95,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	} else {
 		readPolicyURL := tSettings.Aerospike.ReadPolicyURL
 		if readPolicyURL == nil {
-			return nil, errors.NewConfigurationError("no aerospike_readPolicynd found")
+			return nil, errors.NewConfigurationError("no aerospike_readPolicy found")
 		}
 
 		logger.Infof("[Aerospike] readPolicy url %s", readPolicyURL)
@@ -592,9 +595,9 @@ func WithMaxRetries(retries int) AerospikeReadPolicyOptions {
 	}
 }
 
-// GetAerospikeReadPolicy creates a new Aerospike read policy with the provided options applied. Used to manage
-// default connection parameters
-// If no options are provided, the policy will use the default values
+// GetAerospikeReadPolicy creates a new Aerospike read policy with the provided options applied.
+// Used to manage default connection parameters for read operations.
+// If no options are provided, the policy will use the configured default values.
 func GetAerospikeReadPolicy(tSettings *settings.Settings, options ...AerospikeReadPolicyOptions) *aerospike.BasePolicy {
 	readPolicy := aerospike.NewPolicy()
 
@@ -641,9 +644,9 @@ func WithMaxRetriesWrite(retries int) AerospikeWritePolicyOptions {
 	}
 }
 
-// GetAerospikeWritePolicy creates a new Aerospike write policy with the provided options applied. Used to manage
-// default connection parameters
-// If no options are provided, the policy will use the default values
+// GetAerospikeWritePolicy creates a new Aerospike write policy with the provided options applied.
+// Used to manage default connection parameters for write operations with strong consistency.
+// If no options are provided, the policy will use the configured default values.
 func GetAerospikeWritePolicy(tSettings *settings.Settings, generation uint32, options ...AerospikeWritePolicyOptions) *aerospike.WritePolicy {
 	writePolicy := aerospike.NewWritePolicy(generation, aerospike.TTLDontExpire)
 
@@ -667,6 +670,8 @@ func GetAerospikeWritePolicy(tSettings *settings.Settings, generation uint32, op
 	return writePolicy
 }
 
+// GetAerospikeBatchPolicy creates a new Aerospike batch policy configured with default settings.
+// Used for batch read/write operations to optimize performance and consistency.
 func GetAerospikeBatchPolicy(tSettings *settings.Settings) *aerospike.BatchPolicy {
 	batchPolicy := aerospike.NewBatchPolicy()
 
@@ -685,6 +690,8 @@ func GetAerospikeBatchPolicy(tSettings *settings.Settings) *aerospike.BatchPolic
 	return batchPolicy
 }
 
+// GetAerospikeBatchWritePolicy creates a new Aerospike batch write policy with strong consistency.
+// Used for batch write operations to ensure data integrity across multiple records.
 func GetAerospikeBatchWritePolicy(tSettings *settings.Settings) *aerospike.BatchWritePolicy {
 	batchWritePolicy := aerospike.NewBatchWritePolicy()
 
@@ -697,6 +704,8 @@ func GetAerospikeBatchWritePolicy(tSettings *settings.Settings) *aerospike.Batch
 	return batchWritePolicy
 }
 
+// GetAerospikeBatchReadPolicy creates a new Aerospike batch read policy with default settings.
+// Used for batch read operations to optimize throughput and consistency.
 func GetAerospikeBatchReadPolicy(tSettings *settings.Settings) *aerospike.BatchReadPolicy {
 	batchReadPolicy := aerospike.NewBatchReadPolicy()
 

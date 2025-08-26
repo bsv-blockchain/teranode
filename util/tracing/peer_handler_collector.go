@@ -8,6 +8,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// PeerHandlerStats holds atomic counters for peer handler operation metrics,
+// tracking various transaction and block-related events and processing times.
 type PeerHandlerStats struct {
 	TransactionSent         atomic.Uint64
 	TransactionAnnouncement atomic.Uint64
@@ -32,6 +34,8 @@ func NewPeerHandlerStats() *PeerHandlerStats {
 	}
 }
 
+// PeerHandlerCollector is a Prometheus collector that exposes peer handler metrics
+// for monitoring transaction and block processing performance across peers.
 type PeerHandlerCollector struct {
 	service                 string
 	stats                   *safemap.Safemap[string, *PeerHandlerStats]
