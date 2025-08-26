@@ -99,7 +99,10 @@ func Retry[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error
 				if setOptions.InfiniteRetry && i > maxLinearBackoffRetries {
 					retryCountForBackoff = maxLinearBackoffRetries // Cap for infinite retry to prevent excessive delays
 				}
-				BackoffAndSleep(retryCountForBackoff, setOptions.BackoffMultiplier, setOptions.BackoffDurationType)
+				if err := BackoffAndSleep(ctx, retryCountForBackoff, setOptions.BackoffMultiplier, setOptions.BackoffDurationType); err != nil {
+					logger.Errorf("Context cancelled during backoff, stopping retries")
+					return result, err
+				}
 			}
 
 			// Call the function

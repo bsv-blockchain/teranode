@@ -379,7 +379,7 @@ func (ba *BlockAssembly) storeSubtreeMetaWithRetry(ctx context.Context, subtreeR
 			ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree meta already exists", subtreeRetry.subtreeHash.String())
 		} else {
 			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree meta: %s", subtreeRetry.subtreeHash.String(), err)
-			ba.handleRetryLogic(subtreeRetry, subtreeRetryChan, "subtree meta")
+			ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree meta")
 		}
 	}
 
@@ -400,7 +400,7 @@ func (ba *BlockAssembly) storeSubtreeDataWithRetry(ctx context.Context, subtreeR
 			ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree already exists", subtreeRetry.subtreeHash.String())
 		} else {
 			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree: %s", subtreeRetry.subtreeHash.String(), err)
-			ba.handleRetryLogic(subtreeRetry, subtreeRetryChan, "subtree")
+			ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree")
 		}
 	}
 
@@ -408,7 +408,7 @@ func (ba *BlockAssembly) storeSubtreeDataWithRetry(ctx context.Context, subtreeR
 }
 
 // handleRetryLogic manages the retry logic for failed storage operations.
-func (ba *BlockAssembly) handleRetryLogic(subtreeRetry *subtreeRetrySend, subtreeRetryChan chan *subtreeRetrySend, itemType string) {
+func (ba *BlockAssembly) handleRetryLogic(ctx context.Context, subtreeRetry *subtreeRetrySend, subtreeRetryChan chan *subtreeRetrySend, itemType string) {
 	if subtreeRetry.retries > 10 {
 		ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store %s, retries exhausted", subtreeRetry.subtreeHash.String(), itemType)
 		return
@@ -417,7 +417,10 @@ func (ba *BlockAssembly) handleRetryLogic(subtreeRetry *subtreeRetrySend, subtre
 	subtreeRetry.retries++
 	go func() {
 		// backoff and wait before re-adding to retry queue
-		retry.BackoffAndSleep(subtreeRetry.retries, 2, time.Second)
+		if err := retry.BackoffAndSleep(ctx, subtreeRetry.retries, 2, time.Second); err != nil {
+			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: context cancelled", subtreeRetry.subtreeHash.String())
+			return
+		}
 
 		// re-add the subtree to the retry queue
 		subtreeRetryChan <- subtreeRetry

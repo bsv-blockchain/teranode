@@ -142,6 +142,76 @@ func TestRetryWithExponentialBackoff(t *testing.T) {
 	assert.Equal(t, context.DeadlineExceeded, err)
 }
 
+func TestBackoffAndSleep(t *testing.T) {
+	t.Run("completes sleep successfully", func(t *testing.T) {
+		ctx := context.Background()
+		start := time.Now()
+		err := BackoffAndSleep(ctx, 1, 1, 10*time.Millisecond)
+		elapsed := time.Since(start)
+
+		assert.NoError(t, err)
+		// Should sleep for (1*1)+1 = 2 * 10ms = 20ms
+		assert.GreaterOrEqual(t, elapsed, 20*time.Millisecond)
+		assert.Less(t, elapsed, 30*time.Millisecond)
+	})
+
+	t.Run("cancels on context cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+
+		// Start the sleep in a goroutine
+		done := make(chan error, 1)
+		go func() {
+			// Should sleep for (2*1)+1 = 3 * 100ms = 300ms
+			done <- BackoffAndSleep(ctx, 2, 1, 100*time.Millisecond)
+		}()
+
+		// Cancel after a short delay
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+
+		// Should return context error quickly
+		select {
+		case err := <-done:
+			assert.Equal(t, context.Canceled, err)
+		case <-time.After(50 * time.Millisecond):
+			t.Fatal("BackoffAndSleep did not cancel in time")
+		}
+	})
+
+	t.Run("respects backoff calculation", func(t *testing.T) {
+		// Save original and restore after
+		originalSleepFunc := sleepFunc
+		defer func() { sleepFunc = originalSleepFunc }()
+
+		var recordedDuration time.Duration
+		sleepFunc = func(ctx context.Context, d time.Duration) error {
+			recordedDuration = d
+			return nil
+		}
+
+		ctx := context.Background()
+
+		// Test various combinations
+		tests := []struct {
+			retries    int
+			multiplier int
+			duration   time.Duration
+			expected   time.Duration
+		}{
+			{0, 1, time.Second, 1 * time.Second},            // (0*1)+1 = 1
+			{1, 2, time.Second, 3 * time.Second},            // (1*2)+1 = 3
+			{3, 3, time.Second, 10 * time.Second},           // (3*3)+1 = 10
+			{2, 5, time.Millisecond, 11 * time.Millisecond}, // (2*5)+1 = 11
+		}
+
+		for _, tc := range tests {
+			err := BackoffAndSleep(ctx, tc.retries, tc.multiplier, tc.duration)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expected, recordedDuration)
+		}
+	})
+}
+
 func TestRetryTimer(t *testing.T) {
 	// Save the original function
 	originalSleepFunc := sleepFunc
@@ -152,8 +222,9 @@ func TestRetryTimer(t *testing.T) {
 	// This is used to test the backoff time
 	var recordedSleeps []time.Duration
 	// mock sleep function
-	sleepFunc = func(duration time.Duration) {
+	sleepFunc = func(ctx context.Context, duration time.Duration) error {
 		recordedSleeps = append(recordedSleeps, duration)
+		return nil
 	}
 
 	tests := []struct {
