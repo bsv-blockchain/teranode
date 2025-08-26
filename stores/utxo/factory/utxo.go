@@ -139,9 +139,9 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 				if errors.Is(err, context.Canceled) {
 					logger.Infof("[UTXOStore] error getting best height and time for %s: %v", source, err)
 				} else {
-					logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
+					logger.Warnf("[UTXOStore] error getting best height and time for %s: %v", source, err)
 				}
-			} else {
+			} else if blockHeight > 0 {
 				logger.Debugf("[UTXOStore] setting block height to %d", blockHeight)
 
 				if err = utxoStore.SetBlockHeight(blockHeight); err != nil {
@@ -153,6 +153,8 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 				if err = utxoStore.SetMedianBlockTime(medianBlockTime); err != nil {
 					logger.Errorf("[UTXOStore] error setting median block time for %s: %v", source, err)
 				}
+			} else {
+				logger.Infof("[UTXOStore] skipping block height initialization for %s (height is 0)", source)
 			}
 
 			logger.Infof("[UTXOStore] starting block height subscription for: %s", source)
@@ -172,7 +174,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 								} else {
 									logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
 								}
-							} else {
+							} else if blockHeight > 0 {
 								logger.Debugf("[UTXOStore] updated block height to %d and median time to %d for %s", blockHeight, medianBlockTime, source)
 
 								if err = utxoStore.SetBlockHeight(blockHeight); err != nil {
@@ -182,6 +184,8 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 								if err = utxoStore.SetMedianBlockTime(medianBlockTime); err != nil {
 									logger.Errorf("[UTXOStore] error setting median block time for %s: %v", source, err)
 								}
+							} else {
+								logger.Infof("[UTXOStore] skipping block height update for %s (height is 0)", source)
 							}
 						}
 					}
