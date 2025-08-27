@@ -34,6 +34,7 @@ var commandHelp = map[string]string{
 	"export-blocks":      "Export blockchain to CSV",
 	"import-blocks":      "Import blockchain from CSV",
 	"checkblocktemplate": "Check block template",
+	"fix-chainwork":      "Fix incorrect chainwork values in blockchain database",
 }
 
 var dangerousCommands = map[string]bool{}
@@ -289,6 +290,20 @@ func Start(args []string, version, commit string) {
 			fmt.Printf("Checked block template successfully: %s\n", blockTemplate.String())
 
 			return nil
+		}
+	case "fix-chainwork":
+		dbURL := cmd.FlagSet.String("db-url", "", "Database URL (postgres://... or sqlite://...)")
+		dryRun := cmd.FlagSet.Bool("dry-run", true, "Preview changes without updating database")
+		batchSize := cmd.FlagSet.Int("batch-size", 1000, "Number of updates to batch in a transaction")
+		startHeight := cmd.FlagSet.Uint("start-height", 650286, "Starting block height")
+		endHeight := cmd.FlagSet.Uint("end-height", 0, "Ending block height (0 for current tip)")
+
+		cmd.Execute = func(args []string) error {
+			if *dbURL == "" {
+				return errors.NewProcessingError("Please provide a database URL with --db-url")
+			}
+
+			return fixChainwork(*dbURL, *dryRun, *batchSize, uint32(*startHeight), uint32(*endHeight))
 		}
 	default:
 		fmt.Printf("Unknown command: %s\n\n", command)
