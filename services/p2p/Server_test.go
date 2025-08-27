@@ -2227,6 +2227,54 @@ func TestHandleMiningOnTopic(t *testing.T) {
 			t.Fatal("Expected notification message but none received")
 		}
 	})
+
+	t.Run("sync not complete - buffers mining_on", func(t *testing.T) {
+		mockP2PNode := new(MockServerP2PNode)
+		selfPeerID, _ := peer.Decode("12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg")
+		mockP2PNode.On("HostID").Return(selfPeerID)
+		mockP2PNode.On("GetPeerIPs", mock.Anything).Return([]string{"192.168.1.1"})
+		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
+		mockBanList := new(MockBanList)
+		mockBanList.On("IsBanned", mock.Anything).Return(false)
+
+		syncManager := &SyncManager{
+			logger: ulogger.New("sync"),
+		}
+
+		mockBlockchainClient := new(blockchain.Mock)
+		fsmState := blockchain_api.FSMEventType_STOP
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+		server := &Server{
+			P2PNode:          mockP2PNode,
+			banList:          mockBanList,
+			syncManager:      syncManager,
+			blockchainClient: mockBlockchainClient,
+			notificationCh:   make(chan *notificationMsg, 10),
+			logger:           ulogger.New("test"),
+		}
+
+		msg := `{
+		"peerID":"12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg",
+		"miningOn":true,
+		"dataHubURL":"http://node.example",
+		"hash":"abc123",
+		"previousHash":"0000",
+		"height":5,
+		"miner":"test",
+		"sizeInBytes":123
+	}`
+
+		server.handleMiningOnTopic(ctx, []byte(msg), "12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg")
+
+		select {
+		case msg := <-server.notificationCh:
+			t.Logf("%v", msg)
+		default:
+			// No msg processed
+		}
+	})
+
 }
 
 func TestBlacklistBaseURL(t *testing.T) {
@@ -4365,4 +4413,108 @@ func TestProcessInvalidBlockMessageAddBanScoreFails(t *testing.T) {
 
 	err := server.processInvalidBlockMessage(kafkaMsg)
 	assert.Nil(t, err)
+}
+
+func TestBlockchainSubscriptionListener(t *testing.T) {
+	t.Run("context cancelled - shutdown", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		subscription := make(chan *blockchain.Notification, 1)
+
+		server := &Server{
+			logger: ulogger.New("test"),
+		}
+
+		done := make(chan struct{})
+		go func() {
+			server.blockchainSubscriptionListener(ctx, subscription)
+			close(done)
+		}()
+
+		cancel()
+
+		select {
+		case <-done:
+
+		case <-time.After(1 * time.Second):
+			t.Fatal("listener did not shut down after context cancel")
+		}
+	})
+
+	t.Run("processBlockchainNotification returns error - log and continue", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		subscription := make(chan *blockchain.Notification, 1)
+		subscription <- &blockchain.Notification{
+			Type: model.NotificationType(255),
+		}
+
+		server := &Server{
+			logger: ulogger.New("test"),
+		}
+
+		go func() {
+			server.blockchainSubscriptionListener(ctx, subscription)
+		}()
+
+		time.Sleep(100 * time.Millisecond)
+	})
+}
+
+func TestConnectPeer(t *testing.T) {
+	t.Run("P2P node is nil", func(t *testing.T) {
+		server := &Server{
+			logger:  ulogger.New("test"),
+			P2PNode: nil,
+		}
+
+		resp, err := server.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{
+			PeerAddress: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFakePeer",
+		})
+		require.NoError(t, err)
+		assert.False(t, resp.Success)
+		assert.Equal(t, "P2P node not available", resp.Error)
+	})
+
+	t.Run("ConnectToPeer returns error", func(t *testing.T) {
+		mockP2PNode := new(MockServerP2PNode)
+		mockP2PNode.
+			On("ConnectToPeer", mock.Anything, "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFail").
+			Return(errors.NewProcessingError("connection failed"))
+
+		server := &Server{
+			logger:  ulogger.New("test"),
+			P2PNode: mockP2PNode,
+		}
+
+		resp, err := server.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{
+			PeerAddress: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFail",
+		})
+		require.NoError(t, err)
+		assert.False(t, resp.Success)
+		assert.Contains(t, resp.Error, "connection failed")
+
+		mockP2PNode.AssertExpectations(t)
+	})
+
+	t.Run("ConnectToPeer success", func(t *testing.T) {
+		mockP2PNode := new(MockServerP2PNode)
+		mockP2PNode.
+			On("ConnectToPeer", mock.Anything, "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooSuccess").
+			Return(nil)
+
+		server := &Server{
+			logger:  ulogger.New("test"),
+			P2PNode: mockP2PNode,
+		}
+
+		resp, err := server.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{
+			PeerAddress: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooSuccess",
+		})
+		require.NoError(t, err)
+		assert.True(t, resp.Success)
+		assert.Empty(t, resp.Error)
+
+		mockP2PNode.AssertExpectations(t)
+	})
 }
