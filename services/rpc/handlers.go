@@ -1321,12 +1321,15 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 		s.logger.Errorf("error creating chain work hash: %v", err)
 	}
 
+	difficultyBigFloat := bestBlockHeader.Bits.CalculateDifficulty()
+	difficulty, _ := difficultyBigFloat.Float64()
+
 	jsonMap := map[string]interface{}{
 		"chain":                s.settings.ChainCfgParams.Name,
 		"blocks":               bestBlockMeta.Height,
 		"headers":              863341,
 		"bestblockhash":        bestBlockHeader.Hash().String(),
-		"difficulty":           bestBlockHeader.Bits.CalculateDifficulty(),
+		"difficulty":           difficulty, // Return as float64 to match Bitcoin SV
 		"mediantime":           0,
 		"verificationprogress": 0,
 		"chainwork":            chainWorkHash.String(),
@@ -1355,17 +1358,14 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 		return cached.(map[string]interface{}), nil
 	}
 
-	height, _, err := s.blockchainClient.GetBestHeightAndTime(ctx)
+	bestBlockHeader, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		s.logger.Errorf("error getting best height and time: %v", err)
-
-		height = 0
-	}
-
-	difficulty, err := s.blockAssemblyClient.GetCurrentDifficulty(ctx)
-	if err != nil {
+		s.logger.Errorf("error getting best block header: %v", err)
 		return nil, err
 	}
+
+	difficultyBigFloat := bestBlockHeader.Bits.CalculateDifficulty()
+	difficulty, _ := difficultyBigFloat.Float64()
 
 	var p2pConnections *p2p_api.GetPeersResponse
 	if s.p2pClient != nil {
@@ -1443,7 +1443,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	jsonMap := map[string]interface{}{
 		"version":         1,                                             // the version of the server
 		"protocolversion": wire.ProtocolVersion,                          // the latest supported protocol version
-		"blocks":          height,                                        // the number of blocks processed
+		"blocks":          bestBlockMeta.Height,                          // the number of blocks processed
 		"connections":     connectionCount,                               // the number of connected peers
 		"difficulty":      difficulty,                                    // the current target difficulty
 		"testnet":         s.settings.ChainCfgParams.Net == wire.TestNet, // whether or not server is using testnet

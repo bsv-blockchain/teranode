@@ -73,16 +73,40 @@ func (b NBit) CalculateTarget() *big.Int {
 	return target
 }
 
-// CalculateDifficulty from nBits
+// CalculateDifficulty from nBits using the standard Bitcoin algorithm
 func (b NBit) CalculateDifficulty() *big.Float {
-	// Difficulty 1 target
-	difficulty1Target, _ := new(big.Int).SetString("00000000FFFF0000000000000000000000000000000000000000000000000000", 16)
+	// This implementation follows the standard Bitcoin difficulty calculation
+	// as used in both Bitcoin Core and Bitcoin SV:
+	// https://github.com/bitcoin/bitcoin/blob/master/src/rpc/blockchain.cpp
+	// https://github.com/bitcoin-sv/bitcoin-sv/blob/master/src/rpc/blockchain.cpp
+	//
+	// The algorithm is identical in both implementations:
+	// double GetDifficulty(const CBlockIndex& blockindex) {
+	//     int nShift = (blockindex.nBits >> 24) & 0xff;
+	//     double dDiff = (double)0x0000ffff / (double)(blockindex.nBits & 0x00ffffff);
+	//     while (nShift < 29) { dDiff *= 256.0; nShift++; }
+	//     while (nShift > 29) { dDiff /= 256.0; nShift--; }
+	//     return dDiff;
+	// }
 
-	// Current target from nBits
-	currentTarget := b.CalculateTarget()
+	nb := binary.LittleEndian.Uint32(b[:])
 
-	// Calculate difficulty
-	difficulty := new(big.Float).Quo(new(big.Float).SetInt(difficulty1Target), new(big.Float).SetInt(currentTarget))
+	// Extract nShift (exponent) and coefficient
+	nShift := (nb >> 24) & 0xff
+	coefficient := nb & 0x00ffffff
 
-	return difficulty
+	// Calculate initial difficulty
+	dDiff := float64(0x0000ffff) / float64(coefficient)
+
+	// Normalize to exponent 29
+	for nShift < 29 {
+		dDiff *= 256.0
+		nShift++
+	}
+	for nShift > 29 {
+		dDiff /= 256.0
+		nShift--
+	}
+
+	return big.NewFloat(dDiff)
 }

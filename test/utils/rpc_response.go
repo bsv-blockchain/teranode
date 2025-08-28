@@ -17,7 +17,7 @@ type BlockchainInfo struct {
 		Blocks               int      `json:"blocks"`
 		Chain                string   `json:"chain"`
 		Chainwork            string   `json:"chainwork"`
-		Difficulty           string   `json:"difficulty"`
+		Difficulty           float64  `json:"difficulty"`
 		Headers              int      `json:"headers"`
 		Mediantime           int      `json:"mediantime"`
 		Pruned               bool     `json:"pruned"`

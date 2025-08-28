@@ -3643,8 +3643,14 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 	t.Run("successful get info with all clients", func(t *testing.T) {
 		clearRPCCallCache()
 		mockBlockchainClient := &mockBlockchainClient{
-			getBestHeightAndTimeFunc: func(ctx context.Context) (uint32, uint32, error) {
-				return 100000, 1234567890, nil
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				// Create a valid NBit value for difficulty calculation
+				nBits, _ := model.NewNBitFromString("180f9ff5")
+				return &model.BlockHeader{
+						Bits: *nBits,
+					}, &model.BlockHeaderMeta{
+						Height: 100000,
+					}, nil
 			},
 		}
 
@@ -3702,7 +3708,8 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		assert.Equal(t, wire.ProtocolVersion, infoMap["protocolversion"])
 		assert.Equal(t, uint32(100000), infoMap["blocks"])
 		assert.Equal(t, 3, infoMap["connections"]) // 2 p2p + 1 legacy
-		assert.Equal(t, 12345.67890, infoMap["difficulty"])
+		// Difficulty is now calculated from nBits and returned as float64
+		assert.InDelta(t, 70368426346.67, infoMap["difficulty"], 0.01)
 		assert.Equal(t, false, infoMap["testnet"]) // MainNet
 		assert.Equal(t, false, infoMap["stn"])     // MainNet
 	})
@@ -3710,8 +3717,13 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 	t.Run("successful get info with testnet", func(t *testing.T) {
 		clearRPCCallCache()
 		mockBlockchainClient := &mockBlockchainClient{
-			getBestHeightAndTimeFunc: func(ctx context.Context) (uint32, uint32, error) {
-				return 50000, 1234567890, nil
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				nBits, _ := model.NewNBitFromString("180f9ff5")
+				return &model.BlockHeader{
+						Bits: *nBits,
+					}, &model.BlockHeaderMeta{
+						Height: 50000,
+					}, nil
 			},
 		}
 
@@ -3748,7 +3760,8 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		// Verify testnet-specific fields
 		assert.Equal(t, uint32(50000), infoMap["blocks"])
 		assert.Equal(t, 0, infoMap["connections"]) // No peer clients
-		assert.Equal(t, 1.0, infoMap["difficulty"])
+		// Difficulty is now calculated from nBits and returned as float64
+		assert.InDelta(t, 70368426346.67, infoMap["difficulty"], 0.01)
 		assert.Equal(t, true, infoMap["testnet"]) // TestNet
 		assert.Equal(t, false, infoMap["stn"])    // Not STN
 	})
@@ -3756,8 +3769,8 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 	t.Run("blockchain client error handling", func(t *testing.T) {
 		clearRPCCallCache()
 		mockBlockchainClient := &mockBlockchainClient{
-			getBestHeightAndTimeFunc: func(ctx context.Context) (uint32, uint32, error) {
-				return 0, 0, errors.New(errors.ERR_ERROR, "blockchain service unavailable")
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return nil, nil, errors.New(errors.ERR_ERROR, "blockchain service unavailable")
 			},
 		}
 
@@ -3781,33 +3794,29 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		}
 
 		result, err := handleGetInfo(context.Background(), s, nil, nil)
-		require.NoError(t, err) // Should not error, just set height to 0
-		require.NotNil(t, result)
-
-		infoMap, ok := result.(map[string]interface{})
-		assert.True(t, ok)
-		assert.Equal(t, uint32(0), infoMap["blocks"]) // Height defaults to 0 on error
-		assert.Equal(t, 1000.0, infoMap["difficulty"])
+		require.Error(t, err) // Should error when GetBestBlockHeader fails
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "blockchain service unavailable")
 	})
 
-	t.Run("block assembly client error", func(t *testing.T) {
+	t.Run("successful without block assembly client", func(t *testing.T) {
 		clearRPCCallCache()
 		mockBlockchainClient := &mockBlockchainClient{
-			getBestHeightAndTimeFunc: func(ctx context.Context) (uint32, uint32, error) {
-				return 75000, 1234567890, nil
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				nBits, _ := model.NewNBitFromString("180f9ff5")
+				return &model.BlockHeader{
+						Bits: *nBits,
+					}, &model.BlockHeaderMeta{
+						Height: 75000,
+					}, nil
 			},
 		}
 
-		mockBlockAssemblyClient := &mockBlockAssemblyClient{
-			getCurrentDifficultyFunc: func(ctx context.Context) (float64, error) {
-				return 0, errors.New(errors.ERR_ERROR, "block assembly service error")
-			},
-		}
-
+		// No block assembly client needed anymore since difficulty comes from block header
 		s := &RPCServer{
 			logger:              logger,
 			blockchainClient:    mockBlockchainClient,
-			blockAssemblyClient: mockBlockAssemblyClient,
+			blockAssemblyClient: nil, // Can be nil now
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -3817,16 +3826,26 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		}
 
 		result, err := handleGetInfo(context.Background(), s, nil, nil)
-		assert.Error(t, err) // Should error on difficulty retrieval failure
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "block assembly service error")
+		require.NoError(t, err) // Should succeed even without block assembly client
+		require.NotNil(t, result)
+
+		infoMap, ok := result.(map[string]interface{})
+		assert.True(t, ok)
+		assert.Equal(t, uint32(75000), infoMap["blocks"])
+		// Difficulty is calculated from the nBits value and returned as float64
+		assert.InDelta(t, 70368426346.67, infoMap["difficulty"], 0.01)
 	})
 
 	t.Run("p2p client error handling", func(t *testing.T) {
 		clearRPCCallCache()
 		mockBlockchainClient := &mockBlockchainClient{
-			getBestHeightAndTimeFunc: func(ctx context.Context) (uint32, uint32, error) {
-				return 80000, 1234567890, nil
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				nBits, _ := model.NewNBitFromString("180f9ff5")
+				return &model.BlockHeader{
+						Bits: *nBits,
+					}, &model.BlockHeaderMeta{
+						Height: 80000,
+					}, nil
 			},
 		}
 
@@ -3867,8 +3886,13 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 	t.Run("legacy peer client error handling", func(t *testing.T) {
 		clearRPCCallCache()
 		mockBlockchainClient := &mockBlockchainClient{
-			getBestHeightAndTimeFunc: func(ctx context.Context) (uint32, uint32, error) {
-				return 90000, 1234567890, nil
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				nBits, _ := model.NewNBitFromString("180f9ff5")
+				return &model.BlockHeader{
+						Bits: *nBits,
+					}, &model.BlockHeaderMeta{
+						Height: 90000,
+					}, nil
 			},
 		}
 
@@ -3909,8 +3933,13 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 	t.Run("timeout handling for p2p client", func(t *testing.T) {
 		clearRPCCallCache()
 		mockBlockchainClient := &mockBlockchainClient{
-			getBestHeightAndTimeFunc: func(ctx context.Context) (uint32, uint32, error) {
-				return 95000, 1234567890, nil
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				nBits, _ := model.NewNBitFromString("180f9ff5")
+				return &model.BlockHeader{
+						Bits: *nBits,
+					}, &model.BlockHeaderMeta{
+						Height: 95000,
+					}, nil
 			},
 		}
 
@@ -3957,8 +3986,13 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 	t.Run("network configuration flags", func(t *testing.T) {
 		clearRPCCallCache()
 		mockBlockchainClient := &mockBlockchainClient{
-			getBestHeightAndTimeFunc: func(ctx context.Context) (uint32, uint32, error) {
-				return 25000, 1234567890, nil
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				nBits, _ := model.NewNBitFromString("180f9ff5")
+				return &model.BlockHeader{
+						Bits: *nBits,
+					}, &model.BlockHeaderMeta{
+						Height: 25000,
+					}, nil
 			},
 		}
 
