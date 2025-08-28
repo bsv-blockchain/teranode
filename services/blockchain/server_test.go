@@ -1043,7 +1043,7 @@ func TestBlockchainStart(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 
 	// settings
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	tSettings.BlockChain.GRPCListenAddress = ""
 	tSettings.BlockChain.HTTPListenAddress = ""
@@ -1086,7 +1086,7 @@ func TestBlockchainStartGRPCError(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	tSettings.BlockChain.HTTPListenAddress = "127.0.0.1:0"
