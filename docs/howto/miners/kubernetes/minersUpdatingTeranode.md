@@ -25,7 +25,7 @@ Ensure you have:
 # Set new versions
 export OPERATOR_VERSION=<new-version>
 export TERANODE_VERSION=<new-version>
-export ECR_REGISTRY=ghcr.io/bsv-blockchain/teranode
+export ECR_REGISTRY=ghcr.io/bsv-blockchain
 ```
 
 ### 2. Update Images
@@ -33,11 +33,11 @@ export ECR_REGISTRY=ghcr.io/bsv-blockchain/teranode
 ```bash
 # Pull new images
 docker pull $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
-docker pull $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
+docker pull $ECR_REGISTRY/teranode:$TERANODE_VERSION
 
 # Load into Minikube
 minikube image load $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
-minikube image load $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
+minikube image load $ECR_REGISTRY/teranode:$TERANODE_VERSION
 ```
 
 ### 3. Update Operator

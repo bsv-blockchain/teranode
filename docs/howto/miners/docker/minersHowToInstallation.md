@@ -406,11 +406,11 @@ Teranode includes Aerospike 8.0 community edition for storing the UTXO set. The 
 
 The default configuration is set to stop writing when 50% of the system memory has been consumed. To future proof, you might want to run a dedicated cluster, with more memory and disk space allocated.
 
-See [aerospike.conf / stop-writes-sys-memory-pct](https://github.com/bsv-blockchain/teranode-public/blob/master/docker/base/aerospike.conf)
+See [aerospike.conf / stop-writes-sys-memory-pct](https://github.com/bsv-blockchain/teranode/blob/main/deploy/docker/base/aerospike.conf)
 
 By default, the Aerospike data is written to a single mount mounted in the `aerospike` container. For performance reasons, it is recommended to use at least 4 dedicated disks for the Aerospike data.
 
-See [aerospike.conf / storage-engine](https://github.com/bsv-blockchain/teranode-public/blob/master/docker/base/aerospike.conf)
+See [aerospike.conf / storage-engine](https://github.com/bsv-blockchain/teranode/blob/main/deploy/docker/base/aerospike.conf)
 
 ### Aerospike Administration
 

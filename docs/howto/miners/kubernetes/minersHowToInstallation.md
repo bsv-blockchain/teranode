@@ -136,22 +136,17 @@ Pull and load the required Teranode images into Minikube:
 
 #### Identify Available Versions
 
-```bash
-# Identify the latest available Teranode version
-aws ecr list-images \
-  --repository-name teranode-public \
-  --region eu-north-1 \
-  --query 'imageIds[*].imageTag' \
-  --output text
-```
+You can find the latest available version published on GitHub Container Registry:
+- https://github.com/bitcoin-sv/teranode/pkgs/container/teranode
+- https://github.com/bitcoin-sv/teranode-operator/pkgs/container/teranode-operator
 
 #### Set Image Versions
 
 ```bash
 # Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)
-export OPERATOR_VERSION=v0.5.3
-export TERANODE_VERSION=v0.9.53
-export ECR_REGISTRY=ghcr.io/bsv-blockchain/teranode
+export OPERATOR_VERSION=v0.5.5
+export TERANODE_VERSION=v0.9.76
+export ECR_REGISTRY=ghcr.io/bsv-blockchain
 ```
 
 #### Load Images into Minikube
@@ -162,8 +157,8 @@ docker pull $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
 minikube image load $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
 
 # Load Teranode Public
-docker pull $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
-minikube image load $ECR_REGISTRY/teranode-public:$TERANODE_VERSION
+docker pull $ECR_REGISTRY/teranode:$TERANODE_VERSION
+minikube image load $ECR_REGISTRY/teranode:$TERANODE_VERSION
 ```
 
 ### Deploy Teranode
