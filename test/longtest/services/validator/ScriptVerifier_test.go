@@ -50,7 +50,7 @@ func BenchmarkScriptVerification(b *testing.B) {
 	}
 
 	tLogger := &ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(b)
 	scriptInterpreterTypes := []string{"GoBDK", "GoSDK", "GoBT"}
 	for _, siType := range scriptInterpreterTypes {
 		createTxScriptInterpreter, ok := validator.TxScriptInterpreterFactory[validator.TxInterpreter(siType)]
@@ -104,7 +104,7 @@ func Test_ScriptVerificationBDKLargeTx(t *testing.T) {
 			require.NoError(t, err)
 
 			tLogger := &ulogger.TestLogger{}
-			tSettings := test.CreateBaseTestSettings()
+			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.ChainCfgParams, err = chaincfg.GetChainParams("mainnet")
 			require.NoError(t, err)
 
@@ -137,7 +137,7 @@ func Test_ScriptVerificationBDKTestNetData(t *testing.T) {
 			require.NoError(t, err)
 
 			tLogger := &ulogger.TestLogger{}
-			tSettings := test.CreateBaseTestSettings()
+			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.ChainCfgParams, err = chaincfg.GetChainParams("testnet")
 			require.NoError(t, err)
 

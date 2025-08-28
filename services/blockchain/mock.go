@@ -5,6 +5,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
 )
@@ -26,8 +27,8 @@ func (m *Mock) Health(ctx context.Context, checkLiveness bool) (int, string, err
 }
 
 // AddBlock mocks the AddBlock method
-func (m *Mock) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
-	args := m.Called(ctx, block, peerID)
+func (m *Mock) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) error {
+	args := m.Called(ctx, block, peerID, opts)
 
 	return args.Error(0)
 }
@@ -80,6 +81,17 @@ func (m *Mock) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error
 	}
 
 	return args.Get(0).(*model.Block), args.Error(1)
+}
+
+// GetNextBlockID mocks the GetNextBlockID method
+func (m *Mock) GetNextBlockID(ctx context.Context) (uint64, error) {
+	args := m.Called(ctx)
+
+	if args.Error(1) != nil {
+		return 0, args.Error(1)
+	}
+
+	return args.Get(0).(uint64), args.Error(1)
 }
 
 // GetBlockStats mocks the GetBlockStats method

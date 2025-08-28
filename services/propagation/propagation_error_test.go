@@ -23,7 +23,7 @@ import (
 // error propagation and service behavior under validation failure conditions.
 func TestPropagationServiceErrors(t *testing.T) {
 	// Create test settings
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	// tSettings.Propagation.GRPCListenAddress = "localhost:0" // Let OS choose port
 
 	mockClient := &blockchain.Mock{}

@@ -128,7 +128,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 	// get all the subtrees that are missing from the peer in parallel
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, 32)
+	util.SafeSetLimit(g, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
 
 	for subtreeIdx, subtreeHash := range missingSubtrees {
 		subtreeHash := subtreeHash
@@ -184,7 +184,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	subtreeTxs = nil // Clear the slice to free memory
 
 	// get the previous block headers on this chain and pass into the validation
-	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()))
+	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
 	if err != nil {
 		return nil, errors.NewProcessingError("[CheckSubtree] Failed to get block headers from blockchain client", err)
 	}
@@ -206,7 +206,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		}
 
 		g, gCtx = errgroup.WithContext(ctx)
-		util.SafeSetLimit(g, 32) // TODO: make this configurable
+		util.SafeSetLimit(g, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
 
 		var revalidateSubtreesMutex sync.Mutex
 		revalidateSubtrees := make([]chainhash.Hash, 0, len(missingSubtrees))
@@ -422,6 +422,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		validator.WithSkipPolicyChecks(true),
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
+		validator.WithAddTXToBlockAssembly(false),
 	)
 
 	// Track validation results
@@ -467,6 +468,10 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Log truly invalid transactions
 						u.logger.Warnf("[processTransactionsInLevels] Invalid transaction detected: %s: %v", tx.TxIDChainHash().String(), err)
+
+						if errors.Is(err, errors.ErrTxInvalid) {
+							return err
+						}
 					} else {
 						u.logger.Errorf("[processTransactionsInLevels] Processing error for transaction %s: %v", tx.TxIDChainHash().String(), err)
 					}
@@ -484,12 +489,12 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 			})
 		}
 
-		// Wait for all transactions in this level to complete before proceeding to next level
-		if err := g.Wait(); err != nil {
+		// Fail early if we get an actual tx error thrown
+		if err = g.Wait(); err != nil {
 			return errors.NewProcessingError("[processTransactionsInLevels] Failed to process level %d: %v", level, err)
 		}
 
-		u.logger.Debugf("[processTransactionsInLevels] Completed level %d", level)
+		u.logger.Debugf("[processTransactionsInLevels] Processing level %d with %d transactions DONE", level, len(levelTxs))
 	}
 
 	if errorsFound.Load() > 0 {

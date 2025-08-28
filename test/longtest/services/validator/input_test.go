@@ -31,7 +31,7 @@ func TestCheckInputsWithDuplicateInputs(t *testing.T) {
 		transactions.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
 	)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	tv := validator.NewTxValidator(
 		ulogger.TestLogger{},

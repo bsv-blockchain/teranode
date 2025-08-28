@@ -97,7 +97,7 @@ func setupServer(t *testing.T, sendBatchSize ...int) (context.Context, *Server, 
 	})
 
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Disable fee checking for tests
 	tSettings.Policy.MinMiningTxFee = 0

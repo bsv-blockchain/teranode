@@ -29,7 +29,7 @@ func TestDifficultyAdjustmentShouldNotChangeDifficultyIfBlocksAreMinedInTime(t *
 
 	currentTime := time.Now().Unix()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	tSettings.Block.StoreCacheEnabled = false
 
@@ -113,7 +113,7 @@ func TestDifficultyAdjustmentShouldChangeDifficultyIfBlocksAreMinedFasterThanExp
 
 	currentTime := time.Now().Unix()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	tSettings.Block.StoreCacheEnabled = false
 

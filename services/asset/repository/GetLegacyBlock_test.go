@@ -262,7 +262,7 @@ type testContext struct {
 func setup(t *testing.T) *testContext {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)

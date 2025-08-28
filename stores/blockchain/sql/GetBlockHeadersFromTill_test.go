@@ -15,7 +15,7 @@ import (
 )
 
 func TestSQLGetBlockHeadersFromTill(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("blocks not found", func(t *testing.T) {
 		ctx := context.Background()

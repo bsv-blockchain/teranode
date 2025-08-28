@@ -1114,7 +1114,16 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 	// remove checksum file, if exists
 	_ = os.Remove(fileName + checksumExtension)
 
-	return os.Remove(fileName)
+	if err = os.Remove(fileName); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// If the file does not exist, consider it deleted
+			return nil
+		}
+
+		return errors.NewStorageError("[File][Del] [%s] failed to remove file", fileName, err)
+	}
+
+	return nil
 }
 
 func findFilesByExtension(root, ext string) ([]string, error) {

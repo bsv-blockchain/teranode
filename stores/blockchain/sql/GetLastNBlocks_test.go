@@ -16,7 +16,7 @@ import (
 // mockRows implements a subset of sql.Rows interface for testing error cases
 
 func TestSQLGetLastNBlocks(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("get last blocks with empty chain", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")

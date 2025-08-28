@@ -58,7 +58,7 @@ func TestDifficultyCalculationFromMainnetHeaders(t *testing.T) {
 	}
 
 	// Create difficulty calculator
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	d, err := NewDifficulty(nil, ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)

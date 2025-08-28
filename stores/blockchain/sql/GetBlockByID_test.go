@@ -29,6 +29,7 @@ func TestGetBlockByID(t *testing.T) {
 
 		defer store.Close()
 
+		// Genesis block should have ID 0
 		genesisBlock, err := store.GetBlockByID(context.Background(), 0)
 		require.NoError(t, err)
 

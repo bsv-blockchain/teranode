@@ -58,8 +58,14 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		size.Store(1)
 		validateBlocksChan := make(chan *model.Block, 1)
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call fetchBlocksConcurrently
-		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, targetBlock, "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, catchupCtx, validateBlocksChan, &size)
 		require.NoError(t, err)
 
 		// Wait for goroutines to complete
@@ -116,8 +122,14 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		size.Store(int64(numBlocks))
 		validateBlocksChan := make(chan *model.Block, numBlocks)
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call fetchBlocksConcurrently
-		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, targetBlock, "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, catchupCtx, validateBlocksChan, &size)
 		require.NoError(t, err)
 
 		// Wait for goroutines to complete
@@ -177,8 +189,14 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		size.Store(int64(numBlocks))
 		validateBlocksChan := make(chan *model.Block, numBlocks)
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call fetchBlocksConcurrently - it now handles its own error group internally
-		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, targetBlock, "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, catchupCtx, validateBlocksChan, &size)
 
 		// The function should return an error when HTTP request fails
 		require.Error(t, err)
@@ -228,8 +246,14 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		ctx, cancel := context.WithCancel(suite.Ctx)
 		// errorGroup, gCtx := errgroup.WithContext(ctx)
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call fetchBlocksConcurrently
-		err := suite.Server.fetchBlocksConcurrently(ctx, targetBlock, "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, &size)
 		require.NoError(t, err)
 
 		// Cancel context after a short delay
@@ -269,8 +293,14 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		size.Store(int64(numBlocks))
 		validateBlocksChan := make(chan *model.Block, numBlocks)
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call fetchBlocksConcurrently - it now handles its own error group internally
-		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, targetBlock, "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, catchupCtx, validateBlocksChan, &size)
 
 		// The function should return an error when response is empty (expected blocks but got none)
 		require.Error(t, err)
@@ -332,8 +362,14 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		// errorGroup, gCtx := errgroup.WithContext(suite.Ctx)
 		startTime := time.Now()
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call fetchBlocksConcurrently
-		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, targetBlock, "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, catchupCtx, validateBlocksChan, &size)
 		assert.NoError(t, err)
 
 		// Wait for completion
@@ -379,8 +415,14 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		size.Store(0)
 		validateBlocksChan := make(chan *model.Block, 1)
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call fetchBlocksConcurrently
-		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, targetBlock, "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, catchupCtx, validateBlocksChan, &size)
 		require.NoError(t, err)
 
 		// Wait for goroutines to complete
@@ -414,8 +456,14 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		size.Store(0)
 		validateBlocksChan := make(chan *model.Block, 1)
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call fetchBlocksConcurrently
-		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, targetBlock, "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, catchupCtx, validateBlocksChan, &size)
 		require.NoError(t, err)
 
 		// Wait for goroutines to complete
@@ -515,8 +563,14 @@ func TestFetchBlocksConcurrently_PerformanceCharacteristics(t *testing.T) {
 		size.Store(int64(numBlocks))
 		validateBlocksChan := make(chan *model.Block, numBlocks)
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call fetchBlocksConcurrently
-		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, targetBlock, "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, catchupCtx, validateBlocksChan, &size)
 		require.NoError(t, err)
 
 		// Wait for goroutines to complete
@@ -560,8 +614,14 @@ func TestFetchBlocksConcurrently_EdgeCases(t *testing.T) {
 		size.Store(0)
 		validateBlocksChan := make(chan *model.Block, 1)
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call fetchBlocksConcurrently
-		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, targetBlock, "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, catchupCtx, validateBlocksChan, &size)
 		require.NoError(t, err)
 
 		// Wait for goroutines to complete
@@ -831,7 +891,13 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		validateBlocksChan := make(chan *model.Block, 10)
 		size := &atomic.Int64{}
 
-		err := suite.Server.fetchBlocksConcurrently(ctx, blocks[5], "http://peer", blockHeaders, validateBlocksChan, size)
+		catchupCtx := &CatchupContext{
+			blockUpTo:    blocks[5],
+			baseURL:      "http://peer",
+			blockHeaders: blockHeaders,
+		}
+
+		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
 		assert.NoError(t, err)
 
 		// Wait for completion
@@ -906,7 +972,13 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		validateBlocksChan := make(chan *model.Block, 20)
 		size := &atomic.Int64{}
 
-		err := suite.Server.fetchBlocksConcurrently(ctx, blocks[15], "http://peer", blockHeaders, validateBlocksChan, size)
+		catchupCtx := &CatchupContext{
+			blockUpTo:    blocks[15],
+			baseURL:      "http://peer",
+			blockHeaders: blockHeaders,
+		}
+
+		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
 		assert.NoError(t, err)
 
 		// Wait for completion
@@ -968,7 +1040,13 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		validateBlocksChan := make(chan *model.Block, 200)
 		size := &atomic.Int64{}
 
-		err := suite.Server.fetchBlocksConcurrently(ctx, blocks[100], "http://peer", blockHeaders, validateBlocksChan, size)
+		catchupCtx := &CatchupContext{
+			blockUpTo:    blocks[100],
+			baseURL:      "http://peer",
+			blockHeaders: blockHeaders,
+		}
+
+		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
 		assert.NoError(t, err)
 
 		// Wait for completion
@@ -1042,7 +1120,13 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		validateBlocksChan := make(chan *model.Block, 300)
 		size := &atomic.Int64{}
 
-		err := suite.Server.fetchBlocksConcurrently(ctx, blocks[250], "http://peer", blockHeaders, validateBlocksChan, size)
+		catchupCtx := &CatchupContext{
+			blockUpTo:    blocks[250],
+			baseURL:      "http://peer",
+			blockHeaders: blockHeaders,
+		}
+
+		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
 		assert.NoError(t, err)
 
 		// Wait for completion
@@ -1114,7 +1198,13 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		validateBlocksChan := make(chan *model.Block, 100)
 		size := &atomic.Int64{}
 
-		err := suite.Server.fetchBlocksConcurrently(ctx, blocks[50], "http://peer", blockHeaders, validateBlocksChan, size)
+		catchupCtx := &CatchupContext{
+			blockUpTo:    blocks[50],
+			baseURL:      "http://peer",
+			blockHeaders: blockHeaders,
+		}
+
+		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
 		assert.NoError(t, err)
 
 		// Wait for completion
@@ -1176,7 +1266,13 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		validateBlocksChan := make(chan *model.Block, 10)
 		size := &atomic.Int64{}
 
-		err := suite.Server.fetchBlocksConcurrently(ctx, blocks[5], "http://peer", blockHeaders, validateBlocksChan, size)
+		catchupCtx := &CatchupContext{
+			blockUpTo:    blocks[5],
+			baseURL:      "http://peer",
+			blockHeaders: blockHeaders,
+		}
+
+		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
 
 		// The function should return an error when HTTP request fails
 		assert.Error(t, err)
@@ -1226,7 +1322,13 @@ func TestFetchBlocksConcurrently_WorkerPoolArchitecture(t *testing.T) {
 		validateBlocksChan := make(chan *model.Block, 200)
 		size := &atomic.Int64{}
 
-		err := suite.Server.fetchBlocksConcurrently(ctx, blocks[100], "http://peer", blockHeaders, validateBlocksChan, size)
+		catchupCtx := &CatchupContext{
+			blockUpTo:    blocks[100],
+			baseURL:      "http://peer",
+			blockHeaders: blockHeaders,
+		}
+
+		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
 		assert.NoError(t, err)
 
 		// Wait for completion
@@ -1642,8 +1744,14 @@ func TestFetchBlocksConcurrentlyOptimized(t *testing.T) {
 		size.Store(2)
 		validateBlocksChan := make(chan *model.Block, 2)
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call the deprecated alias function
-		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, targetBlock, "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, catchupCtx, validateBlocksChan, &size)
 		assert.NoError(t, err)
 
 		// Wait for completion
@@ -1675,7 +1783,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 
 	logger := ulogger.TestLogger{}
 	mockSubtreeStore := memory.New()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	server := &Server{
 		logger:       logger,
 		subtreeStore: mockSubtreeStore,
@@ -1845,7 +1953,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 func TestFetchAndStoreSubtreeData(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	mockSubtreeStore := memory.New()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	server := &Server{
 		logger:       logger,
 		subtreeStore: mockSubtreeStore,
@@ -2156,7 +2264,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 	defer httpmock.DeactivateAndReset()
 
 	logger := ulogger.TestLogger{}
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	server := &Server{
 		logger:   logger,
 		settings: settings,
@@ -2255,7 +2363,7 @@ func TestBlockWorker(t *testing.T) {
 
 	logger := ulogger.TestLogger{}
 	mockSubtreeStore := memory.New()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	server := &Server{
 		logger:       logger,
 		subtreeStore: mockSubtreeStore,
@@ -2462,10 +2570,16 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		// Create context that will be cancelled
 		ctx, cancel := context.WithCancel(context.Background())
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    blocks[4],
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Start the function in a goroutine
 		errChan := make(chan error, 1)
 		go func() {
-			err := suite.Server.fetchBlocksConcurrently(ctx, blocks[4], "http://test-peer", headers, validateBlocksChan, &size)
+			err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, &size)
 			errChan <- err
 		}()
 
@@ -2516,8 +2630,14 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		size.Store(2)
 		validateBlocksChan := make(chan *model.Block, 2)
 
+		catchupCtx := &CatchupContext{
+			blockUpTo:    blocks[2],
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+		}
+
 		// Call fetchBlocksConcurrently
-		err := suite.Server.fetchBlocksConcurrently(context.Background(), blocks[2], "http://test-peer", headers, validateBlocksChan, &size)
+		err := suite.Server.fetchBlocksConcurrently(context.Background(), catchupCtx, validateBlocksChan, &size)
 
 		// Should fail with hash mismatch error
 		assert.Error(t, err)
@@ -2594,8 +2714,14 @@ func TestOrderedDelivery_StrictOrdering(t *testing.T) {
 	size.Store(int64(len(headers)))
 	validateBlocksChan := make(chan *model.Block, 10)
 
+	catchupCtx := &CatchupContext{
+		blockUpTo:    blocks[5],
+		baseURL:      "http://test-peer",
+		blockHeaders: headers,
+	}
+
 	// Call fetchBlocksConcurrently
-	err := suite.Server.fetchBlocksConcurrently(context.Background(), blocks[5], "http://test-peer", headers, validateBlocksChan, &size)
+	err := suite.Server.fetchBlocksConcurrently(context.Background(), catchupCtx, validateBlocksChan, &size)
 	assert.NoError(t, err)
 
 	// Collect delivered blocks
@@ -2623,7 +2749,7 @@ func TestFetchSingleBlock_ImprovedErrorHandling(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	server := &Server{
 		logger:   logger,
-		settings: test.CreateBaseTestSettings(),
+		settings: test.CreateBaseTestSettings(t),
 	}
 
 	t.Run("Block Creation Failure with Better Context", func(t *testing.T) {

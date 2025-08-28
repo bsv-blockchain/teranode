@@ -153,7 +153,7 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 }
 
 func cleanDB(t *testing.T, client *uaerospike.Client) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	policy := util.GetAerospikeWritePolicy(tSettings, 0)
 
@@ -176,10 +176,10 @@ func cleanDB(t *testing.T, client *uaerospike.Client) {
 	}
 }
 
-func setupStore(_ *testing.T, client *uaerospike.Client) *teranode_aerospike.Store {
+func setupStore(t *testing.T, client *uaerospike.Client) *teranode_aerospike.Store {
 	s := &teranode_aerospike.Store{}
 
-	s.SetSettings(test.CreateBaseTestSettings())
+	s.SetSettings(test.CreateBaseTestSettings(t))
 	s.SetLogger(ulogger.TestLogger{})
 	s.SetUtxoBatchSize(100)
 	s.SetClient(client)

@@ -41,7 +41,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 	node2 := testEnv.Nodes[1]
 	node3 := testEnv.Nodes[2]
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	_, err := helper.CallRPC(node1.RPCURL, "setban", []interface{}{node2.IPAddress, "add", 180, false})
 	require.NoError(t, err)

@@ -128,6 +128,9 @@ type Server struct {
 	// blockValidation contains the core validation logic and state
 	blockValidation *BlockValidation
 
+	// validatorClient provides transaction validation services
+	validatorClient validator.Interface
+
 	// kafkaConsumerClient handles subscription to and consumption of
 	// Kafka messages for distributed coordination
 	kafkaConsumerClient kafka.KafkaConsumerGroupI
@@ -225,6 +228,7 @@ func New(
 		blockchainClient:     blockchainClient,
 		txStore:              txStore,
 		utxoStore:            utxoStore,
+		validatorClient:      validatorClient,
 		blockAssemblyClient:  blockAssemblyClient,
 		blockFoundCh:         make(chan processBlockFound, tSettings.BlockValidation.BlockFoundChBufferSize),
 		catchupCh:            make(chan processBlockCatchup, tSettings.BlockValidation.CatchupChBufferSize),
@@ -391,7 +395,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 	// Only create a new BlockValidation if one wasn't already set (for testing)
 	if u.blockValidation == nil {
-		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, subtreeValidationClient)
+		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient)
 	}
 
 	// if our FSM state is CATCHINGBLOCKS, this is probably a remnant of a crash, put the node back in RUNNING state
@@ -419,6 +423,16 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 			case c := <-u.catchupCh:
 				{
+					if u.peerMetrics != nil {
+						peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(c.baseURL)
+						if peerMetric != nil {
+							if peerMetric.IsBad() || peerMetric.IsMalicious() {
+								u.logger.Warnf("[catchup][%s] peer %s is marked as bad (score: %0.0f) or malicious (attempts: %d), skipping [%s]", c.block.Hash().String(), c.baseURL, peerMetric.GetReputation(), peerMetric.GetMaliciousAttempts(), c.baseURL)
+								continue
+							}
+						}
+					}
+
 					if err := u.catchup(ctx, c.block, c.baseURL); err != nil {
 						var (
 							peerMetric        *catchup.PeerCatchupMetrics
@@ -634,9 +648,6 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 	_, _, ctx1 := tracing.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
 
-	// TODO optimize this for the valid chain, not processing everything ???
-	u.logger.Infof("[Init] processing block found on channel [%s]", blockFound.hash.String())
-
 	err := u.processBlockFound(ctx1, blockFound.hash, blockFound.baseURL)
 	if err != nil {
 		if blockFound.errCh != nil {
@@ -650,7 +661,6 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		blockFound.errCh <- nil
 	}
 
-	u.logger.Infof("[Init] processing block found on channel DONE [%s]", blockFound.hash.String())
 	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 
 	return nil
@@ -986,6 +996,14 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 
 	if err != nil {
 		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
+	}
+
+	// peer sent us a valid block, so increase its reputation score
+	if u.peerMetrics != nil {
+		peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(baseURL)
+		if peerMetric != nil {
+			peerMetric.RecordSuccess()
+		}
 	}
 
 	return nil

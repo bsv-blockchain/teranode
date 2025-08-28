@@ -66,7 +66,7 @@ func setup(ctx context.Context, t *testing.T) (*Store, *bt.Tx) {
 
 	logger := ulogger.TestLogger{}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.DBTimeout = 30 * time.Second
 
 	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
@@ -445,7 +445,7 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	defer cancel()
 
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.DBTimeout = 30 * time.Second
 	tSettings.GlobalBlockHeightRetention = 1 // Set low retention for this test
 

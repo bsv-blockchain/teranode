@@ -32,7 +32,7 @@ type testCtx struct {
 func testSetup(t *testing.T) *testCtx {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -174,7 +174,7 @@ func TestServerInitErrors(t *testing.T) {
 func TestHealth_LivenessCheck(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestHealth_LivenessCheck(t *testing.T) {
 
 	server := NewServer(
 		ulogger.New("asset"),
-		test.CreateBaseTestSettings(),
+		test.CreateBaseTestSettings(t),
 		utxoStore,
 		blobMemory.New(),
 		blobMemory.New(),
@@ -201,7 +201,7 @@ func TestHealth_LivenessCheck(t *testing.T) {
 func TestHealth_ReadinessWithNoDependencies(t *testing.T) {
 	server := NewServer(
 		ulogger.New("asset"),
-		test.CreateBaseTestSettings(),
+		test.CreateBaseTestSettings(t),
 		nil,
 		nil,
 		nil,
@@ -501,7 +501,7 @@ func TestHealth_ErrorCases(t *testing.T) {
 		// Create server with nil blockchain client to simulate dependency failure
 		server := NewServer(
 			ulogger.New("asset"),
-			test.CreateBaseTestSettings(),
+			test.CreateBaseTestSettings(t),
 			nil, // utxoStore
 			nil, // txStore
 			nil, // subtreeStore

@@ -38,7 +38,7 @@ func TestSquaringBugFix(t *testing.T) {
 		Height:    886144,
 	}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	d, err := NewDifficulty(nil, ulogger.TestLogger{}, tSettings)

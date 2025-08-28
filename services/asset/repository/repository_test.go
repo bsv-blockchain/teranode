@@ -43,7 +43,7 @@ func TestTransaction(t *testing.T) {
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestTransaction(t *testing.T) {
 	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
@@ -210,14 +210,14 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
 
 	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
 	require.NoError(t, err)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
@@ -315,7 +315,7 @@ func TestRepository_GetBlockByHash(t *testing.T) {
 	t.Run("GetBlockByHash returns block", func(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -349,7 +349,7 @@ func TestRepository_GetLastNBlocks(t *testing.T) {
 	t.Run("GetLastNBlocks with various parameters", func(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -390,7 +390,7 @@ func TestRepository_GetBlocks(t *testing.T) {
 	t.Run("GetBlocks with hash and count", func(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -422,7 +422,7 @@ func TestRepository_GetBlockHeaders(t *testing.T) {
 	t.Run("GetBlockHeaders with hash and count", func(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -462,7 +462,7 @@ func TestRepository_GetBlockHeadersToCommonAncestor(t *testing.T) {
 	t.Run("GetBlockHeadersToCommonAncestor finds common ancestor", func(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -499,7 +499,7 @@ func TestRepository_GetBlockHeadersFromCommonAncestor(t *testing.T) {
 	t.Run("GetBlockHeadersFromCommonAncestor returns headers", func(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -536,7 +536,7 @@ func TestRepository_GetBlockHeadersFromHeight(t *testing.T) {
 	t.Run("GetBlockHeadersFromHeight returns headers starting at height", func(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -568,7 +568,7 @@ func TestRepository_GetSubtreeData(t *testing.T) {
 	t.Run("GetSubtreeData with various scenarios", func(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -632,7 +632,7 @@ func TestRepository_GetSubtreeHead(t *testing.T) {
 	t.Run("GetSubtreeHead returns structured data", func(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -683,7 +683,7 @@ func TestRepository_ErrorHandling(t *testing.T) {
 	t.Run("handles missing transaction", func(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -713,7 +713,7 @@ func TestRepository_ErrorHandling(t *testing.T) {
 	t.Run("handles store errors gracefully", func(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		// Create mock store that returns errors
 		errorStore := &mockErrorStore{}

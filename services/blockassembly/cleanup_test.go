@@ -24,7 +24,7 @@ func TestStartUnminedTransactionCleanup(t *testing.T) {
 	t.Run("starts and stops cleanup ticker", func(t *testing.T) {
 		mockStore := new(utxo.MockUtxostore)
 		logger := ulogger.TestLogger{}
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		ba := &BlockAssembler{
 			utxoStore:       mockStore,
@@ -58,7 +58,7 @@ func TestStartUnminedTransactionCleanup(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(utxo.MockUtxostore)
 		logger := ulogger.TestLogger{}
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 
 		ba := &BlockAssembler{
 			utxoStore:       mockStore,
@@ -94,7 +94,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(utxo.MockUtxostore)
 		logger := ulogger.TestLogger{}
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		settings.UtxoStore.UnminedTxRetention = 5
 
 		// Setup expectations in order
@@ -177,7 +177,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(utxo.MockUtxostore)
 		logger := ulogger.TestLogger{}
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		settings.UtxoStore.UnminedTxRetention = 5
 
 		// Create mock transactions - only normal transaction should be returned by iterator

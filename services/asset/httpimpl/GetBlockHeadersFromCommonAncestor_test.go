@@ -313,7 +313,7 @@ func TestGetBlockHeadersFromCommonAncestor_Integration(t *testing.T) {
 	require.Equal(t, 101, len(headersArray), "Expected 101 headers in testdata")
 
 	// Set up test settings
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.TeraTestNetParams
 
 	// Create SQLite blockchain store

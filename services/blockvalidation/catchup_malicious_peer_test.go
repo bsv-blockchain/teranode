@@ -458,7 +458,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 			Return([]uint32{}, nil).Maybe()
 
 		// Mock AddBlock for successful block validation
-		mockBlockchainClient.On("AddBlock", mock.Anything, mock.Anything, mock.Anything).
+		mockBlockchainClient.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 			Return(nil).Maybe()
 
 		// Mock SetBlockSubtreesSet for block validation

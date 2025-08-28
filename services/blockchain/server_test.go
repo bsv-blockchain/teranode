@@ -145,7 +145,7 @@ func setup(t *testing.T) *testContext {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	// Clear the default addresses since we're not starting the servers in tests
 	tSettings.BlockChain.GRPCListenAddress = ""
@@ -239,7 +239,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	_, err = ctx.utxoStore.Create(context.Background(), tx1, 0)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	hashPrevBlock := tSettings.ChainCfgParams.GenesisHash
 
@@ -388,7 +388,7 @@ func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
 	headers := make([]*model.BlockHeader, 0, 150)
 
 	// Get genesis block hash from chain params
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	prevHash := tSettings.ChainCfgParams.GenesisHash
 
@@ -614,7 +614,7 @@ func Test_GetLastNBlocks(t *testing.T) {
 	ctx := setup(t)
 
 	// Create and store unique blocks
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	prevHash := tSettings.ChainCfgParams.GenesisHash
 
@@ -678,7 +678,7 @@ func Test_GetBlockHeadersFromCommonAncestor(t *testing.T) {
 	headers := make([]*model.BlockHeader, 0, 150)
 
 	// Get genesis block hash from chain params
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	prevHash := tSettings.ChainCfgParams.GenesisHash
 

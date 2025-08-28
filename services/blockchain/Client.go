@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -217,16 +218,22 @@ func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 }
 
 // AddBlock sends a request to add a new block to the blockchain.
-func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
+func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) error {
+	storeBlockOptions := options.ProcessStoreBlockOptions(opts...)
+
 	external := peerID != ""
 	req := &blockchain_api.AddBlockRequest{
-		Header:           block.Header.Bytes(),
-		CoinbaseTx:       block.CoinbaseTx.Bytes(),
-		SubtreeHashes:    make([][]byte, 0, len(block.Subtrees)),
-		TransactionCount: block.TransactionCount,
-		SizeInBytes:      block.SizeInBytes,
-		External:         external,
-		PeerId:           peerID,
+		Header:            block.Header.Bytes(),
+		CoinbaseTx:        block.CoinbaseTx.Bytes(),
+		SubtreeHashes:     make([][]byte, 0, len(block.Subtrees)),
+		TransactionCount:  block.TransactionCount,
+		SizeInBytes:       block.SizeInBytes,
+		External:          external,
+		PeerId:            peerID,
+		OptionMinedSet:    storeBlockOptions.MinedSet,
+		OptionSubtreesSet: storeBlockOptions.SubtreesSet,
+		OptionInvalid:     storeBlockOptions.Invalid,
+		OptionID:          storeBlockOptions.ID,
 	}
 
 	for _, subtreeHash := range block.Subtrees {
@@ -325,6 +332,16 @@ func (c *Client) GetBlockByID(ctx context.Context, id uint64) (*model.Block, err
 	}
 
 	return c.blockFromResponse(resp)
+}
+
+// GetNextBlockID retrieves the next available block ID.
+func (c *Client) GetNextBlockID(ctx context.Context) (uint64, error) {
+	resp, err := c.client.GetNextBlockID(ctx, &emptypb.Empty{})
+	if err != nil {
+		return 0, errors.UnwrapGRPC(err)
+	}
+
+	return resp.NextBlockId, nil
 }
 
 // blockFromResponse converts a gRPC GetBlockResponse into a model.Block.
@@ -651,6 +668,10 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 		PeerID:      resp.PeerId,
 		BlockTime:   resp.BlockTime,
 		Timestamp:   resp.Timestamp,
+		ChainWork:   resp.ChainWork,
+		MinedSet:    resp.MinedSet,
+		SubtreesSet: resp.SubtreesSet,
+		Invalid:     resp.Invalid,
 	}
 
 	return header, meta, nil

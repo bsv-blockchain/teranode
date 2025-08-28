@@ -236,7 +236,7 @@ func testPeer(t *testing.T, p *peer.Peer, s peerStats) {
 
 // TestPeerConnection tests connection between inbound and outbound peers.
 func TestPeerConnection(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	verack := make(chan struct{})
 	peer1Cfg := &peer.Config{
 		Listeners: peer.MessageListeners{
@@ -378,7 +378,7 @@ func TestPeerConnection(t *testing.T) {
 // TestPeerListeners tests that the peer listeners are called as expected.
 func TestPeerListeners(t *testing.T) {
 	verack := make(chan struct{}, 1)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	ok := make(chan wire.Message, 20)
 	peerCfg := &peer.Config{
 		Listeners: peer.MessageListeners{
@@ -644,7 +644,7 @@ func TestOutboundPeer(t *testing.T) {
 		TrickleInterval:        time.Second * 10,
 		TstAllowSelfConnection: true,
 	}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	r, w := io.Pipe()
 	c := &conn{raddr: "10.0.0.1:8333", Writer: w, Reader: r}
@@ -798,7 +798,7 @@ func TestUnsupportedVersionPeer(t *testing.T) {
 		TrickleInterval:        time.Second * 10,
 		TstAllowSelfConnection: true,
 	}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	localNA := wire.NewNetAddressIPPort(
 		net.ParseIP("10.0.0.1"),
@@ -926,7 +926,7 @@ func TestDuplicateVersionMsg(t *testing.T) {
 		&conn{laddr: "10.0.0.1:9108", raddr: "10.0.0.2:9108"},
 		&conn{laddr: "10.0.0.2:9108", raddr: "10.0.0.1:9108"},
 	)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	outPeer, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, peerCfg, inConn.laddr)
 	if err != nil {
@@ -973,7 +973,7 @@ func TestDuplicateVersionMsg(t *testing.T) {
 func TestBanPeer(t *testing.T) {
 	t.Skip("skipping ban peer test")
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	verack := make(chan struct{})
 	peer1Cfg := &peer.Config{
 		Listeners: peer.MessageListeners{
@@ -1152,7 +1152,7 @@ func TestBanPeer(t *testing.T) {
 
 func NewTestServer(t *testing.T) (*legacy.Server, error) {
 	logger := ulogger.NewVerboseTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Legacy.ListenAddresses = []string{"127.0.0.1:9876"}
 	// tSettings.Legacy.ConnectPeers = []string{"78.110.160.26:8333", "13.231.149.50:8333", "54.249.171.1:8333", "3.68.157.171:37890"}
 	tSettings.Legacy.ConnectPeers = []string{"10.0.0.1:8333", "10.0.0.2:8333"}

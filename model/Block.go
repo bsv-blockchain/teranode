@@ -659,7 +659,7 @@ func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree,
 		// in a tx map, Put is mutually exclusive, can only be called once per key
 		if err = b.txMap.Put(subtreeNode.Hash, idx64); err != nil {
 			if errors.Is(err, errors.ErrTxExists) || strings.Contains(err.Error(), "hash already exists in map") {
-				return errors.NewBlockInvalidError("[BLOCK][%s] duplicate transaction %s", b.String(), subtreeNode.Hash.String())
+				return errors.NewBlockInvalidError("[BLOCK][%s] block contains duplicate transaction %s", b.String(), subtreeNode.Hash.String())
 			}
 
 			return errors.NewStorageError("[BLOCK][%s] error adding transaction %s to txMap", b.String(), subtreeNode.Hash.String(), err)

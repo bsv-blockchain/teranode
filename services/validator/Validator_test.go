@@ -70,7 +70,7 @@ func BenchmarkValidator(b *testing.B) {
 		panic(err)
 	}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(b)
 
 	blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
 	require.NoError(b, err)
@@ -112,7 +112,7 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestValidate_ValidTransaction(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -263,7 +263,7 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -317,7 +317,7 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -379,7 +379,7 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 	height := uint32(257727)
 	utxos := []uint32{253237}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
@@ -413,7 +413,7 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 	height := uint32(249976)
 	utxos := []uint32{249957, 249957, 249957}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
@@ -443,7 +443,7 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 	var height uint32 = 229369
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 	tSettings.Policy.MinMiningTxFee = 0
 
@@ -474,7 +474,7 @@ func TestValidateTx7f4244335dec8d941e3fc1847ac3d020fac9347a0c0335294bf56ede8aa58
 
 	var height uint32 = 1553037
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("testnet")
 
 	v := &Validator{
@@ -502,7 +502,7 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 	var height uint32 = 229369
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 	tSettings.Policy.MinMiningTxFee = 1000 // high fee
 
@@ -566,7 +566,7 @@ func TestValidateTransactions(t *testing.T) {
 		tx, err := bt.NewTxFromString(testData.ExtendedTx)
 		require.NoError(t, err)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 		v := &Validator{
@@ -595,7 +595,7 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 
 	var height uint32 = 249976
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
@@ -623,7 +623,7 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 
 	var height uint32 = 478631
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
@@ -713,7 +713,7 @@ func Benchmark_validateInternal(b *testing.B) {
 	tx, err := bt.NewTxFromBytes(txF65eHex)
 	require.NoError(b, err)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(b)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	v := &Validator{
@@ -767,7 +767,7 @@ func TestExtendedTxa1f6a4ffcfd7bb4775790932aff1f82ac6a9b3b3e76c8faf8b11328e948af
 	aeroURL, err := url.Parse(aerospikeContainerURL)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// teranode db client
 	var db *teranode_aerospike.Store
@@ -972,7 +972,7 @@ func TestValidator_TwoPhaseCommitTransaction(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -990,8 +990,8 @@ func TestValidator_TwoPhaseCommitTransaction(t *testing.T) {
 	v := &Validator{
 		logger:      ulogger.TestLogger{},
 		utxoStore:   utxoStore,
-		settings:    test.CreateBaseTestSettings(),
-		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings()),
+		settings:    test.CreateBaseTestSettings(t),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
 		stats:       gocore.NewStat("validator"),
 	}
 
@@ -1016,7 +1016,7 @@ func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
 
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -1035,8 +1035,8 @@ func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
 	v := &Validator{
 		logger:      ulogger.TestLogger{},
 		utxoStore:   utxoStore,
-		settings:    test.CreateBaseTestSettings(),
-		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings()),
+		settings:    test.CreateBaseTestSettings(t),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
 		stats:       gocore.NewStat("validator"),
 	}
 
@@ -1059,11 +1059,11 @@ func (f *FailingUtxoStore) SetLocked(ctx context.Context, hashes []chainhash.Has
 	return errors.NewProcessingError("throws error")
 }
 
-func NewFailingUtxoStore() *FailingUtxoStore {
+func NewFailingUtxoStore(t *testing.T) *FailingUtxoStore {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	if err != nil {
@@ -1083,19 +1083,19 @@ func NewFailingUtxoStore() *FailingUtxoStore {
 func TestValidator_TwoPhaseCommitTransaction_SetLockedFails(t *testing.T) {
 	tracing.SetupMockTracer()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
 	require.NoError(t, err)
 
-	utxoStore := NewFailingUtxoStore()
+	utxoStore := NewFailingUtxoStore(t)
 	_, _ = utxoStore.Create(ctx, tx, 100, utxostore.WithLocked(true))
 
 	v := &Validator{
 		logger:      ulogger.TestLogger{},
 		utxoStore:   utxoStore,
-		settings:    test.CreateBaseTestSettings(),
-		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings()),
+		settings:    test.CreateBaseTestSettings(t),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
 		stats:       gocore.NewStat("validator"),
 	}
 
@@ -1116,7 +1116,7 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -1136,7 +1136,7 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 
 	blockAsmMock := blockassembly.NewMock()
 
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.Disabled = false
 
 	v := &Validator{
@@ -1144,7 +1144,7 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 		utxoStore:      utxoStore,
 		blockAssembler: blockAsmMock,
 		settings:       settings,
-		txValidator:    NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings()),
+		txValidator:    NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
 		stats:          gocore.NewStat("validator"),
 	}
 
@@ -1171,7 +1171,7 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -1194,7 +1194,7 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 
 	blockAsmMock := blockassembly.NewMock()
 
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.Disabled = false
 
 	v := &Validator{
@@ -1202,7 +1202,7 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 		utxoStore:      utxoStore,
 		blockAssembler: blockAsmMock,
 		settings:       settings,
-		txValidator:    NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings()),
+		txValidator:    NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
 		stats:          gocore.NewStat("validator"),
 	}
 

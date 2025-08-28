@@ -16,7 +16,7 @@ func TestSQLGetHeader(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)

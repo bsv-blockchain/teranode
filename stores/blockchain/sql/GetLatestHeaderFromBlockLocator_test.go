@@ -13,7 +13,7 @@ import (
 )
 
 func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("genesis block only - empty locator", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
@@ -293,7 +293,7 @@ func setupPostgresTestStore(t *testing.T) (*SQL, func()) {
 	storeURL, err := url.Parse(connStr)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
@@ -408,7 +408,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocatorPostgreSQL(t *testing.T) {
 		s, cleanup := setupPostgresTestStore(t)
 		defer cleanup()
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		genesisHash := tSettings.ChainCfgParams.GenesisHash
 		blockLocator := []chainhash.Hash{}
 
@@ -420,7 +420,8 @@ func TestSQLGetLatestBlockHeaderFromBlockLocatorPostgreSQL(t *testing.T) {
 }
 
 func BenchmarkGetLatestBlockHeaderFromBlockLocator(b *testing.B) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(b)
+
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(b, err)
 

@@ -28,7 +28,7 @@ func NewCommonTestSetup(t *testing.T) *CommonTestSetup {
 	return &CommonTestSetup{
 		Ctx:      context.Background(),
 		Logger:   ulogger.NewErrorTestLogger(t),
-		Settings: test.CreateBaseTestSettings(),
+		Settings: test.CreateBaseTestSettings(t),
 	}
 }
 

@@ -151,7 +151,9 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 			if tx, ok := transactionFromSubtreeData[hash]; ok {
 				// If the transaction is found in the subtree data, serialize it and append to response
 				responseBytesMu.Lock()
-				responseBytes = append(responseBytes, tx.ExtendedBytes()...)
+				// always write the non-extended normal bytes as a response !
+				// our peer node should extend the transactions if needed
+				responseBytes = append(responseBytes, tx.Bytes()...)
 				responseBytesMu.Unlock()
 			} else {
 				g.Go(func() error {

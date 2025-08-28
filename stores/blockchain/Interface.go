@@ -86,6 +86,12 @@ type Store interface {
 	GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error)
 	GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 
+	// GetNextBlockID retrieves the next available block ID.
+	// Parameters:
+	//   - ctx: Context for the operation
+	// Returns: next block ID and any error encountered
+	GetNextBlockID(ctx context.Context) (uint64, error)
+
 	// GetBlockInChainByHeightHash retrieves a block at a specific height in a chain determined by the start hash. This is useful for getting the block at a given height in a chain that may have a different tip.
 	// Parameters:
 	//   - ctx: Context for the operation

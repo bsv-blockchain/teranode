@@ -263,7 +263,7 @@ func TestTtlCache(t *testing.T) {
 // TestSetInitialState validates the initial state setting functionality
 func TestSetInitialState(t *testing.T) {
 	hash, _ := chainhash.NewHashFromStr(txIds[0])
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	bp := New(context.Background(), nil, tSettings, nil, nil, nil, nil, WithSetInitialState(1, hash))
 
 	height, err := bp.state.GetLastPersistedBlockHeight()

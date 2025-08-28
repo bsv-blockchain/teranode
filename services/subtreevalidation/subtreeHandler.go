@@ -156,6 +156,8 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 			AllowFailFast: true,
 		}
 
+		// the blockIDs map is not passed into this function since we want to validate all the transactions and
+		// warm up the cache if possible. The blockIDs check will be done when a block is mined.
 		if subtree, err = u.ValidateSubtreeInternal(ctx, v, 0, nil); err != nil {
 			return err
 		}

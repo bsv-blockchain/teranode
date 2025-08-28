@@ -18,7 +18,7 @@ import (
 
 func TestNew(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	server := New(logger, tSettings, nil, nil, nil, nil, nil)
 
@@ -31,7 +31,7 @@ func TestNew(t *testing.T) {
 func TestServer_Health(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("liveness_check", func(t *testing.T) {
 		server := New(logger, tSettings, nil, nil, nil, nil, nil)
@@ -60,7 +60,7 @@ func TestServer_Health(t *testing.T) {
 func TestServer_HealthGRPC(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("successful_health_check", func(t *testing.T) {
 		server := New(logger, tSettings, nil, nil, nil, nil, nil)
@@ -79,7 +79,7 @@ func TestServer_HealthGRPC(t *testing.T) {
 func TestServer_Init_basic(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Set up required alert settings
 	tSettings.Alert.GenesisKeys = []string{"test_key_1", "test_key_2"}
@@ -104,7 +104,7 @@ func TestServer_Init_basic(t *testing.T) {
 // ensuring proper protocol ID, topic name, and discovery interval setup.
 func TestServer_requireP2P(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	server := New(logger, tSettings, nil, nil, nil, nil, nil)
 
@@ -129,7 +129,7 @@ func TestServer_requireP2P(t *testing.T) {
 
 func TestServer_requireP2P_validation_errors(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	server := New(logger, tSettings, nil, nil, nil, nil, nil)
 
@@ -160,7 +160,7 @@ func TestServer_requireP2P_validation_errors(t *testing.T) {
 
 func TestServer_createPrivateKeyDirectory(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	server := New(logger, tSettings, nil, nil, nil, nil, nil)
 	server.appConfig = &config.Config{
@@ -176,7 +176,7 @@ func TestServer_createPrivateKeyDirectory(t *testing.T) {
 func TestServer_loadDatastore(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	server := New(logger, tSettings, nil, nil, nil, nil, nil)
 	server.appConfig = &config.Config{
@@ -211,7 +211,7 @@ func TestServer_loadDatastore(t *testing.T) {
 func TestServer_basic_functionality(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Set up alert settings
 	tSettings.Alert.GenesisKeys = []string{"test_key_1"}

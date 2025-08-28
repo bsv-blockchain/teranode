@@ -27,7 +27,7 @@ import (
 func TestStore_GetBinsToStore(t *testing.T) {
 	s := teranodeaerospike.Store{}
 	s.SetUtxoBatchSize(100)
-	s.SetSettings(test.CreateBaseTestSettings())
+	s.SetSettings(test.CreateBaseTestSettings(t))
 
 	t.Run("TestStore_GetBinsToStore empty", func(t *testing.T) {
 		tx := &bt.Tx{}
@@ -184,7 +184,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 
 func TestStore_StoreTransactionExternally(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	client, db, ctx, deferFn := initAerospike(t, tSettings, logger)
 
@@ -195,7 +195,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 	t.Run("TestStore_StoreTransactionExternally", func(t *testing.T) {
 		s := setupStore(t, client)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		s.SetSettings(tSettings)
 
 		teranodeaerospike.InitPrometheusMetrics()
@@ -234,7 +234,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 
 		teranodeaerospike.InitPrometheusMetrics()
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		s.SetSettings(tSettings)
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
@@ -271,7 +271,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 
 func TestStore_StorePartialTransactionExternally(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 
@@ -282,7 +282,7 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 	t.Run("TestStore_StorePartialTransactionExternally", func(t *testing.T) {
 		s := setupStore(t, client)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		s.SetSettings(tSettings)
 
 		teranodeaerospike.InitPrometheusMetrics()

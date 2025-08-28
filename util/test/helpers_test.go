@@ -11,12 +11,12 @@ import (
 
 func TestCreateBaseTestSettings(t *testing.T) {
 	t.Run("basic functionality", func(t *testing.T) {
-		settings := CreateBaseTestSettings()
+		settings := CreateBaseTestSettings(t)
 		require.NotNil(t, settings, "CreateBaseTestSettings should return non-nil settings")
 	})
 
 	t.Run("chain configuration", func(t *testing.T) {
-		settings := CreateBaseTestSettings()
+		settings := CreateBaseTestSettings(t)
 
 		assert.NotNil(t, settings.ChainCfgParams, "ChainCfgParams should not be nil")
 		assert.Equal(t, &chaincfg.RegressionNetParams, settings.ChainCfgParams,
@@ -26,21 +26,21 @@ func TestCreateBaseTestSettings(t *testing.T) {
 	})
 
 	t.Run("global block height retention", func(t *testing.T) {
-		settings := CreateBaseTestSettings()
+		settings := CreateBaseTestSettings(t)
 
 		assert.Equal(t, uint32(10), settings.GlobalBlockHeightRetention,
 			"GlobalBlockHeightRetention should be set to 10")
 	})
 
 	t.Run("block validation settings", func(t *testing.T) {
-		settings := CreateBaseTestSettings()
+		settings := CreateBaseTestSettings(t)
 
 		assert.False(t, settings.BlockValidation.OptimisticMining,
 			"OptimisticMining should be disabled for tests")
 	})
 
 	t.Run("aerospike write policy configuration", func(t *testing.T) {
-		settings := CreateBaseTestSettings()
+		settings := CreateBaseTestSettings(t)
 
 		require.NotNil(t, settings.Aerospike.WritePolicyURL,
 			"Aerospike WritePolicyURL should not be nil")
@@ -69,7 +69,7 @@ func TestCreateBaseTestSettings(t *testing.T) {
 	})
 
 	t.Run("store retention adjustments", func(t *testing.T) {
-		settings := CreateBaseTestSettings()
+		settings := CreateBaseTestSettings(t)
 
 		assert.Equal(t, int32(0), settings.UtxoStore.BlockHeightRetentionAdjustment,
 			"UtxoStore.BlockHeightRetentionAdjustment should be 0")
@@ -78,8 +78,8 @@ func TestCreateBaseTestSettings(t *testing.T) {
 	})
 
 	t.Run("consistency across multiple calls", func(t *testing.T) {
-		settings1 := CreateBaseTestSettings()
-		settings2 := CreateBaseTestSettings()
+		settings1 := CreateBaseTestSettings(t)
+		settings2 := CreateBaseTestSettings(t)
 
 		// Verify they are different objects
 		assert.NotSame(t, settings1, settings2,
@@ -105,7 +105,7 @@ func TestCreateBaseTestSettings(t *testing.T) {
 	})
 
 	t.Run("regression net params properties", func(t *testing.T) {
-		settings := CreateBaseTestSettings()
+		settings := CreateBaseTestSettings(t)
 
 		// Verify key properties of RegressionNetParams that are important for testing
 		assert.NotEmpty(t, settings.ChainCfgParams.Name, "Chain params should have a name")

@@ -30,7 +30,8 @@ import (
 // testBlockValidation is a test double for BlockValidation that allows shadowing waitForPreviousBlocksToBeProcessed.
 type testBlockValidation struct {
 	*BlockValidation
-	waitFunc func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error
+	waitFunc     func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error
+	setMinedChan chan *chainhash.Hash
 }
 
 func (tbv *testBlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error {
@@ -42,10 +43,10 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.
 
 	ctx := context.Background()
 
-	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup()
+	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup(t)
 	defer cleanup()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.ArePreviousBlocksProcessedMaxRetry = 2
 
 	coinbaseTx, childTx, _, _ := createCoinbaseAndChildTx(t)
@@ -61,7 +62,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.
 	mockBlockchain := setupMockBlockchain(parentBlock)
 	callCount := 0
 	bv := &testBlockValidation{
-		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient, &MockInvalidBlockHandler{}),
+		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient, &MockInvalidBlockHandler{}),
 		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
 			callCount++
 			if callCount == 1 {
@@ -69,6 +70,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.
 			}
 			return nil
 		},
+		setMinedChan: make(chan *chainhash.Hash, 1),
 	}
 
 	err := bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
@@ -95,10 +97,10 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *test
 
 	ctx := context.Background()
 
-	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup()
+	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup(t)
 	defer cleanup()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.ArePreviousBlocksProcessedMaxRetry = 2
 
 	coinbaseTx, childTx, _, _ := createCoinbaseAndChildTx(t)
@@ -120,7 +122,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *test
 
 	tSettings.BlockValidation.OptimisticMining = true
 	bv := &testBlockValidation{
-		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient, mockHandler),
+		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient, mockHandler),
 		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
 			callCount++
 			if callCount == 1 {
@@ -128,6 +130,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *test
 			}
 			return nil
 		},
+		setMinedChan: setMinedChan,
 	}
 
 	err := bv.ValidateBlock(ctx, block, "test", model.NewBloomStats(), false)
@@ -277,6 +280,7 @@ func setupMockBlockchain(parentBlock *model.Block) *blockchain.Mock {
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, errors.ErrBlockNotFound)
 	mockBlockchain.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errors.ErrBlockNotFound)
 
 	return mockBlockchain
@@ -285,7 +289,7 @@ func setupMockBlockchain(parentBlock *model.Block) *blockchain.Mock {
 func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	initPrometheusMetrics()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -344,7 +348,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	invalidateBlockCalled := make(chan struct{})
 
 	mockBlockchain := &blockchain.Mock{}
-	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything).Return(nil)
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
 	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return(nil).Run(func(args mock.Arguments) {
 		// Signal that InvalidateBlock was called
@@ -359,7 +363,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 
-	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup()
+	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
 	mockHandler := new(MockInvalidBlockHandler)
@@ -378,7 +382,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	tSettings.Kafka.InvalidBlocks = "test-invalid-blocks" // Enable Kafka publishing
 
 	bv := &testBlockValidation{
-		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient, mockHandler),
+		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient, mockHandler),
 		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
 			callCount++
 			if callCount == 1 {
@@ -415,7 +419,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	initPrometheusMetrics()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -471,7 +475,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	}
 
 	mockBlockchain := &blockchain.Mock{}
-	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything).Return(nil)
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
 	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return(nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
@@ -483,7 +487,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 
-	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup()
+	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
 	// bv := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
@@ -504,7 +508,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	tSettings.Kafka.InvalidBlocks = "test-invalid-blocks"
 
 	bv := &testBlockValidation{
-		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, subtreeValidationClient, mockHandler),
+		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient, mockHandler),
 		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {
 			callCount++
 			if callCount == 1 {

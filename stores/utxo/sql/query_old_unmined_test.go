@@ -97,7 +97,7 @@ func TestQueryOldUnminedTransactions_EdgeCases(t *testing.T) {
 
 	t.Run("handles empty database", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		settings.UtxoStore.DBTimeout = 30 * time.Second
 
 		storeURL, err := url.Parse("sqlitememory:///test_query_empty")

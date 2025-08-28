@@ -132,7 +132,7 @@ func TestSimpleTracing(t *testing.T) {
 	t.Skip()
 
 	// Initialize tracer
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.TracingSampleRate = 1.0
 
 	err := InitTracer(tSettings)

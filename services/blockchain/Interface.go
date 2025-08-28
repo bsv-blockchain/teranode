@@ -11,6 +11,7 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
@@ -56,10 +57,25 @@ type ClientI interface {
 	// - ctx: Context for the operation with timeout and cancellation support
 	// - block: The block to be added, containing header, transactions, and metadata
 	// - peerID: Identifier of the peer that provided this block (for tracking purposes)
+	// - opts: Optional parameters to customize block storage behavior (e.g., mined status, invalid flag)
 	//
 	// Returns:
 	// - Error if the block addition fails, nil on success
-	AddBlock(ctx context.Context, block *model.Block, peerID string) error
+	AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) error
+
+	// GetNextBlockID retrieves the next available block ID.
+	//
+	// This method fetches the next block ID that will be assigned to a new block when it is
+	// added to the blockchain. This is useful for clients that need to know the upcoming
+	// block ID for tracking or logging purposes.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	//
+	// Returns:
+	// - The next block ID as a uint64
+	// - Error if the retrieval fails
+	GetNextBlockID(ctx context.Context) (uint64, error)
 
 	// SendNotification broadcasts a notification to subscribers.
 	//

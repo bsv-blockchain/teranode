@@ -17,10 +17,27 @@ type BlockHeaderMeta struct {
 	BlockTime   uint32 `json:"block_time"`    // Time of the block.
 	Timestamp   uint32 `json:"timestamp"`     // Timestamp of creation of the block in the db.
 	ChainWork   []byte `json:"chainwork"`     // ChainWork of the block.
+	MinedSet    bool   `json:"mined_set"`     // Whether the block is in the mined set.
+	SubtreesSet bool   `json:"subtrees_set"`  // Whether the block has its subtrees set.
+	Invalid     bool   `json:"invalid"`       // Whether the block is marked as invalid.
 }
 
 func (m *BlockHeaderMeta) Bytes() []byte {
-	b := make([]byte, 0, 4+4+8+8+len(m.Miner))
+	b := make([]byte, 0, 4+4+4+8+8+len(m.Miner))
+
+	// write the flags (minedSet, subtreesSet, invalid) as te first byte
+	flags := byte(0)
+	if m.MinedSet {
+		flags |= 1 << 0
+	}
+	if m.SubtreesSet {
+		flags |= 1 << 1
+	}
+	if m.Invalid {
+		flags |= 1 << 2
+	}
+
+	b = append(b, flags)
 
 	b32 := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b32, m.ID)
@@ -69,6 +86,16 @@ func NewBlockHeaderMetaFromBytes(b []byte) (*BlockHeaderMeta, error) {
 	}
 
 	m := &BlockHeaderMeta{}
+	// read in the flags
+	flags := b[0]
+	m.MinedSet = (flags & (1 << 0)) != 0
+	m.SubtreesSet = (flags & (1 << 1)) != 0
+	m.Invalid = (flags & (1 << 2)) != 0
+
+	// remove the flags byte from the slice
+	b = b[1:]
+
+	// read in the fixed-size fields
 	m.ID = binary.LittleEndian.Uint32(b[:4])
 	m.Height = binary.LittleEndian.Uint32(b[4:8])
 	m.TxCount = binary.LittleEndian.Uint64(b[8:16])

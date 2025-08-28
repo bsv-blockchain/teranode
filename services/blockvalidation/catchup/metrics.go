@@ -46,8 +46,10 @@ func (pm *PeerCatchupMetrics) RecordSuccess() {
 	pm.LastSuccessTime = time.Now()
 
 	// Improve reputation on success
-	if pm.ReputationScore < 100 {
-		pm.ReputationScore += 1.0
+	pm.ReputationScore += 10 // 10 for a valid block
+
+	if pm.ReputationScore > 100 {
+		pm.ReputationScore = 100
 	}
 }
 
@@ -73,6 +75,7 @@ func (pm *PeerCatchupMetrics) RecordMaliciousAttempt() {
 	defer pm.mu.Unlock()
 
 	pm.MaliciousAttempts++
+
 	// Significant reputation penalty for malicious behavior
 	pm.ReputationScore = 0
 }
@@ -90,7 +93,31 @@ func (pm *PeerCatchupMetrics) IsMalicious() bool {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 
-	return pm.ReputationScore < 30 && pm.MaliciousAttempts > 0
+	return pm.ReputationScore < 10 && pm.MaliciousAttempts > 0
+}
+
+// IsBad returns whether the peer is considered having a bad reputation
+func (pm *PeerCatchupMetrics) IsBad() bool {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	return pm.ReputationScore < 10
+}
+
+// GetReputation returns the current reputation score
+func (pm *PeerCatchupMetrics) GetReputation() float64 {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	return pm.ReputationScore
+}
+
+// GetMaliciousAttempts returns the number of malicious attempts recorded
+func (pm *PeerCatchupMetrics) GetMaliciousAttempts() int64 {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	return pm.MaliciousAttempts
 }
 
 // UpdateReputation updates reputation based on success/failure and response time

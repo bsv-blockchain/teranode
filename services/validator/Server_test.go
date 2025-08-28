@@ -31,7 +31,7 @@ func TestHTTPServer_Endpoints(t *testing.T) {
 
 	// Setup the validator server with mocked dependencies
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Policy.MinMiningTxFee = 0
 	tSettings.BlockAssembly.Disabled = true
 
@@ -174,7 +174,7 @@ func TestValidatorHTTP_Endpoints(t *testing.T) {
 
 	// Setup test server with mocked dependencies
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Policy.MinMiningTxFee = 0
 	tSettings.BlockAssembly.Disabled = true
 
@@ -284,7 +284,7 @@ func TestHTTPServerIntegration(t *testing.T) {
 
 	// Setup test server with mocked dependencies
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Validator.HTTPListenAddress = "localhost:0" // Use any available port
 	tSettings.Validator.HTTPRateLimit = 1000
 
@@ -353,7 +353,7 @@ func TestHTTPServerHandlers(t *testing.T) {
 	server := &Server{
 		logger:     &ulogger.TestLogger{},
 		validator:  mockValidator,
-		settings:   test.CreateBaseTestSettings(),
+		settings:   test.CreateBaseTestSettings(t),
 		httpServer: echo.New(),
 	}
 

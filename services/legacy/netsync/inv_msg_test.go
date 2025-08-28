@@ -20,7 +20,7 @@ func Test_invMsg(t *testing.T) {
 			Type: wire.InvTypeBlock,
 			Hash: chainhash.Hash{0x01, 0x02, 0x03, 0x04},
 		})
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		peer, err := peerpkg.NewOutboundPeer(ulogger.TestLogger{}, tSettings, &peerpkg.Config{}, "localhost:8333")
 		require.NoError(t, err)
@@ -63,7 +63,7 @@ func Test_invMsg(t *testing.T) {
 			Type: wire.InvTypeBlock,
 			Hash: chainhash.Hash{0x01, 0x02, 0x03, 0x04},
 		})
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		peer, err := peerpkg.NewOutboundPeer(ulogger.TestLogger{}, tSettings, &peerpkg.Config{}, "[::1]:8333")
 		require.NoError(t, err)
@@ -105,7 +105,7 @@ func Test_invMsg(t *testing.T) {
 			Type: wire.InvTypeBlock,
 			Hash: chainhash.Hash{0x01, 0x02, 0x03, 0x04},
 		})
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		peer, err := peerpkg.NewOutboundPeer(ulogger.TestLogger{}, tSettings, &peerpkg.Config{}, "[2600:1f18:573a:32f:ba74:c04d:50a3:ca7d]:8333")
 		require.NoError(t, err)

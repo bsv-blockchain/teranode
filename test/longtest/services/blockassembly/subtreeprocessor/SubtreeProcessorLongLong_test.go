@@ -88,7 +88,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 262144
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -213,7 +213,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)

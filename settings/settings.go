@@ -283,6 +283,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			FetchNumWorkers:         getInt("blockvalidation_fetch_num_workers", 16, alternativeContext...),
 			FetchBufferSize:         getInt("blockvalidation_fetch_buffer_size", 500, alternativeContext...),
 			SubtreeFetchConcurrency: getInt("blockvalidation_subtree_fetch_concurrency", 8, alternativeContext...),
+			ExtendTransactionTimeout: getDuration("blockvalidation_extend_transaction_timeout", 120*time.Second, alternativeContext...),
+			GetBlockTransactionsConcurrency: getInt("blockvalidation_get_block_transactions_concurrency", 64, alternativeContext...),
 		},
 		Validator: ValidatorSettings{
 			GRPCAddress:               getString("validator_grpcAddress", "localhost:8081", alternativeContext...),
@@ -317,6 +319,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			OutpointBatcherDurationMillis:  getInt("utxostore_outpointBatcherDurationMillis", 10, alternativeContext...),
 			SpendBatcherDurationMillis:     getInt("utxostore_spendBatcherDurationMillis", 100, alternativeContext...),
 			SpendBatcherSize:               getInt("utxostore_spendBatcherSize", 100, alternativeContext...),
+			SpendBatcherConcurrency:        getInt("utxostore_spendBatcherConcurrency", 32, alternativeContext...),
 			StoreBatcherDurationMillis:     getInt("utxostore_storeBatcherDurationMillis", 100, alternativeContext...),
 			StoreBatcherSize:               getInt("utxostore_storeBatcherSize", 100, alternativeContext...),
 			UtxoBatchSize:                  getInt("utxostore_utxoBatchSize", 128, alternativeContext...),
@@ -454,6 +457,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlacklistedBaseURLs:                       blacklistMap,
 			BlockHeightRetentionAdjustment:            getInt32("subtreevalidation_blockHeightRetentionAdjustment", 0, alternativeContext...),
 			OrphanageTimeout:                          getDuration("subtreevalidation_orphanageTimeout", 15*time.Minute, alternativeContext...),
+			CheckBlockSubtreesConcurrency:             getInt("subtreevalidation_check_block_subtrees_concurrency", 32, alternativeContext...),
 		},
 		Legacy: LegacySettings{
 			WorkingDir:                       getString("legacy_workingDir", "../../data", alternativeContext...),

@@ -62,7 +62,7 @@ func TestConsolidateBlockRange(t *testing.T) {
 	blockStore, err := blob.NewStore(logger, storeURL)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	consolidator := NewConsolidator(logger, tSettings, &mockHeaderIfc{}, nil, blockStore, nil)

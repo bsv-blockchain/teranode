@@ -74,7 +74,7 @@ func TestNewUTXOSet(t *testing.T) {
 
 	ctx := context.Background()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	ud1, err := NewUTXOSet(ctx, ulogger.TestLogger{}, tSettings, store, &hash1, 0)
 	require.NoError(t, err)

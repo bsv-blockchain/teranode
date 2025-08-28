@@ -50,7 +50,7 @@ func (m *ExtendedMockValidator) GetMedianBlockTime() uint32 {
 func TestServerInit(t *testing.T) {
 	t.Run("successful init with disabled block assembly", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.Disabled = true
 		utxoStore := &utxo.MockUtxostore{}
 		blockchainClient := &blockchain.Mock{}
@@ -66,7 +66,7 @@ func TestServerInit(t *testing.T) {
 
 	t.Run("error when block assembly enabled but client nil", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.Disabled = false
 		utxoStore := &utxo.MockUtxostore{}
 		blockchainClient := &blockchain.Mock{}
@@ -81,7 +81,7 @@ func TestServerInit(t *testing.T) {
 
 	t.Run("successful init with block assembly client", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.Disabled = false
 		utxoStore := &utxo.MockUtxostore{}
 		blockchainClient := &blockchain.Mock{}
@@ -100,7 +100,7 @@ func TestServerInit(t *testing.T) {
 func TestServerStop(t *testing.T) {
 	t.Run("stop with kafka signal", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
 		server.kafkaSignal = make(chan os.Signal, 1)
@@ -124,7 +124,7 @@ func TestServerStop(t *testing.T) {
 
 	t.Run("stop without kafka signal or consumer", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
 		err := server.Stop(context.Background())
@@ -136,7 +136,7 @@ func TestServerStop(t *testing.T) {
 func TestServerHealth(t *testing.T) {
 	t.Run("liveness check", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
 		status, msg, err := server.Health(context.Background(), true)
@@ -147,7 +147,7 @@ func TestServerHealth(t *testing.T) {
 
 	t.Run("readiness with no dependencies", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Validator.GRPCListenAddress = ""
 		tSettings.Validator.HTTPListenAddress = ""
 
@@ -160,7 +160,7 @@ func TestServerHealth(t *testing.T) {
 
 	t.Run("readiness with gRPC configured", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Validator.GRPCListenAddress = "localhost:8081"
 		tSettings.Validator.HTTPListenAddress = ""
 
@@ -173,7 +173,7 @@ func TestServerHealth(t *testing.T) {
 
 	t.Run("readiness with HTTP configured", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Validator.GRPCListenAddress = ""
 		tSettings.Validator.HTTPListenAddress = ":8090"
 
@@ -188,7 +188,7 @@ func TestServerHealth(t *testing.T) {
 // TestServerHealthGRPC tests the HealthGRPC method
 func TestServerHealthGRPC(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Validator.GRPCListenAddress = ""
 	tSettings.Validator.HTTPListenAddress = ""
 
@@ -207,7 +207,7 @@ func TestServerHealthGRPC(t *testing.T) {
 func TestServerValidateTransaction(t *testing.T) {
 	t.Run("valid transaction", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
@@ -237,7 +237,7 @@ func TestServerValidateTransaction(t *testing.T) {
 
 	t.Run("invalid transaction bytes", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
@@ -253,7 +253,7 @@ func TestServerValidateTransaction(t *testing.T) {
 
 	t.Run("with all validation options", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
@@ -290,7 +290,7 @@ func TestServerValidateTransaction(t *testing.T) {
 
 	t.Run("validation error", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
@@ -315,7 +315,7 @@ func TestServerValidateTransaction(t *testing.T) {
 func TestServerValidateTransactionBatch(t *testing.T) {
 	t.Run("successful batch", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
@@ -347,7 +347,7 @@ func TestServerValidateTransactionBatch(t *testing.T) {
 
 	t.Run("partial failures", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
@@ -398,7 +398,7 @@ func TestServerValidateTransactionBatch(t *testing.T) {
 func TestServerGetBlockHeight(t *testing.T) {
 	t.Run("valid height", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
 		server.validator = &ExtendedMockValidator{
@@ -415,7 +415,7 @@ func TestServerGetBlockHeight(t *testing.T) {
 
 	t.Run("zero height error", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
 		server.validator = &ExtendedMockValidator{
@@ -435,7 +435,7 @@ func TestServerGetBlockHeight(t *testing.T) {
 func TestServerGetMedianBlockTime(t *testing.T) {
 	t.Run("valid median time", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
 		server.validator = &ExtendedMockValidator{
@@ -452,7 +452,7 @@ func TestServerGetMedianBlockTime(t *testing.T) {
 
 	t.Run("zero median time error", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
 		server.validator = &ExtendedMockValidator{
@@ -533,7 +533,7 @@ func TestExtractValidationParams(t *testing.T) {
 func TestHandleSingleTx(t *testing.T) {
 	t.Run("invalid body", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
 		e := echo.New()
@@ -550,7 +550,7 @@ func TestHandleSingleTx(t *testing.T) {
 
 	t.Run("validation failure", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
 		server.validator = &TestMockValidator{
@@ -577,7 +577,7 @@ func TestHandleSingleTx(t *testing.T) {
 func TestHandleMultipleTx(t *testing.T) {
 	t.Run("invalid transaction format", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
 		e := echo.New()
@@ -596,7 +596,7 @@ func TestHandleMultipleTx(t *testing.T) {
 // TestStartHTTPServer tests HTTP server initialization
 func TestStartHTTPServer(t *testing.T) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Validator.HTTPRateLimit = 1000
 	server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 

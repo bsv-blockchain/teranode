@@ -18,7 +18,7 @@ func TestReadWriteHeight(t *testing.T) {
 	store := memory.New()
 
 	// Create a new UTXO persister
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	s := New(ctx, ulogger.TestLogger{}, tSettings, store, nil)
 
 	oldHeight, err := s.readLastHeight(ctx)

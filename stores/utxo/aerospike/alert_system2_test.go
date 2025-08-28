@@ -25,7 +25,7 @@ import (
 
 func TestAlertSystem(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 
@@ -53,7 +53,7 @@ func TestAlertSystem(t *testing.T) {
 		aErr = client.Put(nil, key, bins)
 		require.NoError(t, aErr)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		// Call FreezeUTXO
 		err := store.FreezeUTXOs(ctx, []*utxo.Spend{spend}, tSettings)
@@ -121,7 +121,7 @@ func TestAlertSystem(t *testing.T) {
 		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
 		require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		// Call UnFreezeUTXOs
 		err = store.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, tSettings)
@@ -217,7 +217,7 @@ func TestAlertSystem(t *testing.T) {
 		require.Len(t, utxoBytes, 32)
 		assert.Equal(t, utxoHash0[:], utxoBytes)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		// Call ReAssignUTXO - should fail, utxo is not frozen
 		err = store.ReAssignUTXO(ctx, utxoRec, newUtxoRec, tSettings)

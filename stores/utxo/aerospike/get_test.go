@@ -39,7 +39,7 @@ import (
 
 func TestStore_GetTxFromExternalStore(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	client, _, ctx, deferFn := initAerospike(t, tSettings, logger)
 
@@ -164,7 +164,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	tSettings.UtxoStore.GetBatcherSize = 8192
 	tSettings.UtxoStore.SpendBatcherSize = 8192

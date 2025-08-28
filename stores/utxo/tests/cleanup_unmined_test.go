@@ -55,7 +55,7 @@ func GetStoreTestCases() []StoreTestCase {
 		{
 			name: "sql_sqlite_store",
 			createStore: func(t *testing.T, ctx context.Context, logger ulogger.Logger) utxo.Store {
-				settings := test.CreateBaseTestSettings()
+				settings := test.CreateBaseTestSettings(t)
 				storeURL, err := url.Parse("sqlitememory:///test_cleanup_agnostic")
 				require.NoError(t, err)
 				store, err := sql.New(ctx, logger, settings, storeURL)
@@ -82,7 +82,7 @@ func TestStoreAgnosticPreserveParentsOfOldUnminedTransactions(t *testing.T) {
 			logger := ulogger.TestLogger{}
 
 			// Create test settings with retention period
-			settings := test.CreateBaseTestSettings()
+			settings := test.CreateBaseTestSettings(t)
 			settings.UtxoStore.UnminedTxRetention = 5 // Keep transactions for 5 blocks
 
 			store := tc.createStore(t, ctx, logger)
@@ -173,7 +173,7 @@ func TestStoreAgnosticPreserveParentsOfOldUnminedTransactions_EdgeCases(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			logger := ulogger.TestLogger{}
-			settings := test.CreateBaseTestSettings()
+			settings := test.CreateBaseTestSettings(t)
 			settings.UtxoStore.UnminedTxRetention = 5
 
 			t.Run("no_unmined_transactions", func(t *testing.T) {
@@ -276,7 +276,7 @@ func TestCleanupWithMixedTransactionTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			logger := ulogger.TestLogger{}
-			settings := test.CreateBaseTestSettings()
+			settings := test.CreateBaseTestSettings(t)
 			settings.UtxoStore.UnminedTxRetention = 3
 
 			store := tc.createStore(t, ctx, logger)

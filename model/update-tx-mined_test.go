@@ -33,7 +33,7 @@ var (
 func TestUpdateTxMinedStatus(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 

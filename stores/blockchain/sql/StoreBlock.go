@@ -99,6 +99,12 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Apply options
+	storeBlockOptions := options.StoreBlockOptions{}
+	for _, opt := range opts {
+		opt(&storeBlockOptions)
+	}
+
 	// Extract miner before storing block
 	var miner string
 	if block.CoinbaseTx != nil && block.CoinbaseTx.OutputCount() != 0 {
@@ -109,7 +115,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		}
 	}
 
-	newBlockID, height, chainWork, err := s.storeBlock(ctx, block, peerID, opts...)
+	newBlockID, height, chainWork, invalid, err := s.storeBlock(ctx, block, peerID, storeBlockOptions)
 	if err != nil {
 		return 0, height, err
 	}
@@ -134,6 +140,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		ChainWork:   chainWork,
 		BlockTime:   block.Header.Timestamp,
 		Timestamp:   timeUint32,
+		MinedSet:    storeBlockOptions.MinedSet,
+		SubtreesSet: storeBlockOptions.SubtreesSet,
+		Invalid:     invalid,
 	}
 
 	ok := s.blocksCache.AddBlockHeader(block.Header, meta)
@@ -169,7 +178,7 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 		id = uint64(prevMeta.ID)
 		chainWork = prevMeta.ChainWork
 		height = prevMeta.Height
-		invalid = false // Assuming cache only stores valid chain info implicitly
+		invalid = prevMeta.Invalid
 
 		return id, chainWork, height, invalid, nil
 	}
@@ -246,20 +255,14 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 //   - ctx: Context for the database operation, allowing for cancellation and timeouts
 //   - block: The complete block structure to be stored, including header and transactions
 //   - peerID: Identifier of the peer that provided this block, used for tracking
-//   - opts: Optional parameters using the functional options pattern to modify storage behavior
+//   - storeBlockOptions: Configuration options using the functional options pattern
 //
 // Returns:
 //   - uint64: The unique database ID assigned to the stored block
 //   - uint32: The height of the block in the blockchain
 //   - []byte: The calculated cumulative chain work for this block as a byte array
 //   - error: Any error encountered during the operation, including validation failures
-func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, []byte, error) {
-	// Apply options
-	storeBlockOptions := options.StoreBlockOptions{}
-	for _, opt := range opts {
-		opt(&storeBlockOptions)
-	}
-
+func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions) (uint64, uint32, []byte, bool, error) {
 	var (
 		coinbaseTxID string
 		q            string
@@ -271,12 +274,26 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 
 	genesis, height, previousBlockID, previousChainWork, previousBlockInvalid, err := s.getPreviousBlockData(ctx, coinbaseTxID, block)
 	if err != nil {
-		return 0, 0, nil, err
+		return 0, 0, nil, false, err
+	}
+
+	storeAsInvalid := previousBlockInvalid || storeBlockOptions.Invalid
+
+	// Determine if we should use a custom ID or auto-increment
+	// ID=0 is special: it means "not set" for regular blocks, but "use ID=0" for genesis
+	useCustomID := storeBlockOptions.ID != 0
+
+	// Genesis blocks cannot have custom IDs (except during initialization with ID=0)
+	if genesis && storeBlockOptions.ID > 0 {
+		return 0, 0, nil, false, errors.NewInvalidArgumentError("genesis block cannot have custom ID")
 	}
 
 	if genesis {
-		// genesis block
-		q = `
+		// genesis block - use ID=0 if specified, otherwise auto-increment
+		if storeBlockOptions.ID == 0 {
+			// Genesis initialization with explicit ID=0
+			useCustomID = true
+			q = `
 INSERT INTO blocks (
 	id
 	,parent_id
@@ -298,11 +315,12 @@ INSERT INTO blocks (
 	,invalid
 	,mined_set
 	,subtrees_set
-) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19)
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20)
 RETURNING id
-		`
-	} else {
-		q = `
+			`
+		} else {
+			// Genesis without explicit ID - use auto-increment
+			q = `
 INSERT INTO blocks (
 	parent_id
 	,version
@@ -325,17 +343,73 @@ INSERT INTO blocks (
 	,subtrees_set
 ) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19)
 RETURNING id
-`
+			`
+		}
+	} else {
+		if useCustomID {
+			// non-genesis block with custom ID
+			q = `
+INSERT INTO blocks (
+	id
+	,parent_id
+	,version
+	,hash
+	,previous_hash
+	,merkle_root
+	,block_time
+	,n_bits
+	,nonce
+	,height
+	,chain_work
+	,tx_count
+	,size_in_bytes
+	,subtree_count
+	,subtrees
+	,peer_id
+	,coinbase_tx
+	,invalid
+	,mined_set
+	,subtrees_set
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20)
+RETURNING id
+			`
+		} else {
+			// non-genesis block with auto-increment
+			q = `
+INSERT INTO blocks (
+	parent_id
+	,version
+	,hash
+	,previous_hash
+	,merkle_root
+	,block_time
+	,n_bits
+	,nonce
+	,height
+	,chain_work
+	,tx_count
+	,size_in_bytes
+	,subtree_count
+	,subtrees
+	,peer_id
+	,coinbase_tx
+	,invalid
+	,mined_set
+	,subtrees_set
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19)
+RETURNING id
+			`
+		}
 	}
 
 	cumulativeChainWorkBytes, err := calculateAndPrepareChainWork(previousChainWork, block)
 	if err != nil {
-		return 0, 0, nil, err // Return error from calculation
+		return 0, 0, nil, false, err // Return error from calculation
 	}
 
 	subtreeBytes, err := block.SubTreeBytes()
 	if err != nil {
-		return 0, 0, nil, errors.NewStorageError("failed to get subtree bytes", err)
+		return 0, 0, nil, false, errors.NewStorageError("failed to get subtree bytes", err)
 	}
 
 	var coinbaseBytes []byte
@@ -345,45 +419,72 @@ RETURNING id
 
 	var rows *sql.Rows
 
-	rows, err = s.db.QueryContext(ctx, q,
-		previousBlockID,
-		block.Header.Version,
-		block.Hash().CloneBytes(),
-		block.Header.HashPrevBlock.CloneBytes(),
-		block.Header.HashMerkleRoot.CloneBytes(),
-		block.Header.Timestamp,
-		block.Header.Bits.CloneBytes(),
-		block.Header.Nonce,
-		height,
-		cumulativeChainWorkBytes,
-		block.TransactionCount,
-		block.SizeInBytes,
-		len(block.Subtrees),
-		subtreeBytes,
-		peerID,
-		coinbaseBytes,
-		previousBlockInvalid,
-		storeBlockOptions.MinedSet,
-		storeBlockOptions.SubtreesSet,
-	)
+	if useCustomID {
+		// When using custom ID, the ID is the first parameter
+		rows, err = s.db.QueryContext(ctx, q,
+			storeBlockOptions.ID,
+			previousBlockID,
+			block.Header.Version,
+			block.Hash().CloneBytes(),
+			block.Header.HashPrevBlock.CloneBytes(),
+			block.Header.HashMerkleRoot.CloneBytes(),
+			block.Header.Timestamp,
+			block.Header.Bits.CloneBytes(),
+			block.Header.Nonce,
+			height,
+			cumulativeChainWorkBytes,
+			block.TransactionCount,
+			block.SizeInBytes,
+			len(block.Subtrees),
+			subtreeBytes,
+			peerID,
+			coinbaseBytes,
+			storeAsInvalid,
+			storeBlockOptions.MinedSet,
+			storeBlockOptions.SubtreesSet,
+		)
+	} else {
+		// When using auto-increment, no ID parameter is needed
+		rows, err = s.db.QueryContext(ctx, q,
+			previousBlockID,
+			block.Header.Version,
+			block.Hash().CloneBytes(),
+			block.Header.HashPrevBlock.CloneBytes(),
+			block.Header.HashMerkleRoot.CloneBytes(),
+			block.Header.Timestamp,
+			block.Header.Bits.CloneBytes(),
+			block.Header.Nonce,
+			height,
+			cumulativeChainWorkBytes,
+			block.TransactionCount,
+			block.SizeInBytes,
+			len(block.Subtrees),
+			subtreeBytes,
+			peerID,
+			coinbaseBytes,
+			storeAsInvalid,
+			storeBlockOptions.MinedSet,
+			storeBlockOptions.SubtreesSet,
+		)
+	}
 
 	if err != nil {
-		return 0, 0, nil, s.parseSQLError(err, block)
+		return 0, 0, nil, false, s.parseSQLError(err, block)
 	}
 
 	defer rows.Close()
 
 	rowFound := rows.Next()
 	if !rowFound {
-		return 0, 0, nil, errors.NewBlockExistsError("block already exists: %s", block.Hash())
+		return 0, 0, nil, false, errors.NewBlockExistsError("block already exists: %s", block.Hash())
 	}
 
 	var newBlockID uint64
 	if err = rows.Scan(&newBlockID); err != nil {
-		return 0, 0, nil, errors.NewStorageError("failed to scan new block id", err)
+		return 0, 0, nil, false, errors.NewStorageError("failed to scan new block id", err)
 	}
 
-	return newBlockID, height, cumulativeChainWorkBytes, nil
+	return newBlockID, height, cumulativeChainWorkBytes, storeAsInvalid, nil
 }
 
 // parseSQLError unwraps and translates SQL-specific errors into domain-specific errors.

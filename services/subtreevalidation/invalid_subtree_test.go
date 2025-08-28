@@ -60,7 +60,7 @@ func TestInvalidSubtreeReporting_MalformedTransactionData(t *testing.T) {
 	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	subtreeHash := chainhash.HashH([]byte("test-subtree"))
 	baseURL := testPeerURL
 
@@ -114,7 +114,7 @@ func TestInvalidSubtreeReporting_TransactionCountMismatch(t *testing.T) {
 	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	subtreeHash := chainhash.HashH([]byte("test-subtree"))
 	baseURL := testPeerURL
 
@@ -176,7 +176,7 @@ func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	subtreeHash := chainhash.HashH([]byte("test-subtree"))
 	baseURL := testPeerURL
 
@@ -247,7 +247,7 @@ func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 // TestInvalidSubtreeReporting_NilKafkaProducer tests that the system handles nil kafka producer gracefully
 func TestInvalidSubtreeReporting_NilKafkaProducer(t *testing.T) {
 	// setup
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	subtreeHash := chainhash.HashH([]byte("test-subtree"))
 	baseURL := testPeerURL
 
@@ -273,7 +273,7 @@ func TestInvalidSubtreeReporting_HTTPErrorResponse(t *testing.T) {
 	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	subtreeHash := chainhash.HashH([]byte("test-subtree"))
 	baseURL := testPeerURL
 
@@ -335,7 +335,7 @@ func TestInvalidSubtreeReporting_ReadTxFromReaderPanic(t *testing.T) {
 // TestPublishInvalidSubtree_DirectCall tests the publishInvalidSubtree method directly
 func TestPublishInvalidSubtree_DirectCall(t *testing.T) {
 	// setup
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	subtreeHash := "abc123"
 	peerURL := "http://test-peer.com"
 	reason := "test_invalid_reason"

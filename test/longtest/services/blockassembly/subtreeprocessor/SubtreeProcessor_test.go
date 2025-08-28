@@ -322,7 +322,7 @@ func initStores(t *testing.T) (*memory.Memory, utxo.Store, *settings.Settings, b
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Policy.BlockMaxSize = 1000000
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 

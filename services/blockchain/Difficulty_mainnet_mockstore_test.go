@@ -70,7 +70,7 @@ func TestDifficultyCalculationWithMockStore(t *testing.T) {
 	}
 
 	// Create difficulty calculator with the MockStore
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	d, err := NewDifficulty(store, ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)

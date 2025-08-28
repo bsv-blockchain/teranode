@@ -13,7 +13,7 @@ import (
 )
 
 func TestSqlGetChainTip(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("block 0 - genesis block", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")

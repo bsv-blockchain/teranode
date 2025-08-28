@@ -22,7 +22,7 @@ import (
 
 func TestStore_SpendMultiRecord(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 
@@ -174,7 +174,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 func TestStore_IncrementSpentRecords(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = 2
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -326,7 +326,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 
 func TestStore_Unspend(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 

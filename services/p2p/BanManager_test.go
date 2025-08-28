@@ -25,7 +25,7 @@ func (h *testBanHandler) OnPeerBanned(peerID string, until time.Time, reason str
 
 func TestAddScore_BanAndDecay(t *testing.T) {
 	handler := &testBanHandler{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.P2P.BanThreshold = 30
 	tSettings.P2P.BanDuration = 2 * time.Hour
 
@@ -58,7 +58,7 @@ func TestAddScore_BanAndDecay(t *testing.T) {
 }
 
 func TestAddScore_UnknownReason(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	m := NewPeerBanManager(context.Background(), nil, tSettings)
 	peerID := "peer2"
 	score, banned := m.AddScore(peerID, ReasonUnknown)
@@ -67,7 +67,7 @@ func TestAddScore_UnknownReason(t *testing.T) {
 }
 
 func TestResetAndCleanupBanScore(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	m := NewPeerBanManager(context.Background(), nil, tSettings)
 	peerID := "peer3"
 	m.AddScore(peerID, ReasonInvalidSubtree)
@@ -86,7 +86,7 @@ func TestResetAndCleanupBanScore(t *testing.T) {
 }
 
 func TestGetBanScoreAndReasons(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.P2P.BanThreshold = 100
 	m := NewPeerBanManager(context.Background(), nil, tSettings)
 	peerID := "peer4"
@@ -103,7 +103,7 @@ func TestGetBanScoreAndReasons(t *testing.T) {
 }
 
 func TestIsBannedAndListBanned(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	m := NewPeerBanManager(context.Background(), nil, tSettings)
 	m.banThreshold = 10
 	m.banDuration = 1 * time.Second // short ban for test

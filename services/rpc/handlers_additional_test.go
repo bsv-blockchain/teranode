@@ -23,6 +23,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/p2p/p2p_api"
 	"github.com/bitcoin-sv/teranode/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/teranode/settings"
+	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bitcoin-sv/teranode/util/test/mocklogger"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
@@ -4121,7 +4122,7 @@ func (m *mockBlockchainClient) GetBlockHeader(ctx context.Context, blockHash *ch
 }
 
 // Add stub implementations for all other interface methods
-func (m *mockBlockchainClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
+func (m *mockBlockchainClient) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) error {
 	return nil
 }
 func (m *mockBlockchainClient) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
@@ -4132,6 +4133,9 @@ func (m *mockBlockchainClient) GetBlocks(ctx context.Context, blockHash *chainha
 }
 func (m *mockBlockchainClient) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
 	return nil, nil
+}
+func (m *mockBlockchainClient) GetNextBlockID(ctx context.Context) (uint64, error) {
+	return 1, nil
 }
 func (m *mockBlockchainClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return nil, nil

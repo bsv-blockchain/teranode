@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blockchain"
+	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util/health"
@@ -98,8 +99,8 @@ func (c *LocalClient) Health(ctx context.Context, checkLiveness bool) (int, stri
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
-func (c *LocalClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
-	ID, height, err := c.store.StoreBlock(ctx, block, peerID)
+func (c *LocalClient) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) error {
+	ID, height, err := c.store.StoreBlock(ctx, block, peerID, opts...)
 	if err != nil {
 		return err
 	}
@@ -160,6 +161,10 @@ func (c *LocalClient) GetBlockByHeight(ctx context.Context, height uint32) (*mod
 
 func (c *LocalClient) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
 	return c.store.GetBlockByID(ctx, id)
+}
+
+func (c *LocalClient) GetNextBlockID(ctx context.Context) (uint64, error) {
+	return c.store.GetNextBlockID(ctx)
 }
 
 func (c *LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {

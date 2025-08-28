@@ -30,6 +30,9 @@ service BlockchainAPI {
   // GetBlockByID retrieves a block by its id.
   rpc GetBlockByID (GetBlockByIDRequest) returns (GetBlockResponse) {}
 
+  // GetNextBlockID retrieves the next available block ID.
+  rpc GetNextBlockID (google.protobuf.Empty) returns (GetNextBlockIDResponse) {}
+
   // GetBlockStats retrieves statistical information about the blockchain.
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
 
@@ -176,13 +179,17 @@ message HealthResponse {
 
 // AddBlockRequest contains data for adding a new block to the blockchain.
 message AddBlockRequest {
-  bytes header = 1;                              // Block header
-  repeated bytes subtree_hashes = 2;             // Merkle tree hashes
-  bytes coinbase_tx = 3;                         // Coinbase transaction
-  uint64 transaction_count = 4;                  // Number of transactions
+  bytes header = 1;                             // Block header
+  repeated bytes subtree_hashes = 2;            // Merkle tree hashes
+  bytes coinbase_tx = 3;                        // Coinbase transaction
+  uint64 transaction_count = 4;                 // Number of transactions
   uint64 size_in_bytes = 5;                     // Block size
   bool external = 6;                            // External block flag
   string peer_id = 7;                           // Peer identifier
+  bool optionMinedSet = 8;                      // Option to mark block as mined
+  bool optionSubtreesSet = 9;                   // Option to mark subtrees as set
+  bool optionInvalid = 10;                      // Option to invalidate block when adding
+  uint64 optionID = 11;                            // Optional block ID
 }
 
 // GetBlockRequest represents a request to retrieve a block by its hash.
@@ -209,6 +216,11 @@ message GetBlockByHeightRequest {
 // GetBlockByIDRequest represents a request to retrieve a block by its ID.
 message GetBlockByIDRequest {
   uint64 id = 1;  // Block ID to retrieve
+}
+
+// GetNextBlockIDResponse represents the response containing the next available block ID.
+message GetNextBlockIDResponse {
+  uint64 next_block_id = 1;  // Next available block ID
 }
 
 // GetBlockInChainByHeightHashRequest represents a request to retrieve a block by height in a specific chain.
@@ -348,6 +360,9 @@ message GetBlockHeaderResponse {
   uint32 block_time = 8;      // Block timestamp
   uint32 timestamp = 9;       // Processing timestamp
   bytes chain_work = 10;      // Accumulated chain work
+  bool mined_set = 11;        // Mined status
+  bool subtrees_set = 12;     // Subtrees status
+  bool invalid = 13;          // Validity status
 }
 
 // CheckBlockIsCurrentChainResponse indicates if blocks are in the main chain.

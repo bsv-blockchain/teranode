@@ -179,7 +179,7 @@ func TestFileLoadDAHs(t *testing.T) {
 		f.fileDAHsMu.Unlock()
 
 		err = f.Del(ctx, key, fileformat.FileTypeTesting)
-		require.Error(t, err)
+		require.NoError(t, err) // deleting non-existing file should not return error
 	})
 }
 

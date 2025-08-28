@@ -15,7 +15,7 @@ import (
 func TestPreserveParentsOfOldUnminedTransactions_EarlyReturn(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.UtxoStore.UnminedTxRetention = 10
 
 	// Create a mock store (we won't use it because of early return)
@@ -34,7 +34,7 @@ func TestPreserveParentsOfOldUnminedTransactions_EarlyReturn(t *testing.T) {
 func TestCleanupCutoffCalculation(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.UtxoStore.UnminedTxRetention = 5
 
 	mockStore := new(MockUtxostore)
@@ -54,7 +54,7 @@ func TestCleanupCutoffCalculation(t *testing.T) {
 func TestPreserveParentsOfOldUnminedTransactions_StorageError(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.UtxoStore.UnminedTxRetention = 5
 
 	mockStore := new(MockUtxostore)

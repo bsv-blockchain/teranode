@@ -20,7 +20,7 @@ import (
 // the subtree size never increases even with high utilization
 func TestSubtreeProcessor_LowVolumeNeverIncreases(t *testing.T) {
 	// Setup
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.UseDynamicSubtreeSize = true
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 8
 	settings.BlockAssembly.MinimumMerkleItemsPerSubtree = 4
@@ -140,7 +140,7 @@ func TestSubtreeProcessor_LowVolumeNeverIncreases(t *testing.T) {
 // based on actual observed usage
 func TestSubtreeProcessor_UsageBasedCapping(t *testing.T) {
 	// Setup
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.UseDynamicSubtreeSize = true
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 32
 	settings.BlockAssembly.MinimumMerkleItemsPerSubtree = 4
@@ -243,7 +243,7 @@ func TestSubtreeProcessor_UsageBasedCapping(t *testing.T) {
 // TestSubtreeProcessor_RealWorldScenario tests a realistic scenario with varying load
 func TestSubtreeProcessor_RealWorldScenario(t *testing.T) {
 	// Setup
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.UseDynamicSubtreeSize = true
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
 	settings.BlockAssembly.MinimumMerkleItemsPerSubtree = 4
@@ -345,7 +345,7 @@ func TestSubtreeProcessor_RealWorldScenario(t *testing.T) {
 // tracked when subtrees complete
 func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 	// Setup
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.UseDynamicSubtreeSize = true
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 8
 
@@ -504,7 +504,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 // TestSubtreeProcessor_MinimumSizeRespected tests that minimum size is always respected
 func TestSubtreeProcessor_MinimumSizeRespected(t *testing.T) {
 	// Setup
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.UseDynamicSubtreeSize = true
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 8
 	settings.BlockAssembly.MinimumMerkleItemsPerSubtree = 4
@@ -574,7 +574,7 @@ func TestSubtreeProcessor_MinimumSizeRespected(t *testing.T) {
 // scales up when there's genuinely high transaction volume
 func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 	// Setup
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.UseDynamicSubtreeSize = true
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 64
 	settings.BlockAssembly.MinimumMerkleItemsPerSubtree = 4
@@ -849,7 +849,7 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 // TestSubtreeProcessor_VolumeThresholds tests the 50-node threshold for volume detection
 func TestSubtreeProcessor_VolumeThresholds(t *testing.T) {
 	// Setup
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.UseDynamicSubtreeSize = true
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 64
 	settings.BlockAssembly.MinimumMerkleItemsPerSubtree = 4

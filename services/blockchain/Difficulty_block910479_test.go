@@ -125,7 +125,7 @@ func TestBlock910479Difficulty(t *testing.T) {
 	}
 
 	// Create difficulty calculator
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	d, err := NewDifficulty(store, ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)

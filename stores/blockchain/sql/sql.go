@@ -443,7 +443,7 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 			_, _ = s.db.Exec("SET session_replication_role = 'replica'")
 		}
 
-		_, _, err = s.StoreBlock(context.Background(), genesisBlock, "", options.WithMinedSet(true), options.WithSubtreesSet(true))
+		_, _, err = s.StoreBlock(context.Background(), genesisBlock, "", options.WithID(0), options.WithMinedSet(true), options.WithSubtreesSet(true))
 		if err != nil {
 			return errors.NewStorageError("failed to insert genesis block", err)
 		}

@@ -7,12 +7,15 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
+	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation/catchup"
+	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bitcoin-sv/teranode/util/blockassemblyutil"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/go-wire"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -27,16 +30,19 @@ const (
 
 // CatchupContext holds all the state needed during a catchup operation
 type CatchupContext struct {
-	blockUpTo          *model.Block
-	baseURL            string
-	startTime          time.Time
-	bestBlockHeader    *model.BlockHeader
-	commonAncestorHash *chainhash.Hash
-	commonAncestorMeta *model.BlockHeaderMeta
-	forkDepth          uint32
-	currentHeight      uint32
-	blockHeaders       []*model.BlockHeader
-	headersFetchResult *catchup.Result
+	blockUpTo               *model.Block
+	baseURL                 string
+	startTime               time.Time
+	bestBlockHeader         *model.BlockHeader
+	commonAncestorHash      *chainhash.Hash
+	commonAncestorMeta      *model.BlockHeaderMeta
+	commonAncestorIndex     int // Index of common ancestor in peer headers
+	forkDepth               uint32
+	currentHeight           uint32
+	blockHeaders            []*model.BlockHeader
+	headersFetchResult      *catchup.Result
+	useQuickValidation      bool   // Whether to use quick validation for checkpointed blocks
+	highestCheckpointHeight uint32 // Highest checkpoint height for validation checks
 }
 
 // catchup orchestrates the complete blockchain synchronization process.
@@ -66,6 +72,16 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 		tracing.WithLogMessage(u.logger, "[catchup][%s] starting catchup to %s", blockUpTo.Hash().String(), baseURL),
 	)
 	defer deferFn()
+
+	// TEMP TEMP TEMP for testing
+	if u.settings.ChainCfgParams.Net == wire.TeraTestNet {
+		u.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{
+			// nolint:govet
+			{500, newHashFromStr("0000000004cebafe8b90f095a5bb76e5bfeb2b20a5d71fc9ce498d5ed0a3b06c")},
+			// nolint:govet
+			{750, newHashFromStr("0000000005e105e65e60fe0483bfaa5558310ed285ae60b7edb58f4a1f283da3")},
+		}
+	}
 
 	catchupCtx := &CatchupContext{
 		blockUpTo: blockUpTo,
@@ -126,12 +142,19 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 		return err
 	}
 
-	// Step 9: Fetch and validate blocks
+	// Step 9: Verify checkpoints and determine if quick validation can be used
+	// This step ensures we're on the correct chain by validating checkpoint hashes
+	if err = u.verifyCheckpointsInHeaderChain(catchupCtx); err != nil {
+		u.logger.Errorf("[catchup][%s] Checkpoint verification failed: %v", blockUpTo.Hash().String(), err)
+		return err
+	}
+
+	// Step 10: Fetch and validate blocks
 	if err = u.fetchAndValidateBlocks(ctx, catchupCtx); err != nil {
 		return err
 	}
 
-	// Step 10: Clean up resources
+	// Step 11: Clean up resources
 	u.cleanup(catchupCtx)
 
 	return nil
@@ -192,6 +215,8 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 // fetchHeaders retrieves block headers from the peer using block locator pattern.
 // Uses the headers_from_common_ancestor endpoint for efficient fetching.
+// IMPORTANT: Headers should extend to at least a checkpoint when possible to ensure
+// we can verify we're on the correct chain.
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -228,24 +253,63 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	u.logger.Debugf("[catchup][%s] Step 2: Finding common ancestor", catchupCtx.blockUpTo.Hash().String())
 
 	// Headers from headers_from_common_ancestor endpoint are already in oldest-to-newest order
-	initialHeaders := catchupCtx.headersFetchResult.Headers
-
-	// Find common ancestor using block locator
-	commonAncestorFinderInstance := catchup.NewCommonAncestorFinderWithLocator(u.blockchainClient, u.logger, catchupCtx.headersFetchResult.LocatorHashes)
+	peerHeaders := catchupCtx.headersFetchResult.Headers
+	if len(peerHeaders) == 0 {
+		return errors.NewProcessingError("[catchup][%s] no headers received from peer", catchupCtx.blockUpTo.Hash().String())
+	}
 
 	currentHeight := u.utxoStore.GetBlockHeight()
 	catchupCtx.currentHeight = currentHeight
 
-	commonAncestorHash, commonAncestorMeta, forkDepth, err := commonAncestorFinderInstance.FindCommonAncestorWithForkDepth(ctx, initialHeaders, currentHeight)
+	// Walk through peer's headers (oldest to newest) to find the highest common ancestor
+	commonAncestorIndex := -1
+	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders))
+
+	for i, header := range peerHeaders {
+		exists, err := u.blockchainClient.GetBlockExists(ctx, header.Hash())
+		if err != nil {
+			return errors.NewProcessingError("[catchup][%s] failed to check if block %s exists: %v", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+		}
+
+		if exists {
+			commonAncestorIndex = i // Keep updating to find the LAST match
+			u.logger.Debugf("[catchup][%s] Block %s exists in our chain (index %d)", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), i)
+		} else {
+			u.logger.Debugf("[catchup][%s] Block %s not in our chain - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String())
+			break // Once we find a header we don't have, stop
+		}
+	}
+
+	if commonAncestorIndex == -1 {
+		return errors.NewProcessingError("[catchup][%s] no common ancestor found in peer headers", catchupCtx.blockUpTo.Hash().String())
+	}
+
+	// Get the common ancestor header and its metadata
+	commonAncestorHeader := peerHeaders[commonAncestorIndex]
+	commonAncestorHash := commonAncestorHeader.Hash()
+
+	// Get metadata for the common ancestor
+	_, commonAncestorMeta, err := u.blockchainClient.GetBlockHeader(ctx, commonAncestorHash)
 	if err != nil {
-		return errors.NewProcessingError("[catchup][%s] failed to find common ancestor: %v", catchupCtx.blockUpTo.Hash().String(), err)
+		return errors.NewProcessingError("[catchup][%s] failed to get metadata for common ancestor %s: %v", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), err)
+	}
+
+	if commonAncestorMeta.Invalid {
+		return errors.NewProcessingError("[catchup][%s] common ancestor %s at height %d is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height)
+	}
+
+	// Calculate fork depth
+	forkDepth := uint32(0)
+	if commonAncestorMeta.Height < currentHeight {
+		forkDepth = currentHeight - commonAncestorMeta.Height
 	}
 
 	catchupCtx.commonAncestorHash = commonAncestorHash
 	catchupCtx.commonAncestorMeta = commonAncestorMeta
+	catchupCtx.commonAncestorIndex = commonAncestorIndex
 	catchupCtx.forkDepth = forkDepth
 
-	u.logger.Infof("[catchup][%s] Found common ancestor: %s at height %d, fork depth: %d", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height, forkDepth)
+	u.logger.Infof("[catchup][%s] Found common ancestor: %s at height %d (index %d), fork depth: %d", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height, commonAncestorIndex, forkDepth)
 
 	return nil
 }
@@ -307,18 +371,26 @@ func (u *Server) checkSecretMining(ctx context.Context, catchupCtx *CatchupConte
 func (u *Server) filterHeaders(ctx context.Context, catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 5: Filtering headers to process", catchupCtx.blockUpTo.Hash().String())
 
-	// Get headers after common ancestor
-	headersAfterAncestor := u.extractHeadersAfterAncestor(catchupCtx.headersFetchResult.Headers, catchupCtx.commonAncestorHash)
-
-	// Filter out existing blocks
-	newHeaders, err := u.filterExistingBlocks(ctx, headersAfterAncestor, catchupCtx.blockUpTo)
-	if err != nil {
-		return err
+	peerHeaders := catchupCtx.headersFetchResult.Headers
+	if len(peerHeaders) == 0 {
+		return errors.NewProcessingError("[catchup][%s] no headers to filter", catchupCtx.blockUpTo.Hash().String())
 	}
 
-	catchupCtx.blockHeaders = newHeaders
+	// Since we found the true common ancestor, all headers after that index should be new to us
+	// No need for complex filtering - just take everything after the common ancestor
+	if catchupCtx.commonAncestorIndex < 0 || catchupCtx.commonAncestorIndex >= len(peerHeaders) {
+		return errors.NewProcessingError("[catchup][%s] invalid common ancestor index: %d", catchupCtx.blockUpTo.Hash().String(), catchupCtx.commonAncestorIndex)
+	}
 
-	u.logger.Infof("[catchup][%s] Filtered to %d new blocks to process", catchupCtx.blockUpTo.Hash().String(), len(newHeaders))
+	// Extract headers after common ancestor (commonAncestorIndex+1 onwards)
+	headersToProcess := make([]*model.BlockHeader, 0)
+	if catchupCtx.commonAncestorIndex+1 < len(peerHeaders) {
+		headersToProcess = peerHeaders[catchupCtx.commonAncestorIndex+1:]
+	}
+
+	catchupCtx.blockHeaders = headersToProcess
+
+	u.logger.Infof("[catchup][%s] Taking %d headers after common ancestor (index %d)", catchupCtx.blockUpTo.Hash().String(), len(headersToProcess), catchupCtx.commonAncestorIndex)
 
 	return nil
 }
@@ -352,6 +424,82 @@ func (u *Server) buildHeaderCache(catchupCtx *CatchupContext) error {
 	// Record metric
 	if len(catchupCtx.blockHeaders) > 0 && prometheusCatchupHeadersFetched != nil {
 		prometheusCatchupHeadersFetched.WithLabelValues(catchupCtx.baseURL).Add(float64(len(catchupCtx.blockHeaders)))
+	}
+
+	return nil
+}
+
+// verifyCheckpointsInHeaderChain verifies that any checkpoints within our header range match.
+// This ensures we're on the correct chain before proceeding with catchup.
+//
+// Parameters:
+//   - catchupCtx: Catchup context with block information
+//
+// Returns:
+//   - error: If checkpoint verification fails
+func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) error {
+	// Get checkpoints from settings
+	if u.settings.ChainCfgParams == nil || len(u.settings.ChainCfgParams.Checkpoints) == 0 {
+		u.logger.Debugf("[catchup][%s] No checkpoints configured", catchupCtx.blockUpTo.Hash().String())
+		return nil // No checkpoints to verify
+	}
+
+	// Cannot verify checkpoints if there's a fork
+	if catchupCtx.forkDepth > 0 {
+		u.logger.Debugf("[catchup][%s] Fork detected (depth %d), checkpoint verification not applicable", catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth)
+		return nil // Fork handling takes precedence
+	}
+
+	// Get the highest checkpoint height for reference
+	highestCheckpointHeight := getHighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+	catchupCtx.highestCheckpointHeight = highestCheckpointHeight
+
+	// Calculate the height range - much simpler now since headers are sequential with no gaps
+	if len(catchupCtx.blockHeaders) == 0 {
+		u.logger.Debugf("[catchup][%s] No headers to verify", catchupCtx.blockUpTo.Hash().String())
+		return nil
+	}
+
+	firstBlockHeight := catchupCtx.commonAncestorMeta.Height + 1
+	lastBlockHeight := catchupCtx.commonAncestorMeta.Height + uint32(len(catchupCtx.blockHeaders))
+
+	u.logger.Debugf("[catchup][%s] Verifying checkpoints in height range %d-%d (common ancestor at %d)", catchupCtx.blockUpTo.Hash().String(), firstBlockHeight, lastBlockHeight, catchupCtx.commonAncestorMeta.Height)
+
+	// Verify checkpoints within our header range
+	checkpointsChecked := 0
+	for _, checkpoint := range u.settings.ChainCfgParams.Checkpoints {
+		checkpointHeight := uint32(checkpoint.Height)
+
+		// Skip checkpoints at or below the common ancestor height
+		if checkpointHeight <= catchupCtx.commonAncestorMeta.Height {
+			u.logger.Debugf("[catchup][%s] Skipping checkpoint at height %d (at/below common ancestor height %d)", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, catchupCtx.commonAncestorMeta.Height)
+			continue
+		}
+
+		// Check if checkpoint is within our header range
+		if checkpointHeight >= firstBlockHeight && checkpointHeight <= lastBlockHeight {
+			// Calculate the index in blockHeaders (simple sequential calculation)
+			headerIndex := checkpointHeight - firstBlockHeight
+			if int(headerIndex) >= len(catchupCtx.blockHeaders) {
+				return errors.NewProcessingError("[catchup][%s] internal error: checkpoint height %d maps to invalid header index %d", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, headerIndex)
+			}
+
+			headerHash := catchupCtx.blockHeaders[headerIndex].Hash()
+			if !headerHash.IsEqual(checkpoint.Hash) {
+				// CRITICAL: Checkpoint hash mismatch - we're on the wrong chain!
+				return errors.NewProcessingError("[catchup][%s] CHECKPOINT VERIFICATION FAILED: checkpoint at height %d requires hash %s but got %s - stopping catchup", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String(), headerHash.String())
+			}
+
+			u.logger.Infof("[catchup][%s] Verified checkpoint at height %d with hash %s", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String())
+			checkpointsChecked++
+		}
+	}
+
+	if checkpointsChecked > 0 {
+		u.logger.Infof("[catchup][%s] Successfully verified %d checkpoint(s) in header chain", catchupCtx.blockUpTo.Hash().String(), checkpointsChecked)
+		catchupCtx.useQuickValidation = true
+	} else {
+		catchupCtx.useQuickValidation = false
 	}
 
 	return nil
@@ -428,12 +576,12 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 
 	// Start fetching blocks
 	errorGroup.Go(func() error {
-		return u.fetchBlocksConcurrently(gCtx, catchupCtx.blockUpTo, catchupCtx.baseURL, catchupCtx.blockHeaders, validateBlocksChan, &size)
+		return u.fetchBlocksConcurrently(gCtx, catchupCtx, validateBlocksChan, &size)
 	})
 
 	// Start validation in parallel
 	errorGroup.Go(func() error {
-		return u.validateBlocksOnChannel(validateBlocksChan, gCtx, catchupCtx.blockUpTo, &size, catchupCtx.baseURL)
+		return u.validateBlocksOnChannel(validateBlocksChan, gCtx, catchupCtx, &size)
 	})
 
 	// Wait for both operations to complete
@@ -590,14 +738,15 @@ func (u *Server) restoreFSMState(ctx context.Context, catchupCtx *CatchupContext
 // Parameters:
 //   - validateBlocksChan: Channel providing blocks to validate
 //   - gCtx: Context for cancellation
-//   - blockUpTo: Target block for progress tracking
+//   - catchupCtx: Catchup context with validation mode information
 //   - size: Atomic counter for remaining blocks
-//   - baseURL: Peer URL for metrics tracking
 //
 // Returns:
 //   - error: If validation fails or context is cancelled
-func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, gCtx context.Context, blockUpTo *model.Block, size *atomic.Int64, baseURL string) error {
+func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, gCtx context.Context, catchupCtx *CatchupContext, size *atomic.Int64) error {
 	i := 0
+	blockUpTo := catchupCtx.blockUpTo
+	baseURL := catchupCtx.baseURL
 
 	// validate the blocks while getting them from the other node
 	// this will block until all blocks are validated
@@ -605,15 +754,15 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 		// Check context cancellation before processing each block
 		select {
 		case <-gCtx.Done():
-			u.logger.Infof("[catcup:validateBlocksOnChannel][%s] context cancelled during block validation", blockUpTo.Hash().String())
+			u.logger.Infof("[catchup:validateBlocksOnChannel][%s] context cancelled during block validation", blockUpTo.Hash().String())
 			return gCtx.Err()
 		default:
 			i++
 			// Use debug logging during catchup, with progress logs every 100 blocks
 			if i%100 == 0 || i == 1 {
-				u.logger.Infof("[catcup:validateBlocksOnChannel][%s] validating block %s %d/%d", blockUpTo.Hash().String(), block.Hash().String(), i, size.Load())
+				u.logger.Infof("[catchup:validateBlocksOnChannel][%s] validating block %s %d/%d", blockUpTo.Hash().String(), block.Hash().String(), i, size.Load())
 			} else {
-				u.logger.Debugf("[catcup:validateBlocksOnChannel][%s] validating block %s %d/%d", blockUpTo.Hash().String(), block.Hash().String(), i, size.Load())
+				u.logger.Debugf("[catchup:validateBlocksOnChannel][%s] validating block %s %d/%d", blockUpTo.Hash().String(), block.Hash().String(), i, size.Load())
 			}
 
 			// Wait for block assembly to be ready if needed
@@ -624,35 +773,104 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 			// Get cached headers for validation
 			cachedHeaders, _ := u.headerChainCache.GetValidationHeaders(block.Hash())
 
-			// Create validation options with cached headers
-			opts := &ValidateBlockOptions{
-				CachedHeaders:           cachedHeaders,
-				IsCatchupMode:           true,
-				DisableOptimisticMining: true,
+			// Determine if this specific block can use quick validation
+			// A block can use quick validation if it's at or below the highest verified checkpoint height
+			canUseQuickValidation := catchupCtx.useQuickValidation && block.Height <= catchupCtx.highestCheckpointHeight
+			tryNormalValidation := true // Default to normal validation, we'll unset if quick validation is used
+
+			// If block is below checkpoint, use quick validation directly
+			if canUseQuickValidation {
+				// Quick validation: create UTXOs for the block and validate transactions in parallel
+				if err := u.blockValidation.quickValidateBlock(gCtx, block, baseURL); err != nil {
+					if prometheusCatchupErrors != nil {
+						prometheusCatchupErrors.WithLabelValues(baseURL, "validation_failure").Inc()
+					}
+
+					u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] quick validation failed for block %s, removing .subtree files: %v", blockUpTo.Hash().String(), block.Hash().String(), err)
+
+					// since the quick validation failed, we will have to remove the .subtree files, which will trigger
+					// the normal validation to re-create the UTXOs and validate the transactions
+					for _, subtreeHash := range block.Subtrees {
+						if err = u.subtreeStore.Del(gCtx, subtreeHash[:], fileformat.FileTypeSubtree); err != nil {
+							if !errors.Is(err, errors.ErrNotFound) {
+								return errors.NewProcessingError("[catchup:validateBlocksOnChannel][%s] failed to remove subtree file %s", blockUpTo.Hash().String(), subtreeHash.String(), err)
+							}
+						}
+					}
+				} else {
+					// Quick validation succeeded, skip normal validation
+					tryNormalValidation = false
+				}
 			}
 
-			// Validate the block
-			if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, baseURL, nil, opts); err != nil {
-				u.logger.Errorf("[catcup:validateBlocksOnChannel][%s] failed to validate block %s at position %d: %v", blockUpTo.Hash().String(), block.Hash().String(), i, err)
-				// Record metric for validation failure
-				if prometheusCatchupErrors != nil {
-					prometheusCatchupErrors.WithLabelValues(baseURL, "validation_failure").Inc()
+			if tryNormalValidation {
+				// Standard validation path for blocks not verified by checkpoints
+				// Create validation options with cached headers
+				opts := &ValidateBlockOptions{
+					CachedHeaders:           cachedHeaders,
+					IsCatchupMode:           true,
+					DisableOptimisticMining: true,
 				}
 
-				return err
+				// Validate the block using standard validation
+				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, baseURL, nil, opts); err != nil {
+					u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to validate block %s at position %d: %v", blockUpTo.Hash().String(), block.Hash().String(), i, err)
+
+					// mark block as invalid, we did not add it to the chain, since we did not do optimistic mining
+					if markErr := u.blockchainClient.AddBlock(gCtx, block, baseURL, options.WithInvalid(true)); markErr != nil {
+						u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to store block %s and mark as invalid: %v", blockUpTo.Hash().String(), block.Hash().String(), markErr)
+					}
+
+					// Record metric for validation failure
+					if prometheusCatchupErrors != nil {
+						prometheusCatchupErrors.WithLabelValues(baseURL, "validation_failure").Inc()
+					}
+
+					return err
+				}
 			}
 
 			// Update the remaining block count
 			remaining := size.Add(-1)
 			if remaining%100 == 0 && remaining > 0 {
-				u.logger.Infof("[catcup:validateBlocksOnChannel][%s] %d blocks remaining", blockUpTo.Hash().String(), remaining)
+				u.logger.Infof("[catchup:validateBlocksOnChannel][%s] %d blocks remaining", blockUpTo.Hash().String(), remaining)
 			}
 		}
 	}
 
-	u.logger.Infof("[catcup:validateBlocksOnChannel][%s] completed validation of %d blocks", blockUpTo.Hash().String(), i)
+	u.logger.Infof("[catchup:validateBlocksOnChannel][%s] completed validation of %d blocks", blockUpTo.Hash().String(), i)
 
 	return nil
+}
+
+// getHighestCheckpointHeight returns the height of the highest checkpoint
+func getHighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
+	if len(checkpoints) == 0 {
+		return 0
+	}
+
+	var highestHeight uint32
+	for _, checkpoint := range checkpoints {
+		if uint32(checkpoint.Height) > highestHeight {
+			highestHeight = uint32(checkpoint.Height)
+		}
+	}
+	return highestHeight
+}
+
+// getLowestCheckpointHeight returns the height of the lowest checkpoint
+func getLowestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
+	if len(checkpoints) == 0 {
+		return 0
+	}
+
+	lowestHeight := uint32(checkpoints[0].Height)
+	for _, checkpoint := range checkpoints[1:] {
+		if uint32(checkpoint.Height) < lowestHeight {
+			lowestHeight = uint32(checkpoint.Height)
+		}
+	}
+	return lowestHeight
 }
 
 // checkSecretMiningFromCommonAncestor detects if a peer withheld blocks (secret mining).
@@ -725,14 +943,8 @@ func (u *Server) validateBatchHeaders(ctx context.Context, headers []*model.Bloc
 		return nil
 	}
 
-	// Get checkpoints from settings
-	var checkpoints []chaincfg.Checkpoint
-	if u.settings.ChainCfgParams != nil {
-		checkpoints = u.settings.ChainCfgParams.Checkpoints
-	}
-
-	// Track if we need to look up heights for checkpoint validation
-	needHeightLookup := len(checkpoints) > 0
+	// Note: Checkpoint validation is handled separately in verifyCheckpointsInHeaderChain()
+	// This function focuses on basic header validation (PoW, merkle root, timestamp)
 
 	for i, header := range headers {
 		// Check context cancellation
@@ -763,21 +975,22 @@ func (u *Server) validateBatchHeaders(ctx context.Context, headers []*model.Bloc
 			return err
 		}
 
-		// Validate against checkpoints if we have them and can determine height
-		if needHeightLookup && i > 0 {
-			// For headers after the first, we need to look up the height
-			// This is expensive, so we only do it if we have checkpoints
-			_, meta, err := u.blockchainClient.GetBlockHeader(ctx, header.Hash())
-			if err == nil && meta != nil {
-				if err := catchup.ValidateHeaderAgainstCheckpoints(header, meta.Height, checkpoints); err != nil {
-					u.logger.Errorf("[catchup:validateBatchHeaders] header %d/%d fails checkpoint validation at height %d: %v",
-						i+1, len(headers), meta.Height, err)
-					return err
-				}
-			}
-		}
+		// Checkpoint validation is handled separately in verifyCheckpointsInHeaderChain()
 	}
 
 	u.logger.Debugf("[catchup:validateBatchHeaders] validated %d headers successfully", len(headers))
 	return nil
+}
+
+// newHashFromStr converts the passed big-endian hex string into a
+// chainhash.Hash.  It only differs from the one available in chainhash in that
+// it panics on an error since it will only (and must only) be called with
+// hard-coded, and therefore known good, hashes.
+func newHashFromStr(hexStr string) *chainhash.Hash {
+	hash, err := chainhash.NewHashFromStr(hexStr)
+	if err != nil {
+		panic(err)
+	}
+
+	return hash
 }

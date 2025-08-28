@@ -291,6 +291,10 @@ type BlockValidationSettings struct {
 	FetchNumWorkers         int // Number of worker goroutines for parallel processing (default: 16)
 	FetchBufferSize         int // Buffer size for channels (default: 500)
 	SubtreeFetchConcurrency int // Concurrent subtree fetches per block (default: 8)
+	// Transaction extension timeout
+	ExtendTransactionTimeout time.Duration // Timeout for extending transactions (default: 120s)
+	// Concurrency limits
+	GetBlockTransactionsConcurrency int // Concurrency limit for getBlockTransactions (default: 64)
 }
 
 type ValidatorSettings struct {
@@ -329,6 +333,7 @@ type UtxoStoreSettings struct {
 	OutpointBatcherDurationMillis  int
 	SpendBatcherDurationMillis     int
 	SpendBatcherSize               int
+	SpendBatcherConcurrency        int
 	StoreBatcherDurationMillis     int
 	StoreBatcherSize               int
 	UtxoBatchSize                  int
@@ -493,6 +498,8 @@ type SubtreeValidationSettings struct {
 	BlacklistedBaseURLs            map[string]struct{}
 	BlockHeightRetentionAdjustment int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
 	OrphanageTimeout               time.Duration
+	// Concurrency limits
+	CheckBlockSubtreesConcurrency int // Concurrency limit for CheckBlockSubtrees operations (default: 32)
 }
 
 type LegacySettings struct {

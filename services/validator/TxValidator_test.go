@@ -219,7 +219,7 @@ func BenchmarkVerifyTransactionGoSDK2(b *testing.B) {
 
 // policy settings tests
 func TestMaxTxSizePolicy(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.Policy.MaxTxSizePolicy = 10 // insanely low
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
@@ -237,7 +237,7 @@ func TestMaxOpsPerScriptPolicy(t *testing.T) {
 	testBlockHeight := uint32(886413)
 	testUtxoHeights := []uint32{886412}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Policy.MaxOpsPerScriptPolicy = 2       // insanely low
 	tSettings.Policy.MaxScriptSizePolicy = 100000000 // quite high
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
@@ -261,7 +261,7 @@ func TestMaxScriptSizePolicy(t *testing.T) {
 	testBlockHeight := uint32(886413)
 	testUtxoHeights := []uint32{886412}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Policy.MaxScriptSizePolicy = 1 // low
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
@@ -285,7 +285,7 @@ func TestMaxPubKeysPerMultiSigPolicy(t *testing.T) {
 	testUtxoHeights := []uint32{766656, 766656, 766656}
 
 	t.Run("low max pubkeys per multisig policy must fail", func(t *testing.T) {
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxPubKeysPerMultisigPolicy = 2
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
@@ -296,7 +296,7 @@ func TestMaxPubKeysPerMultiSigPolicy(t *testing.T) {
 	})
 
 	t.Run("hight max pubkeys per multisig policy must pass", func(t *testing.T) {
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxPubKeysPerMultisigPolicy = 3 // low
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
@@ -319,7 +319,7 @@ func TestMaxStackMemoryUsagePolicy(t *testing.T) {
 			}
 		}()
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxStackMemoryUsagePolicy = 2
 		tSettings.Policy.MaxStackMemoryUsageConsensus = 1
 
@@ -336,7 +336,7 @@ func TestMaxStackMemoryUsagePolicy(t *testing.T) {
 	testUtxoHeights := []uint32{815262}
 
 	t.Run("low MaxStackMemoryUsageConsensus must fail", func(t *testing.T) {
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxStackMemoryUsagePolicy = 1
 		tSettings.Policy.MaxStackMemoryUsageConsensus = 271
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
@@ -348,7 +348,7 @@ func TestMaxStackMemoryUsagePolicy(t *testing.T) {
 	})
 
 	t.Run("high MaxStackMemoryUsageConsensus must pass", func(t *testing.T) {
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxStackMemoryUsagePolicy = 1
 		tSettings.Policy.MaxStackMemoryUsageConsensus = 272
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
@@ -359,7 +359,7 @@ func TestMaxStackMemoryUsagePolicy(t *testing.T) {
 	})
 
 	t.Run("low MaxStackMemoryUsage must fail", func(t *testing.T) {
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxStackMemoryUsagePolicy = 271
 		tSettings.Policy.MaxStackMemoryUsageConsensus = 1000000
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
@@ -371,7 +371,7 @@ func TestMaxStackMemoryUsagePolicy(t *testing.T) {
 	})
 
 	t.Run("high MaxStackMemoryUsage must pass", func(t *testing.T) {
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxStackMemoryUsagePolicy = 272
 		tSettings.Policy.MaxStackMemoryUsageConsensus = 1000000
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
@@ -411,7 +411,7 @@ func TestMaxScriptNumLengthPolicy(t *testing.T) {
 	testUtxoHeights := []uint32{820539}
 
 	t.Run("low MaxScriptNumLengthPolicy must fail", func(t *testing.T) {
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxScriptNumLengthPolicy = 5
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
@@ -422,7 +422,7 @@ func TestMaxScriptNumLengthPolicy(t *testing.T) {
 	})
 
 	t.Run("high MaxScriptNumLengthPolicy must pass", func(t *testing.T) {
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Policy.MaxScriptNumLengthPolicy = 6
 		tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
@@ -443,7 +443,7 @@ func TestMaxTxSigopsCountsPolicy(t *testing.T) {
 	testBlockHeight := uint32(886413)
 	testUtxoHeights := []uint32{886412}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Policy.MaxTxSigopsCountsPolicy = 1 // low
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
@@ -458,7 +458,7 @@ func TestMaxTxSigopsCountsPolicy(t *testing.T) {
 }
 
 func TestMaxOpsPerScriptPolicyWithConcensus(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.Policy.MaxOpsPerScriptPolicy = 2       // insanely low
 	tSettings.Policy.MaxScriptSizePolicy = 100000000 // quite high
@@ -479,7 +479,7 @@ func TestReturnConsensusError(t *testing.T) {
 	testBlockHeight := uint32(886413)
 	testUtxoHeights := []uint32{886412, 886412} // Add one element to make utxo array wrong
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Policy.MaxTxSigopsCountsPolicy = 1 // low
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
@@ -552,7 +552,7 @@ func Test_MinFeePolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tSettings := test.CreateBaseTestSettings()
+			tSettings := test.CreateBaseTestSettings(t)
 			// Set minimum fee to 0.000000010 BSV/kB
 			// This equals 1 satoshi/kB = 0.001 satoshis/byte
 			// So transactions > 1000 bytes need more than 1 satoshi
@@ -615,7 +615,7 @@ func Test_MinFeePolicy(t *testing.T) {
 }
 
 func TestCheckFees(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	tv := &TxValidator{
 		settings: tSettings,
@@ -682,7 +682,7 @@ func TestSubErrorTxInvalid(t *testing.T) {
 }
 
 func TestZeroSatoshiOutputRequiresOpFalseOpReturn(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	privKey, err := bec.NewPrivateKey()
 	require.NoError(t, err)
@@ -737,7 +737,7 @@ func TestZeroSatoshiOutputRequiresOpFalseOpReturn(t *testing.T) {
 }
 
 func Test_isConsolidationTx(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 
 	// Create a consolidation transaction with multiple inputs and a single output

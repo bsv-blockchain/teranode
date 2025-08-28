@@ -136,7 +136,7 @@ func Restore(t *testing.T, db utxostore.Store) {
 func Freeze(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	_, err := db.Create(ctx, Tx, 1000)
 	require.NoError(t, err)
@@ -180,7 +180,7 @@ func Freeze(t *testing.T, db utxostore.Store) {
 func ReAssign(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	err := db.SetBlockHeight(101)
 	require.NoError(t, err)

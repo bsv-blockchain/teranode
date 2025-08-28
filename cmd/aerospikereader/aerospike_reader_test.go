@@ -29,7 +29,7 @@ func TestAerospikeReader(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 
 	// Create a test settings object
-	testingSettings := test.CreateBaseTestSettings()
+	testingSettings := test.CreateBaseTestSettings(t)
 	ctx := context.Background()
 
 	// Create a new private key for the transaction

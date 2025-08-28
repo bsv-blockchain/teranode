@@ -27,6 +27,7 @@ func NewCommonAncestorFinderWithLocator(blockchainClient blockchain.ClientI, log
 		if err != nil {
 			return nil, false
 		}
+
 		return header, true
 	}
 
@@ -44,9 +45,11 @@ func NewCommonAncestorFinderWithLocator(blockchainClient blockchain.ClientI, log
 func (caf *CommonAncestorFinderWithLocator) FindCommonAncestorWithForkDepth(ctx context.Context, remoteHeaders []*model.BlockHeader, currentHeight uint32) (*chainhash.Hash, *model.BlockHeaderMeta, uint32, error) {
 	// Debug logging
 	caf.logger.Debugf("[common-ancestor] Looking for common ancestor with %d locator hashes and %d remote headers", len(caf.locatorHashes), len(remoteHeaders))
+
 	if len(caf.locatorHashes) > 0 && len(remoteHeaders) > 0 {
 		caf.logger.Debugf("[common-ancestor] First locator hash: %s", caf.locatorHashes[0].String())
 		caf.logger.Debugf("[common-ancestor] First remote header hash: %s", remoteHeaders[0].Hash().String())
+
 		if len(remoteHeaders) > 1 {
 			caf.logger.Debugf("[common-ancestor] Last remote header hash: %s", remoteHeaders[len(remoteHeaders)-1].Hash().String())
 		}
@@ -72,8 +75,7 @@ func (caf *CommonAncestorFinderWithLocator) FindCommonAncestorWithForkDepth(ctx 
 	}
 
 	// Log the result
-	caf.logger.Debugf("[common-ancestor] found at height %d (index %d in remote headers), fork depth: %d",
-		meta.Height, index, forkDepth)
+	caf.logger.Debugf("[common-ancestor] found at height %d (index %d in remote headers), fork depth: %d", meta.Height, index, forkDepth)
 
 	return ancestor.Hash(), meta, forkDepth, nil
 }

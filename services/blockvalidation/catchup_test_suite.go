@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation/catchup"
 	"github.com/bitcoin-sv/teranode/services/blockvalidation/testhelpers"
+	"github.com/bitcoin-sv/teranode/services/validator"
 	blobmemory "github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -31,6 +32,7 @@ type CatchupTestSuite struct {
 	Server         *Server // Direct access to Server
 	MockBlockchain *blockchain.Mock
 	MockUTXOStore  *utxo.MockUtxostore
+	MockValidator  *validator.MockValidatorClient
 	HttpMock       *testhelpers.HTTPMockSetup
 	Config         *testhelpers.CatchupServerConfig
 	CleanupFuncs   []func()
@@ -60,7 +62,7 @@ func NewCatchupTestSuiteWithConfig(t *testing.T, config *testhelpers.CatchupServ
 	suite.setupMocks()
 
 	// Create server
-	suite.createServer()
+	suite.createServer(t)
 
 	return suite
 }
@@ -69,16 +71,17 @@ func NewCatchupTestSuiteWithConfig(t *testing.T, config *testhelpers.CatchupServ
 func (s *CatchupTestSuite) setupMocks() {
 	s.MockBlockchain = &blockchain.Mock{}
 	s.MockUTXOStore = &utxo.MockUtxostore{}
+	s.MockValidator = &validator.MockValidatorClient{UtxoStore: s.MockUTXOStore}
 	s.HttpMock = testhelpers.NewHTTPMockSetup(s.T)
 }
 
 // createServer creates the Server instance with all dependencies
-func (s *CatchupTestSuite) createServer() {
+func (s *CatchupTestSuite) createServer(t *testing.T) {
 	// Initialize metrics for tests
 	initPrometheusMetrics()
 
 	// Create settings from config
-	tSettings := testutil.CreateBaseTestSettings()
+	tSettings := testutil.CreateBaseTestSettings(t)
 	if s.Config != nil {
 		tSettings.BlockValidation.SecretMiningThreshold = uint32(s.Config.SecretMiningThreshold)
 		tSettings.BlockValidation.CatchupMaxRetries = s.Config.MaxRetries
@@ -95,6 +98,7 @@ func (s *CatchupTestSuite) createServer() {
 		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		bloomFilterStats:              model.NewBloomStats(),
 		utxoStore:                     s.MockUTXOStore,
+		validatorClient:               s.MockValidator,
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),
 		subtreeStore:                  blobmemory.New(),
@@ -115,9 +119,11 @@ func (s *CatchupTestSuite) createServer() {
 		settings:             tSettings,
 		blockFoundCh:         make(chan processBlockFound, 10),
 		catchupCh:            make(chan processBlockCatchup, 10),
+		validatorClient:      s.MockValidator,
 		blockValidation:      bv,
 		blockchainClient:     s.MockBlockchain,
 		utxoStore:            s.MockUTXOStore,
+		subtreeStore:         bv.subtreeStore,
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		stats:                gocore.NewStat("test"),
 		peerMetrics: &catchup.CatchupMetrics{

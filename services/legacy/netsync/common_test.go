@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/teranode/services/legacy/bsvutil"
@@ -104,12 +105,12 @@ func Pipe(addr1, addr2 net.Addr) (net.Conn, net.Conn) {
 // connection and the second sees an outbound connection. The index parameter
 // is used in the network addresses of the peers to create peers with unique
 // IPs.
-func MakeConnectedPeers(inboundCfg peer.Config, outboundCfg peer.Config, index uint8) (*peer.Peer, *peer.Peer, error) {
+func MakeConnectedPeers(t *testing.T, inboundCfg peer.Config, outboundCfg peer.Config, index uint8) (*peer.Peer, *peer.Peer, error) {
 	// Must enable this in tests to avoid automatic disconnection.
 	inboundCfg.TstAllowSelfConnection = true
 	outboundCfg.TstAllowSelfConnection = true
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	conn1, conn2 := Pipe(
 		&SimpleAddr{net: "tcp", addr: fmt.Sprintf("10.0.0.%d:8333", index)},

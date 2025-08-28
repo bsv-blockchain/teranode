@@ -21,11 +21,11 @@ func TestDeDuplicateTransactions(t *testing.T) {
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
 
-	utxoStore, err := sql.New(t.Context(), ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+	utxoStore, err := sql.New(t.Context(), ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 	require.NoError(t, err)
 
 	blobStore := blob_memory.New()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)

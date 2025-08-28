@@ -28,6 +28,9 @@ func TestNewBlockHeaderMetaFromBytes(t *testing.T) {
 			BlockTime:   5,
 			Timestamp:   6,
 			ChainWork:   []byte{7, 8, 9, 10},
+			MinedSet:    true,
+			SubtreesSet: true,
+			Invalid:     true,
 		}
 
 		b := bhm.Bytes()
@@ -44,6 +47,9 @@ func TestNewBlockHeaderMetaFromBytes(t *testing.T) {
 		require.Equal(t, bhm.BlockTime, meta.BlockTime)
 		require.Equal(t, bhm.Timestamp, meta.Timestamp)
 		require.Equal(t, bhm.ChainWork, meta.ChainWork)
+		require.Equal(t, bhm.MinedSet, meta.MinedSet)
+		require.Equal(t, bhm.SubtreesSet, meta.SubtreesSet)
+		require.Equal(t, bhm.Invalid, meta.Invalid)
 
 		require.NoError(t, err)
 		require.Equal(t, b, meta.Bytes())

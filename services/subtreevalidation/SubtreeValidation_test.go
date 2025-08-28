@@ -65,7 +65,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 	t.Run("validateSubtree - smoke test", func(t *testing.T) {
 		InitPrometheusMetrics()
 
-		txMetaStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
+		txMetaStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
 		defer deferFunc()
 
 		subtree, err := subtreepkg.NewTreeByLeafCount(4)
@@ -97,7 +97,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		)
 
 		nilConsumer := &kafka.KafkaConsumerGroup{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 		require.NoError(t, err)
@@ -113,7 +113,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 	})
 }
 
-func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store, blockchain.ClientI, func()) {
+func setup(t *testing.T) (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store, blockchain.ClientI, func()) {
 	// we only need the httpClient, utxoStore and validatorClient when blessing a transaction
 	httpmock.Activate()
 	httpmock.RegisterResponder(
@@ -132,7 +132,7 @@ func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	if err != nil {
@@ -163,7 +163,7 @@ func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store
 func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	InitPrometheusMetrics()
 
-	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
+	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
 	defer deferFunc()
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(1)
@@ -181,7 +181,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 	require.NoError(t, err)
@@ -205,7 +205,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 func TestBlockValidationValidateSubtreeInternalLegacy(t *testing.T) {
 	InitPrometheusMetrics()
 
-	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
+	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
 	defer deferFunc()
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(2)
@@ -241,7 +241,7 @@ func TestBlockValidationValidateSubtreeInternalLegacy(t *testing.T) {
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 	require.NoError(t, err)
@@ -521,7 +521,7 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 	t.Run("test get subtree tx hashes", func(t *testing.T) {
 		InitPrometheusMetrics()
 		// Setup test
-		utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
+		utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
 		defer deferFunc()
 
 		// Create test transactions
@@ -628,7 +628,7 @@ func TestSubtreeValidationWhenBlessMissingTransactions(t *testing.T) {
 
 		// Setup and run validation
 		nilConsumer := &kafka.KafkaConsumerGroup{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 		require.NoError(t, err)
 
@@ -689,7 +689,7 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -717,7 +717,7 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -767,7 +767,7 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 }
 
 func Test_getSubtreeMissingTxs(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, err)
@@ -777,7 +777,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 	require.NoError(t, subtree.AddNode(*hash4, 123, 0))
 
 	t.Run("getSubtreeMissingTxs - smoke test", func(t *testing.T) {
-		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup()
+		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup(t)
 		defer deferFunc()
 
 		// Create a mock Server struct
@@ -797,7 +797,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 	})
 
 	t.Run("getSubtreeMissingTxs - from peer", func(t *testing.T) {
-		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup()
+		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup(t)
 		defer deferFunc()
 
 		// Create a mock Server struct
@@ -834,7 +834,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 	})
 
 	t.Run("getSubtreeMissingTxs - from data", func(t *testing.T) {
-		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup()
+		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup(t)
 		defer deferFunc()
 
 		// Create a mock Server struct
@@ -883,7 +883,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 		assert.Equal(t, *hash2, *missingTxs[1].tx.TxIDChainHash())
 	})
 	t.Run("getSubtreeMissingTxs - from data with coinbase & odd number of txs", func(t *testing.T) {
-		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup()
+		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup(t)
 		defer deferFunc()
 
 		// Create a mock Server struct
@@ -934,10 +934,10 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 }
 
 func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("getSubtreeMissingTxs - from testnet", func(t *testing.T) {
-		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup()
+		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup(t)
 		defer deferFunc()
 
 		subtreeHashStr := "8ddeb634b22bcb3b5bbebdd74fdc4a4e2bfd92dc4a3f4c2ed43883607ab6a68a"
@@ -1010,7 +1010,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 	})
 
 	t.Run("getSubtreeMissingTxs - from testnet", func(t *testing.T) {
-		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup()
+		txMetaStore, validatorClient, _, subtreeStore, blockchainClient, deferFunc := setup(t)
 		defer deferFunc()
 
 		subtreeHashStr := "e973de16e606750feed45d7b02dcf493887ef27acabbd7913710b9f3454f2555"

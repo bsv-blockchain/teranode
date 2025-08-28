@@ -90,7 +90,7 @@ func TestHTTPEndpoints(t *testing.T) {
 
 	t.Run("Single transaction via HTTP endpoint", func(t *testing.T) {
 		// Create test settings with policy checks disabled
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.Disabled = true
 
 		// Create a mock UTXO store with expectations
@@ -141,7 +141,7 @@ func TestHTTPEndpoints(t *testing.T) {
 
 	t.Run("Multiple transactions via HTTP endpoint", func(t *testing.T) {
 		// Create test settings with policy checks disabled
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.Disabled = true
 
 		// Create a mock UTXO store

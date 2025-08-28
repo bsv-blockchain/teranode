@@ -15,7 +15,7 @@ import (
 )
 
 func TestSQLGetBlockHeadersFromOldest(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("empty - no error", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
@@ -217,7 +217,7 @@ func setupPostgresTestStoreForOldest(t *testing.T) (*SQL, func()) {
 	storeURL, err := url.Parse(connStr)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
@@ -254,7 +254,7 @@ func TestSQLGetBlockHeadersFromOldestPostgreSQL(t *testing.T) {
 
 		storeTestBlocksForOldest(t, s)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		headers, metas, err := s.GetBlockHeadersFromOldest(context.Background(), block2.Hash(), tSettings.ChainCfgParams.GenesisHash, 3)
 		require.NoError(t, err)
 		require.Len(t, headers, 3)
@@ -295,7 +295,7 @@ func TestSQLGetBlockHeadersFromOldestPostgreSQL(t *testing.T) {
 		_, _, err := s.StoreBlock(context.Background(), block2Alt, "test_peer")
 		require.NoError(t, err)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		headers, metas, err := s.GetBlockHeadersFromOldest(context.Background(), block2Alt.Hash(), tSettings.ChainCfgParams.GenesisHash, 3)
 		require.NoError(t, err)
 		require.Len(t, headers, 3)
@@ -346,7 +346,8 @@ func TestSQLGetBlockHeadersFromOldestPostgreSQL(t *testing.T) {
 }
 
 func BenchmarkGetBlockHeadersFromOldest(b *testing.B) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(b)
+
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(b, err)
 

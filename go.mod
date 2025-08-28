@@ -16,7 +16,7 @@ require (
 	github.com/bitcoin-sv/testcontainers-aerospike-go v0.2.2
 	github.com/bsv-blockchain/go-bt/v2 v2.4.6
 	github.com/bsv-blockchain/go-chaincfg v1.3.0
-	github.com/bsv-blockchain/go-subtree v1.0.1
+	github.com/bsv-blockchain/go-subtree v1.0.4
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
 	github.com/centrifugal/centrifuge v0.33.2
@@ -49,7 +49,7 @@ require (
 	github.com/segmentio/encoding v0.4.0 // indirect
 	github.com/sercand/kuberesolver/v6 v6.0.1
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.0
 	github.com/testcontainers/testcontainers-go v0.35.0
 	github.com/testcontainers/testcontainers-go/modules/compose v0.35.0
 	github.com/uber/jaeger-client-go v2.30.0+incompatible // indirect
@@ -159,7 +159,7 @@ require (
 	github.com/bsv-blockchain/go-bn v1.0.3
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p v1.2.1
-	github.com/bsv-blockchain/go-safe-conversion v1.0.1
+	github.com/bsv-blockchain/go-safe-conversion v1.0.3
 	github.com/bsv-blockchain/go-sdk v1.2.6
 	github.com/bsv-blockchain/go-tx-map v1.0.5
 	github.com/bsv-blockchain/go-wire v1.0.6

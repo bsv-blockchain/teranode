@@ -273,7 +273,7 @@ func TestValidateBatchHeaders(t *testing.T) {
 	t.Run("ValidBatch", func(t *testing.T) {
 		server := &Server{
 			logger:           ulogger.TestLogger{},
-			settings:         test.CreateBaseTestSettings(),
+			settings:         test.CreateBaseTestSettings(t),
 			blockchainClient: &blockchain.Mock{},
 		}
 
@@ -302,7 +302,7 @@ func TestValidateBatchHeaders(t *testing.T) {
 	t.Run("EmptyBatch", func(t *testing.T) {
 		server := &Server{
 			logger:   ulogger.TestLogger{},
-			settings: test.CreateBaseTestSettings(),
+			settings: test.CreateBaseTestSettings(t),
 		}
 
 		ctx := context.Background()
@@ -313,7 +313,7 @@ func TestValidateBatchHeaders(t *testing.T) {
 	t.Run("BatchWithInvalidPoW", func(t *testing.T) {
 		server := &Server{
 			logger:   ulogger.TestLogger{},
-			settings: test.CreateBaseTestSettings(),
+			settings: test.CreateBaseTestSettings(t),
 		}
 
 		// Create header with impossible difficulty
@@ -336,7 +336,7 @@ func TestValidateBatchHeaders(t *testing.T) {
 	t.Run("BatchWithInvalidTimestamp", func(t *testing.T) {
 		server := &Server{
 			logger:   ulogger.TestLogger{},
-			settings: test.CreateBaseTestSettings(),
+			settings: test.CreateBaseTestSettings(t),
 		}
 
 		// Create header with timestamp too far in future
@@ -359,7 +359,7 @@ func TestValidateBatchHeaders(t *testing.T) {
 	t.Run("BatchWithContextCancellation", func(t *testing.T) {
 		server := &Server{
 			logger:   ulogger.TestLogger{},
-			settings: test.CreateBaseTestSettings(),
+			settings: test.CreateBaseTestSettings(t),
 		}
 
 		// Create multiple headers
@@ -389,7 +389,7 @@ func TestValidateBatchHeaders(t *testing.T) {
 		mockBlockchain := &blockchain.Mock{}
 		checkpointHash := chainhash.HashH([]byte("checkpoint"))
 
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		settings.ChainCfgParams = &chaincfg.Params{
 			Checkpoints: []chaincfg.Checkpoint{
 				{Height: 100, Hash: &checkpointHash},

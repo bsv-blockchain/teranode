@@ -113,7 +113,7 @@ func TestTxValidator_Fees_BitcoinSV(t *testing.T) {
 			actualSize := tx.Size()
 
 			// Create validator with specified fee rate
-			tSettings := test.CreateBaseTestSettings()
+			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.Policy.MinMiningTxFee = tt.minFeeRate
 			tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
@@ -321,7 +321,7 @@ func TestTxValidator_Fees_EdgeCases(t *testing.T) {
 			tx := createTestTransactionWithFee(t, tt.txSize, tt.fee)
 
 			// Create validator
-			tSettings := test.CreateBaseTestSettings()
+			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.Policy.MinMiningTxFee = tt.minFeeRate
 			tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
@@ -450,7 +450,7 @@ func TestTxValidator_Fees_VariousFeeRates(t *testing.T) {
 				tx = createTestTransactionWithFee(t, size, expectedFee)
 
 				// Create validator
-				tSettings := test.CreateBaseTestSettings()
+				tSettings := test.CreateBaseTestSettings(t)
 				tSettings.Policy.MinMiningTxFee = fr.rate
 				tSettings.ChainCfgParams = &chaincfg.MainNetParams
 

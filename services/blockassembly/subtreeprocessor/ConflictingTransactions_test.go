@@ -32,7 +32,7 @@ func TestProcessConflictingTransactions(t *testing.T) {
 	mockUtxoStore := new(utxo.MockUtxostore)
 
 	blobStore := blob_memory.New()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)
@@ -102,7 +102,7 @@ func TestWaitForBlockBeingMined(t *testing.T) {
 	mockBlockchainClient := new(blockchain.Mock)
 
 	blobStore := blob_memory.New()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -188,7 +188,7 @@ func TestGetBlockIDsMap(t *testing.T) {
 	mockUtxoStore := new(utxo.MockUtxostore)
 
 	blobStore := blob_memory.New()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
@@ -252,7 +252,7 @@ func TestGetBlockIDsMap(t *testing.T) {
 func TestGetSubtreeAndConflictingTransactionsMap(t *testing.T) {
 	// Setup
 	blobStore := blob_memory.New()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -326,7 +326,7 @@ func TestMarkConflictingTxsInSubtrees(t *testing.T) {
 	mockUtxoStore := new(utxo.MockUtxostore)
 
 	blobStore := blob_memory.New()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)
 

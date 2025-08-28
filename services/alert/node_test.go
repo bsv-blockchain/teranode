@@ -27,7 +27,7 @@ var (
 func TestNode_AddToConsensusBlacklist(t *testing.T) {
 	ctx := context.Background()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("empty", func(t *testing.T) {
 		logger := ulogger.NewErrorTestLogger(t)
@@ -102,7 +102,7 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 
 	t.Run("unfreeze", func(t *testing.T) {
 		logger := ulogger.NewErrorTestLogger(t)
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -180,7 +180,7 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 	ctx := context.Background()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("empty", func(t *testing.T) {
 		node := NewNodeConfig(ulogger.TestLogger{}, nil, nil, nil, nil, nil, tSettings)

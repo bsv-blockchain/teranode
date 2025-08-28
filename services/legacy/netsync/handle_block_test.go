@@ -76,7 +76,7 @@ func TestSyncManager_HandleBlockDirect(t *testing.T) {
 	blockValidation := &blockvalidation.MockBlockValidation{}
 
 	sm := &SyncManager{
-		settings:         test.CreateBaseTestSettings(),
+		settings:         test.CreateBaseTestSettings(t),
 		logger:           ulogger.TestLogger{},
 		orphanTxs:        expiringmap.New[chainhash.Hash, *orphanTxAndParents](10),
 		blockchainClient: blockchainClient,
@@ -317,7 +317,7 @@ func TestSyncManager_extendTransactions(t *testing.T) {
 	require.NoError(t, err)
 
 	sm := &SyncManager{
-		settings: test.CreateBaseTestSettings(),
+		settings: test.CreateBaseTestSettings(t),
 		logger:   ulogger.TestLogger{},
 	}
 
@@ -334,7 +334,7 @@ func TestSyncManager_extendTransactions(t *testing.T) {
 func TestSyncManager_createUtxos(t *testing.T) {
 	t.Skip("Skipping test due to nil pointer issue")
 	sm := &SyncManager{
-		settings: test.CreateBaseTestSettings(),
+		settings: test.CreateBaseTestSettings(t),
 		logger:   ulogger.TestLogger{},
 	}
 
@@ -384,7 +384,7 @@ func TestSyncManager_validateTransactions(t *testing.T) {
 	validationClient := &validator.MockValidatorClient{}
 
 	sm := &SyncManager{
-		settings:         test.CreateBaseTestSettings(),
+		settings:         test.CreateBaseTestSettings(t),
 		logger:           ulogger.TestLogger{},
 		validationClient: validationClient,
 	}
@@ -454,7 +454,7 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 	validationClient := &validator.MockValidatorClient{}
 
 	sm := &SyncManager{
-		settings:         test.CreateBaseTestSettings(),
+		settings:         test.CreateBaseTestSettings(t),
 		logger:           ulogger.TestLogger{},
 		blockchainClient: blockchainClient,
 		validationClient: validationClient,
@@ -474,7 +474,7 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 func TestSyncManager_ExtendTransaction(t *testing.T) {
 	t.Skip("Skipping test due to nil pointer issue")
 	sm := &SyncManager{
-		settings: test.CreateBaseTestSettings(),
+		settings: test.CreateBaseTestSettings(t),
 		logger:   ulogger.TestLogger{},
 	}
 

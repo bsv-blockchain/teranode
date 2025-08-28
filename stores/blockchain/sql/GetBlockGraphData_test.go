@@ -13,7 +13,7 @@ import (
 )
 
 func TestSQLGetBlockGraphData(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("get graph data with empty chain", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")

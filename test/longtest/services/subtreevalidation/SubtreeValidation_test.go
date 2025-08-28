@@ -107,7 +107,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	defer deferFunc()
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create a blockchain client without stores (for FSM state checks)
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, nil, nil, nil)

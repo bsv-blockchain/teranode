@@ -37,7 +37,7 @@ func (m MockExister) Exists(_ context.Context, _ []byte, _ fileformat.FileType, 
 func TestLock(t *testing.T) {
 	exister := MockExister{}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.SubtreeValidation.QuorumPath = "./data/subtree_quorum"
 
@@ -201,7 +201,7 @@ func TestSubtreesHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tSettings := test.CreateBaseTestSettings()
+			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.SubtreeValidation.QuorumPath = "./data/subtree_quorum"
 
 			defer func() {

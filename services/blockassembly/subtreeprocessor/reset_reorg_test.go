@@ -25,11 +25,11 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -56,11 +56,11 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -99,11 +99,11 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -137,11 +137,11 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -168,11 +168,11 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -336,11 +336,11 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -493,11 +493,11 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -515,11 +515,11 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -562,11 +562,11 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -594,11 +594,11 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -636,11 +636,11 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -749,11 +749,11 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -974,11 +974,11 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
 
 		blobStore := blob_memory.New()
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}

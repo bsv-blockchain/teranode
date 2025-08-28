@@ -179,6 +179,21 @@ func (m *MockStore) GetBlockByID(_ context.Context, id uint64) (*model.Block, er
 	return nil, context.DeadlineExceeded
 }
 
+func (m *MockStore) GetNextBlockID(_ context.Context) (uint64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Find the highest existing block ID and return the next one
+	maxID := uint64(0)
+	for _, block := range m.Blocks {
+		if uint64(block.ID) > maxID {
+			maxID = uint64(block.ID)
+		}
+	}
+
+	return maxID + 1, nil
+}
+
 func (m *MockStore) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	panic(implementMe)
 }
@@ -364,9 +379,26 @@ func (m *MockStore) StoreBlock(ctx context.Context, block *model.Block, peerID s
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	blockStoreOptions := options.ProcessStoreBlockOptions(opts...)
+
 	m.Blocks[*block.Hash()] = block
 	m.BlockByHeight[block.Height] = block
 	m.BlockExists[*block.Hash()] = true
+
+	if blockStoreOptions.MinedSet {
+		// If the block is marked as mined, we do not update the best block
+		// add this to the mock
+	}
+
+	if blockStoreOptions.SubtreesSet {
+		// If the block is marked as having subtrees set, we do not update the best block
+		// add this to the mock
+	}
+
+	if blockStoreOptions.Invalid {
+		// If the block is marked as invalid, we do not update the best block
+		// add this to the mock
+	}
 
 	if m.BestBlock == nil || block.Height > m.BestBlock.Height {
 		m.BestBlock = block

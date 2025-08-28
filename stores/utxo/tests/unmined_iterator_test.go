@@ -53,7 +53,7 @@ func TestUnminedTxIteratorAerospike(t *testing.T) {
 func testUnminedTxIterator(t *testing.T, utxoStoreURL string) {
 	logger := ulogger.NewErrorTestLogger(t)
 	ctx := context.Background()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	// Parse the URL and set it in settings
 	parsedURL, err := url.Parse(utxoStoreURL)

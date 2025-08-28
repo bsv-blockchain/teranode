@@ -48,7 +48,7 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 	blobStore := memory.New()
 
 	logger := ulogger.NewErrorTestLogger(t)
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func Test_CoinbaseSubsidyHeight(t *testing.T) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	require.NoError(t, err, "Failed to get mining candidate")
 
-	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
+	coinbase, err := CreateCoinbaseTxCandidate(t, miningCandidate)
 	require.NoError(t, err, "Failed to create coinbase tx")
 
 	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidate, coinbase)
@@ -201,7 +201,7 @@ func TestDifficultyAdjustment(t *testing.T) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	require.NoError(t, err, "Failed to get mining candidate")
 
-	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
+	coinbase, err := CreateCoinbaseTxCandidate(t, miningCandidate)
 	require.NoError(t, err, "Failed to create coinbase tx")
 
 	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidate, coinbase)
@@ -286,7 +286,7 @@ func TestShouldFollowLongerChain(t *testing.T) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	require.NoError(t, err, "Failed to get mining candidate")
 
-	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
+	coinbase, err := CreateCoinbaseTxCandidate(t, miningCandidate)
 	require.NoError(t, err, "Failed to create coinbase tx")
 
 	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidate, coinbase)
@@ -402,7 +402,7 @@ func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	require.NoError(t, err, "Failed to get mining candidate")
 
-	coinbase, err := CreateCoinbaseTxCandidate(miningCandidate)
+	coinbase, err := CreateCoinbaseTxCandidate(t, miningCandidate)
 	require.NoError(t, err, "Failed to create coinbase tx")
 
 	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidate, coinbase)
@@ -1105,8 +1105,8 @@ func TestShouldFailCoinbaseArbitraryTextTooLong(t *testing.T) {
 	require.Contains(t, err.Error(), "bad coinbase length")
 }
 
-func CreateCoinbaseTxCandidate(m *model.MiningCandidate) (*bt.Tx, error) {
-	tSettings := test.CreateBaseTestSettings()
+func CreateCoinbaseTxCandidate(t *testing.T, m *model.MiningCandidate) (*bt.Tx, error) {
+	tSettings := test.CreateBaseTestSettings(t)
 
 	arbitraryText := tSettings.Coinbase.ArbitraryText
 

@@ -705,9 +705,9 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		// Should not fail even with validation errors (errors are logged but not returned)
+		// Should fail with validation errors (errors are logged but not returned)
 		err = server.processTransactionsInLevels(context.Background(), allTransactions, 100, blockIds)
-		require.NoError(t, err)
+		require.Error(t, err)
 	})
 
 	t.Run("MissingParentErrors", func(t *testing.T) {
@@ -874,9 +874,9 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		// Should not return error even with some validation failures
+		// Should return error even some validation failures
 		err := server.processTransactionsInLevels(context.Background(), allTransactions, 100, blockIds)
-		require.NoError(t, err)
+		require.Error(t, err)
 	})
 }
 

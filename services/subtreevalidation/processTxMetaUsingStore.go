@@ -111,9 +111,20 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 
 						txMetaSlice[data.Idx] = data.Data
 
+						// if the tx is conflicting, we need to check if it is conflicting on the current chain
 						if txMetaSlice[data.Idx].Conflicting {
 							if err = u.checkCounterConflictingOnCurrentChain(ctx, data.Hash, blockIds); err != nil {
 								return errors.NewProcessingError("[processTxMetaUsingStore][%s] failed to check counter conflicting tx on current chain", data.Hash.String(), err)
+							}
+						}
+
+						// check whether this transaction has already been mined into a block on our chain
+						if len(txMetaSlice[data.Idx].BlockIDs) > 0 && blockIds != nil {
+							for _, blockID := range txMetaSlice[data.Idx].BlockIDs {
+								if _, exists := blockIds[blockID]; exists {
+									// this transaction has already been mined into a block on our chain
+									return errors.NewProcessingError("transaction %s has already been mined into block ID %d on our chain", data.Hash.String(), blockID)
+								}
 							}
 						}
 					}

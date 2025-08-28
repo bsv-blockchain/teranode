@@ -155,12 +155,12 @@ github.com/bsv-blockchain/go-lockfree-queue v1.0.0 h1:rizOsTImw2Gk/iSTQRHqB+2OcJ
 github.com/bsv-blockchain/go-lockfree-queue v1.0.0/go.mod h1:NS0Zfkaz8G3jDQNNr1rtvjeH45rxK7pVH4iV7xy4o4U=
 github.com/bsv-blockchain/go-p2p v1.2.1 h1:HOQEuEe0ormhLjVBHP33PZCkrrMZIXYbG2/K0dU3Nfc=
 github.com/bsv-blockchain/go-p2p v1.2.1/go.mod h1:cUiFKFCqIeOHAf1dNd/clikVie5k+cfli/EFEoFiUkg=
-github.com/bsv-blockchain/go-safe-conversion v1.0.1 h1:b/AVkGVF2JnKRgG0oVpCRFAZBgghylDbgSD47VdM6KI=
-github.com/bsv-blockchain/go-safe-conversion v1.0.1/go.mod h1:q2+SQIAONrc2T7Ip1W9OsEzKXLoWeI06vuVm0Q85Bss=
+github.com/bsv-blockchain/go-safe-conversion v1.0.3 h1:sn6G6OQe1LBRJ1vUZFhxVuF60ZygNcxK+9cOpFEVmfY=
+github.com/bsv-blockchain/go-safe-conversion v1.0.3/go.mod h1:q2+SQIAONrc2T7Ip1W9OsEzKXLoWeI06vuVm0Q85Bss=
 github.com/bsv-blockchain/go-sdk v1.2.6 h1:6J1I1rBNhCZuQ64OoNAZICMVDKYEEGYkmsD21dQt4LY=
 github.com/bsv-blockchain/go-sdk v1.2.6/go.mod h1:Dc8WX7olShuMHLfNTBpVQnkxZWbu3djbAer/73yMcd4=
-github.com/bsv-blockchain/go-subtree v1.0.1 h1:ubf76IbxAlyrEBQEiY7ZUZVcyCI3p8XMwF8GVzB6TFE=
-github.com/bsv-blockchain/go-subtree v1.0.1/go.mod h1:yhN/Myprp/BnsMNwkutmWcqV3RylyRyMPjS2Dzqocts=
+github.com/bsv-blockchain/go-subtree v1.0.4 h1:e3ABtI1o8jlp6ZW/hAhvr8D9ULYM/hf/vuJGczGWPSw=
+github.com/bsv-blockchain/go-subtree v1.0.4/go.mod h1:yQACV4GUDmM3gtx/+RgJBi5hbJ1TbvOh7Mj5Z2uazWI=
 github.com/bsv-blockchain/go-tx-map v1.0.5 h1:bCG2OmU6FDJLhcEnrtfORi51tIGr98YXxyMSw2oZ+88=
 github.com/bsv-blockchain/go-tx-map v1.0.5/go.mod h1:oo9xG4DxHFenRK4SU5SngX8pmDOEoJlkk6QhuKnsn3w=
 github.com/bsv-blockchain/go-wire v1.0.6 h1:rMVASfuXtrZB1ZaZEl+/tvmXfdPMf4KY8Pew7/VeyQ0=
@@ -1028,8 +1028,8 @@ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
 github.com/stretchr/testify v1.8.3/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
-github.com/stretchr/testify v1.10.0 h1:Xv5erBjTwe/5IxqUQTdXv5kgmIvbHo3QQyRwhJsOfJA=
-github.com/stretchr/testify v1.10.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
+github.com/stretchr/testify v1.11.0 h1:ib4sjIrwZKxE5u/Japgo/7SJV3PvgjGiRNAvTVGqQl8=
+github.com/stretchr/testify v1.11.0/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/subosito/gotenv v1.6.0 h1:9NlTDc1FTs4qu0DDq7AEtTPNw6SVm7uBMsUCUjABIf8=
 github.com/subosito/gotenv v1.6.0/go.mod h1:Dk4QP5c2W3ibzajGcXpNraDfq2IrhjMIvMSWPKKo0FU=
 github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07/go.mod h1:kDXzergiv9cbyO7IOYJZWg1U88JhDg3PB6klq9Hg2pA=

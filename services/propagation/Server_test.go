@@ -39,7 +39,7 @@ import (
 // setupRealValidator creates a real validator with LocalClient blockchain backend
 func setupRealValidator(t *testing.T, ctx context.Context) (validator.Interface, utxo.Store) {
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	// Disable block assembly in tests
 	tSettings.BlockAssembly.Disabled = true
 
@@ -67,7 +67,7 @@ func TestPropagationServer_HealthLiveness(t *testing.T) {
 	tracing.SetupMockTracer()
 
 	// Create a server with minimal dependencies
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	// Clear the default addresses since we're not starting the servers in tests
 	tSettings.Propagation.GRPCListenAddress = ""
 	tSettings.Propagation.HTTPListenAddress = ""
@@ -93,7 +93,7 @@ func TestPropagationServerInit(t *testing.T) {
 
 	t.Run("successful init", func(t *testing.T) {
 		// Create a server with minimal dependencies
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Propagation.GRPCListenAddress = ""
 		tSettings.Propagation.HTTPListenAddress = ""
 
@@ -117,7 +117,7 @@ func TestPropagationServerStop(t *testing.T) {
 
 	t.Run("stop server", func(t *testing.T) {
 		// Create a server with minimal dependencies
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Propagation.GRPCListenAddress = ""
 		tSettings.Propagation.HTTPListenAddress = ""
 
@@ -141,7 +141,7 @@ func TestStartUDP6Listeners(t *testing.T) {
 
 	t.Run("start with invalid interface", func(t *testing.T) {
 		// Create a server with minimal dependencies
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		ps := &PropagationServer{
 			logger:   ulogger.TestLogger{},
@@ -169,7 +169,7 @@ func TestProcessTransaction(t *testing.T) {
 		validatorInstance, utxoStore := setupRealValidator(t, ctx)
 
 		// Create server
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		txStore, _ := null.New(ulogger.TestLogger{})
 		ps := &PropagationServer{
 			logger:    ulogger.TestLogger{},
@@ -214,7 +214,7 @@ func TestPropagationServer_HealthReadiness(t *testing.T) {
 		// Create real validator with real blockchain client
 		validatorInstance, _ := setupRealValidator(t, ctx)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		// Use real blockchain client with memory SQLite instead of mock
 		mockBlockchainClient := testutil.NewMemorySQLiteBlockchainClient(ulogger.TestLogger{}, tSettings, t)
 
@@ -258,7 +258,7 @@ func TestPropagationServer_HealthReadiness(t *testing.T) {
 		// Create real validator with real blockchain client
 		validatorInstance, _ := setupRealValidator(t, ctx)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		// Use real blockchain client - it will return healthy status
 		mockBlockchainClient := testutil.NewMemorySQLiteBlockchainClient(ulogger.TestLogger{}, tSettings, t)
 
@@ -300,7 +300,7 @@ func TestPropagationServer_HealthReadiness(t *testing.T) {
 	t.Run("no dependencies", func(t *testing.T) {
 		ctx := context.Background()
 		// Create server with no dependencies
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		// Clear the default addresses since we're not starting the servers in tests
 		tSettings.Propagation.GRPCListenAddress = ""
 		tSettings.Propagation.HTTPListenAddress = ""
@@ -341,7 +341,7 @@ func TestPropagationServer_HealthReadiness(t *testing.T) {
 		// Create real validator with real blockchain client
 		validatorInstance, _ := setupRealValidator(t, ctx)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		// Use real blockchain client with memory SQLite instead of mock
 		mockBlockchainClient := testutil.NewMemorySQLiteBlockchainClient(ulogger.TestLogger{}, tSettings, t)
 
@@ -389,7 +389,7 @@ func TestPropagationServer_HealthGRPC(t *testing.T) {
 		// Create real validator with real blockchain client
 		validatorInstance, _ := setupRealValidator(t, ctx)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		// Use real blockchain client with memory SQLite instead of mock
 		mockBlockchainClient := testutil.NewMemorySQLiteBlockchainClient(ulogger.TestLogger{}, tSettings, t)
 
@@ -427,7 +427,7 @@ func TestPropagationServer_HealthGRPC(t *testing.T) {
 
 	t.Run("unhealthy service", func(t *testing.T) {
 		// Create server with real blockchain client (healthy)
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		// Use real blockchain client - it will be healthy, but we can test other unhealthy dependencies
 		mockBlockchainClient := testutil.NewMemorySQLiteBlockchainClient(ulogger.TestLogger{}, tSettings, t)
 		// Clear the default addresses since we're not starting the servers in tests
@@ -554,7 +554,7 @@ func Test_handleMultipleTx(t *testing.T) {
 	initPrometheusMetrics()
 
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	// Clear the default addresses since we're not starting the servers in tests
 	tSettings.Propagation.GRPCListenAddress = ""
 	tSettings.Propagation.HTTPListenAddress = ""
@@ -618,7 +618,7 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 	initPrometheusMetrics()
 
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	// Clear the default addresses since we're not starting the servers in tests
 	tSettings.Propagation.GRPCListenAddress = ""
 	tSettings.Propagation.HTTPListenAddress = ""
@@ -747,7 +747,7 @@ func TestPropagationServerCoverage(t *testing.T) {
 
 	t.Run("Health with self-check enabled", func(t *testing.T) {
 		ctx := context.Background()
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		// Enable self health check
 		tSettings.Propagation.GRPCListenAddress = "localhost:8081"
 		tSettings.Propagation.HTTPListenAddress = "localhost:8090"
@@ -778,7 +778,7 @@ func TestPropagationServerCoverage(t *testing.T) {
 		// Create real validator
 		validatorInstance, _ := setupRealValidator(t, ctx)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Propagation.GRPCListenAddress = ""
 		tSettings.Propagation.HTTPListenAddress = ""
 
@@ -808,7 +808,7 @@ func TestPropagationServerCoverage(t *testing.T) {
 
 	t.Run("Health with blockchain client", func(t *testing.T) {
 		ctx := context.Background()
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		// Create real blockchain client
 		blockchainClient := testutil.NewMemorySQLiteBlockchainClient(ulogger.TestLogger{}, tSettings, t)
@@ -838,7 +838,7 @@ func TestPropagationServerCoverage(t *testing.T) {
 
 	t.Run("Health with tx store", func(t *testing.T) {
 		ctx := context.Background()
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		// Create tx store
 		txStore, err := null.New(ulogger.TestLogger{})
@@ -869,7 +869,7 @@ func TestPropagationServerCoverage(t *testing.T) {
 
 	t.Run("Health with all dependencies unhealthy", func(t *testing.T) {
 		ctx := context.Background()
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		// Configure multiple dependencies that will be unhealthy
 		tSettings.Propagation.GRPCListenAddress = "localhost:8081"

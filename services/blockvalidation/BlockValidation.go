@@ -29,9 +29,11 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/subtreevalidation"
+	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
+	blockoptions "github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
@@ -108,6 +110,9 @@ type BlockValidation struct {
 	// utxoStore manages the UTXO set for transaction validation
 	utxoStore utxo.Store
 
+	// validatorClient handles transaction validation operations
+	validatorClient validator.Interface
+
 	// recentBlocksBloomFilters maintains bloom filters for recent blocks
 	recentBlocksBloomFilters *txmap.SyncedMap[chainhash.Hash, *model.BlockBloomFilter]
 
@@ -179,7 +184,7 @@ type BlockValidation struct {
 //
 // Returns a configured BlockValidation instance ready for use.
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txStore blob.Store, utxoStore utxo.Store, subtreeValidationClient subtreevalidation.Interface, opts ...interface{},
+	txStore blob.Store, utxoStore utxo.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, opts ...interface{},
 ) *BlockValidation {
 	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
 	// Initialize Kafka producer for invalid blocks if configured
@@ -209,6 +214,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		subtreeBlockHeightRetention:   tSettings.GetSubtreeValidationBlockHeightRetention(),
 		txStore:                       txStore,
 		utxoStore:                     utxoStore,
+		validatorClient:               validatorClient,
 		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 		bloomFilterRetentionSize:      tSettings.GetSubtreeValidationBlockHeightRetention() + 2, // Needs to be larger than global value but not orders of magnitude larger
 		subtreeValidationClient:       subtreeValidationClient,
@@ -420,6 +426,18 @@ func (u *BlockValidation) start(ctx context.Context) error {
 				u.logger.Infof("[BlockValidation:start][%s] setMinedChan size: %d", blockHash.String(), len(u.setMinedChan))
 
 				startTime := time.Now()
+
+				// check whether the block needs the tx mined, or it has already been done
+				_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(ctx, blockHash)
+				if err != nil {
+					u.logger.Errorf("[BlockValidation:start][%s] failed to get block header: %s", blockHash.String(), err)
+					continue
+				}
+
+				if blockHeaderMeta != nil && blockHeaderMeta.MinedSet {
+					u.logger.Infof("[BlockValidation:start][%s] block already has mined_set true, skipping setTxMined", blockHash.String())
+					continue
+				}
 
 				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
 
@@ -885,6 +903,15 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 
 	if err = u.validateBlockSubtrees(ctx, block, baseURL); err != nil {
+		if errors.Is(err, errors.ErrTxInvalid) {
+			u.logger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
+
+			// the block contained invalid transactions and should be marked as invalid
+			if err = u.blockchainClient.AddBlock(ctx, block, baseURL, blockoptions.WithInvalid(true)); err != nil {
+				return errors.NewProcessingError("[ValidateBlock][%s] failed to store invalid block", block.Hash().String(), err)
+			}
+		}
+
 		return err
 	}
 
@@ -1219,7 +1246,7 @@ func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context
 		ctx,
 		u.logger,
 		checkParentBlock,
-		retry.WithBackoffDurationType(time.Millisecond),
+		retry.WithBackoffDurationType(100*time.Millisecond),
 		retry.WithBackoffMultiplier(u.settings.BlockValidation.ArePreviousBlocksProcessedRetryBackoffMultiplier),
 		retry.WithRetryCount(u.settings.BlockValidation.ArePreviousBlocksProcessedMaxRetry),
 	)
@@ -1314,7 +1341,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	// validate all the subtrees in the block
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees", blockData.block.Hash().String(), len(blockData.block.Subtrees))
 
-	if err := u.validateBlockSubtrees(ctx, blockData.block, blockData.baseURL); err != nil {
+	if err = u.validateBlockSubtrees(ctx, blockData.block, blockData.baseURL); err != nil {
 		return err
 	}
 

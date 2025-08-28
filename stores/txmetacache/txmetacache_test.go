@@ -31,7 +31,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -117,7 +117,7 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(b)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(b)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(b, err)
@@ -154,7 +154,7 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(b)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(b)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(b, err)
@@ -229,7 +229,7 @@ func Test_txMetaCache_HeightEncoding(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)

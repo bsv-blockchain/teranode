@@ -268,7 +268,7 @@ func TestHealthMethod(t *testing.T) {
 
 	t.Run("readiness with nil dependencies", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		// Create server with nil dependencies
 		server := New(logger, tSettings, nil, nil, nil, nil)

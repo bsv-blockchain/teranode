@@ -12,7 +12,7 @@ import (
 )
 
 func TestGetLastNInvalidBlocks(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Note: block1, block2, block3 are defined in sql_test.go as package variables
 

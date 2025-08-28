@@ -144,7 +144,7 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 			Return([]uint32{}, nil).Maybe()
 
 		// Mock AddBlock for when blocks are successfully validated
-		mockBlockchainClient.On("AddBlock", mock.Anything, mock.Anything, mock.Anything).
+		mockBlockchainClient.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 			Return(nil).Maybe()
 
 		// Mock SetBlockSubtreesSet for subtree tracking

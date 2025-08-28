@@ -16,7 +16,7 @@ import (
 func TestUnminedTxIterator_Integration(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	ctx := context.Background()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)

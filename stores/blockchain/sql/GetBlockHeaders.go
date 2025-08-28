@@ -95,6 +95,9 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			,b.block_time
 			,b.inserted_at
 			,b.chain_work
+			,b.mined_set
+			,b.subtrees_set
+			,b.invalid
 		FROM blocks b
 		WHERE id IN (
 			SELECT id FROM blocks
@@ -168,10 +171,13 @@ func (s *SQL) processBlockHeadersRows(rows *sql.Rows, numberOfHeaders uint64) ([
 			&blockHeaderMeta.BlockTime,
 			&insertedAt,
 			&blockHeaderMeta.ChainWork,
+			&blockHeaderMeta.MinedSet,
+			&blockHeaderMeta.SubtreesSet,
+			&blockHeaderMeta.Invalid,
 		}
 
-		// Add coinbase_tx if it's in the columns (15th column)
-		hasCoinbaseColumn := len(columns) > 14
+		// Add coinbase_tx if it's in the columns (18th column)
+		hasCoinbaseColumn := len(columns) > 17
 
 		if hasCoinbaseColumn {
 			scanTargets = append(scanTargets, &coinbaseBytes)

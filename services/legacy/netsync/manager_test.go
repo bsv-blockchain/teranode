@@ -50,10 +50,10 @@ type testContext struct {
 	syncManager  *SyncManager
 }
 
-func (tc *testContext) Setup(config *testConfig) error {
+func (tc *testContext) Setup(t *testing.T, config *testConfig) error {
 	tc.cfg = *config
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	peerNotifier := NewMockPeerNotifier()
 
@@ -138,7 +138,7 @@ func TestPeerConnections(t *testing.T) {
 
 	var ctx testContext
 
-	err := ctx.Setup(&testConfig{
+	err := ctx.Setup(t, &testConfig{
 		dbName:      "TestPeerConnections",
 		chainParams: chainParams,
 	})
@@ -159,7 +159,7 @@ func TestPeerConnections(t *testing.T) {
 		Services:         0,
 	}
 
-	_, localNode1, err := MakeConnectedPeers(peerCfg, peerCfg, 0)
+	_, localNode1, err := MakeConnectedPeers(t, peerCfg, peerCfg, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestPeerConnections(t *testing.T) {
 	// from.
 	peerCfg.Services = wire.SFNodeNetwork
 
-	_, localNode2, err := MakeConnectedPeers(peerCfg, peerCfg, 1)
+	_, localNode2, err := MakeConnectedPeers(t, peerCfg, peerCfg, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestPeerConnections(t *testing.T) {
 
 	// Register another full node peer with the manager. Even though the new
 	// peer is a valid sync peer, manager should not change from the first one.
-	_, localNode3, err := MakeConnectedPeers(peerCfg, peerCfg, 2)
+	_, localNode3, err := MakeConnectedPeers(t, peerCfg, peerCfg, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +419,7 @@ func TestBlockchainSync(t *testing.T) {
 
 	var ctx testContext
 
-	err := ctx.Setup(&testConfig{
+	err := ctx.Setup(t, &testConfig{
 		dbName:      "TestBlockchainSync",
 		chainParams: &chainParams,
 	})
@@ -464,7 +464,7 @@ func TestBlockchainSync(t *testing.T) {
 		Services:         wire.SFNodeNetwork,
 	}
 
-	_, localNode, err := MakeConnectedPeers(remotePeerCfg, localPeerCfg, 0)
+	_, localNode, err := MakeConnectedPeers(t, remotePeerCfg, localPeerCfg, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

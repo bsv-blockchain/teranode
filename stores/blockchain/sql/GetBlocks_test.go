@@ -12,7 +12,7 @@ import (
 )
 
 func TestSQLGetBlocks(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("get blocks from genesis", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")

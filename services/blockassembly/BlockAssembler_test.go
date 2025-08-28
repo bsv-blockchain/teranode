@@ -154,7 +154,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 	t.Run("Start on mainnet, wait 2 blocks", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		tSettings := createTestSettings()
+		tSettings := createTestSettings(t)
 		tSettings.BlockAssembly.ResetWaitCount = 2
 		tSettings.BlockAssembly.ResetWaitDuration = 20 * time.Minute
 		tSettings.ChainCfgParams.Net = wire.MainNet
@@ -194,7 +194,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 	t.Run("Start on testnet, inherits same wait as mainnet", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		tSettings := createTestSettings()
+		tSettings := createTestSettings(t)
 		tSettings.BlockAssembly.ResetWaitCount = 2
 		tSettings.BlockAssembly.ResetWaitDuration = 20 * time.Minute
 		tSettings.ChainCfgParams.Net = wire.TestNet
@@ -234,7 +234,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 	t.Run("Start with existing state in blockchain", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		tSettings := createTestSettings()
+		tSettings := createTestSettings(t)
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
 
@@ -293,7 +293,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 	t.Run("Start with cleanup service enabled", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		tSettings := createTestSettings()
+		tSettings := createTestSettings(t)
 		tSettings.UtxoStore.DisableDAHCleaner = false
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -620,7 +620,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
 
-	tSettings := createTestSettings()
+	tSettings := createTestSettings(t)
 
 	utxoStore, err := utxostoresql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
@@ -1186,8 +1186,8 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 //
 // Returns:
 //   - *settings.Settings: Test configuration settings
-func createTestSettings() *settings.Settings {
-	tSettings := test.CreateBaseTestSettings()
+func createTestSettings(t *testing.T) *settings.Settings {
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Policy.BlockMaxSize = 1000000
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 	tSettings.BlockAssembly.SubtreeProcessorBatcherSize = 1
@@ -1519,7 +1519,7 @@ func TestBlockAssembler_CacheInvalidation(t *testing.T) {
 		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), createTestSettings())
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), createTestSettings(t))
 		require.NoError(t, err)
 
 		// setBestBlockHeader should invalidate cache
@@ -1599,7 +1599,7 @@ func TestBlockAssembler_CacheInvalidation(t *testing.T) {
 		var buf bytes.Buffer
 		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), createTestSettings())
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), createTestSettings(t))
 		require.NoError(t, err)
 
 		ba.bestBlockHeader.Store(genesisBlock.Header)

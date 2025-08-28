@@ -238,7 +238,7 @@ func TestBlock(t *testing.T) {
 
 func TestFileStorer(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	url, err := url.Parse("file://./data/blockstore")
 	require.NoError(t, err)
@@ -350,7 +350,7 @@ func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *MockStore, *memory.Me
 
 	blockchainClient := &blockchain.LocalClient{}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	var block model.Block

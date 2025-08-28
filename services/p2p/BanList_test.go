@@ -29,7 +29,7 @@ func setupBanList(t *testing.T) (*BanList, chan BanEvent, error) {
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	store, err := blockchain.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
@@ -225,7 +225,7 @@ func TestBanListChannel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockChain.StoreURL, _ = url.Parse("sqlitememory://")
 
 	banList, eventChan, err := GetBanList(ctx, ulogger.TestLogger{}, tSettings)

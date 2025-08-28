@@ -14,7 +14,7 @@ import (
 )
 
 func TestSQLGetBlockHeaderIDs(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("empty - no error", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
@@ -79,7 +79,7 @@ func BenchmarkSQLGetBlockHeaderIDs(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(b)
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	if err != nil {

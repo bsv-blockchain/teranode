@@ -225,7 +225,9 @@ func WriteTxs(_ context.Context, logger ulogger.Logger, writer *filestorer.FileS
 			continue
 		}
 
-		if _, err := writer.Write(tx.ExtendedBytes()); err != nil {
+		// always write the non-extended normal bytes to the subtree data file !
+		// our peer node should extend the transactions if needed
+		if _, err := writer.Write(tx.Bytes()); err != nil {
 			return errors.NewProcessingError("error writing tx", err)
 		}
 

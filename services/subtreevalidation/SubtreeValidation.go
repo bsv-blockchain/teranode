@@ -305,10 +305,6 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 		return nil, err
 	}
 
-	if !tx.IsExtended() { // block height is not used
-		return nil, errors.NewTxInvalidError("tx is not extended")
-	}
-
 	return tx, nil
 }
 
@@ -381,7 +377,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainh
 	if len(txMeta.BlockIDs) > 0 && len(blockIds) > 0 {
 		for _, blockID := range txMeta.BlockIDs {
 			if blockIds[blockID] {
-				return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s][%s] transaction is already mined on our chain", subtreeHash.String(), tx.TxID())
+				return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s][%s] transaction is already mined on our chain, in block %d", subtreeHash.String(), tx.TxID(), blockID)
 			}
 		}
 	}
@@ -1057,6 +1053,11 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Report invalid subtree - contains truly invalid transaction
 						u.publishInvalidSubtree(gCtx, subtreeHash.String(), baseURL, "contains_invalid_transaction")
+
+						// return the error, so that the caller can handle it
+						if errors.Is(err, errors.ErrTxInvalid) {
+							return err
+						}
 					} else {
 						// If the error is not a policy error, we log it as a processing error
 						u.logger.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
@@ -1091,8 +1092,9 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 		}
 
 		// wait for each level to process separately
-		// no errors will be returned here, since we want to process all transactions in the subtree
-		_ = g.Wait()
+		if err = g.Wait(); err != nil {
+			return err
+		}
 	}
 
 	if errorsFound.Load() > 0 {

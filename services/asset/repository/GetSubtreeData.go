@@ -33,6 +33,7 @@ func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *c
 	g, gCtx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
+		// write all transactions of the subtree to the pipe writer in extended format
 		if err := repo.writeTransactionsViaSubtreeStore(gCtx, w, nil, subtreeHash); err != nil {
 			_ = w.CloseWithError(io.ErrClosedPipe)
 			_ = r.CloseWithError(err)

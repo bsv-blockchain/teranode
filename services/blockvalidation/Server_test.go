@@ -101,7 +101,7 @@ var (
 func TestOneTransaction(t *testing.T) {
 	var err error
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	subtrees := make([]*subtree.Subtree, 1)
 
@@ -164,7 +164,7 @@ func TestTwoTransactions(t *testing.T) {
 
 	var err error
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	subtrees := make([]*subtree.Subtree, 1)
 
@@ -223,7 +223,7 @@ func TestTwoTransactions(t *testing.T) {
 func TestMerkleRoot(t *testing.T) {
 	var err error
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	subtrees := make([]*subtree.Subtree, 2)
 
@@ -364,7 +364,7 @@ func TestBlockHeadersN(t *testing.T) {
 func Test_Server_processBlockFound(t *testing.T) {
 	ctx := context.Background()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	// regtest SubsidyReductionInterval is 150
 	// so use mainnet params
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
@@ -402,14 +402,14 @@ func Test_Server_processBlockFound(t *testing.T) {
 	tSettings.GlobalBlockHeightRetention = uint32(1)
 
 	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient, nil)
-	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil)
+	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, nil)
 
 	err = s.processBlockFound(context.Background(), block.Hash(), "legacy", block)
 	require.NoError(t, err)
 }
 
 func TestServer_processBlockFoundChannel(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	if !tSettings.BlockValidation.UseCatchupWhenBehind {
 		t.Skip("Skipping test as blockvalidation_useCatchupWhenBehind is false")
 	}
@@ -460,7 +460,7 @@ func TestServer_catchup(t *testing.T) {
 
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.CatchupConcurrency = 1
 
 	baseURL := "http://test.com"
@@ -475,7 +475,7 @@ func TestServer_catchup(t *testing.T) {
 		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
 		require.NoError(t, err)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.GlobalBlockHeightRetention = uint32(0)
 		tSettings.ChainCfgParams.CoinbaseMaturity = 100
 		tSettings.BlockValidation.SecretMiningThreshold = 100
@@ -498,7 +498,7 @@ func TestServer_catchup(t *testing.T) {
 			logger:               logger,
 			settings:             tSettings,
 			blockchainClient:     mockBlockchainClient,
-			blockValidation:      NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, subtreeStore, nil, nil, nil),
+			blockValidation:      NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, subtreeStore, nil, nil, nil, nil),
 			utxoStore:            utxoStore,
 			processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 			headerChainCache:     catchup.NewHeaderChainCache(logger),
@@ -685,7 +685,7 @@ func createServerTestBlockChain(t *testing.T, numBlocks int) []*model.Block {
 func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 	initPrometheusMetrics()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	blocks := testhelpers.CreateTestBlockChain(t, 3)
 	testBlock := blocks[2]
@@ -694,7 +694,7 @@ func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 
 	blockFoundCh := make(chan processBlockFound, 10)
 
-	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup()
+	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
 	mockBlockchain := &blockchain.Mock{}
@@ -702,7 +702,7 @@ func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 	subChan := make(chan *blockchain_api.Notification, 1)
 	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
-	mockBlockchain.On("AddBlock", mock.Anything, testBlock, mock.Anything).Return(nil)
+	mockBlockchain.On("AddBlock", mock.Anything, testBlock, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
 	mockBlockchain.On("InvalidateBlock", mock.Anything, testBlock.Hash()).Return(nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
@@ -711,7 +711,7 @@ func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 
-	bv := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
+	bv := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 
 	server := &Server{
 		logger:          ulogger.TestLogger{},
@@ -753,7 +753,7 @@ func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 func Test_HealthLiveness(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create a minimal server with just enough setup for health checks
 	server := &Server{
@@ -775,12 +775,12 @@ func Test_HealthLiveness(t *testing.T) {
 func Test_HealthReadiness(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	// Clear the default addresses since we're not starting the servers in tests
 	tSettings.BlockValidation.GRPCListenAddress = ""
 
 	// Use actual in-memory stores that have proper health methods
-	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
 	// Create mock blockchain client
@@ -815,10 +815,10 @@ func Test_HealthReadiness(t *testing.T) {
 func Test_HealthReadiness_UnhealthyDependency(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Use actual in-memory stores that have proper health methods
-	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
 	// Create mock dependencies with one unhealthy
@@ -849,10 +849,10 @@ func Test_HealthGRPC(t *testing.T) {
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Use actual in-memory stores that have proper health methods
-	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
 	// Create mock dependencies
@@ -891,10 +891,10 @@ func Test_HealthGRPC_Unhealthy(t *testing.T) {
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Use actual in-memory stores that have proper health methods
-	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
 	// Create mock dependencies with one unhealthy
@@ -944,10 +944,10 @@ func (m *mockKafkaConsumer) Close() error {
 func Test_Start(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Use actual in-memory stores
-	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
 	// Create mock blockchain client
@@ -988,7 +988,7 @@ func Test_Start(t *testing.T) {
 func Test_Start_FSMTransitionError(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create mock blockchain client that returns error
 	mockBlockchainClient := &blockchain.Mock{}
@@ -1011,7 +1011,7 @@ func Test_Start_FSMTransitionError(t *testing.T) {
 func Test_Stop(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create mock kafka consumer
 	mockKafkaConsumer := &mockKafkaConsumer{}
@@ -1036,7 +1036,7 @@ func Test_Stop(t *testing.T) {
 func Test_Stop_KafkaCloseError(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create mock kafka consumer that returns error
 	mockKafkaConsumer := &mockKafkaConsumer{}
@@ -1063,7 +1063,7 @@ func Test_BlockFound(t *testing.T) {
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create test hash
 	hash := chainhash.HashH([]byte("test block"))
@@ -1234,7 +1234,7 @@ func Test_ProcessBlock(t *testing.T) {
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create a test block
 	block := createTestBlock(t)
@@ -1243,7 +1243,7 @@ func Test_ProcessBlock(t *testing.T) {
 
 	t.Run("success with height provided", func(t *testing.T) {
 		// Use actual in-memory stores
-		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 		defer deferFunc()
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -1286,7 +1286,7 @@ func Test_ProcessBlock(t *testing.T) {
 
 	t.Run("success with height from previous block", func(t *testing.T) {
 		// Use actual in-memory stores
-		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 		defer deferFunc()
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -1378,7 +1378,7 @@ func Test_ValidateBlock(t *testing.T) {
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create a test block
 	block := createTestBlock(t)
@@ -1387,7 +1387,7 @@ func Test_ValidateBlock(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		// Use actual in-memory stores
-		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 		defer deferFunc()
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -1456,7 +1456,7 @@ func Test_ValidateBlock(t *testing.T) {
 
 	t.Run("validation failure", func(t *testing.T) {
 		// Use actual in-memory stores
-		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup()
+		utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 		defer deferFunc()
 
 		mockBlockchainClient := &blockchain.Mock{}
@@ -1508,7 +1508,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 	initPrometheusMetrics()
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	hashStr := "8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87"
 	url := "http://test.com"

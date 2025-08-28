@@ -15,7 +15,7 @@ import (
 //
 //	go clean -testcache && go test ./services/validator/... -run ^TestTxValidatorOldWhiteList$ -v
 func TestTxValidatorOldWhiteList(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)

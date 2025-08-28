@@ -138,7 +138,7 @@ func createTestBlock(t *testing.T, nonce uint32, previousHash *chainhash.Hash) *
 func setupTestStore(t *testing.T) *SQL {
 	t.Helper()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)

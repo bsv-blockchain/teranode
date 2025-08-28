@@ -12,7 +12,7 @@ import (
 )
 
 func TestSQLGetState(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("state 0", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")

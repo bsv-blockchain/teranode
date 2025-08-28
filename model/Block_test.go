@@ -1419,7 +1419,7 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -1522,7 +1522,7 @@ func TestCheckDuplicateTransactions(t *testing.T) {
 func TestCheckParentExistsOnChain(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)

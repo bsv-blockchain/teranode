@@ -109,7 +109,7 @@ func TestUnmined(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	ctx := context.Background()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	container, err := aeroTest.RunContainer(ctx)
 	require.NoError(t, err)
@@ -234,7 +234,7 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	ctx := context.Background()
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	container, err := aeroTest.RunContainer(ctx)
 	require.NoError(t, err)

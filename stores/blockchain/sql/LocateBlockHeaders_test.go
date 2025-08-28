@@ -21,7 +21,7 @@ var blockCount = 10
 func TestSQLLocateBlockHeaders(t *testing.T) {
 	dbURL, _ := url.Parse("sqlitememory:///")
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)

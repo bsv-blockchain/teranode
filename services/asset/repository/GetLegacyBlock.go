@@ -102,7 +102,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 				for {
 					tx := &bt.Tx{}
 
-					// this will read the extended format transaction into the tx object
+					// this will read the transaction into the tx object
 					if _, err = tx.ReadFrom(bufferedReader); err != nil {
 						if err == io.EOF {
 							break
@@ -206,7 +206,8 @@ func (repo *Repository) writeLegacyBlockHeader(w io.Writer, block *model.Block, 
 //
 // Returns:
 //   - error: Any error encountered during writing
-func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w *io.PipeWriter, block *model.Block, subtreeHash *chainhash.Hash) error {
+func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w *io.PipeWriter, block *model.Block,
+	subtreeHash *chainhash.Hash) error {
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree)
 	if err != nil {
 		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
@@ -266,13 +267,14 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 				}
 
 				// Write coinbase tx
-				if _, err := w.Write(block.CoinbaseTx.Bytes()); err != nil {
+				if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
 					return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing coinbase tx", err)
 				}
 			}
 		} else {
-			// Write regular tx
-			if _, err := w.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
+			// always write the non-extended normal bytes to the subtree data file !
+			// our peer node should extend the transactions if needed
+			if _, err = w.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
 				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing tx[%d])", i, err)
 			}
 		}

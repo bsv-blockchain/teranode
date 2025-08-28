@@ -57,7 +57,7 @@ func TestCalcNextRequiredDifficulty(t *testing.T) {
 	// expected from block 826224 - 180a39ef
 	expectedNbits, _ := model.NewNBitFromString("180a2268")
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	d, err := NewDifficulty(nil, ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestBlock910479Fix(t *testing.T) {
 	// The chainwork should increase by approximately 144 blocks worth of work
 	lastChainwork, _ := hex.DecodeString("000000000000000000000000000000000000000001683c90000000000000000")
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	d, err := NewDifficulty(nil, ulogger.TestLogger{}, tSettings)
@@ -179,7 +179,7 @@ func TestCalculateDifficulty(t *testing.T) {
 			expected:                   *eBits}, // 826768
 	}
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	d, err := NewDifficulty(nil, ulogger.TestLogger{}, tSettings)

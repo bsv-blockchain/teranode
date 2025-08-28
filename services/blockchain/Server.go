@@ -31,6 +31,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/teranode/settings"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
+	blockchainoptions "github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/health"
@@ -747,7 +748,23 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		SizeInBytes:      request.SizeInBytes,
 	}
 
-	ID, height, err := b.store.StoreBlock(ctx, block, request.PeerId)
+	// process options for storing
+	storeBlockOptions := make([]blockchainoptions.StoreBlockOption, 0, 3)
+
+	if request.OptionMinedSet {
+		storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithMinedSet(request.OptionMinedSet))
+	}
+	if request.OptionSubtreesSet {
+		storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithSubtreesSet(request.OptionSubtreesSet))
+	}
+	if request.OptionInvalid {
+		storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithInvalid(request.OptionInvalid))
+	}
+	if request.OptionID != 0 {
+		storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithID(request.OptionID))
+	}
+
+	ID, height, err := b.store.StoreBlock(ctx, block, request.PeerId, storeBlockOptions...)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -960,6 +977,24 @@ func (b *Blockchain) GetBlockByID(ctx context.Context, request *blockchain_api.G
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
 		Id:               block.ID,
+	}, nil
+}
+
+// GetNextBlockID retrieves the next available block ID.
+func (b *Blockchain) GetNextBlockID(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetNextBlockIDResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetNextBlockID",
+		tracing.WithParentStat(b.stats),
+		tracing.WithLogMessage(b.logger, "[GetNextBlockID] called"),
+	)
+	defer deferFn()
+
+	nextID, err := b.store.GetNextBlockID(ctx)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetNextBlockIDResponse{
+		NextBlockId: nextID,
 	}, nil
 }
 
@@ -1305,6 +1340,9 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 		PeerId:      meta.PeerID,
 		BlockTime:   meta.BlockTime,
 		Timestamp:   meta.Timestamp,
+		MinedSet:    meta.MinedSet,
+		SubtreesSet: meta.SubtreesSet,
+		Invalid:     meta.Invalid,
 	}, nil
 }
 

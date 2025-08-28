@@ -76,7 +76,7 @@ func Test_HandleBlockDirect(t *testing.T) {
 		ChainWork:   nil,
 	}
 
-	blockchainClient.On("AddBlock", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	blockchainClient.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(mockBlockHeader, mockBlockHeaderMeta, nil)
 	blockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(true, nil)
 	blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)

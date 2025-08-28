@@ -85,11 +85,11 @@ func TestMoveBackBlockProcessBlock(t *testing.T) {
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
 
-	utxoStore, err := sql.New(t.Context(), ulogger.TestLogger{}, test.CreateBaseTestSettings(), utxoStoreURL)
+	utxoStore, err := sql.New(t.Context(), ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 	require.NoError(t, err)
 
 	blobStore := blob_memory.New()
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.MoveBackBlockConcurrency = 1
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)
@@ -264,7 +264,7 @@ func TestRotate(t *testing.T) {
 		}
 	}()
 
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, nil, nil, nil, newSubtreeChan)
@@ -330,7 +330,7 @@ func Test_RemoveTxFromSubtrees(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -402,7 +402,7 @@ func TestReChainSubtrees(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -502,7 +502,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			}
 		}()
 
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 8
 
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, nil, nil, nil, newSubtreeChan)
@@ -542,7 +542,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			}
 		}()
 
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, nil, nil, nil, newSubtreeChan)
@@ -623,7 +623,7 @@ func TestMoveForwardBlock(t *testing.T) {
 	subtreeStore, _ := null.New(logger)
 
 	ctx := context.Background()
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -631,7 +631,7 @@ func TestMoveForwardBlock(t *testing.T) {
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
 
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	blockchainClient := &blockchain.Mock{}
@@ -702,7 +702,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -718,7 +718,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	err = subtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockAssembly.DoubleSpendWindow = 2 * time.Second
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 32
 
@@ -786,7 +786,7 @@ func TestIncompleteSubtreeMoveForwardBlock(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -888,7 +888,7 @@ func TestSubtreeMoveForwardBlockNewCurrent(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -984,7 +984,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 		}
 	}()
 
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(t)
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 	subtreeProcessor, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, nil, nil, nil, newSubtreeChan, WithBatcherSize(1))
@@ -1076,7 +1076,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 			}
 		}()
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 		subtreeProcessor, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, nil, nil, nil, newSubtreeChan)
@@ -1195,7 +1195,7 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 		}
 	}()
 
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(b)
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
 
 	stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, nil, nil, nil, newSubtreeChan)
@@ -1291,7 +1291,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -1435,7 +1435,7 @@ func TestMoveBackBlocks(t *testing.T) {
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
 
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -1556,7 +1556,7 @@ func TestMoveBackBlocks(t *testing.T) {
 
 func Test_removeMap(t *testing.T) {
 	t.Run("when adding from queue", func(t *testing.T) {
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 128
 
 		newSubtreeChan := make(chan NewSubtreeRequest, 100)
@@ -1681,7 +1681,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -1815,7 +1815,7 @@ func initTestAddNodeBenchmark(b *testing.B) (*errgroup.Group, *SubtreeProcessor,
 		}
 	})
 
-	settings := test.CreateBaseTestSettings()
+	settings := test.CreateBaseTestSettings(b)
 	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1048576
 	settings.BlockAssembly.DoubleSpendWindow = 0
 
@@ -1837,7 +1837,7 @@ func initTestAddNodeBenchmark(b *testing.B) (*errgroup.Group, *SubtreeProcessor,
 func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 	t.Run("size adjusts based on block timing", func(t *testing.T) {
 		// Setup
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		settings.BlockAssembly.UseDynamicSubtreeSize = true
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
 
@@ -1862,7 +1862,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)
@@ -1954,7 +1954,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 	t.Run("size increases when creating subtrees too quickly", func(t *testing.T) {
 		// Setup
-		settings := test.CreateBaseTestSettings()
+		settings := test.CreateBaseTestSettings(t)
 		settings.BlockAssembly.UseDynamicSubtreeSize = true
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
 
@@ -1979,7 +1979,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
-		tSettings := test.CreateBaseTestSettings()
+		tSettings := test.CreateBaseTestSettings(t)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		require.NoError(t, err)

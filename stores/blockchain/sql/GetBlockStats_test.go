@@ -12,7 +12,7 @@ import (
 )
 
 func TestSQLGetBlockStats(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("get stats with empty chain", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")

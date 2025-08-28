@@ -2219,6 +2219,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 		SkipNotification:  skipNotification,
 	})
 	if err != nil {
+		// reset the subtree state back to before we started processing this block
 		return err
 	}
 
@@ -2604,8 +2605,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 				hashes := hashes
 				// put the hashes into the transaction map in parallel, it has already been split into the correct buckets
 				bucketG.Go(func() error {
-					_ = transactionMap.PutMultiBucket(bucket, hashes, 0)
-					return nil
+					return transactionMap.PutMultiBucket(bucket, hashes, 0)
 				})
 			}
 

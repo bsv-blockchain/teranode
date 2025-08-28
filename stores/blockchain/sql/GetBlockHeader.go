@@ -115,6 +115,9 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		,b.height
 		,b.tx_count
 		,b.chain_work
+		,b.mined_set
+		,b.subtrees_set
+		,b.invalid
 		FROM blocks b
 		WHERE b.hash = $1
 	`
@@ -144,6 +147,9 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		&blockHeaderMeta.Height,
 		&blockHeaderMeta.TxCount,
 		&blockHeaderMeta.ChainWork,
+		&blockHeaderMeta.MinedSet,
+		&blockHeaderMeta.SubtreesSet,
+		&blockHeaderMeta.Invalid,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.NewBlockNotFoundError("error in GetBlockHeader", errors.ErrNotFound)

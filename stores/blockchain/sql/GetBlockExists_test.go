@@ -12,7 +12,7 @@ import (
 )
 
 func TestSQLGetBlockExists(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("check non-existent block", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")

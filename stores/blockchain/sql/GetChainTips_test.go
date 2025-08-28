@@ -15,7 +15,7 @@ import (
 )
 
 func Test_SqlGetChainTips(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(t)
 
 	t.Run("genesis block only", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
@@ -444,7 +444,7 @@ func createAlternativeBlock2() *model.Block {
 }
 
 func BenchmarkGetChainTipsPerformance(b *testing.B) {
-	tSettings := test.CreateBaseTestSettings()
+	tSettings := test.CreateBaseTestSettings(b)
 
 	storeURL, err := url.Parse("sqlitememory:///")
 	if err != nil {
