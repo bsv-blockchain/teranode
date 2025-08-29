@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"sync"
 	"testing"
@@ -28,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-subtree"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -1111,4 +1113,202 @@ func TestBlockchainStartGRPCError(t *testing.T) {
 	require.Error(t, err)
 
 	require.Contains(t, err.Error(), "can't start GRPC server")
+}
+
+func TestInvalidateHandler(t *testing.T) {
+	ctx := context.Background()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	e := echo.New()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings.BlockChain.GRPCListenAddress = ""
+	tSettings.BlockChain.HTTPListenAddress = ""
+	mockProducer := kafka.NewKafkaAsyncProducerMock()
+	storeURL, err := url.Parse("sqlitememory:///blockchain")
+	require.NoError(t, err)
+	blockchainStore, err := sql.New(logger, storeURL, tSettings)
+	require.NoError(t, err)
+	t.Run("invalid has detected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/invalidate/notAHash", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("hash")
+		c.SetParamValues("notAHash")
+
+		server, _ := New(ctx, logger, tSettings, blockchainStore, mockProducer)
+		err := server.invalidateHandler(c)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "invalid hash")
+	})
+
+	t.Run("invalidation fails", func(t *testing.T) {
+		validHash := chainhash.DoubleHashH([]byte("abc")).String()
+		req := httptest.NewRequest(http.MethodPost, "/invalidate/"+validHash, nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("hash")
+		c.SetParamValues(validHash)
+		server, _ := New(ctx, logger, tSettings, blockchainStore, mockProducer)
+		err := server.invalidateHandler(c)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Contains(t, rec.Body.String(), "error invalidating block")
+	})
+
+	t.Run("success", func(t *testing.T) {
+		ctx := setup(t)
+		block := mockBlock(ctx, t)
+		_, _, err := ctx.server.store.StoreBlock(context.Background(), block, "peer1")
+		require.NoError(t, err)
+		validHash := block.Hash().String()
+		req := httptest.NewRequest(http.MethodPost, "/invalidate/"+validHash, nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("hash")
+		c.SetParamValues(validHash)
+		err = ctx.server.invalidateHandler(c)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "block invalidated")
+	})
+}
+
+func TestRevalidateHandler(t *testing.T) {
+	ctx := setup(t)
+	e := echo.New()
+
+	t.Run("invalid hash returns 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/revalidate/notAHash", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("hash")
+		c.SetParamValues("notAHash")
+
+		err := ctx.server.revalidateHandler(c)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "invalid hash")
+	})
+
+	t.Run("non-existent block returns 500", func(t *testing.T) {
+		nonExistentHash := chainhash.DoubleHashH([]byte("nope")).String()
+
+		req := httptest.NewRequest(http.MethodPost, "/revalidate/"+nonExistentHash, nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("hash")
+		c.SetParamValues(nonExistentHash)
+
+		err := ctx.server.revalidateHandler(c)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Contains(t, rec.Body.String(), "error revalidating block")
+	})
+
+	t.Run("existing block returns 200", func(t *testing.T) {
+		block := mockBlock(ctx, t)
+		_, _, err := ctx.server.store.StoreBlock(context.Background(), block, "peer1")
+		require.NoError(t, err)
+
+		validHash := block.Hash().String()
+		req := httptest.NewRequest(http.MethodPost, "/revalidate/"+validHash, nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("hash")
+		c.SetParamValues(validHash)
+
+		err = ctx.server.revalidateHandler(c)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "block revalidated")
+	})
+}
+
+func TestGetBlocks(t *testing.T) {
+	ctx := setup(t)
+
+	t.Run("invalid hash returns error", func(t *testing.T) {
+		req := &blockchain_api.GetBlocksRequest{
+			Hash:  []byte{1, 2, 3}, // not 32 byte
+			Count: 1,
+		}
+
+		resp, err := ctx.server.GetBlocks(context.Background(), req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Contains(t, err.Error(), "not valid")
+	})
+
+	t.Run("store returns error", func(t *testing.T) {
+		validHash := chainhash.DoubleHashH([]byte("does-not-exist"))
+
+		// request blocks starting from a non-existent hash
+		req := &blockchain_api.GetBlocksRequest{
+			Hash:  validHash.CloneBytes(),
+			Count: 1,
+		}
+
+		resp, err := ctx.server.GetBlocks(context.Background(), req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Len(t, resp.Blocks, 0, "expected no blocks when hash not found")
+	})
+
+	t.Run("success returns blocks", func(t *testing.T) {
+		block := mockBlock(ctx, t)
+		_, _, err := ctx.server.store.StoreBlock(context.Background(), block, "peer1")
+		require.NoError(t, err)
+
+		req := &blockchain_api.GetBlocksRequest{
+			Hash:  block.Hash().CloneBytes(),
+			Count: 1,
+		}
+
+		resp, err := ctx.server.GetBlocks(context.Background(), req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Len(t, resp.Blocks, 1)
+		require.NotEmpty(t, resp.Blocks[0])
+	})
+}
+
+func TestGetBestBlockHeader(t *testing.T) {
+	t.Run("store returns error - no best block", func(t *testing.T) {
+		store := blockchain_store.NewMockStore()
+		logger := ulogger.NewErrorTestLogger(t)
+
+		tSettings := test.CreateBaseTestSettings(t)
+		b, err := New(context.Background(), logger, tSettings, store, nil)
+		require.NoError(t, err)
+
+		resp, err := b.GetBestBlockHeader(context.Background(), &emptypb.Empty{})
+		require.Nil(t, resp)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "no best block")
+	})
+
+	t.Run("success - best block available", func(t *testing.T) {
+		ctx := setup(t)
+
+		blk := mockBlock(ctx, t)
+		_, _, err := ctx.server.store.StoreBlock(context.Background(), blk, "peer1")
+		require.NoError(t, err)
+
+		resp, err := ctx.server.GetBestBlockHeader(context.Background(), &emptypb.Empty{})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+
+		assert.Equal(t, blk.Height, uint32(resp.Height))
+		assert.Equal(t, blk.TransactionCount, resp.TxCount)
+		assert.Equal(t, blk.SizeInBytes, resp.SizeInBytes)
+		assert.NotEmpty(t, resp.BlockHeader)
+	})
 }
