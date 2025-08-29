@@ -156,8 +156,8 @@ func TestPeerCircuitBreakers_MultiplePeers(t *testing.T) {
 	}
 	pcb := NewPeerCircuitBreakers(config)
 
-	peer1 := "http://peer1.example.com"
-	peer2 := "http://peer2.example.com"
+	peer1 := "peer-001"
+	peer2 := "peer-002"
 
 	// Both peers should start closed
 	breaker1 := pcb.GetBreaker(peer1)
@@ -183,7 +183,7 @@ func TestPeerCircuitBreakers_MultiplePeers(t *testing.T) {
 func TestPeerCircuitBreakers_Reset(t *testing.T) {
 	pcb := NewPeerCircuitBreakers(DefaultCircuitBreakerConfig())
 
-	peer := "http://peer.example.com"
+	peer := "peer-test-001"
 	breaker := pcb.GetBreaker(peer)
 
 	// Open circuit
@@ -201,8 +201,8 @@ func TestPeerCircuitBreakers_Reset(t *testing.T) {
 func TestPeerCircuitBreakers_ResetAll(t *testing.T) {
 	pcb := NewPeerCircuitBreakers(DefaultCircuitBreakerConfig())
 
-	peer1 := "http://peer1.example.com"
-	peer2 := "http://peer2.example.com"
+	peer1 := "peer-001"
+	peer2 := "peer-002"
 	breaker1 := pcb.GetBreaker(peer1)
 	breaker2 := pcb.GetBreaker(peer2)
 

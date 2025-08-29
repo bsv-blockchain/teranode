@@ -7,6 +7,7 @@ package kafkamessage;
 message KafkaBlockTopicMessage {
   string hash = 1;
   string URL = 2;
+  string peer_id = 3; // P2P peer identifier for peerMetrics tracking
 }
 
 message KafkaInvalidBlockTopicMessage {

@@ -64,6 +64,9 @@ type processBlockFound struct {
 	// if needed during validation
 	baseURL string
 
+	// peerID is the P2P peer identifier used for peerMetrics tracking
+	peerID string
+
 	// errCh receives any errors encountered during block validation and allows
 	// synchronous waiting for validation completion
 	errCh chan error
@@ -79,6 +82,9 @@ type processBlockCatchup struct {
 	// baseURL indicates the peer URL from which additional block data can be
 	// retrieved if needed during catchup
 	baseURL string
+
+	// peerID is the P2P peer identifier used for peerMetrics tracking
+	peerID string
 }
 
 // Server implements a high-performance block validation service for Bitcoin SV.
@@ -423,17 +429,17 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 			case c := <-u.catchupCh:
 				{
-					if u.peerMetrics != nil {
-						peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(c.baseURL)
+					if u.peerMetrics != nil && c.peerID != "" {
+						peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(c.peerID)
 						if peerMetric != nil {
 							if peerMetric.IsBad() || peerMetric.IsMalicious() {
-								u.logger.Warnf("[catchup][%s] peer %s is marked as bad (score: %0.0f) or malicious (attempts: %d), skipping [%s]", c.block.Hash().String(), c.baseURL, peerMetric.GetReputation(), peerMetric.GetMaliciousAttempts(), c.baseURL)
+								u.logger.Warnf("[catchup][%s] peer %s is marked as bad (score: %0.0f) or malicious (attempts: %d), skipping", c.block.Hash().String(), c.peerID, peerMetric.GetReputation(), peerMetric.GetMaliciousAttempts())
 								continue
 							}
 						}
 					}
 
-					if err := u.catchup(ctx, c.block, c.baseURL); err != nil {
+					if err := u.catchup(ctx, c.block, c.baseURL, c.peerID); err != nil {
 						var (
 							peerMetric        *catchup.PeerCatchupMetrics
 							reputationScore   float64
@@ -441,15 +447,15 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						)
 
 						// this should be moved into the catchup directly...
-						if u.peerMetrics != nil {
-							peerMetric = u.peerMetrics.GetOrCreatePeerMetrics(c.baseURL)
+						if u.peerMetrics != nil && c.peerID != "" {
+							peerMetric = u.peerMetrics.GetOrCreatePeerMetrics(c.peerID)
 							if peerMetric != nil {
 								peerMetric.RecordFailure()
 								reputationScore = peerMetric.ReputationScore
 								maliciousAttempts = peerMetric.MaliciousAttempts
 
 								if !peerMetric.IsTrusted() {
-									u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", c.block.Hash().String(), c.baseURL, peerMetric.ReputationScore, peerMetric.MaliciousAttempts)
+									u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", c.block.Hash().String(), c.peerID, peerMetric.ReputationScore, peerMetric.MaliciousAttempts)
 								}
 							}
 						}
@@ -461,14 +467,14 @@ func (u *Server) Init(ctx context.Context) (err error) {
 			case blockFound := <-u.blockFoundCh:
 				{
 					if err := u.processBlockFoundChannel(ctx, blockFound); err != nil {
-						if u.peerMetrics != nil {
-							peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(blockFound.baseURL)
+						if u.peerMetrics != nil && blockFound.peerID != "" {
+							peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(blockFound.peerID)
 							if peerMetric != nil {
 								peerMetric.RecordFailure()
 							}
 
 							if !peerMetric.IsTrusted() {
-								u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", blockFound.hash.String(), blockFound.baseURL, peerMetric.ReputationScore, peerMetric.MaliciousAttempts)
+								u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", blockFound.hash.String(), blockFound.peerID, peerMetric.ReputationScore, peerMetric.MaliciousAttempts)
 							}
 						}
 
@@ -538,11 +544,11 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 		return err
 	}
 
-	if u.peerMetrics != nil {
-		peerMetrics := u.peerMetrics.GetOrCreatePeerMetrics(baseURL.String())
+	if u.peerMetrics != nil && kafkaMsg.GetPeerId() != "" {
+		peerMetrics := u.peerMetrics.GetOrCreatePeerMetrics(kafkaMsg.GetPeerId())
 
 		if peerMetrics != nil && peerMetrics.IsMalicious() {
-			u.logger.Warnf("[BlockFound][%s] peer is malicious, skipping [%s]", hash.String(), baseURL.String())
+			u.logger.Warnf("[BlockFound][%s] peer %s is malicious, skipping [%s]", hash.String(), kafkaMsg.GetPeerId(), baseURL.String())
 			// do not return for now
 			// return nil
 		}
@@ -576,6 +582,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 	u.blockFoundCh <- processBlockFound{
 		hash:    hash,
 		baseURL: baseURL.String(),
+		peerID:  kafkaMsg.GetPeerId(),
 		errCh:   errCh,
 	}
 	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
@@ -608,12 +615,23 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		allDrainedItems = append(allDrainedItems, blockFound)
 
 		peerBlocks := make(map[string]processBlockFound)
-		peerBlocks[blockFound.baseURL] = blockFound
+		// Use peerID as the key if available
+		key := blockFound.peerID
+		if key == "" {
+			u.logger.Warnf("[processBlockFoundChannel] Missing peerID for block %s, using baseURL as fallback", blockFound.hash.String())
+			key = blockFound.baseURL
+		}
+		peerBlocks[key] = blockFound
 		// get the newest block per peer, emptying the block found channel
 		for len(u.blockFoundCh) > 0 {
 			pb := <-u.blockFoundCh
 			allDrainedItems = append(allDrainedItems, pb)
-			peerBlocks[pb.baseURL] = pb
+			pbKey := pb.peerID
+			if pbKey == "" {
+				u.logger.Warnf("[processBlockFoundChannel] Missing peerID for block %s, using baseURL as fallback", pb.hash.String())
+				pbKey = pb.baseURL
+			}
+			peerBlocks[pbKey] = pb
 		}
 
 		u.logger.Infof("[Init] peerBlocks: %v", peerBlocks)
@@ -633,6 +651,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 			u.catchupCh <- processBlockCatchup{
 				block:   block,
 				baseURL: pb.baseURL,
+				peerID:  pb.peerID,
 			}
 		}
 
@@ -648,7 +667,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 	_, _, ctx1 := tracing.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
 
-	err := u.processBlockFound(ctx1, blockFound.hash, blockFound.baseURL)
+	err := u.processBlockFound(ctx1, blockFound.hash, blockFound.baseURL, blockFound.peerID)
 	if err != nil {
 		if blockFound.errCh != nil {
 			blockFound.errCh <- err
@@ -777,6 +796,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 		u.blockFoundCh <- processBlockFound{
 			hash:    hash,
 			baseURL: req.GetBaseUrl(),
+			peerID:  req.GetPeerId(),
 			errCh:   errCh,
 		}
 		prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
@@ -840,7 +860,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = height
 
-	if err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block); err != nil {
+	if err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", "", block); err != nil {
 		// error from processBlockFound is already wrapped
 		return nil, errors.WrapGRPC(err)
 	}
@@ -926,7 +946,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 //   - useBlock: Optional pre-loaded block to avoid retrieval (variadic parameter)
 //
 // Returns an error if block processing, validation, or dependency management fails
-func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseURL string, useBlock ...*model.Block) error {
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseURL string, peerID string, useBlock ...*model.Block) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationProcessBlockFound),
@@ -970,6 +990,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 			u.catchupCh <- processBlockCatchup{
 				block:   block,
 				baseURL: baseURL,
+				peerID:  peerID,
 			}
 		}()
 

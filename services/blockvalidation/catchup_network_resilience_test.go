@@ -81,7 +81,7 @@ func TestCatchup_PartialNetworkFailure(t *testing.T) {
 		httpMock.Activate()
 
 		// Execute catchup
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://unreliable-peer")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://unreliable-peer", "peer-unreliable-001")
 
 		// Should eventually succeed after retries
 		assert.NoError(t, err)
@@ -148,7 +148,7 @@ func TestCatchup_PartialNetworkFailure(t *testing.T) {
 		httpMock.Activate()
 
 		// Should succeed after retries
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://flaky-peer")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://flaky-peer", "peer-flaky-001")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -232,17 +232,17 @@ func TestCatchup_ConnectionDropMidTransfer(t *testing.T) {
 		httpMock.Activate()
 
 		// First attempt should fail, circuit breaker records failure
-		_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://dropping-peer")
+		_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://dropping-peer", "peer-dropping-002")
 
 		// Should eventually succeed (either through retry or would try alternate peer)
 		if err != nil {
 			// Circuit breaker should have recorded the failure
-			breaker := server.peerCircuitBreakers.GetBreaker("http://dropping-peer")
+			breaker := server.peerCircuitBreakers.GetBreaker("peer-dropping-002")
 			assert.NotNil(t, breaker)
 			state, _, _, _ := breaker.GetStats()
 			assert.NotEqual(t, catchup.StateClosed, state, "Circuit breaker should not be closed after failure")
 			// Check circuit breaker state using helper
-			AssertCircuitBreakerState(t, server, "http://dropping-peer", catchup.StateOpen)
+			AssertCircuitBreakerState(t, server, "peer-dropping-002", catchup.StateOpen)
 		}
 	})
 
@@ -312,25 +312,25 @@ func TestCatchup_ConnectionDropMidTransfer(t *testing.T) {
 
 		// First failure with timeout
 		ctx1, cancel1 := context.WithTimeout(ctx, 2*time.Second)
-		_, _, err1 := server.catchupGetBlockHeaders(ctx1, targetBlock, "http://bad-peer")
+		_, _, err1 := server.catchupGetBlockHeaders(ctx1, targetBlock, "http://bad-peer", "peer-bad-002")
 		cancel1()
 		assert.Error(t, err1)
 
 		// Second failure should open circuit breaker
 		ctx2, cancel2 := context.WithTimeout(ctx, 2*time.Second)
-		_, _, err2 := server.catchupGetBlockHeaders(ctx2, targetBlock, "http://bad-peer")
+		_, _, err2 := server.catchupGetBlockHeaders(ctx2, targetBlock, "http://bad-peer", "peer-bad-003")
 		cancel2()
 		assert.Error(t, err2)
 
 		// Third attempt should be blocked by circuit breaker
 		ctx3, cancel3 := context.WithTimeout(ctx, 2*time.Second)
-		_, _, err3 := server.catchupGetBlockHeaders(ctx3, targetBlock, "http://bad-peer")
+		_, _, err3 := server.catchupGetBlockHeaders(ctx3, targetBlock, "http://bad-peer", "peer-bad-004")
 		cancel3()
 		assert.Error(t, err3)
 		assert.Contains(t, err3.Error(), "circuit breaker open")
 
 		// Verify circuit breaker is open
-		breaker := server.peerCircuitBreakers.GetBreaker("http://bad-peer")
+		breaker := server.peerCircuitBreakers.GetBreaker("peer-bad-001")
 		state, _, _, _ := breaker.GetStats()
 		assert.Equal(t, catchup.StateOpen, state)
 	})
@@ -412,7 +412,7 @@ func TestCatchup_FlappingPeer(t *testing.T) {
 		failCount := 0
 
 		for i := 0; i < 6; i++ {
-			_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://flapping-peer")
+			_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://flapping-peer", "peer-flapping-002")
 			if err != nil {
 				failCount++
 			} else {
@@ -437,7 +437,7 @@ func TestCatchup_FlappingPeer(t *testing.T) {
 		}
 
 		// Circuit breaker should eventually stabilize
-		breaker := server.peerCircuitBreakers.GetBreaker("http://flapping-peer")
+		breaker := server.peerCircuitBreakers.GetBreaker("peer-flapping-001")
 		finalState, _, _, _ := breaker.GetStats()
 		t.Logf("Final circuit breaker state: %v, reputation: %.2f", finalState, peerMetric.ReputationScore)
 	})
@@ -522,7 +522,7 @@ func TestCatchup_FlappingPeer(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			// Create a timeout for each individual request to prevent hanging
 			reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
-			_, _, _ = server.catchupGetBlockHeaders(reqCtx, targetBlock, "http://degrading-peer")
+			_, _, _ = server.catchupGetBlockHeaders(reqCtx, targetBlock, "http://degrading-peer", "peer-degrading-001")
 			reqCancel()
 			time.Sleep(50 * time.Millisecond)
 		}
@@ -617,16 +617,17 @@ func TestCatchup_NetworkPartition(t *testing.T) {
 			httpMock.Activate()
 
 			// Attempt catchup from this peer
-			result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerURL)
+			peerID := fmt.Sprintf("peer-partition-%03d", peerIdx)
+			result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerURL, peerID)
 
 			if err == nil && result != nil {
 				// Record successful chain info
-				peerMetric := server.peerMetrics.PeerMetrics[peerURL]
+				peerMetric := server.peerMetrics.PeerMetrics[peerID]
 				if peerMetric == nil {
 					peerMetric = &catchup.PeerCatchupMetrics{
-						PeerURL: peerURL,
+						PeerID: peerID,
 					}
-					server.peerMetrics.PeerMetrics[peerURL] = peerMetric
+					server.peerMetrics.PeerMetrics[peerID] = peerMetric
 				}
 				peerMetric.SuccessfulRequests++
 			}
@@ -637,8 +638,8 @@ func TestCatchup_NetworkPartition(t *testing.T) {
 
 		// Each peer provided a different valid chain
 		for i := 0; i < 3; i++ {
-			peerURL := fmt.Sprintf("http://peer-%d", i)
-			metric := server.peerMetrics.PeerMetrics[peerURL]
+			peerID := fmt.Sprintf("peer-partition-%03d", i)
+			metric := server.peerMetrics.PeerMetrics[peerID]
 			assert.NotNil(t, metric)
 			assert.Greater(t, metric.SuccessfulRequests, int64(0))
 		}
@@ -711,7 +712,7 @@ func TestCatchup_NetworkLatencyHandling(t *testing.T) {
 		httpMock.Activate()
 
 		start := time.Now()
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://slow-peer")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://slow-peer", "peer-slow-001")
 		elapsed := time.Since(start)
 
 		// Should succeed but take time
@@ -785,7 +786,7 @@ func TestCatchup_NetworkLatencyHandling(t *testing.T) {
 		httpMock.Activate()
 
 		// Should timeout due to slow response
-		_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://very-slow-peer")
+		_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://very-slow-peer", "peer-very-slow-001")
 
 		assert.Error(t, err)
 		// Should get a timeout error for slow peer response
@@ -884,7 +885,8 @@ func TestCatchup_ConcurrentNetworkRequests(t *testing.T) {
 				defer wg.Done()
 
 				peerURL := fmt.Sprintf("http://peer-%d", idx)
-				result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerURL)
+				peerID := fmt.Sprintf("peer-concurrent-%03d", idx)
+				result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerURL, peerID)
 				results[idx] = err == nil && result != nil
 			}(i)
 		}
@@ -907,13 +909,13 @@ func TestCatchup_ConcurrentNetworkRequests(t *testing.T) {
 		var fastestPeer string
 		var fastestTime time.Duration = time.Hour
 
-		for peerURL, metric := range server.peerMetrics.PeerMetrics {
+		for peerID, metric := range server.peerMetrics.PeerMetrics {
 			if metric.AverageResponseTime < fastestTime {
 				fastestTime = metric.AverageResponseTime
-				fastestPeer = peerURL
+				fastestPeer = peerID
 			}
 		}
 
-		assert.Equal(t, "http://peer-4", fastestPeer, "Peer 4 should be fastest")
+		assert.Equal(t, "peer-concurrent-004", fastestPeer, "Peer 4 should be fastest")
 	})
 }

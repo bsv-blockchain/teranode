@@ -10,7 +10,7 @@ type PeerCatchupMetrics struct {
 	mu sync.RWMutex
 
 	// Identification
-	PeerURL string
+	PeerID string
 
 	// Request statistics
 	SuccessfulRequests int64
@@ -152,7 +152,7 @@ func (pm *PeerCatchupMetrics) UpdateReputation(success bool, responseTime time.D
 // CatchupMetrics manages metrics for all peers involved in catchup
 type CatchupMetrics struct {
 	mu          sync.RWMutex
-	PeerMetrics map[string]*PeerCatchupMetrics
+	PeerMetrics map[string]*PeerCatchupMetrics // Key is PeerID
 }
 
 // NewCatchupMetrics creates a new CatchupMetrics instance
@@ -163,27 +163,27 @@ func NewCatchupMetrics() *CatchupMetrics {
 }
 
 // GetOrCreatePeerMetrics gets or creates metrics for a peer
-func (cm *CatchupMetrics) GetOrCreatePeerMetrics(peerURL string) *PeerCatchupMetrics {
+func (cm *CatchupMetrics) GetOrCreatePeerMetrics(peerID string) *PeerCatchupMetrics {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	if metric, exists := cm.PeerMetrics[peerURL]; exists {
+	if metric, exists := cm.PeerMetrics[peerID]; exists {
 		return metric
 	}
 
 	metric := &PeerCatchupMetrics{
-		PeerURL:         peerURL,
+		PeerID:          peerID,
 		ReputationScore: 50.0, // Start with neutral reputation
 	}
-	cm.PeerMetrics[peerURL] = metric
+	cm.PeerMetrics[peerID] = metric
 	return metric
 }
 
 // GetPeerMetrics safely retrieves metrics for a peer if they exist
-func (cm *CatchupMetrics) GetPeerMetrics(peerURL string) (*PeerCatchupMetrics, bool) {
+func (cm *CatchupMetrics) GetPeerMetrics(peerID string) (*PeerCatchupMetrics, bool) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	metric, exists := cm.PeerMetrics[peerURL]
+	metric, exists := cm.PeerMetrics[peerID]
 	return metric, exists
 }

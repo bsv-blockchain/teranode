@@ -126,6 +126,7 @@ type BlockFoundRequest struct {
 	Hash           []byte                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
 	BaseUrl        string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
 	WaitToComplete bool                   `protobuf:"varint,3,opt,name=wait_to_complete,json=waitToComplete,proto3" json:"wait_to_complete,omitempty"`
+	PeerId         string                 `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"` // P2P peer identifier for peerMetrics tracking
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -179,6 +180,13 @@ func (x *BlockFoundRequest) GetWaitToComplete() bool {
 		return x.WaitToComplete
 	}
 	return false
+}
+
+func (x *BlockFoundRequest) GetPeerId() string {
+	if x != nil {
+		return x.PeerId
+	}
+	return ""
 }
 
 // swagger:model ProcessBlockRequest
@@ -349,11 +357,12 @@ const file_services_blockvalidation_blockvalidation_api_blockvalidation_api_prot
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"l\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\x85\x01\n" +
 	"\x11BlockFoundRequest\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\fR\x04hash\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12(\n" +
-	"\x10wait_to_complete\x18\x03 \x01(\bR\x0ewaitToComplete\"C\n" +
+	"\x10wait_to_complete\x18\x03 \x01(\bR\x0ewaitToComplete\x12\x17\n" +
+	"\apeer_id\x18\x04 \x01(\tR\x06peerId\"C\n" +
 	"\x13ProcessBlockRequest\x12\x14\n" +
 	"\x05block\x18\x01 \x01(\fR\x05block\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\"D\n" +

@@ -404,7 +404,7 @@ func Test_Server_processBlockFound(t *testing.T) {
 	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient, nil)
 	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, nil)
 
-	err = s.processBlockFound(context.Background(), block.Hash(), "legacy", block)
+	err = s.processBlockFound(context.Background(), block.Hash(), "legacy", "", block)
 	require.NoError(t, err)
 }
 
@@ -606,7 +606,7 @@ func TestServer_catchup(t *testing.T) {
 				return httpmock.NewBytesResponse(200, responseBytes), nil
 			})
 
-		err = server.catchup(ctx, lastBlock, baseURL)
+		err = server.catchup(ctx, lastBlock, baseURL, "test-peer-001")
 		require.NoError(t, err)
 	})
 }

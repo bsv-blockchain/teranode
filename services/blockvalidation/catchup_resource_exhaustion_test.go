@@ -133,7 +133,7 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 		)
 
 		// Execute catchup - should fail due to invalid headers
-		err = server.catchup(ctx, targetBlock, "http://malicious-peer")
+		err = server.catchup(ctx, targetBlock, "http://malicious-peer", "")
 		require.Error(t, err, "Catchup should fail with invalid headers")
 
 		// Check memory after test - should not have grown excessively
@@ -159,7 +159,7 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 
 		// Circuit breaker might not be initialized in this test setup
 		if server.peerCircuitBreakers != nil {
-			state := server.peerCircuitBreakers.GetPeerState("http://malicious-peer")
+			state := server.peerCircuitBreakers.GetPeerState("peer-malicious-002")
 			t.Logf("Circuit breaker state: %v", state)
 		}
 	})
@@ -235,7 +235,7 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 		)
 
 		// Should handle large valid chains without issues
-		err := server.catchup(ctx, targetBlock, "http://honest-peer")
+		err := server.catchup(ctx, targetBlock, "http://honest-peer", "")
 
 		// May have other errors but should not be memory-related
 		if err != nil {
@@ -357,7 +357,7 @@ func TestCatchup_CPUExhaustion(t *testing.T) {
 				defer wg.Done()
 
 				peerURL := fmt.Sprintf("http://peer-%d", idx)
-				if err := server.catchup(ctx, targetBlocks[idx], peerURL); err != nil {
+				if err := server.catchup(ctx, targetBlocks[idx], peerURL, ""); err != nil {
 					// Check if error indicates resource exhaustion
 					if strings.Contains(err.Error(), "another catchup is currently in progress") {
 						atomic.AddInt32(&rejectedCount, 1)
@@ -491,7 +491,7 @@ func TestCatchup_SlowLorisAttack(t *testing.T) {
 		)
 
 		start := time.Now()
-		err := server.catchup(ctx, targetBlock, "http://slow-peer")
+		err := server.catchup(ctx, targetBlock, "http://slow-peer", "")
 		duration := time.Since(start)
 
 		// Should timeout quickly
@@ -500,7 +500,7 @@ func TestCatchup_SlowLorisAttack(t *testing.T) {
 
 		// Verify peer was marked as problematic if circuit breaker is configured
 		if server.peerCircuitBreakers != nil {
-			peerState := server.peerCircuitBreakers.GetPeerState("http://slow-peer")
+			peerState := server.peerCircuitBreakers.GetPeerState("peer-slow-001")
 			// Circuit breaker might be open or half-open for slow peer
 			// Note: The exact state depends on the circuit breaker configuration
 			t.Logf("Circuit breaker state for slow peer: %v", peerState)
@@ -587,7 +587,7 @@ func TestCatchup_SlowLorisAttack(t *testing.T) {
 		)
 
 		start := time.Now()
-		err := server.catchup(ctx, targetBlock, "http://legitimate-slow-peer")
+		err := server.catchup(ctx, targetBlock, "http://legitimate-slow-peer", "")
 		duration := time.Since(start)
 
 		// Should complete successfully despite being slow
@@ -745,7 +745,7 @@ func TestCatchup_MemoryMonitoring(t *testing.T) {
 		)
 
 		// Execute catchup
-		_ = server.catchup(ctx, targetBlock, "http://test-peer")
+		_ = server.catchup(ctx, targetBlock, "http://test-peer", "")
 
 		// Stop memory monitoring
 		close(memoryCheckDone)
@@ -797,7 +797,7 @@ func TestCatchup_ResourceCleanup(t *testing.T) {
 			Return(true, nil) // Already have this block
 
 		// Execute catchup (should return immediately)
-		err := server.catchup(ctx, targetBlock, "http://test-peer")
+		err := server.catchup(ctx, targetBlock, "http://test-peer", "")
 		require.NoError(t, err)
 
 		// Give time for goroutines to cleanup
@@ -862,7 +862,7 @@ func TestCatchup_ResourceCleanup(t *testing.T) {
 		)
 
 		// Execute catchup (should fail)
-		err := server.catchup(ctx, targetBlock, "http://test-peer")
+		err := server.catchup(ctx, targetBlock, "http://test-peer", "")
 		assert.Error(t, err)
 
 		// Give time for cleanup

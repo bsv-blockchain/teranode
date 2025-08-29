@@ -209,10 +209,10 @@ func SetupScenario(t *testing.T, scenario testhelpers.TestScenario) *CatchupTest
 }
 
 // AssertCircuitBreakerState checks the circuit breaker state for a peer
-func (s *CatchupTestSuite) AssertCircuitBreakerState(peerURL string, expectedState catchup.CircuitBreakerState) {
-	breaker := s.Server.peerCircuitBreakers.GetBreaker(peerURL)
-	require.NotNil(s.T, breaker, "Circuit breaker not found for peer %s", peerURL)
+func (s *CatchupTestSuite) AssertCircuitBreakerState(peerID string, expectedState catchup.CircuitBreakerState) {
+	breaker := s.Server.peerCircuitBreakers.GetBreaker(peerID)
+	require.NotNil(s.T, breaker, "Circuit breaker not found for peer %s", peerID)
 
 	state, _, _, _ := breaker.GetStats()
-	require.Equal(s.T, expectedState, state, "Circuit breaker state mismatch for %s", peerURL)
+	require.Equal(s.T, expectedState, state, "Circuit breaker state mismatch for %s", peerID)
 }

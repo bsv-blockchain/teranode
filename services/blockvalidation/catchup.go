@@ -32,6 +32,7 @@ const (
 type CatchupContext struct {
 	blockUpTo               *model.Block
 	baseURL                 string
+	peerID                  string
 	startTime               time.Time
 	bestBlockHeader         *model.BlockHeader
 	commonAncestorHash      *chainhash.Hash
@@ -66,7 +67,7 @@ type CatchupContext struct {
 //
 // Returns:
 //   - error: If any step fails or safety checks are violated
-func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL string) (err error) {
+func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL string, peerID string) (err error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "catchup",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[catchup][%s] starting catchup to %s", blockUpTo.Hash().String(), baseURL),
@@ -83,9 +84,15 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 		}
 	}
 
+	// Use baseURL as fallback if peerID is not provided (for backward compatibility)
+	if peerID == "" {
+		peerID = baseURL
+	}
+
 	catchupCtx := &CatchupContext{
 		blockUpTo: blockUpTo,
 		baseURL:   baseURL,
+		peerID:    peerID,
 		startTime: time.Now(),
 	}
 
@@ -227,7 +234,7 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 func (u *Server) fetchHeaders(ctx context.Context, catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 1: Fetching headers from peer %s", catchupCtx.blockUpTo.Hash().String(), catchupCtx.baseURL)
 
-	result, bestBlockHeader, err := u.catchupGetBlockHeaders(ctx, catchupCtx.blockUpTo, catchupCtx.baseURL)
+	result, bestBlockHeader, err := u.catchupGetBlockHeaders(ctx, catchupCtx.blockUpTo, catchupCtx.baseURL, catchupCtx.peerID)
 	if err != nil {
 		return errors.NewProcessingError("[catchup][%s] failed to get block headers: %w", catchupCtx.blockUpTo.Hash().String(), err)
 	}
@@ -329,11 +336,11 @@ func (u *Server) validateForkDepth(catchupCtx *CatchupContext) error {
 		u.logger.Errorf("[catchup][%s] fork depth (%d blocks) exceeds coinbase maturity (%d blocks)", catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth, u.settings.ChainCfgParams.CoinbaseMaturity)
 
 		// Record malicious attempt
-		u.recordMaliciousAttempt(catchupCtx.baseURL, "coinbase_maturity_violation")
+		u.recordMaliciousAttempt(catchupCtx.peerID, "coinbase_maturity_violation")
 
 		// Record error metric
 		if prometheusCatchupErrors != nil {
-			prometheusCatchupErrors.WithLabelValues(catchupCtx.baseURL, "coinbase_maturity_violation").Inc()
+			prometheusCatchupErrors.WithLabelValues(catchupCtx.peerID, "coinbase_maturity_violation").Inc()
 		}
 
 		return errors.NewServiceError("[catchup][%s] fork depth (%d) exceeds coinbase maturity (%d)", catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth, u.settings.ChainCfgParams.CoinbaseMaturity)
@@ -356,7 +363,7 @@ func (u *Server) validateForkDepth(catchupCtx *CatchupContext) error {
 func (u *Server) checkSecretMining(ctx context.Context, catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 4: Checking for secret mining", catchupCtx.blockUpTo.Hash().String())
 
-	return u.checkSecretMiningFromCommonAncestor(ctx, catchupCtx.blockUpTo, catchupCtx.baseURL, catchupCtx.commonAncestorHash, catchupCtx.commonAncestorMeta)
+	return u.checkSecretMiningFromCommonAncestor(ctx, catchupCtx.blockUpTo, catchupCtx.baseURL, catchupCtx.peerID, catchupCtx.commonAncestorHash, catchupCtx.commonAncestorMeta)
 }
 
 // filterHeaders filters headers to only those after the common ancestor that we don't have.
@@ -678,16 +685,18 @@ func (u *Server) filterExistingBlocks(ctx context.Context, headers []*model.Bloc
 // Updates peer metrics and logs security warnings.
 //
 // Parameters:
-//   - peerURL: URL of the malicious peer
+//   - peerID: P2P peer identifier of the malicious peer
 //   - reason: Description of the malicious behavior
-func (u *Server) recordMaliciousAttempt(peerURL string, reason string) {
-	if u.peerMetrics != nil {
-		peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(peerURL)
+func (u *Server) recordMaliciousAttempt(peerID string, reason string) {
+	if u.peerMetrics != nil && peerID != "" {
+		peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(peerID)
 		peerMetric.RecordMaliciousAttempt()
-		u.logger.Warnf("Recorded malicious attempt from peer %s: %s", peerURL, reason)
+		u.logger.Warnf("Recorded malicious attempt from peer %s: %s", peerID, reason)
 	}
 
-	u.logger.Errorf("SECURITY: Peer %s attempted %s - should be banned (banning not yet implemented)", peerURL, reason)
+	if peerID != "" {
+		u.logger.Errorf("SECURITY: Peer %s attempted %s - should be banned (banning not yet implemented)", peerID, reason)
+	}
 }
 
 // setFSMCatchingBlocks sets the FSM state to CATCHINGBLOCKS.
@@ -747,6 +756,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 	i := 0
 	blockUpTo := catchupCtx.blockUpTo
 	baseURL := catchupCtx.baseURL
+	peerID := catchupCtx.peerID
 
 	// validate the blocks while getting them from the other node
 	// this will block until all blocks are validated
@@ -813,17 +823,17 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 				}
 
 				// Validate the block using standard validation
-				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, baseURL, nil, opts); err != nil {
+				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, peerID, nil, opts); err != nil {
 					u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to validate block %s at position %d: %v", blockUpTo.Hash().String(), block.Hash().String(), i, err)
 
 					// mark block as invalid, we did not add it to the chain, since we did not do optimistic mining
-					if markErr := u.blockchainClient.AddBlock(gCtx, block, baseURL, options.WithInvalid(true)); markErr != nil {
+					if markErr := u.blockchainClient.AddBlock(gCtx, block, peerID, options.WithInvalid(true)); markErr != nil {
 						u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to store block %s and mark as invalid: %v", blockUpTo.Hash().String(), block.Hash().String(), markErr)
 					}
 
 					// Record metric for validation failure
 					if prometheusCatchupErrors != nil {
-						prometheusCatchupErrors.WithLabelValues(baseURL, "validation_failure").Inc()
+						prometheusCatchupErrors.WithLabelValues(peerID, "validation_failure").Inc()
 					}
 
 					return err
@@ -885,7 +895,7 @@ func getLowestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
 //
 // Returns:
 //   - error: If secret mining is detected
-func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockUpTo *model.Block, baseURL string, commonAncestorHash *chainhash.Hash, commonAncestorMeta *model.BlockHeaderMeta) error {
+func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockUpTo *model.Block, baseURL string, peerID string, commonAncestorHash *chainhash.Hash, commonAncestorMeta *model.BlockHeaderMeta) error {
 	// Check whether the common ancestor is more than X blocks behind our current chain.
 	// This indicates potential secret mining.
 	currentHeight := u.utxoStore.GetBlockHeight()
@@ -900,8 +910,8 @@ func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockU
 	u.logger.Errorf("[catchup][%s] is potentially a secretly mined chain from common ancestor %s at height %d, ignoring", blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height)
 
 	// Record error metric for secret mining
-	if prometheusCatchupErrors != nil {
-		prometheusCatchupErrors.WithLabelValues(baseURL, "secret_mining").Inc()
+	if prometheusCatchupErrors != nil && peerID != "" {
+		prometheusCatchupErrors.WithLabelValues(peerID, "secret_mining").Inc()
 	}
 
 	// Log metrics for secret mining detection
@@ -910,8 +920,8 @@ func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockU
 		currentHeight-commonAncestorMeta.Height, u.settings.BlockValidation.SecretMiningThreshold)
 
 	// Record the malicious attempt for this peer
-	if u.peerMetrics != nil {
-		peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(baseURL)
+	if u.peerMetrics != nil && peerID != "" {
+		peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(peerID)
 		peerMetric.RecordMaliciousAttempt()
 		u.logger.Warnf("[catchup][%s] recorded malicious attempt from peer %s for secret mining", blockUpTo.Hash().String(), baseURL)
 	}

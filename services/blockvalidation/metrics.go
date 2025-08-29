@@ -194,7 +194,7 @@ func _initPrometheusMetrics() {
 			Help:      "Duration of catchup operations in seconds",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
-		[]string{"peer", "success"},
+		[]string{"peer_id", "success"},
 	)
 
 	prometheusCatchupBlocksFetched = promauto.NewCounterVec(
@@ -204,7 +204,7 @@ func _initPrometheusMetrics() {
 			Name:      "catchup_blocks_fetched_total",
 			Help:      "Total number of blocks fetched during catchup",
 		},
-		[]string{"peer"},
+		[]string{"peer_id"},
 	)
 
 	prometheusCatchupHeadersFetched = promauto.NewCounterVec(
@@ -214,7 +214,7 @@ func _initPrometheusMetrics() {
 			Name:      "catchup_headers_fetched_total",
 			Help:      "Total number of headers fetched during catchup",
 		},
-		[]string{"peer"},
+		[]string{"peer_id"},
 	)
 
 	prometheusCatchupErrors = promauto.NewCounterVec(
@@ -224,7 +224,7 @@ func _initPrometheusMetrics() {
 			Name:      "catchup_errors_total",
 			Help:      "Total number of errors during catchup operations",
 		},
-		[]string{"peer", "error_type"},
+		[]string{"peer_id", "error_type"},
 	)
 
 	prometheusCatchupActive = promauto.NewGauge(

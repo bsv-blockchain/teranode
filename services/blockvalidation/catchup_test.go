@@ -60,7 +60,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 		suite.MockBlockchain.On("GetBlockExists", mock.Anything, targetBlock.Header.Hash()).Return(true, nil)
 
 		// Step 4: Execute test using suite.Ctx and suite.Server
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer", "peer-test-003")
 
 		// Step 5: Use suite assertions
 		suite.RequireNoError(err)
@@ -112,7 +112,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 			httpmock.NewBytesResponder(200, headersBytes),
 		)
 
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer", "peer-test-simple-001")
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		if len(result.Headers) > 0 {
@@ -177,7 +177,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 			},
 		)
 
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer", "peer-test-large-001")
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		// Should get all 12499 headers through iterative requests
@@ -227,7 +227,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 		)
 		httpMock.Activate()
 
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer", "peer-test-003")
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.Len(t, result.Headers, 499)
@@ -265,7 +265,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 			httpmock.NewBytesResponder(200, []byte{}),
 		)
 
-		_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer")
+		_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer", "peer-test-003")
 		// When no headers are returned, the function returns an error
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no headers received from peer")
@@ -301,7 +301,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 			httpmock.NewErrorResponder(errors.NewNetworkError("network error")),
 		)
 
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer", "peer-test-003")
 		assert.Error(t, err)
 		assert.NotNil(t, result)
 		// The error should contain "timed out" since the mock error causes a timeout
@@ -345,7 +345,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 			httpmock.NewBytesResponder(200, invalidBytes),
 		)
 
-		_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer")
+		_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer", "peer-test-003")
 		// Invalid headers should be rejected with an error
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid headers")
@@ -395,7 +395,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 			},
 		)
 
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer", "peer-test-003")
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.Len(t, result.Headers, 2999)
@@ -475,7 +475,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 			},
 		)
 
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer", "peer-test-003")
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		// Function should make 4 requests: 3 to get headers, 1 returns empty (chain tip reached)
@@ -547,7 +547,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 			},
 		)
 
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer", "peer-test-003")
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.Len(t, result.Headers, 50)
@@ -1000,7 +1000,7 @@ func TestCatchup(t *testing.T) {
 		// Mock GetBlockExists to return true to simulate no catchup needed
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, blockUpTo.Header.Hash()).Return(true, nil)
 
-		err := server.catchup(ctx, blockUpTo, "http://test-peer")
+		err := server.catchup(ctx, blockUpTo, "http://test-peer", "")
 		require.NoError(t, err)
 	})
 
@@ -1033,6 +1033,7 @@ func TestCatchup(t *testing.T) {
 			ctx,
 			blockUpTo,
 			"http://test-peer",
+			"",
 			commonAncestorHash,
 			commonAncestorMeta,
 		)
@@ -1217,7 +1218,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		)
 
 		// Execute catchupGetBlockHeaders
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer", "peer-test-001")
 
 		// Should stop due to memory limit (100,000 headers)
 		require.NoError(t, err)
@@ -1286,7 +1287,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 			cancel()
 		}()
 
-		err := server.catchup(ctx, targetBlock, "http://test-peer")
+		err := server.catchup(ctx, targetBlock, "http://test-peer", "peer-test-cancel-001")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "context canceled")
 	})
@@ -1326,17 +1327,17 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 
 		// Make multiple calls to trigger the circuit breaker (threshold is 3)
 		for i := 0; i < 3; i++ {
-			result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer")
+			result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer", "peer-test-001")
 			assert.Error(t, err)
 			assert.NotNil(t, result)
 		}
 
 		// Check circuit breaker state - should be open after 3 failures
-		cbState := server.peerCircuitBreakers.GetPeerState("http://test-peer")
+		cbState := server.peerCircuitBreakers.GetPeerState("peer-test-001")
 		assert.Equal(t, catchup.StateOpen, cbState)
 
 		// Try another call - should fail immediately due to open circuit
-		_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer")
+		_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer", "peer-test-001")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "circuit breaker open")
 	})
@@ -1486,7 +1487,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		go func() {
 			// Run the catchup - we don't expect it to fully complete in the test
 			// but it should not panic or have race conditions
-			_ = server.catchup(ctx, targetBlock, "http://test-peer")
+			_ = server.catchup(ctx, targetBlock, "http://test-peer", "")
 			done <- true
 		}()
 
@@ -1547,12 +1548,12 @@ func TestCatchupErrorScenarios(t *testing.T) {
 			},
 		)
 
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer", "peer-test-001")
 		assert.Error(t, err)
 		assert.NotNil(t, result)
 		assert.True(t, result.HasErrors())
 		// Check metrics using helper
-		AssertPeerMetrics(t, server, "http://test-peer", func(m *catchup.PeerCatchupMetrics) {
+		AssertPeerMetrics(t, server, "peer-test-001", func(m *catchup.PeerCatchupMetrics) {
 			assert.Less(t, m.ReputationScore, 50.0, "Reputation should be affected")
 			assert.GreaterOrEqual(t, m.TotalRequests, int64(1), "Should have attempted requests")
 			assert.Greater(t, m.FailedRequests, int64(0), "Should have failed requests")
@@ -1606,7 +1607,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 			httpmock.NewBytesResponder(200, make([]byte, model.BlockHeaderSize+10)), // Invalid size
 		)
 
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer", "peer-test-001")
 		assert.Error(t, err)
 		assert.NotNil(t, result)
 		assert.Contains(t, err.Error(), "invalid header bytes length")
@@ -1674,7 +1675,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 			httpmock.NewBytesResponder(200, headersBytes),
 		)
 
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer", "peer-test-001")
 		// The corrupt headers will fail proof of work validation and be treated as malicious
 		assert.Error(t, err)
 		assert.NotNil(t, result)
@@ -1710,7 +1711,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return(nil, errors.NewStorageError("database error"))
 
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer", "peer-test-001")
 		assert.Error(t, err)
 		assert.NotNil(t, result)
 		assert.Contains(t, err.Error(), "failed to get block locator")
@@ -1760,7 +1761,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 		// Mock GetBlockLocator to return error to simulate database failure
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.NewStorageError("database error"))
 
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer", "peer-test-001")
 		assert.Error(t, err)
 		assert.NotNil(t, result)
 		assert.Contains(t, result.StopReason, "Failed to get block locator")
@@ -1804,13 +1805,13 @@ func TestCatchupErrorScenarios(t *testing.T) {
 			httpmock.NewStringResponder(404, "Not Found"),
 		)
 
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer", "peer-test-001")
 		assert.Error(t, err)
 		assert.NotNil(t, result)
 		assert.True(t, result.HasErrors())
 
 		// Check circuit breaker recorded failure
-		cbState := server.peerCircuitBreakers.GetPeerState("http://test-peer")
+		cbState := server.peerCircuitBreakers.GetPeerState("peer-test-404-001")
 		assert.NotEqual(t, catchup.StateOpen, cbState) // Should not be open after just one 404
 	})
 
@@ -1855,7 +1856,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 		)
 
 		// Override fetchHeadersWithRetry to simulate malicious response error
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer", "peer-test-001")
 		assert.Error(t, err)
 		assert.NotNil(t, result)
 	})
@@ -1922,7 +1923,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 			wg.Add(1)
 			go func(idx int, block *model.Block) {
 				defer wg.Done()
-				results[idx], _, errors[idx] = server.catchupGetBlockHeaders(ctx, block, "http://test-peer")
+				results[idx], _, errors[idx] = server.catchupGetBlockHeaders(ctx, block, "http://test-peer", "peer-test-002")
 			}(i, targetBlock)
 		}
 
@@ -2170,7 +2171,7 @@ func TestCatchup_PreventsConcurrentOperations(t *testing.T) {
 
 	// Try to start second catchup
 	block := createTestBlock(t)
-	err := server.catchup(ctx, block, "http://peer1:8080")
+	err := server.catchup(ctx, block, "http://peer1:8080", "")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "another catchup is currently in progress")
@@ -2380,7 +2381,7 @@ func SkipTestCatchupPerformanceWithHeaderCache(t *testing.T) {
 	// Execute catchup
 	t.Logf("Starting catchup with target block: %s", targetBlock.Header.Hash().String())
 	t.Logf("Our best block (block 0): %s", blocks[0].Header.Hash().String())
-	err := server.catchup(ctx, targetBlock, "http://test-peer")
+	err := server.catchup(ctx, targetBlock, "http://test-peer", "")
 
 	duration := time.Since(startTime)
 	// Verify no errors
@@ -2430,7 +2431,7 @@ func BenchmarkCatchupWithHeaderCache(b *testing.B) {
 			httpmock.NewBytesResponder(200, headersBytes))
 
 		// Run catchup
-		_ = server.catchup(ctx, targetBlock, "http://test-peer")
+		_ = server.catchup(ctx, targetBlock, "http://test-peer", "")
 
 		httpmock.DeactivateAndReset()
 		cleanup()
@@ -2526,7 +2527,7 @@ func TestCatchup_NoRepeatedHeaderFetching(t *testing.T) {
 	)
 
 	// Execute catchup
-	result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer")
+	result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://test-peer", "peer-test-001")
 
 	// Verify results
 	assert.NoError(t, err)
@@ -3087,11 +3088,11 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 // ============================================================================
 
 // AssertPeerMetrics verifies peer-specific metrics
-func AssertPeerMetrics(t *testing.T, server *Server, peerURL string, assertions func(*catchup.PeerCatchupMetrics)) {
+func AssertPeerMetrics(t *testing.T, server *Server, peerID string, assertions func(*catchup.PeerCatchupMetrics)) {
 	t.Helper()
 
-	peerMetric, exists := server.peerMetrics.PeerMetrics[peerURL]
-	require.True(t, exists, "Peer metrics should exist for %s", peerURL)
+	peerMetric, exists := server.peerMetrics.PeerMetrics[peerID]
+	require.True(t, exists, "Peer metrics should exist for %s", peerID)
 	require.NotNil(t, peerMetric, "Peer metric should not be nil")
 
 	if assertions != nil {
@@ -3100,16 +3101,16 @@ func AssertPeerMetrics(t *testing.T, server *Server, peerURL string, assertions 
 }
 
 // AssertCircuitBreakerState verifies circuit breaker state
-func AssertCircuitBreakerState(t *testing.T, server *Server, peerURL string, expectedState catchup.CircuitBreakerState) {
+func AssertCircuitBreakerState(t *testing.T, server *Server, peerID string, expectedState catchup.CircuitBreakerState) {
 	t.Helper()
 
-	breaker := server.peerCircuitBreakers.GetBreaker(peerURL)
-	require.NotNil(t, breaker, "Circuit breaker should exist for %s", peerURL)
+	breaker := server.peerCircuitBreakers.GetBreaker(peerID)
+	require.NotNil(t, breaker, "Circuit breaker should exist for %s", peerID)
 
 	// Get the state as an int directly from the PeerCircuitBreakers
-	actualState := server.peerCircuitBreakers.GetPeerState(peerURL)
+	actualState := server.peerCircuitBreakers.GetPeerState(peerID)
 
-	assert.Equal(t, expectedState, actualState, "Circuit breaker for %s should be in state %v", peerURL, expectedState)
+	assert.Equal(t, expectedState, actualState, "Circuit breaker for %s should be in state %v", peerID, expectedState)
 }
 
 // ============================================================================
@@ -3226,7 +3227,7 @@ func TestCheckpointValidationWithSuboptimalAncestor(t *testing.T) {
 	)
 
 	// Test the issue: Run catchup and see if checkpoint validation works correctly
-	result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer")
+	result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://test-peer", "test-peer-id")
 
 	// The test should succeed if common ancestor finding and checkpoint validation work correctly
 	require.NoError(t, err, "Catchup should succeed with proper checkpoint validation")

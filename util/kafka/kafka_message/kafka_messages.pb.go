@@ -123,6 +123,7 @@ type KafkaBlockTopicMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Hash          string                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
 	URL           string                 `protobuf:"bytes,2,opt,name=URL,proto3" json:"URL,omitempty"`
+	PeerId        string                 `protobuf:"bytes,3,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"` // P2P peer identifier for peerMetrics tracking
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -167,6 +168,13 @@ func (x *KafkaBlockTopicMessage) GetHash() string {
 func (x *KafkaBlockTopicMessage) GetURL() string {
 	if x != nil {
 		return x.URL
+	}
+	return ""
+}
+
+func (x *KafkaBlockTopicMessage) GetPeerId() string {
+	if x != nil {
+		return x.PeerId
 	}
 	return ""
 }
@@ -767,10 +775,11 @@ var File_util_kafka_kafka_message_kafka_messages_proto protoreflect.FileDescript
 
 const file_util_kafka_kafka_message_kafka_messages_proto_rawDesc = "" +
 	"\n" +
-	"-util/kafka/kafka_message/kafka_messages.proto\x12\fkafkamessage\">\n" +
+	"-util/kafka/kafka_message/kafka_messages.proto\x12\fkafkamessage\"W\n" +
 	"\x16KafkaBlockTopicMessage\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\tR\x04hash\x12\x10\n" +
-	"\x03URL\x18\x02 \x01(\tR\x03URL\"U\n" +
+	"\x03URL\x18\x02 \x01(\tR\x03URL\x12\x17\n" +
+	"\apeer_id\x18\x03 \x01(\tR\x06peerId\"U\n" +
 	"\x1dKafkaInvalidBlockTopicMessage\x12\x1c\n" +
 	"\tblockHash\x18\x01 \x01(\tR\tblockHash\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"u\n" +

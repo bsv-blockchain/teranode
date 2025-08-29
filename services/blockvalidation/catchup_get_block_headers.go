@@ -29,7 +29,7 @@ import (
 //   - *CatchupResult: Result containing headers and metrics
 //   - *model.BlockHeader: Best block header from our chain
 //   - error: If fetching or parsing headers fails
-func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Block, baseURL string) (*catchup.Result, *model.BlockHeader, error) {
+func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Block, baseURL string, peerID string) (*catchup.Result, *model.BlockHeader, error) {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "catchupGetBlockHeaders",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[catchup][%s] fetching headers up to %s from peer %s", blockUpTo.Hash().String(), baseURL),
@@ -46,20 +46,26 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	}
 	failedIterations := make([]catchup.IterationError, 0, 10) // Preallocate for up to 10 failed iterations
 
+	// Use baseURL as fallback if peerID is not provided (for backward compatibility)
+	identifier := peerID
+	if identifier == "" {
+		identifier = baseURL
+	}
+
 	// Check if we're using circuit breaker
 	var circuitBreaker *catchup.CircuitBreaker
 	if u.peerCircuitBreakers != nil {
-		circuitBreaker = u.peerCircuitBreakers.GetBreaker(baseURL)
+		circuitBreaker = u.peerCircuitBreakers.GetBreaker(identifier)
 		if !circuitBreaker.CanCall() {
-			return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Circuit breaker open for peer"), nil, errors.NewServiceUnavailableError("circuit breaker open for peer %s", baseURL)
+			return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Circuit breaker open for peer"), nil, errors.NewServiceUnavailableError("circuit breaker open for peer %s", identifier)
 		}
 	}
 
 	// Check peer reputation before proceeding
 	if u.peerMetrics != nil {
-		if peerMetric, exists := u.peerMetrics.GetPeerMetrics(baseURL); exists {
+		if peerMetric, exists := u.peerMetrics.GetPeerMetrics(identifier); exists {
 			if !peerMetric.IsTrusted() {
-				u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", blockUpTo.Hash().String(), baseURL, peerMetric.ReputationScore, peerMetric.MaliciousAttempts)
+				u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", blockUpTo.Hash().String(), identifier, peerMetric.ReputationScore, peerMetric.MaliciousAttempts)
 			}
 		}
 	}
@@ -126,7 +132,11 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	for iteration < maxCatchupIterations {
 		iteration++
 
-		peerMetrics := u.peerMetrics.GetOrCreatePeerMetrics(baseURL)
+		if peerID == "" {
+			u.logger.Warnf("[catchup][%s] No peerID provided for peer at %s", blockUpTo.Hash().String(), baseURL)
+			return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "No peerID provided"), nil, errors.NewProcessingError("[catchup][%s] peerID is required but not provided for peer %s", blockUpTo.Hash().String(), baseURL)
+		}
+		peerMetrics := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
 		if peerMetrics != nil && peerMetrics.IsMalicious() {
 			u.logger.Warnf("[catchup][%s] peer %s is marked as malicious (%d attempts), should skip catchup", chainTipHash.String(), baseURL, peerMetrics.MaliciousAttempts)
 			// Too many malicious attempts - skip this peer
@@ -171,7 +181,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 				// Update peer metrics for slow response
 				if u.peerMetrics != nil {
-					peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(baseURL)
+					peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
 					if peerMetric != nil {
 						peerMetric.RecordFailure()
 					}
@@ -211,7 +221,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 			// Update peer reputation for failed request
 			if u.peerMetrics != nil {
-				peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(baseURL)
+				peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
 				peerMetric.UpdateReputation(false, time.Since(startTime))
 				peerMetric.FailedRequests++
 				peerMetric.TotalRequests++
@@ -252,7 +262,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			if errors.IsMaliciousResponseError(parseErr) {
 				// Record malicious attempt
 				if u.peerMetrics != nil {
-					peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(baseURL)
+					peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
 					peerMetric.RecordMaliciousAttempt()
 				}
 
@@ -297,7 +307,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			if errors.IsMaliciousResponseError(err) {
 				// Record malicious attempt for checkpoint violation
 				if u.peerMetrics != nil {
-					peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(baseURL)
+					peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
 					peerMetric.RecordMaliciousAttempt()
 				}
 
@@ -367,7 +377,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	// Update peer reputation for successful fetching (if we got any headers)
 	if totalHeadersFetched > 0 {
 		if u.peerMetrics != nil {
-			peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(baseURL)
+			peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
 
 			responseTime := time.Since(startTime)
 			peerMetric.UpdateReputation(true, responseTime)
