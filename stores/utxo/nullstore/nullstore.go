@@ -127,8 +127,8 @@ func (m *NullStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLoc
 	return nil
 }
 
-func (m *NullStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
-	return nil
+func (m *NullStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
+	return nil, nil
 }
 
 func (m *NullStore) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {

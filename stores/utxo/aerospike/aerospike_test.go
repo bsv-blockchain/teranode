@@ -206,12 +206,15 @@ func TestUnmined(t *testing.T) {
 		assert.Equal(t, 1, count)
 
 		// set the tx as mined
-		err = store.SetMinedMulti(store.ctx, []*chainhash.Hash{txUnMined.TxIDChainHash()}, utxo.MinedBlockInfo{
+		blockIDsMap, err := store.SetMinedMulti(store.ctx, []*chainhash.Hash{txUnMined.TxIDChainHash()}, utxo.MinedBlockInfo{
 			BlockID:     1,
 			BlockHeight: currentBlockHeight,
 			SubtreeIdx:  1,
 		})
 		require.NoError(t, err)
+		require.Len(t, blockIDsMap, 1)
+		require.Len(t, blockIDsMap[*txUnMined.TxIDChainHash()], 1)
+		require.Equal(t, []uint32{1}, blockIDsMap[*txUnMined.TxIDChainHash()])
 
 		recordset, err = client.Query(nil, stmt)
 		require.NoError(t, err)
@@ -301,12 +304,15 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now mark as mined
-	err = store.SetMinedMulti(context.Background(), []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+	blockIDsMap, err := store.SetMinedMulti(context.Background(), []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
 		BlockID:     1,
 		BlockHeight: 1,
 		SubtreeIdx:  1,
 	})
 	require.NoError(t, err)
+	require.Len(t, blockIDsMap, 1)
+	require.Len(t, blockIDsMap[*tx.TxIDChainHash()], 1)
+	require.Equal(t, []uint32{1}, blockIDsMap[*tx.TxIDChainHash()])
 
 	dah, err := os.ReadFile("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah")
 	require.NoError(t, err)

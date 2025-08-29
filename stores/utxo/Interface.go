@@ -243,7 +243,7 @@ type Store interface {
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 
 	// SetMinedMulti updates the block ID for multiple transactions that have been mined.
-	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error
+	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) (map[chainhash.Hash][]uint32, error)
 
 	// GetUnminedTxIterator returns an iterator for all unmined transactions in the store.
 	GetUnminedTxIterator() (UnminedTxIterator, error)

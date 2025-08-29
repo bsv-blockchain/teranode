@@ -57,16 +57,22 @@ func TestAerospikeReader(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set the mined block info for the transaction
-	err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+	blockIDsMap, err := store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
 		BlockID: 0,
 	})
 	require.NoError(t, err)
+	require.Len(t, blockIDsMap, 1)
+	require.Contains(t, blockIDsMap, *tx.TxIDChainHash())
+	require.Equal(t, []uint32{0}, blockIDsMap[*tx.TxIDChainHash()])
 
 	// Set the mined block info for the transaction
-	err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+	blockIDsMap, err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
 		BlockID: 1,
 	})
 	require.NoError(t, err)
+	require.Len(t, blockIDsMap, 1)
+	require.Contains(t, blockIDsMap, *tx.TxIDChainHash())
+	require.Equal(t, []uint32{0, 1}, blockIDsMap[*tx.TxIDChainHash()])
 
 	// Log the transaction ID
 	t.Logf("txid: %s", tx.TxIDChainHash().String())

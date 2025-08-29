@@ -99,6 +99,16 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 
 func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 	if msg != nil {
+		blockIDsMap := u.currentBlockIDsMap.Load()
+		if blockIDsMap == nil {
+			return errors.NewProcessingError("failed to get block IDs map during subtree validation")
+		}
+
+		bestBlockHeaderMeta := u.bestBlockHeaderMeta.Load()
+		if bestBlockHeaderMeta == nil {
+			return errors.NewProcessingError("failed to get best block header meta during subtree validation")
+		}
+
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -156,9 +166,9 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 			AllowFailFast: true,
 		}
 
-		// the blockIDs map is not passed into this function since we want to validate all the transactions and
-		// warm up the cache if possible. The blockIDs check will be done when a block is mined.
-		if subtree, err = u.ValidateSubtreeInternal(ctx, v, 0, nil); err != nil {
+		// validate the subtree as if it is for the next block height
+		// this is because subtrees are always validated ahead of time before they are needed for a block
+		if subtree, err = u.ValidateSubtreeInternal(ctx, v, bestBlockHeaderMeta.Height+1, *blockIDsMap); err != nil {
 			return err
 		}
 

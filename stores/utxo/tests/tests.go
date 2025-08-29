@@ -260,8 +260,10 @@ func SetMined(t *testing.T, db utxostore.Store) {
 	_, err = db.Create(ctx, Tx, 0)
 	require.NoError(t, err)
 
-	err = db.SetMinedMulti(ctx, []*chainhash.Hash{TXHash}, utxostore.MinedBlockInfo{BlockID: 123, BlockHeight: 101, SubtreeIdx: 2})
+	blockIDsMap, err := db.SetMinedMulti(ctx, []*chainhash.Hash{TXHash}, utxostore.MinedBlockInfo{BlockID: 123, BlockHeight: 101, SubtreeIdx: 2})
 	require.NoError(t, err)
+	require.Len(t, blockIDsMap, 1)
+	require.Equal(t, []uint32{123}, blockIDsMap[*TXHash])
 
 	resp, err := db.Get(ctx, testSpend0.TxID)
 	require.NoError(t, err)

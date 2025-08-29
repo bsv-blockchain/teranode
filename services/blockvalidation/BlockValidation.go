@@ -699,11 +699,9 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
 	}
 
-	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, 1); err != nil || len(ids) != 1 {
+	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2)); err != nil || len(ids) == 0 {
 		return errors.NewServiceError("[setTxMined][%s] failed to get block header ids", blockHash.String(), err)
 	}
-
-	blockID := ids[0]
 
 	// add the transactions in this block to the block IDs in the utxo store
 	if err = model.UpdateTxMinedStatus(
@@ -712,8 +710,16 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		u.settings,
 		u.utxoStore,
 		block,
-		blockID,
+		ids[0],
+		ids[0:], // all the block IDs are needed to check the transactions have not already been mined on our chain
 	); err != nil {
+		// check whether we got already mined errors and mark the block as invalid
+		if errors.Is(err, errors.ErrBlockInvalid) {
+			u.logger.Errorf("[setTxMined][%s] block is invalid, contains transactions already on our chain: %s", block.Hash().String(), err)
+			// mark the block as invalid in the blockchain
+			u.markBlockAsInvalid(ctx, block, "contains transactions already on our chain: "+err.Error())
+		}
+
 		return errors.NewProcessingError("[setTxMined][%s] error updating tx mined status", block.Hash().String(), err)
 	}
 
@@ -990,30 +996,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				if errors.Is(err, errors.ErrBlockInvalid) {
 					reason := p2pconstants.ReasonInvalidBlock.String()
-
-					// Only use Kafka for reporting invalid blocks
-					if u.invalidBlockKafkaProducer != nil {
-						u.logger.Infof("[ValidateBlock][%s] publishing invalid block to Kafka in background", block.Hash().String())
-						msg := &kafkamessage.KafkaInvalidBlockTopicMessage{
-							BlockHash: block.Hash().String(),
-							Reason:    reason,
-						}
-
-						msgBytes, err := proto.Marshal(msg)
-						if err != nil {
-							u.logger.Errorf("[ValidateBlock][%s] failed to marshal invalid block message: %v", block.Hash().String(), err)
-						} else {
-							kafkaMsg := &kafka.Message{
-								Key:   []byte(block.Hash().String()),
-								Value: msgBytes,
-							}
-							u.invalidBlockKafkaProducer.Publish(kafkaMsg)
-						}
-					}
-
-					if invalidateBlockErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invalidateBlockErr != nil {
-						u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
-					}
+					u.markBlockAsInvalid(decoupledCtx, block, reason)
 				} else {
 					// storage or processing error, block is not really invalid, but we need to re-validate
 					u.ReValidateBlock(block, baseURL)
@@ -1026,10 +1009,13 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			if err = u.checkOldBlockIDs(decoupledCtx, oldBlockIDsMap, block); err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to check old block IDs: %s", block.String(), err)
 
-				if !errors.Is(err, context.Canceled) {
+				if errors.Is(err, errors.ErrBlockInvalid) {
 					if invalidateBlockErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invalidateBlockErr != nil {
 						u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
 					}
+				} else {
+					// some other error, re-validate the block
+					u.ReValidateBlock(block, baseURL)
 				}
 			}
 		}()
@@ -1067,25 +1053,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				reason = err.Error()
 			}
 
-			// Publish invalid block to Kafka if producer is available
-			if u.invalidBlockKafkaProducer != nil {
-				u.logger.Infof("[ValidateBlock][%s] publishing invalid block to Kafka", block.Hash().String())
-				msg := &kafkamessage.KafkaInvalidBlockTopicMessage{
-					BlockHash: block.Hash().String(),
-					Reason:    reason,
-				}
-
-				msgBytes, err := proto.Marshal(msg)
-				if err != nil {
-					u.logger.Errorf("[ValidateBlock][%s] failed to marshal invalid block message: %v", block.Hash().String(), err)
-				} else {
-					kafkaMsg := &kafka.Message{
-						Key:   []byte(block.Hash().String()),
-						Value: msgBytes,
-					}
-					u.invalidBlockKafkaProducer.Publish(kafkaMsg)
-				}
-			}
+			u.kafkaNotifyBlockInvalid(block, reason)
 
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
 		}
@@ -1142,6 +1110,36 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 	}
 
 	return nil
+}
+
+func (u *BlockValidation) markBlockAsInvalid(ctx context.Context, block *model.Block, reason string) {
+	// Only use Kafka for reporting invalid blocks
+	u.kafkaNotifyBlockInvalid(block, reason)
+
+	if invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); invalidateBlockErr != nil {
+		u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
+	}
+}
+
+func (u *BlockValidation) kafkaNotifyBlockInvalid(block *model.Block, reason string) {
+	if u.invalidBlockKafkaProducer != nil {
+		u.logger.Infof("[ValidateBlock][%s] publishing invalid block to Kafka in background", block.Hash().String())
+		msg := &kafkamessage.KafkaInvalidBlockTopicMessage{
+			BlockHash: block.Hash().String(),
+			Reason:    reason,
+		}
+
+		msgBytes, err := proto.Marshal(msg)
+		if err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to marshal invalid block message: %v", block.Hash().String(), err)
+		} else {
+			kafkaMsg := &kafka.Message{
+				Key:   []byte(block.Hash().String()),
+				Value: msgBytes,
+			}
+			u.invalidBlockKafkaProducer.Publish(kafkaMsg)
+		}
+	}
 }
 
 func (u *BlockValidation) collectNecessaryBloomFilters(ctx context.Context, block *model.Block, currentChainBlockHeaders []*model.BlockHeader) ([]*model.BlockBloomFilter, error) {

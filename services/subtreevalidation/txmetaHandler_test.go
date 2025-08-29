@@ -136,9 +136,9 @@ func (m *mockCache) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
 	return args.Error(0)
 }
 
-func (m *mockCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
+func (m *mockCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	args := m.Called(ctx, hashes, minedBlockInfo)
-	return args.Error(0)
+	return args.Get(0).(map[chainhash.Hash][]uint32), args.Error(1)
 }
 
 func (m *mockCache) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {

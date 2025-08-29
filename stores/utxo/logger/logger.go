@@ -209,11 +209,11 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return err
 }
 
-func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
-	err := s.store.SetMinedMulti(ctx, hashes, minedBlockInfo)
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
+	blockIDsMap, err := s.store.SetMinedMulti(ctx, hashes, minedBlockInfo)
 	s.logger.Debugf("[UTXOStore][logger][SetMinedMulti] hashes %v blockID %d err %v : %s", hashes, minedBlockInfo.BlockID, err, caller())
 
-	return err
+	return blockIDsMap, err
 }
 
 func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {

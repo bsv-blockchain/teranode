@@ -307,12 +307,15 @@ func TestSetMinedMulti(t *testing.T) {
 
 		_ = it.Close()
 
-		err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+		blockIDsMap, err := utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
 			BlockID:     1,
 			BlockHeight: 1,
 			SubtreeIdx:  0,
 		})
 		require.NoError(t, err)
+		require.Len(t, blockIDsMap, 1)
+		require.Len(t, blockIDsMap[*tx.TxIDChainHash()], 1)
+		require.Equal(t, uint32(1), blockIDsMap[*tx.TxIDChainHash()][0])
 
 		meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)
@@ -347,12 +350,15 @@ func TestSetMinedMulti(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, meta.Locked)
 
-		err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
+		blockIDsMap, err := utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
 			BlockID:     1,
 			BlockHeight: 1,
 			SubtreeIdx:  0,
 		})
 		require.NoError(t, err)
+		require.Len(t, blockIDsMap, 1)
+		require.Len(t, blockIDsMap[*tx.TxIDChainHash()], 1)
+		require.Equal(t, uint32(1), blockIDsMap[*tx.TxIDChainHash()][0])
 
 		meta, err = utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)

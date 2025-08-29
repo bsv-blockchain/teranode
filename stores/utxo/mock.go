@@ -92,9 +92,10 @@ func (m *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsLock
 
 // SetMinedMulti mocks the batch setting of mined status for multiple transactions.
 // Returns the configured mock response for batch mined status operations.
-func (m *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error {
+func (m *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	args := m.Called(ctx, hashes, minedBlockInfo)
-	return args.Error(0)
+
+	return args.Get(0).(map[chainhash.Hash][]uint32), args.Error(1)
 }
 
 // GetUnminedTxIterator mocks the creation of an iterator for unmined transactions.

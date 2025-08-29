@@ -1134,14 +1134,14 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
 	// Start a database transaction
 	txn, err := s.db.Begin()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	defer func() {
@@ -1171,25 +1171,51 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 		WHERE hash = $1;
 	`
 
+	qGet := `
+		SELECT block_id FROM block_ids
+		WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1)
+	`
+
+	blockIDsMap := make(map[chainhash.Hash][]uint32)
+
 	for _, hash := range hashes {
-		// TODO set all the values from minedBlockInfo
 		if _, err = txn.ExecContext(ctx, q, hash[:], minedBlockInfo.BlockID, minedBlockInfo.BlockHeight, minedBlockInfo.SubtreeIdx); err != nil {
-			return errors.NewStorageError("SQL error calling SetMinedMulti on tx %s:%v", hash.String(), err)
+			return nil, errors.NewStorageError("SQL error calling SetMinedMulti on tx %s:%v", hash.String(), err)
 		}
+
+		// get the current block IDs for the transaction
+		rows, err := txn.QueryContext(ctx, qGet, hash[:])
+		if err != nil {
+			return nil, errors.NewStorageError("SQL error calling get block IDs on tx %s:%v", hash.String(), err)
+		}
+
+		var blockIDs []uint32
+		for rows.Next() {
+			var blockID uint32
+			if err := rows.Scan(&blockID); err != nil {
+				rows.Close()
+
+				return nil, errors.NewStorageError("SQL error scanning block ID on tx %s:%v", hash.String(), err)
+			}
+			blockIDs = append(blockIDs, blockID)
+		}
+		rows.Close()
+
+		blockIDsMap[*hash] = blockIDs
 	}
 
 	for _, hash := range hashes {
 		if _, err = txn.ExecContext(ctx, q2, hash[:]); err != nil {
-			return errors.NewStorageError("SQL error calling update locked on tx %s:%v", hash.String(), err)
+			return nil, errors.NewStorageError("SQL error calling update locked on tx %s:%v", hash.String(), err)
 		}
 	}
 
 	// Commit the transaction
 	if err = txn.Commit(); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return blockIDsMap, nil
 }
 
 func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {

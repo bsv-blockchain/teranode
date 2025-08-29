@@ -497,6 +497,9 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     blocks[#blocks + 1] = blockID
     rec[BIN_BLOCK_IDS] = blocks
 
+    -- Also add the block ids to the response
+    response[FIELD_BLOCK_IDS] = blocks
+
     local heights = rec[BIN_BLOCK_HEIGHTS]
     heights[#heights + 1] = blockHeight
     rec[BIN_BLOCK_HEIGHTS] = heights

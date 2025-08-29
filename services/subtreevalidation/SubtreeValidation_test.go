@@ -23,6 +23,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	blobmemory "github.com/bitcoin-sv/teranode/stores/blob/memory"
+	blockchainstore "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/sql"
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -149,8 +150,10 @@ func setup(t *testing.T) (utxo.Store, *validator.MockValidatorClient, blob.Store
 
 	validatorClient := &validator.MockValidatorClient{UtxoStore: utxoStore}
 
+	mockBlockChainStore := &blockchainstore.MockStore{}
+
 	// Create LocalClient properly using the constructor to ensure all fields are initialized
-	blockchainClient, err := blockchain.NewLocalClient(logger, nil, subtreeStore, utxoStore)
+	blockchainClient, err := blockchain.NewLocalClient(logger, mockBlockChainStore, subtreeStore, utxoStore)
 	if err != nil {
 		panic(err)
 	}
@@ -751,12 +754,14 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 
 		// set the tx1DoubleSpend to mined
-		err = s.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx1DoubleSpend.TxIDChainHash()}, utxo.MinedBlockInfo{
+		blockIDsMap, err := s.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx1DoubleSpend.TxIDChainHash()}, utxo.MinedBlockInfo{
 			BlockID:     122,
 			BlockHeight: 122,
 			SubtreeIdx:  0,
 		})
 		require.NoError(t, err)
+		require.Len(t, blockIDsMap, 1)
+		require.Equal(t, []uint32{122}, blockIDsMap[*tx1DoubleSpend.TxIDChainHash()])
 
 		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
 		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{

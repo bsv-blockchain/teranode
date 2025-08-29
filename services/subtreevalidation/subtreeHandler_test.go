@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/services/validator"
@@ -214,17 +216,25 @@ func TestSubtreesHandler(t *testing.T) {
 			blockchainClient := &blockchain.Mock{}
 			blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
 
+			blockIDsMap := make(map[uint32]bool)
+
 			server := &testServer{
 				Server: Server{
-					logger:           logger,
-					settings:         tSettings,
-					blockchainClient: blockchainClient,
-					subtreeStore:     subtreeStore,
-					utxoStore:        utxoStore,
-					validatorClient:  &validator.MockValidator{},
-					orphanage:        expiringmap.New[chainhash.Hash, *bt.Tx](tSettings.SubtreeValidation.OrphanageTimeout),
+					logger:              logger,
+					settings:            tSettings,
+					blockchainClient:    blockchainClient,
+					subtreeStore:        subtreeStore,
+					utxoStore:           utxoStore,
+					validatorClient:     &validator.MockValidator{},
+					orphanage:           expiringmap.New[chainhash.Hash, *bt.Tx](tSettings.SubtreeValidation.OrphanageTimeout),
+					currentBlockIDsMap:  atomic.Pointer[map[uint32]bool]{},
+					bestBlockHeader:     atomic.Pointer[model.BlockHeader]{},
+					bestBlockHeaderMeta: atomic.Pointer[model.BlockHeaderMeta]{},
 				},
 			}
+
+			server.Server.currentBlockIDsMap.Store(&blockIDsMap)
+			server.Server.bestBlockHeaderMeta.Store(&model.BlockHeaderMeta{Height: 100})
 
 			q, _ = NewQuorum(
 				logger,

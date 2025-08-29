@@ -67,6 +67,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 )
 
 // SetMinedMulti updates the block references for multiple transactions in batch.
@@ -122,7 +123,7 @@ import (
 //   - prometheusTxMetaAerospikeMapSetMinedBatch: Batch operation count
 //   - prometheusTxMetaAerospikeMapSetMinedBatchN: Successful updates
 //   - prometheusTxMetaAerospikeMapSetMinedBatchErrN: Failed updates
-func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "aerospike:SetMinedMulti2")
 	defer deferFn()
 
@@ -131,12 +132,12 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	// Prepare batch records
 	batchRecords, err := s.prepareBatchRecordsForSetMined(hashes, minedBlockInfo, thisBlockHeight)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Execute batch operation
-	if err := s.executeBatchOperation(batchRecords); err != nil {
-		return err
+	if err = s.executeBatchOperation(batchRecords); err != nil {
+		return nil, err
 	}
 
 	// Process batch results
@@ -173,27 +174,46 @@ func (s *Store) prepareBatchRecordsForSetMined(hashes []*chainhash.Hash, minedBl
 // executeBatchOperation performs the batch operation and increments metrics
 func (s *Store) executeBatchOperation(batchRecords []aerospike.BatchRecordIfc) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	err := s.client.BatchOperate(batchPolicy, batchRecords)
-	if err != nil {
+
+	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
 		return errors.NewStorageError("aerospike BatchOperate error", err)
 	}
+
 	prometheusTxMetaAerospikeMapSetMinedBatch.Inc()
+
 	return nil
 }
 
 // processBatchResultsForSetMined processes the results of the batch operation
-func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, hashes []*chainhash.Hash, thisBlockHeight uint32) error {
+func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, hashes []*chainhash.Hash, thisBlockHeight uint32) (map[chainhash.Hash][]uint32, error) {
 	var errs error
 	okUpdates := 0
 	nrErrors := 0
+	blockIDs := make(map[chainhash.Hash][]uint32, len(hashes))
 
 	for idx, batchRecord := range batchRecords {
-		result, err := s.processSingleBatchRecord(ctx, batchRecord, hashes[idx], thisBlockHeight)
+		result, res, err := s.processSingleBatchRecord(ctx, batchRecord, hashes[idx], thisBlockHeight)
 		if err != nil {
 			errs = errors.Join(errs, err)
 			nrErrors++
 		} else if result {
 			okUpdates++
+		}
+
+		if res != nil && res.BlockIDs != nil {
+			blockIDsUint32 := make([]uint32, len(res.BlockIDs))
+			for i, bID := range res.BlockIDs {
+				bID32, err := safeconversion.IntToUint32(bID)
+				if err != nil {
+					errs = errors.Join(errs, errors.NewProcessingError("aerospike SetMinedMulti blockID conversion error", err))
+					nrErrors++
+					continue
+				}
+
+				blockIDsUint32[i] = bID32
+			}
+
+			blockIDs[*hashes[idx]] = blockIDsUint32
 		}
 	}
 
@@ -201,41 +221,41 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 
 	if errs != nil || nrErrors > 0 {
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
-		return errors.NewError("aerospike batchRecord errors", errs)
+		return nil, errors.NewError("aerospike batchRecord errors", errs)
 	}
 
-	return nil
+	return blockIDs, nil
 }
 
 // processSingleBatchRecord processes a single batch record result
-func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerospike.BatchRecordIfc, hash *chainhash.Hash, thisBlockHeight uint32) (bool, error) {
+func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerospike.BatchRecordIfc, hash *chainhash.Hash, thisBlockHeight uint32) (bool, *LuaMapResponse, error) {
 	batchErr := batchRecord.BatchRec().Err
 	if batchErr != nil {
-		return false, s.handleBatchRecordError(batchErr, hash)
+		return false, nil, s.handleBatchRecordError(batchErr, hash)
 	}
 
 	response := batchRecord.BatchRec().Record
 	if response == nil || response.Bins == nil || response.Bins[LuaSuccess.String()] == nil {
-		return false, errors.NewError("aerospike batchRecord %s !bins[SUCCESS]", hash.String(), batchRecord.BatchRec().Err)
+		return false, nil, errors.NewError("aerospike batchRecord %s !bins[SUCCESS]", hash.String(), batchRecord.BatchRec().Err)
 	}
 
 	res, parseErr := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
 	if parseErr != nil {
-		return false, errors.NewError("aerospike batchRecord %s ParseLuaMapResponse error", hash.String(), parseErr)
+		return false, nil, errors.NewError("aerospike batchRecord %s ParseLuaMapResponse error", hash.String(), parseErr)
 	}
 
 	if res.Status != LuaStatusOK {
-		return false, errors.NewError("aerospike batchRecord %s error: %s", hash.String(), res.Message, batchRecord.BatchRec().Err)
+		return false, res, errors.NewError("aerospike batchRecord %s error: %s", hash.String(), res.Message, batchRecord.BatchRec().Err)
 	}
 
 	// Handle signal if present
 	if res.Signal != "" {
 		if err := s.handleSetMinedSignal(ctx, res.Signal, hash, res.ChildCount, thisBlockHeight); err != nil {
-			return true, err // Still counts as OK update, but with signal handling error
+			return true, res, err // Still counts as OK update, but with signal handling error
 		}
 	}
 
-	return true, nil
+	return true, res, nil
 }
 
 // handleBatchRecordError handles errors from batch records

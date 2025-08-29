@@ -125,6 +125,15 @@ type Server struct {
 
 	// pauseSubtreeProcessing is used to pause subtree processing while a block is being processed
 	pauseSubtreeProcessing atomic.Bool
+
+	// bestBlockHeader is used to store the current best block header
+	bestBlockHeader atomic.Pointer[model.BlockHeader]
+
+	// bestBlockHeaderMeta is used to store the current best block header metadata
+	bestBlockHeaderMeta atomic.Pointer[model.BlockHeaderMeta]
+
+	// currentBlockIDsMap is used to store the current block IDs for the current best block height
+	currentBlockIDsMap atomic.Pointer[map[uint32]bool]
 }
 
 var (
@@ -249,71 +258,95 @@ func New(
 		logger.Infof("No Kafka topic configured for invalid subtrees")
 	}
 
+	// get and set the initial best block
+	if err = u.updateBestBlock(ctx); err != nil {
+		logger.Errorf("[SubtreeValidation] failed to get initial best block: %s", err)
+	}
+
 	if u.blockchainClient != nil {
-		var (
-			subscribeCtx    context.Context
-			subscribeCancel context.CancelFunc
-			height          uint32
-		)
-
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					if subscribeCancel != nil {
-						u.logger.Infof("[SubtreeValidation:DAH] cancelling blockchain subscription")
-
-						subscribeCancel()
-					}
-
-					u.logger.Warnf("[SubtreeValidation:DAH] exiting setMined goroutine: %s", ctx.Err())
-
-					return
-				default:
-					u.logger.Infof("[SubtreeValidation:DAH] subscribing to blockchain for setTxMined signal")
-
-					subscribeCtx, subscribeCancel = context.WithCancel(ctx)
-
-					blockchainSubscription, err := u.blockchainClient.Subscribe(subscribeCtx, "subtreevalidation")
-					if err != nil {
-						u.logger.Errorf("[SubtreeValidation:DAH] failed to subscribe to blockchain: %s", err)
-
-						// backoff for 5 seconds and try again
-						time.Sleep(5 * time.Second)
-
-						continue
-					}
-
-					for notification := range blockchainSubscription {
-						if notification == nil {
-							continue
-						}
-
-						if notification.Type == model.NotificationType_Block {
-							cHash := chainhash.Hash(notification.Hash)
-							u.logger.Infof("[SubtreeValidation:DAH] received Block notification: %s", cHash.String())
-
-							block, err := u.blockchainClient.GetBlock(ctx, &cHash)
-							if err != nil {
-								u.logger.Errorf("[SubtreeValidation:DAH] failed to get block: %s", err)
-
-								continue
-							}
-
-							if block.Height > height {
-								height = block.Height
-								u.subtreeStore.SetCurrentBlockHeight(block.Height)
-							}
-						}
-					}
-
-					subscribeCancel()
-				}
-			}
-		}()
+		go u.blockchainSubscriptionListener(ctx)
 	}
 
 	return u, nil
+}
+
+func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
+	var (
+		subscribeCtx    context.Context
+		subscribeCancel context.CancelFunc
+	)
+
+	for {
+		select {
+		case <-ctx.Done():
+			if subscribeCancel != nil {
+				u.logger.Infof("[SubtreeValidation:blockchainSubscriptionListener] cancelling blockchain subscription")
+
+				subscribeCancel()
+			}
+
+			u.logger.Warnf("[SubtreeValidation:blockchainSubscriptionListener] exiting setMined goroutine: %s", ctx.Err())
+
+			return
+		default:
+			u.logger.Infof("[SubtreeValidation:blockchainSubscriptionListener] subscribing to blockchain for setTxMined signal")
+
+			subscribeCtx, subscribeCancel = context.WithCancel(ctx)
+
+			blockchainSubscription, err := u.blockchainClient.Subscribe(subscribeCtx, "subtreevalidation")
+			if err != nil {
+				u.logger.Errorf("[SubtreeValidation:blockchainSubscriptionListener] failed to subscribe to blockchain: %s", err)
+
+				// backoff for 5 seconds and try again
+				time.Sleep(5 * time.Second)
+
+				continue
+			}
+
+			for notification := range blockchainSubscription {
+				if notification == nil {
+					continue
+				}
+
+				if notification.Type == model.NotificationType_Block {
+					cHash := chainhash.Hash(notification.Hash)
+					u.logger.Infof("[SubtreeValidation:blockchainSubscriptionListener] received Block notification: %s", cHash.String())
+
+					// get the best block header, we might have just added an invalid block that we do not want to count
+					if err = u.updateBestBlock(ctx); err != nil {
+						u.logger.Errorf("[SubtreeValidation:blockchainSubscriptionListener] failed to update best block: %s", err)
+					}
+				}
+			}
+
+			subscribeCancel()
+		}
+	}
+}
+
+func (u *Server) updateBestBlock(ctx context.Context) error {
+	bestBlockHeader, bestBlockHeaderMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewProcessingError("[SubtreeValidation:blockchainSubscriptionListener] failed to get best block header: %s", err)
+	}
+
+	u.bestBlockHeader.Store(bestBlockHeader)
+	u.bestBlockHeaderMeta.Store(bestBlockHeaderMeta)
+	u.subtreeStore.SetCurrentBlockHeight(bestBlockHeaderMeta.Height)
+
+	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, bestBlockHeader.Hash(), uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
+	if err != nil {
+		return errors.NewProcessingError("[SubtreeValidation:blockchainSubscriptionListener] failed to get block header IDs: %s", err)
+	}
+
+	blockIDsMap := make(map[uint32]bool, len(ids))
+	for _, id := range ids {
+		blockIDsMap[id] = true
+	}
+
+	u.currentBlockIDsMap.Store(&blockIDsMap)
+
+	return nil
 }
 
 // Health checks the health status of the service and its dependencies.

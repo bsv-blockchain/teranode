@@ -478,7 +478,7 @@ func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 //
 // Returns:
 // - Error if updating the transaction metadata fails
-func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (err error) {
+func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (blockIDs []uint32, err error) {
 	var txMeta *meta.Data
 
 	txMeta, err = t.Get(ctx, hash)
@@ -487,7 +487,7 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 	}
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if txMeta.BlockIDs == nil {
@@ -504,7 +504,7 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 		_ = t.SetCache(hash, txMeta)
 	}
 
-	return nil
+	return txMeta.BlockIDs, nil
 }
 
 // SetMined marks a transaction as mined in a specific block, updating both the
@@ -517,18 +517,18 @@ func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash,
 //
 // Returns:
 // - Error if updating either the underlying store or cache fails
-func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) error {
-	err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, minedBlockInfo)
+func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) ([]uint32, error) {
+	blockIDsMap, err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, minedBlockInfo)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	err = t.setMinedInCache(ctx, hash, minedBlockInfo)
+	_, err = t.setMinedInCache(ctx, hash, minedBlockInfo)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return blockIDsMap[*hash], nil
 }
 
 // SetMinedMulti marks multiple transactions as mined in a specific block.
@@ -541,20 +541,19 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, minedB
 //
 // Returns:
 // - Error if updating the cache for any transaction fails
-func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (err error) {
-	// do not update the aerospike tx meta store, it kills the aerospike server
-	// err := t.txMetaStore.SetMinedMulti(ctx, hashes, blockID)
-	// if err != nil {
-	//   return err
-	// }
+func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
+	blockIDsMap := make(map[chainhash.Hash][]uint32, len(hashes))
+
 	for _, hash := range hashes {
-		err = t.setMinedInCache(ctx, hash, minedBlockInfo)
+		blockIDs, err := t.setMinedInCache(ctx, hash, minedBlockInfo)
 		if err != nil {
-			return err
+			return nil, err
 		}
+
+		blockIDsMap[*hash] = blockIDs
 	}
 
-	return nil
+	return blockIDsMap, nil
 }
 
 // SetMinedMultiParallel marks multiple transactions as mined in a specific block using parallel processing.

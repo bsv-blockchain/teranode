@@ -49,7 +49,9 @@ import (
 //   - BlockNotFoundError if no block exists at the specified height in the specified chain
 //   - StorageError for database or processing errors
 func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (block *model.Block, invalid bool, err error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockInChainByHeightHash")
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockInChainByHeightHash",
+		tracing.WithLogMessage(s.logger, "[GetBlockInChainByHeightHash][%s:%d] called", startHash.String(), height),
+	)
 	defer deferFn()
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
@@ -58,7 +60,7 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 	cached := s.responseCache.Get(cacheID)
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*model.Block); ok && cacheData != nil {
-			s.logger.Debugf("GetBlockByHeight cache hit")
+			s.logger.Debugf("[GetBlockInChainByHeightHash][%s:%d] cache hit", startHash.String(), height)
 			return cacheData, false, nil
 		}
 	}
@@ -132,10 +134,10 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 		&invalid,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, false, errors.NewBlockNotFoundError("failed to get block in-chain by height", err)
+			return nil, false, errors.NewBlockNotFoundError("[GetBlockInChainByHeightHash][%s:%d] failed to get block in-chain by height", startHash.String(), height, err)
 		}
 
-		return nil, false, errors.NewStorageError("failed to get block in-chain by height", err)
+		return nil, false, errors.NewStorageError("[GetBlockInChainByHeightHash][%s:%d] failed to get block in-chain by height", startHash.String(), height, err)
 	}
 
 	bits, _ := model.NewNBitFromSlice(nBits)
@@ -143,12 +145,12 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, false, errors.NewInvalidArgumentError("failed to convert hashPrevBlock: %s", utils.ReverseAndHexEncodeSlice(hashPrevBlock), err)
+		return nil, false, errors.NewInvalidArgumentError("[GetBlockInChainByHeightHash][%s:%d] failed to convert hashPrevBlock: %s", startHash.String(), height, utils.ReverseAndHexEncodeSlice(hashPrevBlock), err)
 	}
 
 	block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, false, errors.NewInvalidArgumentError("failed to convert hashMerkleRoot: %s", utils.ReverseAndHexEncodeSlice(hashMerkleRoot), err)
+		return nil, false, errors.NewInvalidArgumentError("[GetBlockInChainByHeightHash][%s:%d] failed to convert hashMerkleRoot: %s", startHash.String(), height, utils.ReverseAndHexEncodeSlice(hashMerkleRoot), err)
 	}
 
 	block.TransactionCount = transactionCount
@@ -157,13 +159,13 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 	if len(coinbaseTx) > 0 {
 		block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
 		if err != nil {
-			return nil, false, errors.NewInvalidArgumentError("failed to convert coinbaseTx", err)
+			return nil, false, errors.NewInvalidArgumentError("[GetBlockInChainByHeightHash][%s:%d] failed to convert coinbaseTx", startHash.String(), height, err)
 		}
 	}
 
 	err = block.SubTreesFromBytes(subtreeBytes)
 	if err != nil {
-		return nil, false, errors.NewInvalidArgumentError("failed to convert subtrees", err)
+		return nil, false, errors.NewInvalidArgumentError("[GetBlockInChainByHeightHash][%s:%d] failed to convert subtrees", startHash.String(), height, err)
 	}
 
 	s.responseCache.Set(cacheID, block, s.cacheTTL)

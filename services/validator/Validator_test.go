@@ -174,12 +174,14 @@ func TestValidate_ValidTransaction(t *testing.T) {
 		assert.Len(t, txMeta.BlockIDs, 0)
 
 		// set the transaction as mined
-		err = utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{tests.Tx.TxIDChainHash()}, utxostore.MinedBlockInfo{
+		blockIDsMap, err := utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{tests.Tx.TxIDChainHash()}, utxostore.MinedBlockInfo{
 			BlockID:     125,
 			BlockHeight: 123,
 			SubtreeIdx:  0,
 		})
 		require.NoError(t, err)
+		require.Len(t, blockIDsMap, 1)
+		require.Equal(t, []uint32{125}, blockIDsMap[*tests.Tx.TxIDChainHash()])
 
 		// validate the transaction and make sure we are getting blockIDs
 		txMeta, err = v.Validate(ctx, tests.Tx, 123)

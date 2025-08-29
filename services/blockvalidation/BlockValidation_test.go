@@ -1098,12 +1098,14 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	err := utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{tx0.TxIDChainHash()}, utxostore.MinedBlockInfo{
+	blockIDsMap, err := utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{tx0.TxIDChainHash()}, utxostore.MinedBlockInfo{
 		BlockID:     0,
 		BlockHeight: 1,
 		SubtreeIdx:  0,
 	})
 	require.NoError(t, err)
+	require.Len(t, blockIDsMap, 1)
+	require.Equal(t, []uint32{0}, blockIDsMap[*tx0.TxIDChainHash()])
 
 	// Create a subtree with our transactions
 	subtree, err := subtreepkg.NewTreeByLeafCount(4) // 4 transactions excluding coinbase
