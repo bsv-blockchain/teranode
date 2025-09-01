@@ -207,7 +207,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 
 	// 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,
 	//    more than the dust threshold if 1 unless it's OP_RETURN, which is allowed to be 0)
-	if err := tv.checkOutputs(tx, blockHeight); err != nil {
+	if err := tv.checkOutputs(tx, blockHeight, validationOptions); err != nil {
 		return err
 	}
 
@@ -314,7 +314,7 @@ func isStandardInputScript(script *bscript.Script, blockHeight uint32, uahfHeigh
 	return parsedScript.IsPushOnly()
 }
 
-func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
+func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	total := uint64(0)
 
 	for index, output := range tx.Outputs {
@@ -325,7 +325,8 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 		// Check dust limit after genesis activation
 		// Note: We use > instead of >= to exclude the Genesis activation block itself
 		// because transactions in block 620538 were created before Genesis rules existed
-		if blockHeight > tv.settings.ChainCfgParams.GenesisActivationHeight {
+		// Dust checks are policy rules, not consensus rules - they only apply to mempool/relay
+		if !validationOptions.SkipPolicyChecks && blockHeight > tv.settings.ChainCfgParams.GenesisActivationHeight {
 			// Only enforce dust limit for spendable outputs when RequireStandard is true
 			if tv.settings.ChainCfgParams.RequireStandard && output.Satoshis < DustLimit && !isUnspendableOutput(output.LockingScript) {
 				return errors.NewTxInvalidError("zero-satoshi outputs require 'OP_FALSE OP_RETURN' prefix")

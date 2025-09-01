@@ -41,19 +41,19 @@ import (
 // - Thread-safe operation for concurrent test scenarios
 type MockValidatorClient struct {
 	// BlockHeight represents the current blockchain height for validation context
-	BlockHeight     uint32
+	BlockHeight uint32
 
 	// MedianBlockTime represents the median time of recent blocks for timelock validation
 	MedianBlockTime uint32
 
 	// Errors contains a list of errors to return from validation operations
-	Errors          []error
+	Errors []error
 
 	// ErrorsMu provides thread-safe access to the Errors slice
-	ErrorsMu        sync.Mutex
+	ErrorsMu sync.Mutex
 
 	// UtxoStore provides access to UTXO data for transaction validation
-	UtxoStore       utxo.Store
+	UtxoStore utxo.Store
 }
 
 // Health implements the validator client health check interface for testing.
