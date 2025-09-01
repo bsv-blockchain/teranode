@@ -528,6 +528,7 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 
 		outputs[i] = bsvjson.Vout{
 			Value: float64(txOut.Satoshis),
+			N:     uint32(i),
 			ScriptPubKey: bsvjson.ScriptPubKeyResult{
 				Addresses: addressStrings,
 				Asm:       asm,
