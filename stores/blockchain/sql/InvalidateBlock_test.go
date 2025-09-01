@@ -143,6 +143,49 @@ func TestSQLInvalidateBlock(t *testing.T) {
 		assert.Equal(t, uint32(3), height)
 		assert.True(t, invalid)
 	})
+
+	// Ensure best block header cache is invalidated when the tip is marked invalid
+	t.Run("Invalidate tip updates best block header (cache invalidation)", func(t *testing.T) {
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		require.NoError(t, err)
+
+		// Build a short chain: genesis -> block1 -> block2 -> block3
+		_, _, err = s.StoreBlock(context.Background(), block1, "peer")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block2, "peer")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block3, "peer")
+		require.NoError(t, err)
+
+		// Warm the cache so best header is served from cache
+		head, meta, err := s.GetBestBlockHeader(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, head)
+		require.NotNil(t, meta)
+		assert.Equal(t, uint32(3), meta.Height)
+		assert.Equal(t, block3.Hash().String(), head.Hash().String())
+
+		// Invalidate the tip
+		require.NoError(t, s.InvalidateBlock(context.Background(), block3.Hash()))
+
+		// Now best header must move back to block2 (not the invalid block3)
+		head2, meta2, err := s.GetBestBlockHeader(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, head2)
+		require.NotNil(t, meta2)
+		assert.Equal(t, uint32(2), meta2.Height)
+		assert.Equal(t, block2.Hash().String(), head2.Hash().String())
+
+		// Call again to ensure cached path is also correct
+		head3, meta3, err := s.GetBestBlockHeader(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(2), meta3.Height)
+		assert.Equal(t, head2.Hash().String(), head3.Hash().String())
+	})
+
 }
 
 // func dumpDBData(t *testing.T, err error, s *SQL) error {

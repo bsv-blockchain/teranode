@@ -1824,6 +1824,9 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 		return nil, errors.WrapGRPC(err)
 	}
 
+	// Clear any cached difficulty that may depend on the previous best tip
+	b.difficulty.ResetCache()
+
 	bestBlock, _, err := b.store.GetBestBlockHeader(ctx)
 	if err != nil {
 		b.logger.Errorf("[Blockchain] Error getting best block header: %v", err)
@@ -1896,6 +1899,9 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
+
+	// Clear any cached difficulty that may depend on the previous best tip
+	b.difficulty.ResetCache()
 
 	return &emptypb.Empty{}, nil
 }

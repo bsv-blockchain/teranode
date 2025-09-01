@@ -189,5 +189,8 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 	// Set the block time to the timestamp in the meta
 	blockHeaderMeta.BlockTime = blockHeader.Timestamp
 
+	// Cache the fresh result for future calls to avoid repeated database queries
+	s.blocksCache.AddBlockHeader(blockHeader, blockHeaderMeta)
+
 	return blockHeader, blockHeaderMeta, nil
 }

@@ -426,3 +426,12 @@ func (d *Difficulty) ValidateBlockHeaderDifficulty(ctx context.Context, newBlock
 
 	return nil
 }
+
+// ResetCache clears any cached values inside Difficulty that depend on the
+// current best chain tip. This should be called when the best tip may have
+// changed due to invalidation, revalidation, or reorgs to avoid returning
+// stale results from CalcNextWorkRequired.
+func (d *Difficulty) ResetCache() {
+	d.bestBlockHash = nil
+	d.lastComputednBits = nil
+}

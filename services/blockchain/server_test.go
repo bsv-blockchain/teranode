@@ -977,13 +977,12 @@ func Test_Subscribe(t *testing.T) {
 
 	assert.Equal(t, 1, subCount)
 
-	// Cancel context to end subscription
+	// Cancel the mock stream to terminate the subscription
 	mockStream.Cancel()
 
-	// Wait for subscription to end
 	select {
 	case <-done:
-		// Success
+		// Success - subscription ended as expected
 	case <-time.After(time.Second):
 		t.Fatal("Subscription didn't end in time")
 	}
@@ -1311,4 +1310,94 @@ func TestGetBestBlockHeader(t *testing.T) {
 		assert.Equal(t, blk.SizeInBytes, resp.SizeInBytes)
 		assert.NotEmpty(t, resp.BlockHeader)
 	})
+}
+
+// Test_ServiceInvalidateBlock_ClearsBestAndDifficultyCache ensures that invalidating the
+// current best block via the service updates the best block header and allows
+// difficulty to be recalculated based on the new best tip (i.e., cache does not stay stale).
+func Test_ServiceInvalidateBlock_ClearsBestAndDifficultyCache(t *testing.T) {
+	ctx := setup(t)
+
+	// Build a short chain of 3 blocks (heights 1,2,3) from genesis
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+
+	var blocks []*model.Block
+	for i := 1; i <= 3; i++ {
+		coinbase := bt.NewTx()
+		err := coinbase.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+		require.NoError(t, err)
+
+		arbitraryData := []byte{0x03, byte(i), 0x00, 0x00}
+		coinbase.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
+		coinbase.Inputs[0].SequenceNumber = 0xffffffff
+		err = coinbase.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 5000000000)
+		require.NoError(t, err)
+
+		merkleRoot := coinbase.TxIDChainHash()
+
+		blk := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: merkleRoot,
+				Timestamp:      uint32(time.Now().Unix()) + uint32(i),
+				Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+				Nonce:          uint32(i),
+			},
+			CoinbaseTx:       coinbase,
+			TransactionCount: 1,
+			SizeInBytes:      1000,
+			Height:           uint32(i),
+			ID:               uint32(i),
+		}
+
+		_, _, err = ctx.server.store.StoreBlock(context.Background(), blk, "test")
+		require.NoError(t, err)
+
+		blocks = append(blocks, blk)
+		prevHash = blk.Hash()
+	}
+
+	// Warm difficulty cache using the current best (height 3)
+	bestRespBefore, err := ctx.server.GetBestBlockHeader(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.NotNil(t, bestRespBefore)
+
+	bestHeaderBefore, err := model.NewBlockHeaderFromBytes(bestRespBefore.BlockHeader)
+	require.NoError(t, err)
+
+	// Call GetNextWorkRequired twice to warm any internal caching
+	req := &blockchain_api.GetNextWorkRequiredRequest{BlockHash: bestHeaderBefore.Hash().CloneBytes()}
+	diff1, err := ctx.server.GetNextWorkRequired(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, diff1)
+
+	diff2, err := ctx.server.GetNextWorkRequired(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, diff2)
+
+	// Invalidate the current best block (height 3)
+	_, err = ctx.server.InvalidateBlock(context.Background(), &blockchain_api.InvalidateBlockRequest{
+		BlockHash: bestHeaderBefore.Hash().CloneBytes(),
+	})
+	require.NoError(t, err)
+
+	// After invalidation, the best should move to height 2
+	bestRespAfter, err := ctx.server.GetBestBlockHeader(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.NotNil(t, bestRespAfter)
+
+	bestHeaderAfter, err := model.NewBlockHeaderFromBytes(bestRespAfter.BlockHeader)
+	require.NoError(t, err)
+
+	// Verify that best tip changed from the invalidated block (the store decides the next best)
+	assert.False(t, bestHeaderAfter.Hash().IsEqual(bestHeaderBefore.Hash()))
+
+	// Ensure difficulty can be computed for the new best without using stale cache
+	reqAfter := &blockchain_api.GetNextWorkRequiredRequest{BlockHash: bestHeaderAfter.Hash().CloneBytes()}
+	diffAfter, err := ctx.server.GetNextWorkRequired(context.Background(), reqAfter)
+	require.NoError(t, err)
+	require.NotNil(t, diffAfter)
 }
