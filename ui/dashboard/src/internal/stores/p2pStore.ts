@@ -28,9 +28,60 @@ export const currentNodePeerID = createCurrentNodePeerIDStore() // Track our own
 const maxMessages = 500
 const MAX_RECONNECT_ATTEMPTS = 5
 const BASE_RECONNECT_DELAY = 2000 // Start with 2 seconds
+const PEER_EXPIRY_TIME = 30000 // 30 seconds in milliseconds
 
 // Track if we've received the first node_status message for this session
 let firstNodeStatusReceived = false
+
+// Cleanup interval reference
+let cleanupInterval: any = null
+
+// Function to clean up expired peers
+function cleanupExpiredPeers() {
+  const now = new Date().getTime()
+  const miningNodeSet: any = get(miningNodes)
+  let hasChanges = false
+  
+  // Check each peer and remove if last update was more than 30 seconds ago
+  for (const nodeKey in miningNodeSet) {
+    const node = miningNodeSet[nodeKey]
+    if (node.receivedAt) {
+      const lastUpdate = new Date(node.receivedAt).getTime()
+      if (now - lastUpdate > PEER_EXPIRY_TIME) {
+        console.log(`Removing expired peer: ${nodeKey} (last seen: ${new Date(node.receivedAt).toISOString()})`)
+        delete miningNodeSet[nodeKey]
+        hasChanges = true
+      }
+    }
+  }
+  
+  // Only update the store if we made changes
+  if (hasChanges) {
+    miningNodes.set(miningNodeSet)
+  }
+}
+
+// Start the cleanup interval
+function startCleanupInterval() {
+  // Clear any existing interval
+  stopCleanupInterval()
+  
+  // Run cleanup every 5 seconds
+  cleanupInterval = setInterval(() => {
+    cleanupExpiredPeers()
+  }, 5000)
+  
+  console.log('Started peer cleanup interval (checking every 5 seconds)')
+}
+
+// Stop the cleanup interval
+function stopCleanupInterval() {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval)
+    cleanupInterval = null
+    console.log('Stopped peer cleanup interval')
+  }
+}
 
 export async function connectToP2PServer() {
   // Reset connection attempts when manually connecting
@@ -66,6 +117,8 @@ export async function connectToP2PServer() {
           sock.set(socket)
           // Reset firstNodeStatusReceived flag for new connection
           firstNodeStatusReceived = false
+          // Start the cleanup interval when connection is established
+          startCleanupInterval()
           // This is required to trigger connect on server side since server expects
           // initial connect request from a WebSocket unidirectional client.
           socket.send(JSON.stringify({}))
@@ -226,6 +279,8 @@ export async function connectToP2PServer() {
           console.log(`p2pWS connection closed by server (${url})`)
           socket = null
           sock.set(null)
+          // Stop the cleanup interval when connection is closed
+          stopCleanupInterval()
           // Reset the first node status flag so we can detect it again on reconnection
           firstNodeStatusReceived = false
 
@@ -289,4 +344,16 @@ export async function connectToP2PServer() {
       }
     }
   }
+}
+
+// Export cleanup function for manual use if needed
+export function cleanupPeers() {
+  cleanupExpiredPeers()
+}
+
+// Clean up on module unload (for HMR in development)
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    stopCleanupInterval()
+  })
 }
