@@ -46,6 +46,11 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	}
 	failedIterations := make([]catchup.IterationError, 0, 10) // Preallocate for up to 10 failed iterations
 
+	// Validate that we have a baseURL for making HTTP requests
+	if baseURL == "" {
+		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "No baseURL provided"), nil, errors.NewInvalidArgumentError("baseURL is required for fetching headers")
+	}
+
 	// Use baseURL as fallback if peerID is not provided (for backward compatibility)
 	identifier := peerID
 	if identifier == "" {

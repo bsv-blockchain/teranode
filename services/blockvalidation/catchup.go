@@ -84,6 +84,11 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 		}
 	}
 
+	// Validate that we have a baseURL for making HTTP requests
+	if baseURL == "" {
+		return errors.NewInvalidArgumentError("baseURL is required for catchup")
+	}
+
 	// Use baseURL as fallback if peerID is not provided (for backward compatibility)
 	if peerID == "" {
 		peerID = baseURL
