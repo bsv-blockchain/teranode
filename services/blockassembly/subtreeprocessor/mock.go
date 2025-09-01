@@ -144,12 +144,7 @@ func (m *MockSubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*subtr
 	return args.Get(0).([]*subtree.Subtree)
 }
 
-// SetCurrentBlockHeader implements Interface.SetCurrentBlockHeader
-func (m *MockSubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeader) {
+// InitCurrentBlockHeader implements Interface.InitCurrentBlockHeader
+func (m *MockSubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHeader) {
 	m.Called(blockHeader)
-}
-
-// DeDuplicateTransactions implements Interface.DeDuplicateTransactions
-func (m *MockSubtreeProcessor) DeDuplicateTransactions() {
-	m.Called()
 }

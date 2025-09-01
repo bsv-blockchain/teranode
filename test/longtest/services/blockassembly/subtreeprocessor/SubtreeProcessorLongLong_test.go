@@ -141,7 +141,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 
 	wg.Add(8) // we are expecting 4 subtrees
 
-	stp.SetCurrentBlockHeader(prevBlockHeader)
+	stp.InitCurrentBlockHeader(prevBlockHeader)
 
 	timeStart := time.Now()
 

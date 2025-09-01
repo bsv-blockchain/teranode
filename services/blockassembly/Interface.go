@@ -99,15 +99,6 @@ type ClientI interface {
 	//   - error: Any error encountered during generation
 	GenerateBlocks(ctx context.Context, req *blockassembly_api.GenerateBlocksRequest) error
 
-	// DeDuplicateBlockAssembly removes duplicate transactions from block assembly.
-	//
-	// Parameters:
-	//   - ctx: Context for cancellation
-	//
-	// Returns:
-	//   - error: Any error encountered during deduplication
-	DeDuplicateBlockAssembly(ctx context.Context) error
-
 	// ResetBlockAssembly resets the block assembly state.
 	//
 	// Parameters:

@@ -1314,18 +1314,6 @@ func (ba *BlockAssembly) removeSubtreesDAH(ctx context.Context, block *model.Blo
 	return nil
 }
 
-func (ba *BlockAssembly) DeDuplicateBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
-	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "DeDuplicateBlockAssembly",
-		tracing.WithParentStat(ba.stats),
-		tracing.WithLogMessage(ba.logger, "[DeDuplicateBlockAssembly] called"),
-	)
-	defer deferFn()
-
-	ba.blockAssembler.DeDuplicateTransactions()
-
-	return &blockassembly_api.EmptyMessage{}, nil
-}
-
 func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "ResetBlockAssembly",
 		tracing.WithParentStat(ba.stats),

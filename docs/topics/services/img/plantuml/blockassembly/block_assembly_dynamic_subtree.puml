@@ -12,7 +12,7 @@ STP -> STP: Create subtrees based on current size
 note right: Current subtree size: X items
 
 STP <-- BH: New block header (Block N+1)
-STP -> STP: SetCurrentBlockHeader()
+STP -> STP: InitCurrentBlockHeader()
 note right: Start timing for new block
 
 STP -> STP: Record intervals between subtrees

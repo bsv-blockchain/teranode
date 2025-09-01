@@ -159,7 +159,7 @@ func Test_CoinbaseSubsidyHeight(t *testing.T) {
 
 	ba.blockAssembler.bestBlockHeader.Store(h)
 	ba.blockAssembler.bestBlockHeight.Store(m.Height)
-	ba.blockAssembler.subtreeProcessor.SetCurrentBlockHeader(ba.blockAssembler.bestBlockHeader.Load())
+	ba.blockAssembler.subtreeProcessor.InitCurrentBlockHeader(ba.blockAssembler.bestBlockHeader.Load())
 	mc, st, err := ba.blockAssembler.getMiningCandidate()
 	require.NoError(t, err, "Failed to get mining candidate")
 	assert.NotNil(t, mc, "Mining candidate should not be nil")

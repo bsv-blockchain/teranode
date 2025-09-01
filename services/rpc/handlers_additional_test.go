@@ -5257,9 +5257,6 @@ func (m *mockBlockAssemblyClient) GenerateBlocks(ctx context.Context, req *block
 	}
 	return nil
 }
-func (m *mockBlockAssemblyClient) DeDuplicateBlockAssembly(ctx context.Context) error {
-	return nil
-}
 func (m *mockBlockAssemblyClient) ResetBlockAssembly(ctx context.Context) error {
 	return nil
 }

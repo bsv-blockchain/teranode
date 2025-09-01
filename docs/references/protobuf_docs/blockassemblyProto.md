@@ -3,26 +3,26 @@
 
 ## Table of Contents
 
-- [blockassembly_api.proto](#blockassembly_api.proto)
-    - [AddTxBatchRequest](#AddTxBatchRequest)
-    - [AddTxBatchResponse](#AddTxBatchResponse)
-    - [AddTxRequest](#AddTxRequest)
-    - [AddTxResponse](#AddTxResponse)
-    - [EmptyMessage](#EmptyMessage)
-    - [GenerateBlocksRequest](#GenerateBlocksRequest)
-    - [GetBlockAssemblyBlockCandidateResponse](#GetBlockAssemblyBlockCandidateResponse)
-    - [GetCurrentDifficultyResponse](#GetCurrentDifficultyResponse)
-    - [GetMiningCandidateRequest](#GetMiningCandidateRequest)
-    - [HealthResponse](#HealthResponse)
-    - [NewChaintipAndHeightRequest](#NewChaintipAndHeightRequest)
-    - [OKResponse](#OKResponse)
-    - [RemoveTxRequest](#RemoveTxRequest)
-    - [StateMessage](#StateMessage)
-    - [SubmitMiningSolutionRequest](#SubmitMiningSolutionRequest)
-
-    - [BlockAssemblyAPI](#BlockAssemblyAPI)
-
-- [Scalar Value Types](#scalar-value-types)
+- [GRPC Documentation - BlockAssemblyAPI](#grpc-documentation---blockassemblyapi)
+  - [Table of Contents](#table-of-contents)
+  - [blockassembly\_api.proto](#blockassembly_apiproto)
+    - [AddTxBatchRequest](#addtxbatchrequest)
+    - [AddTxBatchResponse](#addtxbatchresponse)
+    - [AddTxRequest](#addtxrequest)
+    - [AddTxResponse](#addtxresponse)
+    - [EmptyMessage](#emptymessage)
+    - [GenerateBlocksRequest](#generateblocksrequest)
+    - [GetCurrentDifficultyResponse](#getcurrentdifficultyresponse)
+    - [GetMiningCandidateRequest](#getminingcandidaterequest)
+    - [HealthResponse](#healthresponse)
+    - [NewChaintipAndHeightRequest](#newchaintipandheightrequest)
+    - [RemoveTxRequest](#removetxrequest)
+    - [StateMessage](#statemessage)
+    - [SubmitMiningSolutionRequest](#submitminingsolutionrequest)
+    - [OKResponse](#okresponse)
+    - [GetBlockAssemblyBlockCandidateResponse](#getblockassemblyblockcandidateresponse)
+    - [BlockAssemblyAPI](#blockassemblyapi)
+  - [Scalar Value Types](#scalar-value-types)
 
 
 
@@ -290,7 +290,6 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
 | GetMiningCandidate | [GetMiningCandidateRequest](#blockassembly_api-GetMiningCandidateRequest) | [model.MiningCandidate](#model-MiningCandidate) | Retrieves a block template ready for mining. Includes all necessary components for miners to begin work. |
 | GetCurrentDifficulty | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetCurrentDifficultyResponse](#blockassembly_api-GetCurrentDifficultyResponse) | Retrieves the current network mining difficulty. Used by miners to understand the current mining requirements. |
 | SubmitMiningSolution | [SubmitMiningSolutionRequest](#blockassembly_api-SubmitMiningSolutionRequest) | [OKResponse](#blockassembly_api-OKResponse) | Submits a solved block to the network. Includes the proof-of-work solution and block details. |
-| DeDuplicateBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Removes duplicate transactions from the assembly process. Ensures transaction uniqueness within blocks. |
 | ResetBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Resets the block assembly state. Useful for handling reorgs or recovering from errors. |
 | GetBlockAssemblyState | [EmptyMessage](#blockassembly_api-EmptyMessage) | [StateMessage](#blockassembly_api-StateMessage) | Retrieves the current state of block assembly. Provides detailed information about the assembly process status. |
 | GenerateBlocks | [GenerateBlocksRequest](#blockassembly_api-GenerateBlocksRequest) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Creates new blocks (typically for testing purposes). Allows specification of block count and recipient address. |

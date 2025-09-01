@@ -237,7 +237,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set initial state with some transactions in the processor
-		stp.SetCurrentBlockHeader(moveBackBlock2.Header)
+		stp.InitCurrentBlockHeader(moveBackBlock2.Header)
 
 		// Add transactions that would be in the blocks being moved back
 		stp.Add(subtree.SubtreeNode{
@@ -403,7 +403,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set initial state
-		stp.SetCurrentBlockHeader(moveBackBlock.Header)
+		stp.InitCurrentBlockHeader(moveBackBlock.Header)
 
 		// Add initial transactions to simulate existing state
 		stp.Add(subtree.SubtreeNode{
@@ -710,7 +710,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set initial processor state to block2 (before reorg)
-		stp.SetCurrentBlockHeader(block2Header)
+		stp.InitCurrentBlockHeader(block2Header)
 
 		// Verify initial state
 		initialHeader := stp.GetCurrentBlockHeader()
@@ -852,7 +852,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set initial processor state to block3 (tip of chain before reorg)
-		stp.SetCurrentBlockHeader(block3Header)
+		stp.InitCurrentBlockHeader(block3Header)
 
 		// Add transactions to simulate they were processed up to block3
 		// tx1 and tx2 would have been processed in block2
@@ -1043,7 +1043,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set initial state and add transactions
-		stp.SetCurrentBlockHeader(oldBlockHeader)
+		stp.InitCurrentBlockHeader(oldBlockHeader)
 
 		// Add transactions that would be in the old block
 		stp.Add(subtree.SubtreeNode{

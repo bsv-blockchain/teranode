@@ -406,5 +406,3 @@ func TestMarkConflictingTxsInSubtrees(t *testing.T) {
 	mockBlockchainClient.AssertExpectations(t)
 	mockUtxoStore.AssertExpectations(t)
 }
-
-// TestDeDuplicateTransactions is implemented in DeDuplicateTransactions_test.go

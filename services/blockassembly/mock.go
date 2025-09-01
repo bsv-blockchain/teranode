@@ -94,16 +94,6 @@ func (m *Mock) GenerateBlocks(ctx context.Context, req *blockassembly_api.Genera
 	return nil
 }
 
-func (m *Mock) DeDuplicateBlockAssembly(ctx context.Context) error {
-	args := m.Called(ctx)
-
-	if args.Error(0) != nil {
-		return args.Error(0)
-	}
-
-	return nil
-}
-
 func (m *Mock) ResetBlockAssembly(ctx context.Context) error {
 	args := m.Called(ctx)
 

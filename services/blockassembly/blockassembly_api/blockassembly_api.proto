@@ -42,10 +42,6 @@ service BlockAssemblyAPI {
   // Includes the proof-of-work solution and block details.
   rpc SubmitMiningSolution (SubmitMiningSolutionRequest) returns (OKResponse) {}
 
-  // DeDuplicateBlockAssembly removes duplicate transactions from the assembly process.
-  // Ensures transaction uniqueness within blocks.
-  rpc DeDuplicateBlockAssembly (EmptyMessage) returns (EmptyMessage) {}
-
   // ResetBlockAssembly resets the block assembly state.
   // Useful for handling reorgs or recovering from errors.
   rpc ResetBlockAssembly (EmptyMessage) returns (EmptyMessage) {}

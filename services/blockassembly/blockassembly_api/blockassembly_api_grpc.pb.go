@@ -27,7 +27,6 @@ const (
 	BlockAssemblyAPI_GetMiningCandidate_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate"
 	BlockAssemblyAPI_GetCurrentDifficulty_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/GetCurrentDifficulty"
 	BlockAssemblyAPI_SubmitMiningSolution_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution"
-	BlockAssemblyAPI_DeDuplicateBlockAssembly_FullMethodName       = "/blockassembly_api.BlockAssemblyAPI/DeDuplicateBlockAssembly"
 	BlockAssemblyAPI_ResetBlockAssembly_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/ResetBlockAssembly"
 	BlockAssemblyAPI_GetBlockAssemblyState_FullMethodName          = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyState"
 	BlockAssemblyAPI_GenerateBlocks_FullMethodName                 = "/blockassembly_api.BlockAssemblyAPI/GenerateBlocks"
@@ -66,9 +65,6 @@ type BlockAssemblyAPIClient interface {
 	// SubmitMiningSolution submits a solved block to the network.
 	// Includes the proof-of-work solution and block details.
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*OKResponse, error)
-	// DeDuplicateBlockAssembly removes duplicate transactions from the assembly process.
-	// Ensures transaction uniqueness within blocks.
-	DeDuplicateBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
 	// ResetBlockAssembly resets the block assembly state.
 	// Useful for handling reorgs or recovering from errors.
 	ResetBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
@@ -168,16 +164,6 @@ func (c *blockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, in *S
 	return out, nil
 }
 
-func (c *blockAssemblyAPIClient) DeDuplicateBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(EmptyMessage)
-	err := c.cc.Invoke(ctx, BlockAssemblyAPI_DeDuplicateBlockAssembly_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *blockAssemblyAPIClient) ResetBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EmptyMessage)
@@ -268,9 +254,6 @@ type BlockAssemblyAPIServer interface {
 	// SubmitMiningSolution submits a solved block to the network.
 	// Includes the proof-of-work solution and block details.
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*OKResponse, error)
-	// DeDuplicateBlockAssembly removes duplicate transactions from the assembly process.
-	// Ensures transaction uniqueness within blocks.
-	DeDuplicateBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error)
 	// ResetBlockAssembly resets the block assembly state.
 	// Useful for handling reorgs or recovering from errors.
 	ResetBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error)
@@ -320,9 +303,6 @@ func (UnimplementedBlockAssemblyAPIServer) GetCurrentDifficulty(context.Context,
 }
 func (UnimplementedBlockAssemblyAPIServer) SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*OKResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SubmitMiningSolution not implemented")
-}
-func (UnimplementedBlockAssemblyAPIServer) DeDuplicateBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method DeDuplicateBlockAssembly not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) ResetBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResetBlockAssembly not implemented")
@@ -489,24 +469,6 @@ func _BlockAssemblyAPI_SubmitMiningSolution_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlockAssemblyAPI_DeDuplicateBlockAssembly_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(EmptyMessage)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockAssemblyAPIServer).DeDuplicateBlockAssembly(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockAssemblyAPI_DeDuplicateBlockAssembly_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockAssemblyAPIServer).DeDuplicateBlockAssembly(ctx, req.(*EmptyMessage))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _BlockAssemblyAPI_ResetBlockAssembly_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyMessage)
 	if err := dec(in); err != nil {
@@ -649,10 +611,6 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SubmitMiningSolution",
 			Handler:    _BlockAssemblyAPI_SubmitMiningSolution_Handler,
-		},
-		{
-			MethodName: "DeDuplicateBlockAssembly",
-			Handler:    _BlockAssemblyAPI_DeDuplicateBlockAssembly_Handler,
 		},
 		{
 			MethodName: "ResetBlockAssembly",

@@ -378,24 +378,6 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 	}
 }
 
-// DeDuplicateBlockAssembly triggers transaction deduplication in block assembly.
-//
-// Parameters:
-//   - ctx: Context for cancellation
-//
-// Returns:
-//   - error: Any error encountered during deduplication
-func (s *Client) DeDuplicateBlockAssembly(_ context.Context) error {
-	_, err := s.client.DeDuplicateBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
-
-	unwrappedErr := errors.UnwrapGRPC(err)
-	if unwrappedErr == nil {
-		return nil
-	}
-
-	return unwrappedErr
-}
-
 // ResetBlockAssembly triggers a reset of the block assembly state.
 //
 // Parameters:

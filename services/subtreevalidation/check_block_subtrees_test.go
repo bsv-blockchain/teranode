@@ -1107,8 +1107,9 @@ func TestExtractAndCollectTransactions_ConcurrentAccess(t *testing.T) {
 	err = server.subtreeStore.Set(context.Background(), subtreeHash2[:], fileformat.FileTypeSubtreeData, subtreeData2.Bytes())
 	require.NoError(t, err)
 
-	// Shared resources
-	var allTransactions []*bt.Tx
+	// Separate slices for each goroutine to avoid race conditions
+	var transactions1 []*bt.Tx
+	var transactions2 []*bt.Tx
 
 	// Extract from multiple subtrees concurrently
 	var wg sync.WaitGroup
@@ -1116,19 +1117,20 @@ func TestExtractAndCollectTransactions_ConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		err := server.extractAndCollectTransactions(context.Background(), subtreeHash1, &allTransactions)
+		err := server.extractAndCollectTransactions(context.Background(), subtreeHash1, &transactions1)
 		assert.NoError(t, err)
 	}()
 
 	go func() {
 		defer wg.Done()
-		err := server.extractAndCollectTransactions(context.Background(), subtreeHash2, &allTransactions)
+		err := server.extractAndCollectTransactions(context.Background(), subtreeHash2, &transactions2)
 		assert.NoError(t, err)
 	}()
 
 	wg.Wait()
 
-	// Verify both transactions were collected
+	// Merge results and verify both transactions were collected
+	allTransactions := append(transactions1, transactions2...)
 	assert.Len(t, allTransactions, 2)
 }
 

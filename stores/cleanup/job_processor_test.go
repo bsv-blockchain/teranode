@@ -342,9 +342,16 @@ func TestJobManagerTriggerCleanup(t *testing.T) {
 		processorCancelTest := func(job *Job, workerID int) {
 			if job.BlockHeight == 123 {
 				// Simulate work for the first job to allow cancellation
-				time.Sleep(200 * time.Millisecond)
+				select {
+				case <-time.After(200 * time.Millisecond):
+					// Work completed
+				case <-job.Context().Done():
+					// Job was cancelled
+					job.SetStatus(JobStatusCancelled)
+					return
+				}
 			}
-			// Mark job as completed
+			// Mark job as completed if not cancelled
 			job.SetStatus(JobStatusCompleted)
 		}
 
@@ -366,7 +373,7 @@ func TestJobManagerTriggerCleanup(t *testing.T) {
 
 		doneCh := make(chan string)
 
-		// Trigger second cleanup
+		// Trigger second cleanup while first is maybe running
 		err = manager.TriggerCleanup(456, doneCh)
 		require.NoError(t, err)
 

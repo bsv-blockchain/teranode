@@ -141,12 +141,12 @@ type Interface interface {
 	//   - *model.BlockHeader: Current block header
 	GetCurrentBlockHeader() *model.BlockHeader
 
-	// SetCurrentBlockHeader updates the current block header in the processor.
+	// InitCurrentBlockHeader updates the current block header in the processor.
 	// This is used to synchronize the processor with blockchain state changes.
 	//
 	// Parameters:
 	//   - blockHeader: New block header to set as current
-	SetCurrentBlockHeader(blockHeader *model.BlockHeader)
+	InitCurrentBlockHeader(blockHeader *model.BlockHeader)
 
 	// GetCurrentSubtree returns the subtree currently being processed.
 	// This provides visibility into the active processing state.
@@ -226,8 +226,4 @@ type Interface interface {
 	// Returns:
 	//   - int: Total number of subtrees
 	SubtreeCount() int
-
-	// DeDuplicateTransactions triggers deduplication of transactions in the processor.
-	// This removes duplicate transactions to maintain processing efficiency.
-	DeDuplicateTransactions()
 }

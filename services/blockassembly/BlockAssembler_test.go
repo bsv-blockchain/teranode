@@ -1713,25 +1713,6 @@ func TestBlockAssembly_RemoveTx(t *testing.T) {
 	})
 }
 
-func TestBlockAssembly_DeDuplicateTransactions(t *testing.T) {
-	t.Run("DeDuplicateTransactions calls subtree processor", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-
-		// Test DeDuplicateTransactions - it should call the subtree processor's DeDuplicateTransactions method
-		txHashes := make([]*chainhash.Hash, 3)
-		for i := 0; i < 3; i++ {
-			tx := newTx(uint32(i + 100))
-			txHashes[i] = tx.TxIDChainHash()
-		}
-
-		// Call DeDuplicateTransactions (it takes no parameters)
-		testItems.blockAssembler.DeDuplicateTransactions()
-		// We can't verify the internal behavior without mocking the subtree processor
-	})
-}
-
 func TestBlockAssembly_Reset(t *testing.T) {
 	t.Run("Reset triggers invalidation of mining candidate cache", func(t *testing.T) {
 		initPrometheusMetrics()

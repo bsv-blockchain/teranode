@@ -658,7 +658,7 @@ func (b *BlockAssembler) initState(ctx context.Context) {
 		}
 	} else {
 		b.logger.Infof("[BlockAssembler] setting best block header from state: %d: %s", b.bestBlockHeight.Load(), b.bestBlockHeader.Load().Hash())
-		b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader.Load())
+		b.subtreeProcessor.InitCurrentBlockHeader(b.bestBlockHeader.Load())
 	}
 
 	b.setBestBlockHeader(bestBlockHeader, bestBlockHeight)
@@ -672,7 +672,7 @@ func (b *BlockAssembler) initState(ctx context.Context) {
 			b.logger.Infof("[BlockAssembler] setting best block header from GetBestBlockHeader: %s", b.bestBlockHeader.Load().Hash())
 
 			b.setBestBlockHeader(header, meta.Height)
-			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader.Load())
+			b.subtreeProcessor.InitCurrentBlockHeader(b.bestBlockHeader.Load())
 		}
 	}
 
@@ -765,11 +765,6 @@ func (b *BlockAssembler) AddTx(node subtree.SubtreeNode, txInpoints subtree.TxIn
 //   - error: Any error encountered during removal
 func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
 	return b.subtreeProcessor.Remove(hash)
-}
-
-// DeDuplicateTransactions triggers deduplication of transactions in the subtree processor.
-func (b *BlockAssembler) DeDuplicateTransactions() {
-	b.subtreeProcessor.DeDuplicateTransactions()
 }
 
 // Reset triggers a reset of the block assembler state.
