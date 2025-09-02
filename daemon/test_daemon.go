@@ -970,8 +970,15 @@ func (td *TestDaemon) MineAndWait(t *testing.T, blockCount uint32) *model.Block 
 	_, meta, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
 	require.NoError(t, err)
 
-	_, err = td.CallRPC(td.Ctx, "generate", []any{blockCount})
-	require.NoError(t, err)
+	// Generate blocks in batches to avoid timeout in CI environments
+	const batchSize = 100
+	for generated := uint32(0); generated < blockCount; {
+		remaining := min(batchSize, blockCount-generated)
+		t.Logf("Generating %d blocks (%d/%d)...", remaining, generated+remaining, blockCount)
+		_, err = td.CallRPC(td.Ctx, "generate", []any{remaining})
+		require.NoError(t, err)
+		generated += remaining
+	}
 
 	endHeight := meta.Height + blockCount
 

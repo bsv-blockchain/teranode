@@ -124,8 +124,7 @@ func TestShouldAllowReassign(t *testing.T) {
 	require.Error(t, err, "Transaction should be rejected since UTXO is not spendable until block 1000")
 
 	// Generate 1000 blocks to reach reassignment height
-	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1000})
-	require.NoError(t, err)
+	td.MineAndWait(t, 1000)
 
 	// Now try spending the reassigned UTXO - should succeed
 	_, err = td.DistributorClient.SendTransaction(td.Ctx, charlesSpendingTx)

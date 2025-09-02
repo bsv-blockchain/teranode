@@ -30,8 +30,7 @@ func TestShouldAllowSpendAllUtxos(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
-	require.NoError(t, err)
+	td.MineAndWait(t, 101)
 
 	// Generate private key and address for recipient
 	privateKey1, err := bec.NewPrivateKey()

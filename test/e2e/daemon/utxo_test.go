@@ -33,8 +33,7 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
-	require.NoError(t, err)
+	td.MineAndWait(t, 101)
 
 	privateKey1, err := bec.NewPrivateKey()
 	require.NoError(t, err, "Failed to generate private key")
@@ -300,8 +299,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
-	require.NoError(t, err)
+	td.MineAndWait(t, 101)
 
 	// Get coinbase transaction from block 1
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
@@ -399,8 +397,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate one more block to reach retention height
-	_, err = td.CallRPC(td.Ctx, "generate", []any{300})
-	require.NoError(t, err)
+	td.MineAndWait(t, 300)
 
 	time.Sleep(cleanerInterval)
 

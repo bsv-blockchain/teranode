@@ -599,10 +599,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 	// require.NoError(t, err)
 
 	blocksToGenerate := node1.Settings.GlobalBlockHeightRetention
-	_, err = node1.CallRPC(node1.Ctx, "generate", []any{blocksToGenerate + 1})
-	require.NoError(t, err)
-
-	time.Sleep(10 * time.Second)
+	node1.MineAndWait(t, blocksToGenerate+1)
 
 	t.Logf("Get block 5 from node1")
 

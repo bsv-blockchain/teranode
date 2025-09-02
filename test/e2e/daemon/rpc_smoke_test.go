@@ -269,8 +269,7 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 
 	// Generate initial blocks
 	// CSVHeight is the block height at which the CSV rules are activated including lock time
-	_, err = td.CallRPC(td.Ctx, "generate", []any{tSettings.ChainCfgParams.CSVHeight + 1})
-	require.NoError(t, err)
+	td.MineAndWait(t, tSettings.ChainCfgParams.CSVHeight+1)
 
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
