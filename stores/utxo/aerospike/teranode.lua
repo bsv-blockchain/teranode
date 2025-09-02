@@ -22,6 +22,7 @@ local BIN_TOTAL_EXTRA_RECS = "totalExtraRecs"
 local BIN_LOCKED = "locked"
 local BIN_UTXOS = "utxos"
 local BIN_UTXO_SPENDABLE_IN = "utxoSpendableIn"
+local BIN_LAST_SPENT_STATE = "lastSpentState"  -- Tracks last signaled state: "ALLSPENT" or "NOTALLSPENT"
 
 -- Status constants
 local STATUS_OK = "OK"
@@ -827,11 +828,25 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     -- Handle pagination records
     if totalExtraRecs == nil then
-        -- This is a pagination record: check if all the UTXOs are spent
+        -- Default nil to NOTALLSPENT (initial state when record is created with unspent UTXOs)
+        local lastState = rec[BIN_LAST_SPENT_STATE] or SIGNAL_NOT_ALL_SPENT
+        
+        local currentState
+        -- Determine current state
         if rec[BIN_SPENT_UTXOS] == rec[BIN_RECORD_UTXOS] then
-            return SIGNAL_ALL_SPENT, nil
+            currentState = SIGNAL_ALL_SPENT
         else
-            return SIGNAL_NOT_ALL_SPENT, nil
+            currentState = SIGNAL_NOT_ALL_SPENT
+        end
+        
+        -- Only signal if state has changed
+        if lastState ~= currentState then
+            -- State transition detected, update and signal
+            rec[BIN_LAST_SPENT_STATE] = currentState
+            return currentState, nil
+        else
+            -- No state change, don't signal
+            return "", nil
         end
     end
     
