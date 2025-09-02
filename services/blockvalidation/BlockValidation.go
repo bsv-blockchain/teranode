@@ -358,7 +358,17 @@ func (u *BlockValidation) start(ctx context.Context) error {
 					case <-gCtx.Done():
 						return nil
 					default:
-						if err := u.setTxMined(gCtx, blockHash); err != nil {
+						// get the block metadata to check if the block is invalid
+						_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(gCtx, blockHash)
+						if err != nil {
+							u.logger.Errorf("[BlockValidation:start] failed to get block header: %s", err)
+
+							u.setMinedChan <- blockHash
+
+							return nil
+						}
+
+						if err = u.setTxMined(gCtx, blockHash, blockHeaderMeta.Invalid); err != nil {
 							if errors.Is(err, context.Canceled) {
 								u.logger.Infof("[BlockValidation:start] failed to set block mined: %s", err)
 							} else {
@@ -441,7 +451,7 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
 
-				if err := u.setTxMined(ctx, blockHash); err != nil {
+				if err = u.setTxMined(ctx, blockHash, blockHeaderMeta.Invalid); err != nil {
 					// Check if context is done before logging
 					select {
 					case <-ctx.Done():
@@ -651,7 +661,7 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 //
 // Returns:
 //   - error: Any error encountered during the mining status update process
-func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.Hash) (err error) {
+func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.Hash, unsetMined ...bool) (err error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "setTxMined",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[setTxMined][%s] setting tx mined", blockHash.String()),
@@ -712,6 +722,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		block,
 		ids[0],
 		ids[0:], // all the block IDs are needed to check the transactions have not already been mined on our chain
+		unsetMined...,
 	); err != nil {
 		// check whether we got already mined errors and mark the block as invalid
 		if errors.Is(err, errors.ErrBlockInvalid) {
@@ -1023,7 +1034,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				u.logger.Errorf("[ValidateBlock][%s] failed to check old block IDs: %s", block.String(), err)
 
 				if errors.Is(err, errors.ErrBlockInvalid) {
-					if invalidateBlockErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invalidateBlockErr != nil {
+					if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invalidateBlockErr != nil {
 						u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
 					}
 				} else {
@@ -1129,7 +1140,7 @@ func (u *BlockValidation) markBlockAsInvalid(ctx context.Context, block *model.B
 	// Only use Kafka for reporting invalid blocks
 	u.kafkaNotifyBlockInvalid(block, reason)
 
-	if invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); invalidateBlockErr != nil {
+	if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); invalidateBlockErr != nil {
 		u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
 	}
 }
@@ -1382,7 +1393,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		if errors.Is(err, errors.ErrBlockInvalid) {
-			if invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); invalidateBlockErr != nil {
+			if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); invalidateBlockErr != nil {
 				u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), invalidateBlockErr)
 			}
 		}

@@ -192,7 +192,7 @@ func Test_SqlGetChainTips(t *testing.T) {
 		require.NoError(t, err)
 
 		// Invalidate the alternative block
-		err = s.InvalidateBlock(context.Background(), blockAlternative2.Header.Hash())
+		_, err = s.InvalidateBlock(context.Background(), blockAlternative2.Header.Hash())
 		require.NoError(t, err)
 
 		tips, err := s.GetChainTips(context.Background())

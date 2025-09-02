@@ -1232,6 +1232,13 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 		ON CONFLICT DO NOTHING;
     `
 
+	// remove if minedBlockInfo.SetMined is false
+	qRemove := `
+		DELETE FROM block_ids
+		WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1)
+		AND block_id = $2;
+	`
+
 	q2 := `
 		UPDATE transactions SET
 		 locked = false
@@ -1247,8 +1254,15 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	blockIDsMap := make(map[chainhash.Hash][]uint32)
 
 	for _, hash := range hashes {
-		if _, err = txn.ExecContext(ctx, q, hash[:], minedBlockInfo.BlockID, minedBlockInfo.BlockHeight, minedBlockInfo.SubtreeIdx); err != nil {
-			return nil, errors.NewStorageError("SQL error calling SetMinedMulti on tx %s:%v", hash.String(), err)
+		if minedBlockInfo.UnsetMined {
+			// remove the block ID from the transaction
+			if _, err = txn.ExecContext(ctx, qRemove, hash[:], minedBlockInfo.BlockID); err != nil {
+				return nil, errors.NewStorageError("SQL error calling SetMinedMulti on tx %s:%v", hash.String(), err)
+			}
+		} else {
+			if _, err = txn.ExecContext(ctx, q, hash[:], minedBlockInfo.BlockID, minedBlockInfo.BlockHeight, minedBlockInfo.SubtreeIdx); err != nil {
+				return nil, errors.NewStorageError("SQL error calling SetMinedMulti on tx %s:%v", hash.String(), err)
+			}
 		}
 
 		// get the current block IDs for the transaction

@@ -271,6 +271,30 @@ func SetMined(t *testing.T, db utxostore.Store) {
 	require.Equal(t, []uint32{123}, resp.BlockIDs)
 	require.Equal(t, []uint32{101}, resp.BlockHeights)
 	require.Equal(t, []int{2}, resp.SubtreeIdxs)
+
+	blockIDsMap, err = db.SetMinedMulti(ctx, []*chainhash.Hash{TXHash}, utxostore.MinedBlockInfo{BlockID: 124, BlockHeight: 102, SubtreeIdx: 1})
+	require.NoError(t, err)
+	require.Len(t, blockIDsMap, 1)
+	require.Equal(t, []uint32{123, 124}, blockIDsMap[*TXHash])
+
+	resp, err = db.Get(ctx, testSpend0.TxID)
+	require.NoError(t, err)
+
+	require.Equal(t, []uint32{123, 124}, resp.BlockIDs)
+	require.Equal(t, []uint32{101, 102}, resp.BlockHeights)
+	require.Equal(t, []int{2, 1}, resp.SubtreeIdxs)
+
+	// unset the mined status for the tx for block 123
+	blockIDsMap, err = db.SetMinedMulti(ctx, []*chainhash.Hash{TXHash}, utxostore.MinedBlockInfo{BlockID: 123, BlockHeight: 101, SubtreeIdx: 2, UnsetMined: true})
+	require.NoError(t, err)
+	require.Len(t, blockIDsMap, 1)
+
+	resp, err = db.Get(ctx, testSpend0.TxID)
+	require.NoError(t, err)
+
+	require.Equal(t, []uint32{124}, resp.BlockIDs)
+	require.Equal(t, []uint32{102}, resp.BlockHeights)
+	require.Equal(t, []int{1}, resp.SubtreeIdxs)
 }
 
 func Conflicting(t *testing.T, db utxostore.Store) {

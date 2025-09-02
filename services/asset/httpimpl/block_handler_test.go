@@ -292,7 +292,7 @@ func TestInvalidateBlock(t *testing.T) {
 		// Mock the blockchain client responses
 		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
 		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(true, nil)
-		mockClient.On("InvalidateBlock", mock.Anything, blockHash).Return(nil)
+		mockClient.On("InvalidateBlock", mock.Anything, blockHash).Return([]chainhash.Hash{}, nil)
 
 		// Call the function to be tested
 		err := handler.InvalidateBlock(c)
@@ -320,7 +320,7 @@ func TestInvalidateBlock(t *testing.T) {
 		// Mock the blockchain client responses
 		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
 		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(true, nil)
-		mockClient.On("InvalidateBlock", mock.Anything, blockHash).Return(errors.ErrServiceError)
+		mockClient.On("InvalidateBlock", mock.Anything, blockHash).Return([]chainhash.Hash{}, errors.ErrServiceError)
 
 		// Call the function to be tested
 		err := handler.InvalidateBlock(c)

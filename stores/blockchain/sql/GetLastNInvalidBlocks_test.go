@@ -50,7 +50,7 @@ func TestGetLastNInvalidBlocks(t *testing.T) {
 		assert.Empty(t, invalidBlocks)
 
 		// Invalidate a block
-		err = s.InvalidateBlock(context.Background(), block2.Hash())
+		_, err = s.InvalidateBlock(context.Background(), block2.Hash())
 		require.NoError(t, err)
 
 		// Verify we can retrieve the invalid block
@@ -83,7 +83,7 @@ func TestGetLastNInvalidBlocks(t *testing.T) {
 		require.NoError(t, err)
 
 		// Invalidate a block
-		err = s.InvalidateBlock(context.Background(), block2.Hash())
+		_, err = s.InvalidateBlock(context.Background(), block2.Hash())
 		require.NoError(t, err)
 
 		// Verify we have invalid blocks

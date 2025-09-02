@@ -142,7 +142,7 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	if miner == miner2 {
 		logger.Infof("Invalidating block on Miner 1")
 
-		err := blockchainNode1.InvalidateBlock(ctx, header1.Hash())
+		_, err := blockchainNode1.InvalidateBlock(ctx, header1.Hash())
 		if err != nil {
 			t.Errorf("Failed to invalidate block: %v", err)
 		}
@@ -158,7 +158,7 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	if miner == miner2 {
 		logger.Infof("Invalidating block on Miner 2")
 
-		err := blockchainNode2.InvalidateBlock(ctx, header2.Hash())
+		_, err := blockchainNode2.InvalidateBlock(ctx, header2.Hash())
 		if err != nil {
 			t.Errorf("Failed to invalidate block: %v", err)
 		}
@@ -174,7 +174,7 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	if miner == miner2 {
 		logger.Infof("Invalidating block on Miner 3")
 
-		err := blockchainNode3.InvalidateBlock(ctx, header3.Hash())
+		_, err := blockchainNode3.InvalidateBlock(ctx, header3.Hash())
 		if err != nil {
 			t.Errorf("Failed to invalidate block: %v", err)
 		}

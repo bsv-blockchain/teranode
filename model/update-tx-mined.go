@@ -28,6 +28,7 @@ type txMinedMessage struct {
 	block         *Block
 	blockID       uint32
 	chainBlockIDs []uint32
+	unsetMined    bool
 	done          chan error
 }
 
@@ -104,6 +105,7 @@ func initWorker(tSettings *settings.Settings) {
 					msg.block,
 					msg.blockID,
 					chainBlockIDsMap,
+					msg.unsetMined,
 				); err != nil {
 					msg.done <- err
 				} else {
@@ -117,7 +119,7 @@ func initWorker(tSettings *settings.Settings) {
 }
 
 func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, txMetaStore txMinedStatus,
-	block *Block, blockID uint32, chainBlockIDs []uint32) error {
+	block *Block, blockID uint32, chainBlockIDs []uint32, unsetMined ...bool) error {
 	// start the worker, if not already started
 	txMinedOnce.Do(func() { initWorker(tSettings) })
 
@@ -128,6 +130,11 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 
 	done := make(chan error)
 
+	unsetTxMined := false
+	if len(unsetMined) > 0 {
+		unsetTxMined = unsetMined[0]
+	}
+
 	txMinedChan <- &txMinedMessage{
 		ctx:           ctx,
 		logger:        logger,
@@ -135,6 +142,7 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		block:         block,
 		blockID:       blockID,
 		chainBlockIDs: chainBlockIDs,
+		unsetMined:    unsetTxMined, // whether to unset the mined status
 		done:          done,
 	}
 
@@ -144,7 +152,7 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 }
 
 func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, txMetaStore txMinedStatus,
-	block *Block, blockID uint32, chainBlockIDsMap map[uint32]bool) (err error) {
+	block *Block, blockID uint32, chainBlockIDsMap map[uint32]bool, unsetMined bool) (err error) {
 	ctx, _, endSpan := tracing.Tracer("model").Start(ctx, "updateTxMinedStatus",
 		tracing.WithHistogram(prometheusUpdateTxMinedDuration),
 		tracing.WithTag("txid", block.Hash().String()),
@@ -175,6 +183,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 			BlockID:     blockID,
 			BlockHeight: block.Height,
 			SubtreeIdx:  subtreeIdx,
+			UnsetMined:  unsetMined,
 		}
 
 		g.Go(func() error {

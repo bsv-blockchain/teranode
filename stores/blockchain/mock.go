@@ -490,7 +490,7 @@ func (m *MockStore) GetBlockHeadersByHeight(ctx context.Context, startHeight, en
 	panic(implementMe)
 }
 
-func (m *MockStore) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+func (m *MockStore) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 	panic(implementMe)
 }
 

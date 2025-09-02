@@ -24,7 +24,7 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	// recursively update all children blocks to invalid in 1 query
 	q := `
 		UPDATE blocks
-		SET invalid = false
+		SET invalid = false, mined_set = false
 		WHERE hash = $1
 	`
 	if _, err = s.db.ExecContext(ctx, q, blockHash.CloneBytes()); err != nil {

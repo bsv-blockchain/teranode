@@ -140,7 +140,7 @@ type BlockchainAPIClient interface {
 	// GetBlockHeader retrieves the header of a specific block.
 	GetBlockHeader(ctx context.Context, in *GetBlockHeaderRequest, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	// InvalidateBlock marks a block as invalid in the blockchain.
-	InvalidateBlock(ctx context.Context, in *InvalidateBlockRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	InvalidateBlock(ctx context.Context, in *InvalidateBlockRequest, opts ...grpc.CallOption) (*InvalidateBlockResponse, error)
 	// RevalidateBlock restores a previously invalidated block.
 	RevalidateBlock(ctx context.Context, in *RevalidateBlockRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Subscribe creates a subscription for blockchain notifications.
@@ -475,9 +475,9 @@ func (c *blockchainAPIClient) GetBlockHeader(ctx context.Context, in *GetBlockHe
 	return out, nil
 }
 
-func (c *blockchainAPIClient) InvalidateBlock(ctx context.Context, in *InvalidateBlockRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *blockchainAPIClient) InvalidateBlock(ctx context.Context, in *InvalidateBlockRequest, opts ...grpc.CallOption) (*InvalidateBlockResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(emptypb.Empty)
+	out := new(InvalidateBlockResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_InvalidateBlock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -778,7 +778,7 @@ type BlockchainAPIServer interface {
 	// GetBlockHeader retrieves the header of a specific block.
 	GetBlockHeader(context.Context, *GetBlockHeaderRequest) (*GetBlockHeaderResponse, error)
 	// InvalidateBlock marks a block as invalid in the blockchain.
-	InvalidateBlock(context.Context, *InvalidateBlockRequest) (*emptypb.Empty, error)
+	InvalidateBlock(context.Context, *InvalidateBlockRequest) (*InvalidateBlockResponse, error)
 	// RevalidateBlock restores a previously invalidated block.
 	RevalidateBlock(context.Context, *RevalidateBlockRequest) (*emptypb.Empty, error)
 	// Subscribe creates a subscription for blockchain notifications.
@@ -917,7 +917,7 @@ func (UnimplementedBlockchainAPIServer) GetChainTips(context.Context, *emptypb.E
 func (UnimplementedBlockchainAPIServer) GetBlockHeader(context.Context, *GetBlockHeaderRequest) (*GetBlockHeaderResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeader not implemented")
 }
-func (UnimplementedBlockchainAPIServer) InvalidateBlock(context.Context, *InvalidateBlockRequest) (*emptypb.Empty, error) {
+func (UnimplementedBlockchainAPIServer) InvalidateBlock(context.Context, *InvalidateBlockRequest) (*InvalidateBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InvalidateBlock not implemented")
 }
 func (UnimplementedBlockchainAPIServer) RevalidateBlock(context.Context, *RevalidateBlockRequest) (*emptypb.Empty, error) {

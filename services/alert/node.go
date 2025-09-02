@@ -164,7 +164,13 @@ func (n *Node) InvalidateBlock(ctx context.Context, blockHashStr string) error {
 		return err
 	}
 
-	return n.blockchainClient.InvalidateBlock(ctx, blockHash)
+	invalidatedHashes, err := n.blockchainClient.InvalidateBlock(ctx, blockHash)
+	if err != nil {
+		return err
+	}
+
+	n.logger.Infof("InvalidateBlock %s, invalidated %d blocks: %v", blockHashStr, len(invalidatedHashes), invalidatedHashes)
+	return nil
 }
 
 // BanPeer adds the peer's IP address to the ban list for both P2P and legacy peers.

@@ -2229,11 +2229,12 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 
 	t.Run("successful block invalidation", func(t *testing.T) {
 		mockClient := &mockBlockchainClient{
-			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) error {
+			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 				// Verify the block hash matches expected value
 				expectedHash, _ := chainhash.NewHashFromStr("00000000000000000007878ec04bb2b2e12317804810f4c26033585b3f81ffaa")
 				assert.Equal(t, expectedHash, blockHash)
-				return nil
+
+				return []chainhash.Hash{}, nil
 			},
 		}
 
@@ -2283,10 +2284,10 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 
 	t.Run("short block hash succeeds with padding", func(t *testing.T) {
 		mockClient := &mockBlockchainClient{
-			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) error {
+			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 				// Verify the hash is padded correctly - "abcd" becomes padded with zeros
 				// This test shows that short hex strings are valid and get padded
-				return nil
+				return []chainhash.Hash{}, nil
 			},
 		}
 
@@ -2311,8 +2312,8 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 	t.Run("blockchain client error", func(t *testing.T) {
 		expectedError := errors.New(errors.ERR_ERROR, "blockchain service unavailable")
 		mockClient := &mockBlockchainClient{
-			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) error {
-				return expectedError
+			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
+				return nil, expectedError
 			},
 		}
 
@@ -2356,12 +2357,12 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 
 	t.Run("context cancellation", func(t *testing.T) {
 		mockClient := &mockBlockchainClient{
-			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) error {
+			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					return nil, ctx.Err()
 				default:
-					return nil
+					return nil, nil
 				}
 			},
 		}
@@ -2391,11 +2392,11 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 
 	t.Run("zero block hash", func(t *testing.T) {
 		mockClient := &mockBlockchainClient{
-			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) error {
+			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 				// Verify zero hash is passed correctly
 				zeroHash := &chainhash.Hash{}
 				assert.Equal(t, zeroHash, blockHash)
-				return nil
+				return []chainhash.Hash{}, nil
 			},
 		}
 
@@ -4087,7 +4088,7 @@ type mockBlockchainClient struct {
 	getBestBlockHeaderFunc   func(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	getBestHeightAndTimeFunc func(context.Context) (uint32, uint32, error)
 	getChainTipsFunc         func(context.Context) ([]*model.ChainTip, error)
-	invalidateBlockFunc      func(context.Context, *chainhash.Hash) error
+	invalidateBlockFunc      func(context.Context, *chainhash.Hash) ([]chainhash.Hash, error)
 	revalidateBlockFunc      func(context.Context, *chainhash.Hash) error
 	healthFunc               func(context.Context, bool) (int, string, error)
 	getFSMCurrentStateFunc   func(context.Context) (*blockchain.FSMStateType, error)
@@ -4191,11 +4192,11 @@ func (m *mockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, he
 func (m *mockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
-func (m *mockBlockchainClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+func (m *mockBlockchainClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 	if m.invalidateBlockFunc != nil {
 		return m.invalidateBlockFunc(ctx, blockHash)
 	}
-	return errors.New(errors.ERR_ERROR, "not implemented")
+	return nil, errors.New(errors.ERR_ERROR, "not implemented")
 }
 func (m *mockBlockchainClient) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	if m.revalidateBlockFunc != nil {

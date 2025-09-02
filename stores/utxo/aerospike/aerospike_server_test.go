@@ -1366,6 +1366,13 @@ func TestSmokeTests(t *testing.T) {
 		tests.ReAssign(t, store)
 	})
 
+	t.Run("set mined", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SetMined(t, store)
+	})
+
 	t.Run("aerospike_conflicting", func(t *testing.T) {
 		err := store.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)

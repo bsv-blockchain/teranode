@@ -277,9 +277,12 @@ func (m *Mock) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeig
 }
 
 // InvalidateBlock mocks the InvalidateBlock method
-func (m *Mock) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+func (m *Mock) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 	args := m.Called(ctx, blockHash)
-	return args.Error(0)
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]chainhash.Hash), args.Error(1)
 }
 
 // RevalidateBlock mocks the RevalidateBlock method

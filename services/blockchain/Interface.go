@@ -456,7 +456,7 @@ type ClientI interface {
 	//
 	// Returns:
 	// - Error if the invalidation fails, nil on success
-	InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error
+	InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error)
 
 	// RevalidateBlock restores a previously invalidated block.
 	//

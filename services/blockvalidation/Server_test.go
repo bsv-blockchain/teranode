@@ -704,7 +704,7 @@ func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("AddBlock", mock.Anything, testBlock, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
-	mockBlockchain.On("InvalidateBlock", mock.Anything, testBlock.Hash()).Return(nil)
+	mockBlockchain.On("InvalidateBlock", mock.Anything, testBlock.Hash()).Return([]chainhash.Hash{}, nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{testBlock.Header}, []*model.BlockHeaderMeta{{Height: 100}}, nil)

@@ -207,6 +207,7 @@ type MinedBlockInfo struct {
 	BlockID     uint32
 	BlockHeight uint32
 	SubtreeIdx  int
+	UnsetMined  bool // if true, the mined info will be removed from the tx
 }
 
 // Store defines the interface for UTXO management operations.

@@ -243,7 +243,7 @@ type Store interface {
 	//   - ctx: Context for the operation
 	//   - blockHash: Hash of the block to invalidate
 	// Returns: Any error encountered
-	InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error
+	InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error)
 
 	// RevalidateBlock marks a previously invalidated block as valid.
 	// Parameters:

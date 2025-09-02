@@ -2696,7 +2696,7 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		Bits:           model.NBit{},
 		Nonce:          0,
 	}}, []*model.BlockHeaderMeta{{}}, nil)
-	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return(nil)
+	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil)
 	// Mock GetNextWorkRequired for difficulty validation
 	defaultNBits, _ := model.NewNBitFromString("2000ffff")
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(defaultNBits, nil)
@@ -3054,7 +3054,7 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(defaultNBits3, nil)
 	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
-	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return(nil).Run(func(args mock.Arguments) {
+	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return([]chainhash.Hash{}, nil).Run(func(args mock.Arguments) {
 		// Signal that InvalidateBlock was called
 		close(invalidateBlockCalled)
 	})
@@ -3543,7 +3543,7 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(defaultNBits5, nil)
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
-	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return(nil)
+	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return([]chainhash.Hash{}, nil)
 	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)

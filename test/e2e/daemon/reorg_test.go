@@ -336,7 +336,7 @@ func TestInvalidBlock(t *testing.T) {
 	require.Equal(t, uint32(3), node1BestBlockHeaderMeta.Height)
 
 	// Invalidate best block 3
-	err = node1.BlockchainClient.InvalidateBlock(t.Context(), node1BestBlockHeader.Hash())
+	_, err = node1.BlockchainClient.InvalidateBlock(t.Context(), node1BestBlockHeader.Hash())
 	require.NoError(t, err)
 
 	// Best block should be 2

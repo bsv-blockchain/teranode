@@ -165,6 +165,7 @@ func (s *Store) prepareBatchRecordsForSetMined(hashes []*chainhash.Hash, minedBl
 			aerospike.NewValue(minedBlockInfo.SubtreeIdx),
 			aerospike.NewValue(thisBlockHeight),
 			aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
+			aerospike.BoolValue(minedBlockInfo.UnsetMined),
 		)
 	}
 

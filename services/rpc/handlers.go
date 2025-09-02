@@ -1573,7 +1573,7 @@ func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 		return nil, rpcDecodeHexError(c.BlockHash)
 	}
 
-	err = s.blockchainClient.InvalidateBlock(ctx, ch)
+	_, err = s.blockchainClient.InvalidateBlock(ctx, ch)
 	if err != nil {
 		return nil, err
 	}

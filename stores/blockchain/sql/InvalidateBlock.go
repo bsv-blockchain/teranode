@@ -58,21 +58,23 @@ import (
 //   - BlockNotFoundError if the specified block doesn't exist in the database
 //   - StorageError for database errors, transaction failures, or if no rows were affected
 //   - ProcessingError for internal processing failures
-func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 	s.logger.Infof("InvalidateBlock %s", blockHash.String())
 
 	s.blocksCache.RebuildBlockchain(nil, nil) // reset cache so that GetBlockExists goes to the DB
 
 	exists, err := s.GetBlockExists(ctx, blockHash)
 	if err != nil {
-		return errors.NewStorageError("error checking block exists", err)
+		return nil, errors.NewStorageError("error checking block exists", err)
 	}
 
 	if !exists {
-		return errors.NewStorageError("block %s does not exist", blockHash.String(), errors.ErrNotFound)
+		return nil, errors.NewStorageError("block %s does not exist", blockHash.String(), errors.ErrNotFound)
 	}
 
 	// recursively update all children blocks to invalid in 1 query
+	// we also set mined_set to false as an invalid block cannot be mined, this will trigger
+	// the mined go routing in block validation to reset any mining state for this block
 	q := `
 		WITH RECURSIVE children AS (
 			SELECT id, hash, previous_hash
@@ -84,26 +86,45 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 			INNER JOIN children c ON c.hash = b.previous_hash	
 		)
 		UPDATE blocks
-		SET invalid = true
+		SET invalid = true, mined_set = false
 		WHERE id IN (SELECT id FROM children)
+		RETURNING hash
 	`
 
-	var res sql.Result
+	var (
+		rows              *sql.Rows
+		hashBytes         []byte
+		hash              *chainhash.Hash
+		invalidatedHashes []chainhash.Hash
+	)
 
-	if res, err = s.db.ExecContext(ctx, q, blockHash.CloneBytes()); err != nil {
-		return errors.NewStorageError("error updating block to invalid", err)
+	if rows, err = s.db.QueryContext(ctx, q, blockHash.CloneBytes()); err != nil {
+		return nil, errors.NewStorageError("error querying blocks to invalidate", err)
 	}
 
-	// check if the block was updated
-	if rows, _ := res.RowsAffected(); rows <= 0 {
-		return errors.NewStorageError("block %s was not updated to invalid", blockHash.String())
+	defer rows.Close()
+
+	for rows.Next() {
+		if err = rows.Scan(&hashBytes); err != nil {
+			return nil, errors.NewStorageError("error scanning invalidated block hash", err)
+		}
+
+		if hash, err = chainhash.NewHash(hashBytes); err != nil {
+			return nil, errors.NewStorageError("error creating hash from bytes", err)
+		}
+
+		invalidatedHashes = append(invalidatedHashes, *hash)
+	}
+
+	if len(invalidatedHashes) == 0 {
+		return nil, errors.NewStorageError("no blocks were invalidated", errors.ErrProcessing)
 	}
 
 	if err = s.ResetBlocksCache(ctx); err != nil {
-		return errors.NewStorageError("error clearing caches", err)
+		return nil, errors.NewStorageError("error clearing caches", err)
 	}
 
 	s.ResetResponseCache()
 
-	return nil
+	return invalidatedHashes, nil
 }

@@ -35,126 +35,170 @@ var (
 )
 
 func TestUpdateTxMinedStatus(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings(t)
+	t.Run("set mined status for block transactions", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		tSettings := test.CreateBaseTestSettings(t)
 
-	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
+		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
-	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   1024,
-		MaxMinedRoutines:    128,
-		DBTimeout:           30 * time.Second, // Increase timeout for SQLite in-memory operations
-	}
-	setWorkerSettings(tSettings)
+		tSettings.UtxoStore = settings.UtxoStoreSettings{
+			UpdateTxMinedStatus: true,
+			MaxMinedBatchSize:   1024,
+			MaxMinedRoutines:    128,
+			DBTimeout:           30 * time.Second, // Increase timeout for SQLite in-memory operations
+		}
+		setWorkerSettings(tSettings)
 
-	utxoStoreURL, err := url.Parse("sqlitememory:///test")
-	require.NoError(t, err)
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
 
-	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
-	require.NoError(t, err)
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
 
-	_, err = utxoStore.Create(context.Background(), tx0, 0)
-	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), tx1, 0)
-	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), tx2, 0)
-	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), tx3, 0)
-	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), tx4, 0)
-	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), tx5, 0)
-	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), tx6, 0)
-	require.NoError(t, err)
-	_, err = utxoStore.Create(context.Background(), tx7, 0)
-	require.NoError(t, err)
+		_, err = utxoStore.Create(context.Background(), tx0, 0)
+		require.NoError(t, err)
+		_, err = utxoStore.Create(context.Background(), tx1, 0)
+		require.NoError(t, err)
+		_, err = utxoStore.Create(context.Background(), tx2, 0)
+		require.NoError(t, err)
+		_, err = utxoStore.Create(context.Background(), tx3, 0)
+		require.NoError(t, err)
+		_, err = utxoStore.Create(context.Background(), tx4, 0)
+		require.NoError(t, err)
+		_, err = utxoStore.Create(context.Background(), tx5, 0)
+		require.NoError(t, err)
+		_, err = utxoStore.Create(context.Background(), tx6, 0)
+		require.NoError(t, err)
+		_, err = utxoStore.Create(context.Background(), tx7, 0)
+		require.NoError(t, err)
 
-	block := &Block{}
-	block.CoinbaseTx = tx0
-	block.Subtrees = []*chainhash.Hash{
-		tx1.TxIDChainHash(),
-		tx2.TxIDChainHash(),
-	}
-	block.SubtreeSlices = []*subtree.Subtree{
-		{
-			Nodes: []subtree.SubtreeNode{
-				{
-					Hash: *subtree.CoinbasePlaceholderHash,
-				},
-				{
-					Hash: *tx1.TxIDChainHash(),
-				},
-				{
-					Hash: *tx2.TxIDChainHash(),
-				},
-				{
-					Hash: *tx3.TxIDChainHash(),
-				},
-			},
-		},
-		{
-			Nodes: []subtree.SubtreeNode{
-				{
-					Hash: *tx4.TxIDChainHash(),
-				},
-				{
-					Hash: *tx5.TxIDChainHash(),
-				},
-				{
-					Hash: *tx6.TxIDChainHash(),
-				},
-				{
-					Hash: *tx7.TxIDChainHash(),
+		block := &Block{}
+		block.CoinbaseTx = tx0
+		block.Subtrees = []*chainhash.Hash{
+			tx1.TxIDChainHash(),
+			tx2.TxIDChainHash(),
+		}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.SubtreeNode{
+					{
+						Hash: *subtree.CoinbasePlaceholderHash,
+					},
+					{
+						Hash: *tx1.TxIDChainHash(),
+					},
+					{
+						Hash: *tx2.TxIDChainHash(),
+					},
+					{
+						Hash: *tx3.TxIDChainHash(),
+					},
 				},
 			},
-		},
-	}
+			{
+				Nodes: []subtree.SubtreeNode{
+					{
+						Hash: *tx4.TxIDChainHash(),
+					},
+					{
+						Hash: *tx5.TxIDChainHash(),
+					},
+					{
+						Hash: *tx6.TxIDChainHash(),
+					},
+					{
+						Hash: *tx7.TxIDChainHash(),
+					},
+				},
+			},
+		}
 
-	err = UpdateTxMinedStatus(
-		ctx,
-		logger,
-		tSettings,
-		utxoStore,
-		block,
-		1,
-		[]uint32{0},
-	)
-	require.NoError(t, err)
+		err = UpdateTxMinedStatus(
+			ctx,
+			logger,
+			tSettings,
+			utxoStore,
+			block,
+			1,
+			[]uint32{0},
+			false,
+		)
+		require.NoError(t, err)
 
-	txMeta, err := utxoStore.Get(ctx, tx0.TxIDChainHash())
-	require.NoError(t, err)
-	assert.Empty(t, txMeta.BlockIDs) // tx0 is a coinbase tx, so it should not have any block IDs set by the SetMinedMulti process - its done in the block assembly process at the point of creating the coinbasetx
+		txMeta, err := utxoStore.Get(ctx, tx0.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Empty(t, txMeta.BlockIDs) // tx0 is a coinbase tx, so it should not have any block IDs set by the SetMinedMulti process - its done in the block assembly process at the point of creating the coinbasetx
 
-	txMeta, err = utxoStore.Get(ctx, tx1.TxIDChainHash())
-	require.NoError(t, err)
-	assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+		txMeta, err = utxoStore.Get(ctx, tx1.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
 
-	txMeta, err = utxoStore.Get(ctx, tx2.TxIDChainHash())
-	require.NoError(t, err)
-	assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+		txMeta, err = utxoStore.Get(ctx, tx2.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
 
-	txMeta, err = utxoStore.Get(ctx, tx3.TxIDChainHash())
-	require.NoError(t, err)
-	assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+		txMeta, err = utxoStore.Get(ctx, tx3.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
 
-	txMeta, err = utxoStore.Get(ctx, tx4.TxIDChainHash())
-	require.NoError(t, err)
-	assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+		txMeta, err = utxoStore.Get(ctx, tx4.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
 
-	txMeta, err = utxoStore.Get(ctx, tx5.TxIDChainHash())
-	require.NoError(t, err)
-	assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+		txMeta, err = utxoStore.Get(ctx, tx5.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
 
-	txMeta, err = utxoStore.Get(ctx, tx6.TxIDChainHash())
-	require.NoError(t, err)
-	assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+		txMeta, err = utxoStore.Get(ctx, tx6.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
 
-	txMeta, err = utxoStore.Get(ctx, tx7.TxIDChainHash())
-	require.NoError(t, err)
-	assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+		txMeta, err = utxoStore.Get(ctx, tx7.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+
+		// Now unset the mined status
+		err = UpdateTxMinedStatus(
+			ctx,
+			logger,
+			tSettings,
+			utxoStore,
+			block,
+			1,
+			[]uint32{0},
+			true,
+		)
+		require.NoError(t, err)
+
+		txMeta, err = utxoStore.Get(ctx, tx1.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Empty(t, txMeta.BlockIDs)
+
+		txMeta, err = utxoStore.Get(ctx, tx2.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Empty(t, txMeta.BlockIDs)
+
+		txMeta, err = utxoStore.Get(ctx, tx3.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Empty(t, txMeta.BlockIDs)
+
+		txMeta, err = utxoStore.Get(ctx, tx4.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Empty(t, txMeta.BlockIDs)
+
+		txMeta, err = utxoStore.Get(ctx, tx5.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Empty(t, txMeta.BlockIDs)
+
+		txMeta, err = utxoStore.Get(ctx, tx6.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Empty(t, txMeta.BlockIDs)
+
+		txMeta, err = utxoStore.Get(ctx, tx7.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Empty(t, txMeta.BlockIDs)
+	})
 }
 
 func newTx(lockTime uint32) *bt.Tx {
@@ -714,7 +758,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, false)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -746,7 +790,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		// Chain contains block IDs that conflict
 		chainBlockIDsMap := map[uint32]bool{5: true, 10: true, 15: true}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, false)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
@@ -782,7 +826,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, false)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "context canceled")
@@ -812,7 +856,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, disabledSettings, mockStore, block, 15, chainBlockIDsMap)
+		err := updateTxMinedStatus(ctx, logger, disabledSettings, mockStore, block, 15, chainBlockIDsMap, false)
 
 		require.NoError(t, err)
 		mockStore.AssertNotCalled(t, "SetMinedMulti")
@@ -852,7 +896,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		// Chain contains block ID 5 and 15
 		chainBlockIDsMap := map[uint32]bool{5: true, 15: true}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, false)
 
 		// Should fail because tx1 conflicts (block ID 5 is on current chain)
 		require.Error(t, err)
@@ -885,7 +929,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{5: true, 10: true}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, false)
 
 		// Should succeed because no existing block IDs to conflict with
 		require.NoError(t, err)
@@ -922,7 +966,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, false)
 
 		// Should succeed without calling SetMinedMulti (no nodes to process)
 		require.NoError(t, err)
@@ -948,7 +992,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, false)
 
 		// Should succeed without calling SetMinedMulti (all placeholders skipped)
 		require.NoError(t, err)
@@ -990,7 +1034,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, largeBatchSettings, mockStore, block, 15, chainBlockIDsMap)
+		err := updateTxMinedStatus(ctx, logger, largeBatchSettings, mockStore, block, 15, chainBlockIDsMap, false)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -1033,7 +1077,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, boundarySettings, mockStore, block, 15, chainBlockIDsMap)
+		err := updateTxMinedStatus(ctx, logger, boundarySettings, mockStore, block, 15, chainBlockIDsMap, false)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -1065,7 +1109,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, false)
 
 		require.Error(t, err)
 		assert.True(t,

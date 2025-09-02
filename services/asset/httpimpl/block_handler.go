@@ -147,7 +147,13 @@ func (h *BlockHandler) handleBlockOperation(c echo.Context, operationName string
 //   - error: Any error encountered during block invalidation
 func (h *BlockHandler) InvalidateBlock(c echo.Context) error {
 	return h.handleBlockOperation(c, "invalidate", func(ctx echo.Context, blockHash *chainhash.Hash) error {
-		return h.blockchainClient.InvalidateBlock(ctx.Request().Context(), blockHash)
+		invalidatedHashes, err := h.blockchainClient.InvalidateBlock(ctx.Request().Context(), blockHash)
+		if err != nil {
+			return err
+		}
+
+		h.logger.Infof("Invalidated %d blocks: %v", len(invalidatedHashes), invalidatedHashes)
+		return nil
 	})
 }
 

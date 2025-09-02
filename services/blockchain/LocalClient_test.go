@@ -343,7 +343,7 @@ func TestLocalClient_NilStorePanics(t *testing.T) {
 		{
 			name: "InvalidateBlock",
 			fn: func() {
-				_ = client.InvalidateBlock(ctx, &blockHash)
+				_, _ = client.InvalidateBlock(ctx, &blockHash)
 			},
 		},
 		{

@@ -1182,7 +1182,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 			ba.logger.Errorf("[BlockAssembly][%s][InvalidateBlock] block is not valid: %v", block.String(), err)
 
 			if !errors.Is(err, context.Canceled) {
-				if err = ba.blockchainClient.InvalidateBlock(callerCtx, block.Header.Hash()); err != nil {
+				if _, err = ba.blockchainClient.InvalidateBlock(callerCtx, block.Header.Hash()); err != nil {
 					ba.logger.Errorf("[BlockAssembly][%s][InvalidateBlock] failed to invalidate block: %s", block.Header.Hash(), err)
 				}
 			}

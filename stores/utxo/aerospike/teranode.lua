@@ -471,7 +471,7 @@ function unspend(rec, offset, utxoHash, currentBlockHeight, blockHeightRetention
 end
 
 --
-function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blockHeightRetention)
+function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blockHeightRetention, unsetMined)
     local response = map()
     
     if not aerospike:exists(rec) then 
@@ -493,24 +493,61 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
         rec[BIN_SUBTREE_IDXS] = list()
     end
 
-    -- Append the value to the list in the specified bin
     local blocks = rec[BIN_BLOCK_IDS]
-    blocks[#blocks + 1] = blockID
-    rec[BIN_BLOCK_IDS] = blocks
+    local heights = rec[BIN_BLOCK_HEIGHTS]
+    local subtreeIdxs = rec[BIN_SUBTREE_IDXS]
+
+    if unsetMined then
+        -- Remove the block id and height/subtreeIdx at the same index from the bin if it exists, the block was invalidated
+        local newBlocks = list()
+        local newBlockHeights = list()
+        local newSubtreeIdxs = list()
+
+        for i = 1, #blocks do
+            local b = blocks[i]
+            if b ~= blockID then
+                newBlocks[#newBlocks + 1] = b
+                newBlockHeights[#newBlockHeights + 1] = heights[i]
+                newSubtreeIdxs[#newSubtreeIdxs + 1] = subtreeIdxs[i]
+            end
+        end
+
+        rec[BIN_BLOCK_IDS] = newBlocks
+        rec[BIN_BLOCK_HEIGHTS] = newBlockHeights
+        rec[BIN_SUBTREE_IDXS] = newSubtreeIdxs
+    else
+        -- Append the value to the list in the specified bin if it doesn't already exist
+        local blockExists = false
+
+        for b in list.iterator(blocks) do
+            if b == blockID then
+                blockExists = true
+                break
+            end
+        end
+
+        if not blockExists then
+            blocks[#blocks + 1] = blockID
+            rec[BIN_BLOCK_IDS] = blocks
+
+            heights[#heights + 1] = blockHeight
+            rec[BIN_BLOCK_HEIGHTS] = heights
+
+            subtreeIdxs[#subtreeIdxs + 1] = subtreeIdx
+            rec[BIN_SUBTREE_IDXS] = subtreeIdxs
+        end
+    end
 
     -- Also add the block ids to the response
     response[FIELD_BLOCK_IDS] = blocks
 
-    local heights = rec[BIN_BLOCK_HEIGHTS]
-    heights[#heights + 1] = blockHeight
-    rec[BIN_BLOCK_HEIGHTS] = heights
+    -- if we have blocks in the record, then it is no longer unmined
+    if blocks and #blocks > 0 then
+        rec[BIN_UNMINED_SINCE] = nil
+    else
+        rec[BIN_UNMINED_SINCE] = currentBlockHeight
+    end
 
-    local subtreeIdxs = rec[BIN_SUBTREE_IDXS]
-    subtreeIdxs[#subtreeIdxs + 1] = subtreeIdx
-    rec[BIN_SUBTREE_IDXS] = subtreeIdxs
-
-    rec[BIN_UNMINED_SINCE] = nil
-    
     -- set the record to not be locked again, if it was locked, since if was just mined into a block
     if rec[BIN_LOCKED] then
         rec[BIN_LOCKED] = false
