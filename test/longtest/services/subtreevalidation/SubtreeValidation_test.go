@@ -3,6 +3,7 @@ package subtreevalidation
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"runtime/pprof"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
 	blobmemory "github.com/bitcoin-sv/teranode/stores/blob/memory"
+	"github.com/bitcoin-sv/teranode/stores/blockchain/sql"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
@@ -108,9 +110,16 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 	tSettings := test.CreateBaseTestSettings(t)
+	logger := ulogger.TestLogger{}
 
-	// Create a blockchain client without stores (for FSM state checks)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, nil, nil, nil)
+	// Create a real SQLite in-memory blockchain store
+	storeURL, err := url.Parse("sqlitememory:///blockchain")
+	require.NoError(t, err)
+	blockchainStore, err := sql.New(logger, storeURL, tSettings)
+	require.NoError(t, err)
+
+	// Create a blockchain client with the real store
+	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
 	// Activate httpmock for HTTP mocking
