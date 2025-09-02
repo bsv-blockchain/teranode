@@ -535,7 +535,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	ctx, _, endSpan := tracing.Tracer("subtreevalidation").Start(ctx, "ValidateSubtreeInternal",
 		tracing.WithHistogram(prometheusSubtreeValidationValidateSubtree),
-		tracing.WithDebugLogMessage(u.logger, "[ValidateSubtreeInternal][%s] called", v.SubtreeHash.String()),
+		tracing.WithWarnLogMessage(u.logger, "[ValidateSubtreeInternal][%s] called", v.SubtreeHash.String()),
 	)
 
 	defer func() {
@@ -679,7 +679,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 			missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, failFast)
 			if err != nil {
-				// Don't wrap the error again, processTxMetaUsingStore returns the correctly formated error.
+				// Don't wrap the error again, processTxMetaUsingStore returns the correctly formatted error.
 				return nil, err
 			}
 		}

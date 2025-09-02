@@ -70,6 +70,13 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 				return nil
 			}
 
+			if errors.Is(err, errors.ErrContextCanceled) {
+				// if the error is context canceled, then return nil, so that the kafka message is marked as committed.
+				// So the message will not be consumed again.
+				u.logger.Infof("[consumerMessageHandler] Context canceled, marking Kafka message as completed: %v\n", err)
+				return nil
+			}
+
 			// currently, the following cases are considered recoverable:
 			// ERR_SERVICE_ERROR, ERR_STORAGE_ERROR, ERR_CONTEXT_ERROR, ERR_THRESHOLD_EXCEEDED, ERR_EXTERNAL_ERROR
 			// all other cases, including but not limited to, are considered as unrecoverable:
@@ -79,7 +86,7 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 			// If the error is a recoverable error, then return the error, so that it kafka message is not marked as committed.
 			// So the message will be consumed again.
 			notFoundError := errors.Is(err, errors.ErrSubtreeNotFound)
-			recoverableError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrContextCanceled) || errors.Is(err, errors.ErrExternal)
+			recoverableError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrExternal)
 
 			if recoverableError && !notFoundError {
 				u.logger.Errorf("[consumerMessageHandler] Recoverable error processing kafka message, returning error, not marking Kafka message as complete: %v", err)
