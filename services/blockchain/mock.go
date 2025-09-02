@@ -2,9 +2,11 @@ package blockchain
 
 import (
 	"context"
+	"encoding/binary"
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
@@ -503,4 +505,66 @@ func (m *Mock) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.Blo
 	}
 
 	return args.Get(0).([]*model.BlockInfo), args.Error(1)
+}
+
+type mockDifficulty struct {
+	mock.Mock
+	forceError bool
+}
+
+func (m *mockDifficulty) CalcNextWorkRequired(ctx context.Context, header *model.BlockHeader, height uint32, testnetArgs ...int64) (*model.NBit, error) {
+	args := m.Called(ctx)
+	if m.forceError {
+		return nil, args.Error(1)
+	}
+	bytesLittleEndian := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bytesLittleEndian, 0x1d00ffff)
+	nbits, _ := model.NewNBitFromSlice(bytesLittleEndian)
+	return nbits, nil
+}
+
+type errorStoreGetBlockHeaders struct {
+	mock.Mock
+	blockchain_store.MockStore
+}
+
+func (s *errorStoreGetBlockHeaders) GetBlockHeaders(ctx context.Context, h *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := s.Called(ctx)
+	return nil, nil, args.Error(1)
+}
+
+type emptyStoreGetBlockHeaders struct {
+	blockchain_store.MockStore
+}
+
+func (s *emptyStoreGetBlockHeaders) GetBlockHeaders(ctx context.Context, h *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
+}
+
+type errorStore struct {
+	mock.Mock
+	blockchain_store.MockStore
+}
+
+func (e *errorStore) GetNextBlockID(ctx context.Context) (uint64, error) {
+	args := e.Called(ctx)
+	return 0, args.Error(1)
+}
+
+func (e *errorStore) GetLatestBlockHeaderFromBlockLocator(
+	ctx context.Context,
+	bestBlockHash *chainhash.Hash,
+	locator []chainhash.Hash,
+) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	args := e.Called(ctx, bestBlockHash, locator)
+	return nil, nil, args.Error(2)
+}
+
+type fakeStoreOldest struct {
+	blockchain_store.MockStore
+	fn func(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+}
+
+func (f *fakeStoreOldest) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return f.fn(ctx, chainTipHash, targetHash, numberOfHeaders)
 }
