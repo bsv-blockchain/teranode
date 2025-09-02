@@ -314,6 +314,12 @@ func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 					// get the best block header, we might have just added an invalid block that we do not want to count
 					if err = u.updateBestBlock(ctx); err != nil {
+						// Check if context was cancelled - if so, exit gracefully
+						if ctx.Err() != nil {
+							u.logger.Infof("[SubtreeValidation:blockchainSubscriptionListener] context cancelled, stopping listener")
+							subscribeCancel()
+							return
+						}
 						u.logger.Errorf("[SubtreeValidation:blockchainSubscriptionListener] failed to update best block: %s", err)
 					}
 				}
