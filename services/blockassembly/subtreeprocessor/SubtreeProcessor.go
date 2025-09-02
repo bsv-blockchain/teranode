@@ -650,7 +650,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(context.Background(), "reset",
 		tracing.WithParentStat(stp.stats),
 		tracing.WithHistogram(prometheusSubtreeProcessorReset),
-		tracing.WithLogMessage(stp.logger, "[SubtreeProcessor][reset][%s] Resetting subtree processor with %d moveBackBlocks and %d moveForwardBlocks", len(moveBackBlocks), len(moveForwardBlocks)),
+		tracing.WithLogMessage(stp.logger, "[SubtreeProcessor][reset] Resetting subtree processor with %d moveBackBlocks and %d moveForwardBlocks", len(moveBackBlocks), len(moveForwardBlocks)),
 	)
 
 	defer deferFn()
