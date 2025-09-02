@@ -50,6 +50,7 @@ import (
 	"net/url"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/settings"
@@ -184,6 +185,36 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	// ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	// defer cancelTimeout()
 
+	// Try the operation with retry logic for lock errors
+	var txMeta *meta.Data
+	var err error
+
+	for attempt := 0; attempt <= 3; attempt++ {
+		txMeta, err = s.createWithRetry(ctx, tx, blockHeight, options)
+
+		// If no error or not a lock error, return immediately
+		if err == nil || !isLockError(err) {
+			return txMeta, err
+		}
+
+		// For lock errors, retry with backoff
+		if attempt < 3 {
+			backoff := time.Duration(100<<attempt) * time.Millisecond // 100ms, 200ms, 400ms
+			s.logger.Warnf("Database lock error during create (attempt %d): %v, retrying in %v", attempt+1, err, backoff)
+
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+				// Continue to next attempt
+			}
+		}
+	}
+
+	return txMeta, err
+}
+
+func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint32, options *utxo.CreateOptions) (*meta.Data, error) {
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to get tx meta data", err)
@@ -742,6 +773,36 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 		}
 	}()
 
+	// try the operation with retry logic for lock errors
+	var spends []*utxo.Spend
+	var err error
+
+	for attempt := 0; attempt <= 3; attempt++ {
+		spends, err = s.spendWithRetry(ctx, tx, ignoreFlags...)
+
+		// if no error or not a lock error, return immediately
+		if err == nil || !isLockError(err) {
+			return spends, err
+		}
+
+		// for lock errors, retry with backoff
+		if attempt < 3 {
+			backoff := time.Duration(100<<attempt) * time.Millisecond // 100ms, 200ms, 400ms
+			s.logger.Warnf("Database lock error during spend (attempt %d): %v, retrying in %v", attempt+1, err, backoff)
+
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+				// continue to next attempt
+			}
+		}
+	}
+
+	return spends, err
+}
+
+func (s *Store) spendWithRetry(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	blockHeight := s.GetBlockHeight()
 
 	spends, err := utxo.GetSpends(tx)
@@ -779,6 +840,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 	`
 
 	if s.engine == "postgres" {
+		// use FOR UPDATE without SKIP LOCKED to ensure we wait for locked rows
+		// rather than skipping them, which can cause false "not found" errors
 		q1 += ` FOR UPDATE`
 	}
 
@@ -820,10 +883,15 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 				errorFound = true
 
 				if errors.Is(err, sql.ErrNoRows) {
-					spend.Err = errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+					// with SKIP LOCKED, this could mean the row is locked by another transaction or it genuinely doesn't exist
+					if s.engine == "postgres" {
+						spend.Err = errors.NewStorageError("output %s:%d not found or locked by another transaction", spend.TxID, spend.Vout)
+					} else {
+						spend.Err = errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+					}
+				} else {
+					spend.Err = errors.NewStorageError("[Spend] failed: SELECT output FOR UPDATE %s:%d - %v", spend.TxID, spend.Vout, err)
 				}
-
-				spend.Err = errors.NewStorageError("[Spend] failed: SELECT output FOR UPDATE NOWAIT %s:%d", spend.TxID, spend.Vout, err)
 
 				continue
 			}
@@ -2089,8 +2157,8 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	args = append([]interface{}{preserveUntilHeight}, args...)
 
 	query := fmt.Sprintf(`
-    UPDATE transactions 
-    SET preserve_until = ?, delete_at_height = NULL 
+    UPDATE transactions
+    SET preserve_until = ?, delete_at_height = NULL
     WHERE hash IN (%s)
 	`, strings.Join(placeholders, ","))
 
@@ -2116,7 +2184,7 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	deleteAtHeight := currentHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 
 	query := `
-		UPDATE transactions 
+		UPDATE transactions
 		SET delete_at_height = ?, preserve_until = NULL
 		WHERE preserve_until IS NOT NULL AND preserve_until <= ?
 	`
@@ -2139,4 +2207,30 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 // RawDB returns the underlying *usql.DB connection. For test/debug use only.
 func (s *Store) RawDB() *usql.DB {
 	return s.db
+}
+
+// isLockError checks if the error is a database lock/deadlock error
+func isLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// PostgreSQL deadlock/lock errors
+	if pqErr, ok := err.(*pq.Error); ok {
+		// 40001: serialization_failure
+		// 40P01: deadlock_detected
+		// 55P03: lock_not_available
+		return pqErr.Code == "40001" || pqErr.Code == "40P01" || pqErr.Code == "55P03"
+	}
+
+	// SQLite busy/locked errors
+	if sqliteErr, ok := err.(*sqlite.Error); ok {
+		return sqliteErr.Code() == sqlite3.SQLITE_BUSY || sqliteErr.Code() == sqlite3.SQLITE_LOCKED
+	}
+
+	// Check error message for common lock patterns
+	errStr := err.Error()
+	return strings.Contains(errStr, "database is locked") ||
+		strings.Contains(errStr, "deadlock") ||
+		strings.Contains(errStr, "lock timeout")
 }

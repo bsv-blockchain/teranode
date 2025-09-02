@@ -293,7 +293,11 @@ func NewServer(
 			ed25519Key := append(rawPriv, rawPub...)
 			privateKey = hex.EncodeToString(ed25519Key)
 
-			// Save to file with secure permissions (0600)
+			// Ensure the directory exists before attempting to write the key file
+			if err := os.MkdirAll(filepath.Dir(keyFilePath), 0o755); err != nil {
+				logger.Errorf("[P2P] Failed to create directory for private key %s: %v", keyFilePath, err)
+				return nil, errors.NewServiceError(fmt.Sprintf("failed to create directory for private key %s", keyFilePath), err)
+			}
 			if err := os.WriteFile(keyFilePath, []byte(privateKey), 0600); err != nil {
 				logger.Errorf("[P2P] Failed to save private key to file %s: %v", keyFilePath, err)
 				return nil, errors.NewServiceError(fmt.Sprintf("failed to save private key to file %s", keyFilePath), err)
