@@ -688,23 +688,13 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		block.SetSettings(u.settings)
 	}
 
-	var baseURL string
-
-	_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(ctx, blockHash)
+	_, _, err = u.blockchainClient.GetBlockHeader(ctx, blockHash)
 	if err != nil {
 		return errors.NewServiceError("[setTxMined][%s] failed to get block header from blockchain", blockHash.String(), err)
 	}
 
-	if blockHeaderMeta != nil && blockHeaderMeta.PeerID != "" {
-		baseURL = blockHeaderMeta.PeerID
-	}
-
-	// make sure all the subtrees are loaded in the block
-	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
-		return u.subtreeValidationClient.CheckSubtreeFromBlock(ctx, subtreeHash, baseURL, block.Height, block.Hash(), block.Header.HashPrevBlock)
-	}
-
-	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore, fallbackGetFunc)
+	// All subtrees should already be available for fully processed blocks
+	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore)
 	if err != nil {
 		return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
 	}

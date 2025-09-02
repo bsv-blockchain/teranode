@@ -17,7 +17,6 @@ import (
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
@@ -124,19 +123,15 @@ func TestSendTxAndCheckState(t *testing.T) {
 
 	block := td.MineAndWait(t, 1)
 
-	err = block.GetAndValidateSubtrees(ctx, td.Logger, td.SubtreeStore, nil)
+	err = block.GetAndValidateSubtrees(ctx, td.Logger, td.SubtreeStore)
 	require.NoError(t, err)
 
 	err = block.CheckMerkleRoot(ctx)
 	require.NoError(t, err)
 
-	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
-		return block.SubTreesFromBytes(subtreeHash[:])
-	}
-
 	var subtree []*subtree.Subtree
 
-	subtree, err = block.GetSubtrees(ctx, td.Logger, td.SubtreeStore, fallbackGetFunc)
+	subtree, err = block.GetSubtrees(ctx, td.Logger, td.SubtreeStore)
 	require.NoError(t, err)
 
 	blFound := false
@@ -631,17 +626,13 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify block103 contains TX2
-	err = block103.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
+	err = block103.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
 	require.NoError(t, err)
 
 	err = block103.CheckMerkleRoot(td.Ctx)
 	require.NoError(t, err)
 
-	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
-		return block103.SubTreesFromBytes(subtreeHash[:])
-	}
-
-	subtree, err := block103.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore, fallbackGetFunc)
+	subtree, err := block103.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
 	require.NoError(t, err)
 
 	tx2Found := false

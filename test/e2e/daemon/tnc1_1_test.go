@@ -41,7 +41,7 @@ func TestVerifyMerkleRootCalculation(t *testing.T) {
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
 
-	err = block1.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
+	err = block1.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
 	require.NoError(t, err)
 
 	err = block1.CheckMerkleRoot(td.Ctx)

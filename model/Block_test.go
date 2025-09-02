@@ -1470,7 +1470,7 @@ func TestGetAndValidateSubtrees(t *testing.T) {
 	require.NoError(t, err)
 
 	mockBlobStore, _ := New(ulogger.TestLogger{})
-	err = b.GetAndValidateSubtrees(context.Background(), ulogger.TestLogger{}, mockBlobStore, nil)
+	err = b.GetAndValidateSubtrees(context.Background(), ulogger.TestLogger{}, mockBlobStore)
 	require.NoError(t, err)
 }
 
@@ -1957,7 +1957,7 @@ func TestBlock_NewOptimizedBloomFilter(t *testing.T) {
 		mockSubtreeStore := &mockSubtreeStore{shouldError: true}
 
 		// This will fail because the subtree doesn't exist in the store
-		err = block.GetAndValidateSubtrees(ctx, logger, mockSubtreeStore, nil)
+		err = block.GetAndValidateSubtrees(ctx, logger, mockSubtreeStore)
 		require.Error(t, err)
 		// With timeout, we expect context deadline exceeded or mock error
 		assert.True(t, err != nil)
@@ -2111,7 +2111,7 @@ func TestBlock_GetSubtrees(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		mockSubtreeStore := &mockSubtreeStore{shouldError: true}
 
-		_, err = block.GetSubtrees(ctx, logger, mockSubtreeStore, nil)
+		_, err = block.GetSubtrees(ctx, logger, mockSubtreeStore)
 		require.Error(t, err)
 		// With timeout, we get context deadline exceeded instead of file not found
 		assert.True(t, err != nil)

@@ -11,7 +11,6 @@ import (
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/assert"
@@ -150,17 +149,13 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 	block102, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 102)
 	require.NoError(t, err)
 
-	err = block102.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, nil)
+	err = block102.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
 	require.NoError(t, err)
 
 	err = block102.CheckMerkleRoot(td.Ctx)
 	require.NoError(t, err)
 
-	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
-		return block102.SubTreesFromBytes(subtreeHash[:])
-	}
-
-	subtree, err := block102.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore, fallbackGetFunc)
+	subtree, err := block102.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
 	require.NoError(t, err)
 
 	blFound := false

@@ -146,7 +146,7 @@ func TestOneTransaction(t *testing.T) {
 	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 
 	// loads the subtrees into the block
-	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, nil)
+	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore)
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
@@ -212,7 +212,7 @@ func TestTwoTransactions(t *testing.T) {
 	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 
 	// loads the subtrees into the block
-	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, nil)
+	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore)
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
@@ -301,7 +301,7 @@ func TestMerkleRoot(t *testing.T) {
 	// require.NoError(t, err)
 
 	// loads the subtrees into the block
-	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, nil)
+	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore)
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
