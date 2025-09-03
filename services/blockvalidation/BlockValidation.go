@@ -933,22 +933,32 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		}
 	}
 
-	// First check that the nBits (difficulty target) is correct for this block
-	expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock)
-	if err != nil {
-		return errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", block.Header.Hash().String(), err)
-	}
+	// Skip difficulty validation for blocks at or below the highest checkpoint
+	// These blocks are already verified by checkpoints, so we don't need to validate difficulty
+	highestCheckpointHeight := getHighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+	skipDifficultyCheck := block.Height <= highestCheckpointHeight
 
-	// Compare the block's nBits with the expected nBits
-	if expectedNBits != nil && block.Header.Bits != *expectedNBits {
-		return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
-			block.Header.Hash().String(), block.Header.Bits, expectedNBits)
-	}
+	if skipDifficultyCheck {
+		u.logger.Debugf("[ValidateBlock][%s] skipping difficulty validation for block at height %d (at or below checkpoint height %d)",
+			block.Header.Hash().String(), block.Height, highestCheckpointHeight)
+	} else {
+		// First check that the nBits (difficulty target) is correct for this block
+		expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock)
+		if err != nil {
+			return errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", block.Header.Hash().String(), err)
+		}
 
-	// Then check that the block hash meets the difficulty target
-	headerValid, _, err := block.Header.HasMetTargetDifficulty()
-	if !headerValid {
-		return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
+		// Compare the block's nBits with the expected nBits
+		if expectedNBits != nil && block.Header.Bits != *expectedNBits {
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
+				block.Header.Hash().String(), block.Header.Bits, expectedNBits)
+		}
+
+		// Then check that the block hash meets the difficulty target
+		headerValid, _, err := block.Header.HasMetTargetDifficulty()
+		if !headerValid {
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
+		}
 	}
 
 	var optimisticMiningWg sync.WaitGroup
@@ -1328,22 +1338,32 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	)
 	defer deferFn()
 
-	// First check that the nBits (difficulty target) is correct for this block
-	expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, blockData.block.Header.HashPrevBlock)
-	if err != nil {
-		return errors.NewServiceError("[reValidateBlock][%s] failed to get expected work required", blockData.block.Header.Hash().String(), err)
-	}
+	// Skip difficulty validation for blocks at or below the highest checkpoint
+	// These blocks are already verified by checkpoints, so we don't need to validate difficulty
+	highestCheckpointHeight := getHighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
+	skipDifficultyCheck := blockData.block.Height <= highestCheckpointHeight
 
-	// Compare the block's nBits with the expected nBits
-	if expectedNBits != nil && blockData.block.Header.Bits != *expectedNBits {
-		return errors.NewBlockInvalidError("[reValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
-			blockData.block.Header.Hash().String(), blockData.block.Header.Bits, expectedNBits)
-	}
+	if skipDifficultyCheck {
+		u.logger.Debugf("[reValidateBlock][%s] skipping difficulty validation for block at height %d (at or below checkpoint height %d)",
+			blockData.block.Header.Hash().String(), blockData.block.Height, highestCheckpointHeight)
+	} else {
+		// First check that the nBits (difficulty target) is correct for this block
+		expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, blockData.block.Header.HashPrevBlock)
+		if err != nil {
+			return errors.NewServiceError("[reValidateBlock][%s] failed to get expected work required", blockData.block.Header.Hash().String(), err)
+		}
 
-	// Then check that the block hash meets the difficulty target
-	headerValid, _, err := blockData.block.Header.HasMetTargetDifficulty()
-	if !headerValid {
-		return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err)
+		// Compare the block's nBits with the expected nBits
+		if expectedNBits != nil && blockData.block.Header.Bits != *expectedNBits {
+			return errors.NewBlockInvalidError("[reValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
+				blockData.block.Header.Hash().String(), blockData.block.Header.Bits, expectedNBits)
+		}
+
+		// Then check that the block hash meets the difficulty target
+		headerValid, _, err := blockData.block.Header.HasMetTargetDifficulty()
+		if !headerValid {
+			return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err)
+		}
 	}
 
 	// get all X previous block headers, 100 is the default
