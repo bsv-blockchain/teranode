@@ -568,3 +568,56 @@ type fakeStoreOldest struct {
 func (f *fakeStoreOldest) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return f.fn(ctx, chainTipHash, targetHash, numberOfHeaders)
 }
+
+type errorStoreGetBlockExists struct {
+	mock.Mock
+}
+
+func (e *errorStoreGetBlockExists) GetBlockExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	args := e.Called(ctx, hash)
+	return args.Bool(0), args.Error(1)
+}
+
+func (e *errorStore) GetBlockExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	args := e.Called(ctx, hash)
+	return args.Bool(0), args.Error(1)
+}
+
+type mockStoreCheckBlockChain struct {
+	*blockchain_store.MockStore
+	mock.Mock
+}
+
+func (m *mockStoreCheckBlockChain) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	args := m.Called(ctx, blockIDs)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *mockStoreCheckBlockChain) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]*model.ChainTip), args.Error(1)
+}
+
+type mockStoreGetBlockHeader struct {
+	*blockchain_store.MockStore
+	mock.Mock
+}
+
+func (m *mockStoreGetBlockHeader) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, blockHash)
+
+	if args.Error(2) != nil {
+		return nil, nil, args.Error(2)
+	}
+	return args.Get(0).(*model.BlockHeader), args.Get(1).(*model.BlockHeaderMeta), nil
+}
+
+type mockStoreGetBlockHeaders struct {
+	*blockchain_store.MockStore
+	mock.Mock
+}
+
+func (m *mockStoreGetBlockHeaders) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, blockHash, numberOfHeaders)
+	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
+}

@@ -4,6 +4,7 @@ package blockchain
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -1708,5 +1709,384 @@ func TestGetBlockHeadersFromOldestRequest(t *testing.T) {
 		resp, err := server.GetBlockHeadersFromOldestRequest(ctx, req)
 		require.Error(t, err)
 		require.Nil(t, resp)
+	})
+}
+
+func TestGetBlockExists(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	t.Run("error - invalid hash", func(t *testing.T) {
+		store := blockchain_store.NewMockStore()
+		server, _ := New(ctx, logger, tSettings, store, nil)
+
+		req := &blockchain_api.GetBlockRequest{
+			Hash: []byte("invalid-hash"),
+		}
+
+		resp, err := server.GetBlockExists(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		assert.Contains(t, err.Error(), "not valid")
+	})
+
+	t.Run("error - store returns error", func(t *testing.T) {
+		hash := chainhash.DoubleHashH([]byte("block"))
+		mockStore := &errorStore{}
+		mockStore.On(
+			"GetBlockExists",
+			mock.Anything,
+			mock.AnythingOfType("*chainhash.Hash"),
+		).Return(false, errors.NewProcessingError("forced error"))
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		req := &blockchain_api.GetBlockRequest{
+			Hash: hash.CloneBytes(),
+		}
+
+		_, err := server.GetBlockExists(ctx, req)
+		require.Error(t, err)
+	})
+
+	t.Run("success - block exists", func(t *testing.T) {
+		hash := chainhash.DoubleHashH([]byte("exists"))
+		mockStore := &errorStore{}
+		mockStore.On(
+			"GetBlockExists",
+			mock.Anything,
+			mock.AnythingOfType("*chainhash.Hash"),
+		).Return(true, nil)
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		req := &blockchain_api.GetBlockRequest{
+			Hash: hash.CloneBytes(),
+		}
+
+		resp, err := server.GetBlockExists(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+	})
+
+	t.Run("success - block does not exist", func(t *testing.T) {
+		hash := chainhash.DoubleHashH([]byte("not-exists"))
+		mockStore := new(errorStore)
+		mockStore.On(
+			"GetBlockExists",
+			mock.Anything,
+			mock.AnythingOfType("*chainhash.Hash"),
+		).Return(false, nil)
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		req := &blockchain_api.GetBlockRequest{
+			Hash: hash.CloneBytes(),
+		}
+
+		resp, err := server.GetBlockExists(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.False(t, resp.Exists)
+	})
+}
+
+func TestCheckBlockIsInCurrentChain(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	t.Run("error - store returns error", func(t *testing.T) {
+		mockStore := &mockStoreCheckBlockChain{MockStore: blockchain_store.NewMockStore()}
+		mockStore.On(
+			"CheckBlockIsInCurrentChain",
+			mock.Anything,
+			mock.AnythingOfType("[]uint32"),
+		).Return(false, errors.NewProcessingError("forced error"))
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		req := &blockchain_api.CheckBlockIsCurrentChainRequest{BlockIDs: []uint32{1, 2, 3}}
+		resp, err := server.CheckBlockIsInCurrentChain(ctx, req)
+
+		require.Error(t, err)
+		require.Nil(t, resp)
+		assert.Contains(t, err.Error(), "forced error")
+	})
+
+	t.Run("success - block is part of current chain", func(t *testing.T) {
+		mockStore := new(mockStoreCheckBlockChain)
+		mockStore.On(
+			"CheckBlockIsInCurrentChain",
+			mock.Anything,
+			mock.AnythingOfType("[]uint32"),
+		).Return(true, nil)
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		req := &blockchain_api.CheckBlockIsCurrentChainRequest{
+			BlockIDs: []uint32{10, 20},
+		}
+
+		resp, err := server.CheckBlockIsInCurrentChain(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.True(t, resp.IsPartOfCurrentChain)
+	})
+
+	t.Run("success - block is NOT part of current chain", func(t *testing.T) {
+		mockStore := new(mockStoreCheckBlockChain)
+		mockStore.On(
+			"CheckBlockIsInCurrentChain",
+			mock.Anything,
+			mock.AnythingOfType("[]uint32"),
+		).Return(false, nil)
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		req := &blockchain_api.CheckBlockIsCurrentChainRequest{
+			BlockIDs: []uint32{99, 100},
+		}
+
+		resp, err := server.CheckBlockIsInCurrentChain(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.False(t, resp.IsPartOfCurrentChain)
+	})
+}
+
+func TestGetChainTips(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	t.Run("error - store returns error", func(t *testing.T) {
+		mockStore := &mockStoreCheckBlockChain{MockStore: blockchain_store.NewMockStore()}
+		mockStore.On("GetChainTips", mock.Anything).Return([]*model.ChainTip(nil), errors.NewProcessingError("forced error"))
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		resp, err := server.GetChainTips(ctx, &emptypb.Empty{})
+		require.Error(t, err)
+		require.Nil(t, resp)
+		assert.Contains(t, err.Error(), "forced error")
+	})
+
+	t.Run("success - returns tips", func(t *testing.T) {
+		mockStore := &mockStoreCheckBlockChain{MockStore: blockchain_store.NewMockStore()}
+		expectedTips := []*model.ChainTip{{Height: 100, Hash: "hash-100"}}
+		mockStore.On("GetChainTips", mock.Anything).Return(expectedTips, nil)
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		resp, err := server.GetChainTips(ctx, &emptypb.Empty{})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, expectedTips, resp.Tips)
+	})
+
+	t.Run("success - empty tips", func(t *testing.T) {
+		mockStore := &mockStoreCheckBlockChain{MockStore: blockchain_store.NewMockStore()}
+		mockStore.On("GetChainTips", mock.Anything).Return([]*model.ChainTip{}, nil)
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		resp, err := server.GetChainTips(ctx, &emptypb.Empty{})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Empty(t, resp.Tips)
+	})
+}
+
+func TestGetBlockHeader(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	t.Run("error - invalid hash", func(t *testing.T) {
+		store := blockchain_store.NewMockStore()
+		server, _ := New(ctx, logger, tSettings, store, nil)
+
+		req := &blockchain_api.GetBlockHeaderRequest{
+			BlockHash: []byte("not-a-valid-hash"),
+		}
+
+		resp, err := server.GetBlockHeader(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		assert.Contains(t, err.Error(), "not valid")
+	})
+
+	t.Run("error - store returns error", func(t *testing.T) {
+		hash := chainhash.DoubleHashH([]byte("block"))
+		mockStore := &mockStoreGetBlockHeader{}
+
+		mockStore.On(
+			"GetBlockHeader",
+			mock.Anything,
+			mock.AnythingOfType("*chainhash.Hash"),
+		).Return(nil, nil, errors.NewProcessingError("forced error"))
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		req := &blockchain_api.GetBlockHeaderRequest{
+			BlockHash: hash.CloneBytes(),
+		}
+
+		resp, err := server.GetBlockHeader(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		assert.Contains(t, err.Error(), "forced error")
+	})
+
+	t.Run("success", func(t *testing.T) {
+		hash := chainhash.DoubleHashH([]byte("block"))
+
+		prev := chainhash.DoubleHashH([]byte("prev"))
+		merkle := chainhash.DoubleHashH([]byte("merkle"))
+
+		bytesLE := make([]byte, 4)
+		binary.LittleEndian.PutUint32(bytesLE, 0x1d00ffff)
+		nbits, _ := model.NewNBitFromSlice(bytesLE)
+
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &prev,
+			HashMerkleRoot: &merkle,
+			Timestamp:      1234567890,
+			Bits:           *nbits,
+			Nonce:          42,
+		}
+
+		meta := &model.BlockHeaderMeta{
+			ID:          1,
+			Height:      100,
+			TxCount:     10,
+			SizeInBytes: 256,
+			Miner:       "test-miner",
+			PeerID:      "peer-1",
+			BlockTime:   1234567890,
+			Timestamp:   1234567890,
+			MinedSet:    true,
+			SubtreesSet: true,
+			Invalid:     false,
+		}
+
+		mockStore := new(mockStoreGetBlockHeader)
+		mockStore.On(
+			"GetBlockHeader",
+			mock.Anything,
+			mock.AnythingOfType("*chainhash.Hash"),
+		).Return(header, meta, nil)
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		req := &blockchain_api.GetBlockHeaderRequest{
+			BlockHash: hash.CloneBytes(),
+		}
+
+		resp, err := server.GetBlockHeader(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, header.Bytes(), resp.BlockHeader)
+		assert.Equal(t, meta.ID, resp.Id)
+		assert.Equal(t, meta.Height, resp.Height)
+		assert.Equal(t, meta.TxCount, resp.TxCount)
+		assert.Equal(t, meta.SizeInBytes, resp.SizeInBytes)
+		assert.Equal(t, meta.Miner, resp.Miner)
+		assert.Equal(t, meta.PeerID, resp.PeerId)
+		assert.Equal(t, meta.BlockTime, resp.BlockTime)
+		assert.Equal(t, meta.Timestamp, resp.Timestamp)
+		assert.Equal(t, meta.MinedSet, resp.MinedSet)
+		assert.Equal(t, meta.SubtreesSet, resp.SubtreesSet)
+		assert.Equal(t, meta.Invalid, resp.Invalid)
+	})
+}
+
+func TestGetBlockHeaders(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	t.Run("error - invalid start hash", func(t *testing.T) {
+		store := blockchain_store.NewMockStore()
+		server, _ := New(ctx, logger, tSettings, store, nil)
+
+		req := &blockchain_api.GetBlockHeadersRequest{
+			StartHash:       []byte("invalid-hash"),
+			NumberOfHeaders: 1,
+		}
+
+		resp, err := server.GetBlockHeaders(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		assert.Contains(t, err.Error(), "not valid")
+	})
+
+	t.Run("error - store returns error", func(t *testing.T) {
+		hash := chainhash.DoubleHashH([]byte("block"))
+
+		mockStore := new(mockStoreGetBlockHeaders)
+		mockStore.On(
+			"GetBlockHeaders",
+			mock.Anything,
+			mock.AnythingOfType("*chainhash.Hash"),
+			mock.AnythingOfType("uint64"),
+		).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, errors.NewProcessingError("forced store error"))
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		req := &blockchain_api.GetBlockHeadersRequest{
+			StartHash:       hash.CloneBytes(),
+			NumberOfHeaders: 2,
+		}
+
+		resp, err := server.GetBlockHeaders(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		assert.Contains(t, err.Error(), "forced store error")
+	})
+
+	t.Run("success", func(t *testing.T) {
+		hash := chainhash.DoubleHashH([]byte("block"))
+		prev := chainhash.DoubleHashH([]byte("prev"))
+		merkle := chainhash.DoubleHashH([]byte("merkle"))
+
+		// NBit valid
+		bytesLE := make([]byte, 4)
+		binary.LittleEndian.PutUint32(bytesLE, 0x1d00ffff)
+		nbits, _ := model.NewNBitFromSlice(bytesLE)
+
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &prev,
+			HashMerkleRoot: &merkle,
+			Timestamp:      111111,
+			Bits:           *nbits,
+			Nonce:          42,
+		}
+		meta := &model.BlockHeaderMeta{ID: 1, Height: 100}
+
+		mockStore := new(mockStoreGetBlockHeaders)
+		mockStore.On(
+			"GetBlockHeaders",
+			mock.Anything,
+			mock.AnythingOfType("*chainhash.Hash"),
+			mock.AnythingOfType("uint64"),
+		).Return([]*model.BlockHeader{header}, []*model.BlockHeaderMeta{meta}, nil)
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		req := &blockchain_api.GetBlockHeadersRequest{
+			StartHash:       hash.CloneBytes(),
+			NumberOfHeaders: 1,
+		}
+
+		resp, err := server.GetBlockHeaders(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Len(t, resp.BlockHeaders, 1)
+		assert.Len(t, resp.Metas, 1)
 	})
 }
