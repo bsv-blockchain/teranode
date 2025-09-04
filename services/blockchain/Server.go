@@ -1093,11 +1093,7 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 	binary.LittleEndian.PutUint32(bytesLittleEndian, b.settings.ChainCfgParams.PowLimitBits)
 	defaultNbits, _ := model.NewNBitFromSlice(bytesLittleEndian)
 
-	// skip expensive difficulty calculation during legacy sync mode for performance
-	if b.finiteStateMachine != nil && (b.finiteStateMachine.Current() == blockchain_api.FSMStateType_LEGACYSYNCING.String() || b.finiteStateMachine.Current() == blockchain_api.FSMStateType_CATCHINGBLOCKS.String()) {
-		b.logger.Debugf("difficulty calculation skipped during legacy sync mode")
-		nBits = defaultNbits
-	} else if b.difficulty == nil {
+	if b.difficulty == nil {
 		b.logger.Debugf("difficulty is null")
 
 		nBits = defaultNbits

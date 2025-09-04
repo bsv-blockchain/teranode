@@ -1254,6 +1254,18 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	blockIDsMap := make(map[chainhash.Hash][]uint32)
 
 	for _, hash := range hashes {
+		// First check if the transaction exists
+		var txExists bool
+		err := txn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", hash[:]).Scan(&txExists)
+		if err != nil {
+			return nil, errors.NewStorageError("SQL error checking transaction existence for %s: %v", hash.String(), err)
+		}
+
+		// Skip if transaction doesn't exist yet (it might be processed later in the same block)
+		if !txExists {
+			continue
+		}
+
 		if minedBlockInfo.UnsetMined {
 			// remove the block ID from the transaction
 			if _, err = txn.ExecContext(ctx, qRemove, hash[:], minedBlockInfo.BlockID); err != nil {
@@ -1287,8 +1299,11 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	}
 
 	for _, hash := range hashes {
-		if _, err = txn.ExecContext(ctx, q2, hash[:]); err != nil {
-			return nil, errors.NewStorageError("SQL error calling update locked on tx %s:%v", hash.String(), err)
+		// Only update transactions that exist in blockIDsMap (which means they exist in the database)
+		if _, exists := blockIDsMap[*hash]; exists {
+			if _, err = txn.ExecContext(ctx, q2, hash[:]); err != nil {
+				return nil, errors.NewStorageError("SQL error calling update locked on tx %s:%v", hash.String(), err)
+			}
 		}
 	}
 
@@ -1423,7 +1438,8 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 		AND o.idx = $2
 	`
 
-	for _, input := range tx.Inputs {
+	var missingInputs []int
+	for i, input := range tx.Inputs {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -1433,11 +1449,27 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 				continue
 			}
 
+			// Skip if already decorated
+			if input.PreviousTxScript != nil {
+				continue
+			}
+
 			err := s.db.QueryRowContext(ctx, q, input.PreviousTxIDChainHash()[:], input.PreviousTxOutIndex).Scan(&input.PreviousTxScript, &input.PreviousTxSatoshis)
 			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					// Track missing inputs - they might be in the same block being processed
+					missingInputs = append(missingInputs, i)
+					continue
+				}
 				return err
 			}
 		}
+	}
+
+	// If we have missing inputs, return an error indicating they couldn't be found
+	// The caller (ExtendTransaction) will handle this by trying alternative methods
+	if len(missingInputs) > 0 {
+		return errors.NewProcessingError("failed to decorate previous outputs for tx %s", tx.TxIDChainHash())
 	}
 
 	return nil
