@@ -15,10 +15,13 @@ import (
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain/work"
 	"github.com/bitcoin-sv/teranode/settings"
+	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -206,104 +209,209 @@ func (td testData) GetTime() uint32 {
 }
 
 func TestComputeTargetFromCSV(t *testing.T) {
-	// Open and read blocks.csv
-	file, err := os.Open("./work/testnet.csv")
-	if err != nil {
-		t.Fatalf("Failed to open testnet.csv: %v", err)
-	}
-	defer file.Close()
-
-	// Create CSV reader
-	reader := bufio.NewReader(file)
-	// Skip header row if it exists
-	_, err = reader.ReadString('\n')
-	if err != nil {
-		t.Fatalf("Failed to read CSV header: %v", err)
+	testFiles := []string{
+		"./work/testnet.csv",
+		"./work/teratestnet.csv",
 	}
 
-	// Create a new Difficulty instance for testing
-	logger := ulogger.TestLogger{}
-
-	chainParams := &chaincfg.TestNetParams
-	s := &settings.Settings{
-		ChainCfgParams: chainParams,
-	}
-
-	d, err := NewDifficulty(nil, logger, s)
-	require.NoError(t, err)
-
-	data := make([]testData, 0, 1_700_000)
-	i := 0
-
-	// Read and process each row
-	for {
-		record, err := reader.ReadString('\n')
-		if err == io.EOF {
-			break
-		}
-
+	for _, testFile := range testFiles {
+		// Open and read blocks.csv
+		file, err := os.Open(testFile)
 		if err != nil {
-			t.Fatalf("Error reading CSV record: %v", err)
+			t.Fatalf("Failed to open testnet.csv: %v", err)
+		}
+		defer file.Close()
+
+		// Create CSV reader
+		reader := bufio.NewReader(file)
+		// Skip header row if it exists
+		_, err = reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("Failed to read CSV header: %v", err)
 		}
 
-		// Parse CSV data - adjust these indices based on your CSV structure
-		fields := strings.Split(strings.TrimSpace(record), ",")
+		// Create a new Difficulty instance for testing
+		logger := ulogger.TestLogger{}
 
-		height, _ := strconv.ParseUint(fields[0], 10, 32)
-		time, _ := strconv.ParseInt(fields[1], 10, 32)
-		chainworkBytes, _ := hex.DecodeString(fields[2])
-		chainwork := new(big.Int).SetBytes(chainworkBytes)
-		bitsStr := fields[3]
-		bits, _ := model.NewNBitFromString(bitsStr)
-
-		data = append(data, testData{
-			height:    uint32(height), // nolint:gosec
-			time:      time,           // nolint:gosec
-			chainwork: chainwork,
-			bits:      bits,
-		})
-
-		i++
-	}
-
-	// Skip the first 144 rows for this test (144+2 needed)
-	for i := 146; i < len(data)-1; i++ {
-		// The latestSuitableBlock is based on the last block (i - 1) and the previous 2 blocks
-		l := make([]testData, 3)
-		l[2] = data[i]
-		l[1] = data[i-1]
-		l[0] = data[i-2]
-
-		util.SortForDifficultyAdjustment(l)
-
-		// Create test blocks
-		latestSuitableBlock := &model.SuitableBlock{
-			NBits:     l[1].bits.CloneBytes(),
-			Time:      uint32(l[1].time), // nolint:gosec
-			ChainWork: l[1].chainwork.Bytes(),
-			Height:    l[1].height,
+		chainParams := &chaincfg.TestNetParams
+		s := &settings.Settings{
+			ChainCfgParams: chainParams,
 		}
 
-		l[2] = data[i-144]
-		l[1] = data[i-144-1]
-		l[0] = data[i-144-2]
-
-		util.SortForDifficultyAdjustment(l)
-
-		earliestSuitableBlock := &model.SuitableBlock{
-			NBits:     l[1].bits.CloneBytes(),
-			Time:      uint32(l[1].time), // nolint:gosec
-			ChainWork: l[1].chainwork.Bytes(),
-			Height:    l[1].height,
-		}
-
-		// Call computeTarget
-		result, err := d.computeTarget(earliestSuitableBlock, latestSuitableBlock, data[i].time, data[i+1].time)
+		d, err := NewDifficulty(nil, logger, s)
 		require.NoError(t, err)
 
-		// t.Logf("height %d: %s", data[i].height, result.String())
+		data := make([]testData, 0, 1_700_000)
+		i := 0
 
-		require.Equal(t, data[i+1].bits.String(), result.String())
+		// Read and process each row
+		for {
+			record, err := reader.ReadString('\n')
+			if err == io.EOF {
+				break
+			}
+
+			if err != nil {
+				t.Fatalf("Error reading CSV record: %v", err)
+			}
+
+			// Parse CSV data - adjust these indices based on your CSV structure
+			fields := strings.Split(strings.TrimSpace(record), ",")
+
+			height, _ := strconv.ParseUint(fields[0], 10, 32)
+			time, _ := strconv.ParseInt(fields[1], 10, 32)
+			chainworkBytes, _ := hex.DecodeString(fields[2])
+			chainwork := new(big.Int).SetBytes(chainworkBytes)
+			bitsStr := fields[3]
+			bits, _ := model.NewNBitFromString(bitsStr)
+
+			data = append(data, testData{
+				height:    uint32(height), // nolint:gosec
+				time:      time,           // nolint:gosec
+				chainwork: chainwork,
+				bits:      bits,
+			})
+
+			i++
+		}
+
+		// Create and populate MockStore
+		mockStore := blockchain_store.NewMockStore()
+
+		// Populate the MockStore with all blocks
+		for j, td := range data {
+			// Create a block header
+			header := &model.BlockHeader{
+				Version:        1,
+				Timestamp:      uint32(td.time),
+				Bits:           *td.bits,
+				Nonce:          uint32(j),         // Use j as nonce to make each header unique
+				HashMerkleRoot: &chainhash.Hash{}, // Initialize to empty hash
+			}
+
+			// Set previous block hash reference using a consistent scheme
+			// For genesis block (j==0), HashPrevBlock is nil
+			// For others, create a deterministic hash based on previous block height
+			if j > 0 {
+				prevHashBytes := make([]byte, 32)
+				// Use a deterministic pattern: height encoded in first 4 bytes, rest filled with pattern
+				binary.LittleEndian.PutUint32(prevHashBytes, data[j-1].height)
+				for k := 4; k < 32; k++ {
+					prevHashBytes[k] = byte((data[j-1].height + uint32(k)) % 256)
+				}
+				prevHash, _ := chainhash.NewHash(prevHashBytes)
+				header.HashPrevBlock = prevHash
+			} else {
+				header.HashPrevBlock = &chainhash.Hash{}
+			}
+
+			// Create a Block object - IMPORTANT: Do this before calling Hash()
+			block := &model.Block{
+				Header: header,
+				Height: td.height,
+			}
+
+			// Now calculate the hash with all fields properly set
+			hash := header.Hash()
+
+			// Store the block with its calculated hash
+			mockStore.Blocks[*hash] = block
+			mockStore.BlockExists[*hash] = true
+			mockStore.BlockByHeight[block.Height] = block
+
+			// Store chainwork
+			chainworkBytes := td.chainwork.Bytes()
+			paddedChainwork := make([]byte, 32)
+			copy(paddedChainwork[32-len(chainworkBytes):], chainworkBytes)
+			mockStore.BlockChainWork[*hash] = paddedChainwork
+
+			// Update best block
+			if mockStore.BestBlock == nil || block.Height > mockStore.BestBlock.Height {
+				mockStore.BestBlock = block
+			}
+		}
+
+		// Set the mock store
+		d.store = mockStore
+
+		// Skip the first 144 rows for this test (144+2 needed)
+		// Also skip very early teratestnet blocks that have special difficulty rules
+		startIdx := 146
+		if testFile == "./work/teratestnet.csv" {
+			// Skip the first 149 blocks for teratestnet as they have special rules
+			startIdx = 149
+		}
+		for i := startIdx; i < len(data)-1; i++ {
+			// The latestSuitableBlock is based on the last block (i - 1) and the previous 2 blocks
+			// This simulates the median-of-3 selection in GetSuitableBlock
+			l := make([]testData, 3)
+			l[2] = data[i]
+			l[1] = data[i-1]
+			l[0] = data[i-2]
+
+			util.SortForDifficultyAdjustment(l)
+
+			lastSuitableBlock := &model.SuitableBlock{
+				Hash:   nil, // Not needed for computeTarget
+				Height: l[1].height,
+				NBits:  l[1].bits.CloneBytes(),
+				Time:   uint32(l[1].time),
+				ChainWork: func() []byte {
+					bytes := l[1].chainwork.Bytes()
+					padded := make([]byte, 32)
+					copy(padded[32-len(bytes):], bytes)
+					return padded
+				}(),
+			}
+
+			// Get the first suitable block (144 blocks back)
+			l[2] = data[i-144]
+			l[1] = data[i-144-1]
+			l[0] = data[i-144-2]
+
+			util.SortForDifficultyAdjustment(l)
+
+			firstSuitableBlock := &model.SuitableBlock{
+				Hash:   nil, // Not needed for computeTarget
+				Height: l[1].height,
+				NBits:  l[1].bits.CloneBytes(),
+				Time:   uint32(l[1].time),
+				ChainWork: func() []byte {
+					bytes := l[1].chainwork.Bytes()
+					padded := make([]byte, 32)
+					copy(padded[32-len(bytes):], bytes)
+					return padded
+				}(),
+			}
+
+			// For testnet, check if minimum difficulty rule should apply
+			var result *model.NBit
+			var err error
+
+			if chainParams.ReduceMinDifficulty {
+				// Check if the next block (i+1) should have minimum difficulty
+				// based on the time gap from current block (i)
+				currentBlockTime := data[i].time
+				nextBlockTime := data[i+1].time
+				targetSpacing := int64(chainParams.TargetTimePerBlock.Seconds())
+
+				if nextBlockTime > currentBlockTime+2*targetSpacing {
+					// This should trigger minimum difficulty
+					result = d.powLimitnBits
+				} else {
+					// Normal difficulty calculation
+					result, err = d.computeTarget(firstSuitableBlock, lastSuitableBlock)
+					require.NoError(t, err)
+				}
+			} else {
+				// Normal difficulty calculation for non-testnet
+				result, err = d.computeTarget(firstSuitableBlock, lastSuitableBlock)
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, data[i+1].bits.String(), result.String(), "difficulty wrong in %s at height %d", testFile, data[i+1].height)
+			// t.Logf("height %d: %s = %s", data[i+1].height, result.String(), data[i+1].bits.String())
+		}
 	}
 }
 
@@ -567,7 +675,7 @@ func TestDifficultyFor0000000000000f8f4026dc67d5635d79d87ef2d88f870c1dfdaa1338b5
 	require.NoError(t, err)
 
 	// Call computeTarget
-	result, err := d.computeTarget(earliestSuitableBlock, latestSuitableBlock, 1732540094, 1732540611)
+	result, err := d.computeTarget(earliestSuitableBlock, latestSuitableBlock)
 	require.NoError(t, err)
 
 	// t.Logf("height %d: %s", data[i].height, result.String())
@@ -670,7 +778,7 @@ func TestDifficultyFor000000001d27fe89679d4c2c873b0511df0aecdb95e19c0a782b9f4b05
 	require.NoError(t, err)
 
 	// Call computeTarget
-	result, err := d.computeTarget(earliestSuitableBlock, latestSuitableBlock, 1733396488, 1733396567)
+	result, err := d.computeTarget(earliestSuitableBlock, latestSuitableBlock)
 	require.NoError(t, err)
 
 	// t.Logf("height %d: %s", data[i].height, result.String())

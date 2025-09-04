@@ -1219,6 +1219,22 @@ func (s *Server) sendVerack(ctx context.Context, from string, hs p2p.HandshakeMe
 // checkAndTriggerSync evaluates if the peer should trigger blockchain sync.
 // It sends a Kafka message to blockchain service if the peer is our sync peer and ahead of us.
 func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32) {
+	// Defensive check: ensure Server is not nil
+	if s == nil {
+		return
+	}
+
+	// Defensive check: ensure logger is available
+	if s.logger == nil {
+		return
+	}
+
+	// Defensive check: ensure context is available
+	if s.gCtx == nil {
+		s.logger.Warnf("[checkAndTriggerSync] gCtx is nil, cannot check sync status")
+		return
+	}
+
 	if syncing, err := s.isBlockchainSyncingOrCatchingUp(s.gCtx); err != nil || syncing {
 		s.logger.Debugf("[checkAndTriggerSync] skipping height sync, blockchain is syncing or catching up: %v", err)
 

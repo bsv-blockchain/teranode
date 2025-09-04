@@ -3,6 +3,8 @@
 # Use DATADIR environment variable if set, otherwise default to ./data
 DATADIR="${DATADIR:-./data}"
 
+mkdir -p ${DATADIR}/postgres
+
 docker run -d --rm \
   --name postgres \
   -p 5432:5432 \

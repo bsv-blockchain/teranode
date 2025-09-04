@@ -3,6 +3,8 @@
 # Use DATADIR environment variable if set, otherwise default to ./data
 DATADIR="${DATADIR:-./data}"
 
+mkdir -p ${DATADIR}/aerospike
+
 docker run -d --rm \
   --name aerospike \
   -p 3000-3002:3000-3002 \
