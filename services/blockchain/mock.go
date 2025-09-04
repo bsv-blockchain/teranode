@@ -621,3 +621,107 @@ func (m *mockStoreGetBlockHeaders) GetBlockHeaders(ctx context.Context, blockHas
 	args := m.Called(ctx, blockHash, numberOfHeaders)
 	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
 }
+
+type mockStoreState struct {
+	*blockchain_store.MockStore
+	mock.Mock
+}
+
+func (m *mockStoreState) GetState(ctx context.Context, key string) ([]byte, error) {
+	args := m.Called(ctx, key)
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]byte), nil
+}
+
+func (m *mockStoreState) SetState(ctx context.Context, key string, data []byte) error {
+	args := m.Called(ctx, key, data)
+	return args.Error(0)
+}
+
+type mockStoreGetBlockHeaderIDs struct {
+	*blockchain_store.MockStore
+	mock.Mock
+}
+
+func (m *mockStoreGetBlockHeaderIDs) GetBlockHeaderIDs(ctx context.Context, startHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
+	args := m.Called(ctx, startHash, numberOfHeaders)
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]uint32), nil
+}
+
+type mockStoreGetSetBlockIsMined struct {
+	*blockchain_store.MockStore
+	mock.Mock
+}
+
+func (m *mockStoreGetSetBlockIsMined) GetBlockIsMined(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, hash)
+	if args.Error(1) != nil {
+		return false, args.Error(1)
+	}
+	return args.Bool(0), nil
+}
+
+func (m *mockStoreGetSetBlockIsMined) SetBlockMinedSet(ctx context.Context, hash *chainhash.Hash) error {
+	args := m.Called(ctx, hash)
+	return args.Error(0)
+}
+
+func (m *mockStoreGetSetBlockIsMined) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
+	args := m.Called(ctx)
+
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*model.Block), args.Error(1)
+}
+
+func (m *mockStoreGetSetBlockIsMined) SetBlockSubtreesSet(ctx context.Context, hash *chainhash.Hash) error {
+	args := m.Called(ctx, hash)
+	return args.Error(0)
+}
+
+func (m *mockStoreGetSetBlockIsMined) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
+	args := m.Called(ctx)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*model.Block), nil
+}
+
+type mockFSM struct {
+	states []string
+	index  int
+}
+
+func (m *mockFSM) Current() string {
+	if m.index < len(m.states)-1 {
+		val := m.states[m.index]
+		m.index++
+		return val
+	}
+	return m.states[len(m.states)-1]
+}
+
+type mockStoreLocateBlockHeaders struct {
+	*blockchain_store.MockStore
+	mock.Mock
+}
+
+func (m *mockStoreLocateBlockHeaders) LocateBlockHeaders(
+	ctx context.Context,
+	locator []*chainhash.Hash,
+	hashStop *chainhash.Hash,
+	maxHashes uint32,
+) ([]*model.BlockHeader, error) {
+	args := m.Called(ctx, locator, hashStop, maxHashes)
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*model.BlockHeader), nil
+}
