@@ -259,3 +259,18 @@ func (m *MockKafkaProducer) Stop() error {
 	args := m.Called()
 	return args.Error(0)
 }
+
+// MockSyncManager is a testify mock for SyncManager
+type MockSyncManager struct {
+	mock.Mock
+}
+
+func (m *MockSyncManager) IsInitialSyncComplete() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
+func (m *MockSyncManager) BufferBlockAnnouncement(announcement *BlockAnnouncement) bool {
+	args := m.Called(announcement)
+	return args.Bool(0)
+}

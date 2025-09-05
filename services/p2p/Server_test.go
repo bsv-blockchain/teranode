@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -677,6 +679,120 @@ func TestHandleBlockTopic(t *testing.T) {
 			assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", notification.Hash)
 		default:
 			t.Fatal("Expected notification message but none received")
+		}
+	})
+
+	t.Run("buffer block announcement during initial sync", func(t *testing.T) {
+		mockP2PNode := new(MockServerP2PNode)
+		selfPeerID, _ := peer.Decode("QmSelf")
+		mockP2PNode.On("HostID").Return(selfPeerID)
+
+		mockBanManager := new(MockPeerBanManager)
+		mockBanManager.On("IsBanned", mock.Anything).Return(false)
+
+		mockSync := new(MockSyncManager)
+		mockSync.On("IsInitialSyncComplete").Return(false)
+		mockSync.On("BufferBlockAnnouncement", mock.Anything).Return(true)
+
+		syncManager := &SyncManager{
+			logger: ulogger.New("sync"),
+		}
+
+		logger := ulogger.New("test-server")
+
+		server := &Server{
+			P2PNode:        mockP2PNode,
+			notificationCh: make(chan *notificationMsg, 10),
+			banManager:     mockBanManager,
+			syncManager:    syncManager,
+			logger:         logger,
+		}
+
+		msg := []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"QmValidPeerID"}`)
+		server.handleBlockTopic(ctx, msg, "other-peer-id")
+
+		select {
+		case <-server.notificationCh:
+			t.Logf("Unexpected notification message received, expected buffering")
+		default:
+			// ok
+		}
+	})
+
+	t.Run("buffering fails - should log warning", func(t *testing.T) {
+		mockP2PNode := new(MockServerP2PNode)
+		selfPeerID, _ := peer.Decode("QmSelf")
+		mockP2PNode.On("HostID").Return(selfPeerID)
+
+		mockBanManager := new(MockPeerBanManager)
+		mockBanManager.On("IsBanned", mock.Anything).Return(false)
+
+		mockSync := new(MockSyncManager)
+		mockSync.On("IsInitialSyncComplete").Return(false)
+		mockSync.On("BufferBlockAnnouncement", mock.Anything).Return(false)
+
+		syncManager := &SyncManager{
+			logger: ulogger.New("sync"),
+		}
+
+		server := &Server{
+			P2PNode:        mockP2PNode,
+			notificationCh: make(chan *notificationMsg, 10),
+			banManager:     mockBanManager,
+			syncManager:    syncManager,
+			logger:         ulogger.New("test-server"),
+		}
+
+		msg := []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"QmValidPeerID"}`)
+		server.handleBlockTopic(ctx, msg, "other-peer-id")
+
+		select {
+		case <-server.notificationCh:
+			t.Logf("Unexpected notification message received, expected warning")
+		default:
+			// ok
+		}
+	})
+
+	t.Run("discard announcement below sync peer height", func(t *testing.T) {
+		mockP2PNode := new(MockServerP2PNode)
+		selfPeerID, _ := peer.Decode("QmSelf")
+		mockP2PNode.On("HostID").Return(selfPeerID)
+
+		mockBanManager := new(MockPeerBanManager)
+		mockBanManager.On("IsBanned", mock.Anything).Return(false)
+
+		mockBlockchainClient := new(blockchain.Mock)
+		fsmState := blockchain_api.FSMStateType_CATCHINGBLOCKS
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
+
+		syncMgr := NewSyncManager(ulogger.New("sync"), &settings.Settings{})
+		fakePeerID, _ := peer.Decode("12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg")
+		syncMgr.AddPeer(fakePeerID)
+		syncMgr.SetPeerHeightCallback(func(peer.ID) int32 {
+			return 100
+		})
+		syncMgr.SetLocalHeightCallback(func() uint32 { return 0 })
+		syncMgr.selectSyncPeerLocked()
+
+		server := &Server{
+			P2PNode:          mockP2PNode,
+			notificationCh:   make(chan *notificationMsg, 1),
+			banManager:       mockBanManager,
+			syncManager:      syncMgr,
+			blockchainClient: mockBlockchainClient,
+			gCtx:             context.Background(),
+			logger:           ulogger.New("test-server"),
+		}
+
+		msg := []byte(`{"Hash":"abc","Height":1,"DataHubURL":"http://example.com","PeerID":"12D3KooFakePeer"}`)
+		server.handleBlockTopic(context.Background(), msg, "other-peer")
+
+		select {
+		case <-server.notificationCh:
+			t.Logf("Discard notification")
+		default:
+			// ok
 		}
 	})
 }
@@ -2948,6 +3064,53 @@ func TestPrivateKeyHandling(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "decoding")
 		mockClient.AssertExpectations(t)
+	})
+
+	t.Run("no key in settings and no p2p.key file - should generate and save new key", func(t *testing.T) {
+		mockClient := &blockchain.Mock{}
+
+		settings := createBaseTestSettings()
+		settings.P2P.PrivateKey = ""
+		settings.P2P.ListenAddresses = []string{"127.0.0.1"}
+		settings.P2P.StaticPeers = []string{}
+		settings.BlockChain.StoreURL = &url.URL{
+			Scheme: "sqlitememory",
+		}
+
+		tmpDir := t.TempDir()
+		settings.P2P.PeerCacheDir = tmpDir
+
+		server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil, nil)
+		require.NoError(t, err)
+		require.NotNil(t, server)
+
+		keyPath := filepath.Join(tmpDir, "p2p.key")
+		data, err := os.ReadFile(keyPath)
+		require.NoError(t, err)
+		require.NotEmpty(t, data, "nuova chiave deve essere scritta su disco")
+
+		mockClient.AssertExpectations(t)
+	})
+
+	t.Run("error writing key file", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.Chmod(dir, 0o555))
+		defer func() {
+			if err := os.Chmod(dir, 0o755); err != nil {
+				t.Logf("failed to restore permissions on %s: %v", dir, err)
+			}
+		}()
+
+		settings := createBaseTestSettings()
+		settings.P2P.PrivateKey = ""
+		settings.P2P.ListenAddresses = []string{"127.0.0.1"}
+		settings.P2P.PeerCacheDir = dir
+		settings.BlockChain.StoreURL = &url.URL{Scheme: "sqlitememory"}
+
+		server, err := NewServer(ctx, logger, settings, &blockchain.Mock{}, nil, nil, nil, nil, nil, nil)
+		require.Error(t, err)
+		require.Nil(t, server)
+		require.Contains(t, err.Error(), "failed to save private key")
 	})
 
 }
