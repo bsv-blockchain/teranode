@@ -193,6 +193,59 @@ func markConflictingRecursively(ctx context.Context, s Store, hashes []chainhash
 	return affectedParentSpends, nil
 }
 
+func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]chainhash.Hash, error) {
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetAndLockChildren")
+
+	defer deferFn()
+
+	if hash.Equal(subtree.CoinbasePlaceholderHashValue) {
+		// skip the coinbase placeholder hash
+		return nil, errors.NewProcessingError("[GetAndLockChildren][%s] tx is frozen", hash.String())
+	}
+
+	// lock the transaction so it can't be modified while we are processing it
+	if err := s.SetLocked(ctx, []chainhash.Hash{hash}, true); err != nil {
+		return nil, err
+	}
+
+	// get the transaction utxos, which will include the spends
+	txMeta, err := s.Get(ctx, &hash, fields.Utxos)
+	if err != nil {
+		return nil, err
+	}
+
+	childrenMap := make(map[chainhash.Hash]struct{})
+
+	// set the conflicting children from the utxos bin spends
+	if txMeta.SpendingDatas != nil {
+		for _, spendingData := range txMeta.SpendingDatas {
+			if spendingData != nil {
+				childrenMap[*spendingData.TxID] = struct{}{}
+			}
+		}
+	}
+
+	// get and lock the children of the spends
+	for child := range childrenMap {
+		children, err := GetAndLockChildren(ctx, s, child)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, c := range children {
+			childrenMap[c] = struct{}{}
+		}
+	}
+
+	children := make([]chainhash.Hash, 0, len(childrenMap))
+
+	for child := range childrenMap {
+		children = append(children, child)
+	}
+
+	return children, nil
+}
+
 func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]chainhash.Hash, error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetConflictingChildren")
 
@@ -223,13 +276,6 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash) (
 			if spendingData != nil {
 				conflictingChildrenMap[*spendingData.TxID] = struct{}{}
 			}
-		}
-	}
-
-	// get the conflicting children
-	if txMeta.ConflictingChildren != nil {
-		for _, child := range txMeta.ConflictingChildren {
-			conflictingChildrenMap[child] = struct{}{}
 		}
 	}
 

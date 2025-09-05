@@ -958,7 +958,7 @@ func (s *Store) spendWithRetry(ctx context.Context, tx *bt.Tx, ignoreFlags ...ut
 			// If this utxo has a coinbase spending height, check it is time to spend it
 			if coinbaseSpendingHeight > 0 && blockHeight < coinbaseSpendingHeight {
 				errorFound = true
-				spend.Err = errors.NewStorageError("[Spend]coinbase utxo not ready to spend for %s:%d", spend.TxID, spend.Vout)
+				spend.Err = errors.NewStorageError("[Spend] coinbase utxo not ready to spend for %s:%d", spend.TxID, spend.Vout)
 
 				continue
 			}
