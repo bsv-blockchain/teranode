@@ -283,13 +283,13 @@ func setupMockBlockchain(parentBlock *model.Block) *blockchain.Mock {
 	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, errors.ErrBlockNotFound)
 	mockBlockchain.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errors.ErrBlockNotFound)
 	// Mock GetNextWorkRequired for difficulty validation - return any NBit that's passed
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(
-		func(ctx context.Context, hash *chainhash.Hash) *model.NBit {
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, hash *chainhash.Hash, currentBlockTime ...int64) *model.NBit {
 			// Return a default NBit for testing
 			nBits, _ := model.NewNBitFromString("2000ffff")
 			return nBits
 		},
-		func(ctx context.Context, hash *chainhash.Hash) error {
+		func(ctx context.Context, hash *chainhash.Hash, currentBlockTime ...int64) error {
 			return nil
 		},
 	)
@@ -374,7 +374,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 	// Mock GetNextWorkRequired for difficulty validation
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nBits, nil)
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil)
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
@@ -500,7 +500,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 	// Mock GetNextWorkRequired for difficulty validation
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nBits, nil)
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil)
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()

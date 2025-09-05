@@ -1190,13 +1190,13 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		// wait for any pending blocks to be processed before loading unmined transactions, this will include invalidated blocks
 		if err = b.waitForPendingBlocks(ctx); err != nil {
 			// we cannot continue if we have not processed all pending blocks
-			return errors.NewProcessingError("[BlockAssembler] failed to wait for pending blocks: %v", err)
+			return errors.NewProcessingError("[BlockAssembler] failed to wait for pending blocks", err)
 		}
 
 		// load unmined transactions again, but only after all blocks have been mined_set properly
 		if err = b.loadUnminedTransactions(ctx); err != nil {
 			// we cannot continue if we have not loaded unmined transactions successfully
-			return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
+			return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions", err)
 		}
 	}
 

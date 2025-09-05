@@ -171,7 +171,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
 		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.ErrNotFound)
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
-		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		subChan := make(chan *blockchain_api.Notification, 1)
 		// Send initial notification to mimic real blockchain service behavior
 		subChan <- &blockchain_api.Notification{
@@ -211,7 +211,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
 		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.ErrNotFound)
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
-		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		subChan := make(chan *blockchain_api.Notification, 1)
 		// Send initial notification to mimic real blockchain service behavior
 		subChan <- &blockchain_api.Notification{
@@ -269,7 +269,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1}, nil)
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		nextBits := model.NBit{0xff, 0xff, 0x7f, 0x20}
-		blockchainClient.On("GetNextWorkRequired", mock.Anything, bestBlockHeader.Hash()).Return(&nextBits, nil)
+		blockchainClient.On("GetNextWorkRequired", mock.Anything, bestBlockHeader.Hash(), mock.Anything).Return(&nextBits, nil)
 		subChan := make(chan *blockchain_api.Notification, 1)
 		// Send initial notification to mimic real blockchain service behavior
 		subChan <- &blockchain_api.Notification{
@@ -308,7 +308,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
 		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.ErrNotFound)
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
-		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		subChan := make(chan *blockchain_api.Notification, 1)
 		// Send initial notification to mimic real blockchain service behavior
 		subChan <- &blockchain_api.Notification{

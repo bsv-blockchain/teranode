@@ -2808,10 +2808,11 @@ func (x *GetHashOfAncestorBlockResponse) GetHash() []byte {
 
 // GetNextWorkRequiredRequest requests difficulty calculation.
 type GetNextWorkRequiredRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BlockHash     []byte                 `protobuf:"bytes,1,opt,name=blockHash,proto3" json:"blockHash,omitempty"` // Reference block hash
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	PreviousBlockHash []byte                 `protobuf:"bytes,1,opt,name=previousBlockHash,proto3" json:"previousBlockHash,omitempty"` // Reference block hash
+	CurrentBlockTime  int64                  `protobuf:"varint,2,opt,name=currentBlockTime,proto3" json:"currentBlockTime,omitempty"`  // Current block time is only used for emaergency difficulty adjustment on testnet-type networks
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *GetNextWorkRequiredRequest) Reset() {
@@ -2844,11 +2845,18 @@ func (*GetNextWorkRequiredRequest) Descriptor() ([]byte, []int) {
 	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{50}
 }
 
-func (x *GetNextWorkRequiredRequest) GetBlockHash() []byte {
+func (x *GetNextWorkRequiredRequest) GetPreviousBlockHash() []byte {
 	if x != nil {
-		return x.BlockHash
+		return x.PreviousBlockHash
 	}
 	return nil
+}
+
+func (x *GetNextWorkRequiredRequest) GetCurrentBlockTime() int64 {
+	if x != nil {
+		return x.CurrentBlockTime
+	}
+	return 0
 }
 
 // GetNextWorkRequiredResponse contains difficulty target.
@@ -3748,9 +3756,10 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"targetHash\x12(\n" +
 	"\x0fnumberOfHeaders\x18\x03 \x01(\x04R\x0fnumberOfHeaders\"4\n" +
 	"\x1eGetHashOfAncestorBlockResponse\x12\x12\n" +
-	"\x04hash\x18\x01 \x01(\fR\x04hash\":\n" +
-	"\x1aGetNextWorkRequiredRequest\x12\x1c\n" +
-	"\tblockHash\x18\x01 \x01(\fR\tblockHash\"1\n" +
+	"\x04hash\x18\x01 \x01(\fR\x04hash\"v\n" +
+	"\x1aGetNextWorkRequiredRequest\x12,\n" +
+	"\x11previousBlockHash\x18\x01 \x01(\fR\x11previousBlockHash\x12*\n" +
+	"\x10currentBlockTime\x18\x02 \x01(\x03R\x10currentBlockTime\"1\n" +
 	"\x1bGetNextWorkRequiredResponse\x12\x12\n" +
 	"\x04bits\x18\x01 \x01(\fR\x04bits\"7\n" +
 	"\x17SetBlockMinedSetRequest\x12\x1c\n" +

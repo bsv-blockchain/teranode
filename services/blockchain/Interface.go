@@ -257,7 +257,7 @@ type ClientI interface {
 	// Returns:
 	// - NBit structure containing the difficulty target for the next block
 	// - Error if the calculation fails
-	GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash) (*model.NBit, error)
+	GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash, currentBlockTime ...int64) (*model.NBit, error)
 
 	// GetBlockExists checks if a block exists in the blockchain.
 	//

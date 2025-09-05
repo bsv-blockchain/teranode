@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
@@ -152,8 +153,8 @@ func (m *Mock) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash,
 }
 
 // GetNextWorkRequired mocks the GetNextWorkRequired method
-func (m *Mock) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash) (*model.NBit, error) {
-	args := m.Called(ctx, hash)
+func (m *Mock) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash, currentBlockTime ...int64) (*model.NBit, error) {
+	args := m.Called(ctx, hash, currentBlockTime)
 
 	if args.Error(1) != nil {
 		return nil, args.Error(1)
@@ -539,6 +540,27 @@ type emptyStoreGetBlockHeaders struct {
 
 func (s *emptyStoreGetBlockHeaders) GetBlockHeaders(ctx context.Context, h *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
+}
+
+type errorStoreGetBlockHeader struct {
+	mock.Mock
+	blockchain_store.MockStore
+}
+
+func (s *errorStoreGetBlockHeader) GetBlockHeader(ctx context.Context, h *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	args := s.Called(ctx, h)
+	if args.Get(0) == nil {
+		return nil, nil, args.Error(2)
+	}
+	return args.Get(0).(*model.BlockHeader), args.Get(1).(*model.BlockHeaderMeta), args.Error(2)
+}
+
+type emptyStoreGetBlockHeader struct {
+	blockchain_store.MockStore
+}
+
+func (s *emptyStoreGetBlockHeader) GetBlockHeader(ctx context.Context, h *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return nil, nil, errors.NewBlockNotFoundError("block header not found")
 }
 
 type errorStore struct {

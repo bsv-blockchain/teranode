@@ -2578,7 +2578,7 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 	mockBlockchain := &blockchain.Mock{}
 	// Mock GetNextWorkRequired for difficulty validation (in case it's called)
 	defaultNBits6, _ := model.NewNBitFromString("2000ffff")
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(defaultNBits6, nil).Maybe()
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBits6, nil).Maybe()
 
 	// Simulate GetBlockHeaders returns error
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, errors.NewError("header fetch error"))
@@ -2699,7 +2699,7 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil)
 	// Mock GetNextWorkRequired for difficulty validation
 	defaultNBits, _ := model.NewNBitFromString("2000ffff")
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(defaultNBits, nil)
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBits, nil)
 
 	tSettings := test.CreateBaseTestSettings(t)
 	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
@@ -2950,7 +2950,7 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 	mockBlockchain := &blockchain.Mock{}
 	// Mock GetNextWorkRequired for difficulty validation
 	defaultNBits2, _ := model.NewNBitFromString("2000ffff")
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(defaultNBits2, nil)
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBits2, nil)
 
 	var callCount int
 
@@ -3051,7 +3051,7 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	mockBlockchain := &blockchain.Mock{}
 	// Mock GetNextWorkRequired for difficulty validation
 	defaultNBits3, _ := model.NewNBitFromString("2000ffff")
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(defaultNBits3, nil)
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBits3, nil)
 	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
 	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return([]chainhash.Hash{}, nil).Run(func(args mock.Arguments) {
@@ -3339,7 +3339,7 @@ func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	mockBlockchain := &blockchain.Mock{}
 	// Mock GetNextWorkRequired for difficulty validation (in case it's called)
 	defaultNBits4, _ := model.NewNBitFromString("2000ffff")
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(defaultNBits4, nil).Maybe()
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBits4, nil).Maybe()
 
 	notificationCh := make(chan *blockchain_api.Notification, 1)
 	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(notificationCh, nil)
@@ -3540,7 +3540,7 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 	mockBlockchain := &blockchain.Mock{}
 	// Mock GetNextWorkRequired for difficulty validation
 	defaultNBits5, _ := model.NewNBitFromString("2000ffff")
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything).Return(defaultNBits5, nil)
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBits5, nil)
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
 	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return([]chainhash.Hash{}, nil)

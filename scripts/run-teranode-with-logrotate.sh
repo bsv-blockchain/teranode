@@ -47,7 +47,7 @@ cleanup() {
 trap cleanup INT TERM
 
 # Run teranode with output to log file only
-./teranode.run  >> "$LOG_FILE" 2>&1
+./teranode.run "$@" >> "$LOG_FILE" 2>&1
 
 # Cleanup when teranode exits
 cleanup

@@ -4156,7 +4156,7 @@ func (m *mockBlockchainClient) GetSuitableBlock(ctx context.Context, blockHash *
 func (m *mockBlockchainClient) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
 	return nil, nil
 }
-func (m *mockBlockchainClient) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash) (*model.NBit, error) {
+func (m *mockBlockchainClient) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash, currentBlockTime ...int64) (*model.NBit, error) {
 	return nil, nil
 }
 func (m *mockBlockchainClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {

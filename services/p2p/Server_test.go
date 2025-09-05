@@ -4642,7 +4642,7 @@ func TestConnectPeer(t *testing.T) {
 	t.Run("ConnectToPeer returns error", func(t *testing.T) {
 		mockP2PNode := new(MockServerP2PNode)
 		mockP2PNode.
-			On("ConnectToPeer", mock.Anything, "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFail").
+			On("ConnectToPeer", mock.Anything, "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFailing").
 			Return(errors.NewProcessingError("connection failed"))
 
 		server := &Server{
@@ -4651,7 +4651,7 @@ func TestConnectPeer(t *testing.T) {
 		}
 
 		resp, err := server.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{
-			PeerAddress: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFail",
+			PeerAddress: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFailing",
 		})
 		require.NoError(t, err)
 		assert.False(t, resp.Success)

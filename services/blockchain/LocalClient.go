@@ -189,7 +189,7 @@ func (c *LocalClient) GetSuitableBlock(ctx context.Context, blockHash *chainhash
 func (c *LocalClient) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, num int) (*chainhash.Hash, error) {
 	return c.store.GetHashOfAncestorBlock(ctx, blockHash, num)
 }
-func (c *LocalClient) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash) (*model.NBit, error) {
+func (c *LocalClient) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash, currentBlockTime ...int64) (*model.NBit, error) {
 	return nil, nil
 }
 

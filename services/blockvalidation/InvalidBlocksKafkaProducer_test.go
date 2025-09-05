@@ -318,8 +318,8 @@ func (m *MockBlockchainClient) GetLastNInvalidBlocks(ctx context.Context, n int6
 }
 
 // GetNextWorkRequired implements the blockchain.ClientI interface
-func (m *MockBlockchainClient) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash) (*model.NBit, error) {
-	args := m.Called(ctx, hash)
+func (m *MockBlockchainClient) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash, currentBlockTime ...int64) (*model.NBit, error) {
+	args := m.Called(ctx, hash, currentBlockTime)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

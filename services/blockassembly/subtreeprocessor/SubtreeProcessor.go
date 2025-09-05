@@ -661,6 +661,9 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	stp.currentSubtree, _ = subtreepkg.NewTreeByLeafCount(stp.currentItemsPerFile)
 	stp.txCount.Store(0)
 
+	// clear current tx map
+	stp.currentTxMap.Clear()
+
 	// dequeue all transactions
 	stp.logger.Warnf("[SubtreeProcessor][Reset] Dequeueing all transactions")
 
@@ -1075,10 +1078,10 @@ func (stp *SubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHead
 func (stp *SubtreeProcessor) addNode(node subtreepkg.SubtreeNode, parents *subtreepkg.TxInpoints, skipNotification bool) (err error) {
 	// parent can only be set to nil, when they are already in the map
 	if parents == nil {
-		if nilParents, ok := stp.currentTxMap.Get(node.Hash); !ok {
+		if p, ok := stp.currentTxMap.Get(node.Hash); !ok {
 			return errors.NewProcessingError("error adding node to subtree: txInpoints not found in currentTxMap for %s", node.Hash.String())
 		} else {
-			parents = &nilParents // nolint:ineffassign
+			parents = &p // nolint:ineffassign
 		}
 	} else {
 		// SetIfNotExists returns (value, wasSet) where wasSet is true if the key was newly inserted

@@ -1098,27 +1098,23 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 
 		nBits = defaultNbits
 	} else {
-		hash, err := chainhash.NewHash(request.BlockHash)
+		hash, err := chainhash.NewHash(request.PreviousBlockHash)
 		if err != nil {
 			return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetNextWorkRequired] request's block hash is not valid", err))
 		}
 
-		blockHeaders, metas, err := b.store.GetBlockHeaders(ctx, hash, 2)
+		blockHeader, meta, err := b.store.GetBlockHeader(ctx, hash)
 		if err != nil {
 			return nil, errors.WrapGRPC(err)
 		}
 
-		if len(blockHeaders) == 0 {
-			return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] could not GetBlockHeaders for hash %s", hash.String()))
-		}
-
 		var testnetArgs []int64
 
-		if b.settings.ChainCfgParams.ReduceMinDifficulty {
-			testnetArgs = append(testnetArgs, int64(blockHeaders[0].Timestamp))
+		if b.settings.ChainCfgParams.ReduceMinDifficulty && request.CurrentBlockTime > 0 {
+			testnetArgs = append(testnetArgs, request.CurrentBlockTime)
 		}
 
-		nBitsp, err := b.difficulty.CalcNextWorkRequired(ctx, blockHeaders[0], metas[0].Height, testnetArgs...)
+		nBitsp, err := b.difficulty.CalcNextWorkRequired(ctx, blockHeader, meta.Height, testnetArgs...)
 		if err == nil {
 			nBits = nBitsp
 		} else {

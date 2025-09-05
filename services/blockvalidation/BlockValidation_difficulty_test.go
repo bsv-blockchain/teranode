@@ -121,7 +121,7 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(notificationChan, nil)
 
 	// Mock GetNextWorkRequired to return the expected difficulty
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash()).
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
 		Return(expectedNBits, nil).Once()
 
 	// Mock GetBlock for bloom filter creation
@@ -251,7 +251,7 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(notificationChan, nil)
 
 	// Mock GetNextWorkRequired to return the expected difficulty
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash()).
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
 		Return(expectedNBits, nil).Once()
 
 	// Mock GetBlock for bloom filter creation
@@ -393,7 +393,7 @@ func TestValidateBlock_ValidDifficulty(t *testing.T) {
 	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(notificationChan, nil)
 
 	// Mock GetNextWorkRequired to return the expected difficulty
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash()).
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
 		Return(expectedNBits, nil).Once()
 
 	// Mock GetBlock for bloom filter creation

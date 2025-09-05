@@ -1219,22 +1219,6 @@ func (s *Server) sendVerack(ctx context.Context, from string, hs p2p.HandshakeMe
 // checkAndTriggerSync evaluates if the peer should trigger blockchain sync.
 // It sends a Kafka message to blockchain service if the peer is our sync peer and ahead of us.
 func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32) {
-	// Defensive check: ensure Server is not nil
-	if s == nil {
-		return
-	}
-
-	// Defensive check: ensure logger is available
-	if s.logger == nil {
-		return
-	}
-
-	// Defensive check: ensure context is available
-	if s.gCtx == nil {
-		s.logger.Warnf("[checkAndTriggerSync] gCtx is nil, cannot check sync status")
-		return
-	}
-
 	if syncing, err := s.isBlockchainSyncingOrCatchingUp(s.gCtx); err != nil || syncing {
 		s.logger.Debugf("[checkAndTriggerSync] skipping height sync, blockchain is syncing or catching up: %v", err)
 
@@ -1294,8 +1278,9 @@ func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32
 					s.logger.Errorf("[checkAndTriggerSync] error getting chainhash from string %s: %v", hs.BestHash, err)
 				} else {
 					msg := &kafkamessage.KafkaBlockTopicMessage{
-						Hash: hash.String(),
-						URL:  hs.DataHubURL,
+						Hash:   hash.String(),
+						URL:    hs.DataHubURL,
+						PeerId: hs.PeerID,
 					}
 
 					value, err := proto.Marshal(msg)
@@ -1310,7 +1295,7 @@ func (s *Server) checkAndTriggerSync(hs p2p.HandshakeMessage, localHeight uint32
 			}
 		} else {
 			// Peer is ahead but not our sync peer
-			s.logger.Debugf("[checkAndTriggerSync] Peer %s has higher block (%s) at height %d > %d, but is not sync peer", hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
+			s.logger.Infof("[checkAndTriggerSync] Peer %s has higher block (%s) at height %d > %d, but is not sync peer", hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
 		}
 	} else if hs.BestHash != "" && hs.BestHeight > 0 {
 		s.logger.Debugf("[checkAndTriggerSync] peer %s has block %s at height %d (our height: %d), not requesting", hs.PeerID, hs.BestHash, hs.BestHeight, localHeight)
@@ -2030,8 +2015,9 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
 	// send block to kafka, if configured
 	if s.blocksKafkaProducerClient != nil {
 		msg := &kafkamessage.KafkaBlockTopicMessage{
-			Hash: hash.String(),
-			URL:  blockMessage.DataHubURL,
+			Hash:   hash.String(),
+			URL:    blockMessage.DataHubURL,
+			PeerId: blockMessage.PeerID,
 		}
 
 		value, err := proto.Marshal(msg)
@@ -2289,8 +2275,9 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 			}
 
 			msg := &kafkamessage.KafkaBlockTopicMessage{
-				Hash: hash.String(),
-				URL:  miningOnMessage.DataHubURL,
+				Hash:   hash.String(),
+				URL:    miningOnMessage.DataHubURL,
+				PeerId: miningOnMessage.PeerID,
 			}
 
 			value, err := proto.Marshal(msg)
@@ -2961,8 +2948,9 @@ func (s *Server) processBufferedAnnouncementsWhenReady(ctx context.Context) {
 						// Send only the best block to Kafka
 						if s.blocksKafkaProducerClient != nil {
 							msg := &kafkamessage.KafkaBlockTopicMessage{
-								Hash: bestAnnouncement.Hash,
-								URL:  bestAnnouncement.DataHubURL,
+								Hash:   bestAnnouncement.Hash,
+								URL:    bestAnnouncement.DataHubURL,
+								PeerId: bestAnnouncement.PeerID,
 							}
 
 							value, err := proto.Marshal(msg)
@@ -2992,8 +2980,9 @@ func (s *Server) processBufferedAnnouncementsWhenReady(ctx context.Context) {
 						// Send to Kafka
 						if s.blocksKafkaProducerClient != nil {
 							msg := &kafkamessage.KafkaBlockTopicMessage{
-								Hash: announcement.Hash,
-								URL:  announcement.DataHubURL,
+								Hash:   announcement.Hash,
+								URL:    announcement.DataHubURL,
+								PeerId: announcement.PeerID,
 							}
 
 							value, err := proto.Marshal(msg)

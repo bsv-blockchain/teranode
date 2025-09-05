@@ -477,7 +477,8 @@ message GetHashOfAncestorBlockResponse {
 
 // GetNextWorkRequiredRequest requests difficulty calculation.
 message GetNextWorkRequiredRequest {
-  bytes blockHash = 1;  // Reference block hash
+  bytes previousBlockHash = 1;  // Reference block hash
+  int64 currentBlockTime = 2;  // Current block time is only used for emaergency difficulty adjustment on testnet-type networks
 }
 
 // GetNextWorkRequiredResponse contains difficulty target.

@@ -53,10 +53,10 @@ func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, tSetting
 //   - ctx: Context for the operation
 //   - blockHeader: Block header to calculate the next difficulty for
 //   - blockHeight: Height of the block
-//   - testnetArgs: Optional arguments for testnet difficulty calculation
+//   - currentBlockHeight: Optional argument for the current block height for testnet difficulty calculation
 //
 // Returns the calculated NBit target difficulty.
-func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *model.BlockHeader, blockHeight uint32, testnetArgs ...int64) (*model.NBit, error) {
+func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *model.BlockHeader, blockHeight uint32, currentBlockHeight ...int64) (*model.NBit, error) {
 	// If regtest we don't adjust the difficulty
 	if d.settings.ChainCfgParams.NoDifficultyAdjustment {
 		return &blockHeader.Bits, nil
@@ -66,9 +66,9 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 	// If the new block's timestamp is more than 2 * target spacing after the previous block,
 	// allow mining of a min-difficulty block.
 	// This matches bitcoin-sv's pow.cpp implementation.
-	if d.settings.ChainCfgParams.ReduceMinDifficulty && len(testnetArgs) >= 1 {
-		// testnetArgs[0] is the timestamp of the new block being validated
-		newBlockTime := testnetArgs[0]
+	if d.settings.ChainCfgParams.ReduceMinDifficulty && len(currentBlockHeight) >= 1 {
+		// currentBlockHeight[0] is the timestamp of the new block being validated
+		newBlockTime := currentBlockHeight[0]
 		prevBlockTime := int64(blockHeader.Timestamp)
 		targetSpacing := int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
 
