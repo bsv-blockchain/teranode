@@ -1203,8 +1203,84 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 }
 
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
+	// Check if we're using PostgreSQL or SQLite
+	isPostgres := s.storeURL.Scheme == "postgres"
+
+	// For SQLite or small batches, fall back to the original implementation
+	// SQLite doesn't support array operations, and small batches don't benefit from bulk operations
+	if !isPostgres || len(hashes) < 10 {
+		// Add timeout context for the original implementation
+		ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
+		defer cancelTimeout()
+		return s.setMinedMultiOriginal(ctxWithTimeout, hashes, minedBlockInfo)
+	}
+
+	// For very large batches, split into smaller chunks to avoid long-running transactions
+	const maxBatchSize = 500
+	if len(hashes) > maxBatchSize {
+		return s.setMinedMultiBatched(ctx, hashes, minedBlockInfo, maxBatchSize)
+	}
+
+	// Add timeout context and call the bulk implementation
+	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
+	return s.setMinedMultiBulk(ctxWithTimeout, hashes, minedBlockInfo)
+}
+
+// setMinedMultiBatched handles very large batches by splitting them into smaller chunks
+// This avoids long-running transactions that can cause timeouts and deadlocks
+func (s *Store) setMinedMultiBatched(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo, batchSize int) (map[chainhash.Hash][]uint32, error) {
+	// Check if context is already cancelled
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	resultMap := make(map[chainhash.Hash][]uint32)
+
+	// Process hashes in batches
+	for i := 0; i < len(hashes); i += batchSize {
+		end := i + batchSize
+		if end > len(hashes) {
+			end = len(hashes)
+		}
+
+		batch := hashes[i:end]
+
+		// Check context before processing each batch
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		// Process this batch with a timeout
+		ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
+		batchResult, err := s.setMinedMultiBulk(ctxWithTimeout, batch, minedBlockInfo)
+		cancelTimeout()
+
+		if err != nil {
+			return nil, errors.NewStorageError("SQL error in batched operation (batch %d-%d): %v", i, end-1, err)
+		}
+
+		// Merge results
+		for hash, blockIDs := range batchResult {
+			resultMap[hash] = blockIDs
+		}
+	}
+
+	return resultMap, nil
+}
+
+// setMinedMultiBulk is the core bulk implementation for medium-sized batches
+func (s *Store) setMinedMultiBulk(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
+	// Check if context is already cancelled before starting
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 
 	// Start a database transaction
 	txn, err := s.db.Begin()
@@ -1212,8 +1288,193 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 		return nil, err
 	}
 
+	// Use a flag to track if we should rollback
+	committed := false
 	defer func() {
-		_ = txn.Rollback()
+		if !committed {
+			if rollbackErr := txn.Rollback(); rollbackErr != nil {
+				// Log rollback error but don't override original error
+				s.logger.Warnf("Failed to rollback bulk transaction: %v", rollbackErr)
+			}
+		}
+	}()
+
+	// Convert hashes to byte arrays for PostgreSQL
+	hashBytes := make([][]byte, len(hashes))
+	for i, hash := range hashes {
+		hashBytes[i] = hash[:]
+	}
+
+	// Step 1: Bulk check which transactions exist
+	// Using ANY array operator for bulk comparison
+	qCheckExists := `
+		SELECT hash
+		FROM transactions
+		WHERE hash = ANY($1::bytea[])
+	`
+
+	// Check context before first database operation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	rows, err := txn.QueryContext(ctx, qCheckExists, pq.Array(hashBytes))
+	if err != nil {
+		return nil, errors.NewStorageError("SQL error checking transaction existence: %v", err)
+	}
+
+	existingHashes := make(map[chainhash.Hash]bool)
+	for rows.Next() {
+		var hashBytes []byte
+		if err := rows.Scan(&hashBytes); err != nil {
+			rows.Close()
+			return nil, errors.NewStorageError("SQL error scanning existing hash: %v", err)
+		}
+		var hash chainhash.Hash
+		copy(hash[:], hashBytes)
+		existingHashes[hash] = true
+	}
+	rows.Close()
+
+	// If no transactions exist, return early
+	if len(existingHashes) == 0 {
+		// Commit empty transaction
+		if err = txn.Commit(); err != nil {
+			return nil, errors.NewStorageError("SQL error committing empty transaction: %v", err)
+		}
+		committed = true
+		return make(map[chainhash.Hash][]uint32), nil
+	}
+
+	// Prepare array of existing hashes only
+	existingHashBytes := make([][]byte, 0, len(existingHashes))
+	for hash := range existingHashes {
+		h := hash // Create a copy to avoid pointer issues
+		existingHashBytes = append(existingHashBytes, h[:])
+	}
+
+	// Check context before block_ids operations
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	if minedBlockInfo.UnsetMined {
+		// Step 2a: Bulk delete block_ids for unsetting mined status
+		qBulkRemove := `
+			DELETE FROM block_ids
+			WHERE transaction_id IN (
+				SELECT id FROM transactions WHERE hash = ANY($1::bytea[])
+			)
+			AND block_id = $2
+		`
+		if _, err = txn.ExecContext(ctx, qBulkRemove, pq.Array(existingHashBytes), minedBlockInfo.BlockID); err != nil {
+			return nil, errors.NewStorageError("SQL error bulk removing block_ids: %v", err)
+		}
+	} else {
+		// Step 2b: Bulk insert block_ids for setting mined status
+		qBulkInsert := `
+			INSERT INTO block_ids (transaction_id, block_id, block_height, subtree_idx)
+			SELECT t.id, $2, $3, $4
+			FROM transactions t
+			WHERE t.hash = ANY($1::bytea[])
+			ON CONFLICT DO NOTHING
+		`
+		if _, err = txn.ExecContext(ctx, qBulkInsert, pq.Array(existingHashBytes), minedBlockInfo.BlockID, minedBlockInfo.BlockHeight, minedBlockInfo.SubtreeIdx); err != nil {
+			return nil, errors.NewStorageError("SQL error bulk inserting block_ids: %v", err)
+		}
+	}
+
+	// Check context before transaction updates
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Step 3: Bulk update transactions to mark as mined
+	qBulkUpdate := `
+		UPDATE transactions
+		SET locked = false, unmined_since = NULL
+		WHERE hash = ANY($1::bytea[])
+	`
+	if _, err = txn.ExecContext(ctx, qBulkUpdate, pq.Array(existingHashBytes)); err != nil {
+		return nil, errors.NewStorageError("SQL error bulk updating transactions: %v", err)
+	}
+
+	// Check context before final fetch operation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Step 4: Bulk fetch all block IDs for the transactions
+	qBulkGetBlockIDs := `
+		SELECT t.hash, array_agg(b.block_id ORDER BY b.block_id)
+		FROM transactions t
+		LEFT JOIN block_ids b ON t.id = b.transaction_id
+		WHERE t.hash = ANY($1::bytea[])
+		GROUP BY t.hash
+	`
+
+	rows, err = txn.QueryContext(ctx, qBulkGetBlockIDs, pq.Array(existingHashBytes))
+	if err != nil {
+		return nil, errors.NewStorageError("SQL error bulk fetching block IDs: %v", err)
+	}
+
+	blockIDsMap := make(map[chainhash.Hash][]uint32)
+	for rows.Next() {
+		var hashBytes []byte
+		var blockIDs pq.Int32Array
+		if err := rows.Scan(&hashBytes, &blockIDs); err != nil {
+			rows.Close()
+			return nil, errors.NewStorageError("SQL error scanning block IDs: %v", err)
+		}
+		var hash chainhash.Hash
+		copy(hash[:], hashBytes)
+
+		// Convert pq.Int32Array to []uint32, filtering out NULLs (converted to 0)
+		var uint32BlockIDs []uint32
+		for _, id := range blockIDs {
+			if id > 0 { // Skip NULL values which become 0
+				uint32BlockIDs = append(uint32BlockIDs, uint32(id))
+			}
+		}
+		blockIDsMap[hash] = uint32BlockIDs
+	}
+	rows.Close()
+
+	// Commit the transaction
+	if err = txn.Commit(); err != nil {
+		return nil, errors.NewStorageError("SQL error committing transaction: %v", err)
+	}
+	committed = true
+
+	return blockIDsMap, nil
+}
+
+// setMinedMultiOriginal is the original implementation that works with both SQLite and PostgreSQL
+// but uses individual queries for each transaction (slower for large batches)
+func (s *Store) setMinedMultiOriginal(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
+	// Start a database transaction
+	txn, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+
+	// Use a flag to track if we should rollback
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := txn.Rollback(); rollbackErr != nil {
+				// Log rollback error but don't override original error
+				s.logger.Warnf("Failed to rollback original transaction: %v", rollbackErr)
+			}
+		}
 	}()
 
 	// Update the block_ids
@@ -1309,8 +1570,9 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	// Commit the transaction
 	if err = txn.Commit(); err != nil {
-		return nil, err
+		return nil, errors.NewStorageError("SQL error committing original transaction: %v", err)
 	}
+	committed = true
 
 	return blockIDsMap, nil
 }
