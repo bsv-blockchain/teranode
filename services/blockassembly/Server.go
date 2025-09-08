@@ -1356,7 +1356,7 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.StateMessage, error) {
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "GetBlockAssemblyState",
 		tracing.WithParentStat(ba.stats),
-		tracing.WithLogMessage(ba.logger, "[GetBlockAssemblyState] called"),
+		tracing.WithDebugLogMessage(ba.logger, "[GetBlockAssemblyState] called"),
 	)
 	defer deferFn()
 

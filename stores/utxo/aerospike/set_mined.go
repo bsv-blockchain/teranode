@@ -246,7 +246,7 @@ func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerosp
 	}
 
 	if res.Status != LuaStatusOK {
-		return false, res, errors.NewError("aerospike batchRecord %s error: %s", hash.String(), res.Message, batchRecord.BatchRec().Err)
+		return false, res, errors.NewError("aerospike batchRecord %s error", hash.String(), res.Message, batchRecord.BatchRec().Err)
 	}
 
 	// Handle signal if present

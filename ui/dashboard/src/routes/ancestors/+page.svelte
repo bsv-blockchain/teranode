@@ -141,6 +141,27 @@
     }
   }
   
+  // Helper function to create a fetch with timeout
+  async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 10000) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+    
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal
+      })
+      clearTimeout(timeoutId)
+      return response
+    } catch (error) {
+      clearTimeout(timeoutId)
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Timeout')
+      }
+      throw error
+    }
+  }
+  
   // Fetch common ancestor for a single peer
   async function fetchAncestorForPeer(peer: any, index: number) {
     if (!blockLocator.length) {
@@ -206,12 +227,13 @@
       //   blockLocatorHashesLength: blockLocatorHashesStr.length
       // })
       
-      const response = await fetch(targetUrl, {
+      // Use fetchWithTimeout with 10-second timeout
+      const response = await fetchWithTimeout(targetUrl, {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
         },
-      })
+      }, 10000)
       
       if (!response.ok) {
         const errorText = await response.text()
@@ -276,10 +298,19 @@
     } catch (error) {
       // Debug: uncomment to see error details
       // console.error(`Error finding common ancestor with peer ${peer.peer_id}:`, error)
-      ancestorErrors.set(peer.peer_id, error instanceof Error ? error.message : 'Unknown error')
-      peer.common_block_hash = 'Error'
-      peer.common_block_height = null
-      ancestorData.set(peer.peer_id, {hash: 'Error', height: null})
+      
+      // Check if it's a timeout error
+      if (error instanceof Error && error.message === 'Timeout') {
+        ancestorErrors.set(peer.peer_id, 'Timeout after 10 seconds')
+        peer.common_block_hash = 'Timeout'
+        peer.common_block_height = null
+        ancestorData.set(peer.peer_id, {hash: 'Timeout', height: null})
+      } else {
+        ancestorErrors.set(peer.peer_id, error instanceof Error ? error.message : 'Unknown error')
+        peer.common_block_hash = 'Error'
+        peer.common_block_height = null
+        ancestorData.set(peer.peer_id, {hash: 'Error', height: null})
+      }
     }
       
     // Update the specific row in the data array to trigger reactive update
@@ -439,13 +470,13 @@
     common_block_hash: (idField, item, colId) => {
       const value = item[colId]
       
-      // Handle special cases (errors, no common block)
-      if (value === 'Error' || value === 'No common block' || value === 'No DataHub URL' || value === 'No best hash') {
+      // Handle special cases (errors, no common block, timeout)
+      if (value === 'Error' || value === 'Timeout' || value === 'No common block' || value === 'No DataHub URL' || value === 'No best hash') {
         return {
           component: RenderSpan,
           props: {
             value: value,
-            className: value === 'Error' ? 'error-text' : 'warning-text',
+            className: (value === 'Error' || value === 'Timeout') ? 'error-text' : 'warning-text',
           },
           value: '',
         }
@@ -472,8 +503,8 @@
       const value = item[colId]
       const hashValue = item.common_block_hash
       
-      // Don't show height if there was an error or no common block
-      if (hashValue === 'Error' || hashValue === 'No common block') {
+      // Don't show height if there was an error, timeout, or no common block
+      if (hashValue === 'Error' || hashValue === 'Timeout' || hashValue === 'No common block') {
         return {
           component: RenderSpan,
           props: {

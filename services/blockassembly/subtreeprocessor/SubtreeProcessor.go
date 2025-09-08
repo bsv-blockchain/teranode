@@ -443,7 +443,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 			case getSubtreeHashesChan := <-stp.getSubtreeHashesChan:
 				stp.setCurrentRunningState(StateGetSubtreeHashes)
-				logger.Infof("[SubtreeProcessor] get current subtree hashes")
+				logger.Debugf("[SubtreeProcessor] get current subtree hashes")
 				subtreeHashes := make([]chainhash.Hash, 0, stp.chainedSubtreeCount.Load()+1)
 
 				for _, subtree := range stp.chainedSubtrees {
@@ -455,7 +455,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 				}
 
 				getSubtreeHashesChan <- subtreeHashes
-				logger.Infof("[SubtreeProcessor] get current subtree hashes DONE")
+				logger.Debugf("[SubtreeProcessor] get current subtree hashes DONE")
 				stp.setCurrentRunningState(StateRunning)
 
 			case getTransactionHashesChan := <-stp.getTransactionHashesChan:

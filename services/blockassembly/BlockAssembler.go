@@ -706,7 +706,7 @@ func (b *BlockAssembler) initState(ctx context.Context) {
 		}
 	}
 
-	currentDifficulty, err := b.blockchainClient.GetNextWorkRequired(ctx, b.bestBlockHeader.Load().Hash())
+	currentDifficulty, err := b.blockchainClient.GetNextWorkRequired(ctx, b.bestBlockHeader.Load().Hash(), time.Now().Unix())
 	if err != nil {
 		b.logger.Errorf("[BlockAssembler] error getting next work required: %v", err)
 	}
@@ -1034,7 +1034,17 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 		id = topTree.RootHash()
 	}
 
-	nBits, err := b.getNextNbits()
+	timeNow := time.Now().Unix()
+	b.logger.Debugf("Current time: %d", timeNow)
+	timeNowUint32, err := safeconversion.Int64ToUint32(timeNow)
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("error converting time now", err)
+	}
+
+	timeBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
+
+	nBits, err := b.getNextNbits(timeNow)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1061,14 +1071,6 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 	} else {
 		b.currentDifficulty.Store(nBits)
 	}
-
-	timeNowUint32, err := safeconversion.Int64ToUint32(time.Now().Unix())
-	if err != nil {
-		return nil, nil, errors.NewProcessingError("error converting time now", err)
-	}
-
-	timeBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
 
 	// Log coinbase value before adding subsidy
 	feesOnly := coinbaseValue
@@ -1384,8 +1386,8 @@ FoundAncestor:
 // Returns:
 //   - *model.NBit: Next difficulty target
 //   - error: Any error encountered during retrieval
-func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
-	nbit, err := b.blockchainClient.GetNextWorkRequired(context.Background(), b.bestBlockHeader.Load().Hash())
+func (b *BlockAssembler) getNextNbits(nextBlockTime int64) (*model.NBit, error) {
+	nbit, err := b.blockchainClient.GetNextWorkRequired(context.Background(), b.bestBlockHeader.Load().Hash(), nextBlockTime)
 	if err != nil {
 		return nil, errors.NewProcessingError("error getting next work required", err)
 	}

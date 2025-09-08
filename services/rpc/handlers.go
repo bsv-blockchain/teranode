@@ -937,7 +937,7 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetMiningCandidate",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetMiningCandidate),
-		tracing.WithLogMessage(s.logger, "[handleGetMiningCandidate] called"),
+		tracing.WithDebugLogMessage(s.logger, "[handleGetMiningCandidate] called"),
 	)
 	defer deferFn()
 
