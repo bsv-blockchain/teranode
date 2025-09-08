@@ -10,7 +10,7 @@ docker run -d --rm \
   -p 3000-3002:3000-3002 \
   -v ./scripts/aerospike.conf:/opt/aerospike/aerospike.conf \
   -v ${DATADIR}/aerospike:/opt/aerospike/data \
-  aerospike/aerospike-server \
+  aerospike/aerospike-server:8.1 \
   --config-file /opt/aerospike/aerospike.conf
 
 echo "Aerospike started with persistent data in '${DATADIR}/aerospike'"

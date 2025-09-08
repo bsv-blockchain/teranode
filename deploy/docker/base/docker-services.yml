@@ -67,7 +67,7 @@ services:
   # Primary Aerospike node (maintains original name for compatibility)
   aerospike:
     container_name: aerospike
-    image: aerospike:ce-8.0.0.7
+    image: aerospike/aerospike-server:8.1
     command: --config-file /etc/aerospike.conf
     networks:
       - teranode-network
@@ -87,7 +87,7 @@ services:
   # Optional second Aerospike node
   aerospike-2:
     container_name: aerospike-2
-    image: aerospike:ce-8.0.0.7
+    image: aerospike/aerospike-server:8.1
     command: --config-file /etc/aerospike.conf
     networks:
       - teranode-network
@@ -103,6 +103,26 @@ services:
       - ${DATA_PATH}/aerospike-2/data:/opt/aerospike/data
     privileged: true
     hostname: aerospike-2
+
+  # Optional third Aerospike node, replication factor still set to 2
+  aerospike-3:
+    container_name: aerospike-3
+    image: aerospike/aerospike-server:8.1
+    command: --config-file /etc/aerospike.conf
+    networks:
+      - teranode-network
+    ports:
+      - 3020:3000  # Map to different host port to avoid conflicts
+    expose:
+      - 3000
+      - 3001
+      - 3002
+    restart: on-failure
+    volumes:
+      - ./aerospike.conf:/etc/aerospike.conf
+      - ${DATA_PATH}/aerospike-3/data:/opt/aerospike/data
+    privileged: true
+    hostname: aerospike-3
 
   # Aerospike exporter for the primary node
   aerospike-exporter:
