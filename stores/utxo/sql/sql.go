@@ -996,7 +996,7 @@ func (s *Store) spendWithRetry(ctx context.Context, tx *bt.Tx, ignoreFlags ...ut
 	}
 
 	if errorFound {
-		return spends, errors.NewTxInvalidError("One or more UTXOs could not be spent")
+		return spends, errors.NewUtxoError("One or more UTXOs could not be spent")
 	} else {
 		if err = txn.Commit(); err != nil {
 			return nil, errors.NewStorageError("[Spend] failed to commit transaction", err)

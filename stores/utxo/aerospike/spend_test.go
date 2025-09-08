@@ -52,7 +52,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 
 		var tErr *errors.Error
 		require.ErrorAs(t, err, &tErr)
-		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.Equal(t, errors.ERR_UTXO_ERROR, tErr.Code())
 		require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
 		require.Equal(t, spendTx.TxIDChainHash().String(), spends[0].ConflictingTxID.String())
 	})

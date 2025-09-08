@@ -577,7 +577,7 @@ func TestAerospike(t *testing.T) {
 
 		var tErr *errors.Error
 		require.ErrorAs(t, err, &tErr)
-		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.Equal(t, errors.ERR_UTXO_ERROR, tErr.Code())
 		require.Len(t, spends, 1)
 		require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
 		require.NotNil(t, spends[0].ConflictingTxID)
@@ -794,7 +794,7 @@ func TestAerospike(t *testing.T) {
 
 		var tErr *errors.Error
 		require.ErrorAs(t, err, &tErr)
-		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.Equal(t, errors.ERR_UTXO_ERROR, tErr.Code())
 		require.ErrorIs(t, err, errors.ErrFrozen)
 	})
 
@@ -816,7 +816,7 @@ func TestAerospike(t *testing.T) {
 
 		txSpends, err := store.Spend(ctx, tx2)
 		require.ErrorAs(t, err, &tErr)
-		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.Equal(t, errors.ERR_UTXO_ERROR, tErr.Code())
 
 		require.Len(t, txSpends, 1)
 
@@ -856,7 +856,7 @@ func TestAerospike(t *testing.T) {
 
 		txSpends, err := store.Spend(ctx, tx2)
 		require.ErrorAs(t, err, &tErr)
-		require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+		require.Equal(t, errors.ERR_UTXO_ERROR, tErr.Code())
 
 		assert.Len(t, txSpends, 1)
 		assert.ErrorAs(t, txSpends[0].Err, &tErr)
@@ -912,7 +912,7 @@ func TestCoinbase(t *testing.T) {
 
 	spends, err := store.Spend(ctx, spendCoinbaseTx)
 	require.ErrorAs(t, err, &tErr)
-	require.Equal(t, errors.ERR_TX_INVALID, tErr.Code())
+	require.Equal(t, errors.ERR_UTXO_ERROR, tErr.Code())
 	require.ErrorIs(t, spends[0].Err, errors.ErrTxCoinbaseImmature)
 
 	err = store.SetBlockHeight(5000)

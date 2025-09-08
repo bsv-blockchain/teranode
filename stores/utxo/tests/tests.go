@@ -107,7 +107,7 @@ func Spend(t *testing.T, db utxostore.Store) {
 
 	// try to spend with different txid
 	spends, err := db.Spend(context.Background(), spendTx2)
-	require.ErrorIs(t, err, errors.ErrTxInvalid)
+	require.ErrorIs(t, err, errors.ErrUtxoError)
 
 	// check the individual spend error
 	require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
@@ -146,7 +146,7 @@ func Freeze(t *testing.T, db utxostore.Store) {
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
 	spends, err := db.Spend(ctx, spendTx)
-	require.ErrorIs(t, err, errors.ErrTxInvalid)
+	require.ErrorIs(t, err, errors.ErrUtxoError)
 	require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
 
 	resp, err := db.GetSpend(ctx, testSpend0)
@@ -309,7 +309,7 @@ func Conflicting(t *testing.T, db utxostore.Store) {
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
 
 	spends, err := db.Spend(ctx, spendTx)
-	require.ErrorIs(t, err, errors.ErrTxInvalid)
+	require.ErrorIs(t, err, errors.ErrUtxoError)
 	require.ErrorIs(t, spends[0].Err, errors.ErrTxConflicting)
 
 	// get the conflicting info for the tx

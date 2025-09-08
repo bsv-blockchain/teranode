@@ -239,28 +239,25 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 	}
 
 	if len(spends) != len(spentSpends) { // there must have been failures
-		// s.logger.Errorf("len(spends) != len(spentSpends): %d != %d", len(spends), len(spentSpends))
-
-		// for i, spend := range spends {
-		// 	s.logger.Errorf("spend: %d: %v", i, spend.Err)
-		// }
-		// revert the successfully spent utxos
 		unspendErr := s.Unspend(ctx, spentSpends)
 		if unspendErr != nil {
 			s.logger.Errorf("error in aerospike unspend (batched mode): %v", unspendErr)
 		}
 
-		var firstError error
+		var spendErrors error
 
 		for _, spend := range spends {
 			if spend.Err != nil {
-				firstError = spend.Err
-				break
+				if spendErrors != nil {
+					spendErrors = errors.Join(spendErrors, spend.Err)
+				} else {
+					spendErrors = spend.Err
+				}
 			}
 		}
 
-		// return the first error found
-		return spends, errors.NewTxInvalidError("error in aerospike spend (batched mode) - first error", firstError)
+		// return the errors found
+		return spends, errors.NewUtxoError("error in aerospike spend (batched mode) - errors", spendErrors)
 	}
 
 	prometheusUtxoMapSpend.Add(float64(len(spends)))
@@ -620,8 +617,10 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 			if parseErr != nil {
 				return errors.NewStorageError("[SPEND_BATCH_LUA][%s] invalid spending data in error: %s", txID.String(), errMsg.SpendingData)
 			}
+
 			return errors.NewUtxoSpentError(*batchItem.spend.TxID, batchItem.spend.Vout, *batchItem.spend.UTXOHash, spendingData)
 		}
+
 		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] UTXO already spent but no spending data provided", txID.String())
 
 	case LuaErrorCodeFrozen:
@@ -631,13 +630,13 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 		return errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] UTXO frozen until block, vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
 	case LuaErrorCodeUtxoNotFound:
-		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] UTXO not found for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+		return errors.NewTxNotFoundError("[SPEND_BATCH_LUA][%s] UTXO not found for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
 	case LuaErrorCodeUtxoHashMismatch:
-		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] UTXO hash mismatch for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+		return errors.NewUtxoHashMismatchError("[SPEND_BATCH_LUA][%s] UTXO hash mismatch for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
 	case LuaErrorCodeUtxoInvalidSize:
-		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] UTXO invalid size for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+		return errors.NewUtxoInvalidSize("[SPEND_BATCH_LUA][%s] UTXO invalid size for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
 	default:
 		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] error for vout %d (code: %s): %s", txID.String(), batchItem.spend.Vout, errMsg.ErrorCode, errMsg.Message)

@@ -74,11 +74,13 @@ const (
 	ERR_STORAGE_NOT_STARTED ERR = 61
 	ERR_STORAGE_ERROR       ERR = 69
 	// UTXO errors 70-79
-	ERR_UTXO_SPENT     ERR = 70
-	ERR_UTXO_NON_FINAL ERR = 71
-	ERR_UTXO_FROZEN    ERR = 72
-	ERR_UTXO_NOT_FOUND ERR = 73
-	ERR_UTXO_ERROR     ERR = 79
+	ERR_UTXO_SPENT        ERR = 70
+	ERR_UTXO_NON_FINAL    ERR = 71
+	ERR_UTXO_FROZEN       ERR = 72
+	ERR_UTXO_NOT_FOUND    ERR = 73
+	ERR_UTXO_MISMATCH     ERR = 74
+	ERR_UTXO_INVALID_SIZE ERR = 75
+	ERR_UTXO_ERROR        ERR = 79
 	// Kafka errors 80-89
 	ERR_KAFKA_DECODE_ERROR ERR = 80
 	ERR_KAFKA_ERROR        ERR = 89
@@ -150,6 +152,8 @@ var (
 		71:  "UTXO_NON_FINAL",
 		72:  "UTXO_FROZEN",
 		73:  "UTXO_NOT_FOUND",
+		74:  "UTXO_MISMATCH",
+		75:  "UTXO_INVALID_SIZE",
 		79:  "UTXO_ERROR",
 		80:  "KAFKA_DECODE_ERROR",
 		89:  "KAFKA_ERROR",
@@ -215,6 +219,8 @@ var (
 		"UTXO_NON_FINAL":                71,
 		"UTXO_FROZEN":                   72,
 		"UTXO_NOT_FOUND":                73,
+		"UTXO_MISMATCH":                 74,
+		"UTXO_INVALID_SIZE":             75,
 		"UTXO_ERROR":                    79,
 		"KAFKA_DECODE_ERROR":            80,
 		"KAFKA_ERROR":                   89,
@@ -365,7 +371,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\xab\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\xd5\n" +
 	"\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
@@ -418,7 +424,9 @@ const file_errors_error_proto_rawDesc = "" +
 	"UTXO_SPENT\x10F\x12\x12\n" +
 	"\x0eUTXO_NON_FINAL\x10G\x12\x0f\n" +
 	"\vUTXO_FROZEN\x10H\x12\x12\n" +
-	"\x0eUTXO_NOT_FOUND\x10I\x12\x0e\n" +
+	"\x0eUTXO_NOT_FOUND\x10I\x12\x11\n" +
+	"\rUTXO_MISMATCH\x10J\x12\x15\n" +
+	"\x11UTXO_INVALID_SIZE\x10K\x12\x0e\n" +
 	"\n" +
 	"UTXO_ERROR\x10O\x12\x16\n" +
 	"\x12KAFKA_DECODE_ERROR\x10P\x12\x0f\n" +

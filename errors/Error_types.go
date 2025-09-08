@@ -21,18 +21,21 @@ var (
 	ErrContextCanceled            = New(ERR_CONTEXT_CANCELED, "context canceled")
 	ErrError                      = New(ERR_ERROR, "generic error")
 	ErrExternal                   = New(ERR_EXTERNAL, "external error")
-	ErrFrozen                     = New(ERR_UTXO_FROZEN, "tx is frozen")
 	ErrInvalidArgument            = New(ERR_INVALID_ARGUMENT, "invalid argument")
 	ErrInvalidIP                  = New(ERR_INVALID_IP, "invalid ip")
 	ErrInvalidSubnet              = New(ERR_INVALID_SUBNET, "invalid subnet")
 	ErrKafkaDecode                = New(ERR_KAFKA_DECODE_ERROR, "error decoding kafka message")
-	ErrNonFinal                   = New(ERR_UTXO_NON_FINAL, "tx is non-final")
 	ErrNotFound                   = New(ERR_NOT_FOUND, "not found")
 	ErrProcessing                 = New(ERR_PROCESSING, "error processing")
 	ErrServiceError               = New(ERR_SERVICE_ERROR, "service error")
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
+	ErrFrozen                     = New(ERR_UTXO_FROZEN, "tx is frozen")
+	ErrNonFinal                   = New(ERR_UTXO_NON_FINAL, "tx is non-final")
 	ErrSpent                      = New(ERR_UTXO_SPENT, "utxo already spent")
+	ErrUtxoHashMismatch           = New(ERR_UTXO_MISMATCH, "utxo hash mismatch")
+	ErrUtxoInvalidSize            = New(ERR_UTXO_INVALID_SIZE, "utxo invalid size")
+	ErrUtxoError                  = New(ERR_UTXO_ERROR, "utxo error")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
 	ErrStorageError               = New(ERR_STORAGE_ERROR, "storage error")
@@ -256,6 +259,21 @@ func NewUtxoNonFinalError(message string, params ...interface{}) *Error {
 // NewUtxoFrozenError creates a new error with the utxo frozen error code.
 func NewUtxoFrozenError(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_FROZEN, message, params...)
+}
+
+// NewUtxoHashMismatchError creates a new error with the utxo hash mismatch error code.
+func NewUtxoHashMismatchError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_MISMATCH, message, params...)
+}
+
+// NewUtxoInvalidSize creates a new error with the utxo invalid size error code.
+func NewUtxoInvalidSize(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_INVALID_SIZE, message, params...)
+}
+
+// NewUtxoError creates a new generic utxo error.
+func NewUtxoError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_ERROR, message, params...)
 }
 
 // NewStateInitializationError creates a new error with the state initialization error code.
