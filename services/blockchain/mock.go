@@ -11,6 +11,9 @@ import (
 	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/mock"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Mock implements the blockchain.ClientI interface for testing purposes
@@ -746,4 +749,48 @@ func (m *mockStoreLocateBlockHeaders) LocateBlockHeaders(
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*model.BlockHeader), nil
+}
+
+type fakeServer struct {
+	blockchain_api.UnimplementedBlockchainAPIServer
+	subCh chan *blockchain_api.Notification
+}
+
+func (f *fakeServer) HealthGRPC(ctx context.Context, req *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
+	return &blockchain_api.HealthResponse{
+		Ok:        true,
+		Details:   "fake server healthy",
+		Timestamp: timestamppb.Now(),
+	}, nil
+}
+
+func (f *fakeServer) Subscribe(req *blockchain_api.SubscribeRequest, stream blockchain_api.BlockchainAPI_SubscribeServer) error {
+	for notif := range f.subCh {
+		if err := stream.Send(notif); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type mockHealthClient struct {
+	blockchain_api.BlockchainAPIClient
+	resp *blockchain_api.HealthResponse
+	err  error
+}
+
+func (m *mockHealthClient) HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*blockchain_api.HealthResponse, error) {
+	return m.resp, m.err
+}
+
+type mockBlockClient struct {
+	blockchain_api.BlockchainAPIClient
+	err error
+}
+
+func (m *mockBlockClient) AddBlock(ctx context.Context, in *blockchain_api.AddBlockRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &emptypb.Empty{}, nil
 }
