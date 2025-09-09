@@ -394,7 +394,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 			case getSubtreesChan := <-stp.getSubtreesChan:
 				stp.setCurrentRunningState(StateGetSubtrees)
 
-				logger.Infof("[SubtreeProcessor] get current subtrees")
+				logger.Debugf("[SubtreeProcessor] get current subtrees")
 
 				chainedCount := stp.chainedSubtreeCount.Load()
 				completeSubtrees := make([]*subtreepkg.Subtree, 0, chainedCount)
@@ -437,7 +437,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 				getSubtreesChan <- completeSubtrees
 
-				logger.Infof("[SubtreeProcessor] get current subtrees DONE")
+				logger.Debugf("[SubtreeProcessor] get current subtrees DONE")
 
 				stp.setCurrentRunningState(StateRunning)
 
@@ -460,7 +460,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 			case getTransactionHashesChan := <-stp.getTransactionHashesChan:
 				stp.setCurrentRunningState(StateGetTransactionHashes)
-				logger.Infof("[SubtreeProcessor] get current transaction hashes")
+				logger.Debugf("[SubtreeProcessor] get current transaction hashes")
 				transactionHashes := make([]chainhash.Hash, 0, stp.currentTxMap.Length()+1)
 				for _, subtree := range stp.chainedSubtrees {
 					for _, node := range subtree.Nodes {
@@ -474,7 +474,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 				}
 
 				getTransactionHashesChan <- transactionHashes
-				logger.Infof("[SubtreeProcessor] get current transaction hashes DONE")
+				logger.Debugf("[SubtreeProcessor] get current transaction hashes DONE")
 				stp.setCurrentRunningState(StateRunning)
 
 			case reorgReq := <-stp.reorgBlockChan:
@@ -1479,8 +1479,6 @@ func (stp *SubtreeProcessor) checkSubtreeProcessor(errCh chan error) {
 // Returns:
 //   - []*util.Subtree: Array of completed subtrees
 func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*subtreepkg.Subtree {
-	stp.logger.Infof("GetCompletedSubtreesForMiningCandidate")
-
 	var subtrees []*subtreepkg.Subtree
 
 	subtreesChan := make(chan []*subtreepkg.Subtree)

@@ -535,7 +535,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	ctx, _, endSpan := tracing.Tracer("subtreevalidation").Start(ctx, "ValidateSubtreeInternal",
 		tracing.WithHistogram(prometheusSubtreeValidationValidateSubtree),
-		tracing.WithWarnLogMessage(u.logger, "[ValidateSubtreeInternal][%s] called", v.SubtreeHash.String()),
+		tracing.WithDebugLogMessage(u.logger, "[ValidateSubtreeInternal][%s] called", v.SubtreeHash.String()),
 	)
 
 	defer func() {

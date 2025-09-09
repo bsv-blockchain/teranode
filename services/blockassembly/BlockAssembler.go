@@ -938,8 +938,9 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 	var coinbaseValue uint64
 
 	currentHeight := b.bestBlockHeight.Load() + 1
+
 	// Log initial state for debugging
-	b.logger.Infof("Starting coinbase calculation for height %d", currentHeight)
+	b.logger.Debugf("Starting coinbase calculation for height %d", currentHeight)
 
 	// Get the hash of the last subtree in the list...
 	// We do this by using the same subtree processor logic to get the top tree hash.

@@ -73,18 +73,6 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 	)
 	defer deferFn()
 
-	// TEMP TEMP TEMP for testing
-	/*
-		if u.settings.ChainCfgParams.Net == wire.TeraTestNet {
-			u.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{
-				// nolint:govet
-				{500, newHashFromStr("0000000004cebafe8b90f095a5bb76e5bfeb2b20a5d71fc9ce498d5ed0a3b06c")},
-				// nolint:govet
-				{750, newHashFromStr("0000000005e105e65e60fe0483bfaa5558310ed285ae60b7edb58f4a1f283da3")},
-			}
-		}
-	*/
-
 	// Validate that we have a baseURL for making HTTP requests
 	if baseURL == "" {
 		return errors.NewInvalidArgumentError("baseURL is required for catchup")

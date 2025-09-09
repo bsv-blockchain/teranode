@@ -50,7 +50,7 @@ import (
 //   - StorageError for database or processing errors
 func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, startHash *chainhash.Hash) (block *model.Block, invalid bool, err error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockInChainByHeightHash",
-		tracing.WithLogMessage(s.logger, "[GetBlockInChainByHeightHash][%s:%d] called", startHash.String(), height),
+		tracing.WithDebugLogMessage(s.logger, "[GetBlockInChainByHeightHash][%s:%d] called", startHash.String(), height),
 	)
 	defer deferFn()
 

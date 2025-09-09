@@ -577,7 +577,7 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 
 	errCh := make(chan error, 1)
 
-	u.logger.Infof("[BlockFound][%s] add on channel", hash.String())
+	u.logger.Debugf("[BlockFound][%s] add on channel", hash.String())
 
 	u.blockFoundCh <- processBlockFound{
 		hash:    hash,
@@ -986,7 +986,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	if !parentExists {
 		// add to catchup channel, which will block processing any new blocks until we have caught up
 		go func() {
-			u.logger.Infof("[processBlockFound][%s] processBlockFound add to catchup channel", hash.String())
+			u.logger.Debugf("[processBlockFound][%s] processBlockFound add to catchup channel", hash.String())
 			u.catchupCh <- processBlockCatchup{
 				block:   block,
 				baseURL: baseURL,
