@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { createEventDispatcher } from 'svelte'
   import Table from '$lib/components/table/index.svelte'
   import Pager from '$internal/components/pager/index.svelte'
   import Icon from '$lib/components/icon/index.svelte'
@@ -11,6 +12,7 @@
   import { getColDefs, renderCells, getRenderProps } from './data'
 
   const pageKey = 'page.network.nodes'
+  const dispatch = createEventDispatcher()
 
   $: t = $i18n.t
   $: i18nLocal = { t, baseKey: 'comp.pager' }
@@ -18,16 +20,15 @@
   let colDefs: any[] = []
   $: colDefs = getColDefs(t) || []
 
-  export let data: any[] = []
+  export let data: any[] = [] // Paginated data
+  export let allData: any[] = [] // Full dataset for pagination calculation
   export let connected = false
-
-  let page = 1
-  let pageSize = 10
+  export let page = 1
+  export let pageSize = 10
 
   function onPage(e) {
-    const data = e.detail
-    page = data.value.page
-    pageSize = data.value.pageSize
+    // Forward pagination changes to parent component
+    dispatch('pagechange', e.detail)
   }
 
   let totalPages = 0
@@ -37,7 +38,7 @@
   }
 
   $: showPagerNav = totalPages > 1
-  $: showPagerSize = showPagerNav || (totalPages === 1 && data.length > 5)
+  $: showPagerSize = showPagerNav || (totalPages === 1 && allData.length > 5)
   $: showTableFooter = showPagerSize
 
   let variant = 'dynamic'
@@ -55,7 +56,7 @@
     <Pager
       i18n={i18nLocal}
       expandUp={true}
-      totalItems={data?.length}
+      totalItems={allData?.length}
       showPageSize={false}
       showQuickNav={false}
       showNav={showPagerNav}
@@ -85,6 +86,7 @@
       page: 1,
       pageSize: -1,
     }}
+    paginationEnabled={false}
     i18n={{ t, baseKey: 'comp.pager' }}
     pager={false}
     expandUp={true}
@@ -97,7 +99,7 @@
     <Pager
       i18n={i18nLocal}
       expandUp={true}
-      totalItems={data?.length}
+      totalItems={allData?.length}
       showPageSize={showPagerSize}
       showQuickNav={showPagerNav}
       showNav={showPagerNav}
