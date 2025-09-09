@@ -86,7 +86,8 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 			// If the error is a recoverable error, then return the error, so that it kafka message is not marked as committed.
 			// So the message will be consumed again.
 			notFoundError := errors.Is(err, errors.ErrSubtreeNotFound)
-			recoverableError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrExternal)
+			// recoverableError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrExternal)
+			recoverableError := errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrExternal)
 
 			if recoverableError && !notFoundError {
 				u.logger.Errorf("[consumerMessageHandler] Recoverable error processing kafka message, returning error, not marking Kafka message as complete: %v", err)
