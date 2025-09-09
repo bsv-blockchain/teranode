@@ -785,7 +785,23 @@ func (m *mockHealthClient) HealthGRPC(ctx context.Context, in *emptypb.Empty, op
 
 type mockBlockClient struct {
 	blockchain_api.BlockchainAPIClient
-	err error
+	responseGetBlock               *blockchain_api.GetBlockResponse
+	responseGetBlocks              *blockchain_api.GetBlocksResponse
+	responseGetBlockByHeight       *blockchain_api.GetBlockResponse
+	responseGetBlockByID           *blockchain_api.GetBlockResponse
+	responseGetNextBlockID         *blockchain_api.GetNextBlockIDResponse
+	responseGetBlockStats          *model.BlockStats
+	responseGetBlockGraphData      *model.BlockDataPoints
+	lastGetBlockGraphDataReq       *blockchain_api.GetBlockGraphDataRequest
+	responseGetLastNBlocks         *blockchain_api.GetLastNBlocksResponse
+	lastGetLastNBlocksReq          *blockchain_api.GetLastNBlocksRequest
+	responseGetLastNInvalidBlocks  *blockchain_api.GetLastNInvalidBlocksResponse
+	lastGetLastNInvalidBlocksReq   *blockchain_api.GetLastNInvalidBlocksRequest
+	responseGetSuitableBlock       *blockchain_api.GetSuitableBlockResponse
+	lastGetSuitableBlockReq        *blockchain_api.GetSuitableBlockRequest
+	responseGetHashOfAncestorBlock *blockchain_api.GetHashOfAncestorBlockResponse
+	lastGetHashOfAncestorBlockReq  *blockchain_api.GetHashOfAncestorBlockRequest
+	err                            error
 }
 
 func (m *mockBlockClient) AddBlock(ctx context.Context, in *blockchain_api.AddBlockRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
@@ -793,4 +809,92 @@ func (m *mockBlockClient) AddBlock(ctx context.Context, in *blockchain_api.AddBl
 		return nil, m.err
 	}
 	return &emptypb.Empty{}, nil
+}
+
+func (m *mockBlockClient) GetBlock(ctx context.Context, req *blockchain_api.GetBlockRequest, opts ...grpc.CallOption) (*blockchain_api.GetBlockResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.responseGetBlock, nil
+}
+
+func (m *mockBlockClient) GetBlocks(ctx context.Context, req *blockchain_api.GetBlocksRequest, opts ...grpc.CallOption) (*blockchain_api.GetBlocksResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.responseGetBlocks, nil
+}
+
+func (m *mockBlockClient) GetBlockByHeight(ctx context.Context, req *blockchain_api.GetBlockByHeightRequest, opts ...grpc.CallOption) (*blockchain_api.GetBlockResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.responseGetBlockByHeight, nil
+}
+
+func (m *mockBlockClient) GetBlockByID(ctx context.Context, req *blockchain_api.GetBlockByIDRequest, opts ...grpc.CallOption) (*blockchain_api.GetBlockResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.responseGetBlockByID, nil
+}
+
+func (m *mockBlockClient) GetNextBlockID(ctx context.Context, req *emptypb.Empty, opts ...grpc.CallOption) (*blockchain_api.GetNextBlockIDResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.responseGetNextBlockID, nil
+}
+
+func (m *mockBlockClient) GetBlockStats(
+	ctx context.Context,
+	in *emptypb.Empty,
+	opts ...grpc.CallOption,
+) (*model.BlockStats, error) {
+	return m.responseGetBlockStats, m.err
+}
+
+func (m *mockBlockClient) GetBlockGraphData(
+	ctx context.Context,
+	in *blockchain_api.GetBlockGraphDataRequest,
+	opts ...grpc.CallOption,
+) (*model.BlockDataPoints, error) {
+	m.lastGetBlockGraphDataReq = in
+	return m.responseGetBlockGraphData, m.err
+}
+
+func (m *mockBlockClient) GetLastNBlocks(
+	ctx context.Context,
+	in *blockchain_api.GetLastNBlocksRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetLastNBlocksResponse, error) {
+	m.lastGetLastNBlocksReq = in
+	return m.responseGetLastNBlocks, m.err
+}
+
+func (m *mockBlockClient) GetLastNInvalidBlocks(
+	ctx context.Context,
+	in *blockchain_api.GetLastNInvalidBlocksRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetLastNInvalidBlocksResponse, error) {
+	m.lastGetLastNInvalidBlocksReq = in
+	return m.responseGetLastNInvalidBlocks, m.err
+}
+
+func (m *mockBlockClient) GetSuitableBlock(
+	ctx context.Context,
+	in *blockchain_api.GetSuitableBlockRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetSuitableBlockResponse, error) {
+	m.lastGetSuitableBlockReq = in
+	return m.responseGetSuitableBlock, m.err
+}
+
+func (m *mockBlockClient) GetHashOfAncestorBlock(
+	ctx context.Context,
+	in *blockchain_api.GetHashOfAncestorBlockRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetHashOfAncestorBlockResponse, error) {
+	m.lastGetHashOfAncestorBlockReq = in
+	return m.responseGetHashOfAncestorBlock, m.err
 }
