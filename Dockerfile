@@ -12,13 +12,6 @@ ARG TARGETARCH
 ARG BUILD_JOBS=32
 ARG TXMETA_SMALL_TAG=false
 
-# Download all node dependencies for the dashboard, so Docker can cache them if the package.json and package-lock.json files are not changed
-WORKDIR /app/ui/dashboard
-
-COPY package.json package-lock.json ./
-# Run npm install with --ignore-scripts to prevent execution of potentially malicious scripts
-RUN npm install --ignore-scripts && npx node-prune
-
 # Download all the go dependecies so Docker can cache them if the go.mod and go.sum files are not changed
 WORKDIR /app
 COPY go.mod go.sum ./
