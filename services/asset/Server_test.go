@@ -49,7 +49,7 @@ func testSetup(t *testing.T) *testCtx {
 	require.NoError(t, err)
 	blockchainStore, err := blockchainstore.NewStore(logger, storeURL, settings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(logger, settings, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
 	server := NewServer(logger, settings, utxoStore, txSore, subtreeStore, blockPersisterStore, blockchainClient)

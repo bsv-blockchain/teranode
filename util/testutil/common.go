@@ -60,7 +60,7 @@ func NewMemorySQLiteBlockchainClient(logger ulogger.Logger, settings *settings.S
 	require.NoError(t, err)
 
 	var blockchainClient blockchain.ClientI
-	blockchainClient, err = blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
+	blockchainClient, err = blockchain.NewLocalClient(logger, settings, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
 	return blockchainClient

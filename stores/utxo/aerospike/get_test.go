@@ -252,7 +252,7 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 		},
 	}
 
-	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, mockBlockchain, nil, store)
+	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, tSettings, mockBlockchain, nil, store)
 	require.NoError(t, err)
 
 	sm, err := netsync.New(ctx,

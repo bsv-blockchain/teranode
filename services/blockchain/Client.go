@@ -557,16 +557,14 @@ func (c *Client) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, ta
 }
 
 // GetNextWorkRequired calculates the required proof of work for the next block.
-func (c *Client) GetNextWorkRequired(ctx context.Context, previousBlockHash *chainhash.Hash, currentBlockTime ...int64) (*model.NBit, error) {
-	var cbt int64
-
-	if len(currentBlockTime) > 0 {
-		cbt = currentBlockTime[0]
+func (c *Client) GetNextWorkRequired(ctx context.Context, previousBlockHash *chainhash.Hash, currentBlockTime int64) (*model.NBit, error) {
+	if currentBlockTime == 0 {
+		return nil, errors.NewProcessingError("currentBlockTime cannot be zero")
 	}
 
 	resp, err := c.client.GetNextWorkRequired(ctx, &blockchain_api.GetNextWorkRequiredRequest{
 		PreviousBlockHash: previousBlockHash[:],
-		CurrentBlockTime:  cbt,
+		CurrentBlockTime:  currentBlockTime,
 	})
 	if err != nil {
 		return nil, errors.UnwrapGRPC(err)

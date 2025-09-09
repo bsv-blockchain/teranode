@@ -1087,44 +1087,29 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 	)
 	defer deferFn()
 
-	var nBits *model.NBit
+	if request.CurrentBlockTime == 0 {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetNextWorkRequired] request's current block time is not valid", nil))
+	}
 
 	bytesLittleEndian := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bytesLittleEndian, b.settings.ChainCfgParams.PowLimitBits)
-	defaultNbits, _ := model.NewNBitFromSlice(bytesLittleEndian)
 
-	if b.difficulty == nil {
-		b.logger.Debugf("difficulty is null")
-
-		nBits = defaultNbits
-	} else {
-		hash, err := chainhash.NewHash(request.PreviousBlockHash)
-		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetNextWorkRequired] request's block hash is not valid", err))
-		}
-
-		blockHeader, meta, err := b.store.GetBlockHeader(ctx, hash)
-		if err != nil {
-			return nil, errors.WrapGRPC(err)
-		}
-
-		var testnetArgs []int64
-
-		if b.settings.ChainCfgParams.ReduceMinDifficulty && request.CurrentBlockTime > 0 {
-			testnetArgs = append(testnetArgs, request.CurrentBlockTime)
-		}
-
-		nBitsp, err := b.difficulty.CalcNextWorkRequired(ctx, blockHeader, meta.Height, testnetArgs...)
-		if err == nil {
-			nBits = nBitsp
-		} else {
-			b.logger.Debugf("error in GetNextWorkRequired: %v", err)
-
-			nBits = defaultNbits
-		}
-
-		b.logger.Debugf("difficulty adjustment. Difficulty set to %s", nBits.String())
+	hash, err := chainhash.NewHash(request.PreviousBlockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetNextWorkRequired] request's block hash is not valid", err))
 	}
+
+	blockHeader, meta, err := b.store.GetBlockHeader(ctx, hash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	nBits, err := b.difficulty.CalcNextWorkRequired(ctx, blockHeader, meta.Height, request.CurrentBlockTime)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	b.logger.Debugf("difficulty adjustment. Difficulty set to %s", nBits.String())
 
 	return &blockchain_api.GetNextWorkRequiredResponse{
 		Bits: nBits.CloneBytes(),

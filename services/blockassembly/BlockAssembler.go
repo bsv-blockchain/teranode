@@ -135,9 +135,6 @@ type BlockAssembler struct {
 	// blockchainSubscriptionCh receives blockchain notifications
 	blockchainSubscriptionCh chan *blockchain.Notification
 
-	// currentDifficulty stores the current mining difficulty target
-	currentDifficulty atomic.Pointer[model.NBit]
-
 	// defaultMiningNBits stores the default mining difficulty
 	defaultMiningNBits *model.NBit
 
@@ -562,13 +559,6 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 	if err = b.SetState(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		b.logger.Errorf("[BlockAssembler][%s] error setting state: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
-
-	currentDifficulty, err := b.blockchainClient.GetNextWorkRequired(ctx, bestBlockchainBlockHeader.Hash())
-	if err != nil && !errors.Is(err, context.Canceled) {
-		b.logger.Errorf("[BlockAssembler][%s] error getting next work required: %v", bestBlockchainBlockHeader.Hash(), err)
-	}
-
-	b.currentDifficulty.Store(currentDifficulty)
 }
 
 func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.BlockHeader, height uint32) {
@@ -706,13 +696,6 @@ func (b *BlockAssembler) initState(ctx context.Context) {
 		}
 	}
 
-	currentDifficulty, err := b.blockchainClient.GetNextWorkRequired(ctx, b.bestBlockHeader.Load().Hash(), time.Now().Unix())
-	if err != nil {
-		b.logger.Errorf("[BlockAssembler] error getting next work required: %v", err)
-	}
-
-	b.currentDifficulty.Store(currentDifficulty)
-
 	if err = b.SetState(ctx); err != nil {
 		b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
 	}
@@ -830,7 +813,7 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	currentHeight := b.bestBlockHeight.Load()
 
 	// Return cached if still valid (same height and within timeout)
-	if b.cachedCandidate.candidate != nil &&
+	if !b.settings.ChainCfgParams.ReduceMinDifficulty && b.cachedCandidate.candidate != nil &&
 		b.cachedCandidate.lastHeight == currentHeight &&
 		time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateCacheTimeout {
 		candidate := b.cachedCandidate.candidate
@@ -1047,29 +1030,6 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 	nBits, err := b.getNextNbits(timeNow)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	currentDifficulty := b.currentDifficulty.Load()
-	if nBits == nil {
-		if currentDifficulty != nil {
-			b.logger.Warnf("nextNbits is nil. Setting to current difficulty")
-
-			nBits = currentDifficulty
-		} else {
-			b.logger.Warnf("nextNbits and current difficulty are nil. Setting to pow limit bits")
-
-			bitsBytes := make([]byte, 4)
-			binary.LittleEndian.PutUint32(bitsBytes, b.settings.ChainCfgParams.PowLimitBits)
-
-			nBits, err = model.NewNBitFromSlice(bitsBytes)
-			if err != nil {
-				return nil, nil, errors.NewBlockInvalidError("failed to create NBit from Bits", err)
-			}
-
-			b.currentDifficulty.Store(nBits)
-		}
-	} else {
-		b.currentDifficulty.Store(nBits)
 	}
 
 	// Log coinbase value before adding subsidy

@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
 	"github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/stores/blockchain/options"
@@ -23,10 +24,11 @@ import (
 // LocalClient implements a blockchain client with direct store access.
 // It is an abstraction for a client that has a stored embedded directly
 type LocalClient struct {
-	store        blockchain.Store // Blockchain store
-	subtreeStore blob.Store       // Subtree store
-	utxoStore    utxo.Store       // UTXO store
-	logger       ulogger.Logger   // Logger instance
+	logger       ulogger.Logger     // Logger instance
+	settings     *settings.Settings // Configuration settings
+	store        blockchain.Store   // Blockchain store
+	subtreeStore blob.Store         // Subtree store
+	utxoStore    utxo.Store         // UTXO store
 
 	// Subscription management
 	subscribersMu sync.RWMutex
@@ -34,9 +36,10 @@ type LocalClient struct {
 }
 
 // NewLocalClient creates a new LocalClient instance with the provided dependencies.
-func NewLocalClient(logger ulogger.Logger, store blockchain.Store, subtreeStore blob.Store, utxoStore utxo.Store) (ClientI, error) {
+func NewLocalClient(logger ulogger.Logger, tSettings *settings.Settings, store blockchain.Store, subtreeStore blob.Store, utxoStore utxo.Store) (ClientI, error) {
 	return &LocalClient{
 		logger:       logger,
+		settings:     tSettings,
 		store:        store,
 		subtreeStore: subtreeStore,
 		utxoStore:    utxoStore,
@@ -189,8 +192,18 @@ func (c *LocalClient) GetSuitableBlock(ctx context.Context, blockHash *chainhash
 func (c *LocalClient) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, num int) (*chainhash.Hash, error) {
 	return c.store.GetHashOfAncestorBlock(ctx, blockHash, num)
 }
-func (c *LocalClient) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash, currentBlockTime ...int64) (*model.NBit, error) {
-	return nil, nil
+func (c *LocalClient) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash, currentBlockTime int64) (*model.NBit, error) {
+	difficulty, err := NewDifficulty(c.store, c.logger, c.settings)
+	if err != nil {
+		c.logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
+	}
+
+	blockHeader, meta, err := c.store.GetBlockHeader(ctx, blockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return difficulty.CalcNextWorkRequired(ctx, blockHeader, meta.Height, currentBlockTime)
 }
 
 func (c *LocalClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {

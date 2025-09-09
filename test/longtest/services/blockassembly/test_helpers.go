@@ -74,7 +74,7 @@ func initStores(t *testing.T) (*memory.Memory, utxo.Store, *settings.Settings, b
 	blockchainStore, err := blockchainstore.NewStore(logger, blockchainStoreURL, tSettings)
 	require.NoError(t, err)
 
-	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
 	return blobStore, utxoStore, tSettings, blockchainClient, nil, nil

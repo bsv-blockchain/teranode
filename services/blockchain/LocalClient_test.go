@@ -8,7 +8,9 @@ import (
 
 	"github.com/bitcoin-sv/teranode/model"
 	"github.com/bitcoin-sv/teranode/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/teranode/stores/blockchain"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +21,7 @@ func TestNewLocalClient(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 
 	// Create LocalClient using NewLocalClient function
-	client, err := NewLocalClient(logger, nil, nil, nil)
+	client, err := NewLocalClient(logger, nil, nil, nil, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, client)
@@ -38,7 +40,7 @@ func TestLocalClient_Health(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 
 	t.Run("liveness check returns OK", func(t *testing.T) {
-		client, err := NewLocalClient(logger, nil, nil, nil)
+		client, err := NewLocalClient(logger, nil, nil, nil, nil)
 		require.NoError(t, err)
 
 		status, message, err := client.Health(ctx, true)
@@ -67,7 +69,7 @@ func TestLocalClient_Health(t *testing.T) {
 func TestLocalClient_SendNotification(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	client, err := NewLocalClient(logger, nil, nil, nil)
+	client, err := NewLocalClient(logger, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	notification := &blockchain_api.Notification{
@@ -82,7 +84,7 @@ func TestLocalClient_SendNotification(t *testing.T) {
 func TestLocalClient_Subscribe(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	client, err := NewLocalClient(logger, nil, nil, nil)
+	client, err := NewLocalClient(logger, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	source := "test-source"
@@ -95,23 +97,27 @@ func TestLocalClient_Subscribe(t *testing.T) {
 
 // Test GetNextWorkRequired
 func TestLocalClient_GetNextWorkRequired(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(t)
-	client, err := NewLocalClient(logger, nil, nil, nil)
-	require.NoError(t, err)
+	t.Run("not found", func(t *testing.T) {
+		ctx := context.Background()
+		logger := ulogger.NewErrorTestLogger(t)
+		settings := test.CreateBaseTestSettings(t)
+		store := &blockchain.MockStore{}
+		client, err := NewLocalClient(logger, settings, store, nil, nil)
+		require.NoError(t, err)
 
-	blockHash := chainhash.HashH([]byte("test"))
+		blockHash := chainhash.HashH([]byte("test"))
 
-	nbit, err := client.GetNextWorkRequired(ctx, &blockHash)
-	require.NoError(t, err)
-	assert.Nil(t, nbit)
+		nbit, err := client.GetNextWorkRequired(ctx, &blockHash, time.Now().Unix())
+		require.Error(t, err)
+		assert.Nil(t, nbit)
+	})
 }
 
 // Test FSM methods
 func TestLocalClient_FSMMethods(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	client, err := NewLocalClient(logger, nil, nil, nil)
+	client, err := NewLocalClient(logger, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	t.Run("GetFSMCurrentState", func(t *testing.T) {
@@ -157,7 +163,7 @@ func TestLocalClient_FSMMethods(t *testing.T) {
 func TestLocalClient_LifecycleMethods(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	client, err := NewLocalClient(logger, nil, nil, nil)
+	client, err := NewLocalClient(logger, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	t.Run("Run", func(t *testing.T) {
@@ -185,7 +191,7 @@ func TestLocalClient_LifecycleMethods(t *testing.T) {
 func TestLocalClient_LocateBlockHeaders(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	client, err := NewLocalClient(logger, nil, nil, nil)
+	client, err := NewLocalClient(logger, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	locator := []*chainhash.Hash{
@@ -204,7 +210,7 @@ func TestLocalClient_LocateBlockHeaders(t *testing.T) {
 func TestLocalClient_GetBlockLocator(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	client, err := NewLocalClient(logger, nil, nil, nil)
+	client, err := NewLocalClient(logger, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	blockHeaderHash := chainhash.HashH([]byte("test"))
@@ -224,7 +230,7 @@ func TestLocalClient_GetBlockLocator(t *testing.T) {
 func TestLocalClient_GetBlockHeadersToCommonAncestor(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	client, err := NewLocalClient(logger, nil, nil, nil)
+	client, err := NewLocalClient(logger, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	hashTarget := chainhash.HashH([]byte("target"))

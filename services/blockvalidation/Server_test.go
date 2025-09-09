@@ -393,7 +393,7 @@ func Test_Server_processBlockFound(t *testing.T) {
 
 	txStore := memory.New()
 
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, utxoStore)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockchainStore, nil, utxoStore)
 	require.NoError(t, err)
 
 	kafkaConsumerClient := &kafka.KafkaConsumerGroup{}
@@ -470,15 +470,15 @@ func TestServer_catchup(t *testing.T) {
 		testCtx, testCancel := context.WithCancel(ctx)
 		defer testCancel()
 
-		// Setup
-		mockBlockchainStore := blockchain_store.NewMockStore()
-		mockBlockchainClient, err := blockchain.NewLocalClient(logger, mockBlockchainStore, nil, nil)
-		require.NoError(t, err)
-
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.GlobalBlockHeightRetention = uint32(0)
 		tSettings.ChainCfgParams.CoinbaseMaturity = 100
 		tSettings.BlockValidation.SecretMiningThreshold = 100
+
+		// Setup
+		mockBlockchainStore := blockchain_store.NewMockStore()
+		mockBlockchainClient, err := blockchain.NewLocalClient(logger, tSettings, mockBlockchainStore, nil, nil)
+		require.NoError(t, err)
 
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
 		if err != nil {

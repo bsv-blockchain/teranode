@@ -111,7 +111,7 @@ func setupBlockchainClient(t *testing.T, testItems *baTestItems) (*blockchain.Mo
 	// The store automatically initializes with the genesis block, so we don't need to add it
 
 	// Create real blockchain client
-	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(logger, testItems.blockAssembler.settings, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
 	// Get the genesis block that was automatically inserted
@@ -633,7 +633,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
-	items.blockchainClient, err = blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
+	items.blockchainClient, err = blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
 	stats := gocore.NewStat("test")
@@ -1338,6 +1338,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
+
+		testItems.blockAssembler.settings.ChainCfgParams.ReduceMinDifficulty = false // Ensure consistent difficulty
 
 		// Create a cancellable context for proper cleanup
 		ctx, cancel := context.WithCancel(context.Background())

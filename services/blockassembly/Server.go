@@ -1441,9 +1441,12 @@ func (ba *BlockAssembly) GetBlockAssemblyTxs(ctx context.Context, _ *blockassemb
 //   - *blockassembly_api.GetCurrentDifficultyResponse: Response containing the current difficulty
 //   - error: Any error encountered during retrieval
 func (ba *BlockAssembly) GetCurrentDifficulty(_ context.Context, _ *blockassembly_api.EmptyMessage) (resp *blockassembly_api.GetCurrentDifficultyResponse, err error) {
-	cd := ba.blockAssembler.currentDifficulty.Load()
-	dif := cd.CalculateDifficulty()
-	f, _ := dif.Float64()
+	nBits, err := ba.blockAssembler.getNextNbits(time.Now().Unix())
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("error getting next nbits", err))
+	}
+
+	f, _ := nBits.CalculateDifficulty().Float64()
 
 	return &blockassembly_api.GetCurrentDifficultyResponse{
 		Difficulty: f,

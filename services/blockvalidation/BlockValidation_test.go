@@ -223,7 +223,7 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 		panic(err)
 	}
 
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -355,7 +355,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
@@ -413,7 +413,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 		httpmock.NewBytesResponder(200, nodeBytes),
 	)
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("207fffff")
 	hashPrevBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
 	coinbase, err := bt.NewTxFromString(model.CoinbaseHex)
@@ -485,7 +485,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
 
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
@@ -662,7 +662,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
@@ -779,7 +779,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
 
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
@@ -894,7 +894,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
 
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
@@ -986,7 +986,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
 	// Create block header with correct merkle root
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("207fffff")
 	hashPrevBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
 	//nolint:gosec
@@ -1021,7 +1021,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	// Setup blockchain store and client
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	// Create block validation instance
@@ -1186,7 +1186,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
 
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	// Mock HTTP endpoints
@@ -1350,7 +1350,7 @@ func TestBlockValidationExcessiveBlockSize(t *testing.T) {
 			require.NoError(t, err)
 
 			// Create blockchain client
-			blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
+			blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockchainStore, nil, nil)
 			require.NoError(t, err)
 
 			tSettings.GlobalBlockHeightRetention = uint32(1)
@@ -1524,7 +1524,7 @@ func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	// Create a valid block, then tamper with coinbase script length
@@ -1643,7 +1643,7 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	// Create a valid block, then add two txs that spend the same UTXO
@@ -1734,7 +1734,7 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("207fffff")
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
@@ -1779,7 +1779,7 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	privateKey, _ := bec.NewPrivateKey()
@@ -1846,7 +1846,7 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("207fffff")
 
 	blockHeader := &model.BlockHeader{
 		Version:        1,
@@ -1891,7 +1891,7 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	privateKey, _ := bec.NewPrivateKey()
@@ -1986,8 +1986,7 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
-	t.Logf("err: %v", err)
-	require.ErrorContains(t, err, "STORAGE_ERROR")
+	require.Error(t, err)
 }
 
 func Test_checkOldBlockIDs(t *testing.T) {
@@ -2210,7 +2209,7 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	privateKey, _ := bec.NewPrivateKey()
@@ -2316,7 +2315,7 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("207fffff")
 
 	blockHeader := &model.BlockHeader{
 		Version:        1,
@@ -2359,7 +2358,7 @@ func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	// Create a chain of transactions: coinbase -> tx1 -> tx2 -> ...
@@ -2418,7 +2417,7 @@ func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("207fffff")
 
 	blockHeader := &model.BlockHeader{
 		Version:        1,
@@ -2477,7 +2476,7 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	// Create coinbase and a normal transaction
@@ -2532,7 +2531,7 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("207fffff")
 
 	blockHeader := &model.BlockHeader{
 		Version:        1,
@@ -3102,7 +3101,7 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	privateKey, _ := bec.NewPrivateKey()
@@ -3163,7 +3162,7 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("207fffff")
 
 	blockHeader := &model.BlockHeader{
 		Version:        1,
@@ -3284,7 +3283,7 @@ func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("207fffff")
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,

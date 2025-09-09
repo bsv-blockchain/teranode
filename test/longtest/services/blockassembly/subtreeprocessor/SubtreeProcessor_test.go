@@ -345,7 +345,7 @@ func initStores(t *testing.T) (*memory.Memory, utxo.Store, *settings.Settings, b
 		return nil, nil, nil, nil, nil, err
 	}
 
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockchainStore, nil, nil)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}

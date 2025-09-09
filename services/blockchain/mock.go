@@ -156,7 +156,7 @@ func (m *Mock) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash,
 }
 
 // GetNextWorkRequired mocks the GetNextWorkRequired method
-func (m *Mock) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash, currentBlockTime ...int64) (*model.NBit, error) {
+func (m *Mock) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash, currentBlockTime int64) (*model.NBit, error) {
 	args := m.Called(ctx, hash, currentBlockTime)
 
 	if args.Error(1) != nil {

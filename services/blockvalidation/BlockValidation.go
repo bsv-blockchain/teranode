@@ -943,7 +943,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			block.Header.Hash().String(), block.Height, highestCheckpointHeight)
 	} else {
 		// First check that the nBits (difficulty target) is correct for this block
-		expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock)
+		expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock, int64(block.Header.Timestamp))
 		if err != nil {
 			return errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", block.Header.Hash().String(), err)
 		}
@@ -1348,7 +1348,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 			blockData.block.Header.Hash().String(), blockData.block.Height, highestCheckpointHeight)
 	} else {
 		// First check that the nBits (difficulty target) is correct for this block
-		expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, blockData.block.Header.HashPrevBlock)
+		expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, blockData.block.Header.HashPrevBlock, int64(blockData.block.Header.Timestamp))
 		if err != nil {
 			return errors.NewServiceError("[reValidateBlock][%s] failed to get expected work required", blockData.block.Header.Hash().String(), err)
 		}

@@ -64,7 +64,7 @@ func (tc *testContext) Setup(t *testing.T, config *testConfig) error {
 		return errors.NewServiceError("failed to create blockchain store", err)
 	}
 
-	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
+	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, tSettings, blockchainStore, nil, nil)
 	if err != nil {
 		return errors.NewServiceError("failed to create blockchain client", err)
 	}

@@ -119,7 +119,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a blockchain client with the real store
-	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
 	// Activate httpmock for HTTP mocking

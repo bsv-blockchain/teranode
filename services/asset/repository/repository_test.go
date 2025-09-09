@@ -55,7 +55,7 @@ func TestTransaction(t *testing.T) {
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	// Put a transaction into the transaction store
@@ -221,7 +221,7 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	// Put the subtree into the subtree store
@@ -329,7 +329,7 @@ func TestRepository_GetBlockByHash(t *testing.T) {
 
 		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
 		require.NoError(t, err)
-		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
 		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
@@ -363,7 +363,7 @@ func TestRepository_GetLastNBlocks(t *testing.T) {
 
 		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
 		require.NoError(t, err)
-		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
 		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
@@ -404,7 +404,7 @@ func TestRepository_GetBlocks(t *testing.T) {
 
 		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
 		require.NoError(t, err)
-		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
 		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
@@ -436,7 +436,7 @@ func TestRepository_GetBlockHeaders(t *testing.T) {
 
 		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
 		require.NoError(t, err)
-		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
 		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
@@ -476,7 +476,7 @@ func TestRepository_GetBlockHeadersToCommonAncestor(t *testing.T) {
 
 		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
 		require.NoError(t, err)
-		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
 		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
@@ -513,7 +513,7 @@ func TestRepository_GetBlockHeadersFromCommonAncestor(t *testing.T) {
 
 		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
 		require.NoError(t, err)
-		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
 		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
@@ -550,7 +550,7 @@ func TestRepository_GetBlockHeadersFromHeight(t *testing.T) {
 
 		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
 		require.NoError(t, err)
-		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
 		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
@@ -582,7 +582,7 @@ func TestRepository_GetSubtreeData(t *testing.T) {
 
 		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
 		require.NoError(t, err)
-		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
 		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
@@ -646,7 +646,7 @@ func TestRepository_GetSubtreeHead(t *testing.T) {
 
 		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
 		require.NoError(t, err)
-		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
 		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
@@ -697,7 +697,7 @@ func TestRepository_ErrorHandling(t *testing.T) {
 
 		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
 		require.NoError(t, err)
-		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
 		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
@@ -729,7 +729,7 @@ func TestRepository_ErrorHandling(t *testing.T) {
 
 		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, settings)
 		require.NoError(t, err)
-		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
 		repo, err := repository.NewRepository(logger, settings, utxoStore, errorStore, blockchainClient, subtreeStore, blockStore)

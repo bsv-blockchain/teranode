@@ -1164,7 +1164,7 @@ func NewTestServer(t *testing.T) (*legacy.Server, error) {
 		return nil, err
 	}
 
-	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, blockchainStore, nil, nil)
 	if err != nil {
 		return nil, err
 	}

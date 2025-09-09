@@ -91,7 +91,7 @@ func TestDifficultyAdjustmentShouldNotChangeDifficultyIfBlocksAreMinedInTime(t *
 	bestHeader, meta, err := blockchainStore.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
 
-	newBits, err := d.CalcNextWorkRequired(ctx, bestHeader, meta.Height)
+	newBits, err := d.CalcNextWorkRequired(ctx, bestHeader, meta.Height, time.Now().Unix())
 	require.NoError(t, err)
 
 	t.Logf("newBits: %v", newBits.String())
@@ -173,7 +173,7 @@ func TestDifficultyAdjustmentShouldChangeDifficultyIfBlocksAreMinedFasterThanExp
 	bestHeader, meta, err := blockchainStore.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
 
-	newBits, err := d.CalcNextWorkRequired(ctx, bestHeader, meta.Height)
+	newBits, err := d.CalcNextWorkRequired(ctx, bestHeader, meta.Height, time.Now().Unix())
 	require.NoError(t, err)
 	t.Logf("newBits: %v", newBits.String())
 

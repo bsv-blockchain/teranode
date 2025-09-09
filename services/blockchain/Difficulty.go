@@ -53,10 +53,10 @@ func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, tSetting
 //   - ctx: Context for the operation
 //   - blockHeader: Block header to calculate the next difficulty for
 //   - blockHeight: Height of the block
-//   - currentBlockHeight: Optional argument for the current block height for testnet difficulty calculation
+//   - currentBlockHeight: Current block time for testnet difficulty calculation
 //
 // Returns the calculated NBit target difficulty.
-func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *model.BlockHeader, blockHeight uint32, currentBlockHeight ...int64) (*model.NBit, error) {
+func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *model.BlockHeader, blockHeight uint32, currentBlockTime int64) (*model.NBit, error) {
 	// If regtest we don't adjust the difficulty
 	if d.settings.ChainCfgParams.NoDifficultyAdjustment {
 		return &blockHeader.Bits, nil
@@ -66,15 +66,12 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 	// If the new block's timestamp is more than 2 * target spacing after the previous block,
 	// allow mining of a min-difficulty block.
 	// This matches bitcoin-sv's pow.cpp implementation.
-	if d.settings.ChainCfgParams.ReduceMinDifficulty && len(currentBlockHeight) >= 1 {
-		// currentBlockHeight[0] is the timestamp of the new block being validated
-		newBlockTime := currentBlockHeight[0]
+	if d.settings.ChainCfgParams.ReduceMinDifficulty {
 		prevBlockTime := int64(blockHeader.Timestamp)
 		targetSpacing := int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
 
-		if newBlockTime > prevBlockTime+2*targetSpacing {
-			d.logger.Debugf("[Difficulty] Testnet minimum difficulty rule triggered: new block time %d > prev %d + 2*%d",
-				newBlockTime, prevBlockTime, targetSpacing)
+		if currentBlockTime > prevBlockTime+(2*targetSpacing) {
+			d.logger.Debugf("[Difficulty] Testnet minimum difficulty rule triggered: new block time %d > prev %d + 2*%d", currentBlockTime, prevBlockTime, targetSpacing)
 			return d.powLimitnBits, nil
 		}
 	}
@@ -104,8 +101,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 
 	lastSuitableBlock, err := d.store.GetSuitableBlock(ctx, blockHeader.Hash())
 	if err != nil {
-		return nil,
-			errors.NewStorageError("[Difficulty] error getting suitable block", err)
+		return nil, errors.NewStorageError("[Difficulty] error getting suitable block", err)
 	}
 
 	if lastSuitableBlock == nil {
@@ -379,10 +375,10 @@ func CompactToBig(compact uint32) *big.Int {
 //   - ctx: Context for the operation
 //   - newBlock: Block to validate
 //   - previousBlock: Parent block of the block being validated
-//   - testnetArgs: Optional arguments for testnet difficulty calculation
-func (d *Difficulty) ValidateBlockHeaderDifficulty(ctx context.Context, newBlock, previousBlock *model.Block, testnetArgs ...int64) error {
+//   - currentBlockTime: Current block time for testnet difficulty calculation
+func (d *Difficulty) ValidateBlockHeaderDifficulty(ctx context.Context, newBlock, previousBlock *model.Block, currentBlockTime int64) error {
 	// Calculate the expected difficulty for the new block
-	expectedNBits, err := d.CalcNextWorkRequired(ctx, previousBlock.Header, previousBlock.Height, testnetArgs...)
+	expectedNBits, err := d.CalcNextWorkRequired(ctx, previousBlock.Header, previousBlock.Height, currentBlockTime)
 	if err != nil {
 		return errors.NewError("failed to calculate expected difficulty: %v", err)
 	}

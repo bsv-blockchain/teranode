@@ -433,7 +433,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(c.peerID)
 						if peerMetric != nil {
 							if peerMetric.IsBad() || peerMetric.IsMalicious() {
-								u.logger.Warnf("[catchup][%s] peer %s is marked as bad (score: %0.0f) or malicious (attempts: %d), skipping", c.block.Hash().String(), c.peerID, peerMetric.GetReputation(), peerMetric.GetMaliciousAttempts())
+								u.logger.Warnf("[catchup][%s] peer %s (%s) is marked as bad (score: %0.0f) or malicious (attempts: %d), skipping", c.block.Hash().String(), c.peerID, c.baseURL, peerMetric.GetReputation(), peerMetric.GetMaliciousAttempts())
 								continue
 							}
 						}

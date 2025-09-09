@@ -324,7 +324,7 @@ func TestGetBlockHeadersFromCommonAncestor_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create blockchain client
-	blockchainClient, err := blockchain.NewLocalClient(logger, blockchainStore, nil, nil)
+	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
 	b, bm, err := blockchainClient.GetBestBlockHeader(context.Background())

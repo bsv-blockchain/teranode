@@ -153,7 +153,7 @@ func setup(t *testing.T) (utxo.Store, *validator.MockValidatorClient, blob.Store
 	mockBlockChainStore := &blockchainstore.MockStore{}
 
 	// Create LocalClient properly using the constructor to ensure all fields are initialized
-	blockchainClient, err := blockchain.NewLocalClient(logger, mockBlockChainStore, subtreeStore, utxoStore)
+	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, mockBlockChainStore, subtreeStore, utxoStore)
 	if err != nil {
 		panic(err)
 	}

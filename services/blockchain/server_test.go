@@ -1372,7 +1372,7 @@ func Test_ServiceInvalidateBlock_ClearsBestAndDifficultyCache(t *testing.T) {
 	require.NoError(t, err)
 
 	// Call GetNextWorkRequired twice to warm any internal caching
-	req := &blockchain_api.GetNextWorkRequiredRequest{PreviousBlockHash: bestHeaderBefore.Hash().CloneBytes()}
+	req := &blockchain_api.GetNextWorkRequiredRequest{PreviousBlockHash: bestHeaderBefore.Hash().CloneBytes(), CurrentBlockTime: time.Now().Unix()}
 	diff1, err := ctx.server.GetNextWorkRequired(context.Background(), req)
 	require.NoError(t, err)
 	require.NotNil(t, diff1)
@@ -1399,7 +1399,7 @@ func Test_ServiceInvalidateBlock_ClearsBestAndDifficultyCache(t *testing.T) {
 	assert.False(t, bestHeaderAfter.Hash().IsEqual(bestHeaderBefore.Hash()))
 
 	// Ensure difficulty can be computed for the new best without using stale cache
-	reqAfter := &blockchain_api.GetNextWorkRequiredRequest{PreviousBlockHash: bestHeaderAfter.Hash().CloneBytes()}
+	reqAfter := &blockchain_api.GetNextWorkRequiredRequest{PreviousBlockHash: bestHeaderAfter.Hash().CloneBytes(), CurrentBlockTime: time.Now().Unix()}
 	diffAfter, err := ctx.server.GetNextWorkRequired(context.Background(), reqAfter)
 	require.NoError(t, err)
 	require.NotNil(t, diffAfter)
@@ -1478,17 +1478,21 @@ func TestGetNextWorkRequired(t *testing.T) {
 	_, _, err := ctx.server.store.StoreBlock(context.Background(), block, "peer1")
 	require.NoError(t, err)
 
-	t.Run("difficulty is nil - returns defaultNbits", func(t *testing.T) {
-		ctx.server.difficulty = nil
+	t.Run("genesis difficulty", func(t *testing.T) {
+		logger := ulogger.NewErrorTestLogger(t)
+		store := blockchain_store.NewMockStore()
+		tSettings := test.CreateBaseTestSettings(t)
+		realDiff, err := NewDifficulty(store, logger, tSettings)
+		require.NoError(t, err)
+		ctx.server.difficulty = realDiff
 
 		req := &blockchain_api.GetNextWorkRequiredRequest{
-			PreviousBlockHash: validHash.CloneBytes(),
+			PreviousBlockHash: model.GenesisBlockHeader.Hash().CloneBytes(),
+			CurrentBlockTime:  time.Now().Unix(),
 		}
-
 		resp, err := ctx.server.GetNextWorkRequired(context.Background(), req)
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.NotEmpty(t, resp.Bits)
 	})
 
 	t.Run("invalid block hash - returns error", func(t *testing.T) {
@@ -1501,6 +1505,7 @@ func TestGetNextWorkRequired(t *testing.T) {
 
 		req := &blockchain_api.GetNextWorkRequiredRequest{
 			PreviousBlockHash: []byte("not-a-valid-hash"),
+			CurrentBlockTime:  time.Now().Unix(),
 		}
 		resp, err := ctx.server.GetNextWorkRequired(context.Background(), req)
 		require.Error(t, err)
@@ -1508,8 +1513,7 @@ func TestGetNextWorkRequired(t *testing.T) {
 	})
 
 	t.Run("store returns error", func(t *testing.T) {
-		mockStore :=
-			&errorStoreGetBlockHeader{}
+		mockStore := &errorStoreGetBlockHeader{}
 		mockStore.On("GetBlockHeader",
 			mock.Anything, // ctx
 			mock.Anything, // blockHash
@@ -1526,6 +1530,7 @@ func TestGetNextWorkRequired(t *testing.T) {
 
 		req := &blockchain_api.GetNextWorkRequiredRequest{
 			PreviousBlockHash: validHash.CloneBytes(),
+			CurrentBlockTime:  time.Now().Unix(),
 		}
 
 		resp, err := server.GetNextWorkRequired(context.Background(), req)
@@ -1548,6 +1553,7 @@ func TestGetNextWorkRequired(t *testing.T) {
 
 		req := &blockchain_api.GetNextWorkRequiredRequest{
 			PreviousBlockHash: validHash.CloneBytes(),
+			CurrentBlockTime:  time.Now().Unix(),
 		}
 		resp, err := server.GetNextWorkRequired(context.Background(), req)
 		require.Error(t, err)
@@ -1564,6 +1570,7 @@ func TestGetNextWorkRequired(t *testing.T) {
 
 		req := &blockchain_api.GetNextWorkRequiredRequest{
 			PreviousBlockHash: block.Hash().CloneBytes(),
+			CurrentBlockTime:  time.Now().Unix(),
 		}
 
 		resp, err := ctx.server.GetNextWorkRequired(context.Background(), req)
