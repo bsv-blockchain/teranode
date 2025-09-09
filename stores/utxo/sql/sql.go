@@ -1955,10 +1955,20 @@ func createPostgresSchema(db *usql.DB) error {
 
 	// Add the new foreign key constraint with ON DELETE CASCADE for inputs
 	if _, err := db.Exec(`
-		ALTER TABLE inputs
-		ADD CONSTRAINT inputs_transaction_id_fkey
-		FOREIGN KEY (transaction_id)
-		REFERENCES transactions(id) ON DELETE CASCADE;
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM information_schema.table_constraints
+				WHERE table_name = 'inputs'
+				AND constraint_type = 'FOREIGN KEY'
+				AND constraint_name = 'inputs_transaction_id_fkey'
+			) THEN
+				ALTER TABLE inputs
+				ADD CONSTRAINT inputs_transaction_id_fkey
+				FOREIGN KEY (transaction_id)
+				REFERENCES transactions(id) ON DELETE CASCADE;
+			END IF;
+		END $$;
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not add new foreign key constraint with CASCADE on inputs table - [%+v]", err)
@@ -2005,10 +2015,20 @@ func createPostgresSchema(db *usql.DB) error {
 
 	// Add the new foreign key constraint with ON DELETE CASCADE for outputs
 	if _, err := db.Exec(`
-		ALTER TABLE outputs
-		ADD CONSTRAINT outputs_transaction_id_fkey
-		FOREIGN KEY (transaction_id)
-		REFERENCES transactions(id) ON DELETE CASCADE;
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM information_schema.table_constraints
+				WHERE table_name = 'outputs'
+				AND constraint_type = 'FOREIGN KEY'
+				AND constraint_name = 'outputs_transaction_id_fkey'
+			) THEN
+				ALTER TABLE outputs
+				ADD CONSTRAINT outputs_transaction_id_fkey
+				FOREIGN KEY (transaction_id)
+				REFERENCES transactions(id) ON DELETE CASCADE;
+			END IF;
+		END $$;
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not add new foreign key constraint with CASCADE on outputs table - [%+v]", err)
@@ -2089,10 +2109,20 @@ func createPostgresSchema(db *usql.DB) error {
 
 	// Add the new foreign key constraint with ON DELETE CASCADE
 	if _, err := db.Exec(`
-		ALTER TABLE block_ids
-		ADD CONSTRAINT block_ids_transaction_id_fkey
-		FOREIGN KEY (transaction_id)
-		REFERENCES transactions(id) ON DELETE CASCADE;
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM information_schema.table_constraints
+				WHERE table_name = 'block_ids'
+				AND constraint_type = 'FOREIGN KEY'
+				AND constraint_name = 'block_ids_transaction_id_fkey'
+			) THEN
+				ALTER TABLE block_ids
+				ADD CONSTRAINT block_ids_transaction_id_fkey
+				FOREIGN KEY (transaction_id)
+				REFERENCES transactions(id) ON DELETE CASCADE;
+			END IF;
+		END $$;
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not add new foreign key constraint with CASCADE - [%+v]", err)
