@@ -141,7 +141,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	}
 
 	// Process batch results
-	return s.processBatchResultsForSetMined(ctx, batchRecords, hashes, thisBlockHeight)
+	return s.processBatchResultsForSetMined(ctx, batchRecords, hashes, thisBlockHeight, minedBlockInfo)
 }
 
 // prepareBatchRecordsForSetMined creates batch records for the setMined operation
@@ -186,14 +186,15 @@ func (s *Store) executeBatchOperation(batchRecords []aerospike.BatchRecordIfc) e
 }
 
 // processBatchResultsForSetMined processes the results of the batch operation
-func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, hashes []*chainhash.Hash, thisBlockHeight uint32) (map[chainhash.Hash][]uint32, error) {
+func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords []aerospike.BatchRecordIfc,
+	hashes []*chainhash.Hash, thisBlockHeight uint32, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	var errs error
 	okUpdates := 0
 	nrErrors := 0
 	blockIDs := make(map[chainhash.Hash][]uint32, len(hashes))
 
 	for idx, batchRecord := range batchRecords {
-		result, res, err := s.processSingleBatchRecord(ctx, batchRecord, hashes[idx], thisBlockHeight)
+		result, res, err := s.processSingleBatchRecord(ctx, batchRecord, hashes[idx], thisBlockHeight, minedBlockInfo)
 		if err != nil {
 			errs = errors.Join(errs, err)
 			nrErrors++
@@ -229,7 +230,8 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 }
 
 // processSingleBatchRecord processes a single batch record result
-func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerospike.BatchRecordIfc, hash *chainhash.Hash, thisBlockHeight uint32) (bool, *LuaMapResponse, error) {
+func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerospike.BatchRecordIfc, hash *chainhash.Hash,
+	thisBlockHeight uint32, minedBlockInfo utxo.MinedBlockInfo) (bool, *LuaMapResponse, error) {
 	batchErr := batchRecord.BatchRec().Err
 	if batchErr != nil {
 		return false, nil, s.handleBatchRecordError(batchErr, hash)
@@ -237,7 +239,7 @@ func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerosp
 
 	response := batchRecord.BatchRec().Record
 	if response == nil || response.Bins == nil || response.Bins[LuaSuccess.String()] == nil {
-		return false, nil, errors.NewError("aerospike batchRecord %s !bins[SUCCESS]", hash.String(), batchRecord.BatchRec().Err)
+		return false, nil, errors.NewError("missing SUCCESS bin in aerospike response for transaction %s", hash.String())
 	}
 
 	res, parseErr := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
@@ -246,7 +248,12 @@ func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerosp
 	}
 
 	if res.Status != LuaStatusOK {
-		return false, res, errors.NewError("aerospike batchRecord %s error", hash.String(), res.Message, batchRecord.BatchRec().Err)
+		if res.ErrorCode == LuaErrorCodeTxNotFound && minedBlockInfo.UnsetMined {
+			// This is not an error for us, just a no-op, if we are unsetting mined status on a tx that does not exist
+			return true, res, nil
+		}
+
+		return false, res, errors.NewError("aerospike batchRecord %s error: %s", hash.String(), res.Message)
 	}
 
 	// Handle signal if present
