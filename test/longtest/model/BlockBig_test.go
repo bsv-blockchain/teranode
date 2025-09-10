@@ -603,7 +603,7 @@ func Test_LoadTxMetaIntoMemory(t *testing.T) {
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
 
-	teranode_model.TestFileDir = "./big-test-generated_test_data/"
+	teranode_model.TestFileDir = "./testdata/"
 	teranode_model.TestTxMetafileNameTemplate = teranode_model.TestFileDir + "txMeta.bin"
 
 	teranode_model.TestCachedTxMetaStore, err = txmetacache.NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, utxoStore, txmetacache.Unallocated)
@@ -624,7 +624,7 @@ func Test_LoadTxMetaIntoMemory(t *testing.T) {
 }
 
 func generateBigBlockTestData(t *testing.T) (*teranode_model.TestLocalSubtreeStore, *teranode_model.Block, error) {
-	teranode_model.TestFileDir = "./big-test-generated_test_data/"
+	teranode_model.TestFileDir = "./test_data/"
 	teranode_model.TestFileNameTemplate = teranode_model.TestFileDir + "subtree-%d.bin"
 	teranode_model.TestFileNameTemplateMerkleHashes = teranode_model.TestFileDir + "subtree-merkle-hashes.bin"
 	teranode_model.TestFileNameTemplateBlock = teranode_model.TestFileDir + "block.bin"

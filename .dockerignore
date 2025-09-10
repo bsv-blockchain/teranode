@@ -23,7 +23,7 @@ test/
 coverage.out
 test/data
 test/utils/data
-test/model/big-test-generated_test_data
+test/model/testdata
 # Specific test files that don't follow _test.go convention
 daemon/test_daemon.go
 daemon/test_daemon_test.go
