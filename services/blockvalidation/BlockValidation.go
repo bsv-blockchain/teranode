@@ -334,91 +334,38 @@ func initialiseInvalidBlockKafkaProducer(ctx context.Context, logger ulogger.Log
 func (u *BlockValidation) start(ctx context.Context) error {
 	go u.bloomFilterStats.BloomFilterStatsProcessor(ctx)
 
+	g, gCtx := errgroup.WithContext(ctx)
+
 	if u.blockchainClient != nil {
-		// first check whether all old blocks have been processed properly
-		blocksMinedNotSet, err := u.blockchainClient.GetBlocksMinedNotSet(ctx)
-		if err != nil {
-			u.logger.Errorf("[BlockValidation:start] failed to get blocks mined not set: %s", err)
-		}
+		// first check whether all old blocks have their mined_set set
+		u.processBlockMinedNotSet(gCtx, g)
 
-		g, gCtx := errgroup.WithContext(ctx)
-
-		if len(blocksMinedNotSet) > 0 {
-			u.logger.Infof("[BlockValidation:start] found %d blocks mined not set", len(blocksMinedNotSet))
-
-			for _, block := range blocksMinedNotSet {
-				blockHash := block.Hash()
-
-				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
-
-				g.Go(func() error {
-					u.logger.Debugf("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
-
-					select {
-					case <-gCtx.Done():
-						return nil
-					default:
-						// get the block metadata to check if the block is invalid
-						_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(gCtx, blockHash)
-						if err != nil {
-							u.logger.Errorf("[BlockValidation:start] failed to get block header: %s", err)
-
-							u.setMinedChan <- blockHash
-
-							return nil
-						}
-
-						if err = u.setTxMined(gCtx, blockHash, blockHeaderMeta.Invalid); err != nil {
-							if errors.Is(err, context.Canceled) {
-								u.logger.Infof("[BlockValidation:start] failed to set block mined: %s", err)
-							} else {
-								u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
-							}
-							u.setMinedChan <- blockHash
-						}
-
-						if err := u.blockHashesCurrentlyValidated.Delete(*blockHash); err != nil {
-							u.logger.Errorf("[BlockValidation:start] failed to delete block from currently validated: %s", err)
-						}
-
-						u.logger.Infof("[BlockValidation:start] processed block mined and set mined_set: %s", blockHash.String())
-
-						return nil
-					}
-				})
-			}
-		}
-
-		// get all blocks that have subtrees not set
-		blocksSubtreesNotSet, err := u.blockchainClient.GetBlocksSubtreesNotSet(ctx)
-		if err != nil {
-			u.logger.Errorf("[BlockValidation:start] failed to get blocks subtrees not set: %s", err)
-		}
-
-		if len(blocksSubtreesNotSet) > 0 {
-			u.logger.Infof("[BlockValidation:start] found %d blocks subtrees not set", len(blocksSubtreesNotSet))
-
-			for _, block := range blocksSubtreesNotSet {
-				block := block
-
-				g.Go(func() error {
-					u.logger.Infof("[BlockValidation:start] processing block subtrees DAH not set: %s", block.Hash().String())
-
-					if err := u.updateSubtreesDAH(gCtx, block); err != nil {
-						u.logger.Errorf("[BlockValidation:start] failed to update subtrees DAH: %s", err)
-					}
-
-					return nil
-				})
-			}
-		}
+		// then check whether all old blocks have their subtrees_set set
+		u.processSubtreesNotSet(gCtx, g)
 
 		// wait for all blocks to be processed
-		if err = g.Wait(); err != nil {
+		if err := g.Wait(); err != nil {
 			// we cannot start the block validation, we are in a bad state
 			return errors.NewServiceError("[BlockValidation:start] failed to start, process old block mined/subtrees sets", err)
 		}
 	}
+
+	// start a ticker that checks every minute whether there are subtrees that need to be set
+	// this is a light routine, since we only remove the dah files from the subtree store
+	go func() {
+		u.logger.Infof("[BlockValidation:start] starting subtree DAH update goroutine")
+		ticker := time.NewTicker(1 * time.Minute)
+
+		for {
+			select {
+			case <-ctx.Done():
+				u.logger.Warnf("[BlockValidation:start] exiting subtree DAH update goroutine: %s", ctx.Err())
+				return
+			case <-ticker.C:
+				u.processSubtreesNotSet(ctx, g)
+			}
+		}
+	}()
 
 	// start a worker to process the setMinedChan
 	u.logger.Infof("[BlockValidation:start] starting setMined goroutine")
@@ -528,6 +475,90 @@ func (u *BlockValidation) start(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+func (u *BlockValidation) processBlockMinedNotSet(ctx context.Context, g *errgroup.Group) {
+	// first check whether all old blocks have been processed properly
+	blocksMinedNotSet, err := u.blockchainClient.GetBlocksMinedNotSet(ctx)
+	if err != nil {
+		u.logger.Errorf("[BlockValidation:start] failed to get blocks mined not set: %s", err)
+	}
+
+	if len(blocksMinedNotSet) > 0 {
+		u.logger.Infof("[BlockValidation:start] found %d blocks mined not set", len(blocksMinedNotSet))
+
+		for _, block := range blocksMinedNotSet {
+			blockHash := block.Hash()
+
+			_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
+
+			g.Go(func() error {
+				u.logger.Debugf("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
+
+				select {
+				case <-ctx.Done():
+					return nil
+				default:
+					// get the block metadata to check if the block is invalid
+					_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(ctx, blockHash)
+					if err != nil {
+						u.logger.Errorf("[BlockValidation:start] failed to get block header: %s", err)
+
+						u.setMinedChan <- blockHash
+
+						return nil
+					}
+
+					if err = u.setTxMined(ctx, blockHash, blockHeaderMeta.Invalid); err != nil {
+						if errors.Is(err, context.Canceled) {
+							u.logger.Infof("[BlockValidation:start] failed to set block mined: %s", err)
+						} else {
+							u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
+						}
+						u.setMinedChan <- blockHash
+					}
+
+					if err = u.blockHashesCurrentlyValidated.Delete(*blockHash); err != nil {
+						u.logger.Errorf("[BlockValidation:start] failed to delete block from currently validated: %s", err)
+					}
+
+					u.logger.Infof("[BlockValidation:start] processed block mined and set mined_set: %s", blockHash.String())
+
+					return nil
+				}
+			})
+		}
+	}
+}
+
+func (u *BlockValidation) processSubtreesNotSet(ctx context.Context, g *errgroup.Group) {
+	if u.blockchainClient == nil {
+		return
+	}
+
+	// get all blocks that have subtrees not set
+	blocksSubtreesNotSet, err := u.blockchainClient.GetBlocksSubtreesNotSet(ctx)
+	if err != nil {
+		u.logger.Errorf("[BlockValidation:start] failed to get blocks subtrees not set: %s", err)
+	}
+
+	if len(blocksSubtreesNotSet) > 0 {
+		u.logger.Infof("[BlockValidation:start] found %d blocks subtrees not set", len(blocksSubtreesNotSet))
+
+		for _, block := range blocksSubtreesNotSet {
+			block := block
+
+			g.Go(func() error {
+				u.logger.Infof("[BlockValidation:start] processing block subtrees DAH not set: %s", block.Hash().String())
+
+				if err := u.updateSubtreesDAH(ctx, block); err != nil {
+					u.logger.Errorf("[BlockValidation:start] failed to update subtrees DAH: %s", err)
+				}
+
+				return nil
+			})
+		}
+	}
 }
 
 // SetBlockExists marks a block as existing in the validation system's cache.

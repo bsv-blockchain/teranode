@@ -276,7 +276,7 @@ func (b *BlockAssembler) SubtreeCount() int {
 //
 // Parameters:
 //   - ctx: Context for cancellation
-func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
+func (b *BlockAssembler) startChannelListeners(ctx context.Context) error {
 	var (
 		err       error
 		readyOnce sync.Once
@@ -286,8 +286,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 	// this will be used to reset the subtree processor when a new block is mined
 	b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, "BlockAssembler")
 	if err != nil {
-		b.logger.Errorf("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
-		return
+		return errors.NewProcessingError("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 	}
 
 	readyCh := make(chan struct{})
@@ -460,7 +459,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				b.setCurrentRunningState(StateBlockchainSubscription)
 
 				if notification.Type == model.NotificationType_Block {
-					b.UpdateBestBlock(ctx)
+					b.processNewBlockAnnouncement(ctx)
 				}
 
 				b.setCurrentRunningState(StateRunning)
@@ -474,24 +473,24 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 	select {
 	case <-time.After(time.Second * 30):
-		b.logger.Errorf("[BlockAssembler] timeout waiting for blockchain subscription to be ready")
-		return
+		return errors.NewProcessingError("[BlockAssembler] timeout waiting for blockchain subscription to be ready")
 	case <-readyCh:
 	case <-ctx.Done():
-		return
+		return nil
 	}
 
+	return nil
 }
 
-// UpdateBestBlock updates the best block information.
+// processNewBlockAnnouncement updates the best block information.
 //
 // Parameters:
 //   - ctx: Context for cancellation
-func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
-	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "UpdateBestBlock",
+func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "processNewBlockAnnouncement",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockAssemblerUpdateBestBlock),
-		tracing.WithLogMessage(b.logger, "[UpdateBestBlock] called"),
+		tracing.WithLogMessage(b.logger, "[processNewBlockAnnouncement] called"),
 	)
 	defer func() {
 		deferFn()
@@ -578,7 +577,7 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 	// Parameters:
 	//   - bestBlockchainBlockHeader: The new best block header to set
 	//   - height: The height of the new best block
-	b.logger.Infof("[BlockAssembler][%s] setting best block header: %d", bestBlockchainBlockHeader.Hash(), height)
+	b.logger.Infof("[BlockAssembler][%s] setting best block header to height %d", bestBlockchainBlockHeader.Hash(), height)
 
 	b.bestBlockHeader.Store(bestBlockchainBlockHeader)
 	b.bestBlockHeight.Store(height)
@@ -587,13 +586,10 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 	b.invalidateMiningCandidateCache()
 
 	if b.cleanupServiceLoaded.Load() && b.cleanupService != nil && height > 0 {
-		err := b.cleanupService.UpdateBlockHeight(height)
-		if err != nil {
+		if err := b.cleanupService.UpdateBlockHeight(height); err != nil {
 			b.logger.Errorf("[BlockAssembler] cleanup service error updating block height: %v", err)
 		}
 	}
-
-	b.logger.Infof("[BlockAssembler][%s] set best block header to: %d", b.bestBlockHeader.Load().Hash(), b.bestBlockHeight.Load())
 }
 
 // setCurrentRunningState sets the current operational state.
@@ -621,7 +617,9 @@ func (b *BlockAssembler) GetCurrentRunningState() State {
 // Returns:
 //   - error: Any error encountered during startup
 func (b *BlockAssembler) Start(ctx context.Context) (err error) {
-	b.initState(ctx)
+	if err = b.initState(ctx); err != nil {
+		return errors.NewProcessingError("[BlockAssembler] failed to initialize state: %v", err)
+	}
 
 	// Wait for any pending blocks to be processed before loading unmined transactions
 	if !b.skipWaitForPendingBlocks {
@@ -637,7 +635,9 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
 
-	b.startChannelListeners(ctx)
+	if err = b.startChannelListeners(ctx); err != nil {
+		return errors.NewProcessingError("[BlockAssembler] failed to start channel listeners: %v", err)
+	}
 
 	// Check if the UTXO store supports cleanup operations
 	if !b.settings.UtxoStore.DisableDAHCleaner {
@@ -667,38 +667,38 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	return nil
 }
 
-func (b *BlockAssembler) initState(ctx context.Context) {
+func (b *BlockAssembler) initState(ctx context.Context) error {
 	bestBlockHeader, bestBlockHeight, err := b.GetState(ctx)
 	if err != nil {
-		// TODO what is the best way to handle errors wrapped in grpc rpc errors?
-		if strings.Contains(err.Error(), sql.ErrNoRows.Error()) {
+		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), sql.ErrNoRows.Error()) {
 			b.logger.Warnf("[BlockAssembler] no state found in blockchain db")
 		} else {
 			b.logger.Errorf("[BlockAssembler] error getting state from blockchain db: %v", err)
 		}
 	} else {
-		b.logger.Infof("[BlockAssembler] setting best block header from state: %d: %s", b.bestBlockHeight.Load(), b.bestBlockHeader.Load().Hash())
-		b.subtreeProcessor.InitCurrentBlockHeader(b.bestBlockHeader.Load())
+		b.logger.Infof("[BlockAssembler] setting best block header from state: %d: %s", bestBlockHeight, bestBlockHeader.Hash())
+		b.setBestBlockHeader(bestBlockHeader, bestBlockHeight)
+		b.subtreeProcessor.InitCurrentBlockHeader(bestBlockHeader)
 	}
-
-	b.setBestBlockHeader(bestBlockHeader, bestBlockHeight)
 
 	// we did not get any state back from the blockchain db, so we get the current best block header
 	if b.bestBlockHeader.Load() == nil || b.bestBlockHeight.Load() == 0 {
 		header, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
 		if err != nil {
-			b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
+			// we must return an error here since we cannot continue without a best block header
+			return errors.NewProcessingError("[BlockAssembler] error getting best block header: %v", err)
 		} else {
 			b.logger.Infof("[BlockAssembler] setting best block header from GetBestBlockHeader: %s", b.bestBlockHeader.Load().Hash())
-
 			b.setBestBlockHeader(header, meta.Height)
-			b.subtreeProcessor.InitCurrentBlockHeader(b.bestBlockHeader.Load())
+			b.subtreeProcessor.InitCurrentBlockHeader(header)
 		}
 	}
 
 	if err = b.SetState(ctx); err != nil {
 		b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
 	}
+
+	return nil
 }
 
 // GetState retrieves the current state of the block assembler from the blockchain.
@@ -860,7 +860,15 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 
 	// Generate new candidate
 	responseCh := make(chan *miningCandidateResponse)
-	utils.SafeSend(b.miningCandidateCh, responseCh, 10*time.Second)
+
+	select {
+	case <-ctx.Done():
+		// context cancelled, do not send
+	case <-time.After(1 * time.Second):
+		return nil, nil, errors.NewServiceError("timeout sending mining candidate request")
+	case b.miningCandidateCh <- responseCh:
+		// sent successfully
+	}
 
 	// wait for 10 seconds for the response
 	var candidate *model.MiningCandidate
@@ -870,6 +878,8 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	var err error
 
 	select {
+	case <-ctx.Done():
+		// context cancelled, do not send
 	case <-time.After(10 * time.Second):
 		// make sure to close the channel, otherwise the for select will hang, because no one is reading from it
 		close(responseCh)

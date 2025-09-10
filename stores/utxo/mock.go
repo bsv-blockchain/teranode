@@ -216,3 +216,18 @@ func (m *MockUtxostore) ProcessExpiredPreservations(ctx context.Context, current
 	args := m.Called(ctx, currentHeight)
 	return args.Error(0)
 }
+
+// MockUnminedTxIterator is a simple mock implementation of utxo.UnminedTxIterator for testing
+type MockUnminedTxIterator struct{}
+
+func (m *MockUnminedTxIterator) Next(ctx context.Context) (*UnminedTransaction, error) {
+	return nil, nil // No more transactions
+}
+
+func (m *MockUnminedTxIterator) Err() error {
+	return nil
+}
+
+func (m *MockUnminedTxIterator) Close() error {
+	return nil
+}

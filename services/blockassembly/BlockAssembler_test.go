@@ -169,7 +169,8 @@ func TestBlockAssembly_Start(t *testing.T) {
 
 		blockchainClient := &blockchain.Mock{}
 		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
-		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.ErrNotFound)
+		blockchainClient.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 0}, nil)
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		subChan := make(chan *blockchain_api.Notification, 1)
@@ -209,7 +210,8 @@ func TestBlockAssembly_Start(t *testing.T) {
 
 		blockchainClient := &blockchain.Mock{}
 		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
-		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.ErrNotFound)
+		blockchainClient.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 0}, nil)
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		subChan := make(chan *blockchain_api.Notification, 1)
@@ -306,7 +308,8 @@ func TestBlockAssembly_Start(t *testing.T) {
 
 		blockchainClient := &blockchain.Mock{}
 		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
-		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.ErrNotFound)
+		blockchainClient.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 0}, nil)
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 		subChan := make(chan *blockchain_api.Notification, 1)
@@ -1728,4 +1731,197 @@ func TestBlockAssembly_Reset(t *testing.T) {
 		// Give some time for the async reset to execute
 		time.Sleep(10 * time.Millisecond)
 	})
+}
+
+func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
+	t.Run("initState fails when blockchain client returns error", func(t *testing.T) {
+		initPrometheusMetrics()
+
+		blockchainClient := &blockchain.Mock{}
+		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, errors.NewProcessingError("blockchain db connection failed"))
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.NewProcessingError("failed to get best block header"))
+		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		subChan := make(chan *blockchain_api.Notification, 1)
+		blockchainClient.On("SubscribeToNewBlock", mock.Anything).Return(subChan, nil)
+
+		tSettings := createTestSettings(t)
+		newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest)
+
+		stats := gocore.NewStat("test")
+
+		blockAssembler, err := NewBlockAssembler(
+			context.Background(),
+			ulogger.TestLogger{},
+			tSettings,
+			stats,
+			&utxoStore.MockUtxostore{},
+			memory.New(),
+			blockchainClient,
+			newSubtreeChan,
+		)
+		require.NoError(t, err)
+
+		// Set skip wait for pending blocks
+		blockAssembler.SetSkipWaitForPendingBlocks(true)
+
+		err = blockAssembler.Start(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to initialize state")
+	})
+
+	t.Run("initState recovers when GetState fails but GetBestBlockHeader succeeds", func(t *testing.T) {
+		initPrometheusMetrics()
+
+		// Set up UTXO store mock with required expectations
+		mockUtxoStore := &utxoStore.MockUtxostore{}
+
+		// Create a simple mock iterator that returns no transactions
+		mockIterator := &utxoStore.MockUnminedTxIterator{}
+		mockUtxoStore.On("GetUnminedTxIterator").Return(mockIterator, nil)
+		mockUtxoStore.On("SetBlockHeight", mock.Anything).Return(nil)
+
+		blockchainSubscription := make(chan *blockchain_api.Notification, 1)
+		blockchainSubscription <- &blockchain_api.Notification{}
+
+		blockchainClient := &blockchain.Mock{}
+		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
+		blockchainClient.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 0}, nil)
+		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		subChan := make(chan *blockchain_api.Notification, 1)
+		blockchainClient.On("SubscribeToNewBlock", mock.Anything).Return(subChan, nil)
+		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(blockchainSubscription, nil)
+
+		tSettings := createTestSettings(t)
+		newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest)
+		stats := gocore.NewStat("test")
+
+		blockAssembler, err := NewBlockAssembler(
+			context.Background(),
+			ulogger.TestLogger{},
+			tSettings,
+			stats,
+			mockUtxoStore,
+			memory.New(),
+			blockchainClient,
+			newSubtreeChan,
+		)
+		require.NoError(t, err)
+
+		// Set skip wait for pending blocks
+		blockAssembler.SetSkipWaitForPendingBlocks(true)
+
+		err = blockAssembler.Start(context.Background())
+		require.NoError(t, err)
+
+		// Verify state was properly initialized
+		assert.NotNil(t, blockAssembler.bestBlockHeader.Load())
+		assert.Equal(t, uint32(0), blockAssembler.bestBlockHeight.Load())
+	})
+}
+
+func TestBlockAssembly_processNewBlockAnnouncement_ErrorHandling(t *testing.T) {
+	t.Run("processNewBlockAnnouncement handles blockchain client failures gracefully", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+
+		// Mock blockchain client to fail on GetBestBlockHeader during processNewBlockAnnouncement
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, errors.NewProcessingError("blockchain service unavailable"))
+		mockBlockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, errors.NewProcessingError("state service unavailable"))
+
+		// Replace the blockchain client
+		testItems.blockAssembler.blockchainClient = mockBlockchainClient
+
+		// Capture initial state
+		initialHeight := testItems.blockAssembler.bestBlockHeight.Load()
+		initialHeader := testItems.blockAssembler.bestBlockHeader.Load()
+
+		// Call processNewBlockAnnouncement directly
+		testItems.blockAssembler.processNewBlockAnnouncement(context.Background())
+
+		// Verify state remains unchanged after error
+		assert.Equal(t, initialHeight, testItems.blockAssembler.bestBlockHeight.Load())
+		assert.Equal(t, initialHeader, testItems.blockAssembler.bestBlockHeader.Load())
+	})
+}
+
+func TestBlockAssembly_setBestBlockHeader_CleanupServiceFailures(t *testing.T) {
+	t.Run("setBestBlockHeader handles cleanup service failures gracefully", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+
+		// Create a mock cleanup service that fails
+		mockCleanupService := &MockCleanupService{}
+		mockCleanupService.On("UpdateBlockHeight", mock.Anything, mock.Anything).Return(errors.NewProcessingError("cleanup service failed"))
+
+		// Set the cleanup service and mark it as loaded
+		testItems.blockAssembler.cleanupService = mockCleanupService
+		testItems.blockAssembler.cleanupServiceLoaded.Store(true)
+
+		// Create a new block header
+		newHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  model.GenesisBlockHeader.Hash(),
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      1234567890,
+			Bits:           model.NBit{},
+			Nonce:          1234,
+		}
+		newHeight := uint32(1)
+
+		// Call setBestBlockHeader - should not panic or fail even if cleanup service fails
+		testItems.blockAssembler.setBestBlockHeader(newHeader, newHeight)
+
+		// Verify the block header was still set correctly
+		assert.Equal(t, newHeader, testItems.blockAssembler.bestBlockHeader.Load())
+		assert.Equal(t, newHeight, testItems.blockAssembler.bestBlockHeight.Load())
+
+		// Verify cleanup service was called
+		mockCleanupService.AssertCalled(t, "UpdateBlockHeight", newHeight, mock.Anything)
+	})
+
+	t.Run("setBestBlockHeader skips cleanup when cleanup service not loaded", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+
+		// Ensure cleanup service is not loaded
+		testItems.blockAssembler.cleanupServiceLoaded.Store(false)
+
+		newHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  model.GenesisBlockHeader.Hash(),
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      1234567890,
+			Bits:           model.NBit{},
+			Nonce:          1234,
+		}
+		newHeight := uint32(1)
+
+		// This should work without any cleanup service calls
+		testItems.blockAssembler.setBestBlockHeader(newHeader, newHeight)
+
+		// Verify the block header was set correctly
+		assert.Equal(t, newHeader, testItems.blockAssembler.bestBlockHeader.Load())
+		assert.Equal(t, newHeight, testItems.blockAssembler.bestBlockHeight.Load())
+	})
+}
+
+// MockCleanupService is a mock implementation of the cleanup service interface
+type MockCleanupService struct {
+	mock.Mock
+}
+
+func (m *MockCleanupService) Start(ctx context.Context) {
+	m.Called(ctx)
+}
+
+func (m *MockCleanupService) UpdateBlockHeight(height uint32, doneCh ...chan string) error {
+	args := m.Called(height, doneCh)
+	return args.Error(0)
 }

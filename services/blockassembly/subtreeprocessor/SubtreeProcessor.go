@@ -474,14 +474,16 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 				}
 
 				getTransactionHashesChan <- transactionHashes
+
 				logger.Debugf("[SubtreeProcessor] get current transaction hashes DONE")
 				stp.setCurrentRunningState(StateRunning)
 
 			case reorgReq := <-stp.reorgBlockChan:
 				stp.setCurrentRunningState(StateReorg)
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
-				err = stp.reorgBlocks(ctx, reorgReq.moveBackBlocks, reorgReq.moveForwardBlocks)
-				reorgReq.errChan <- err
+
+				reorgReq.errChan <- stp.reorgBlocks(ctx, reorgReq.moveBackBlocks, reorgReq.moveForwardBlocks)
+
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor DONE: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
 				stp.setCurrentRunningState(StateRunning)
 
@@ -490,16 +492,14 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 				logger.Infof("[SubtreeProcessor][%s] moveForwardBlock subtree processor", moveForwardReq.block.String())
 
-				err = stp.moveForwardBlock(ctx, moveForwardReq.block, false)
-				if err == nil {
-					stp.currentBlockHeader = moveForwardReq.block.Header
-				}
-				moveForwardReq.errChan <- err
+				moveForwardReq.errChan <- stp.moveForwardBlock(ctx, moveForwardReq.block, false)
+
 				logger.Infof("[SubtreeProcessor][%s] moveForwardBlock subtree processor DONE", moveForwardReq.block.String())
 				stp.setCurrentRunningState(StateRunning)
 
 			case resetBlocksMsg := <-stp.resetCh:
 				stp.setCurrentRunningState(StateResetBlocks)
+
 				err = stp.reset(resetBlocksMsg.blockHeader, resetBlocksMsg.moveBackBlocks, resetBlocksMsg.moveForwardBlocks, resetBlocksMsg.isLegacySync)
 
 				if resetBlocksMsg.responseCh != nil {
@@ -1062,9 +1062,11 @@ func (stp *SubtreeProcessor) adjustSubtreeSize() {
 // InitCurrentBlockHeader sets the initial block header.
 // This function is not thread-safe.
 func (stp *SubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHeader) {
+	stp.logger.Infof("[SubtreeProcessor] initializing current block header to %s", blockHeader.String())
+
 	stp.currentBlockHeader = blockHeader
 	stp.blockStartTime = time.Now()
-	stp.subtreesInBlock = 1
+	stp.subtreesInBlock = 0
 }
 
 // addNode adds a new transaction node to the current subtree.
@@ -1104,6 +1106,8 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.SubtreeNode, parents *subtr
 		if err != nil {
 			return err
 		}
+
+		stp.txCount.Add(1)
 	}
 
 	err = stp.currentSubtree.AddSubtreeNode(node)
@@ -1368,7 +1372,17 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 
 	stp.chainedSubtreeCount.Store(fromIndexInt32)
 
-	stp.currentSubtree, _ = subtreepkg.NewTreeByLeafCount(stp.currentItemsPerFile)
+	stp.currentSubtree, err = subtreepkg.NewTreeByLeafCount(stp.currentItemsPerFile)
+	if err != nil {
+		return errors.NewProcessingError("error creating new current subtree", err)
+	}
+
+	if len(originalSubtrees) == 0 {
+		// we must add the coinbase tx if we have no original subtrees
+		if err = stp.currentSubtree.AddCoinbaseNode(); err != nil {
+			return errors.NewProcessingError("error adding coinbase node to new current subtree", err)
+		}
+	}
 
 	var (
 		parents subtreepkg.TxInpoints
@@ -1380,13 +1394,19 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 	// addNode's duplicate detection while minimizing memory overhead
 	for _, subtree := range originalSubtrees {
 		for _, node := range subtree.Nodes {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				continue
+			}
+
 			parents, found = stp.currentTxMap.Get(node.Hash)
 			if !found {
 				// this should not happen, but if it does, we need to add the txInpoints to the currentTxMap
-				return errors.NewProcessingError("error getting txInpoints from currentTxMap")
+				return errors.NewProcessingError("error getting txInpoints from currentTxMap for %s", node.Hash.String())
 			}
+
 			// Remove from currentTxMap so addNode won't skip it as a duplicate
 			stp.currentTxMap.Delete(node.Hash)
+
 			// Immediately re-add the node
 			if err = stp.addNode(node, &parents, true); err != nil {
 				return errors.NewProcessingError("error adding node to subtree", err)
@@ -1545,16 +1565,25 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// UTXO spends reverted so they can be properly detected as conflicts when moving forward
 
 	for _, block := range moveBackBlocks {
-		err := stp.moveBackBlock(ctx, block)
-		if err != nil {
+		if err := stp.moveBackBlock(ctx, block); err != nil {
 			return err
 		}
 	}
 
+	if len(moveBackBlocks) > 0 {
+		// we've moved back x blocks, we need to set the current block header to the parent of the last block we moved back
+		lastMoveBackBlock := moveBackBlocks[len(moveBackBlocks)-1]
+		parentHeader, _, err := stp.blockchainClient.GetBlockHeader(ctx, lastMoveBackBlock.Header.HashPrevBlock)
+		if err != nil {
+			return errors.NewProcessingError("error getting parent block header during reorg", err)
+		}
+
+		stp.currentBlockHeader = parentHeader
+	}
+
 	for _, block := range moveForwardBlocks {
 		// we skip the notifications for now and do them all at the end
-		err := stp.moveForwardBlock(ctx, block, true)
-		if err != nil {
+		if err := stp.moveForwardBlock(ctx, block, true); err != nil {
 			return err
 		}
 	}
@@ -1565,8 +1594,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		errCh := make(chan error)
 		stp.newSubtreeChan <- NewSubtreeRequest{Subtree: subtree, ParentTxMap: stp.currentTxMap, ErrChan: errCh}
 
-		err := <-errCh
-		if err != nil {
+		if err := <-errCh; err != nil {
 			return errors.NewProcessingError("error sending subtree to newSubtreeChan", err)
 		}
 	}
@@ -1656,9 +1684,6 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 		return err
 	}
 
-	// no errors will be thrown after this point, so we can update the state
-	stp.currentBlockHeader = block.Header
-
 	// set the tx count from the subtrees
 	stp.setTxCountFromSubtrees()
 
@@ -1737,7 +1762,10 @@ func (stp *SubtreeProcessor) moveBackBlockCreateNewSubtrees(ctx context.Context,
 		if idx == 0 {
 			// process coinbase utxos
 			if err = stp.removeCoinbaseUtxos(ctx, block); err != nil {
-				return errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error removing coinbase utxo", block.String(), subtreeHash.String(), err)
+				// no need to error out if the key doesn't exist anyway
+				if !errors.Is(err, errors.ErrTxNotFound) {
+					return errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error removing coinbase utxo", block.String(), subtreeHash.String(), err)
+				}
 			}
 
 			// skip the first transaction of the first subtree (coinbase)
@@ -1772,6 +1800,11 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 	// so they cannot be spent while we are processing the reorg
 	childSpendHashes, err := utxostore.GetAndLockChildren(ctx, stp.utxoStore, *block.CoinbaseTx.TxIDChainHash())
 	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) {
+			// coinbase tx not found, nothing to do
+			return nil
+		}
+
 		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error getting child spends for coinbase tx %s", block.String(), block.CoinbaseTx.String(), err)
 	}
 
@@ -2081,7 +2114,7 @@ func (stp *SubtreeProcessor) finalizeBlockProcessing(ctx context.Context, block 
 
 	// When starting a new block, calculate the average interval per subtree
 	// from the previous block and adjust the subtree size
-	if stp.currentBlockHeader != nil && stp.blockStartTime != (time.Time{}) {
+	if stp.blockStartTime != (time.Time{}) {
 		blockDuration := time.Since(stp.blockStartTime)
 
 		if stp.subtreesInBlock > 0 {
@@ -2119,10 +2152,9 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 
 	defer deferFn()
 
-	// TODO reactivate and test
-	// if !block.Header.HashPrevBlock.IsEqual(stp.currentBlockHeader.Hash()) {
-	//	return errors.NewProcessingError("the block passed in does not match the current block header: [%s] - [%s]", block.Header.StringDump(), stp.currentBlockHeader.StringDump())
-	// }
+	if !block.Header.HashPrevBlock.IsEqual(stp.currentBlockHeader.Hash()) {
+		return errors.NewProcessingError("the block passed in does not match the current block header: [%s] - [%s]", block.Header.StringDump(), stp.currentBlockHeader.StringDump())
+	}
 
 	stp.logger.Debugf("[moveForwardBlock][%s] resetting subtrees: %v", block.String(), block.Subtrees)
 
@@ -2168,6 +2200,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	}
 
 	// Finalize block processing
+	// this will also set the current block header
 	stp.finalizeBlockProcessing(ctx, block)
 
 	// Log memory stats after block processing if debug logging is enabled

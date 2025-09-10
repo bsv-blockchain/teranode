@@ -100,7 +100,11 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 			}
 
 			if res.Status != LuaStatusOK {
-				batch[idx].errCh <- errors.NewProcessingError("error from setLocked: %s", res.Message)
+				if res.ErrorCode == LuaErrorCodeTxNotFound {
+					batch[idx].errCh <- errors.NewTxNotFoundError("transaction not found: %s", batch[idx].txHash.String())
+				} else {
+					batch[idx].errCh <- errors.NewProcessingError("error from setLocked: %s", res.Message)
+				}
 				continue
 			}
 
