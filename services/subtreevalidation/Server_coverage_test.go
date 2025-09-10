@@ -343,7 +343,8 @@ func TestServerHealth(t *testing.T) {
 	t.Run("readiness check with gRPC configured", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
-		tSettings.SubtreeValidation.GRPCListenAddress = "localhost:8086"
+		// Use a port that's unlikely to be in use
+		tSettings.SubtreeValidation.GRPCListenAddress = "localhost:19086"
 
 		server := &Server{
 			logger:   logger,

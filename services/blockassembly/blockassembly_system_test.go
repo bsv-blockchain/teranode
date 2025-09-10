@@ -56,13 +56,8 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
 	require.NoError(t, err)
 
-	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, tSettings, "test")
-	require.NoError(t, err)
-
-	err = blockchainClient.Run(ctx, "test")
-	require.NoError(t, err, "Blockchain client failed to start")
-
-	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainClient)
+	// Use the blockchain client from the daemon which is already connected and running
+	ba := New(ulogger.TestLogger{}, tSettings, memStore, utxoStore, blobStore, blockchainDaemon.BlockchainClient)
 	require.NotNil(t, ba)
 
 	// Skip waiting for pending blocks in tests to prevent hanging

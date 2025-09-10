@@ -721,7 +721,11 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 	}
 
-	err = baseServer.Init(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer baseServer.processSubtreeNotify.Stop()
+
+	err = baseServer.Init(ctx)
 	require.NoError(t, err)
 
 	// Fill blockFoundCh to trigger the catchup path
@@ -811,6 +815,13 @@ func TestServer_blockFoundCh_triggersCatchupCh_BlockLocator(t *testing.T) {
 
 	require.NoError(t, blockValidation.blockHashesCurrentlyValidated.Put(*block1.Header.Hash()))
 	require.NoError(t, blockValidation.blockHashesCurrentlyValidated.Put(*block2.Header.Hash()))
+
+	// Ensure processSubtreeNotify is stopped on cleanup
+	defer func() {
+		if baseServer.processSubtreeNotify != nil {
+			baseServer.processSubtreeNotify.Stop()
+		}
+	}()
 
 	err = baseServer.Init(context.Background())
 	require.NoError(t, err)
@@ -3008,7 +3019,32 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 	}
 
 	cleanup := func() {
-		// Cleanup if needed
+		// Only stop the TTL cache if it was started
+		// We check if blockFoundCh is not nil as a proxy for whether Init was called
+		// since Init initializes the goroutines that process these channels
+		if server.blockFoundCh != nil && server.processSubtreeNotify != nil {
+			// Use a goroutine with timeout to prevent blocking forever
+			done := make(chan struct{})
+			go func() {
+				server.processSubtreeNotify.Stop()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				// Successfully stopped
+			case <-time.After(100 * time.Millisecond):
+				// Timeout - cache was likely never started
+			}
+		}
+
+		// Close the blob store to stop its goroutine
+		if bv.subtreeStore != nil {
+			_ = bv.subtreeStore.Close(context.Background())
+		}
+
+		// Note: expiringmap doesn't have a Stop method, so we can't stop its goroutine
+		// This is a known limitation of the library
 	}
 
 	return server, mockBlockchainClient, mockUTXOStore, cleanup
@@ -3083,9 +3119,34 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 	}
 
 	cleanup := func() {
+		// Only stop the TTL cache if it was started
+		if server.processSubtreeNotify != nil {
+			// Use a goroutine with timeout to prevent blocking forever
+			done := make(chan struct{})
+			go func() {
+				server.processSubtreeNotify.Stop()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				// Successfully stopped
+			case <-time.After(100 * time.Millisecond):
+				// Timeout - cache was likely never started
+			}
+		}
+
+		// Close the blob store to stop its goroutine
+		if bv.subtreeStore != nil {
+			_ = bv.subtreeStore.Close(context.Background())
+		}
+
 		// Cleanup resources if needed
 		close(server.blockFoundCh)
 		close(server.catchupCh)
+
+		// Note: expiringmap doesn't have a Stop method, so we can't stop its goroutine
+		// This is a known limitation of the library
 	}
 
 	return server, mockBlockchainClient, mockUTXOStore, cleanup

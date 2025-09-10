@@ -175,11 +175,14 @@ func TestServerHealth(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Validator.GRPCListenAddress = ""
-		tSettings.Validator.HTTPListenAddress = ":8090"
+		// Use a port that's unlikely to be in use
+		tSettings.Validator.HTTPListenAddress = ":18999"
 
 		server := NewServer(logger, tSettings, nil, nil, nil, nil, nil, nil)
 
 		status, msg, _ := server.Health(context.Background(), false)
+		// When HTTP server is configured but not started, the health check will fail
+		// because it tries to connect to the HTTP server that isn't running
 		require.NotEqual(t, http.StatusOK, status)
 		require.Contains(t, msg, "HTTP Server")
 	})

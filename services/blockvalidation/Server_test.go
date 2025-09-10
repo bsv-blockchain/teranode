@@ -312,6 +312,21 @@ func TestMerkleRoot(t *testing.T) {
 func TestTtlCache(t *testing.T) {
 	cache := ttlcache.New[chainhash.Hash, bool]()
 
+	// Ensure cleanup happens
+	defer func() {
+		done := make(chan struct{})
+		go func() {
+			cache.Stop()
+			close(done)
+		}()
+		select {
+		case <-done:
+			// Successfully stopped
+		case <-time.After(100 * time.Millisecond):
+			// Timeout - cache might not have been started yet
+		}
+	}()
+
 	for _, txID := range txIDs {
 		hash, _ := chainhash.NewHashFromStr(txID)
 		cache.Set(*hash, true, 1*time.Second)

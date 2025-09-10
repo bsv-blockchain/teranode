@@ -116,6 +116,11 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 
 // Close gracefully shuts down the Kafka consumer group
 func (k *KafkaConsumerGroup) Close() error {
+	// Check if the consumer group was properly initialized
+	if k == nil || k.Config.Logger == nil {
+		return nil
+	}
+
 	k.Config.Logger.Infof("[Kafka] %s: initiating shutdown of consumer group for topic %s", k.Config.ConsumerGroupID, k.Config.Topic)
 
 	// cancel the context first to signal all consumers to stop

@@ -2,10 +2,13 @@ package nodehelpers
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/services/blockchain"
 	"github.com/bitcoin-sv/teranode/settings"
 	blockchain_store "github.com/bitcoin-sv/teranode/stores/blockchain"
@@ -25,6 +28,23 @@ type BlockchainDaemon struct {
 	Store            blockchain_store.Store
 	BlockchainClient blockchain.ClientI
 	cancel           context.CancelFunc
+}
+
+// getFreePort finds a free port to use for testing
+func getFreePort(t *testing.T) int {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
 }
 
 // NewBlockchainDaemon creates a new blockchain daemon instance
@@ -49,6 +69,11 @@ func NewBlockchainDaemon(t *testing.T) (*BlockchainDaemon, error) {
 	storeURL, _ := url.Parse("sqlite:///blockchainDB")
 	tSettings.BlockChain.StoreURL = storeURL
 	tSettings.Block.StoreCacheEnabled = false
+
+	// Use a dynamic port for blockchain gRPC to avoid conflicts with running nodes
+	blockchainPort := getFreePort(t)
+	tSettings.BlockChain.GRPCListenAddress = fmt.Sprintf("localhost:%d", blockchainPort)
+	tSettings.BlockChain.GRPCAddress = fmt.Sprintf("localhost:%d", blockchainPort)
 
 	// Initialize store
 	store, err := blockchain_store.NewStore(logger, storeURL, tSettings)
@@ -89,22 +114,57 @@ func (m *BlockchainDaemon) StartBlockchainService() error {
 		return err
 	}
 
-	// Create blockchain client
-	m.BlockchainClient, err = blockchain.NewClient(m.ctx, m.Logger, m.Settings, "localhost:8087")
+	// Create blockchain client using the configured address from settings
+	m.BlockchainClient, err = blockchain.NewClient(m.ctx, m.Logger, m.Settings, m.Settings.BlockChain.GRPCListenAddress)
 	if err != nil {
 		return err
 	}
 
-	// Start all services and wait
+	// Start all services in background
 	go func() {
 		if err := m.serviceManager.Wait(); err != nil {
 			m.Logger.Errorf("Service manager error: %v", err)
 		}
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for all services to be ready
+	m.serviceManager.WaitForServiceToBeReady()
 
-	return nil
+	// Check initial FSM state
+	initialState, err := m.BlockchainClient.GetFSMCurrentState(m.ctx)
+	if err != nil {
+		return errors.NewProcessingError("failed to get initial FSM state", err)
+	}
+	m.Logger.Infof("Initial FSM state: %v", initialState)
+
+	// Run the blockchain FSM to transition from IDLE to RUNNING
+	if err := m.BlockchainClient.Run(m.ctx, "test"); err != nil {
+		return errors.NewProcessingError("failed to run blockchain FSM", err)
+	}
+
+	// Wait for FSM to actually transition to RUNNING state
+	// Poll for up to 10 seconds
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			finalState, _ := m.BlockchainClient.GetFSMCurrentState(m.ctx)
+			return errors.NewProcessingError("timeout waiting for FSM to transition to RUNNING state", fmt.Sprintf("current state: %v", finalState))
+		case <-ticker.C:
+			state, err := m.BlockchainClient.GetFSMCurrentState(m.ctx)
+			if err != nil {
+				m.Logger.Warnf("Failed to get FSM state: %v", err)
+				continue
+			}
+			if state != nil && *state == blockchain.FSMStateRUNNING {
+				m.Logger.Infof("FSM successfully transitioned to RUNNING state")
+				return nil
+			}
+		}
+	}
 }
 
 // Stop stops all services

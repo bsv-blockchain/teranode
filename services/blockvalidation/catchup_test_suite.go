@@ -146,6 +146,24 @@ func (s *CatchupTestSuite) createServer(t *testing.T) {
 
 // Cleanup should be called with defer in every test
 func (s *CatchupTestSuite) Cleanup() {
+	// Stop the processSubtreeNotify cache if it was created and started
+	if s.Server != nil && s.Server.processSubtreeNotify != nil {
+		// Use a goroutine with timeout to prevent blocking forever
+		// if the cache was never started
+		done := make(chan struct{})
+		go func() {
+			s.Server.processSubtreeNotify.Stop()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Successfully stopped
+		case <-time.After(100 * time.Millisecond):
+			// Timeout - cache was likely never started
+		}
+	}
+
 	// Run cleanup functions in reverse order
 	for i := len(s.CleanupFuncs) - 1; i >= 0; i-- {
 		s.CleanupFuncs[i]()

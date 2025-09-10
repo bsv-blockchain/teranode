@@ -541,12 +541,16 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 //   - error: Any error encountered during shutdown
 func (u *Server) Stop(_ context.Context) error {
 	// close the kafka consumers gracefully
-	if err := u.subtreeConsumerClient.Close(); err != nil {
-		u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+	if u.subtreeConsumerClient != nil {
+		if err := u.subtreeConsumerClient.Close(); err != nil {
+			u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+		}
 	}
 
-	if err := u.txmetaConsumerClient.Close(); err != nil {
-		u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+	if u.txmetaConsumerClient != nil {
+		if err := u.txmetaConsumerClient.Close(); err != nil {
+			u.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
+		}
 	}
 
 	return nil

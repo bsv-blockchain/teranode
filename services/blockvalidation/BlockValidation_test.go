@@ -245,6 +245,11 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 	}
 
 	return utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore, func() {
+		// Stop the subtreeValidationServer to clean up goroutines
+		if err := subtreeValidationServer.Stop(context.Background()); err != nil {
+			// Log the error but don't panic in cleanup
+			t.Logf("Error stopping subtreeValidationServer: %v", err)
+		}
 		httpmock.DeactivateAndReset()
 	}
 }

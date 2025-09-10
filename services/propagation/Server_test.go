@@ -748,9 +748,11 @@ func TestPropagationServerCoverage(t *testing.T) {
 	t.Run("Health with self-check enabled", func(t *testing.T) {
 		ctx := context.Background()
 		tSettings := test.CreateBaseTestSettings(t)
-		// Enable self health check
-		tSettings.Propagation.GRPCListenAddress = "localhost:8081"
-		tSettings.Propagation.HTTPListenAddress = "localhost:8090"
+		// Enable self health check with dynamic ports
+		grpcPort := getFreePort(t)
+		httpPort := getFreePort(t)
+		tSettings.Propagation.GRPCListenAddress = fmt.Sprintf("localhost:%d", grpcPort)
+		tSettings.Propagation.HTTPListenAddress = fmt.Sprintf("localhost:%d", httpPort)
 
 		ps := &PropagationServer{
 			logger:   ulogger.TestLogger{},
@@ -782,8 +784,9 @@ func TestPropagationServerCoverage(t *testing.T) {
 		tSettings.Propagation.GRPCListenAddress = ""
 		tSettings.Propagation.HTTPListenAddress = ""
 
-		// Set validator HTTP address
-		validatorURL, _ := url.Parse("http://localhost:8999")
+		// Set validator HTTP address with dynamic port
+		validatorPort := getFreePort(t)
+		validatorURL, _ := url.Parse(fmt.Sprintf("http://localhost:%d", validatorPort))
 
 		ps := &PropagationServer{
 			logger:            ulogger.TestLogger{},
@@ -871,13 +874,16 @@ func TestPropagationServerCoverage(t *testing.T) {
 		ctx := context.Background()
 		tSettings := test.CreateBaseTestSettings(t)
 
-		// Configure multiple dependencies that will be unhealthy
-		tSettings.Propagation.GRPCListenAddress = "localhost:8081"
-		tSettings.Propagation.HTTPListenAddress = "localhost:8090"
+		// Configure multiple dependencies that will be unhealthy with dynamic ports
+		grpcPort := getFreePort(t)
+		httpPort := getFreePort(t)
+		tSettings.Propagation.GRPCListenAddress = fmt.Sprintf("localhost:%d", grpcPort)
+		tSettings.Propagation.HTTPListenAddress = fmt.Sprintf("localhost:%d", httpPort)
 
 		// Create validator with unreachable HTTP address
 		validatorInstance, _ := setupRealValidator(t, ctx)
-		validatorURL, _ := url.Parse("http://localhost:8999")
+		validatorPort := getFreePort(t)
+		validatorURL, _ := url.Parse(fmt.Sprintf("http://localhost:%d", validatorPort))
 
 		ps := &PropagationServer{
 			logger:            ulogger.TestLogger{},

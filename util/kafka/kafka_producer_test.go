@@ -3,6 +3,8 @@ package kafka
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
+	"net"
 	"net/url"
 	"testing"
 
@@ -281,7 +283,15 @@ func TestNewKafkaProducer_WithKafkaSettings(t *testing.T) {
 func TestConnectProducer_ConfigurationOptions(t *testing.T) {
 	// This test verifies that ConnectProducer would handle various configurations
 	// but since it tries to connect to real brokers, we can only test the parameter validation
-	brokers := []string{"localhost:9092"}
+	// Use a port that's guaranteed to be closed to ensure connection failure
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	require.NoError(t, err)
+	l, err := net.ListenTCP("tcp", addr)
+	require.NoError(t, err)
+	port := l.Addr().(*net.TCPAddr).Port
+	require.NoError(t, l.Close())
+
+	brokers := []string{fmt.Sprintf("localhost:%d", port)}
 	topic := "test-topic"
 	partitions := int32(3)
 

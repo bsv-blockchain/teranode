@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -3258,6 +3259,20 @@ func TestServerSetupHTTPServer(t *testing.T) {
 	require.Equal(t, "OK", rec.Body.String())
 }
 
+// getFreePort asks the kernel for a free open port that is ready to use.
+func getFreePort(t *testing.T) int {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	require.NoError(t, err)
+
+	l, err := net.ListenTCP("tcp", addr)
+	require.NoError(t, err)
+
+	port := l.Addr().(*net.TCPAddr).Port
+	require.NoError(t, l.Close())
+
+	return port
+}
+
 func TestServerStartFull(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -3331,6 +3346,13 @@ func TestServerStartFull(t *testing.T) {
 	settings := createBaseTestSettings()
 	settings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 	settings.BlockChain.StoreURL = &url.URL{Scheme: "sqlitememory"}
+
+	// Use a dynamic port for the HTTP server to avoid conflicts
+	httpPort := getFreePort(t)
+	settings.P2P.HTTPListenAddress = fmt.Sprintf(":%d", httpPort)
+
+	grpcPort := getFreePort(t)
+	settings.P2P.GRPCListenAddress = fmt.Sprintf(":%d", grpcPort)
 
 	// Ensure only one NAT manager is configured
 	settings.P2P.EnableNATPortMap = false

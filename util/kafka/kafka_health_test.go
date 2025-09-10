@@ -2,11 +2,26 @@ package kafka
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// getUnusedPort returns a port number that was free at the time of checking
+// and is now closed, making it ideal for testing connection failures
+func getUnusedPort(t *testing.T) int {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	require.NoError(t, err)
+	l, err := net.ListenTCP("tcp", addr)
+	require.NoError(t, err)
+	port := l.Addr().(*net.TCPAddr).Port
+	require.NoError(t, l.Close())
+	return port
+}
 
 func TestHealthCheckerNilBrokers(t *testing.T) {
 	healthCheck := HealthChecker(context.Background(), nil)
@@ -29,7 +44,13 @@ func TestHealthCheckerEmptyBrokers(t *testing.T) {
 }
 
 func TestHealthCheckerInvalidBrokers(t *testing.T) {
-	brokers := []string{"invalid-broker:9092", "another-invalid:9092"}
+	// Use non-existent hosts with dynamic ports to ensure connection failure
+	unusedPort1 := getUnusedPort(t)
+	unusedPort2 := getUnusedPort(t)
+	brokers := []string{
+		fmt.Sprintf("invalid-broker:%d", unusedPort1),
+		fmt.Sprintf("another-invalid:%d", unusedPort2),
+	}
 	healthCheck := HealthChecker(context.Background(), brokers)
 
 	status, message, err := healthCheck(context.Background(), true)
@@ -75,7 +96,9 @@ func TestHealthCheckerLivenessParameter(t *testing.T) {
 
 func TestHealthCheckerContextHandling(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	brokers := []string{"localhost:9092"}
+	// Use a port that's guaranteed to be closed
+	unusedPort := getUnusedPort(t)
+	brokers := []string{fmt.Sprintf("localhost:%d", unusedPort)}
 
 	healthCheck := HealthChecker(ctx, brokers)
 
@@ -105,6 +128,12 @@ func TestHealthCheckerMultipleInvocations(t *testing.T) {
 }
 
 func TestHealthCheckerErrorScenarios(t *testing.T) {
+	// Get dynamic ports for each test case
+	unusedPort1 := getUnusedPort(t)
+	unusedPort2 := getUnusedPort(t)
+	unusedPort3 := getUnusedPort(t)
+	unusedPort4 := getUnusedPort(t)
+
 	tests := []struct {
 		name            string
 		brokers         []string
@@ -114,14 +143,18 @@ func TestHealthCheckerErrorScenarios(t *testing.T) {
 	}{
 		{
 			name:            "Single invalid broker",
-			brokers:         []string{"non-existent-host:9092"},
+			brokers:         []string{fmt.Sprintf("non-existent-host:%d", unusedPort1)},
 			expectedStatus:  http.StatusServiceUnavailable,
 			expectedMessage: "Failed to connect to Kafka",
 			expectError:     true,
 		},
 		{
-			name:            "Multiple invalid brokers",
-			brokers:         []string{"host1:9092", "host2:9092", "host3:9092"},
+			name: "Multiple invalid brokers",
+			brokers: []string{
+				fmt.Sprintf("host1:%d", unusedPort2),
+				fmt.Sprintf("host2:%d", unusedPort3),
+				fmt.Sprintf("host3:%d", unusedPort4),
+			},
 			expectedStatus:  http.StatusServiceUnavailable,
 			expectedMessage: "Failed to connect to Kafka",
 			expectError:     true,
