@@ -31,10 +31,9 @@ func TestStore_GetBinsToStore(t *testing.T) {
 
 	t.Run("TestStore_GetBinsToStore empty", func(t *testing.T) {
 		tx := &bt.Tx{}
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false)
 		require.Error(t, err)
 		require.Nil(t, bins)
-		require.False(t, hasUtxos)
 	})
 
 	t.Run("TestStore_GetBinsToStore", func(t *testing.T) {
@@ -47,10 +46,9 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		tx, err := bt.NewTxFromString(string(txHex))
 		require.NoError(t, err)
 
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
-		require.True(t, hasUtxos)
 
 		// check the bins
 		require.Equal(t, 1, len(bins))
@@ -129,10 +127,9 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
-		require.True(t, hasUtxos)
 	})
 
 	t.Run("coinbase tx with conflicting and locked", func(t *testing.T) {
@@ -148,10 +145,9 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
-		bins, hasUtxos, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
-		require.True(t, hasUtxos)
 
 		// check the bins
 		require.Equal(t, 1, len(bins))
@@ -201,10 +197,9 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		teranodeaerospike.InitPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
-		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
-		require.True(t, hasUtxos)
+		bItem, binsToStore := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
 
-		go s.StoreTransactionExternally(ctx, bItem, binsToStore, hasUtxos)
+		go s.StoreTransactionExternally(ctx, bItem, binsToStore)
 
 		err := bItem.RecvDone()
 		require.NoError(t, err)
@@ -240,10 +235,9 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
 		tx.Outputs = []*bt.Output{}
 		_ = tx.AddOpReturnOutput([]byte("test"))
-		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
-		require.False(t, hasUtxos)
+		bItem, binsToStore := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
 
-		go s.StoreTransactionExternally(ctx, bItem, binsToStore, hasUtxos)
+		go s.StoreTransactionExternally(ctx, bItem, binsToStore)
 
 		err := bItem.RecvDone()
 		require.NoError(t, err)
@@ -262,10 +256,10 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, exists)
 
-		// check that the file has a DAH
+		// check that the file does NOT have a DAH
 		dah, err := s.GetExternalStore().GetDAH(ctx, bItem.GetTxHash().CloneBytes(), fileformat.FileTypeTx)
 		require.NoError(t, err)
-		assert.NotEqual(t, uint32(0), dah)
+		assert.Equal(t, uint32(0), dah) // DAH should be 0 as we did not set it when storing external txs
 	})
 }
 
@@ -288,10 +282,9 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 		teranodeaerospike.InitPrometheusMetrics()
 
 		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
-		bItem, binsToStore, hasUtxos := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
-		require.True(t, hasUtxos)
+		bItem, binsToStore := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
 
-		go s.StorePartialTransactionExternally(ctx, bItem, binsToStore, hasUtxos)
+		go s.StorePartialTransactionExternally(ctx, bItem, binsToStore)
 
 		err := bItem.RecvDone()
 		require.NoError(t, err)

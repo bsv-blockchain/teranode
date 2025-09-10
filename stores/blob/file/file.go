@@ -335,7 +335,7 @@ func (s *File) readDAHFromFile(fileName string) (uint32, error) {
 	dahBytes, err := os.ReadFile(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
+			return 0, errors.NewNotFoundError("[File] DAH file %s not found", fileName)
 		}
 
 		return 0, errors.NewStorageError("[File] failed to read DAH file", err)
@@ -422,8 +422,7 @@ func (s *File) cleanupExpiredFile(fileName string) {
 	dah, err := s.readDAHFromFile(fileName + ".dah")
 	if err != nil {
 		// If it's a processing error (invalid DAH value or corrupt file), clean it up
-		var terr *errors.Error
-		if errors.As(err, &terr) && terr.Code() == errors.ERR_PROCESSING {
+		if errors.Is(err, errors.ErrProcessing) {
 			s.logger.Warnf("[File] invalid DAH file detected during cleanup: %s, error: %v", fileName+".dah", err)
 			s.removeDAHFromMap(fileName)
 
@@ -431,6 +430,9 @@ func (s *File) cleanupExpiredFile(fileName string) {
 			if removeErr := os.Remove(fileName + ".dah"); removeErr != nil && !os.IsNotExist(removeErr) {
 				s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName+".dah")
 			}
+		} else if errors.Is(err, errors.ErrNotFound) {
+			s.removeDAHFromMap(fileName)
+			s.logger.Debugf("[File] DAH file not found during cleanup, removing from map: %s", fileName+".dah")
 		} else {
 			s.logger.Debugf("[File] failed to read DAH from file: %s, error: %v", fileName+".dah", err)
 		}
@@ -899,7 +901,15 @@ func (s *File) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 	s.fileDAHsMu.Unlock()
 
 	if !ok {
-		return 0, nil
+		// check whether the DAH file exists, it could have been created by another process
+		dah, err = s.readDAHFromFile(fileName + ".dah")
+		if err != nil {
+			if errors.Is(err, errors.ErrNotFound) {
+				return 0, nil
+			}
+
+			return 0, err
+		}
 	}
 
 	return dah, nil
