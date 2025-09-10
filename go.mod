@@ -43,13 +43,13 @@ require (
 	github.com/mrz1836/go-logger v0.3.6
 	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/ordishs/go-utils v1.0.53
-	github.com/ordishs/gocore v1.0.79
-	github.com/prometheus/client_golang v1.22.0
+	github.com/ordishs/gocore v1.0.81
+	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/zerolog v1.33.0
 	github.com/segmentio/encoding v0.4.0 // indirect
 	github.com/sercand/kuberesolver/v6 v6.0.1
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
-	github.com/stretchr/testify v1.11.0
+	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.35.0
 	github.com/testcontainers/testcontainers-go/modules/compose v0.35.0
 	github.com/uber/jaeger-client-go v2.30.0+incompatible // indirect
@@ -60,15 +60,15 @@ require (
 	go.opentelemetry.io/otel/sdk v1.36.0
 	go.opentelemetry.io/otel/trace v1.37.0
 	go.uber.org/atomic v1.11.0
-	golang.org/x/crypto v0.40.0
+	golang.org/x/crypto v0.41.0
 	golang.org/x/exp v0.0.0-20250718183923-645b1fa84792
 	golang.org/x/sync v0.16.0
-	golang.org/x/sys v0.34.0
-	golang.org/x/term v0.33.0
-	golang.org/x/text v0.27.0 // indirect
+	golang.org/x/sys v0.35.0
+	golang.org/x/term v0.34.0
+	golang.org/x/text v0.28.0 // indirect
 	golang.org/x/time v0.12.0
 	google.golang.org/grpc v1.74.2
-	google.golang.org/protobuf v1.36.7
+	google.golang.org/protobuf v1.36.8
 	gopkg.in/DataDog/dd-trace-go.v1 v1.67.0
 	k8s.io/api v0.33.3
 	k8s.io/apimachinery v0.33.3
@@ -148,6 +148,7 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
+	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	gopkg.in/cenkalti/backoff.v1 v1.1.0 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
@@ -352,7 +353,7 @@ require (
 	github.com/polydawn/refmt v0.89.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.65.0 // indirect
+	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/quic-go/webtransport-go v0.8.1-0.20241018022711-4ac2c9250e66 // indirect
@@ -415,7 +416,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/mod v0.26.0 // indirect
-	golang.org/x/net v0.42.0 // indirect
+	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/tools v0.35.0 // indirect
 	gonum.org/v1/gonum v0.16.0 // indirect

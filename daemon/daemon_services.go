@@ -79,19 +79,11 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	}
 
 	// start the profiler if enabled
-	startProfiler(logger, appSettings)
+	startProfilerAndMetrics(logger, appSettings)
 
 	if appSettings.UseDatadogProfiler {
 		deferFn := datadogProfiler()
 		defer deferFn()
-	}
-
-	// start prometheus metrics endpoint if enabled
-	prometheusEndpoint := appSettings.PrometheusEndpoint
-	if prometheusEndpoint != "" && !metricsRegistered.Load() {
-		metricsRegistered.Store(true)
-		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
-		http.Handle(prometheusEndpoint, promhttp.Handler())
 	}
 
 	// start tracing if enabled
@@ -151,16 +143,14 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	return nil
 }
 
-// startProfiler initializes and starts the profiler if the address is set in the app settings.
-func startProfiler(logger ulogger.Logger, appSettings *settings.Settings) {
+// startProfilerAndMetrics initializes and starts the profiler if the address is set in the app settings.
+func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settings) {
 	profilerAddr := appSettings.ProfilerAddr
 	if profilerAddr != "" && !pprofRegistered.Load() {
 		pprofRegistered.Store(true)
 
 		go func() {
 			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
-
-			gocore.RegisterStatsHandlers()
 
 			prefix := appSettings.StatsPrefix
 			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
@@ -184,11 +174,34 @@ func startProfiler(logger ulogger.Logger, appSettings *settings.Settings) {
 			// fgprof support
 			mux.Handle("/debug/fgprof", fgprof.Handler())
 
+			if appSettings.StatsPrefix != "" {
+				gocore.RegisterStatsHandlers(mux)
+			}
+
+			prometheusEndpoint := appSettings.PrometheusEndpoint
+			if prometheusEndpoint != "" && !metricsRegistered.Load() {
+				metricsRegistered.Store(true)
+				logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
+				mux.Handle(prometheusEndpoint, promhttp.Handler())
+			}
+
 			// add mux to the server
 			server.Handler = mux
 
 			logger.Fatalf("%v", server.ListenAndServe())
 		}()
+	} else {
+		if appSettings.StatsPrefix != "" {
+			gocore.RegisterStatsHandlers()
+		}
+
+		// start prometheus metrics endpoint if enabled
+		prometheusEndpoint := appSettings.PrometheusEndpoint
+		if prometheusEndpoint != "" && !metricsRegistered.Load() {
+			metricsRegistered.Store(true)
+			logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
+			http.Handle(prometheusEndpoint, promhttp.Handler())
+		}
 	}
 }
 
