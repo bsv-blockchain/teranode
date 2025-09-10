@@ -1,0 +1,301 @@
+@startuml utxo_operations_flow
+!define TITLE UTXO Store Operations Flow
+title TITLE
+
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #666666
+skinparam sequenceParticipantBackgroundColor #DDDDDD
+skinparam sequenceLifeLineBorderColor #666666
+skinparam sequenceGroupBackgroundColor #EEEEEE
+skinparam noteBorderColor #666666
+skinparam noteBackgroundColor #FFFACD
+
+' Main participants
+participant "Validator\nService" as VAL #B8D4E3
+participant "Block Assembly\nService" as BA #B8D4E3
+participant "Subtree Validation\nService" as SV #D4B8E3
+participant "Blockchain\nService" as BC #B8D4E3
+participant "Alert\nService" as ALERT #B8D4E3
+database "UTXO Store\n(Aerospike/SQL)" as UTXO #C8E6C9
+database "TX Metadata\nStore" as META #FFE0B2
+database "Subtree\nStore" as SUBTREE #E1BEE7
+participant "Conflict\nResolver" as CONFLICT #FFCDD2
+
+' === Transaction Validation Flow ===
+group Transaction Validation & UTXO Creation
+  VAL -> UTXO : Create(tx, blockHeight)
+  activate UTXO
+  note right of UTXO
+    Creates UTXOs for all outputs:
+    - Stores output scripts
+    - Marks as unspent
+    - Sets coinbase maturity
+  end note
+  UTXO --> META : Store metadata
+  META --> UTXO : Metadata stored
+  UTXO --> VAL : meta.Data
+  deactivate UTXO
+
+  VAL -> UTXO : Spend(tx, ignoreFlags)
+  activate UTXO
+  note right of UTXO
+    For each input:
+    - Check if UTXO exists
+    - Verify not already spent
+    - Mark as spent with SpendingData
+    - Track spending tx
+  end note
+  UTXO --> VAL : []*Spend results
+  deactivate UTXO
+end
+
+' === Conflict Detection & Resolution ===
+group Conflict Detection & Resolution
+  VAL -> UTXO : Spend(conflictingTx)
+  activate UTXO
+  UTXO -> UTXO : Detect double-spend
+  UTXO -> CONFLICT : SetConflicting(txID, conflictingTxID)
+  activate CONFLICT
+  note right of CONFLICT
+    Mark transactions as conflicting:
+    - Set ConflictingTxID
+    - Update status flags
+    - Prepare for resolution
+  end note
+  CONFLICT --> UTXO : Conflict recorded
+  deactivate CONFLICT
+  UTXO --> VAL : Error: Double spend detected
+  deactivate UTXO
+
+  BC -> UTXO : ProcessConflictingTransactions(resolvedTx)
+  activate UTXO
+  UTXO -> CONFLICT : ResolveConflict(txID)
+  activate CONFLICT
+  note right of CONFLICT
+    Resolution process:
+    - Clear ConflictingTxID
+    - Update spend status
+    - Remove rejected tx
+  end note
+  CONFLICT --> UTXO : Resolved
+  deactivate CONFLICT
+  UTXO --> BC : Conflicts resolved
+  deactivate UTXO
+end
+
+' === Block Mining & Finalization ===
+group Block Mining & Finalization
+  BA -> UTXO : SetMinedMulti(txHashes[], blockInfo)
+  activate UTXO
+  note right of UTXO
+    Update mined status:
+    - Set BlockID
+    - Record BlockHeight
+    - Update SubtreeIdx
+    - Clear unmined flags
+  end note
+  UTXO --> BA : Updated
+  deactivate UTXO
+
+  BC -> UTXO : ProcessExpiredPreservations(currentHeight)
+  activate UTXO
+  note right of UTXO
+    Cleanup old unmined txs:
+    - Check PreserveUntil
+    - Set DeleteAtHeight
+    - Schedule cleanup
+  end note
+  UTXO --> BC : Processed
+  deactivate UTXO
+end
+
+' === Blockchain Reorganization ===
+group Blockchain Reorganization
+  BC -> UTXO : Unspend(spends[], flagAsLocked)
+  activate UTXO
+  note right of UTXO
+    Revert spent UTXOs:
+    - Clear SpendingData
+    - Mark as unspent
+    - Optionally lock until height
+    - Used during reorgs
+  end note
+  UTXO -> META : Update metadata
+  META --> UTXO : Updated
+  UTXO --> BC : Unspent successfully
+  deactivate UTXO
+
+  BC -> UTXO : PreserveTransactions(txIDs[], preserveUntilHeight)
+  activate UTXO
+  note right of UTXO
+    Protect during cleanup:
+    - Set PreserveUntil height
+    - Clear DeleteAtHeight
+    - Prevent premature deletion
+  end note
+  UTXO --> BC : Preserved
+  deactivate UTXO
+end
+
+' === Alert System Operations ===
+group Alert System - Freeze/Unfreeze
+  ALERT -> UTXO : FreezeUTXOs(utxoList[])
+  activate UTXO
+  note right of UTXO
+    Freeze suspicious UTXOs:
+    - Mark as frozen
+    - Prevent spending
+    - Log freeze reason
+    - Alert compliance
+  end note
+  UTXO -> UTXO : UpdateFreezeStatus(FROZEN)
+  UTXO --> ALERT : Frozen count
+  deactivate UTXO
+
+  ALERT -> UTXO : UnfreezeUTXOs(utxoList[])
+  activate UTXO
+  note right of UTXO
+    Unfreeze cleared UTXOs:
+    - Remove freeze flag
+    - Allow spending
+    - Log unfreeze event
+  end note
+  UTXO -> UTXO : UpdateFreezeStatus(UNFROZEN)
+  UTXO --> ALERT : Unfrozen count
+  deactivate UTXO
+end
+
+' === Query Operations ===
+group Query Operations
+  VAL -> UTXO : GetSpend(spend)
+  activate UTXO
+  UTXO -> UTXO : Lookup UTXO
+  note right of UTXO
+    Check spend status:
+    - Status code
+    - SpendingData if spent
+    - LockTime if locked
+  end note
+  UTXO --> VAL : SpendResponse
+  deactivate UTXO
+
+  BC -> UTXO : GetUnminedTxIterator()
+  activate UTXO
+  note right of UTXO
+    Stream unmined txs:
+    - Create iterator
+    - Batch processing
+    - Memory efficient
+  end note
+  UTXO --> BC : UnminedTxIterator
+  deactivate UTXO
+
+  BC -> UTXO : QueryOldUnminedTransactions(cutoffHeight)
+  activate UTXO
+  UTXO -> UTXO : Filter by height
+  note right of UTXO
+    Find stale unmined txs:
+    - Compare against cutoff
+    - Return tx hashes
+    - Prepare for cleanup
+  end note
+  UTXO --> BC : []chainhash.Hash
+  deactivate UTXO
+end
+
+' === Batch Operations ===
+group Batch Operations
+  VAL -> UTXO : BatchDecorate(unresolvedData[])
+  activate UTXO
+  note right of UTXO
+    Fetch metadata in batch:
+    - Parallel processing
+    - Specified fields only
+    - Error handling per item
+  end note
+  loop For each unresolved item
+    UTXO -> META : Get(hash, fields)
+    META --> UTXO : meta.Data
+  end
+  UTXO --> VAL : Decorated results
+  deactivate UTXO
+end
+
+' === Subtree Validation Operations ===
+group Subtree Validation Operations
+  SV -> UTXO : Create(tx, blockHeight)
+  activate UTXO
+  note right of UTXO
+    Create UTXOs for subtree txs:
+    - Store output scripts
+    - Mark as unspent
+    - Link to subtree
+  end note
+  UTXO --> SV : meta.Data
+  deactivate UTXO
+
+  SV -> UTXO : BatchDecorate(txHashes[])
+  activate UTXO
+  note right of UTXO
+    Retrieve metadata for subtree:
+    - Parallel fetching
+    - Cache optimization
+    - Error aggregation
+  end note
+  UTXO -> META : Batch fetch
+  META --> UTXO : Metadata collection
+  UTXO --> SV : Decorated tx metadata
+  deactivate UTXO
+
+  SV -> SUBTREE : StoreSubtree(subtreeData)
+  activate SUBTREE
+  note right of SUBTREE
+    Persist validated subtree:
+    - Store merkle proof
+    - Link transactions
+    - Record validation state
+  end note
+  SUBTREE --> SV : Subtree stored
+  deactivate SUBTREE
+
+  BA -> SV : ValidateSubtree(subtreeHash)
+  activate SV
+  SV -> SUBTREE : GetSubtree(hash)
+  SUBTREE --> SV : Subtree data
+  SV -> UTXO : ValidateUTXOs(txList)
+  activate UTXO
+  note right of UTXO
+    Validate subtree UTXOs:
+    - Check all inputs exist
+    - Verify spending rules
+    - Confirm no double-spends
+  end note
+  UTXO --> SV : Validation results
+  deactivate UTXO
+  SV --> BA : Subtree valid
+  deactivate SV
+
+  BC -> SV : CheckBlockSubtrees(blockID, subtrees[])
+  activate SV
+  note left of SV
+    Verify block subtrees:
+    - Match merkle roots
+    - Validate all subtrees
+    - Check completeness
+  end note
+  loop For each subtree
+    SV -> UTXO : GetSpends(subtreeTxs)
+    UTXO --> SV : Spend statuses
+    SV -> SUBTREE : VerifySubtree(hash)
+    SUBTREE --> SV : Verification result
+  end
+  SV --> BC : Block subtrees valid
+  deactivate SV
+end
+
+footer Generated: %date("yyyy-MM-dd HH:mm")
+
+@enduml

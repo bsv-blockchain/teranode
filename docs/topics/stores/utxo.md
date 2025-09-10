@@ -69,6 +69,12 @@ The UTXO Store uses a number of different datastores, either in-memory or persis
 
 ![UTXO_Store_Component_Context_Diagram.png](../services/img/UTXO_Store_Component_Context_Diagram.png)
 
+### UTXO Store Operations Flow
+
+The following diagram illustrates the complete flow of UTXO operations across all services, including transaction validation, conflict resolution, block mining, reorganization handling, alert system operations, and subtree validation:
+
+![utxo_operations_flow.svg](../services/img/plantuml/utxo/utxo_operations_flow.svg)
+
 The UTXO store implementation is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (`utxostore`), as it can be seen in the following code fragment (`main.go`):
 
 ```go
