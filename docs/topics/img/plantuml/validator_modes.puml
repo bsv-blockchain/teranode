@@ -1,0 +1,126 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam note {
+  BorderColor #666666
+  BackgroundColor #FFFFCC
+}
+
+title Validator Service Modes and Routing Logic
+
+actor "Client" as Client
+participant "Propagation\nService" as Prop
+participant "Embedded\nValidator" as EmbVal
+participant "Validator\nMicroservice" as ValMS
+participant "Kafka" as Kafka
+participant "UTXO\nStore" as UTXO
+participant "Blob\nStore" as Blob
+
+== Configuration Decision ==
+note over Prop
+  Configuration determines mode:
+  - validator.kafka.producer.client configured → Microservice Mode
+  - validator.kafka.producer.client not configured → Embedded Mode
+end note
+
+== Mode 1: Embedded Validator ==
+group Embedded Mode (Direct Validation)
+  Client -> Prop : Submit Transaction
+  activate Prop
+  Prop -> Blob : Store Transaction
+  Prop -> Prop : Check Configuration
+  note right of Prop : No Kafka producer configured
+
+  Prop -> EmbVal : validator.Validate(tx)
+  activate EmbVal
+  EmbVal -> EmbVal : Script Validation
+  EmbVal -> EmbVal : Consensus Rules
+  EmbVal -> UTXO : Verify/Update UTXOs
+  EmbVal -> Prop : Validation Result
+  deactivate EmbVal
+
+  alt Valid Transaction
+    Prop -> Client : Success Response
+  else Invalid Transaction
+    Prop -> Client : Error Response
+  end
+  deactivate Prop
+end
+
+== Mode 2: Microservice Validator ==
+group Microservice Mode (Async Validation)
+  Client -> Prop : Submit Transaction
+  activate Prop
+  Prop -> Blob : Store Transaction
+  Prop -> Prop : Check Configuration
+  note right of Prop : Kafka producer configured
+
+  Prop -> Prop : Calculate Transaction Size
+
+  alt Transaction Size ≤ Kafka Max Message Size
+    note over Prop : Standard routing via Kafka
+    Prop -> Kafka : Publish KafkaTxValidationTopicMessage
+    Prop -> Client : Accepted (async processing)
+    deactivate Prop
+
+    Kafka -> ValMS : Consume Message
+    activate ValMS
+    ValMS -> Blob : Retrieve Transaction
+    ValMS -> ValMS : Script Validation
+    ValMS -> ValMS : Consensus Rules
+    ValMS -> UTXO : Verify/Update UTXOs
+    ValMS -> Kafka : Publish Validation Result
+    deactivate ValMS
+
+  else Transaction Size > Kafka Max Message Size
+    note over Prop : Large transaction routing via HTTP
+    Prop -> ValMS : HTTP POST /validate
+    activate ValMS
+    ValMS -> ValMS : Script Validation
+    ValMS -> ValMS : Consensus Rules
+    ValMS -> UTXO : Verify/Update UTXOs
+    ValMS -> Prop : HTTP Response
+    deactivate ValMS
+    Prop -> Client : Validation Result
+    deactivate Prop
+  end
+end
+
+== Key Differences ==
+note across
+  **Embedded Mode:**
+  • Synchronous processing
+  • No network overhead
+  • Direct method calls
+  • Immediate response
+  • No size limitations
+
+  **Microservice Mode:**
+  • Asynchronous processing (except large txs)
+  • Network communication overhead
+  • Kafka/HTTP transport
+  • Delayed response for standard txs
+  • Size-based routing logic
+end note
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

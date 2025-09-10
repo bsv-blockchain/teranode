@@ -1,0 +1,241 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam note {
+  BorderColor #666666
+  BackgroundColor #FFFFCC
+}
+
+title Subtree Organization and Parallel Processing
+
+participant "Validator\nService" as Val
+participant "Block Assembly\nService" as BA
+participant "Subtree\nProcessor" as SP
+participant "Current\nSubtree" as CS
+participant "Transaction\nQueue" as TQ
+participant "P2P\nService" as P2P
+
+== 1. Transaction Integration ==
+note over Val, SP
+  **Validated transactions are organized into subtrees for parallel processing**
+end note
+
+Val -> BA : Store(txID, fee, size, txInpoints)
+activate BA
+BA -> SP : Add(SubtreeNode{Hash, Fee}, TxInpoints)
+activate SP
+
+SP -> SP : Analyze transaction dependencies
+note right of SP
+  **Dependency Analysis:**
+  • Check if transaction spends outputs from current subtree
+  • Identify parent transactions (inputs)
+  • Determine if new subtree needed
+  • Handle transaction chaining requirements
+end note
+
+alt Transaction fits in current subtree
+  SP -> CS : Add transaction to current subtree
+  activate CS
+  note right of CS
+    **Subtree Criteria:**
+    • Size limits (configurable)
+    • Dependency relationships
+    • Processing efficiency
+    • Parallel validation capability
+  end note
+  CS -> CS : Update subtree metadata
+  CS -> SP : Transaction added
+  deactivate CS
+else New subtree needed
+  SP -> SP : Complete current subtree
+  SP -> CS : Create new subtree
+  activate CS
+  CS -> CS : Initialize subtree structure
+  CS -> CS : Add transaction as root
+  CS -> SP : New subtree created
+  deactivate CS
+end
+
+SP -> TQ : Queue transaction for processing
+deactivate SP
+deactivate BA
+
+== 2. Subtree Completion Detection ==
+note over SP, P2P
+  **Subtrees are completed based on dependency resolution and size limits**
+end note
+
+SP -> SP : Monitor subtree completion criteria
+note right of SP
+  **Completion Triggers:**
+  • All dependencies resolved
+  • Size limit reached
+  • Time-based completion
+  • Mining candidate request
+  • No pending transactions for subtree
+end note
+
+alt Subtree ready for completion
+  SP -> SP : Mark subtree as completed
+  SP -> SP : Calculate subtree merkle root
+
+  SP -> P2P : NotifySubtreeCreated(subtreeHash)
+  activate P2P
+  note right of P2P
+    **Network Distribution:**
+    • Create SubtreeMessage with hash and DataHub URL
+    • Publish to P2P subtree topic
+    • Enable distributed validation by other nodes
+  end note
+  P2P -> P2P : Publish to network peers
+  deactivate P2P
+end
+
+== 3. Mining Candidate Preparation ==
+note over BA, SP
+  **Block Assembly retrieves completed subtrees for mining**
+end note
+
+BA -> SP : GetCompletedSubtreesForMiningCandidate()
+activate SP
+SP -> SP : Collect all completed subtrees
+SP -> SP : Sort by priority/fee
+note right of SP
+  **Subtree Selection:**
+  • Completed subtrees only
+  • Ordered by total fees
+  • Dependency ordering maintained
+  • Size constraints respected
+end note
+SP -> BA : Return []*subtree.Subtree
+deactivate SP
+
+BA -> BA : Create mining candidate template
+note right of BA
+  **Mining Template:**
+  • Coinbase transaction
+  • Subtree merkle roots
+  • Block header template
+  • Total fee calculation
+end note
+
+== 4. Parallel Processing Benefits ==
+group Independent Validation
+  note over SP
+    **Subtree Independence:**
+    Each subtree can be validated in parallel
+    since they contain resolved dependencies
+  end note
+
+  par Subtree A Validation
+    SP -> SP : Validate Subtree A transactions
+  else Subtree B Validation
+    SP -> SP : Validate Subtree B transactions
+  else Subtree C Validation
+    SP -> SP : Validate Subtree C transactions
+  end
+end
+
+group State Management
+  note over SP, TQ
+    **Processor States and Queue Management**
+  end note
+
+  SP -> SP : Monitor processor state
+  note right of SP
+    **State Management:**
+    • StateRunning: Normal processing
+    • StateGetMiningCandidate: Preparing blocks
+    • StateReorging: Handling reorganizations
+    • StateResetting: Recovery operations
+  end note
+
+  TQ -> TQ : Track queue length and performance
+  note right of TQ
+    **Queue Metrics:**
+    • Current queue length
+    • Processing throughput
+    • Transaction count
+    • Deduplication status
+  end note
+end
+
+== 5. Reorganization Handling ==
+group Blockchain Reorganization
+  note over SP
+    **Subtree state must be maintained during chain reorganizations**
+  end note
+
+  SP -> SP : MoveForwardBlock(newBlock)
+  note right of SP
+    **Forward Movement:**
+    • Update processor state
+    • Process new transactions
+    • Maintain subtree consistency
+  end note
+
+  SP -> SP : Reorg(moveBackBlocks, moveUpBlocks)
+  note right of SP
+    **Reorganization:**
+    • Remove invalidated subtrees
+    • Reprocess affected transactions
+    • Rebuild dependency chains
+    • Restore consistent state
+  end note
+
+  SP -> SP : Reset(blockHeader, moveBackBlocks, moveForwardBlocks)
+  note right of SP
+    **Full Reset:**
+    • Complete state reset to target block
+    • Rebuild all subtrees from scratch
+    • Restore transaction dependencies
+    • Resume normal processing
+  end note
+end
+
+note across
+  **Key Subtree Organization Principles:**
+
+  **Dependency Resolution:**
+  • Parent transactions must be in same or earlier subtree
+  • No circular dependencies allowed
+  • Transaction chains properly ordered
+
+  **Parallel Processing:**
+  • Independent subtrees can be validated concurrently
+  • Merkle tree structure enables efficient verification
+  • Network distribution allows distributed validation
+
+  **Performance Optimization:**
+  • Size-based subtree completion
+  • Fee-based transaction prioritization
+  • Efficient memory management
+
+  **Fault Tolerance:**
+  • Reorganization handling preserves consistency
+  • Reset mechanisms for recovery scenarios
+  • Queue management prevents overflow
+end note
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

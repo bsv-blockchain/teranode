@@ -65,6 +65,7 @@ nav:
       - Architecture Overview: topics/architecture/teranode-overall-system-design.md
       - Architecture Brief: topics/architecture/teranode-architecture-brief.md
       - Microservices Overview: topics/architecture/teranode-microservices-overview.md
+      - Transaction Lifecycle: topics/transactionLifecycle.md
       - State Management: topics/architecture/stateManagement.md
       - Understanding Double Spends: topics/architecture/understandingDoubleSpends.md
       - Technology Stack: topics/technologyStack.md

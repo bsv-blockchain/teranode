@@ -92,6 +92,7 @@
 ### Introduction
 
 - [What is Teranode?](./topics/teranodeIntro.md)
+- [Transaction Lifecycle](./topics/transactionLifecycle.md)
 
 ### Architecture
 

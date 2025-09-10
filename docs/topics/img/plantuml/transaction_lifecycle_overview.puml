@@ -1,0 +1,122 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+title Transaction Lifecycle in Teranode
+
+actor "Client/Miner" as Client
+participant "Propagation\nService" as Prop
+participant "Validator\nService" as Val
+participant "RPC\nService" as RPC
+participant "Block Assembly\nService" as BA
+participant "Blockchain\nService" as BC
+participant "Subtree Validation\nService" as SubVal
+participant "Block Validation\nService" as BV
+participant "UTXO\nStore" as UTXO
+participant "Blob\nStore" as Blob
+participant "Kafka" as Kafka
+participant "P2P\nService" as P2P
+
+
+== 1. Transaction Ingress ==
+Client -> Prop : Submit Transaction\n(gRPC/HTTP/JSON-RPC)
+activate Prop
+Prop -> Prop : Format Validation
+Prop -> Blob : Store Transaction
+Prop -> Kafka : Publish for Validation\n(or direct validation)
+
+== 2. Transaction Validation ==
+alt Microservice Mode (Standard Size)
+    Kafka -> Val : Transaction Message
+else Microservice Mode (Large Transaction)
+    Prop -> Val : Direct HTTP Call
+else Embedded Mode
+    Prop -> Val : Direct Validation
+end
+activate Val
+Val -> Val : Script & Consensus Validation
+Val -> UTXO : UTXO Verification & Management
+Val -> Kafka : Publish Valid Transaction (for inclusion in subtrees)
+deactivate Val
+deactivate Prop
+
+== 3. Subtree Assembly ==
+Kafka -> BA : Valid Transaction
+activate BA
+BA -> BA : Add to Transaction Queue\n(FIFO Processing)
+BA -> BA : Group into Subtrees
+BA -> BA : Create Mining Candidate
+BA -> BC : Submit Subtree Hashes
+BC -> P2P : Notify Subtree Created
+P2P -> P2P : Broadcast to Other Nodes
+note right of P2P
+  Subtrees are broadcast to other
+  Teranodes via P2P network
+end note
+
+== 4. Mining Process ==
+Client -> RPC : Request Mining Candidate
+RPC -> BA : GetMiningCandidate
+BA -> RPC : Block Template
+RPC -> Client : Mining Candidate
+
+Client -> Client : Find Proof-of-Work
+Client -> RPC : Submit Mining Solution
+RPC -> BA : Forward Solution
+BA -> BA : Finalize Block\n(Header + Coinbase + Merkle Root)
+BA -> BC : Submit Final Block
+deactivate BA
+
+== 5. Local Block Processing ==
+activate BC
+BC -> BC : Store Block
+BC -> P2P : Notify Block Added\n(for network broadcast)
+P2P -> P2P : Broadcast Block to Network
+BC -> Kafka : New Block Event
+
+== 8. Blockchain Integration ==
+BC -> BC : Chain Extension\nState Updates
+BC -> Kafka : Block Accepted Event
+BC -> BC : Handle Reorganizations\n(if needed)
+deactivate BC
+
+== 6. Subtree Validation (Remote Subtrees) ==
+P2P -> Kafka : Receive Subtree from Network\n(KafkaSubtreeTopicMessage)
+Kafka -> SubVal : Process Remote Subtree
+activate SubVal
+SubVal -> SubVal : Validate Subtree Content
+SubVal -> UTXO : Read Transaction Metadata
+deactivate SubVal
+
+== 7. Block Validation (Remote Blocks) ==
+P2P -> Kafka : Receive Block from Network\n(KafkaBlockTopicMessage)
+Kafka -> BV : Process Remote Block
+activate BV
+BV -> BV : Header Validation\n(Proof-of-Work + Fields)
+BV -> BV : Merkle Root Validation\n(Calculate and verify merkle root)
+BV -> SubVal : Validate Subtree Contents\n(via CheckBlockSubtrees)
+BV -> UTXO : Read for Validation
+BV -> BC : Block Valid
+deactivate BV
+
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

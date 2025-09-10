@@ -1,0 +1,255 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam note {
+  BorderColor #666666
+  BackgroundColor #FFFFCC
+}
+
+title UTXO State Management Lifecycle
+
+participant "Validator\nService" as Val
+participant "Block Assembly\nService" as BA
+participant "Alert\nService" as Alert
+participant "Subtree Validation\nService" as SubVal
+participant "Block Validation\nService" as BV
+participant "Block Persister\nService" as BP
+participant "UTXO\nStore" as UTXO
+
+== 1. UTXO Creation ==
+note over Val, UTXO
+  **New Transaction Processing**
+  When a transaction is validated, its outputs become new UTXOs
+end note
+
+Val -> UTXO : Create(tx, blockHeight, options)
+activate UTXO
+note right of UTXO
+  **UTXO Creation Options:**
+  • MinedBlockInfo (BlockID, Height, SubtreeIdx)
+  • IsCoinbase flag
+  • Frozen status
+  • Conflicting status
+  • Locked status (two-phase commit)
+end note
+
+UTXO -> UTXO : Store Transaction Metadata
+note right of UTXO
+  **Metadata Stored:**
+  • Transaction data (inputs, outputs, raw tx)
+  • Fee, size, locktime, version
+  • Block information (IDs, heights, subtree indexes)
+  • State flags (locked, conflicting, frozen, coinbase)
+  • UTXO tracking (total UTXOs, spent UTXOs)
+  • Inpoints (references to spent UTXOs)
+  • Timestamps and block height tracking
+end note
+
+UTXO -> Val : Return TxMetaData
+deactivate UTXO
+
+== 2. UTXO Spending ==
+note over Val, UTXO
+  **Transaction Input Validation**
+  When validating a transaction, referenced UTXOs are marked as spent
+end note
+
+Val -> UTXO : Spend(tx, IgnoreFlags{IgnoreConflicting, IgnoreLocked})
+activate UTXO
+UTXO -> UTXO : Validate UTXOs exist and are spendable
+UTXO -> UTXO : Mark UTXOs as spent
+UTXO -> UTXO : Update spending information
+note right of UTXO
+  **Spending Validation:**
+  • Check UTXO exists and is unspent
+  • Verify not frozen by Alert System
+  • Check not locked (unless ignored)
+  • Detect double-spend attempts
+  • Record spending transaction details
+end note
+UTXO -> Val : Return SpendResponse with spent UTXOs
+deactivate UTXO
+
+alt Validation Fails
+  Val -> UTXO : Unspend(spentUtxos)
+  activate UTXO
+  note right of UTXO
+    **Rollback on Failure:**
+    Reverts spending operation
+    if transaction validation fails
+  end note
+  UTXO -> UTXO : Mark UTXOs as unspent
+  UTXO -> UTXO : Clear spending information
+  UTXO -> Val : Spending reversed
+  deactivate UTXO
+end
+
+== 3. Block Mining Integration ==
+note over BA, UTXO
+  **Mining and Block Finalization**
+  Block Assembly coordinates with UTXO store for mining operations
+end note
+
+BA -> UTXO : SetMinedMulti(txHashes, MinedBlockInfo)
+activate UTXO
+note right of UTXO
+  **Mined Block Info:**
+  • BlockID (unique block identifier)
+  • BlockHeight (chain position)
+  • SubtreeIdx (position within block)
+end note
+UTXO -> UTXO : Update block information for transactions
+UTXO -> BA : Confirmation
+deactivate UTXO
+
+== 4. State Management Operations ==
+group Lock/Unlock Operations
+  note over Val, UTXO : **Two-Phase Commit Protocol**
+  Val -> UTXO : SetLocked(txHashes, true/false)
+  activate UTXO
+  UTXO -> UTXO : Update locked status
+  note right of UTXO
+    **Locking Use Cases:**
+    • Two-phase commit during validation
+    • Coinbase maturity enforcement
+    • Prevent spending during conflicts
+  end note
+  UTXO -> Val : Lock status updated
+  deactivate UTXO
+end
+
+group Alert System Operations
+  note over Alert, UTXO : **Security and Compliance Operations**
+
+  Alert -> UTXO : FreezeUTXOs(spends, settings)
+  activate UTXO
+  UTXO -> UTXO : Mark UTXOs as frozen
+  note right of UTXO
+    **Freeze Scenarios:**
+    • Law enforcement requests
+    • Security incidents
+    • Compliance requirements
+  end note
+  UTXO -> Alert : UTXOs frozen
+  deactivate UTXO
+
+  Alert -> UTXO : UnFreezeUTXOs(spends, settings)
+  activate UTXO
+  UTXO -> UTXO : Remove frozen status
+  UTXO -> Alert : UTXOs unfrozen
+  deactivate UTXO
+
+  Alert -> UTXO : ReAssignUTXO(oldUtxo, newUtxo, settings)
+  activate UTXO
+  UTXO -> UTXO : Transfer UTXO ownership
+  note right of UTXO
+    **Reassignment:**
+    • Court-ordered transfers
+    • Asset recovery operations
+    • Requires 1,000 block delay
+  end note
+  UTXO -> Alert : UTXO reassigned
+  deactivate UTXO
+end
+
+group Conflicting Transaction Management
+  note over Val, UTXO : **Double-Spend Detection and Resolution**
+
+  Val -> UTXO : SetConflicting(txHashes, true/false)
+  activate UTXO
+  UTXO -> UTXO : Mark transactions as conflicting
+  UTXO -> UTXO : Track conflicting children
+  UTXO -> Val : Return affected spends and children
+  deactivate UTXO
+
+  SubVal -> UTXO : GetCounterConflicting(txHash)
+  UTXO -> SubVal : Return conflicting transaction hashes
+
+  SubVal -> UTXO : GetConflictingChildren(txHash)
+  UTXO -> SubVal : Return child transaction hashes
+end
+
+== 5. Metadata Access and Decoration ==
+group Batch Operations for Validation
+  SubVal -> UTXO : BatchDecorate(unresolvedMetaData, fields...)
+  activate UTXO
+  note right of UTXO
+    **Efficient Bulk Access:**
+    • Fee, size, inpoints for multiple transactions
+    • Block information for validation
+    • Conflicting status checks
+  end note
+  UTXO -> UTXO : Fetch metadata for multiple transactions
+  UTXO -> SubVal : Metadata decorated in-place
+  deactivate UTXO
+
+  BV -> UTXO : Get(txHash, fields...)
+  UTXO -> BV : Return specific metadata fields
+
+  BP -> UTXO : BatchDecorate(missingTxHashes, fields.Tx)
+  UTXO -> BP : Full transaction data for persistence
+end
+
+group Previous Output Resolution
+  Val -> UTXO : PreviousOutputsDecorate(tx)
+  activate UTXO
+  note right of UTXO
+    **Input Resolution:**
+    • Fetch previous outputs for transaction inputs
+    • Required for script validation
+    • Enables double-spend detection
+  end note
+  UTXO -> UTXO : Resolve input references
+  UTXO -> Val : Transaction inputs decorated
+  deactivate UTXO
+end
+
+== 6. Cleanup and Maintenance ==
+group Unmined Transaction Management
+  UTXO -> UTXO : QueryOldUnminedTransactions(cutoffHeight)
+  note right of UTXO
+    **Cleanup Operations:**
+    • Remove old unmined transactions
+    • Preserve parent transactions
+    • Handle expiring preservations
+  end note
+
+  UTXO -> UTXO : PreserveTransactions(txIDs, preserveUntilHeight)
+  UTXO -> UTXO : ProcessExpiredPreservations(currentHeight)
+end
+
+note across
+  **Key UTXO States:**
+  • **OK**: Valid and spendable UTXO
+  • **SPENT**: Consumed by another transaction
+  • **LOCKED**: Temporarily unavailable (two-phase commit)
+  • **FROZEN**: Blocked by Alert System
+  • **CONFLICTING**: Part of double-spend scenario
+
+  **Storage Backends:**
+  • **Aerospike**: High-performance production deployment
+  • **PostgreSQL**: SQL-based storage for development
+  • **TxMetaCache**: In-memory caching layer
+end note
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

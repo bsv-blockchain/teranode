@@ -1,0 +1,274 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam note {
+  BorderColor #666666
+  BackgroundColor #FFFFCC
+}
+
+title P2P Network Distribution Flow
+
+actor "External\nClient" as Client
+participant "Local Teranode\n(Originating)" as LocalNode
+participant "P2P Service\n(Local)" as LocalP2P
+participant "libp2p\nNetwork" as Network
+participant "Remote Teranode\n(Peer A)" as PeerA
+participant "Remote Teranode\n(Peer B)" as PeerB
+participant "P2P Service\n(Peer A)" as PeerAP2P
+participant "P2P Service\n(Peer B)" as PeerBP2P
+participant "Kafka\n(Peer A)" as KafkaA
+participant "Kafka\n(Peer B)" as KafkaB
+
+== 1. Network Topology and Discovery ==
+note over LocalP2P, Network
+  **P2P Network Initialization and Peer Discovery**
+end note
+
+LocalP2P -> LocalP2P : Initialize libp2p node
+note right of LocalP2P
+  **Node Initialization:**
+  • Generate or load private key
+  • Configure listen addresses
+  • Set up DHT for peer discovery
+  • Initialize pubsub protocols
+  • Configure ban management
+end note
+
+LocalP2P -> Network : Join DHT network
+Network -> Network : Peer discovery via DHT
+Network -> PeerAP2P : Discover peer A
+Network -> PeerBP2P : Discover peer B
+
+LocalP2P -> Network : Subscribe to topics
+note right of LocalP2P
+  **Topic Subscriptions:**
+  • Block topic (for block notifications)
+  • Subtree topic (for subtree notifications)
+  • Control topics (for network management)
+end note
+
+== 2. Subtree Distribution ==
+note over LocalNode, KafkaB
+  **Subtree Creation and Network-wide Distribution**
+end note
+
+Client -> LocalNode : Submit transactions
+LocalNode -> LocalNode : Validate and process transactions
+LocalNode -> LocalNode : Organize into subtrees
+LocalNode -> LocalNode : Complete subtree creation
+
+LocalNode -> LocalP2P : NotifySubtreeCreated(subtreeHash)
+activate LocalP2P
+LocalP2P -> LocalP2P : Create SubtreeMessage
+note right of LocalP2P
+  **SubtreeMessage Content:**
+  • Subtree hash
+  • DataHub URL for subtree data
+  • Originating peer ID
+  • Timestamp and metadata
+end note
+
+LocalP2P -> Network : Publish(subtreeTopicName, SubtreeMessage)
+activate Network
+note right of Network
+  **P2P Broadcast:**
+  • Uses libp2p pubsub mechanism
+  • Message propagated to all topic subscribers
+  • Efficient gossip protocol distribution
+  • Duplicate detection and filtering
+end note
+
+Network -> PeerAP2P : SubtreeMessage
+Network -> PeerBP2P : SubtreeMessage
+deactivate Network
+
+PeerAP2P -> PeerAP2P : Receive and validate message
+activate PeerAP2P
+PeerAP2P -> KafkaA : Publish KafkaSubtreeTopicMessage
+note right of KafkaA
+  **Local Processing:**
+  • Convert P2P message to Kafka format
+  • Trigger subtree validation service
+  • Enable distributed validation
+end note
+deactivate PeerAP2P
+
+PeerBP2P -> PeerBP2P : Receive and validate message
+activate PeerBP2P
+PeerBP2P -> KafkaB : Publish KafkaSubtreeTopicMessage
+deactivate PeerBP2P
+deactivate LocalP2P
+
+== 3. Block Distribution ==
+note over LocalNode, KafkaB
+  **Block Creation and Network-wide Propagation**
+end note
+
+LocalNode -> LocalNode : Mining solution found
+LocalNode -> LocalNode : Finalize block with subtrees
+LocalNode -> LocalNode : Add block to blockchain
+
+LocalNode -> LocalP2P : NotifyBlockAdded(blockHash)
+activate LocalP2P
+LocalP2P -> LocalP2P : Get block header and metadata
+note right of LocalP2P
+  **Block Header Retrieval:**
+  • Query blockchain service for header
+  • Get block height and metadata
+  • Prepare block message for distribution
+end note
+
+LocalP2P -> LocalP2P : Create BlockMessage
+note right of LocalP2P
+  **BlockMessage Content:**
+  • Block hash
+  • Block height
+  • DataHub URL for full block data
+  • Originating peer ID
+  • Block header (hex encoded)
+end note
+
+LocalP2P -> Network : Publish(blockTopicName, BlockMessage)
+activate Network
+Network -> PeerAP2P : BlockMessage
+Network -> PeerBP2P : BlockMessage
+deactivate Network
+
+PeerAP2P -> PeerAP2P : Receive block notification
+activate PeerAP2P
+PeerAP2P -> KafkaA : Publish KafkaBlockTopicMessage
+note right of KafkaA
+  **Block Processing:**
+  • Trigger block validation service
+  • Download full block from DataHub
+  • Validate block and subtrees
+  • Update local blockchain state
+end note
+deactivate PeerAP2P
+
+PeerBP2P -> PeerBP2P : Receive block notification
+activate PeerBP2P
+PeerBP2P -> KafkaB : Publish KafkaBlockTopicMessage
+deactivate PeerBP2P
+deactivate LocalP2P
+
+== 4. Data Retrieval and Validation ==
+note over PeerA, LocalNode
+  **Distributed Data Access via DataHub URLs**
+end note
+
+PeerA -> PeerA : Process Kafka message
+PeerA -> LocalNode : HTTP GET /subtree/{hash} (via DataHub URL)
+LocalNode -> PeerA : Return subtree data
+PeerA -> PeerA : Validate subtree content locally
+
+PeerA -> LocalNode : HTTP GET /block/{hash} (via DataHub URL)
+LocalNode -> PeerA : Return full block data
+PeerA -> PeerA : Validate block and update chain
+
+== 5. Network Management and Resilience ==
+group Peer Management
+  note over LocalP2P, Network
+    **Dynamic Peer Management and Network Health**
+  end note
+
+  LocalP2P -> LocalP2P : Monitor peer connections
+  note right of LocalP2P
+    **Peer Management:**
+    • Track connected peers
+    • Monitor peer reputation
+    • Handle peer bans for misbehavior
+    • Maintain minimum peer connections
+  end note
+
+  LocalP2P -> Network : DHT peer discovery
+  Network -> LocalP2P : New peer information
+  LocalP2P -> LocalP2P : Evaluate and connect to new peers
+end
+
+group Error Handling and Resilience
+  note over LocalP2P, PeerBP2P
+    **Network Fault Tolerance**
+  end note
+
+  alt Message delivery failure
+    Network -> Network : Retry message delivery
+    Network -> Network : Use alternative routing paths
+  else Peer becomes unresponsive
+    LocalP2P -> LocalP2P : Detect peer timeout
+    LocalP2P -> LocalP2P : Remove from active peer list
+    LocalP2P -> Network : Discover replacement peers
+  else Data corruption detected
+    PeerAP2P -> PeerAP2P : Validate message integrity
+    PeerAP2P -> PeerAP2P : Request retransmission
+  end
+end
+
+group Network Scaling and Performance
+  note over Network
+    **Efficient Message Propagation**
+  end note
+
+  Network -> Network : Gossip protocol optimization
+  note right of Network
+    **Scaling Features:**
+    • Efficient message deduplication
+    • Selective peer targeting
+    • Bandwidth optimization
+    • Latency-aware routing
+  end note
+
+  Network -> Network : Topic-based filtering
+  Network -> Network : Message priority handling
+end
+
+note across
+  **P2P Network Distribution Characteristics:**
+
+  **Decentralized Architecture:**
+  • No single point of failure
+  • Self-organizing peer discovery
+  • Resilient to network partitions
+
+  **Efficient Data Distribution:**
+  • Hash-based content addressing
+  • DataHub URLs for large data retrieval
+  • Selective data synchronization
+
+  **Scalability Features:**
+  • Topic-based publish/subscribe
+  • Gossip protocol for message propagation
+  • Bandwidth-efficient content distribution
+
+  **Security and Validation:**
+  • Cryptographic hash verification
+  • Peer reputation management
+  • Ban system for misbehaving nodes
+
+  **Integration Benefits:**
+  • Seamless Kafka integration for local processing
+  • HTTP DataHub for flexible data access
+  • Concurrent validation across network
+end note
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml
