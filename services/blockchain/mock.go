@@ -785,23 +785,79 @@ func (m *mockHealthClient) HealthGRPC(ctx context.Context, in *emptypb.Empty, op
 
 type mockBlockClient struct {
 	blockchain_api.BlockchainAPIClient
-	responseGetBlock               *blockchain_api.GetBlockResponse
-	responseGetBlocks              *blockchain_api.GetBlocksResponse
-	responseGetBlockByHeight       *blockchain_api.GetBlockResponse
-	responseGetBlockByID           *blockchain_api.GetBlockResponse
-	responseGetNextBlockID         *blockchain_api.GetNextBlockIDResponse
-	responseGetBlockStats          *model.BlockStats
-	responseGetBlockGraphData      *model.BlockDataPoints
-	lastGetBlockGraphDataReq       *blockchain_api.GetBlockGraphDataRequest
-	responseGetLastNBlocks         *blockchain_api.GetLastNBlocksResponse
-	lastGetLastNBlocksReq          *blockchain_api.GetLastNBlocksRequest
-	responseGetLastNInvalidBlocks  *blockchain_api.GetLastNInvalidBlocksResponse
-	lastGetLastNInvalidBlocksReq   *blockchain_api.GetLastNInvalidBlocksRequest
-	responseGetSuitableBlock       *blockchain_api.GetSuitableBlockResponse
-	lastGetSuitableBlockReq        *blockchain_api.GetSuitableBlockRequest
-	responseGetHashOfAncestorBlock *blockchain_api.GetHashOfAncestorBlockResponse
-	lastGetHashOfAncestorBlockReq  *blockchain_api.GetHashOfAncestorBlockRequest
-	err                            error
+	responseGetBlock                             *blockchain_api.GetBlockResponse
+	responseGetBlocks                            *blockchain_api.GetBlocksResponse
+	responseGetBlockByHeight                     *blockchain_api.GetBlockResponse
+	responseGetBlockByID                         *blockchain_api.GetBlockResponse
+	responseGetNextBlockID                       *blockchain_api.GetNextBlockIDResponse
+	responseGetBlockStats                        *model.BlockStats
+	responseGetBlockGraphData                    *model.BlockDataPoints
+	lastGetBlockGraphDataReq                     *blockchain_api.GetBlockGraphDataRequest
+	responseGetLastNBlocks                       *blockchain_api.GetLastNBlocksResponse
+	lastGetLastNBlocksReq                        *blockchain_api.GetLastNBlocksRequest
+	responseGetLastNInvalidBlocks                *blockchain_api.GetLastNInvalidBlocksResponse
+	lastGetLastNInvalidBlocksReq                 *blockchain_api.GetLastNInvalidBlocksRequest
+	responseGetSuitableBlock                     *blockchain_api.GetSuitableBlockResponse
+	lastGetSuitableBlockReq                      *blockchain_api.GetSuitableBlockRequest
+	responseGetHashOfAncestorBlock               *blockchain_api.GetHashOfAncestorBlockResponse
+	lastGetHashOfAncestorBlockReq                *blockchain_api.GetHashOfAncestorBlockRequest
+	responseGetLatestBlockHeaderFromBlockLocator *blockchain_api.GetBlockHeaderResponse
+	lastGetLatestBlockHeaderFromBlockLocatorReq  *blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest
+	responseGetBlockHeadersFromOldest            *blockchain_api.GetBlockHeadersResponse
+	lastGetBlockHeadersFromOldestReq             *blockchain_api.GetBlockHeadersFromOldestRequest
+	responseGetNextWorkRequired                  *blockchain_api.GetNextWorkRequiredResponse
+	lastGetNextWorkRequiredReq                   *blockchain_api.GetNextWorkRequiredRequest
+	responseGetBlockExists                       *blockchain_api.GetBlockExistsResponse
+	lastGetBlockExistsReq                        *blockchain_api.GetBlockRequest
+	responseGetBestBlockHeader                   *blockchain_api.GetBlockHeaderResponse
+	responseCheckBlockIsInCurrentChain           *blockchain_api.CheckBlockIsCurrentChainResponse
+	lastCheckBlockIsInCurrentChainReq            *blockchain_api.CheckBlockIsCurrentChainRequest
+	responseGetChainTips                         *blockchain_api.GetChainTipsResponse
+	responseGetBlockHeader                       *blockchain_api.GetBlockHeaderResponse
+	lastGetBlockHeaderReq                        *blockchain_api.GetBlockHeaderRequest
+	responseGetBlockHeaders                      *blockchain_api.GetBlockHeadersResponse
+	lastGetBlockHeadersReq                       *blockchain_api.GetBlockHeadersRequest
+	responseGetBlockHeadersToCommonAncestor      *blockchain_api.GetBlockHeadersResponse
+	lastGetBlockHeadersToCommonAncestorReq       *blockchain_api.GetBlockHeadersToCommonAncestorRequest
+	responseGetBlockHeadersFromCommonAncestor    *blockchain_api.GetBlockHeadersResponse
+	lastGetBlockHeadersFromCommonAncestorReq     *blockchain_api.GetBlockHeadersFromCommonAncestorRequest
+	responseGetBlockHeadersFromTill              *blockchain_api.GetBlockHeadersResponse
+	lastGetBlockHeadersFromTillReq               *blockchain_api.GetBlockHeadersFromTillRequest
+	responseGetBlockHeadersFromHeight            *blockchain_api.GetBlockHeadersFromHeightResponse
+	lastGetBlockHeadersFromHeightReq             *blockchain_api.GetBlockHeadersFromHeightRequest
+	responseGetBlockHeadersByHeight              *blockchain_api.GetBlockHeadersByHeightResponse
+	lastGetBlockHeadersByHeightReq               *blockchain_api.GetBlockHeadersByHeightRequest
+	responseInvalidateBlock                      *blockchain_api.InvalidateBlockResponse
+	lastInvalidateBlockReq                       *blockchain_api.InvalidateBlockRequest
+	responseRevalidateBlock                      *emptypb.Empty
+	lastRevalidateBlockReq                       *blockchain_api.RevalidateBlockRequest
+	responseGetBlockHeaderIDs                    *blockchain_api.GetBlockHeaderIDsResponse
+	lastGetBlockHeaderIDsReq                     *blockchain_api.GetBlockHeadersRequest
+	responseSendNotification                     *emptypb.Empty
+	lastSendNotificationReq                      *blockchain_api.Notification
+	responseGetState                             *blockchain_api.StateResponse
+	lastGetStateReq                              *blockchain_api.GetStateRequest
+	responseSetState                             *emptypb.Empty
+	lastSetStateReq                              *blockchain_api.SetStateRequest
+	responseGetBlockIsMined                      *blockchain_api.GetBlockIsMinedResponse
+	lastGetBlockIsMinedReq                       *blockchain_api.GetBlockIsMinedRequest
+	responseSetBlockMinedSet                     *emptypb.Empty
+	lastSetBlockMinedSetReq                      *blockchain_api.SetBlockMinedSetRequest
+	responseGetBlocksMinedNotSet                 *blockchain_api.GetBlocksMinedNotSetResponse
+	responseSetBlockProcessedAt                  *emptypb.Empty
+	lastSetBlockProcessedAtReq                   *blockchain_api.SetBlockProcessedAtRequest
+	responseSetBlockSubtreesSet                  *emptypb.Empty
+	lastSetBlockSubtreesSetReq                   *blockchain_api.SetBlockSubtreesSetRequest
+	responseGetBlocksSubtreesNotSet              *blockchain_api.GetBlocksSubtreesNotSetResponse
+	responseGetFSMCurrentState                   *blockchain_api.GetFSMStateResponse
+	responseSendFSMEvent                         *blockchain_api.GetFSMStateResponse
+	lastSendFSMEventReq                          *blockchain_api.SendFSMEventRequest
+	responseGetBlockLocator                      *blockchain_api.GetBlockLocatorResponse
+	lastGetBlockLocatorReq                       *blockchain_api.GetBlockLocatorRequest
+	responseLocateBlockHeaders                   *blockchain_api.LocateBlockHeadersResponse
+	lastLocateBlockHeadersReq                    *blockchain_api.LocateBlockHeadersRequest
+	responseGetBestHeightAndTime                 *blockchain_api.GetBestHeightAndTimeResponse
+	err                                          error
 }
 
 func (m *mockBlockClient) AddBlock(ctx context.Context, in *blockchain_api.AddBlockRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
@@ -897,4 +953,279 @@ func (m *mockBlockClient) GetHashOfAncestorBlock(
 ) (*blockchain_api.GetHashOfAncestorBlockResponse, error) {
 	m.lastGetHashOfAncestorBlockReq = in
 	return m.responseGetHashOfAncestorBlock, m.err
+}
+
+func (m *mockBlockClient) GetLatestBlockHeaderFromBlockLocator(
+	ctx context.Context,
+	in *blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockHeaderResponse, error) {
+	m.lastGetLatestBlockHeaderFromBlockLocatorReq = in
+	return m.responseGetLatestBlockHeaderFromBlockLocator, m.err
+}
+
+func (m *mockBlockClient) GetBlockHeadersFromOldest(
+	ctx context.Context,
+	in *blockchain_api.GetBlockHeadersFromOldestRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockHeadersResponse, error) {
+	m.lastGetBlockHeadersFromOldestReq = in
+	return m.responseGetBlockHeadersFromOldest, m.err
+}
+
+func (m *mockBlockClient) GetNextWorkRequired(
+	ctx context.Context,
+	in *blockchain_api.GetNextWorkRequiredRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetNextWorkRequiredResponse, error) {
+	m.lastGetNextWorkRequiredReq = in
+	return m.responseGetNextWorkRequired, m.err
+}
+
+func (m *mockBlockClient) GetBlockExists(
+	ctx context.Context,
+	in *blockchain_api.GetBlockRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockExistsResponse, error) {
+	m.lastGetBlockExistsReq = in
+	return m.responseGetBlockExists, m.err
+}
+
+func (m *mockBlockClient) GetBestBlockHeader(
+	ctx context.Context,
+	in *emptypb.Empty,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockHeaderResponse, error) {
+	return m.responseGetBestBlockHeader, m.err
+}
+
+func (m *mockBlockClient) CheckBlockIsInCurrentChain(
+	ctx context.Context,
+	in *blockchain_api.CheckBlockIsCurrentChainRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.CheckBlockIsCurrentChainResponse, error) {
+	m.lastCheckBlockIsInCurrentChainReq = in
+	return m.responseCheckBlockIsInCurrentChain, m.err
+}
+
+func (m *mockBlockClient) GetChainTips(
+	ctx context.Context,
+	in *emptypb.Empty,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetChainTipsResponse, error) {
+	return m.responseGetChainTips, m.err
+}
+
+func (m *mockBlockClient) GetBlockHeader(
+	ctx context.Context,
+	in *blockchain_api.GetBlockHeaderRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockHeaderResponse, error) {
+	m.lastGetBlockHeaderReq = in
+	return m.responseGetBlockHeader, m.err
+}
+
+func (m *mockBlockClient) GetBlockHeaders(
+	ctx context.Context,
+	in *blockchain_api.GetBlockHeadersRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockHeadersResponse, error) {
+	m.lastGetBlockHeadersReq = in
+	return m.responseGetBlockHeaders, m.err
+}
+
+func (m *mockBlockClient) GetBlockHeadersToCommonAncestor(
+	ctx context.Context,
+	in *blockchain_api.GetBlockHeadersToCommonAncestorRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockHeadersResponse, error) {
+	m.lastGetBlockHeadersToCommonAncestorReq = in
+	return m.responseGetBlockHeadersToCommonAncestor, m.err
+}
+
+func (m *mockBlockClient) GetBlockHeadersFromCommonAncestor(
+	ctx context.Context,
+	in *blockchain_api.GetBlockHeadersFromCommonAncestorRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockHeadersResponse, error) {
+	m.lastGetBlockHeadersFromCommonAncestorReq = in
+	return m.responseGetBlockHeadersFromCommonAncestor, m.err
+}
+
+func (m *mockBlockClient) GetBlockHeadersFromTill(
+	ctx context.Context,
+	in *blockchain_api.GetBlockHeadersFromTillRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockHeadersResponse, error) {
+	m.lastGetBlockHeadersFromTillReq = in
+	return m.responseGetBlockHeadersFromTill, m.err
+}
+
+func (m *mockBlockClient) GetBlockHeadersFromHeight(
+	ctx context.Context,
+	in *blockchain_api.GetBlockHeadersFromHeightRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockHeadersFromHeightResponse, error) {
+	m.lastGetBlockHeadersFromHeightReq = in
+	return m.responseGetBlockHeadersFromHeight, m.err
+}
+
+func (m *mockBlockClient) GetBlockHeadersByHeight(
+	ctx context.Context,
+	in *blockchain_api.GetBlockHeadersByHeightRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockHeadersByHeightResponse, error) {
+	m.lastGetBlockHeadersByHeightReq = in
+	return m.responseGetBlockHeadersByHeight, m.err
+}
+
+func (m *mockBlockClient) InvalidateBlock(
+	ctx context.Context,
+	in *blockchain_api.InvalidateBlockRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.InvalidateBlockResponse, error) {
+	m.lastInvalidateBlockReq = in
+	return m.responseInvalidateBlock, m.err
+}
+
+func (m *mockBlockClient) RevalidateBlock(
+	ctx context.Context,
+	in *blockchain_api.RevalidateBlockRequest,
+	opts ...grpc.CallOption,
+) (*emptypb.Empty, error) {
+	m.lastRevalidateBlockReq = in
+	return m.responseRevalidateBlock, m.err
+}
+
+func (m *mockBlockClient) GetBlockHeaderIDs(
+	ctx context.Context,
+	in *blockchain_api.GetBlockHeadersRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockHeaderIDsResponse, error) {
+	m.lastGetBlockHeaderIDsReq = in
+	return m.responseGetBlockHeaderIDs, m.err
+}
+
+func (m *mockBlockClient) SendNotification(
+	ctx context.Context,
+	in *blockchain_api.Notification,
+	opts ...grpc.CallOption,
+) (*emptypb.Empty, error) {
+	m.lastSendNotificationReq = in
+	return m.responseSendNotification, m.err
+}
+
+func (m *mockBlockClient) GetState(
+	ctx context.Context,
+	in *blockchain_api.GetStateRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.StateResponse, error) {
+	m.lastGetStateReq = in
+	return m.responseGetState, m.err
+}
+
+func (m *mockBlockClient) SetState(
+	ctx context.Context,
+	in *blockchain_api.SetStateRequest,
+	opts ...grpc.CallOption,
+) (*emptypb.Empty, error) {
+	m.lastSetStateReq = in
+	return m.responseSetState, m.err
+}
+
+func (m *mockBlockClient) GetBlockIsMined(
+	ctx context.Context,
+	in *blockchain_api.GetBlockIsMinedRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlockIsMinedResponse, error) {
+	m.lastGetBlockIsMinedReq = in
+	return m.responseGetBlockIsMined, m.err
+}
+
+func (m *mockBlockClient) SetBlockMinedSet(
+	ctx context.Context,
+	in *blockchain_api.SetBlockMinedSetRequest,
+	opts ...grpc.CallOption,
+) (*emptypb.Empty, error) {
+	m.lastSetBlockMinedSetReq = in
+	return m.responseSetBlockMinedSet, m.err
+}
+
+func (m *mockBlockClient) GetBlocksMinedNotSet(
+	ctx context.Context,
+	in *emptypb.Empty,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlocksMinedNotSetResponse, error) {
+	return m.responseGetBlocksMinedNotSet, m.err
+}
+
+func (m *mockBlockClient) SetBlockProcessedAt(
+	ctx context.Context,
+	in *blockchain_api.SetBlockProcessedAtRequest,
+	opts ...grpc.CallOption,
+) (*emptypb.Empty, error) {
+	m.lastSetBlockProcessedAtReq = in
+	return m.responseSetBlockProcessedAt, m.err
+}
+
+func (m *mockBlockClient) SetBlockSubtreesSet(
+	ctx context.Context,
+	in *blockchain_api.SetBlockSubtreesSetRequest,
+	opts ...grpc.CallOption,
+) (*emptypb.Empty, error) {
+	m.lastSetBlockSubtreesSetReq = in
+	return m.responseSetBlockSubtreesSet, m.err
+}
+
+func (m *mockBlockClient) GetBlocksSubtreesNotSet(
+	ctx context.Context,
+	in *emptypb.Empty,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetBlocksSubtreesNotSetResponse, error) {
+	return m.responseGetBlocksSubtreesNotSet, m.err
+}
+
+func (m *mockBlockClient) GetFSMCurrentState(
+	ctx context.Context,
+	in *emptypb.Empty,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetFSMStateResponse, error) {
+	return m.responseGetFSMCurrentState, m.err
+}
+
+func (m *mockBlockClient) SendFSMEvent(
+	ctx context.Context,
+	in *blockchain_api.SendFSMEventRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.GetFSMStateResponse, error) {
+	m.lastSendFSMEventReq = in
+	return m.responseSendFSMEvent, m.err
+}
+
+// Lifecycle methods
+func (m *mockBlockClient) Run(ctx context.Context, req *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, m.err
+}
+
+func (m *mockBlockClient) CatchUpBlocks(ctx context.Context, req *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, m.err
+}
+
+func (m *mockBlockClient) LegacySync(ctx context.Context, req *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, m.err
+}
+
+func (m *mockBlockClient) Idle(ctx context.Context, req *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, m.err
+}
+func (m *mockBlockClient) GetBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest, opts ...grpc.CallOption) (*blockchain_api.GetBlockLocatorResponse, error) {
+	m.lastGetBlockLocatorReq = req
+	return m.responseGetBlockLocator, m.err
+}
+func (m *mockBlockClient) LocateBlockHeaders(ctx context.Context, req *blockchain_api.LocateBlockHeadersRequest, opts ...grpc.CallOption) (*blockchain_api.LocateBlockHeadersResponse, error) {
+	m.lastLocateBlockHeadersReq = req
+	return m.responseLocateBlockHeaders, m.err
+}
+func (m *mockBlockClient) GetBestHeightAndTime(ctx context.Context, req *emptypb.Empty, opts ...grpc.CallOption) (*blockchain_api.GetBestHeightAndTimeResponse, error) {
+	return m.responseGetBestHeightAndTime, m.err
 }
