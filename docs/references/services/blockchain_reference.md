@@ -100,7 +100,26 @@ Gracefully stops the blockchain service, allowing for proper resource cleanup an
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error)
 ```
 
-Processes a request to add a new block to the blockchain. This method handles the full lifecycle of adding a new block: validating and parsing the incoming block data, persisting the validated block, updating block metadata, publishing the finalized block to Kafka, and notifying subscribers.
+Processes a request to add a new block to the blockchain. This method handles the full lifecycle of adding a new block: validating and parsing the incoming block data, persisting the validated block with configurable options, updating block metadata, publishing the finalized block to Kafka, and notifying subscribers.
+
+The method supports functional options through the request's option fields:
+
+- `optionMinedSet`: Marks the block as mined when set to true
+- `optionSubtreesSet`: Marks the block's subtrees as processed when set to true
+- `optionInvalid`: Marks the block as invalid when set to true (useful for tracking invalid blocks during catchup)
+- `optionID`: Allows specifying a custom block ID (useful for quick validation with pre-allocated IDs)
+
+Example usage with options:
+
+```go
+// Adding a block with pre-allocated ID and marked as mined
+request := &blockchain_api.AddBlockRequest{
+    Block:           blockData,
+    BaseURL:         sourceURL,
+    OptionMinedSet:  &wrapperspb.BoolValue{Value: true},
+    OptionID:        &wrapperspb.UInt64Value{Value: preAllocatedID},
+}
+```
 
 ### GetBlock
 
@@ -413,3 +432,28 @@ func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty)
 ```
 
 Retrieves the best height and median time of the blockchain.
+
+## Block ID Management Functions
+
+### GetNextBlockID
+
+```go
+func (b *Blockchain) GetNextBlockID(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetNextBlockIDResponse, error)
+```
+
+Retrieves the next available block ID for pre-allocation purposes. This method provides atomic ID generation that ensures unique block IDs across concurrent operations. It is particularly useful during quick validation scenarios where blocks need to be assigned IDs before full processing.
+
+The implementation varies by database backend:
+
+- **PostgreSQL**: Uses database sequences for atomic ID generation
+- **SQLite**: Implements transaction-based increment for thread safety
+
+Returns:
+
+- `next_block_id`: The next available unique block ID that can be used for block storage
+
+This method is commonly used during:
+
+- Quick validation of checkpointed blocks
+- Parallel block processing where IDs need to be reserved in advance
+- Recovery scenarios where block IDs need to be coordinated across services

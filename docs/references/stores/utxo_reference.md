@@ -196,7 +196,9 @@ type Store interface {
     Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 
     // SetMinedMulti updates the block ID for multiple transactions that have been mined.
-    SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) error
+    // Returns a map of transaction hashes to block IDs where they were already mined,
+    // enabling detection of duplicate transaction mining across different blocks.
+    SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) (map[chainhash.Hash][]uint32, error)
 
     // BatchDecorate efficiently fetches metadata for multiple transactions.
     // The fields parameter specifies which metadata fields to retrieve.

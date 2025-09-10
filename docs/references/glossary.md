@@ -18,6 +18,8 @@
 
 **BSV**: Bitcoin Satoshi Vision, the blockchain network that Teranode is designed to support.
 
+**Checkpoint**: A known valid block height used as a trust anchor for validation optimization. Blocks below checkpoints can use quick validation since they are known to be valid.
+
 **Coinbase Service**: A test-only service designed to split Coinbase UTXOs into smaller UTXOs and manage the spendability of miner rewards.
 
 **Coinbase Transaction**: The first transaction in a block that creates new coins as a reward for the miner.
@@ -26,11 +28,13 @@
 
 **Docker Compose**: A tool for defining and running multi-container Docker applications.
 
-**Extended Transaction Format**: A transaction format that includes additional metadata to facilitate processing.
+**Extended Transaction Format**: A transaction format that includes additional metadata to facilitate processing. Teranode stores transactions in non-extended format for efficiency and extends them on-demand during validation.
 
 **gRPC**: A high-performance, open-source universal RPC framework.
 
 **Initial Sync**: The process of downloading and validating the entire blockchain when setting up a new node.
+
+**Invalid Block**: A block that has failed validation and is marked in the blockchain store. Invalid blocks are tracked to prevent reprocessing and their children inherit the invalid status.
 
 **Kademlia**: A distributed hash table used for efficient routing and peer discovery in P2P networks.
 
@@ -52,7 +56,11 @@
 
 **PostgreSQL**: An open-source relational database used in Teranode for storing blockchain data.
 
+**Pre-allocated Block ID**: A unique block identifier reserved in advance through GetNextBlockID, enabling parallel block processing and optimized validation scenarios.
+
 **Propagation Service**: Handles the propagation of transactions across the peer-to-peer Teranode network.
+
+**Quick Validation**: An optimized validation path for blocks below checkpoints that skips expensive script validation, providing approximately 10x faster processing for historical blocks.
 
 **RPC Service**: Provides compatibility with the Bitcoin RPC interface, allowing clients to interact with the Teranode node using standard Bitcoin RPC commands.
 

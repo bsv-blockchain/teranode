@@ -48,6 +48,22 @@ alt Block does not exist
 
                 loop For each block
                     ValidationService -> BVVB: ValidateBlock(ctx, block, baseURL)
+                    alt Validation fails
+                        BVVB -> BC: AddBlock(block, WithInvalid(true))
+                        BC --> BVVB: Block marked as invalid
+                        note right : Invalid blocks tracked\nto prevent reprocessing\nand chain corruption
+                        ValidationService -> ValidationService: UpdatePeerMetrics(peer, invalid)
+                        note right : Track peer quality\nto avoid bad peers
+                    else Validation succeeds
+                        alt Block below checkpoint
+                            BVVB -> BVVB: QuickValidate(block)
+                            note right : Optimized validation\nfor checkpointed blocks
+                        else Block above checkpoint
+                            BVVB -> BVVB: FullValidate(block)
+                        end
+                        BVVB -> BC: AddBlock(block)
+                        BC --> BVVB: Block added successfully
+                    end
                 end
             end
         end

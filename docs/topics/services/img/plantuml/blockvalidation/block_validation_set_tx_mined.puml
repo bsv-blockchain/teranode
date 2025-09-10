@@ -67,14 +67,15 @@ loop for each subtree hash in the block
     deactivate SubtreeStore
 end
 
-BlockValidation -> Blockchain: GetBlockHeaderIDs(ctx, blockHash, 1)
-Blockchain --> BlockValidation: blockID
+BlockValidation -> Blockchain: GetBlockHeaderIDs(ctx, blockHash, 2 * UTXO_retention_height)
+Blockchain --> BlockValidation: chainBlockIDs[]
 
-BlockValidation -> Model: UpdateTxMinedStatus(ctx, logger, settings, utxoStore, block, blockID)
+BlockValidation -> Model: UpdateTxMinedStatus(ctx, logger, settings, utxoStore, block, blockID, chainBlockIDs)
 activate Model
 note right of Model
   Handles batch processing of transactions
   to mark them as mined
+  Passes chain block IDs for duplicate detection
 end note
 
 Model -> UTXOStore: SetMinedMulti(ctx, txBatchHashes, blockID)
@@ -82,11 +83,23 @@ activate UTXOStore
 note right of UTXOStore
   SetMinedMulti also unsets the locked flag
   (second phase of two-phase commit)
+  Returns map of tx hashes to block IDs
+  where they were already mined
 end note
-UTXOStore --> Model
+UTXOStore --> Model: map[txHash]blockIDs, error
 deactivate UTXOStore
 
-Model --> BlockValidation
+alt Transactions already mined on chain
+    Model --> BlockValidation: ErrBlockInvalid
+    BlockValidation -> Blockchain: InvalidateBlock(ctx, blockHash)
+    note right of BlockValidation
+      Block contains transactions
+      already mined on this chain
+    end note
+else No duplicates
+    Model --> BlockValidation: success
+end
+
 deactivate Model
 
 alt Block was cached

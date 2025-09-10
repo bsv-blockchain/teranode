@@ -6,7 +6,6 @@ Teranode Blocks contain lists of subtree identifiers, not transactions. This is 
 
 ![TERANODE_Block.svg](../architecture/img/TERANODE_Block.svg)
 
-
 Each block is an abstraction which is a container of a group of subtrees. A block contains a variable number of subtrees, a coinbase transaction, and a header, called a block header, which includes the block ID of the previous block, effectively creating a chain.
 
 | Field       | Type                  | Description                                                 |
@@ -17,6 +16,34 @@ Each block is an abstraction which is a container of a group of subtrees. A bloc
 
 This table provides an overview of each field in the `Block` struct, including the data type and a brief description of its purpose or contents.
 
+## Block Storage Metadata
+
+In addition to the core block data, Teranode maintains additional metadata for block management:
+
+| Field       | Type                  | Description                                                 |
+|-------------|-----------------------|-------------------------------------------------------------|
+| ID          | uint64                | Unique identifier for the block in storage                 |
+| Invalid     | bool                  | Flag indicating if the block has been marked as invalid    |
+| MinedSet    | bool                  | Flag indicating if the block has been marked as mined      |
+| SubtreesSet | bool                  | Flag indicating if subtrees have been processed            |
+
+### Block ID Pre-allocation
+
+Teranode supports pre-allocation of block IDs through the blockchain service's `GetNextBlockID` method. This feature enables:
+
+- Parallel block processing with guaranteed unique IDs
+- Quick validation scenarios where blocks need IDs before full processing
+- Recovery scenarios requiring coordinated ID assignment across services
+
+### Invalid Block Tracking
+
+Blocks can be marked as invalid during validation, particularly during catchup operations. Invalid blocks:
+
+- Are tracked in the blockchain store to prevent reprocessing
+- Inherit their invalid status to child blocks (invalid parent = invalid children)
+- Help identify problematic peers providing bad blocks
+- Can be tracked for potential revalidation in recovery scenarios
+
 For details about the block header, please check the `references` section below.
 
 Please note that the use of subtrees within blocks represents a data abstraction for a more optimal propagation of transactions. The data model is still the same as Bitcoin, with blocks containing transactions. The subtrees are used to optimize the propagation of transactions and blocks.
@@ -25,17 +52,13 @@ Please note that the use of subtrees within blocks represents a data abstraction
 
 - **Faster Validation**: Since nodes process subtrees continuously, validating a block is quicker because it involves validating the presence and correctness of subtree identifiers rather than individual transactions.
 
-
 - **Scalability**: The model supports a much higher transaction throughput (> 1M transactions per second).
-
 
 ## Network Behavior
 
 - **Transactions**: They are broadcast network-wide, and each node further propagates the transactions.
 
-
 - **Subtrees**: Nodes broadcast subtrees to indicate prepared batches of transactions for block inclusion, allowing other nodes to perform preliminary validations.
-
 
 - **Block Propagation**: When a block is found, its validation is expedited due to the continuous processing of subtrees. If a node encounters a subtree within a new block that it is unaware of, it can request the details from the node that submitted the block.
 

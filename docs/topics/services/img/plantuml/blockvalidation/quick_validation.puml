@@ -1,0 +1,93 @@
+@startuml QuickValidation
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam database {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+title Quick Validation for Checkpointed Blocks
+
+participant BlockValidation
+database checkpoints
+participant blockchain
+database utxoStore
+database subtreeStore
+participant validator
+
+== Quick Validation Decision ==
+
+BlockValidation -> checkpoints : IsBlockBelowCheckpoint(height)
+checkpoints --> BlockValidation : below/above checkpoint
+
+alt Block Below Checkpoint - Quick Validation Path
+    note over BlockValidation : Quick validation for known valid blocks
+
+    == Phase 1: Pre-allocate Block ID ==
+    BlockValidation -> blockchain : GetNextBlockID()
+    blockchain --> BlockValidation : pre-allocated ID
+
+    == Phase 2: Create All UTXOs ==
+    BlockValidation -> BlockValidation : createAllUTXOs(parallel)
+    note right : Concurrent UTXO creation\nwith pre-set block ID\nand mined status
+
+    loop For each transaction (parallel)
+        BlockValidation -> utxoStore : CreateUTXOs(tx, blockID, mined=true)
+        utxoStore --> BlockValidation : success/conflict
+        note right : Handles existing UTXOs\ngracefully for recovery
+    end
+
+    == Phase 3: Spend All Transactions ==
+    BlockValidation -> BlockValidation : spendAllTransactions(parallel)
+    note right : Optimized validation\nskips policy checks\nfor mined blocks
+
+    loop For each transaction (parallel)
+        BlockValidation -> validator : ValidateTransaction(tx, skipPolicyChecks=true)
+        validator -> utxoStore : SpendInputs(tx.inputs)
+        utxoStore --> validator : spent
+        validator --> BlockValidation : valid
+    end
+
+    == Phase 4: Subtree Processing ==
+    BlockValidation -> subtreeStore : CreateSubtreeMetadata(.subtreeMeta)
+    BlockValidation -> subtreeStore : ReconstructSubtree(.subtree)
+    note right : Non-extended format\nfor storage efficiency
+
+    == Phase 5: Add Block with Options ==
+    BlockValidation -> blockchain : AddBlock(block, WithID(id), WithMinedSet(true), WithSubtreesSet(true))
+    blockchain --> BlockValidation : block added
+
+else Block Above Checkpoint - Normal Validation Path
+    note over BlockValidation : Full validation for recent blocks
+    BlockValidation -> BlockValidation : FullValidation()
+    note right : Complete script validation\nAll policy checks applied\nStandard processing
+end
+
+== Error Handling ==
+
+alt Quick Validation Error
+    BlockValidation -> BlockValidation : Fall back to normal validation
+    note right : Ensures correctness\neven if quick path fails
+end
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

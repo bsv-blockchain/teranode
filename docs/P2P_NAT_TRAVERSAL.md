@@ -33,6 +33,7 @@ p2p_enable_nat_service = true
 ```
 
 This enables libp2p's AutoNAT service which:
+
 - Helps determine your external address
 - Allows the node to learn its public IP from other peers
 - Automatically adds observed addresses to the advertised list
@@ -47,6 +48,7 @@ p2p_advertise_addresses = ["/ip4/203.0.113.1/tcp/9905"]
 ```
 
 This is ideal for:
+
 - Nodes with static public IPs
 - Kubernetes deployments with known ingress IPs
 - Nodes behind reverse proxies
@@ -97,16 +99,19 @@ p2p_share_private_addresses = true
 To debug NAT traversal issues:
 
 1. Check the logs for warnings about unreachable nodes:
-   ```
+
+   ```bash
    grep "No peers connected\|NAT\|observed\|advertise" teranode.log
    ```
 
 2. Verify your configuration:
+
    ```bash
    grep "p2p_enable_nat\|p2p_advertise" settings_local.conf
    ```
 
 3. Test connectivity from another node:
+
    ```bash
    telnet <your-public-ip> 9905
    ```
@@ -138,6 +143,7 @@ The solution involves two stages:
 ### The go-p2p v1.1.18 Issue
 
 The go-p2p library's AddrsFactory aggressively filters private IPs when advertiseAddresses is empty. This prevents the observed address mechanism from working because:
+
 - The node has no addresses to advertise
 - Peers can't tell it what public address they observe
 - The node remains invisible to the network

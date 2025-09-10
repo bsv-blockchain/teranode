@@ -137,8 +137,9 @@ Pull and load the required Teranode images into Minikube:
 #### Identify Available Versions
 
 You can find the latest available version published on GitHub Container Registry:
-- https://github.com/bitcoin-sv/teranode/pkgs/container/teranode
-- https://github.com/bitcoin-sv/teranode-operator/pkgs/container/teranode-operator
+
+- <https://github.com/bitcoin-sv/teranode/pkgs/container/teranode>
+- <https://github.com/bitcoin-sv/teranode-operator/pkgs/container/teranode-operator>
 
 #### Set Image Versions
 
