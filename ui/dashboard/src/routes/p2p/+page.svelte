@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { afterUpdate, onMount } from 'svelte'
+  import { afterUpdate } from 'svelte'
 
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import MessageBox from '$internal/components/msgbox/index.svelte'
@@ -8,7 +8,7 @@
   import { contentLeft } from '$internal/stores/nav'
   import { MessageType } from '$internal/components/msgbox/types'
 
-  import { messages, sock, connectionAttempts } from '$internal/stores/p2pStore'
+  import { messages, sock, connectionAttempts, currentNodePeerID } from '$internal/stores/p2pStore'
   import i18n from '$internal/i18n'
 
   $: t = $i18n.t
@@ -18,29 +18,6 @@
   const pageKey = 'page.p2p'
 
   let innerWidth = 0
-  let currentNodeUrl = ''
-
-  // Get the current node's URL to filter out self-messages
-  onMount(async () => {
-    if (!import.meta.env.SSR && window && window.location) {
-      try {
-        // Try to get the node configuration from the backend
-        const response = await fetch('/api/config/node')
-        if (response.ok) {
-          const config = await response.json()
-          if (config.nodeBaseUrl) {
-            currentNodeUrl = config.nodeBaseUrl
-          } else {
-            throw new Error('No nodeBaseUrl in config')
-          }
-        } else {
-          throw new Error('Config endpoint not available')
-        }
-      } catch (error) {
-        currentNodeUrl = '' // Disable filtering if we can't determine the node URL
-      }
-    }
-  })
 
   function scrollToTop() {
     if (!import.meta.env.SSR && window && window.scrollTo) {
@@ -110,12 +87,10 @@
     filteredMessages = data
       .filter((item) => {
         // Only filter out local messages if showLocalMessages is false
-        if (!showLocalMessages && currentNodeUrl && item.base_url) {
-          // Extract base URL without path for comparison
-          const itemBaseUrl = item.base_url.replace(/\/api\/v1.*$/, '') // Remove /api/v1 and everything after
-          const normalizedCurrentUrl = currentNodeUrl.replace(/\/$/, '') // Remove trailing slash if present
-
-          return itemBaseUrl !== normalizedCurrentUrl // Keep message if it's NOT from current node
+        if (!showLocalMessages && $currentNodePeerID) {
+          // Check if the message is from the current node using peer_id
+          const messagePeerId = item.peer_id || item.peerID || item.peer
+          return messagePeerId !== $currentNodePeerID // Keep message if it's NOT from current node
         }
         return true
       })
@@ -166,7 +141,7 @@
             newGroupedMessages[peerId] = []
           }
           newGroupedMessages[peerId].push(message)
-          
+
           // Extract client name if available and not already stored
           if (!newPeerClientNames[peerId] && message.client_name) {
             newPeerClientNames[peerId] = message.client_name
