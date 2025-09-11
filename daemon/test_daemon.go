@@ -219,7 +219,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.P2P.EnableNATService = false
 	appSettings.P2P.EnableNATPortMap = false
 
-	appSettings.P2P.InitialSyncDelay = 0
 	appSettings.P2P.MinPeersForSync = 0
 	appSettings.P2P.MaxWaitForMinPeers = 0
 

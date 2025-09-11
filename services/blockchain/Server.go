@@ -1807,6 +1807,13 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 		return nil, errors.WrapGRPC(err)
 	}
 
+	// Log successful invalidation with count
+	if len(invalidatedHashes) > 1 {
+		b.logger.Infof("[InvalidateBlock] Invalidated block %s and %d child blocks", blockHash.String(), len(invalidatedHashes)-1)
+	} else {
+		b.logger.Infof("[InvalidateBlock] Invalidated block %s", blockHash.String())
+	}
+
 	invalidatedHashBytes := make([][]byte, len(invalidatedHashes))
 
 	for i, hash := range invalidatedHashes {

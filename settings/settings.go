@@ -279,11 +279,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CircuitBreakerSuccessThreshold: getInt("blockvalidation_circuit_breaker_success_threshold", 2, alternativeContext...),
 			CircuitBreakerTimeoutSeconds:   getInt("blockvalidation_circuit_breaker_timeout_seconds", 30, alternativeContext...),
 			// Block fetching configuration
-			FetchLargeBatchSize:     getInt("blockvalidation_fetch_large_batch_size", 100, alternativeContext...),
-			FetchNumWorkers:         getInt("blockvalidation_fetch_num_workers", 16, alternativeContext...),
-			FetchBufferSize:         getInt("blockvalidation_fetch_buffer_size", 500, alternativeContext...),
-			SubtreeFetchConcurrency: getInt("blockvalidation_subtree_fetch_concurrency", 8, alternativeContext...),
-			ExtendTransactionTimeout: getDuration("blockvalidation_extend_transaction_timeout", 120*time.Second, alternativeContext...),
+			FetchLargeBatchSize:             getInt("blockvalidation_fetch_large_batch_size", 100, alternativeContext...),
+			FetchNumWorkers:                 getInt("blockvalidation_fetch_num_workers", 16, alternativeContext...),
+			FetchBufferSize:                 getInt("blockvalidation_fetch_buffer_size", 500, alternativeContext...),
+			SubtreeFetchConcurrency:         getInt("blockvalidation_subtree_fetch_concurrency", 8, alternativeContext...),
+			ExtendTransactionTimeout:        getDuration("blockvalidation_extend_transaction_timeout", 120*time.Second, alternativeContext...),
 			GetBlockTransactionsConcurrency: getInt("blockvalidation_get_block_transactions_concurrency", 64, alternativeContext...),
 		},
 		Validator: ValidatorSettings{
@@ -390,7 +390,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BanThreshold:    getInt("p2p_ban_threshold", 100, alternativeContext...),
 			BanDuration:     getDuration("p2p_ban_duration", 24*time.Hour),
 			// Sync manager configuration
-			InitialSyncDelay:      getDuration("p2p_initial_sync_delay", 5*time.Second),
 			MinPeersForSync:       getInt("p2p_min_peers_for_sync", 2, alternativeContext...),
 			MaxWaitForMinPeers:    getDuration("p2p_max_wait_for_min_peers", 20*time.Second),
 			ForceSyncPeer:         getString("p2p_force_sync_peer", "", alternativeContext...),

@@ -583,7 +583,7 @@ func Test_checkSecretMining(t *testing.T) {
 
 		blockchainClient := &blockchain.Mock{}
 
-		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
+		server := New(ulogger.TestLogger{}, tSettings, nil, utxoStore, blockchainClient, nil)
 
 		block := &model.Block{Height: 110}
 
@@ -627,7 +627,7 @@ func Test_checkSecretMining(t *testing.T) {
 		blockBytes, err := hex.DecodeString("0000002006226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f1633819a69afbd7ce1f1a01c3b786fcbb023274f3b15172b24feadd4c80e6c6a8b491267ffff7f20040000000102000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
 		require.NoError(t, err)
 
-		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
+		server := New(ulogger.TestLogger{}, tSettings, nil, utxoStore, blockchainClient, nil)
 
 		block, err := model.NewBlockFromBytes(blockBytes, nil)
 		require.NoError(t, err)
@@ -665,7 +665,7 @@ func Test_checkSecretMining_blockchainClientError(t *testing.T) {
 		errExpected := errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found")
 		blockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errExpected).Once()
 
-		server := New(ulogger.TestLogger{}, tSettings, nil, nil, utxoStore, nil, blockchainClient, nil, nil)
+		server := New(ulogger.TestLogger{}, tSettings, nil, utxoStore, blockchainClient, nil)
 
 		secretMining, err := server.checkSecretMining(t.Context(), &chainhash.Hash{})
 		assert.Error(t, err)
@@ -1186,7 +1186,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 
 		// Mock GetBlockHeader to return not found for new headers
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
-			nil, nil, errors.NewServiceError("not found"),
+			nil, errors.NewServiceError("not found"),
 		).Maybe()
 
 		httpmock.Activate()
@@ -1406,7 +1406,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 			} else {
 				// Blocks 18-19 are new from the peer
 				mockBlockchainClient.On("GetBlockHeader", mock.Anything, block.Header.Hash()).Return(
-					nil, nil, errors.NewServiceError("not found"),
+					nil, errors.NewServiceError("not found"),
 				).Maybe()
 			}
 		}
@@ -2270,7 +2270,7 @@ func SkipTestCatchupPerformanceWithHeaderCache(t *testing.T) {
 
 	// Mock GetBlockHeader for any other blocks (return not found)
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-		Return(nil, nil, errors.NewNotFoundError("block not found")).Maybe()
+		Return(nil, errors.NewNotFoundError("block not found")).Maybe()
 
 	// Track GetBlockHeaders calls to measure header fetch reduction
 	headerFetchCount := 0
@@ -2490,7 +2490,7 @@ func TestCatchup_NoRepeatedHeaderFetching(t *testing.T) {
 
 	// Mock GetBlockHeader for any other blocks (return not found)
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-		Return(nil, nil, errors.NewNotFoundError("block not found")).Maybe()
+		Return(nil, errors.NewNotFoundError("block not found")).Maybe()
 
 	// Track HTTP requests
 	requestCount := 0

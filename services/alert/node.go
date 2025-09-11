@@ -159,6 +159,8 @@ func (n *Node) GetRPCUser() string {
 // Returns:
 //   - error: Any error encountered during the invalidation process
 func (n *Node) InvalidateBlock(ctx context.Context, blockHashStr string) error {
+	n.logger.Infof("[InvalidateBlock] Alert service invalidating block %s", blockHashStr)
+
 	blockHash, err := chainhash.NewHashFromStr(blockHashStr)
 	if err != nil {
 		return err
@@ -169,7 +171,7 @@ func (n *Node) InvalidateBlock(ctx context.Context, blockHashStr string) error {
 		return err
 	}
 
-	n.logger.Infof("InvalidateBlock %s, invalidated %d blocks: %v", blockHashStr, len(invalidatedHashes), invalidatedHashes)
+	n.logger.Infof("[InvalidateBlock] Invalidated %d blocks: %v", len(invalidatedHashes), invalidatedHashes)
 	return nil
 }
 

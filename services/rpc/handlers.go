@@ -1568,6 +1568,9 @@ func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 
 	c := cmd.(*bsvjson.InvalidateBlockCmd)
 
+	// Log the RPC request
+	s.logger.Infof("[handleInvalidateBlock] RPC request to invalidate block %s", c.BlockHash)
+
 	ch, err := chainhash.NewHashFromStr(c.BlockHash)
 	if err != nil {
 		return nil, rpcDecodeHexError(c.BlockHash)

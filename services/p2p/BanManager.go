@@ -25,6 +25,7 @@ const (
 	ReasonProtocolViolation
 	ReasonSpam
 	ReasonInvalidBlock
+	ReasonCatchupFailure
 )
 
 func (r BanReason) String() string {
@@ -37,6 +38,8 @@ func (r BanReason) String() string {
 		return "spam"
 	case ReasonInvalidBlock:
 		return "invalid_block"
+	case ReasonCatchupFailure:
+		return "catchup_failure"
 	default:
 		return "unknown"
 	}
@@ -136,6 +139,7 @@ func NewPeerBanManager(ctx context.Context, handler BanEventHandler, tSettings *
 			ReasonProtocolViolation: 20,
 			ReasonSpam:              50,
 			ReasonInvalidBlock:      10, // Using the same ban score value as SVNode
+			ReasonCatchupFailure:    30, // Significant penalty for infrastructure failures during sync
 		},
 		banThreshold:  tSettings.P2P.BanThreshold,
 		banDuration:   tSettings.P2P.BanDuration,

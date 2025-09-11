@@ -90,11 +90,14 @@ func TestNewClientWithAddressNotificationLoop(t *testing.T) {
 
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.BlockChain.GRPCAddress = "localhost:50052"
 	tSettings.BlockChain.MaxRetries = 0
 
-	lis, err := net.Listen("tcp", tSettings.BlockChain.GRPCAddress)
+	// Use port 0 to let the OS assign an available port
+	lis, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
+
+	// Get the actual address with the assigned port
+	tSettings.BlockChain.GRPCAddress = lis.Addr().String()
 
 	grpcServer := grpc.NewServer()
 	fakeSrv := &fakeServer{subCh: make(chan *blockchain_api.Notification, 1)}

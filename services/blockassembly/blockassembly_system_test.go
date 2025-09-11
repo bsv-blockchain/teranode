@@ -4,7 +4,9 @@ package blockassembly
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,6 +32,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// getFreePort returns a free port number on localhost
+func getFreePort(t *testing.T) int {
+	listener, err := net.Listen("tcp", "localhost:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
+}
+
 // setupTest initializes the test environment and returns a cleanup function.
 // The cleanup function should be deferred by the calling test.
 func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, context.Context, context.CancelFunc, func()) {
@@ -43,6 +53,12 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 
 	// Setup block assembly service
 	tSettings := blockchainDaemon.Settings
+
+	// Use a dynamic port for BlockAssembly to avoid conflicts
+	baPort := getFreePort(t)
+	tSettings.BlockAssembly.GRPCListenAddress = fmt.Sprintf("localhost:%d", baPort)
+	tSettings.BlockAssembly.GRPCAddress = fmt.Sprintf("localhost:%d", baPort)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	memStore := memory.New()
 	blobStore := memory.New()
@@ -62,6 +78,10 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 
 	// Skip waiting for pending blocks in tests to prevent hanging
 	ba.SetSkipWaitForPendingBlocks(true)
+
+	// Log the gRPC addresses
+	t.Logf("BlockAssembly GRPCListenAddress: %s", tSettings.BlockAssembly.GRPCListenAddress)
+	t.Logf("BlockAssembly GRPCAddress: %s", tSettings.BlockAssembly.GRPCAddress)
 
 	err = ba.Init(ctx)
 	require.NoError(t, err)

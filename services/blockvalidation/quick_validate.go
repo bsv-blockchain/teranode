@@ -286,7 +286,9 @@ func (u *BlockValidation) getBlockTransactions(ctx context.Context, block *model
 			// the subtree data reader will make sure the data matches the transaction ids from the subtree
 			subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufferedReader)
 			if err != nil {
-				return errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree data %s", block.Hash().String(), subtreeHash.String(), err)
+				// Use the standard subtree invalid error with the subtree hash in the message
+				return errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree data %s: %v",
+					block.Hash().String(), subtreeHash.String(), err)
 			}
 
 			// check that all the transactions are valid

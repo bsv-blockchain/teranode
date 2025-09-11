@@ -72,7 +72,7 @@ func TestReportInvalidBlock(t *testing.T) {
 
 		err := server.ReportInvalidBlock(ctx, blockHash, "test reason")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no peer found for invalid block", "error should indicate block not found")
+		assert.Contains(t, err.Error(), "no peer found for block", "error should indicate block not found")
 	})
 
 	// Test case 3: Invalid peer ID in map

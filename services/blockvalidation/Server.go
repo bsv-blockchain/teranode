@@ -455,7 +455,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 								maliciousAttempts = peerMetric.MaliciousAttempts
 
 								if !peerMetric.IsTrusted() {
-									u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", c.block.Hash().String(), c.peerID, peerMetric.ReputationScore, peerMetric.MaliciousAttempts)
+									u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", c.block.Hash().String(), c.peerID, reputationScore, maliciousAttempts)
 								}
 							}
 						}
@@ -549,8 +549,8 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 
 		if peerMetrics != nil && peerMetrics.IsMalicious() {
 			u.logger.Warnf("[BlockFound][%s] peer %s is malicious, skipping [%s]", hash.String(), kafkaMsg.GetPeerId(), baseURL.String())
-			// do not return for now
-			// return nil
+			// Skip blocks from malicious peers to avoid processing bad data
+			return nil
 		}
 	}
 

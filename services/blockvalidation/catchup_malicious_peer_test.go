@@ -95,7 +95,7 @@ func TestCatchup_EclipseAttack(t *testing.T) {
 
 			// Mock that validation would fail for these headers
 			mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).
-				Return(nil, nil, errors.NewNotFoundError("suspicious header")).Maybe()
+				Return(nil, errors.NewNotFoundError("suspicious header")).Maybe()
 		}
 
 		// Try to catch up with the first malicious peer
@@ -472,7 +472,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 			// Return error for GetBlockHeader - these headers are rejected by blockchain validation
 			// This simulates that the adversarial headers don't exist in our blockchain
 			mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).
-				Return(nil, nil, errors.NewNotFoundError("invalid fork header")).Maybe()
+				Return(nil, errors.NewNotFoundError("invalid fork header")).Maybe()
 		}
 
 		// Test Sybil resistance

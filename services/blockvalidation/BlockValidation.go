@@ -234,11 +234,18 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 
 	go func() {
 		// update stats for the expiring maps every 5 seconds
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
 		for {
-			time.Sleep(5 * time.Second)
-			prometheusBlockValidationLastValidatedBlocksCache.Set(float64(bv.lastValidatedBlocks.Len()))
-			prometheusBlockValidationBlockExistsCache.Set(float64(bv.blockExists.Len()))
-			prometheusBlockValidationSubtreeExistsCache.Set(float64(bv.subtreeExists.Len()))
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				prometheusBlockValidationLastValidatedBlocksCache.Set(float64(bv.lastValidatedBlocks.Len()))
+				prometheusBlockValidationBlockExistsCache.Set(float64(bv.blockExists.Len()))
+				prometheusBlockValidationSubtreeExistsCache.Set(float64(bv.subtreeExists.Len()))
+			}
 		}
 	}()
 
@@ -1168,11 +1175,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 }
 
 func (u *BlockValidation) markBlockAsInvalid(ctx context.Context, block *model.Block, reason string) {
+	// Log the invalidation event - this is the key entry point for automatic invalidation
+	u.logger.Warnf("[ValidateBlock] Marking block %s as invalid - Reason: %s", block.Hash().String(), reason)
+
 	// Only use Kafka for reporting invalid blocks
 	u.kafkaNotifyBlockInvalid(block, reason)
 
 	if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); invalidateBlockErr != nil {
-		u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), invalidateBlockErr)
+		u.logger.Errorf("[ValidateBlock][%s] Failed to invalidate block: %v", block.String(), invalidateBlockErr)
 	}
 }
 

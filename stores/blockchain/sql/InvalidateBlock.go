@@ -59,7 +59,7 @@ import (
 //   - StorageError for database errors, transaction failures, or if no rows were affected
 //   - ProcessingError for internal processing failures
 func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
-	s.logger.Infof("InvalidateBlock %s", blockHash.String())
+	s.logger.Debugf("InvalidateBlock %s", blockHash.String())
 
 	s.blocksCache.RebuildBlockchain(nil, nil) // reset cache so that GetBlockExists goes to the DB
 

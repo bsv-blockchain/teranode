@@ -423,7 +423,6 @@ type P2PSettings struct {
 	BanDuration  time.Duration
 
 	// Sync manager configuration
-	InitialSyncDelay   time.Duration // Initial delay before starting sync operations
 	MinPeersForSync    int           // Minimum number of peers needed before selecting sync peer
 	MaxWaitForMinPeers time.Duration // Maximum time to wait for minimum peers
 	ForceSyncPeer      string        // Force sync from specific peer ID, overrides automatic selection
