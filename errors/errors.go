@@ -81,7 +81,7 @@ func (e *Error) Error() string {
 
 // Is reports whether error codes match.
 func (e *Error) Is(target error) bool {
-	if e == nil {
+	if e == nil || target == nil {
 		return false
 	}
 

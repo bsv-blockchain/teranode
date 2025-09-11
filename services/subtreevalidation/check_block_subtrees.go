@@ -202,7 +202,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		u.logger.Infof("[CheckBlockSubtrees] Processing %d transactions from %d subtrees using level-based validation", len(allTransactions), len(missingSubtrees))
 
 		if err = u.processTransactionsInLevels(ctx, allTransactions, block.Height, blockIds); err != nil {
-			return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to process transactions in levels: %v", err)
+			return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to process transactions in levels", err)
 		}
 
 		g, gCtx = errgroup.WithContext(ctx)
@@ -491,7 +491,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 		// Fail early if we get an actual tx error thrown
 		if err = g.Wait(); err != nil {
-			return errors.NewProcessingError("[processTransactionsInLevels] Failed to process level %d: %v", level, err)
+			return errors.NewProcessingError("[processTransactionsInLevels] Failed to process level %d", level, err)
 		}
 
 		u.logger.Debugf("[processTransactionsInLevels] Processing level %d with %d transactions DONE", level, len(levelTxs))

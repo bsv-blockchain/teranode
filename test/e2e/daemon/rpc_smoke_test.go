@@ -347,8 +347,7 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks to get coinbase funds
-	_, err = td.CallRPC(td.Ctx, "generate", []any{101})
-	require.NoError(t, err)
+	td.MineBlocks(t, 101)
 
 	// Get the policy settings to know the max tx size
 	maxTxSize := td.Settings.Policy.MaxTxSizePolicy
@@ -438,8 +437,7 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks to get coinbase funds
-	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
-	require.NoError(t, err)
+	td.MineBlocks(t, 101)
 
 	// Get the policy settings to know the max script size
 	maxScriptSize := td.Settings.Policy.MaxScriptSizePolicy
@@ -523,8 +521,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks
-	_, err = td.CallRPC(td.Ctx, "generate", []any{101})
-	require.NoError(t, err)
+	td.MineBlocks(t, 101)
 
 	tSettings := td.Settings
 
@@ -576,8 +573,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	waitForBlockAssemblyToProcessTx(t, td, tx1.TxIDChainHash().String())
 
 	// Generate one block to include TX1
-	_, err = td.CallRPC(td.Ctx, "generate", []any{1})
-	require.NoError(t, err)
+	td.MineBlocks(t, 1)
 
 	// Create second recipient's key pair
 	privateKey2, err := bec.NewPrivateKey()
@@ -617,8 +613,7 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	waitForBlockAssemblyToProcessTx(t, td, tx2.TxIDChainHash().String())
 
 	// Generate one block to include TX2
-	_, err = td.CallRPC(td.Ctx, "generate", []any{1})
-	require.NoError(t, err)
+	td.MineBlocks(t, 1)
 
 	// Get the block containing TX2 (should be at height 103)
 	block103, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 103)
@@ -664,8 +659,7 @@ func TestDoubleInput(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate initial blocks to get coinbase funds
-	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{101})
-	require.NoError(t, err)
+	td.MineBlocks(t, 101)
 
 	// Create a transaction with an oversized script
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)

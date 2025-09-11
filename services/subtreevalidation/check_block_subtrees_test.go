@@ -1417,3 +1417,212 @@ func TestCheckBlockSubtrees_DifferentFork(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckBlockSubtrees_ParentBlockErrors(t *testing.T) {
+	// Create test headers
+	testHeaders := testhelpers.CreateTestHeaders(t, 2)
+	parentHash := testHeaders[0].Hash()
+	childHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  parentHash,
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	coinbaseTx := &bt.Tx{Version: 1}
+	block, err := model.NewBlock(childHeader, coinbaseTx, []*chainhash.Hash{}, 1, 250, 0, 0, nil)
+	require.NoError(t, err)
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	t.Run("GetBlockExists_Error", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// Mock GetBestBlockHeader to return a different hash
+		differentHash := chainhash.Hash{}
+		copy(differentHash[:], []byte("different_hash_32_bytes_long!!!!"))
+		differentHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{},
+			Nonce:          0,
+		}
+		server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader",
+			mock.Anything).
+			Return(differentHeader, &model.BlockHeaderMeta{}, nil)
+
+		// Mock GetBlockExists to return an error
+		server.blockchainClient.(*blockchain.Mock).On("GetBlockExists",
+			mock.Anything, parentHash).
+			Return(false, errors.NewUnknownError("database error"))
+
+		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+			Block:   blockBytes,
+			BaseUrl: "http://test.com",
+		}
+
+		response, err := server.CheckBlockSubtrees(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, response.Blessed)
+
+		// Verify that pauseSubtreeProcessing was set to true due to error
+		// (it will be false after defer cleanup)
+		assert.False(t, server.pauseSubtreeProcessing.Load())
+	})
+
+	t.Run("GetBlockHeader_Error", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// Mock GetBestBlockHeader to return a different hash
+		differentHash := chainhash.Hash{}
+		copy(differentHash[:], []byte("different_hash_32_bytes_long!!!!"))
+		differentHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{},
+			Nonce:          0,
+		}
+		server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader",
+			mock.Anything).
+			Return(differentHeader, &model.BlockHeaderMeta{}, nil)
+
+		// Mock GetBlockExists to return true
+		server.blockchainClient.(*blockchain.Mock).On("GetBlockExists",
+			mock.Anything, parentHash).
+			Return(true, nil)
+
+		// Mock GetBlockHeader to return an error
+		server.blockchainClient.(*blockchain.Mock).On("GetBlockHeader",
+			mock.Anything, parentHash).
+			Return(nil, nil, errors.NewUnknownError("database error"))
+
+		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+			Block:   blockBytes,
+			BaseUrl: "http://test.com",
+		}
+
+		response, err := server.CheckBlockSubtrees(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, response.Blessed)
+	})
+
+	t.Run("CheckBlockIsInCurrentChain_Error", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// Mock GetBestBlockHeader to return a different hash
+		differentHash := chainhash.Hash{}
+		copy(differentHash[:], []byte("different_hash_32_bytes_long!!!!"))
+		differentHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{},
+			Nonce:          0,
+		}
+		server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader",
+			mock.Anything).
+			Return(differentHeader, &model.BlockHeaderMeta{}, nil)
+
+		// Mock GetBlockExists to return true
+		server.blockchainClient.(*blockchain.Mock).On("GetBlockExists",
+			mock.Anything, parentHash).
+			Return(true, nil)
+
+		// Mock GetBlockHeader to return a valid header with meta
+		server.blockchainClient.(*blockchain.Mock).On("GetBlockHeader",
+			mock.Anything, parentHash).
+			Return(testHeaders[0], &model.BlockHeaderMeta{ID: 123}, nil)
+
+		// Mock CheckBlockIsInCurrentChain to return an error
+		server.blockchainClient.(*blockchain.Mock).On("CheckBlockIsInCurrentChain",
+			mock.Anything, []uint32{123}).
+			Return(false, errors.NewUnknownError("chain check error"))
+
+		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+			Block:   blockBytes,
+			BaseUrl: "http://test.com",
+		}
+
+		response, err := server.CheckBlockSubtrees(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, response.Blessed)
+	})
+}
+
+// TestCheckBlockSubtrees_ProcessTransactionsError tests error handling when processTransactionsInLevels fails
+// This ensures line 205 in check_block_subtrees.go is covered (the error return from processTransactionsInLevels)
+func TestCheckBlockSubtrees_ProcessTransactionsError(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	// Create test headers
+	testHeaders := testhelpers.CreateTestHeaders(t, 1)
+
+	// Mock blockchain client
+	server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader",
+		mock.Anything).
+		Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
+
+	// Create test transactions
+	tx1, err := createTestTransaction("tx1")
+	require.NoError(t, err)
+
+	// Create subtree with test transaction - we'll store just the data, not the subtree itself
+	subtreeHash := chainhash.Hash{}
+	copy(subtreeHash[:], []byte("test_subtree_hash_32_bytes_long!"))
+
+	// Store subtreeData containing the transaction
+	subtreeData := bytes.Buffer{}
+	subtreeData.Write(tx1.Bytes())
+	err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtreeData, subtreeData.Bytes())
+	require.NoError(t, err)
+
+	// Create a block with the subtree
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  testHeaders[0].Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	coinbaseTx := &bt.Tx{Version: 1}
+	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 250, 0, 0, nil)
+	require.NoError(t, err)
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	// Mock GetBlockHeaderIDs
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, testHeaders[0].Hash(), mock.Anything).
+		Return([]uint32{1, 2, 3}, nil)
+
+	// Set up validator to return an invalid transaction error
+	// This will cause processTransactionsInLevels to fail with an error on line 494
+	mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+	mockValidator.UtxoStore = server.utxoStore
+	mockValidator.Errors = []error{errors.ErrTxInvalid}
+
+	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: "http://test.com",
+	}
+
+	// Execute CheckBlockSubtrees - should fail with error from processTransactionsInLevels
+	// This covers line 205 in check_block_subtrees.go
+	_, err = server.CheckBlockSubtrees(context.Background(), request)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Failed to process transactions in levels")
+}

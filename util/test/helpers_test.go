@@ -19,8 +19,8 @@ func TestCreateBaseTestSettings(t *testing.T) {
 		settings := CreateBaseTestSettings(t)
 
 		assert.NotNil(t, settings.ChainCfgParams, "ChainCfgParams should not be nil")
-		assert.Equal(t, &chaincfg.RegressionNetParams, settings.ChainCfgParams,
-			"ChainCfgParams should be set to RegressionNetParams")
+		assert.Equal(t, chaincfg.RegressionNetParams.Name, settings.ChainCfgParams.Name,
+			"ChainCfgParams should be based on RegressionNetParams")
 		assert.Equal(t, uint16(1), settings.ChainCfgParams.CoinbaseMaturity,
 			"CoinbaseMaturity should be set to 1")
 	})

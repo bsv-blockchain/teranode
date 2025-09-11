@@ -18,10 +18,12 @@ func CreateBaseTestSettings(t TestingT) *settings.Settings {
 	tSettings.DataFolder = t.TempDir()
 	t.Logf("using temp data folder: %s", tSettings.DataFolder)
 
-	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
+	// Create a copy of RegressionNetParams to avoid race conditions
+	chainParams := chaincfg.RegressionNetParams
+	chainParams.CoinbaseMaturity = 1
+	tSettings.ChainCfgParams = &chainParams
 	tSettings.GlobalBlockHeightRetention = 10
 	tSettings.BlockValidation.OptimisticMining = false
-	tSettings.ChainCfgParams.CoinbaseMaturity = 1
 
 	// We sometimes get 'hot key' errors while running the test
 	// To mitigate this, we use more aggressive retry settings with exponential backoff
