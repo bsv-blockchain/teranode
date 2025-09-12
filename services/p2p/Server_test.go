@@ -529,6 +529,63 @@ func TestHandleBlockTopic(t *testing.T) {
 	// Setup common test variables
 	ctx := context.Background()
 
+	t.Run("updates last message time", func(t *testing.T) {
+		// Create mock P2PNode
+		mockP2PNode := new(MockServerP2PNode)
+		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
+		senderPeerID, _ := peer.Decode("12D3KooWEyX7hgdXy8zUjCs9CqvMGpB5dKVFj9MX2nUBLwajdSZH")
+		originatorPeerIDStr := "12D3KooWQYVQJfrw4RZnNHgRxGFLXoXswE5wuoUBgWpeJYeGDjvA"
+		originatorPeerID, _ := peer.Decode(originatorPeerIDStr)
+
+		mockP2PNode.On("HostID").Return(selfPeerID)
+		mockP2PNode.On("GetPeerIPs", mock.AnythingOfType("peer.ID")).Return([]string{})
+		mockP2PNode.On("UpdatePeerHeight", mock.AnythingOfType("peer.ID"), mock.AnythingOfType("int32")).Return()
+
+		// Create mock ban manager
+		mockBanManager := new(MockPeerBanManager)
+		mockBanManager.On("IsBanned", mock.AnythingOfType("string")).Return(false)
+
+		// Create peer registry to track updates
+		peerRegistry := NewPeerRegistry()
+		peerRegistry.AddPeer(senderPeerID)
+		peerRegistry.AddPeer(originatorPeerID)
+
+		// Get initial times
+		senderInfo1, _ := peerRegistry.GetPeer(senderPeerID)
+		originatorInfo1, _ := peerRegistry.GetPeer(originatorPeerID)
+
+		// Wait to ensure time difference
+		time.Sleep(50 * time.Millisecond)
+
+		// Create server with registry
+		server := &Server{
+			P2PNode:        mockP2PNode,
+			peerRegistry:   peerRegistry,
+			banManager:     mockBanManager,
+			notificationCh: make(chan *notificationMsg, 10),
+			logger:         ulogger.New("test-server"),
+		}
+
+		// Call handler with message
+		blockMsg := fmt.Sprintf(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"%s"}`, originatorPeerIDStr)
+		server.handleBlockTopic(ctx, []byte(blockMsg), string(senderPeerID))
+
+		// Verify last message times were updated
+		senderInfo2, _ := peerRegistry.GetPeer(senderPeerID)
+		originatorInfo2, _ := peerRegistry.GetPeer(originatorPeerID)
+
+		assert.True(t, senderInfo2.LastMessageTime.After(senderInfo1.LastMessageTime), "Sender's LastMessageTime should be updated")
+		assert.True(t, originatorInfo2.LastMessageTime.After(originatorInfo1.LastMessageTime), "Originator's LastMessageTime should be updated")
+
+		// Verify notification was sent
+		select {
+		case notification := <-server.notificationCh:
+			assert.Equal(t, "block", notification.Type)
+		default:
+			t.Fatal("Expected notification message but none received")
+		}
+	})
+
 	t.Run("ignore message from self", func(t *testing.T) {
 		// Create mock P2PNode
 		mockP2PNode := new(MockServerP2PNode)

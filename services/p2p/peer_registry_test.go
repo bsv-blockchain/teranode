@@ -23,6 +23,8 @@ func TestPeerRegistry_AddPeer(t *testing.T) {
 	assert.True(t, info.IsHealthy, "New peer should be healthy by default")
 	assert.False(t, info.IsBanned, "New peer should not be banned")
 	assert.NotZero(t, info.ConnectedAt, "ConnectedAt should be set")
+	assert.NotZero(t, info.LastMessageTime, "LastMessageTime should be set")
+	assert.Equal(t, info.ConnectedAt, info.LastMessageTime, "LastMessageTime should initially equal ConnectedAt")
 
 	// Adding same peer again should not reset data
 	originalTime := info.ConnectedAt
@@ -47,6 +49,33 @@ func TestPeerRegistry_RemovePeer(t *testing.T) {
 
 	// Remove non-existent peer should not panic
 	pr.RemovePeer(peer.ID("non-existent"))
+}
+
+func TestPeerRegistry_UpdateLastMessageTime(t *testing.T) {
+	pr := NewPeerRegistry()
+	peerID := peer.ID("test-peer-1")
+
+	// Add peer
+	pr.AddPeer(peerID)
+
+	// Get initial last message time (should be set to connection time)
+	info1, exists := pr.GetPeer(peerID)
+	require.True(t, exists, "Peer should exist")
+	assert.NotZero(t, info1.LastMessageTime, "LastMessageTime should be initialized")
+	assert.Equal(t, info1.ConnectedAt, info1.LastMessageTime, "LastMessageTime should initially equal ConnectedAt")
+
+	// Wait a bit and update last message time
+	time.Sleep(50 * time.Millisecond)
+	pr.UpdateLastMessageTime(peerID)
+
+	// Verify last message time was updated
+	info2, exists := pr.GetPeer(peerID)
+	require.True(t, exists, "Peer should still exist")
+	assert.True(t, info2.LastMessageTime.After(info1.LastMessageTime), "LastMessageTime should be updated")
+	assert.Equal(t, info1.ConnectedAt, info2.ConnectedAt, "ConnectedAt should not change")
+
+	// Update for non-existent peer should not panic
+	pr.UpdateLastMessageTime(peer.ID("non-existent"))
 }
 
 func TestPeerRegistry_GetAllPeers(t *testing.T) {

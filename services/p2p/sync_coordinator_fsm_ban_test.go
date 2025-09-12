@@ -51,7 +51,6 @@ func TestSyncCoordinator_FSMTransitionBansPeerAndUpdatesRegistry(t *testing.T) {
 	// Set the failing peer as current sync peer
 	sc.mu.Lock()
 	sc.currentSyncPeer = failingPeer
-	sc.lastFSMState = blockchain_api.FSMStateType_CATCHINGBLOCKS
 	sc.mu.Unlock()
 
 	// Simulate FSM transitioning from CATCHINGBLOCKS to RUNNING
@@ -69,7 +68,6 @@ func TestSyncCoordinator_FSMTransitionBansPeerAndUpdatesRegistry(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		sc.mu.Lock()
 		sc.currentSyncPeer = failingPeer
-		sc.lastFSMState = blockchain_api.FSMStateType_CATCHINGBLOCKS
 		sc.mu.Unlock()
 		sc.handleFSMTransition(&runningState)
 	}

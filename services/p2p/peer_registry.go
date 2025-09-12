@@ -20,6 +20,7 @@ type PeerInfo struct {
 	ConnectedAt     time.Time
 	BytesReceived   uint64
 	LastBlockTime   time.Time
+	LastMessageTime time.Time // Last time we received any message from this peer
 	URLResponsive   bool      // Whether the DataHub URL is responsive
 	LastURLCheck    time.Time // Last time we checked URL responsiveness
 }
@@ -44,10 +45,12 @@ func (pr *PeerRegistry) AddPeer(id peer.ID) {
 	defer pr.mu.Unlock()
 
 	if _, exists := pr.peers[id]; !exists {
+		now := time.Now()
 		pr.peers[id] = &PeerInfo{
-			ID:          id,
-			ConnectedAt: time.Now(),
-			IsHealthy:   true, // Assume healthy until proven otherwise
+			ID:              id,
+			ConnectedAt:     now,
+			LastMessageTime: now,  // Initialize to connection time
+			IsHealthy:       true, // Assume healthy until proven otherwise
 		}
 	}
 }
@@ -160,6 +163,16 @@ func (pr *PeerRegistry) UpdateURLResponsiveness(id peer.ID, responsive bool) {
 	if info, exists := pr.peers[id]; exists {
 		info.URLResponsive = responsive
 		info.LastURLCheck = time.Now()
+	}
+}
+
+// UpdateLastMessageTime updates the last time we received a message from a peer
+func (pr *PeerRegistry) UpdateLastMessageTime(id peer.ID) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if info, exists := pr.peers[id]; exists {
+		info.LastMessageTime = time.Now()
 	}
 }
 

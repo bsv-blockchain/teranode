@@ -60,11 +60,9 @@ func (ps *PeerSelector) SelectSyncPeer(peers []*PeerInfo, criteria SelectionCrit
 	for _, p := range eligible {
 		if p.Height > criteria.LocalHeight {
 			candidates = append(candidates, p)
-			ps.logger.Debugf("[PeerSelector] Peer %s at height %d > local %d (eligible)",
-				p.ID, p.Height, criteria.LocalHeight)
+			ps.logger.Debugf("[PeerSelector] Peer %s at height %d > local %d (eligible) url=%s", p.ID, p.Height, criteria.LocalHeight, p.DataHubURL)
 		} else {
-			ps.logger.Debugf("[PeerSelector] Peer %s at height %d <= local %d (skip)",
-				p.ID, p.Height, criteria.LocalHeight)
+			ps.logger.Debugf("[PeerSelector] Peer %s at height %d <= local %d (skip) url=%s", p.ID, p.Height, criteria.LocalHeight, p.DataHubURL)
 		}
 	}
 
@@ -116,8 +114,8 @@ func (ps *PeerSelector) SelectSyncPeer(peers []*PeerInfo, criteria SelectionCrit
 
 	// Log top 3 candidates for debugging
 	for i := 0; i < len(candidates) && i < 3; i++ {
-		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (height=%d, banScore=%d)",
-			i+1, candidates[i].ID, candidates[i].Height, candidates[i].BanScore)
+		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (height=%d, banScore=%d url=%s)",
+			i+1, candidates[i].ID, candidates[i].Height, candidates[i].BanScore, candidates[i].DataHubURL)
 	}
 
 	return selected.ID

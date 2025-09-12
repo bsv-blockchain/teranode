@@ -33,7 +33,6 @@ type SyncCoordinator struct {
 	mu              sync.RWMutex
 	currentSyncPeer peer.ID
 	syncStartTime   time.Time
-	lastFSMState    blockchain_api.FSMStateType
 	lastSyncTrigger time.Time // Track when we last triggered sync
 	lastLocalHeight uint32    // Track last known local height
 	lastBlockHash   string    // Track last known block hash
@@ -74,6 +73,29 @@ func NewSyncCoordinator(
 // SetGetLocalHeightCallback sets the local height callback
 func (sc *SyncCoordinator) SetGetLocalHeightCallback(getLocalHeight func() uint32) {
 	sc.getLocalHeight = getLocalHeight
+}
+
+// Constants for monitoring intervals
+const (
+	fastMonitorInterval = 2 * time.Second  // When actively syncing
+	slowMonitorInterval = 15 * time.Second // When caught up
+)
+
+// isCaughtUp determines if we're caught up with the network
+func (sc *SyncCoordinator) isCaughtUp() bool {
+	localHeight := sc.getLocalHeightSafe()
+
+	// Get all peers
+	peers := sc.registry.GetAllPeers()
+
+	// Check if any peer is significantly ahead of us
+	for _, p := range peers {
+		if p.Height > localHeight {
+			return false // At least one peer is ahead
+		}
+	}
+
+	return true // We're at the same height or ahead of all peers
 }
 
 // Start begins the coordinator
@@ -231,8 +253,8 @@ func (sc *SyncCoordinator) monitorFSM(ctx context.Context) {
 	defer sc.wg.Done()
 
 	sc.logger.Infof("[SyncCoordinator] Starting FSM monitor")
-	ticker := time.NewTicker(2 * time.Second) // Check more frequently for state changes
-	defer ticker.Stop()
+	timer := time.NewTimer(fastMonitorInterval)
+	defer timer.Stop()
 
 	for {
 		select {
@@ -242,8 +264,13 @@ func (sc *SyncCoordinator) monitorFSM(ctx context.Context) {
 		case <-sc.stopCh:
 			sc.logger.Infof("[SyncCoordinator] FSM monitor stopping (stop requested)")
 			return
-		case <-ticker.C:
-			sc.checkFSMState(ctx)
+		case <-timer.C:
+			if sc.isCaughtUp() {
+				timer.Reset(slowMonitorInterval)
+			} else {
+				timer.Reset(fastMonitorInterval)
+				sc.checkFSMState(ctx)
+			}
 		}
 	}
 }
@@ -277,20 +304,7 @@ func (sc *SyncCoordinator) checkFSMState(ctx context.Context) {
 
 // handleFSMTransition checks for FSM state transitions and handles them
 func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMStateType) bool {
-	// Get previous state for transition detection
-	sc.mu.RLock()
-	previousState := sc.lastFSMState
-	sc.mu.RUnlock()
-
-	// Update last FSM state
-	sc.mu.Lock()
-	sc.lastFSMState = *currentState
-	sc.mu.Unlock()
-
-	// Detect transition from CATCHINGBLOCKS to RUNNING
-	if previousState == blockchain_api.FSMStateType_CATCHINGBLOCKS && *currentState == blockchain_api.FSMStateType_RUNNING {
-		sc.logger.Infof("[SyncCoordinator] FSM transitioned from CATCHINGBLOCKS to RUNNING")
-
+	if *currentState == blockchain_api.FSMStateType_RUNNING {
 		// Get current sync peer and check if we should consider this a failure
 		sc.mu.Lock()
 		currentPeer := sc.currentSyncPeer
@@ -337,18 +351,12 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 // handleRunningState handles the FSM RUNNING state logic
 func (sc *SyncCoordinator) handleRunningState(ctx context.Context) {
 	localHeight := sc.getLocalHeightSafe()
-	localBlockHash := sc.getCurrentBlockHash(ctx)
 
 	sc.mu.RLock()
 	currentSyncPeer := sc.currentSyncPeer
 	sc.mu.RUnlock()
 
-	// Evaluate current sync peer
-	needNewPeer := sc.evaluateCurrentSyncPeer(ctx, currentSyncPeer, localHeight, localBlockHash)
-
-	if needNewPeer {
-		sc.selectAndActivateNewPeer(localHeight, currentSyncPeer)
-	}
+	sc.selectAndActivateNewPeer(localHeight, currentSyncPeer)
 }
 
 // getLocalHeightSafe safely gets the local blockchain height
@@ -357,55 +365,6 @@ func (sc *SyncCoordinator) getLocalHeightSafe() int32 {
 		return int32(sc.getLocalHeight())
 	}
 	return 0
-}
-
-// getCurrentBlockHash gets the hash of the current chain tip
-func (sc *SyncCoordinator) getCurrentBlockHash(ctx context.Context) string {
-	if sc.blockchainClient == nil {
-		return ""
-	}
-
-	tips, err := sc.blockchainClient.GetChainTips(ctx)
-	if err != nil {
-		sc.logger.Debugf("[SyncCoordinator] Failed to get chain tips: %v", err)
-		return ""
-	}
-
-	// Find the active chain tip (main chain has branchlen=0 and status="active")
-	for _, tip := range tips {
-		if tip.Branchlen == 0 && tip.Status == "active" {
-			return tip.Hash
-		}
-	}
-
-	// Fallback to first tip if no active found
-	if len(tips) > 0 {
-		return tips[0].Hash
-	}
-
-	return ""
-}
-
-// evaluateCurrentSyncPeer evaluates if the current sync peer is still suitable
-func (sc *SyncCoordinator) evaluateCurrentSyncPeer(_ context.Context, currentSyncPeer peer.ID, localHeight int32, localBlockHash string) bool {
-	if currentSyncPeer == "" {
-		return true // Need new peer
-	}
-
-	peerInfo, exists := sc.registry.GetPeer(currentSyncPeer)
-	if !exists {
-		sc.logger.Infof("[SyncCoordinator] Sync peer %s no longer exists", currentSyncPeer)
-		return true // Need new peer
-	}
-
-	// Check if we've caught up to or passed this peer
-	if localHeight >= peerInfo.Height && peerInfo.Height > 0 {
-		sc.logger.Infof("[SyncCoordinator] Caught up to sync peer %s (local: %d, peer: %d)",
-			currentSyncPeer, localHeight, peerInfo.Height)
-		return true // Need new peer
-	}
-
-	return false
 }
 
 // selectAndActivateNewPeer selects a new sync peer and activates it
@@ -418,12 +377,12 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight int32, oldPeer p
 
 	// Check URL responsiveness for all peers first
 	sc.checkAndUpdateURLResponsiveness(peers)
-
 	// Filter eligible peers
 	eligiblePeers := sc.filterEligiblePeers(peers, oldPeer, localHeight)
 
 	if len(eligiblePeers) == 0 {
-		sc.logger.Warnf("[SyncCoordinator] No peers ahead of local height %d", localHeight)
+		// This shouldn't happen given the check above, but keep for safety
+		sc.logger.Infof("[SyncCoordinator] Node is up to date at height %d", localHeight)
 		return
 	}
 
@@ -449,8 +408,10 @@ func (sc *SyncCoordinator) filterEligiblePeers(peers []*PeerInfo, oldPeer peer.I
 	for _, p := range peers {
 		// Skip the old peer and peers not ahead of us
 		if p.ID == oldPeer || p.Height <= localHeight {
-			sc.logger.Debugf("[SyncCoordinator] Skipping peer %s (oldPeer=%v, url=%s, height=%d, local=%d)",
-				p.ID, p.ID == oldPeer, p.DataHubURL, p.Height, localHeight)
+			// Only log if this is the old peer (which is more important to know)
+			if p.ID == oldPeer {
+				sc.logger.Debugf("[SyncCoordinator] Skipping old peer %s (height=%d, local=%d)", p.ID, p.Height, localHeight)
+			}
 			continue
 		}
 
@@ -467,9 +428,6 @@ func (sc *SyncCoordinator) activateSyncPeer(newSyncPeer peer.ID, oldPeer peer.ID
 	sc.syncStartTime = time.Now()
 	sc.lastSyncTrigger = time.Now()
 	sc.mu.Unlock()
-
-	sc.logger.Infof("[SyncCoordinator] Selected new sync peer %s (different from old %s)",
-		newSyncPeer, oldPeer)
 
 	// Trigger sync directly (sends to Kafka)
 	if err := sc.sendSyncMessage(newSyncPeer); err != nil {
@@ -490,8 +448,7 @@ func (sc *SyncCoordinator) logPeerList(peers []*PeerInfo) {
 // logCandidateList logs the list of candidate peers that were skipped
 func (sc *SyncCoordinator) logCandidateList(candidates []*PeerInfo) {
 	for _, p := range candidates {
-		sc.logger.Infof("[SyncCoordinator] Candidate skipped: %s (url=%s, height=%d, banScore=%d)",
-			p.ID, p.DataHubURL, p.Height, p.BanScore)
+		sc.logger.Infof("[SyncCoordinator] Candidate skipped: %s (height=%d, banScore=%d, url=%s)", p.ID, p.Height, p.BanScore, p.DataHubURL)
 	}
 }
 
@@ -544,9 +501,9 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 
 	// Check if we've been syncing too long without progress
 	if syncDuration > 5*time.Minute {
-		timeSinceLastBlock := time.Since(peerInfo.LastBlockTime)
-		if timeSinceLastBlock > 2*time.Minute {
-			sc.logger.Warnf("[SyncCoordinator] Sync peer %s inactive for %v", currentPeer, timeSinceLastBlock)
+		timeSinceLastMessage := time.Since(peerInfo.LastMessageTime)
+		if timeSinceLastMessage > 1*time.Minute {
+			sc.logger.Warnf("[SyncCoordinator] Sync peer %s inactive for %v", currentPeer, timeSinceLastMessage)
 			// Mark peer as unhealthy due to inactivity
 			sc.registry.UpdateHealth(currentPeer, false)
 			sc.ClearSyncPeer()

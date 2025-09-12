@@ -1001,11 +1001,10 @@ func (td *TestDaemon) waitForBlockHeight(t *testing.T, targetHeight uint32, numB
 	ctx, cancel := context.WithTimeout(td.Ctx, timeout)
 	defer cancel()
 
-	// Set up polling ticker with exponential backoff
-	minInterval := 100 * time.Millisecond
-	maxInterval := 2 * time.Second
-	currentInterval := minInterval
-	ticker := time.NewTicker(currentInterval)
+	// Set up polling ticker - use fixed interval for bulk generation
+	// Exponential backoff is counterproductive when waiting for many blocks
+	pollInterval := 100 * time.Millisecond
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	attempts := 0
@@ -1041,17 +1040,8 @@ func (td *TestDaemon) waitForBlockHeight(t *testing.T, targetHeight uint32, numB
 				if _, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, targetHeight); err == nil {
 					return nil
 				}
-				// Block header exists but data isn't ready - keep polling quickly
-				currentInterval = minInterval
-			} else {
-				// Haven't reached target - use exponential backoff
-				if currentInterval < maxInterval {
-					currentInterval = min(currentInterval*2, maxInterval)
-				}
+				// Block header exists but data isn't ready - keep polling
 			}
-
-			// Update ticker interval if changed
-			ticker.Reset(currentInterval)
 		}
 	}
 }

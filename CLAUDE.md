@@ -193,3 +193,5 @@ The project includes a Bitcoin expert agent (`.claude/agents/bitcoin-expert.md`)
 - Protobuf files generate Go code via `make gen`
 - Dashboard is a Svelte application in `ui/dashboard/`
 - Use TestContainers for integration tests requiring external services
+- Don't use mock blockchain client/store - you can use a real one using the sqlitememory store
+- Don't use mock kafka - you can use in_memory_kafka.go

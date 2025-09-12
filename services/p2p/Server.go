@@ -998,6 +998,27 @@ func (s *Server) sendHandshakeToPeer(ctx context.Context, peerID peer.ID, msgByt
 	return s.P2PNode.SendToPeer(ctx, peerID, msgBytes)
 }
 
+// updatePeerLastMessageTime updates the last message time for both the sender and originator.
+// It handles the common pattern of updating message timestamps when receiving P2P messages.
+// Parameters:
+//   - from: the immediate sender's peer ID string
+//   - originatorPeerID: the original message creator's peer ID string (may be same as from)
+func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string) {
+	if s.peerRegistry == nil {
+		return
+	}
+
+	// Update last message time for the sender
+	s.peerRegistry.UpdateLastMessageTime(peer.ID(from))
+
+	// Also update for the originator if different
+	if originatorPeerID != "" {
+		if peerID, err := peer.Decode(originatorPeerID); err == nil && peerID != peer.ID(from) {
+			s.peerRegistry.UpdateLastMessageTime(peerID)
+		}
+	}
+}
+
 // NodeStatusMessage represents a node status update message
 type NodeStatusMessage struct {
 	Type                 string                          `json:"type"`
@@ -1039,6 +1060,9 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 	// but still forward to WebSocket
 	if !isSelf {
 		s.logger.Debugf("[handleNodeStatusTopic] Processing node_status from remote peer %s (peer_id: %s)", from, nodeStatusMessage.PeerID)
+
+		// Update last message time for the sender and originator
+		s.updatePeerLastMessageTime(from, nodeStatusMessage.PeerID)
 	} else {
 		s.logger.Debugf("[handleNodeStatusTopic] forwarding our own node status (peer_id: %s) with is_self=true", nodeStatusMessage.PeerID)
 	}
@@ -1123,6 +1147,9 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 		s.logger.Debugf("[handleHandshakeTopic] Ignoring self handshake (PeerID matches our HostID)")
 		return // ignore self
 	}
+
+	// Update last message time for the sender and originator
+	s.updatePeerLastMessageTime(from, hs.PeerID)
 
 	// Validate topic prefix to ensure we're on the same chain
 	if hs.TopicPrefix != s.topicPrefix {
@@ -1868,6 +1895,9 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
 		return
 	}
 
+	// Update last message time for the sender and originator
+	s.updatePeerLastMessageTime(from, blockMessage.PeerID)
+
 	// Skip notifications from banned peers
 	if s.shouldSkipBannedPeer(from, "handleBlockTopic") {
 		return
@@ -1970,6 +2000,9 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, from string) {
 		s.logger.Debugf("[handleSubtreeTopic] ignoring own subtree message for %s", subtreeMessage.Hash)
 		return
 	}
+
+	// Update last message time for the sender and originator
+	s.updatePeerLastMessageTime(from, subtreeMessage.PeerID)
 
 	// Skip notifications from banned peers
 	if s.shouldSkipBannedPeer(from, "handleSubtreeTopic") {
@@ -2089,6 +2122,9 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 		s.logger.Debugf("[handleMiningOnTopic] ignoring own mining_on message for %s", miningOnMessage.Hash)
 		return
 	}
+
+	// Update last message time for the sender and originator
+	s.updatePeerLastMessageTime(from, miningOnMessage.PeerID)
 
 	// add height to peer info
 	s.P2PNode.UpdatePeerHeight(peer.ID(miningOnMessage.PeerID), int32(miningOnMessage.Height)) //nolint:gosec
