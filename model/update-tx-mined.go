@@ -176,6 +176,12 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		subtree := subtree
 
 		if subtree == nil {
+			if unsetMined {
+				// if unsetting, we can ignore missing subtrees
+				logger.Warnf("[UpdateTxMinedStatus][%s] unsetting mined status, missing subtree %d of %d - ignoring", block.String(), subtreeIdx, len(block.Subtrees))
+				continue
+			}
+
 			return errors.NewProcessingError("[UpdateTxMinedStatus][%s] missing subtree %d of %d", block.String(), subtreeIdx, len(block.Subtrees))
 		}
 
@@ -234,13 +240,15 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 								}
 							}
 						} else {
-							// check that all blockIDs are not already on our chain
-							if len(chainBlockIDsMap) > 0 {
-								for _, bIDs := range blockIDsMap {
-									for _, bID := range bIDs {
-										if _, exists := chainBlockIDsMap[bID]; exists && bID != blockID {
-											// this transaction is already on our chain, the block is invalid
-											return errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain, blockID %d", block.Hash().String(), bID)
+							if !minedBlockInfo.UnsetMined {
+								// check that all blockIDs are not already on our chain
+								if len(chainBlockIDsMap) > 0 {
+									for _, bIDs := range blockIDsMap {
+										for _, bID := range bIDs {
+											if _, exists := chainBlockIDsMap[bID]; exists && bID != blockID {
+												// this transaction is already on our chain, the block is invalid
+												return errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain, blockID %d", block.Hash().String(), bID)
+											}
 										}
 									}
 								}
@@ -289,13 +297,15 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 
 						retries++
 					} else {
-						// check that all blockIDs are not already on our chain
-						if len(chainBlockIDsMap) > 0 {
-							for hash, bIDs := range blockIDsMap {
-								for _, bID := range bIDs {
-									if _, exists := chainBlockIDsMap[bID]; exists && bID != blockID {
-										// this transaction is already on our chain, the block is invalid
-										return errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s, blockID %d", block.Hash().String(), hash.String(), bID)
+						if !minedBlockInfo.UnsetMined {
+							// check that all blockIDs are not already on our chain
+							if len(chainBlockIDsMap) > 0 {
+								for hash, bIDs := range blockIDsMap {
+									for _, bID := range bIDs {
+										if _, exists := chainBlockIDsMap[bID]; exists && bID != blockID {
+											// this transaction is already on our chain, the block is invalid
+											return errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s, blockID %d", block.Hash().String(), hash.String(), bID)
+										}
 									}
 								}
 							}

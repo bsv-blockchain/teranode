@@ -684,7 +684,30 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 
 // Join combines multiple errors into a single error.
 func Join(errs ...error) error {
-	var messages []string
+	var (
+		messages    []string
+		tErr        *Error
+		tErr2       *Error
+		previousErr *Error
+	)
+
+	// If the first error is a custom Error type, chain the rest as wrapped errors.
+	if len(errs) > 0 && errors.As(errs[0], &tErr) {
+		previousErr = tErr
+
+		for i := 1; i < len(errs); i++ {
+			if errors.As(errs[i], &tErr2) {
+				previousErr.SetWrappedErr(tErr2)
+			} else {
+				tErr2 = NewError(errs[i].Error())
+				previousErr.SetWrappedErr(tErr2)
+			}
+
+			previousErr = tErr2
+		}
+
+		return tErr
+	}
 
 	for _, err := range errs {
 		if err != nil {

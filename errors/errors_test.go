@@ -365,7 +365,7 @@ func TestJoinWithMultipleErrs(t *testing.T) {
 
 	joinedErr := Join(err1, err2, err3)
 	require.NotNil(t, joinedErr)
-	assert.Equal(t, "NOT_FOUND (3): not found, BLOCK_NOT_FOUND (10): block not found, INVALID_ARGUMENT (1): invalid argument", joinedErr.Error())
+	assert.Equal(t, "NOT_FOUND (3): not found -> BLOCK_NOT_FOUND (10): block not found -> INVALID_ARGUMENT (1): invalid argument", joinedErr.Error())
 }
 
 // TestErrorString tests the string representation of a custom error.
@@ -868,9 +868,9 @@ func TestError_As(t *testing.T) {
 			Set(reflect.ValueOf(v))
 	}
 
-	//----------------------------------------
+	// ----------------------------------------
 	// Test cases
-	//----------------------------------------
+	// ----------------------------------------
 	tests := []struct {
 		name   string
 		setup  func() (*Error, interface{})
@@ -1438,6 +1438,51 @@ func TestJoin(t *testing.T) {
 		err := Join(err1, err2, err3)
 		expected := "line one\n, tab\tseparated, unicode 💥"
 		require.Equal(t, expected, err.Error())
+	})
+
+	t.Run("join native errors", func(t *testing.T) {
+		err1 := NewError("err1")
+		err2 := NewProcessingError("err2")
+		err3 := NewServiceError("err3")
+
+		err := Join(err1, err2, err3)
+		expected := "ERROR (9): err1 -> PROCESSING (4): err2 -> SERVICE_ERROR (59): err3"
+		require.Equal(t, expected, err.Error())
+
+		// check we have the error all wrapped up properly and can be identified
+		assert.ErrorIs(t, err, ErrError)
+		assert.ErrorIs(t, err, ErrProcessing)
+		assert.ErrorIs(t, err, ErrServiceError)
+	})
+
+	t.Run("join native errors - with nils", func(t *testing.T) {
+		var err1 error
+		err2 := NewProcessingError("err2")
+		err3 := NewServiceError("err3")
+
+		err := Join(err1, err2, err3)
+		expected := "PROCESSING (4): err2, SERVICE_ERROR (59): err3"
+		require.Equal(t, expected, err.Error())
+
+		// check we have the error all wrapped up properly and can be identified
+		// should not be the case since the first error was a nil
+		assert.NotErrorIs(t, err, ErrProcessing)
+		assert.NotErrorIs(t, err, ErrServiceError)
+	})
+
+	t.Run("join native errors - with golang error", func(t *testing.T) {
+		err1 := errors.New("err1")
+		err2 := NewProcessingError("err2")
+		err3 := NewServiceError("err3")
+
+		err := Join(err1, err2, err3)
+		expected := "err1, PROCESSING (4): err2, SERVICE_ERROR (59): err3"
+		require.Equal(t, expected, err.Error())
+
+		// check we have the error all wrapped up properly and can be identified
+		// ErrorIs only works like this with our custom errors
+		assert.NotErrorIs(t, err, ErrProcessing)
+		assert.NotErrorIs(t, err, ErrServiceError)
 	})
 }
 

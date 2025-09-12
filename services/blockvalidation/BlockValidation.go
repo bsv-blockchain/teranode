@@ -43,6 +43,7 @@ import (
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
@@ -731,10 +732,38 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		return errors.NewServiceError("[setTxMined][%s] failed to get block header from blockchain", blockHash.String(), err)
 	}
 
-	// All subtrees should already be available for fully processed blocks
-	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore)
-	if err != nil {
-		return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
+	if len(unsetMined) > 0 && unsetMined[0] {
+		u.logger.Warnf("[setTxMined][%s] block is marked as invalid, will attempt to unset tx mined", block.Hash().String())
+
+		block.SubtreeSlices = make([]*subtreepkg.Subtree, len(block.Subtrees))
+
+		// when the block is invalid, we might not have all the subtrees
+		for subtreeIdx, subtreeHash := range block.Subtrees {
+			subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+			if err != nil {
+				subtreeBytes, err = u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+				if err != nil {
+					u.logger.Warnf("[setTxMined][%s] failed to get subtree %d/%s from store: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
+					continue
+				}
+			}
+
+			subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeBytes)
+			if err != nil {
+				u.logger.Warnf("[setTxMined][%s] failed to parse subtree %d/%s: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
+				continue
+			}
+
+			block.SubtreeSlices[subtreeIdx] = subtree
+
+			u.logger.Debugf("[setTxMined][%s] loaded subtree %d/%s from store", block.Hash().String(), subtreeIdx, subtreeHash.String())
+		}
+	} else {
+		// All subtrees should already be available for fully processed blocks
+		_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore)
+		if err != nil {
+			return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
+		}
 	}
 
 	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2)); err != nil || len(ids) == 0 {

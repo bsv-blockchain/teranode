@@ -196,7 +196,12 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 	for idx, batchRecord := range batchRecords {
 		result, res, err := s.processSingleBatchRecord(ctx, batchRecord, hashes[idx], thisBlockHeight, minedBlockInfo)
 		if err != nil {
-			errs = errors.Join(errs, err)
+			if errs == nil {
+				errs = err
+			} else {
+				errs = errors.Join(errs, err)
+			}
+
 			nrErrors++
 		} else if result {
 			okUpdates++
@@ -248,9 +253,13 @@ func (s *Store) processSingleBatchRecord(ctx context.Context, batchRecord aerosp
 	}
 
 	if res.Status != LuaStatusOK {
-		if res.ErrorCode == LuaErrorCodeTxNotFound && minedBlockInfo.UnsetMined {
-			// This is not an error for us, just a no-op, if we are unsetting mined status on a tx that does not exist
-			return true, res, nil
+		if res.ErrorCode == LuaErrorCodeTxNotFound {
+			if minedBlockInfo.UnsetMined {
+				// This is not an error for us, just a no-op, if we are unsetting mined status on a tx that does not exist
+				return true, res, nil
+			}
+
+			return false, res, errors.NewTxNotFoundError("transaction not found: %s", hash.String())
 		}
 
 		return false, res, errors.NewError("aerospike batchRecord %s error: %s", hash.String(), res.Message)
