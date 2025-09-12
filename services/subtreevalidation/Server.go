@@ -507,7 +507,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	// start kafka consumers
-	u.subtreeConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(3, 2, time.Second))
+	u.subtreeConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
 	u.txmetaConsumerClient.Start(ctx, u.txmetaHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
 
 	// this will block
