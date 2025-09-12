@@ -479,7 +479,6 @@ type SubtreeValidationSettings struct {
 	ProcessTxMetaUsingStoreBatchSize          int
 	ProcessTxMetaUsingStoreConcurrency        int
 	ProcessTxMetaUsingStoreMissingTxThreshold int
-	SubtreeFoundChConcurrency                 int
 	SubtreeBlockHeightRetention               uint32
 	SubtreeDAHConcurrency                     int
 	SubtreeValidationTimeout                  int

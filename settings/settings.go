@@ -439,7 +439,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ProcessTxMetaUsingStoreBatchSize:          getInt("subtreevalidation_processTxMetaUsingStore_BatchSize", 1024, alternativeContext...),
 			ProcessTxMetaUsingStoreConcurrency:        getInt("subtreevalidation_processTxMetaUsingStore_Concurrency", 32, alternativeContext...),
 			ProcessTxMetaUsingStoreMissingTxThreshold: getInt("subtreevalidation_processTxMetaUsingStore_MissingTxThreshold", 1, alternativeContext...),
-			SubtreeFoundChConcurrency:                 getInt("subtreevalidation_subtreeFoundChConcurrency", 1, alternativeContext...),
 			SubtreeBlockHeightRetention:               getUint32("subtreevalidation_subtreeBlockHeightRetention", globalBlockHeightRetention),
 			SubtreeDAHConcurrency:                     getInt("subtreevalidation_subtreeDAHConcurrency", 8, alternativeContext...),
 			SubtreeValidationTimeout:                  getInt("subtreevalidation_subtreeValidationTimeout", 1000, alternativeContext...),
