@@ -715,10 +715,29 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	cachedBlock, blockWasAlreadyCached := u.lastValidatedBlocks.Get(*blockHash)
 
 	if blockWasAlreadyCached && cachedBlock != nil {
-		// we have just validated this block, so we can use the cached block
-		// this should have all the subtrees already loaded
-		block = cachedBlock
-	} else {
+		// Verify the cached block has subtrees loaded
+		if len(cachedBlock.SubtreeSlices) == len(cachedBlock.Subtrees) && len(cachedBlock.SubtreeSlices) > 0 {
+			subtreesValid := true
+			for _, subtree := range cachedBlock.SubtreeSlices {
+				if subtree == nil {
+					subtreesValid = false
+					break
+				}
+			}
+			if subtreesValid {
+				u.logger.Debugf("[setTxMined][%s] using cached block with %d subtrees", blockHash.String(), len(cachedBlock.SubtreeSlices))
+				block = cachedBlock
+			} else {
+				u.logger.Warnf("[setTxMined][%s] cached block has invalid subtrees, fetching from blockchain", blockHash.String())
+				blockWasAlreadyCached = false
+			}
+		} else {
+			u.logger.Warnf("[setTxMined][%s] cached block missing subtrees, fetching from blockchain", blockHash.String())
+			blockWasAlreadyCached = false
+		}
+	}
+
+	if !blockWasAlreadyCached || block == nil {
 		// get the block from the blockchain
 		if block, err = u.blockchainClient.GetBlock(ctx, blockHash); err != nil {
 			return errors.NewServiceError("[setTxMined][%s] failed to get block from blockchain", blockHash.String(), err)
@@ -1034,9 +1053,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 	if useOptimisticMining {
 
-		// set the block in the temporary block cache for 2 minutes, could then be used for SetMined
-		// must be set before AddBlock is called
-		u.lastValidatedBlocks.Set(*block.Hash(), block)
+		// NOTE: We do NOT cache the block here as subtrees are not yet loaded.
+		// The block will be cached after subtrees are validated in the background goroutine.
 
 		u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
 
@@ -1108,7 +1126,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					// some other error, re-validate the block
 					u.ReValidateBlock(block, baseURL)
 				}
+				return
 			}
+
+			// Block validation succeeded - now cache it with subtrees loaded
+			u.logger.Debugf("[ValidateBlock][%s] background validation complete, caching block with subtrees", block.Hash().String())
+			u.lastValidatedBlocks.Set(*block.Hash(), block)
 		}()
 	} else {
 		// get all 100 previous block headers on the main chain
@@ -1155,9 +1178,26 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
 
-		// set the block in the temporary block cache for 2 minutes, could then be used for SetMined
-		// must be set before AddBlock is called
-		u.lastValidatedBlocks.Set(*block.Hash(), block)
+		// Cache the block only if subtrees are loaded (they should be from Valid() call)
+		if len(block.SubtreeSlices) == len(block.Subtrees) && len(block.SubtreeSlices) > 0 {
+			// Verify subtrees are actually populated
+			allLoaded := true
+			for _, subtree := range block.SubtreeSlices {
+				if subtree == nil {
+					allLoaded = false
+					break
+				}
+			}
+			if allLoaded {
+				u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), len(block.SubtreeSlices))
+				u.lastValidatedBlocks.Set(*block.Hash(), block)
+			} else {
+				u.logger.Warnf("[ValidateBlock][%s] not caching block - some subtrees are nil", block.Hash().String())
+			}
+		} else {
+			u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)",
+				block.Hash().String(), len(block.SubtreeSlices), len(block.Subtrees))
+		}
 
 		// if valid, store the block
 		u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
