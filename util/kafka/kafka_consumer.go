@@ -363,7 +363,12 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 					return
 				case err := <-k.ConsumerGroup.Errors():
 					if err != nil {
-						k.Config.Logger.Errorf("Kafka consumer error: %v", err)
+						// Don't log context cancellation as an error - it's expected during shutdown
+						if errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "context canceled") {
+							k.Config.Logger.Debugf("Kafka consumer shutdown: %v", err)
+						} else {
+							k.Config.Logger.Errorf("Kafka consumer error: %v", err)
+						}
 					}
 				}
 			}
