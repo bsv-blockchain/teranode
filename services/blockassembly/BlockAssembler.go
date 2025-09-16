@@ -1430,6 +1430,17 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context) (err error
 
 	b.logger.Infof("[BlockAssembler] now loading remaining unmined transactions")
 
+	// Wait for the unmined_since index to be ready before attempting to get the iterator
+	// This is similar to how the cleanup service waits for the delete_at_height index
+	if indexWaiter, ok := b.utxoStore.(interface {
+		WaitForIndexReady(ctx context.Context, indexName string) error
+	}); ok {
+		if err := indexWaiter.WaitForIndexReady(ctx, "unminedSinceIndex"); err != nil {
+			b.logger.Warnf("[BlockAssembler] failed to wait for unmined_since index: %v", err)
+			// Continue anyway as this may be a non-Aerospike store
+		}
+	}
+
 	it, err := b.utxoStore.GetUnminedTxIterator()
 	if err != nil {
 		return errors.NewProcessingError("error getting unmined tx iterator", err)
