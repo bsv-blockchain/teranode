@@ -1147,13 +1147,19 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		moveForwardBlocks[i] = moveForwardBlockWithMeta.block
 	}
 
-	// now do the reorg in the subtree processor
-	if err = b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks); err != nil {
-		return errors.NewProcessingError("error doing reorg", err)
+	reset := hasInvalidBlock
+
+	if !hasInvalidBlock {
+		// now do the reorg in the subtree processor
+		if err = b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks); err != nil {
+			b.logger.Warnf("[BlockAssembler] error doing reorg, will reset instead: %v", err)
+			// fallback to full reset
+			reset = true
+		}
 	}
 
-	// if we have an invalid block in the reorg, we need to reset the block assembly and load the unmined transactions again
-	if hasInvalidBlock {
+	if reset {
+		// we have an invalid block in the reorg or reorg failed, we need to reset the block assembly and load the unmined transactions again
 		b.logger.Warnf("[BlockAssembler] reorg contains invalid block, resetting block assembly, moveBackBlocks: %d, moveForwardBlocks: %d", len(moveBackBlocks), len(moveForwardBlocks))
 
 		if resp := b.subtreeProcessor.Reset(nil, moveBackBlocks, moveForwardBlocks, false); resp.Err != nil {
