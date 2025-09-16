@@ -60,7 +60,6 @@ func Retry[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error
 	for i := 0; maxRetries == -1 || i < maxRetries; i++ {
 		select {
 		case <-ctx.Done(): // Check if the context has been cancelled
-			logger.Errorf("Context cancelled, stopping retries")
 			return result, ctx.Err()
 
 		default:
