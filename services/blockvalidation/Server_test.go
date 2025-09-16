@@ -1087,6 +1087,7 @@ func Test_BlockFound(t *testing.T) {
 	t.Run("block already exists", func(t *testing.T) {
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		}
 
@@ -1117,6 +1118,7 @@ func Test_BlockFound(t *testing.T) {
 
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
@@ -1156,6 +1158,7 @@ func Test_BlockFound(t *testing.T) {
 
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
@@ -1193,6 +1196,7 @@ func Test_BlockFound(t *testing.T) {
 
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
@@ -1274,6 +1278,7 @@ func Test_ProcessBlock(t *testing.T) {
 			utxoStore:                     utxoStore,
 			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
 
@@ -1317,6 +1322,7 @@ func Test_ProcessBlock(t *testing.T) {
 			utxoStore:                     utxoStore,
 			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
 
@@ -1418,6 +1424,7 @@ func Test_ValidateBlock(t *testing.T) {
 			utxoStore:                     utxoStore,
 			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
 
@@ -1487,6 +1494,7 @@ func Test_ValidateBlock(t *testing.T) {
 			utxoStore:                     utxoStore,
 			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
 
@@ -1537,6 +1545,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 		// Create minimal BlockValidation
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,
@@ -1586,6 +1595,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 		// Create minimal BlockValidation
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,
@@ -1620,6 +1630,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 		// Create minimal BlockValidation
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,

@@ -103,6 +103,7 @@ func (s *CatchupTestSuite) createServer(t *testing.T) {
 		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),
 		subtreeStore:                  blobmemory.New(),
 		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
+		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 	}
 
 	// Create circuit breakers
