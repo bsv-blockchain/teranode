@@ -986,12 +986,16 @@ func (td *TestDaemon) generateBlocks(t *testing.T, numBlocks uint32) error {
 			return errors.NewUnknownError("failed to generate %d blocks (batch %d/%d): %w", remaining, generated, numBlocks, err)
 		}
 
+		// Wait for this batch of blocks to be available before generating the next batch
+		intermediateTarget := startHeight + generated + remaining
+		if err = td.waitForBlockHeight(t, intermediateTarget, remaining); err != nil {
+			return errors.NewUnknownError("failed waiting for batch %d blocks at height %d: %w", remaining, intermediateTarget, err)
+		}
+
 		generated += remaining
 	}
 
-	// Wait for the final block to be available
-	targetHeight := startHeight + numBlocks
-	return td.waitForBlockHeight(t, targetHeight, numBlocks)
+	return nil
 }
 
 // waitForBlockHeight waits for the blockchain to reach the specified height with proper timeout and logging.

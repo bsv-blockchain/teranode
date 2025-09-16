@@ -1476,7 +1476,8 @@ func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_
 	for i := 0; i < int(req.Count); i++ {
 		err := ba.generateBlock(ctx, req.Address)
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewProcessingError("error generating block", err))
+			ba.logger.Errorf("[GenerateBlocks] failed to generate block %d of %d: %v", i+1, req.Count, err)
+			return nil, errors.WrapGRPC(errors.NewProcessingError("error generating block %d of %d", i+1, req.Count, err))
 		}
 	}
 
@@ -1628,17 +1629,46 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 		},
 	}
 
+	// Store the current best block hash before submission
+	previousBestHash := ba.blockAssembler.bestBlockHeader.Load().Hash()
+
 	resp, err := ba.submitMiningSolution(ctx, req)
 	if err != nil {
 		ba.logger.Errorf("[generateBlock] error submitting block: %v", err)
 		return errors.NewProcessingError("error submitting block", err)
 	}
 
-	if resp.Ok {
-		return nil
+	if !resp.Ok {
+		return bt.ErrTxNil
 	}
 
-	return bt.ErrTxNil
+	// Wait for the best block header to be updated after successful submission
+	// This prevents the "already mining on top of the same block" error when generating multiple blocks
+	return ba.waitForBestBlockHeaderUpdate(ctx, previousBestHash)
+}
+
+// waitForBestBlockHeaderUpdate waits for the best block header to be updated after block submission
+func (ba *BlockAssembly) waitForBestBlockHeaderUpdate(ctx context.Context, previousBestHash *chainhash.Hash) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-waitCtx.Done():
+			ba.logger.Warnf("[generateBlock] timeout waiting for best block header update after submitting block")
+			// Continue anyway - the block was submitted successfully
+			return nil
+		case <-ticker.C:
+			currentBestHash := ba.blockAssembler.bestBlockHeader.Load().Hash()
+			if !currentBestHash.IsEqual(previousBestHash) {
+				// Best block has been updated
+				return nil
+			}
+		}
+	}
 }
 
 // SetSkipWaitForPendingBlocks sets the flag to skip waiting for pending blocks during startup.

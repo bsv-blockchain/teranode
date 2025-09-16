@@ -777,34 +777,10 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 			// Get cached headers for validation
 			cachedHeaders, _ := u.headerChainCache.GetValidationHeaders(block.Hash())
 
-			// Determine if this specific block can use quick validation
-			// A block can use quick validation if it's at or below the highest verified checkpoint height
-			canUseQuickValidation := catchupCtx.useQuickValidation && block.Height <= catchupCtx.highestCheckpointHeight
-			tryNormalValidation := true // Default to normal validation, we'll unset if quick validation is used
-
-			// If block is below checkpoint, use quick validation directly
-			if canUseQuickValidation {
-				// Quick validation: create UTXOs for the block and validate transactions in parallel
-				if err := u.blockValidation.quickValidateBlock(gCtx, block, baseURL); err != nil {
-					if prometheusCatchupErrors != nil {
-						prometheusCatchupErrors.WithLabelValues(baseURL, "validation_failure").Inc()
-					}
-
-					u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] quick validation failed for block %s, removing .subtree files: %v", blockUpTo.Hash().String(), block.Hash().String(), err)
-
-					// since the quick validation failed, we will have to remove the .subtree files, which will trigger
-					// the normal validation to re-create the UTXOs and validate the transactions
-					for _, subtreeHash := range block.Subtrees {
-						if err = u.subtreeStore.Del(gCtx, subtreeHash[:], fileformat.FileTypeSubtree); err != nil {
-							if !errors.Is(err, errors.ErrNotFound) {
-								return errors.NewProcessingError("[catchup:validateBlocksOnChannel][%s] failed to remove subtree file %s", blockUpTo.Hash().String(), subtreeHash.String(), err)
-							}
-						}
-					}
-				} else {
-					// Quick validation succeeded, skip normal validation
-					tryNormalValidation = false
-				}
+			// Try quick validation if applicable
+			tryNormalValidation, err := u.tryQuickValidation(gCtx, block, catchupCtx, baseURL)
+			if err != nil {
+				return err
 			}
 
 			if tryNormalValidation {
@@ -820,10 +796,15 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, peerID, nil, opts); err != nil {
 					u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to validate block %s at position %d: %v", blockUpTo.Hash().String(), block.Hash().String(), i, err)
 
-					// mark block as invalid, we did not add it to the chain, since we did not do optimistic mining
-					if markErr := u.blockchainClient.AddBlock(gCtx, block, peerID, options.WithInvalid(true)); markErr != nil {
-						u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to store block %s and mark as invalid: %v", blockUpTo.Hash().String(), block.Hash().String(), markErr)
+					// Only mark block as invalid for consensus violations (ErrBlockInvalid or ErrTxInvalid)
+					// Other errors like missing data, storage issues, or processing errors should not mark the block as invalid
+					if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules, marking as invalid", blockUpTo.Hash().String(), block.Hash().String())
+						if markErr := u.blockchainClient.AddBlock(gCtx, block, peerID, options.WithInvalid(true)); markErr != nil {
+							u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to store invalid block %s: %v", blockUpTo.Hash().String(), block.Hash().String(), markErr)
+						}
 					}
+					// For recoverable errors (storage, processing, missing data), don't mark as invalid - just fail and retry later
 
 					// Record metric for validation failure
 					if prometheusCatchupErrors != nil {
@@ -845,6 +826,45 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 	u.logger.Infof("[catchup:validateBlocksOnChannel][%s] completed validation of %d blocks", blockUpTo.Hash().String(), i)
 
 	return nil
+}
+
+// tryQuickValidation attempts quick validation for checkpointed blocks
+// Returns true if normal validation should be tried, false if quick validation succeeded
+func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, baseURL string) (bool, error) {
+	// Determine if this specific block can use quick validation
+	// A block can use quick validation if it's at or below the highest verified checkpoint height
+	canUseQuickValidation := catchupCtx.useQuickValidation && block.Height <= catchupCtx.highestCheckpointHeight
+
+	// If block is not eligible for quick validation, use normal validation
+	if !canUseQuickValidation {
+		return true, nil
+	}
+
+	// Quick validation: create UTXOs for the block and validate transactions in parallel
+	if err := u.blockValidation.quickValidateBlock(ctx, block, baseURL); err != nil {
+		if prometheusCatchupErrors != nil {
+			prometheusCatchupErrors.WithLabelValues(baseURL, "validation_failure").Inc()
+		}
+
+		u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] quick validation failed for block %s, removing .subtree files: %v",
+			catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), err)
+
+		// since the quick validation failed, we will have to remove the .subtree files, which will trigger
+		// the normal validation to re-create the UTXOs and validate the transactions
+		for _, subtreeHash := range block.Subtrees {
+			if err = u.subtreeStore.Del(ctx, subtreeHash[:], fileformat.FileTypeSubtree); err != nil {
+				if !errors.Is(err, errors.ErrNotFound) {
+					return false, errors.NewProcessingError("[catchup:validateBlocksOnChannel][%s] failed to remove subtree file %s",
+						catchupCtx.blockUpTo.Hash().String(), subtreeHash.String(), err)
+				}
+			}
+		}
+		// Quick validation failed, try normal validation
+		return true, nil
+	}
+
+	// Quick validation succeeded, skip normal validation
+	return false, nil
 }
 
 // getHighestCheckpointHeight returns the height of the highest checkpoint
