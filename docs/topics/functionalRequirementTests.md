@@ -8,8 +8,7 @@ The Functional Requirements for Teranode document describes the responsibilities
 
 ## Structure
 
-The structure of both the document and the tests is as follows:
-
+The functional requirements are organized into the following categories:
 
 - Node responsibilities (TNA)
 - Receive and validate transactions (TNB)
@@ -26,15 +25,36 @@ The structure of both the document and the tests is as follows:
 - Joining the Network (TNM)
 - Technical Errors (TEC)
 
-Within the test folder, there is a subfolder for each of these feature areas. Each area contains its own tests, following a specific naming convention. For example, within the Node Responsibilities tests (TNA), there will be tests named TNA-1, TNA-2, and so on. Sometimes, to cover a single test case, more than one test is required. In such cases, the naming convention within the feature area will be TNC-1-TC-01, TNC-1-TC-02, and so forth.
+## Test Organization
+
+Tests are organized in two main locations:
+
+1. **Dedicated test folders** (`/test/[category]/`):
+   - `/test/tna/` - Node responsibilities tests
+   - `/test/tnb/` - Transaction validation tests
+   - `/test/tnd/` - Block propagation tests
+   - `/test/tnf/` - Longest chain tracking tests
+   - `/test/tnj/` - Consensus rules tests
+   - `/test/tec/` - Error handling tests
+
+2. **Integration tests** (`/test/e2e/daemon/`):
+   - `tnc*_test.go` - Block assembly tests
+   - `tne*_test.go` - Block validation tests
+   - Additional integration tests for various requirements
+
+Test files follow a naming convention: `tn[x][number]_test.go` where x is the category letter and number corresponds to the specific requirement.
 
 ## Test Framework
 
-The test framework is defined in the `test_framework.go` file. This file contains the main structs and functions that the QA team uses to set up, run, and control the execution of the test suites.
+The test framework is built on the testify suite package and is defined primarily in `test/utils/arrange.go` and `test/utils/testenv.go`. These files contain the main structs and functions used to set up, run, and control the execution of the test suites.
 
 ## Test Suites and Setup
 
-A custom setup for each test suite can be achieved through the structs and functions defined in `test/setup/setup.go`. In this file, the Suite object, obtained via the commonly used Go library testify, defines the `settings_local.conf` file parameters and specifies which Docker Compose setup to use when running a test suite.
+The test framework provides two main components:
+- **TeranodeTestSuite** (`test/utils/arrange.go`): Base test suite that embeds testify's suite.Suite and provides common test setup/teardown
+- **TeranodeTestEnv** (`test/utils/testenv.go`): Manages the test environment including Docker Compose stacks, node clients, and service connections
+
+Each test suite can customize its configuration through the TConfig system, which defines settings contexts and Docker Compose files to use when running tests.
 
 ## Test Execution
 
@@ -46,34 +66,51 @@ Prerequisites:
 
 
 
-To execute a given test suite (e.g., TNA, TNC, TNJ), use the following standard command template from the terminal:
+To execute a given test suite (e.g., TNA, TNB, TNJ), use the following standard command template from the terminal:
 
 ```bash
-cd /teranode/test/<test-suite-selected>
-go test -v -tags <tnXtests>
+cd /teranode/test/<test-suite-folder>
+go test -v -tags test_tn[x]
 ```
 
-Where X should be replaced with the letter corresponding to the desired suite. For example:
+Where [x] should be replaced with the letter corresponding to the desired suite. For example:
 
 ```bash
-go test -v -tags tnjtests
+# For TNA tests
+cd /teranode/test/tna
+go test -v -tags test_tna
+
+# For TNJ tests
+cd /teranode/test/tnj
+go test -v -tags test_tnj
 ```
 
-This command will execute all TNJ tests.
+**Note**: Some tests don't require build tags and can be run directly:
+```bash
+# For TNC tests in e2e/daemon
+cd /teranode/test/e2e/daemon
+go test -v -run "^TestCoinbaseTXAmount$"
+```
 
 To execute a single test, use:
 
 ```bash
-go test -v -run "^<TestSuiteName>$/<TestName>$"
+# For tests using testify suites
+go test -v -run "^<TestSuiteName>$/^<TestName>$" -tags <build_tag>
+
+# For standalone tests
+go test -v -run "^<TestName>$"
 ```
 
 For example:
 
 ```bash
-go test -v -run "^TestTNC1TestSuite$/TestCoinbaseTXAmount$"
-```
+# Suite-based test (TNA)
+go test -v -run "^TestTNA1TestSuite$/TestBroadcastNewTxAllNodes$" -tags test_tna ./test/tna/tna1_test.go
 
-`<TestSuiteName>` is available at the end of each `tn<X>_test.go` file.
+# Standalone test (TNC in e2e/daemon)
+go test -v -run "^TestCoinbaseTXAmount$" ./test/e2e/daemon/tnc1_3_test.go
+```
 
 ## TNA
 
@@ -261,9 +298,11 @@ Examples for each TNB test:
 
 ## TNC
 
-As outlined in the Functional Requirements for Teranode reference document, the tests in the `/test/tnc` folder check that transactions are correctly assembled into Merkle tree structures and consequently organized into valid blocks to propagate to mining pool software.
+As outlined in the Functional Requirements for Teranode reference document, the TNC tests verify that transactions are correctly assembled into Merkle tree structures and consequently organized into valid blocks to propagate to mining pool software.
 
-The naming convention for files in this folder is as follows:
+**Note**: TNC tests are located in `/test/e2e/daemon/` rather than a dedicated `/test/tnc/` folder, as they require full daemon integration.
+
+The naming convention for these test files is:
 
 `tnc<number>_<subnumber>_test.go` corresponds to the TNC-<number>.<subnumber> test in the Functional Requirements for Teranode document.
 
@@ -371,9 +410,11 @@ go test -v -run "^TestTND1TestSuite$/TestTND1_1$" -tags test_tnd
 
 ## TNE
 
-As outlined in the Functional Requirements for Teranode reference document, the tests in the `/test/tne` folder verify that nodes correctly validate blocks received from the network and optimize verification processes.
+As outlined in the Functional Requirements for Teranode reference document, the TNE tests verify that nodes correctly validate blocks received from the network and optimize verification processes.
 
-The naming convention for files in this folder is as follows:
+**Note**: TNE tests are located in `/test/e2e/daemon/` rather than a dedicated `/test/tne/` folder, as they require full daemon integration.
+
+The naming convention for these test files is:
 
 `tne<number>_<subnumber>_test.go` corresponds to the TNE-<number>.<subnumber> test in the Functional Requirements for Teranode document.
 
@@ -387,18 +428,14 @@ The naming convention for files in this folder is as follows:
 
 ### Running TNE Tests
 
-#### Running All TNE Tests
+#### Running TNE Tests
 ```bash
-cd /teranode/test/tne
-go test -v -tags test_tne
+cd /teranode/test/e2e/daemon
+# Run specific TNE test
+go test -v -run "^TestTNE1_1$" tne1_1_test.go
 ```
 
-#### Running Specific TNE Tests
-
-```bash
-cd /teranode/test/tne
-go test -v -run "^TestTNE1TestSuite$/TestTNE1_1$" -tags test_tne
-```
+**Note**: TNE tests are integration tests in the e2e/daemon directory and typically don't require build tags.
 
 ## TNF
 
