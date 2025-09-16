@@ -7,14 +7,14 @@ import (
 )
 
 const (
-	// initialSubsidy is the initial block subsidy in satoshis (50 BTC)
-	initialSubsidy = 50 * 1e8
+	// initialSubsidy is the initial block subsidy in satoshis (50 BTC = 50 * 100,000,000 satoshis)
+	initialSubsidy uint64 = 50 * 100_000_000 // Do not use 50 * 1e8 here as it will default to a float result
 	// maxHalvings is the maximum number of halvings before subsidy becomes 0
-	maxHalvings = 64
+	maxHalvings uint64 = 64
 	// minReasonableSubsidy is the minimum reasonable subsidy for early halvings (0.01 BTC)
-	minReasonableSubsidy = 1000000
+	minReasonableSubsidy uint64 = 1_000_000
 	// maxReasonableHalvings is the maximum number of halvings for validation warnings
-	maxReasonableHalvings = 10
+	maxReasonableHalvings uint64 = 10
 )
 
 // GetBlockSubsidyForHeight calculates the block subsidy (coinbase reward) for a given block height.
@@ -32,14 +32,14 @@ func GetBlockSubsidyForHeight(height uint32, params *chaincfg.Params) uint64 {
 		return 0
 	}
 
-	halvings := height / params.SubsidyReductionInterval
+	halvings := uint64(height) / uint64(params.SubsidyReductionInterval)
 
 	// Force block reward to zero when right shift is undefined.
 	if halvings >= maxHalvings {
 		return 0
 	}
 
-	subsidy := uint64(initialSubsidy)
+	subsidy := initialSubsidy
 
 	// Subsidy is cut in half every 210,000 blocks which will occur approximately every 4 years.
 	subsidy >>= halvings
