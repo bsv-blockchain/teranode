@@ -1,0 +1,82 @@
+skinparam defaultTextAlignment center
+skinparam rectangle {
+  BackgroundColor #e6f0ff
+  BorderColor #3366cc
+  FontColor black
+  RoundCorner 10
+}
+skinparam component {
+  BackgroundColor #e6f0ff
+  BorderColor #3366cc
+  FontColor black
+  RoundCorner 10
+}
+skinparam database {
+  BackgroundColor #f2f2f2
+  BorderColor #999999
+  FontColor black
+  RoundCorner 10
+}
+skinparam shadowing false
+skinparam ArrowColor #666666
+
+@startuml Block_Assembly_Component
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title Block Assembly Service - Component Diagram (Code-Verified Connections)
+
+Container_Boundary(block_assembly, "Block Assembly Service") {
+    Component(grpc_server, "gRPC Server", "Go gRPC", "Handles external API requests for mining candidates and solutions")
+    Component(http_server, "HTTP Server", "Go HTTP", "Alternative API endpoint for mining operations")
+
+    Component(block_assembler, "Block Assembler", "Go", "Main orchestration component managing block assembly workflow")
+    Component(subtree_processor, "Subtree Processor", "Go", "Groups transactions into subtrees with dynamic sizing")
+    Component(job_store, "Job Store", "TTL Cache", "Caches mining job candidates with expiration")
+
+    Component(mining_engine, "Mining Engine", "Go", "Handles block header construction and mining operations")
+    Component(metrics_collector, "Metrics Collector", "Prometheus", "Collects performance and operational metrics")
+
+    ' Internal channels and communication
+    Component(channel_manager, "Channel Manager", "Go Channels", "Manages internal goroutine communication")
+    Component(batch_processor, "Batch Processor", "Go", "Handles batched transaction processing")
+}
+
+Container_Boundary(external_services, "External Services") {
+    Container(validator, "Validator Service", "Go", "Transaction validation")
+    Container(blockchain, "Blockchain Service", "Go", "Blockchain state management")
+    Container(utxo_store, "UTXO Store", "Database", "UTXO management")
+    Container(blob_stores, "Blob Stores", "Storage", "Transaction and subtree storage")
+}
+
+System_Ext(alert_service, "Alert Service", "Alert system and enforcement")
+
+Person(miner, "Miner", "Mining software")
+
+' External API interactions
+Rel(miner, grpc_server, "GetMiningCandidate, SubmitMiningSolution", "gRPC")
+Rel(miner, http_server, "Mining API calls", "HTTP")
+
+' CODE-VERIFIED Alert Service connection
+Rel(alert_service, grpc_server, "Block creation influence, health checks", "gRPC")
+
+' Internal component interactions
+Rel(grpc_server, block_assembler, "Delegates requests")
+Rel(http_server, block_assembler, "Delegates requests")
+Rel(block_assembler, subtree_processor, "Add transactions, get subtrees")
+Rel(block_assembler, job_store, "Store/retrieve mining jobs")
+Rel(block_assembler, mining_engine, "Create block headers")
+Rel(subtree_processor, batch_processor, "Process transaction batches")
+Rel(block_assembler, channel_manager, "Coordinate async operations")
+
+' External service interactions
+Rel(validator, grpc_server, "Store validated transactions", "gRPC")
+Rel(blockchain, block_assembler, "Block notifications, state updates", "gRPC")
+Rel(subtree_processor, utxo_store, "UTXO operations", "gRPC")
+Rel(subtree_processor, blob_stores, "Store/retrieve subtrees", "HTTP")
+
+' Metrics
+Rel(block_assembler, metrics_collector, "Performance metrics")
+Rel(subtree_processor, metrics_collector, "Processing metrics")
+
+SHOW_LEGEND()
+@enduml

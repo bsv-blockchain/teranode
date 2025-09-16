@@ -92,6 +92,12 @@ The Block Assembly service also subscribes to the Blockchain service, and receiv
 
 ![Block_Assembly_Service_Component_Diagram.png](img/Block_Assembly_Service_Component_Diagram.png)
 
+### Detailed Component Diagram
+
+The detailed component diagram below shows the internal architecture of the Block Assembly Service with code-verified connections:
+
+![Block_Assembly_Component](img/plantuml/blockassembly/Block_Assembly_Component.svg)
+
 Finally, note that the Block Assembly benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
 
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services.
