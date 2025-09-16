@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/url"
@@ -234,7 +235,120 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	appSettings.LocalTestStartFromState = "RUNNING"
 	appSettings.P2P.Port = p2pPort
 	appSettings.Asset.HTTPPort = assetPort
+	appSettings.Asset.HTTPListenAddress = fmt.Sprintf(":%d", assetPort)
+	appSettings.Asset.HTTPAddress = fmt.Sprintf("http://localhost:%d%s", assetPort, appSettings.Asset.APIPrefix)
+	appSettings.Asset.HTTPPublicAddress = fmt.Sprintf("http://localhost:%d%s", assetPort, appSettings.Asset.APIPrefix)
 	appSettings.Asset.CentrifugeDisable = true
+
+	// Also set centrifuge port even though disabled, to avoid any initialization issues
+	var centrifugePort int
+	centrifugePort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for centrifuge")
+	appSettings.Asset.CentrifugeListenAddress = fmt.Sprintf(":%d", centrifugePort)
+
+	// Use dynamic port for health check to avoid conflicts in parallel tests
+	var healthCheckPort int
+	healthCheckPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for health check")
+	appSettings.HealthCheckHTTPListenAddress = fmt.Sprintf(":%d", healthCheckPort)
+
+	// Use dynamic ports for all service HTTP listeners to avoid conflicts
+	var blockchainHTTPPort int
+	blockchainHTTPPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for blockchain HTTP")
+	appSettings.BlockChain.HTTPListenAddress = fmt.Sprintf(":%d", blockchainHTTPPort)
+
+	var validatorHTTPPort int
+	validatorHTTPPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for validator HTTP")
+	appSettings.Validator.HTTPListenAddress = fmt.Sprintf(":%d", validatorHTTPPort)
+	validatorHTTPURL, err := url.Parse(fmt.Sprintf("http://localhost:%d", validatorHTTPPort))
+	require.NoError(t, err, "Failed to parse validator HTTP URL")
+	appSettings.Validator.HTTPAddress = validatorHTTPURL
+
+	var propagationHTTPPort int
+	propagationHTTPPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for propagation HTTP")
+	appSettings.Propagation.HTTPListenAddress = fmt.Sprintf(":%d", propagationHTTPPort)
+	appSettings.Propagation.HTTPAddresses = []string{fmt.Sprintf("localhost:%d", propagationHTTPPort)}
+
+	var p2pHTTPPort int
+	p2pHTTPPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for p2p HTTP")
+	appSettings.P2P.HTTPListenAddress = fmt.Sprintf(":%d", p2pHTTPPort)
+	appSettings.P2P.HTTPAddress = fmt.Sprintf("localhost:%d", p2pHTTPPort)
+
+	var faucetHTTPPort int
+	faucetHTTPPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for faucet HTTP")
+	appSettings.Faucet.HTTPListenAddress = fmt.Sprintf(":%d", faucetHTTPPort)
+
+	var rpcPort int
+	rpcPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for RPC")
+	rpcURL, err := url.Parse(fmt.Sprintf("http://localhost:%d", rpcPort))
+	require.NoError(t, err, "Failed to parse RPC URL")
+	appSettings.RPC.RPCListenerURL = rpcURL
+
+	var persisterHTTPPort int
+	persisterHTTPPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for persister HTTP")
+	appSettings.Block.PersisterHTTPListenAddress = fmt.Sprintf(":%d", persisterHTTPPort)
+
+	// Use dynamic ports for all service gRPC listeners to avoid conflicts
+	var blockchainGRPCPort int
+	blockchainGRPCPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for blockchain gRPC")
+	appSettings.BlockChain.GRPCListenAddress = fmt.Sprintf(":%d", blockchainGRPCPort)
+	appSettings.BlockChain.GRPCAddress = fmt.Sprintf("localhost:%d", blockchainGRPCPort)
+
+	var blockAssemblyGRPCPort int
+	blockAssemblyGRPCPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for block assembly gRPC")
+	appSettings.BlockAssembly.GRPCListenAddress = fmt.Sprintf(":%d", blockAssemblyGRPCPort)
+	appSettings.BlockAssembly.GRPCAddress = fmt.Sprintf("localhost:%d", blockAssemblyGRPCPort)
+
+	var blockValidationGRPCPort int
+	blockValidationGRPCPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for block validation gRPC")
+	appSettings.BlockValidation.GRPCListenAddress = fmt.Sprintf(":%d", blockValidationGRPCPort)
+	appSettings.BlockValidation.GRPCAddress = fmt.Sprintf("localhost:%d", blockValidationGRPCPort)
+
+	var validatorGRPCPort int
+	validatorGRPCPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for validator gRPC")
+	appSettings.Validator.GRPCListenAddress = fmt.Sprintf(":%d", validatorGRPCPort)
+	appSettings.Validator.GRPCAddress = fmt.Sprintf("localhost:%d", validatorGRPCPort)
+
+	var propagationGRPCPort int
+	propagationGRPCPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for propagation gRPC")
+	appSettings.Propagation.GRPCListenAddress = fmt.Sprintf(":%d", propagationGRPCPort)
+	appSettings.Propagation.GRPCAddresses = []string{fmt.Sprintf("localhost:%d", propagationGRPCPort)}
+
+	var p2pGRPCPort int
+	p2pGRPCPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for p2p gRPC")
+	appSettings.P2P.GRPCListenAddress = fmt.Sprintf(":%d", p2pGRPCPort)
+	appSettings.P2P.GRPCAddress = fmt.Sprintf("localhost:%d", p2pGRPCPort)
+
+	var subtreeValidationGRPCPort int
+	subtreeValidationGRPCPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for subtree validation gRPC")
+	appSettings.SubtreeValidation.GRPCListenAddress = fmt.Sprintf(":%d", subtreeValidationGRPCPort)
+	appSettings.SubtreeValidation.GRPCAddress = fmt.Sprintf("localhost:%d", subtreeValidationGRPCPort)
+
+	var legacyGRPCPort int
+	legacyGRPCPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for legacy gRPC")
+	appSettings.Legacy.GRPCListenAddress = fmt.Sprintf(":%d", legacyGRPCPort)
+	appSettings.Legacy.GRPCAddress = fmt.Sprintf("localhost:%d", legacyGRPCPort)
+
+	var coinbaseGRPCPort int
+	coinbaseGRPCPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for coinbase gRPC")
+	appSettings.Coinbase.GRPCListenAddress = fmt.Sprintf(":%d", coinbaseGRPCPort)
+	appSettings.Coinbase.GRPCAddress = fmt.Sprintf("localhost:%d", coinbaseGRPCPort)
 
 	// Disable both NAT services to avoid libp2p "multiple NATManagers" error
 	appSettings.P2P.EnableNATService = false
