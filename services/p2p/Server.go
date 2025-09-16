@@ -1208,6 +1208,16 @@ func (s *Server) handleHandshakeTopic(ctx context.Context, m []byte, from string
 			// If we have a higher block than the peer who just connected
 			if localHeight > hs.BestHeight {
 				s.logger.Debugf("[handleHandshakeTopic][p2p-handshake] our height (%d) is higher than peer %s (%d)", localHeight, hs.PeerID, hs.BestHeight)
+			} else if hs.BestHeight > localHeight && s.syncCoordinator != nil {
+				// If peer is ahead and we don't have a bootstrap, so no other peers are going
+				// to become available therefore we can trigger immediate sync
+				if len(s.settings.P2P.BootstrapAddresses) == 0 {
+					s.logger.Infof("[handleHandshakeTopic][p2p-handshake] no bootstrap detected, peer %s is ahead (height %d > %d), triggering immediate sync",
+						hs.PeerID, hs.BestHeight, localHeight)
+					if err := s.syncCoordinator.TriggerSync(); err != nil {
+						s.logger.Warnf("[handleHandshakeTopic] Failed to trigger sync: %v", err)
+					}
+				}
 			}
 		}
 	}
