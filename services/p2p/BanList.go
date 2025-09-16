@@ -242,7 +242,12 @@ func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime tim
 
 	b.bannedPeers[ipOrSubnet] = banInfo
 
-	go b.notifySubscribers(BanEvent{Action: "add", IP: ipOrSubnet, Subnet: subnet})
+	// Notify subscribers asynchronously after state is updated
+	// Copy event data to avoid race conditions
+	event := BanEvent{Action: "add", IP: ipOrSubnet, Subnet: subnet}
+	go func() {
+		b.notifySubscribersAsync(event)
+	}()
 
 	return b.savePeerToDatabase(ctx, ipOrSubnet, banInfo)
 }
@@ -270,7 +275,12 @@ func (b *BanList) Remove(ctx context.Context, ipOrSubnet string) error {
 
 	delete(b.bannedPeers, ipOrSubnet)
 
-	go b.notifySubscribers(BanEvent{Action: "remove", IP: ipOrSubnet, Subnet: subnet})
+	// Notify subscribers asynchronously after state is updated
+	// Copy event data to avoid race conditions
+	event := BanEvent{Action: "remove", IP: ipOrSubnet, Subnet: subnet}
+	go func() {
+		b.notifySubscribersAsync(event)
+	}()
 
 	return b.removePeerFromDatabase(ctx, ipOrSubnet)
 }
@@ -511,11 +521,12 @@ func (b *BanList) Unsubscribe(ch chan BanEvent) {
 	delete(b.subscribers, ch)
 }
 
-func (b *BanList) notifySubscribers(event BanEvent) {
-	// Make a copy of subscribers to avoid long lock and reduce chance of race conditions
+// notifySubscribersAsync notifies all subscribers about a ban event asynchronously.
+// This is safe to call from a goroutine.
+func (b *BanList) notifySubscribersAsync(event BanEvent) {
+	// Make a copy of subscribers to avoid long lock
 	b.mu.RLock()
 	subscribers := make([]chan BanEvent, 0, len(b.subscribers))
-
 	for ch := range b.subscribers {
 		subscribers = append(subscribers, ch)
 	}
@@ -523,31 +534,14 @@ func (b *BanList) notifySubscribers(event BanEvent) {
 
 	// Notify each subscriber without holding the lock
 	for _, ch := range subscribers {
-		// Use a closure to safely send to each channel
-		func(ch chan BanEvent) {
-			defer func() {
-				if r := recover(); r != nil {
-					// If we hit a closed channel or other panic, log and continue
-					b.logger.Warnf("Failed to send notification: %v", r)
-					// Remove the subscriber if its channel is closed
-					if _, ok := r.(error); ok && strings.Contains(r.(error).Error(), "closed channel") {
-						b.mu.Lock()
-						delete(b.subscribers, ch)
-						b.mu.Unlock()
-					}
-				}
-			}()
-
-			select {
-			case ch <- event:
-				b.logger.Debugf("Successfully notified subscriber about %s\n", event.IP)
-			default:
-				b.logger.Warnf("Skipped notification for %s due to full channel", event.IP)
-			}
-		}(ch)
+		select {
+		case ch <- event:
+			b.logger.Debugf("Successfully notified subscriber about %s\n", event.IP)
+		default:
+			// Channel is full or closed, skip this notification
+			b.logger.Warnf("Skipped notification for %s (channel full or unavailable)", event.IP)
+		}
 	}
-
-	b.logger.Debugf("Finished notifying subscribers for %s\n", event.IP)
 }
 
 // Clear removes all entries from the ban list and cleans up resources.
@@ -555,18 +549,11 @@ func (b *BanList) Clear() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// Clear the in-memory map
+	// Clear the in-memory maps
 	b.bannedPeers = make(map[string]BanInfo)
-	for ch := range b.subscribers {
-		// Drain the channel before closing
-		for len(ch) > 0 {
-			<-ch
-		}
-
-		close(ch)
-	}
-
 	b.subscribers = make(map[chan BanEvent]struct{})
+	// Note: We don't close subscriber channels - they'll be garbage collected
+	// This avoids any race condition with goroutines trying to send to them
 
 	// Clear the database table
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
