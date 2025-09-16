@@ -377,8 +377,7 @@ func TestCatchup_FSMStateManagement(t *testing.T) {
 				Header: testHeaders[4],
 				Height: 1005,
 			},
-			bestBlockHeader: testHeaders[0],
-			blockHeaders:    testHeaders[1:],
+			blockHeaders: testHeaders[1:],
 		}
 
 		// Mock FSM state changes
@@ -546,7 +545,6 @@ func TestCatchup_ContextStateConsistency(t *testing.T) {
 			blockUpTo:          targetBlock,
 			baseURL:            "http://test-peer",
 			startTime:          time.Now(),
-			bestBlockHeader:    bestBlockHeader,
 			commonAncestorHash: testHeaders[0].Hash(),
 			commonAncestorMeta: &model.BlockHeaderMeta{Height: 1000},
 			forkDepth:          0,

@@ -33,7 +33,6 @@ type CatchupContext struct {
 	baseURL                 string
 	peerID                  string
 	startTime               time.Time
-	bestBlockHeader         *model.BlockHeader
 	commonAncestorHash      *chainhash.Hash
 	commonAncestorMeta      *model.BlockHeaderMeta
 	commonAncestorIndex     int // Index of common ancestor in peer headers
@@ -228,13 +227,12 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 func (u *Server) fetchHeaders(ctx context.Context, catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 1: Fetching headers from peer %s", catchupCtx.blockUpTo.Hash().String(), catchupCtx.baseURL)
 
-	result, bestBlockHeader, err := u.catchupGetBlockHeaders(ctx, catchupCtx.blockUpTo, catchupCtx.baseURL, catchupCtx.peerID)
+	result, _, err := u.catchupGetBlockHeaders(ctx, catchupCtx.blockUpTo, catchupCtx.baseURL, catchupCtx.peerID)
 	if err != nil {
 		return errors.NewProcessingError("[catchup][%s] failed to get block headers: %w", catchupCtx.blockUpTo.Hash().String(), err)
 	}
 
 	catchupCtx.headersFetchResult = result
-	catchupCtx.bestBlockHeader = bestBlockHeader
 
 	u.logger.Infof("[catchup][%s] Fetched %d headers from peer", catchupCtx.blockUpTo.Hash().String(), len(result.Headers))
 
@@ -560,8 +558,13 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	size.Store(int64(len(catchupCtx.blockHeaders)))
 	validateBlocksChan := make(chan *model.Block, size.Load())
 
+	bestBlockHeader, _, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewProcessingError("failed to get best block header", err)
+	}
+
 	// Check if we need to change FSM state
-	newBlocksOnOurChain := len(catchupCtx.blockHeaders) > 0 && catchupCtx.blockHeaders[0].HashPrevBlock.IsEqual(catchupCtx.bestBlockHeader.Hash())
+	newBlocksOnOurChain := len(catchupCtx.blockHeaders) > 0 && catchupCtx.blockHeaders[0].HashPrevBlock.IsEqual(bestBlockHeader.Hash())
 
 	// Set FSM state if needed
 	if newBlocksOnOurChain {
