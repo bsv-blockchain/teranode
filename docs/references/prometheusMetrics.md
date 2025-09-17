@@ -56,24 +56,11 @@
 | `teranode_blockassembly_generate_blocks`                      | Histogram | Histogram of generating blocks in block assembler                                |
 | `teranode_blockassembly_current_state`                       | Gauge     | Current state of the block assembly process                                     |
 
-## Block Service Metrics
-
-| Metric Name                                          | Type      | Description                                     |
-|------------------------------------------------------|-----------|-------------------------------------------------|
-| `teranode_block_from_bytes`                          | Histogram | Histogram of Block.FromBytes                    |
-| `teranode_block_valid`                               | Histogram | Histogram of Block.Valid                        |
-| `teranode_block_check_merkle_root`                   | Histogram | Histogram of Block.CheckMerkleRoot              |
-| `teranode_block_get_subtrees`                        | Histogram | Histogram of Block.GetSubtrees                  |
-| `teranode_block_get_and_validate_subtrees`           | Histogram | Histogram of Block.GetAndValidateSubtrees       |
-| `teranode_block_bloom_filter_query_counter`          | Gauge     | Number of queries to the bloom filter           |
-| `teranode_block_bloom_filter_positive_counter`       | Gauge     | Number of positive from the bloom filter        |
-| `teranode_block_bloom_filter_false_positive_counter` | Gauge     | Number of false positives from the bloom filter |
-
 ## Blockchain Service Metrics
 
 | Metric Name                                             | Type      | Description                                                             |
 |---------------------------------------------------------|-----------|-------------------------------------------------------------------------|
-| `teranode_blockchain_health`                            | Counter   | Histogram of calls to the health endpoint of the blockchain service     |
+| `teranode_blockchain_health`                            | Counter   | Number of calls to the health endpoint of the blockchain service        |
 | `teranode_blockchain_add_block`                         | Histogram | Histogram of block added to the blockchain service                      |
 | `teranode_blockchain_get_block`                         | Histogram | Histogram of Get block calls to the blockchain service                  |
 | `teranode_blockchain_get_block_stats`                   | Histogram | Histogram of Get block stats calls to the blockchain service            |
@@ -139,6 +126,11 @@
 | `teranode_blockvalidation_last_validated_blocks_cache` | Gauge     | Number of blocks in the last validated blocks cache               |
 | `teranode_blockvalidation_block_exists_cache`          | Gauge     | Number of blocks in the block exists cache                        |
 | `teranode_blockvalidation_subtree_exists_cache`        | Gauge     | Number of subtrees in the subtree exists cache                    |
+| `teranode_blockvalidation_catchup_peer_id`             | CounterVec | Number of catchup operations by peer ID                           |
+| `teranode_blockvalidation_catchup_success`             | CounterVec | Number of successful catchup operations                           |
+| `teranode_blockvalidation_catchup_error_type`          | CounterVec | Number of catchup operations by error type                        |
+| `teranode_blockvalidation_catchup_duration`            | Histogram | Duration of catchup operations                                    |
+| `teranode_blockvalidation_catchup_blocks_processed`    | Counter   | Total number of blocks processed during catchup                   |
 
 ## Legacy Peer Server Metrics
 
@@ -231,6 +223,7 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_rpc_freeze`                 | Histogram | Histogram of calls to handleFreeze in the rpc service               |
 | `teranode_rpc_unfreeze`               | Histogram | Histogram of calls to handleUnfreeze in the rpc service             |
 | `teranode_rpc_reassign`               | Histogram | Histogram of calls to handleReassign in the rpc service             |
+| `teranode_rpc_get_chaintips`          | Histogram | Histogram of calls to handleGetChainTips in the rpc service         |
 
 ## Subtree Validation Service Metrics
 
@@ -307,6 +300,10 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_aerospike_set_external`                 | Histogram  | Duration of setting an external transaction to the blob store   |
 | `teranode_aerospike_txmeta_get_counter_conflicting` | Counter    | Counter of conflicting TxMeta GET operations using Aerospike    |
 | `teranode_aerospike_txmeta_get_conflicting`        | Histogram  | Histogram of conflicting TxMeta GET operations using Aerospike  |
+| `teranode_aerospike_external_tx_errors`            | CounterVec | Number of external transaction operation errors                 |
+| `teranode_aerospike_batch_operation_duration`      | Histogram  | Duration of batch operations in aerospike                       |
+| `teranode_aerospike_connection_pool_size`          | Gauge      | Current size of aerospike connection pool                       |
+| `teranode_aerospike_operation_retries`             | Counter    | Number of operation retries in aerospike                        |
 
 ## SQL Service Metrics
 
