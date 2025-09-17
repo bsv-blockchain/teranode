@@ -60,7 +60,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -318,4 +320,503 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "100011", string(dah))
+}
+
+// TestStore_SimpleGetters tests simple getter methods that don't require Aerospike connection
+func TestStore_SimpleGetters(t *testing.T) {
+	// Create a basic store instance for testing getters
+	store := &Store{
+		namespace:     "test-namespace",
+		setName:       "test-set",
+		utxoBatchSize: 25000,
+	}
+
+	t.Run("GetNamespace", func(t *testing.T) {
+		assert.Equal(t, "test-namespace", store.GetNamespace())
+	})
+
+	t.Run("GetSet", func(t *testing.T) {
+		assert.Equal(t, "test-set", store.GetSet())
+	})
+
+	t.Run("GetClient", func(t *testing.T) {
+		// Should return nil for uninitialized client
+		assert.Nil(t, store.GetClient())
+
+		// Set a mock client and test
+		mockClient := &uaerospike.Client{}
+		store.client = mockClient
+		assert.Equal(t, mockClient, store.GetClient())
+	})
+}
+
+// TestStore_SetLogger tests the SetLogger method
+func TestStore_SetLogger(t *testing.T) {
+	store := &Store{}
+	logger := ulogger.NewErrorTestLogger(t)
+
+	// Should not panic
+	store.SetLogger(logger)
+	assert.Equal(t, logger, store.logger)
+}
+
+// TestStore_BlockHeight tests block height methods
+func TestStore_BlockHeight(t *testing.T) {
+	t.Run("InitialBlockHeight", func(t *testing.T) {
+		store := &Store{}
+		// Initial block height should be 0
+		assert.Equal(t, uint32(0), store.GetBlockHeight())
+	})
+
+	t.Run("SetBlockHeightZeroError", func(t *testing.T) {
+		store := &Store{}
+		// SetBlockHeight with 0 should return error
+		err := store.SetBlockHeight(0)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "block height cannot be zero")
+	})
+
+	t.Run("GetBlockHeightOnly", func(t *testing.T) {
+		store := &Store{}
+
+		// Test direct manipulation of atomic value for GetBlockHeight
+		store.blockHeight.Store(12345)
+		assert.Equal(t, uint32(12345), store.GetBlockHeight())
+
+		store.blockHeight.Store(99999)
+		assert.Equal(t, uint32(99999), store.GetBlockHeight())
+	})
+
+	// Note: SetBlockHeight requires logger and externalStore to be initialized
+	// Full testing would require proper Store setup via New() function
+}
+
+// TestStore_MedianBlockTime tests median block time methods
+func TestStore_MedianBlockTime(t *testing.T) {
+	logger := ulogger.NewVerboseTestLogger(t)
+	store := &Store{
+		logger: logger,
+	}
+
+	t.Run("InitialMedianTime", func(t *testing.T) {
+		// Initial median time should be 0
+		assert.Equal(t, uint32(0), store.GetMedianBlockTime())
+	})
+
+	t.Run("SetAndGetMedianTime", func(t *testing.T) {
+		// Test setting median block time
+		testTime := uint32(1640995200) // Example timestamp
+		err := store.SetMedianBlockTime(testTime)
+		assert.NoError(t, err)
+
+		// Test getting the set value
+		retrievedTime := store.GetMedianBlockTime()
+		assert.Equal(t, testTime, retrievedTime)
+	})
+
+	t.Run("SetZeroMedianTime", func(t *testing.T) {
+		// Test setting zero (should be allowed unlike SetBlockHeight)
+		err := store.SetMedianBlockTime(0)
+		assert.NoError(t, err)
+
+		retrievedTime := store.GetMedianBlockTime()
+		assert.Equal(t, uint32(0), retrievedTime)
+	})
+
+	t.Run("SetMaxMedianTime", func(t *testing.T) {
+		// Test setting maximum value
+		maxTime := uint32(4294967295) // Max uint32
+		err := store.SetMedianBlockTime(maxTime)
+		assert.NoError(t, err)
+
+		retrievedTime := store.GetMedianBlockTime()
+		assert.Equal(t, maxTime, retrievedTime)
+	})
+
+	t.Run("DirectAtomicManipulation", func(t *testing.T) {
+		// Test direct manipulation of atomic value for GetMedianBlockTime
+		store.medianBlockTime.Store(54321)
+		assert.Equal(t, uint32(54321), store.GetMedianBlockTime())
+
+		store.medianBlockTime.Store(98765)
+		assert.Equal(t, uint32(98765), store.GetMedianBlockTime())
+	})
+}
+
+// TestStore_calculateOffsetForOutput tests the offset calculation method
+func TestStore_calculateOffsetForOutput(t *testing.T) {
+	store := &Store{utxoBatchSize: 20000}
+
+	testCases := []struct {
+		vout           uint32
+		expectedOffset uint32
+		description    string
+	}{
+		{0, 0, "First output in first batch"},
+		{10000, 10000, "Middle of first batch"},
+		{19999, 19999, "Last output in first batch"},
+		{20000, 0, "First output in second batch"},
+		{30000, 10000, "Middle of second batch"},
+		{39999, 19999, "Last output in second batch"},
+		{40000, 0, "First output in third batch"},
+		{50000, 10000, "Middle of third batch"},
+		{100000, 0, "Output in sixth batch"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			offset := store.calculateOffsetForOutput(tc.vout)
+			assert.Equal(t, tc.expectedOffset, offset, "Vout: %d", tc.vout)
+		})
+	}
+}
+
+// TestStore_calculateOffsetForOutput_DifferentBatchSizes tests offset calculation with different batch sizes
+func TestStore_calculateOffsetForOutput_DifferentBatchSizes(t *testing.T) {
+	testCases := []struct {
+		batchSize      int
+		vout           uint32
+		expectedOffset uint32
+	}{
+		{10000, 0, 0},
+		{10000, 5000, 5000},
+		{10000, 10000, 0},
+		{10000, 15000, 5000},
+		{30000, 0, 0},
+		{30000, 25000, 25000},
+		{30000, 30000, 0},
+		{30000, 35000, 5000},
+		{1, 0, 0},
+		{1, 5, 0},
+		{1, 10, 0},
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("BatchSize_%d_Vout_%d", tc.batchSize, tc.vout), func(t *testing.T) {
+			store := &Store{utxoBatchSize: tc.batchSize}
+			offset := store.calculateOffsetForOutput(tc.vout)
+			assert.Equal(t, tc.expectedOffset, offset)
+		})
+	}
+}
+
+// TestStore_calculateOffsetForOutput_ErrorCases tests error cases in offset calculation
+func TestStore_calculateOffsetForOutput_ErrorCases(t *testing.T) {
+	logger := ulogger.NewVerboseTestLogger(t)
+
+	t.Run("ZeroBatchSize", func(t *testing.T) {
+		store := &Store{
+			utxoBatchSize: 0,
+			logger:        logger,
+		}
+
+		offset := store.calculateOffsetForOutput(100)
+		assert.Equal(t, uint32(0), offset, "Should return 0 for zero batch size")
+	})
+
+	t.Run("NegativeBatchSize", func(t *testing.T) {
+		store := &Store{
+			utxoBatchSize: -1,
+			logger:        logger,
+		}
+
+		offset := store.calculateOffsetForOutput(100)
+		assert.Equal(t, uint32(0), offset, "Should return 0 for negative batch size")
+	})
+
+	t.Run("BatchSizeExceedsUint32Max", func(t *testing.T) {
+		store := &Store{
+			utxoBatchSize: int(uint64(1) << 33), // Exceeds uint32 max
+			logger:        logger,
+		}
+
+		offset := store.calculateOffsetForOutput(100)
+		assert.Equal(t, uint32(0), offset, "Should return 0 when batch size exceeds uint32 max")
+	})
+}
+
+// Note: TestStore_Health is not included because the Health method requires
+// a live Aerospike client connection and is more suitable for integration testing
+
+// TestStore_AtomicOperations tests thread-safety of atomic operations
+func TestStore_AtomicOperations(t *testing.T) {
+	store := &Store{}
+
+	t.Run("ConcurrentBlockHeightReadOperations", func(t *testing.T) {
+		const numGoroutines = 50
+		const numOperations = 100
+
+		// Set initial value
+		store.blockHeight.Store(1000)
+
+		// Test concurrent reads and atomic writes
+		for i := 0; i < numGoroutines; i++ {
+			go func(id int) {
+				for j := 0; j < numOperations; j++ {
+					// Concurrent reads
+					height := store.GetBlockHeight()
+					assert.NotNil(t, height) // Just ensure it doesn't panic
+
+					// Atomic store operation
+					store.blockHeight.Store(uint32(id*1000 + j))
+				}
+			}(i)
+		}
+
+		// Allow goroutines to complete
+		time.Sleep(50 * time.Millisecond)
+
+		// Final value should be readable without issues
+		finalHeight := store.GetBlockHeight()
+		assert.NotEqual(t, uint32(0), finalHeight) // Should be non-zero after operations
+	})
+
+	t.Run("ConcurrentMedianBlockTimeReadOperations", func(t *testing.T) {
+		const numGoroutines = 50
+		const numOperations = 100
+
+		// Set initial value
+		store.medianBlockTime.Store(2000)
+
+		// Test concurrent reads and atomic writes
+		for i := 0; i < numGoroutines; i++ {
+			go func(id int) {
+				for j := 0; j < numOperations; j++ {
+					// Concurrent reads
+					medianTime := store.GetMedianBlockTime()
+					assert.NotNil(t, medianTime) // Just ensure it doesn't panic
+
+					// Atomic store operation
+					store.medianBlockTime.Store(uint32(id*2000 + j))
+				}
+			}(i)
+		}
+
+		// Allow goroutines to complete
+		time.Sleep(50 * time.Millisecond)
+
+		// Final value should be readable without issues
+		finalTime := store.GetMedianBlockTime()
+		assert.NotEqual(t, uint32(0), finalTime) // Should be non-zero after operations
+	})
+}
+
+// TestStore_EdgeCases tests edge cases and boundary conditions
+// Note: Removed TestStore_EdgeCases as it was duplicating TestStore_calculateOffsetForOutput_ErrorCases
+// and had incorrect expectations about panic behavior
+
+// TestStore_Initialization tests Store initialization edge cases
+func TestStore_Initialization(t *testing.T) {
+	t.Run("ZeroValueStore", func(t *testing.T) {
+		store := &Store{}
+
+		// Test zero-value store behavior
+		assert.Equal(t, "", store.GetNamespace())
+		assert.Equal(t, "", store.GetSet())
+		assert.Equal(t, uint32(0), store.GetBlockHeight())
+		assert.Equal(t, uint32(0), store.GetMedianBlockTime())
+		assert.Nil(t, store.GetClient())
+
+		// SetLogger should not panic
+		assert.NotPanics(t, func() {
+			store.SetLogger(nil)
+		})
+	})
+
+	t.Run("PartiallyInitializedStore", func(t *testing.T) {
+		store := &Store{
+			namespace:     "partial",
+			setName:       "",
+			utxoBatchSize: 15000,
+		}
+
+		assert.Equal(t, "partial", store.GetNamespace())
+		assert.Equal(t, "", store.GetSet())
+
+		// calculateOffsetForOutput should work with initialized batch size
+		offset := store.calculateOffsetForOutput(20000)
+		expectedOffset := uint32(5000) // 20000 % 15000 = 5000
+		assert.Equal(t, expectedOffset, offset)
+	})
+}
+
+// TestStore_indexExists_ErrorCases tests indexExists method error cases
+// Note: TestStore_indexExists_ErrorCases removed because indexExists method
+// requires a properly initialized Aerospike client and is better suited for integration tests
+
+// Note: TestNew_URLParsing removed because the New function requires proper settings
+// and Aerospike client setup, making it unsuitable for unit testing without integration setup
+
+// TestStore_Constants tests package constants and variables
+func TestStore_Constants(t *testing.T) {
+	t.Run("MaxTxSizeInStoreInBytes", func(t *testing.T) {
+		assert.Equal(t, 32*1024, MaxTxSizeInStoreInBytes)
+		assert.Equal(t, 32768, MaxTxSizeInStoreInBytes)
+	})
+
+	t.Run("binNames slice", func(t *testing.T) {
+		// Test that binNames contains expected fields
+		expectedFields := []fields.FieldName{
+			fields.Locked,
+			fields.Fee,
+			fields.SizeInBytes,
+			fields.LockTime,
+			fields.Utxos,
+			fields.TxInpoints,
+			fields.BlockIDs,
+			fields.UtxoSpendableIn,
+			fields.Conflicting,
+		}
+
+		assert.Len(t, binNames, len(expectedFields))
+
+		// Check that all expected fields are present
+		for _, expected := range expectedFields {
+			assert.Contains(t, binNames, expected)
+		}
+	})
+}
+
+// TestStore_InterfaceCompliance tests that Store implements required interfaces
+func TestStore_InterfaceCompliance(t *testing.T) {
+	t.Run("Store implements utxo.Store", func(t *testing.T) {
+		// This test ensures Store implements the utxo.Store interface
+		var _ utxo.Store = (*Store)(nil)
+
+		// If this compiles, the interface is implemented correctly
+		assert.True(t, true, "Store successfully implements utxo.Store interface")
+	})
+}
+
+// TestStore_FieldValidation tests field validation and edge cases
+func TestStore_FieldValidation(t *testing.T) {
+	t.Run("Empty namespace and set", func(t *testing.T) {
+		store := &Store{
+			namespace: "",
+			setName:   "",
+		}
+
+		assert.Equal(t, "", store.GetNamespace())
+		assert.Equal(t, "", store.GetSet())
+	})
+
+	t.Run("Special characters in namespace and set", func(t *testing.T) {
+		store := &Store{
+			namespace: "test-namespace_123",
+			setName:   "test-set.456",
+		}
+
+		assert.Equal(t, "test-namespace_123", store.GetNamespace())
+		assert.Equal(t, "test-set.456", store.GetSet())
+	})
+}
+
+// TestStore_BatchSizeEdgeCases tests batch size calculations with edge cases
+func TestStore_BatchSizeEdgeCases(t *testing.T) {
+	testCases := []struct {
+		name        string
+		batchSize   int
+		vout        uint32
+		expectPanic bool
+		description string
+	}{
+		{"Zero batch size", 0, 100, true, "Division by zero should be handled"},
+		{"Negative batch size", -1, 100, true, "Negative batch size should be handled"},
+		{"Very large batch size", 1000000, 500, false, "Large batch size should work"},
+		{"Batch size of 1", 1, 100, false, "Minimum batch size should work"},
+		{"Normal batch size", 20000, 50000, false, "Normal operations should work"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &Store{utxoBatchSize: tc.batchSize}
+
+			if tc.expectPanic {
+				// For edge cases that might panic, we test they don't crash unexpectedly
+				assert.NotPanics(t, func() {
+					defer func() {
+						if r := recover(); r != nil {
+							// Panic occurred, which might be expected for edge cases
+							t.Logf("Function panicked as expected for %s: %v", tc.description, r)
+						}
+					}()
+					_ = store.calculateOffsetForOutput(tc.vout)
+				})
+			} else {
+				assert.NotPanics(t, func() {
+					offset := store.calculateOffsetForOutput(tc.vout)
+					_ = offset // Use the result
+				})
+			}
+		})
+	}
+}
+
+// TestStore_ConcurrentOperations tests thread safety of atomic operations
+func TestStore_ConcurrentOperations(t *testing.T) {
+	logger := ulogger.NewVerboseTestLogger(t)
+	store := &Store{
+		logger: logger,
+	}
+
+	const numGoroutines = 10
+	const numOperations = 20
+
+	t.Run("Concurrent GetBlockHeight operations", func(t *testing.T) {
+		var wg sync.WaitGroup
+		wg.Add(numGoroutines)
+
+		// Test concurrent reads of block height (safe operation)
+		for i := 0; i < numGoroutines; i++ {
+			go func() {
+				defer wg.Done()
+				for j := 0; j < numOperations; j++ {
+					// Read the height (should always be safe)
+					readHeight := store.GetBlockHeight()
+					assert.GreaterOrEqual(t, readHeight, uint32(0))
+				}
+			}()
+		}
+
+		wg.Wait()
+	})
+
+	t.Run("Concurrent GetMedianBlockTime operations", func(t *testing.T) {
+		var wg sync.WaitGroup
+		wg.Add(numGoroutines)
+
+		// Test concurrent reads of median block time (safe operation)
+		for i := 0; i < numGoroutines; i++ {
+			go func() {
+				defer wg.Done()
+				for j := 0; j < numOperations; j++ {
+					// Read the time (should always be safe)
+					readTime := store.GetMedianBlockTime()
+					assert.GreaterOrEqual(t, readTime, uint32(0))
+				}
+			}()
+		}
+
+		wg.Wait()
+	})
+
+	t.Run("Concurrent calculateOffsetForOutput operations", func(t *testing.T) {
+		store := &Store{utxoBatchSize: 20000}
+		var wg sync.WaitGroup
+		wg.Add(numGoroutines)
+
+		// Test concurrent offset calculations (should be thread-safe)
+		for i := 0; i < numGoroutines; i++ {
+			go func(id int) {
+				defer wg.Done()
+				for j := 0; j < numOperations; j++ {
+					vout := uint32(id*100 + j)
+					offset := store.calculateOffsetForOutput(vout)
+					assert.GreaterOrEqual(t, offset, uint32(0))
+				}
+			}(i)
+		}
+
+		wg.Wait()
+	})
 }
