@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -75,6 +76,17 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 	// Validate that we have a baseURL for making HTTP requests
 	if baseURL == "" {
 		return errors.NewInvalidArgumentError("baseURL is required for catchup")
+	}
+
+	// Validate that baseURL is a proper HTTP/HTTPS URL and not a peer ID
+	// Special case: "legacy" is allowed for blocks from the legacy service
+	if baseURL != "legacy" {
+		parsedURL, err := url.Parse(baseURL)
+		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+			u.logger.Errorf("[catchup][%s] Invalid baseURL '%s' - must be valid http/https URL, not peer ID. PeerID: %s",
+				blockUpTo.Hash().String(), baseURL, peerID)
+			return errors.NewProcessingError("[catchup][%s] invalid baseURL - not a valid http/https URL", blockUpTo.Hash().String())
+		}
 	}
 
 	// Use baseURL as fallback if peerID is not provided (for backward compatibility)
@@ -796,7 +808,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 				}
 
 				// Validate the block using standard validation
-				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, peerID, nil, opts); err != nil {
+				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, baseURL, nil, opts); err != nil {
 					u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to validate block %s at position %d: %v", blockUpTo.Hash().String(), block.Hash().String(), i, err)
 
 					// Only mark block as invalid for consensus violations (ErrBlockInvalid or ErrTxInvalid)

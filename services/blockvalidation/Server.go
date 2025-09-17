@@ -544,6 +544,15 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 		return err
 	}
 
+	// Validate that the URL has a proper scheme (http or https)
+	// This prevents peer IDs from being incorrectly used as URLs
+	// Special case: "legacy" is allowed for blocks from the legacy service
+	if kafkaMsg.URL != "legacy" && baseURL.Scheme != "http" && baseURL.Scheme != "https" {
+		u.logger.Errorf("[BlockFound] Invalid URL scheme '%s' for URL '%s' from peer %s - expected http or https. Possible peer ID/URL field confusion.",
+			baseURL.Scheme, kafkaMsg.URL, kafkaMsg.GetPeerId())
+		return errors.NewProcessingError("[BlockFound] invalid URL scheme '%s' - expected http or https", baseURL.Scheme)
+	}
+
 	if u.peerMetrics != nil && kafkaMsg.GetPeerId() != "" {
 		peerMetrics := u.peerMetrics.GetOrCreatePeerMetrics(kafkaMsg.GetPeerId())
 
@@ -605,6 +614,17 @@ func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
 //
 // Returns an error if block processing fails or validation encounters issues
 func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound processBlockFound) error {
+	// Validate baseURL to ensure it's not a peer ID being used as URL
+	// Special case: "legacy" is allowed for blocks from the legacy service
+	if blockFound.baseURL != "legacy" {
+		parsedURL, parseErr := url.Parse(blockFound.baseURL)
+		if parseErr != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+			u.logger.Errorf("[processBlockFoundChannel][%s] Invalid baseURL '%s' for peer %s - must be valid http/https URL, not peer ID",
+				blockFound.hash.String(), blockFound.baseURL, blockFound.peerID)
+			return errors.NewProcessingError("[processBlockFoundChannel][%s] invalid baseURL - not a valid http/https URL", blockFound.hash.String())
+		}
+	}
+
 	// TODO GOKHAN: parameterize this
 	if u.settings.BlockValidation.UseCatchupWhenBehind && len(u.blockFoundCh) > 3 {
 		// we are multiple blocks behind, process all the blocks per peer on the catchup channel
@@ -1020,8 +1040,8 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	}
 
 	// peer sent us a valid block, so increase its reputation score
-	if u.peerMetrics != nil {
-		peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(baseURL)
+	if u.peerMetrics != nil && peerID != "" {
+		peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(peerID)
 		if peerMetric != nil {
 			peerMetric.RecordSuccess()
 		}
