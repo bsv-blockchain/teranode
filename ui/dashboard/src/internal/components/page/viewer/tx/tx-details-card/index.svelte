@@ -111,13 +111,13 @@
               {dataSize(d?.sizeInBytes)}
             </div>
           </div>
-          {#if d?.blockHeights && d?.blockHeights.length > 0 && d?.blockHashes && d?.blockHashes.length > 0}
-            <div class="entry">
-              <div class="label">{t(`${fieldKey}.blockHeight`)}</div>
-              <div class="value block-links">
+          <div class="entry">
+            <div class="label">{t(`${fieldKey}.blockHeight`)}</div>
+            <div class="value block-links">
+              {#if d?.blockHeights && d?.blockHeights.length > 0 && d?.blockHashes && d?.blockHashes.length > 0}
                 {#each d.blockHeights as height, i}
                   {#if d.blockHashes[i]}
-                    <a href={`/viewer/block/${d.blockHashes[i]}`} class="block-link">
+                    <a href={`/viewer/block/?hash=${d.blockHashes[i]}`} class="block-link">
                       {height}
                     </a>
                     {#if i < d.blockHeights.length - 1}
@@ -127,24 +127,42 @@
                     {height}{#if i < d.blockHeights.length - 1}, {/if}
                   {/if}
                 {/each}
-              </div>
-            </div>
-          {:else if d?.blockHeights && d?.blockHeights.length > 0}
-            <div class="entry">
-              <div class="label">{t(`${fieldKey}.blockHeight`)}</div>
-              <div class="value">
+              {:else if d?.blockHeights && d?.blockHeights.length > 0}
                 {d.blockHeights.join(', ')}
-              </div>
+              {:else}
+                <span class="not-in-block">Not in block</span>
+              {/if}
             </div>
-          {/if}
-          {#if d?.subtreeIdxs && d?.subtreeIdxs.length > 0}
-            <div class="entry">
-              <div class="label">{t(`${fieldKey}.subtree`)}</div>
-              <div class="value">
-                {d.subtreeIdxs.map(idx => `Subtree ${idx}`).join(', ')}
-              </div>
+          </div>
+          <div class="entry">
+            <div class="label">{t(`${fieldKey}.subtree`)}</div>
+            <div class="value subtree-info">
+              {#if d?.subtreeIdxs && d?.subtreeIdxs.length > 0 && d?.subtreeHashes && d?.subtreeHashes.length > 0 && d?.blockHashes && d?.blockHashes.length > 0}
+                {#each d.subtreeIdxs as subtreeIdx, i}
+                  <div class="subtree-item">
+                    {#if d.subtreeHashes[i]}
+                      <a href={`/viewer/subtree/?hash=${d.subtreeHashes[i]}&blockHash=${d.blockHashes[i]}`} class="subtree-link">
+                        Subtree #{subtreeIdx}
+                      </a>
+                    {:else}
+                      Subtree #{subtreeIdx}
+                    {/if}
+                    {#if d.blockHashes[i]}
+                      <span class="in-block">
+                        in <a href={`/viewer/block/?hash=${d.blockHashes[i]}`} class="block-link">
+                          Block #{d.blockHeights[i] || ''}
+                        </a>
+                      </span>
+                    {/if}
+                  </div>
+                {/each}
+              {:else if d?.subtreeIdxs && d?.subtreeIdxs.length > 0}
+                {d.subtreeIdxs.map(subtreeIdx => `Subtree #${subtreeIdx}`).join(', ')}
+              {:else}
+                <span class="not-in-subtree">Not in a subtree</span>
+              {/if}
             </div>
-          {/if}
+          </div>
         </div>
         <div>
           <!-- <div class="entry">
@@ -301,5 +319,40 @@
   .block-link:hover {
     opacity: 0.8;
     text-decoration: underline;
+  }
+
+  .subtree-link {
+    color: #1778ff;
+    text-decoration: none;
+    transition: opacity 0.2s;
+    font-weight: 500;
+  }
+
+  .subtree-link:hover {
+    opacity: 0.8;
+    text-decoration: underline;
+  }
+
+  .subtree-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .subtree-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .in-block {
+    color: rgba(255, 255, 255, 0.66);
+    font-size: 14px;
+  }
+
+  .not-in-block,
+  .not-in-subtree {
+    color: rgba(255, 255, 255, 0.4);
+    font-style: italic;
   }
 </style>

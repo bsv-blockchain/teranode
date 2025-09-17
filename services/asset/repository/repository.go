@@ -56,6 +56,7 @@ type Interface interface {
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error)
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, height uint32) ([]*chainhash.Hash, error)
+	GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 }
 
 // Repository provides access to blockchain data storage and retrieval operations.
@@ -758,4 +759,16 @@ func (repo *Repository) GetBlockLocator(ctx context.Context, blockHeaderHash *ch
 	}
 
 	return locator, nil
+}
+
+// GetBlockByID retrieves a block by its database ID
+func (repo *Repository) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
+	repo.logger.Debugf("[Repository] GetBlockByID: %d", id)
+
+	block, err := repo.BlockchainClient.GetBlockByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return block, nil
 }

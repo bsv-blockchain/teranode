@@ -102,11 +102,67 @@ func (h *HTTP) GetTransactionMeta(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
+		// Fetch block hashes and subtree hashes
+		// Note: We assume BlockIDs, SubtreeIdxs, and BlockHeights have the same length and correspond to each other
+		h.logger.Debugf("Transaction %s has BlockIDs: %v, SubtreeIdxs: %v", hash.String(), meta.BlockIDs, meta.SubtreeIdxs)
+
+		numEntries := len(meta.BlockIDs)
+		if len(meta.SubtreeIdxs) != numEntries {
+			h.logger.Warnf("Mismatch in array lengths: %d BlockIDs, %d SubtreeIdxs", numEntries, len(meta.SubtreeIdxs))
+			// Use the minimum length to avoid index out of bounds
+			if len(meta.SubtreeIdxs) < numEntries {
+				numEntries = len(meta.SubtreeIdxs)
+			}
+		}
+
+		blockHashes := make([]string, numEntries)
+		subtreeHashes := make([]string, numEntries)
+
+		for i := 0; i < numEntries; i++ {
+
+			blockID := meta.BlockIDs[i]
+			block, err := h.repository.GetBlockByID(ctx, uint64(blockID))
+			if err != nil {
+				h.logger.Warnf("Failed to get block for ID %d: %v", blockID, err)
+				blockHashes[i] = ""
+				subtreeHashes[i] = ""
+			} else if block != nil && block.Header != nil {
+				blockHashes[i] = block.Header.Hash().String()
+
+				// Get the subtree hash using the subtree index
+				subtreeIdx := meta.SubtreeIdxs[i]
+				if subtreeIdx >= 0 && int(subtreeIdx) < len(block.Subtrees) && block.Subtrees[subtreeIdx] != nil {
+					subtreeHashes[i] = block.Subtrees[subtreeIdx].String()
+					h.logger.Debugf("Transaction in block %d (hash: %s), subtree index %d (hash: %s)",
+						blockID, blockHashes[i], subtreeIdx, subtreeHashes[i])
+				} else {
+					h.logger.Warnf("Subtree index %d out of range for block %d (has %d subtrees)",
+						subtreeIdx, blockID, len(block.Subtrees))
+					subtreeHashes[i] = ""
+				}
+			}
+		}
+
+		// Create enhanced response with block hashes and subtree hashes
+		response := map[string]interface{}{
+			"tx":             meta.Tx,
+			"parentTxHashes": meta.TxInpoints.ParentTxHashes,
+			"blockIDs":       meta.BlockIDs,
+			"blockHashes":    blockHashes,
+			"blockHeights":   meta.BlockHeights,
+			"subtreeIdxs":    meta.SubtreeIdxs,
+			"subtreeHashes":  subtreeHashes,
+			"fee":            meta.Fee,
+			"sizeInBytes":    meta.SizeInBytes,
+			"isCoinbase":     meta.IsCoinbase,
+			"lockTime":       meta.LockTime,
+		}
+
 		prometheusAssetHTTPGetTransaction.WithLabelValues("OK", "200").Inc()
 
 		switch mode {
 		case JSON:
-			return c.JSONPretty(200, meta, "  ")
+			return c.JSONPretty(200, response, "  ")
 		default:
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
 		}

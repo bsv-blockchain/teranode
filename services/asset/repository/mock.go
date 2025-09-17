@@ -291,3 +291,11 @@ func (m *Mock) GetBlockHeader(_ context.Context, hash *chainhash.Hash) (*model.B
 func (m *Mock) GetBlockLocator(_ context.Context, _ *chainhash.Hash, _ uint32) ([]*chainhash.Hash, error) {
 	return nil, nil
 }
+
+func (m *Mock) GetBlockByID(_ context.Context, id uint64) (*model.Block, error) {
+	args := m.Called(id)
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.Block), nil
+}

@@ -61,6 +61,7 @@
         blockHashes: r2.data.blockHashes,
         blockHeights: r2.data.blockHeights,
         subtreeIdxs: r2.data.subtreeIdxs,
+        subtreeHashes: r2.data.subtreeHashes,
         fee: r2.data.fee,
         parentTxHashes: r2.data.parentTxHashes,
         sizeInBytes: r2.data.sizeInBytes,
