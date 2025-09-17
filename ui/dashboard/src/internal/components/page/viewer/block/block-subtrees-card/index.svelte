@@ -78,9 +78,13 @@
   showFooter={showTableFooter}
 >
   <div slot="subtitle">
-    {data?.length === 1
-      ? t(`${baseKey}.subtitle_singular`, { count: data?.length || 0 })
-      : t(`${baseKey}.subtitle`, { count: data?.length || 0 })}
+    {#if totalItems > pageSize}
+      Viewing subtrees {((page - 1) * pageSize) + 1}-{Math.min(page * pageSize, totalItems)} of {totalItems} subtrees
+    {:else if totalItems === 1}
+      {t(`${baseKey}.subtitle_singular`, { count: totalItems || 0 })}
+    {:else}
+      {t(`${baseKey}.subtitle`, { count: totalItems || 0 })}
+    {/if}
   </div>
   <svelte:fragment slot="header-tools">
     <Pager
