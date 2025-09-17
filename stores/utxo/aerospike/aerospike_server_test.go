@@ -8,6 +8,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bitcoin-sv/teranode/errors"
+	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
 	teranode_aerospike "github.com/bitcoin-sv/teranode/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/teranode/stores/utxo/aerospike/cleanup"
@@ -1725,6 +1726,51 @@ func TestSpendSimple(t *testing.T) {
 	assert.Nil(t, response.Bins[fields.DeleteAtHeight.String()])
 }
 
+func TestRespendExpiredChild(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	// Create the tx
+	_, err := store.Create(ctx, tx, 0)
+	require.NoError(t, err)
+
+	// creating spend tx
+	spendingTx1 := utxo2.GetSpendingTx(tx, 1)
+
+	spends, err := store.Spend(ctx, spendingTx1)
+	require.NoError(t, err)
+	assert.Len(t, spends, 1)
+
+	// spending again should be OK
+	_, err = store.Spend(ctx, spendingTx1)
+	require.NoError(t, err)
+	_, err = store.Spend(ctx, spendingTx1)
+	require.NoError(t, err)
+
+	// mark the output 1 as spend and child deleted
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+
+	// mark the child as deleted
+	bin := aerospike.NewBin(fields.DeletedChildren.String(), map[string]bool{
+		spendingTx1.TxIDChainHash().String(): true,
+	})
+	err = client.PutBins(nil, key, bin)
+	require.NoError(t, err)
+
+	// spending again should NOT be OK now
+	spend, err := store.Spend(ctx, spendingTx1)
+	require.Error(t, err)
+	assert.Error(t, spend[0].Err)
+	assert.ErrorIs(t, spend[0].Err, errors.ErrUtxoError)
+}
+
 func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -1928,9 +1974,10 @@ func TestAerospikeCleanupService(t *testing.T) {
 	})
 
 	// start the cleanup service
-	cleanupService, err := cleanup.NewService(cleanup.Options{
+	cleanupService, err := cleanup.NewService(tSettings, cleanup.Options{
 		Ctx:            ctx,
 		Logger:         logger,
+		ExternalStore:  memory.New(),
 		Client:         client,
 		Namespace:      store.GetNamespace(),
 		Set:            store.GetName(),

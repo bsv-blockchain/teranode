@@ -342,6 +342,12 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxMinedBatchSize:              getInt("utxostore_maxMinedBatchSize", 1024, alternativeContext...),
 			BlockHeightRetentionAdjustment: getInt32("utxostore_blockHeightRetentionAdjustment", 0, alternativeContext...),
 			DisableDAHCleaner:              getBool("utxostore_disableDAHCleaner", false, alternativeContext...),
+			// Cleanup-specific settings with reasonable defaults
+			CleanupParentUpdateBatcherSize:           getInt("utxostore_cleanupParentUpdateBatcherSize", 100, alternativeContext...),
+			CleanupParentUpdateBatcherDurationMillis: getInt("utxostore_cleanupParentUpdateBatcherDurationMillis", 10, alternativeContext...),
+			CleanupDeleteBatcherSize:                 getInt("utxostore_cleanupDeleteBatcherSize", 256, alternativeContext...),
+			CleanupDeleteBatcherDurationMillis:       getInt("utxostore_cleanupDeleteBatcherDurationMillis", 10, alternativeContext...),
+			CleanupMaxConcurrentOperations:           getInt("utxostore_cleanupMaxConcurrentOperations", 128, alternativeContext...),
 		},
 		P2P: P2PSettings{
 			BestBlockTopic:      getString("p2p_bestblock_topic", "", alternativeContext...),

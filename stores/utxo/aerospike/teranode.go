@@ -243,6 +243,7 @@ const (
 	LuaErrorCodeFrozenUntil      LuaErrorCode = "FROZEN_UNTIL"
 	LuaErrorCodeCoinbaseImmature LuaErrorCode = "COINBASE_IMMATURE"
 	LuaErrorCodeSpent            LuaErrorCode = "SPENT"
+	LuaErrorCodeInvalidSpend     LuaErrorCode = "INVALID_SPEND"
 	LuaErrorCodeUtxosNotFound    LuaErrorCode = "UTXOS_NOT_FOUND"
 	LuaErrorCodeUtxoNotFound     LuaErrorCode = "UTXO_NOT_FOUND"
 	LuaErrorCodeUtxoInvalidSize  LuaErrorCode = "UTXO_INVALID_SIZE"

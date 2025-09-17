@@ -356,6 +356,12 @@ type UtxoStoreSettings struct {
 	MaxMinedBatchSize              int
 	BlockHeightRetentionAdjustment int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
 	DisableDAHCleaner              bool  // Disable the DAH cleaner process completely
+	// Cleanup-specific settings
+	CleanupParentUpdateBatcherSize           int // Batch size for parent record updates during cleanup
+	CleanupParentUpdateBatcherDurationMillis int // Batch duration for parent record updates during cleanup (ms)
+	CleanupDeleteBatcherSize                 int // Batch size for record deletions during cleanup
+	CleanupDeleteBatcherDurationMillis       int // Batch duration for record deletions during cleanup (ms)
+	CleanupMaxConcurrentOperations           int // Maximum concurrent operations during cleanup processing
 }
 
 type P2PSettings struct {

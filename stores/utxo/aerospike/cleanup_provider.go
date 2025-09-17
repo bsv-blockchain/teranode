@@ -58,15 +58,16 @@ func (s *Store) GetCleanupService() (cleanup.Service, error) {
 
 	// Create options for the cleanup service
 	opts := aerocleanup.Options{
-		Logger:      s.logger,
-		Client:      s.client,
-		Namespace:   s.namespace,
-		Set:         s.setName,
-		IndexWaiter: s,
+		Logger:        s.logger,
+		Client:        s.client,
+		ExternalStore: s.externalStore,
+		Namespace:     s.namespace,
+		Set:           s.setName,
+		IndexWaiter:   s,
 	}
 
 	// Create a new cleanup service
-	cleanupService, err := aerocleanup.NewService(opts)
+	cleanupService, err := aerocleanup.NewService(s.settings, opts)
 	if err != nil {
 		cleanupServiceError = err
 		return nil, err

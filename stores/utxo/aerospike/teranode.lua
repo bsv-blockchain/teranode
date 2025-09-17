@@ -23,6 +23,7 @@ local BIN_LOCKED = "locked"
 local BIN_UTXOS = "utxos"
 local BIN_UTXO_SPENDABLE_IN = "utxoSpendableIn"
 local BIN_LAST_SPENT_STATE = "lastSpentState"  -- Tracks last signaled state: "ALLSPENT" or "NOTALLSPENT"
+local BIN_DELETED_CHILDREN = "deletedChildren"  -- Tracks which child transactions have already been deleted
 
 -- Status constants
 local STATUS_OK = "OK"
@@ -37,6 +38,7 @@ local ERROR_CODE_ALREADY_FROZEN = "ALREADY_FROZEN"
 local ERROR_CODE_FROZEN_UNTIL = "FROZEN_UNTIL"
 local ERROR_CODE_COINBASE_IMMATURE = "COINBASE_IMMATURE"
 local ERROR_CODE_SPENT = "SPENT"
+local ERROR_CODE_INVALID_SPEND = "INVALID_SPEND"
 local ERROR_CODE_UTXOS_NOT_FOUND = "UTXOS_NOT_FOUND"
 local ERROR_CODE_UTXO_NOT_FOUND = "UTXO_NOT_FOUND"
 local ERROR_CODE_UTXO_INVALID_SIZE = "UTXO_INVALID_SIZE"
@@ -52,6 +54,7 @@ local MSG_ALREADY_FROZEN = "UTXO is already frozen"
 local MSG_FROZEN_UNTIL = "UTXO is not spendable until block "
 local MSG_COINBASE_IMMATURE = "Coinbase UTXO can only be spent when it matures"
 local MSG_SPENT = "Already spent by "
+local MSG_INVALID_SPEND = "Invalid spend"
 
 local SIGNAL_ALL_SPENT = "ALLSPENT"
 local SIGNAL_NOT_ALL_SPENT = "NOTALLSPENT"
@@ -119,6 +122,19 @@ local function spendingDataBytesToHex(b)
     for i = 33, 36, 1 do
         hex = hex .. string.format("%02x", b[i])
     end
+    return hex
+end
+
+-- Function to convert a spending byte array to a reverse tx hexadecimal string
+local function spendingDataBytesToTxHex(b)
+    local hex = ""
+
+    -- The first 32 bytes are the txID
+    -- And we want to reverse it
+    for i = 32, 1, -1 do
+        hex = hex .. string.format("%02x", b[i])
+    end
+
     return hex
 end
 
@@ -297,6 +313,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     local blockIDs = rec[BIN_BLOCK_IDS]
 
     local errors = map()
+    local deletedChildren = rec[BIN_DELETED_CHILDREN]
     
     -- loop through the spends
     for spend in list.iterator(spends) do
@@ -333,7 +350,22 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         -- Handle already spent UTXO
         if existingSpendingData then            
             if bytes_equal(existingSpendingData, spendingData) then
-                -- Already spent with same data, skip this one
+                -- Already spent with same data
+
+                if deletedChildren ~= nil then
+                    -- Check whether this child tx (by txid) exists in the deletedChildren map, if yes, error out
+                    local childTxID = spendingDataBytesToTxHex(existingSpendingData)
+                    if deletedChildren[childTxID] then
+                        local error = map()
+
+                        error[FIELD_ERROR_CODE] = ERROR_CODE_INVALID_SPEND
+                        error[FIELD_MESSAGE] = MSG_INVALID_SPEND
+                        error[FIELD_SPENDING_DATA] = spendingDataBytesToHex(existingSpendingData)
+
+                        errors[offset] = error
+                    end
+                end
+
                 goto continue
             elseif isFrozen(existingSpendingData) then
                 local error = map()

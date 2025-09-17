@@ -386,7 +386,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	if blockHeight > v.settings.ChainCfgParams.CSVHeight {
 		utxoStoreMedianBlockTime := v.GetMedianBlockTime()
 		if utxoStoreMedianBlockTime == 0 {
-			err := errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, utxoStoreMedianBlockTime)
+			err = errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, utxoStoreMedianBlockTime)
 			span.RecordError(err)
 
 			return nil, err
@@ -394,7 +394,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 		// this function should be moved into go-bt
 		if err = util.IsTransactionFinal(tx, blockHeight+1, utxoStoreMedianBlockTime); err != nil {
-			err := errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
+			err = errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
 			span.RecordError(err)
 
 			return nil, err
@@ -402,7 +402,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 
 	if tx.IsCoinbase() {
-		err := errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
+		err = errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
 		span.RecordError(err)
 
 		return nil, err
@@ -417,7 +417,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		// utxoHeights is a slice of block heights for each input
 		// txInpoints is a struct containing the parent tx hashes and the vout indexes of each input
 		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID); err != nil {
-			err := errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
+			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
 			span.RecordError(err)
 
 			return nil, err
@@ -427,7 +427,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// validate the transaction format, consensus rules etc.
 	// this does not validate the signatures in the transaction yet
 	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		err := errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
+		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
 		span.RecordError(err)
 
 		return nil, err
@@ -437,7 +437,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// since that processing did not happen before the validateTransaction step
 	if len(utxoHeights) == 0 {
 		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID); err != nil {
-			err := errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
+			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
 			span.RecordError(err)
 
 			return nil, err
@@ -446,7 +446,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	// validate the transaction scripts and signatures
 	if err = v.validateTransactionScripts(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		err := errors.NewProcessingError("[Validate][%s] error validating transaction scripts", txID, err)
+		err = errors.NewProcessingError("[Validate][%s] error validating transaction scripts", txID, err)
 		span.RecordError(err)
 
 		return nil, err
@@ -505,14 +505,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				if txMetaData, utxoMapErr = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, true, false); utxoMapErr != nil {
 					if errors.Is(utxoMapErr, errors.ErrTxExists) {
 						if txMetaData, err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash()); err != nil {
-							err := errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, utxoMapErr)
+							err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, utxoMapErr)
 							span.RecordError(err)
 
 							return nil, err
 						}
 					}
 
-					err := errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, utxoMapErr)
+					err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, utxoMapErr)
 					span.RecordError(err)
 
 					return txMetaData, err
@@ -520,7 +520,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 				// We successfully added the tx to the utxo store as a conflicting tx,
 				// so we can return a conflicting error
-				err := errors.NewTxConflictingError("[Validate][%s] tx is conflicting", txID, err)
+				err = errors.NewTxConflictingError("[Validate][%s] tx is conflicting", txID, err)
 				span.RecordError(err)
 
 				return txMetaData, err
@@ -536,7 +536,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			}
 		}
 
-		err := errors.NewProcessingError("[Validate][%s] error spending utxos", txID, err)
+		err = errors.NewProcessingError("[Validate][%s] error spending utxos", txID, err)
 		span.RecordError(err)
 
 		return nil, err

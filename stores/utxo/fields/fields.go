@@ -78,6 +78,8 @@ const (
 	// When set, it overrides DeleteAtHeight - the transaction won't be deleted until after this height.
 	// This is used to protect parent transactions of unmined transactions from being deleted.
 	PreserveUntil FieldName = "preserveUntil"
+	// DeletedChildren map of child records that have been deleted
+	DeletedChildren FieldName = "deletedChildren"
 )
 
 // String returns the string representation of the FieldName.
