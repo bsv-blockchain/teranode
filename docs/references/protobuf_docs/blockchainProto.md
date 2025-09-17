@@ -41,6 +41,8 @@
     - [GetFullBlockResponse](#GetFullBlockResponse)
     - [GetHashOfAncestorBlockRequest](#GetHashOfAncestorBlockRequest)
     - [GetHashOfAncestorBlockResponse](#GetHashOfAncestorBlockResponse)
+    - [GetLatestBlockHeaderFromBlockLocatorRequest](#GetLatestBlockHeaderFromBlockLocatorRequest)
+    - [GetBlockHeadersFromOldestRequest](#GetBlockHeadersFromOldestRequest)
     - [GetLastNBlocksRequest](#GetLastNBlocksRequest)
     - [GetLastNBlocksResponse](#GetLastNBlocksResponse)
     - [GetMedianTimeRequest](#GetMedianTimeRequest)
@@ -257,6 +259,39 @@ swagger:model GetBlockHeaderResponse
 | miner | [string](#string) |  |  |
 | block_time | [uint32](#uint32) |  |  |
 | timestamp | [uint32](#uint32) |  |  |
+
+
+
+
+
+
+<a name="GetLatestBlockHeaderFromBlockLocatorRequest"></a>
+
+### GetLatestBlockHeaderFromBlockLocatorRequest
+GetLatestBlockHeaderFromBlockLocatorRequest retrieves the latest block header using a block locator.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| bestBlockHash | [bytes](#bytes) |  | Best block hash |
+| blockLocatorHashes | [bytes](#bytes) | repeated | Block locator hashes |
+
+
+
+
+
+
+<a name="GetBlockHeadersFromOldestRequest"></a>
+
+### GetBlockHeadersFromOldestRequest
+GetBlockHeadersFromOldestRequest retrieves block headers starting from the oldest block.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| chainTipHash | [bytes](#bytes) |  | Chain tip hash |
+| targetHash | [bytes](#bytes) |  | Target block hash |
+| numberOfHeaders | [uint64](#uint64) |  | Maximum number of hashes to return |
 
 
 
@@ -1017,6 +1052,8 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | GetBlockHeadersFromTill | [GetBlockHeadersFromTillRequest](#blockchain_api-GetBlockHeadersFromTillRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers between two specified blocks. |
 | GetBlockHeadersFromHeight | [GetBlockHeadersFromHeightRequest](#blockchain_api-GetBlockHeadersFromHeightRequest) | [GetBlockHeadersFromHeightResponse](#blockchain_api-GetBlockHeadersFromHeightResponse) | Retrieves block headers starting from a specific height. |
 | GetBlockHeadersByHeight | [GetBlockHeadersByHeightRequest](#blockchain_api-GetBlockHeadersByHeightRequest) | [GetBlockHeadersByHeightResponse](#blockchain_api-GetBlockHeadersByHeightResponse) | Retrieves block headers between two specified heights. |
+| GetLatestBlockHeaderFromBlockLocator | [GetLatestBlockHeaderFromBlockLocatorRequest](#blockchain_api-GetLatestBlockHeaderFromBlockLocatorRequest) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) | Retrieves the latest block header using a block locator. |
+| GetBlockHeadersFromOldest | [GetBlockHeadersFromOldestRequest](#blockchain_api-GetBlockHeadersFromOldestRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers starting from the oldest block. |
 | GetBlockHeaderIDs | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeaderIDsResponse](#blockchain_api-GetBlockHeaderIDsResponse) | Retrieves block header IDs for a range of blocks. |
 | GetBestBlockHeader | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) | Retrieves the header of the current best block. |
 | CheckBlockIsInCurrentChain | [CheckBlockIsCurrentChainRequest](#blockchain_api-CheckBlockIsCurrentChainRequest) | [CheckBlockIsCurrentChainResponse](#blockchain_api-CheckBlockIsCurrentChainResponse) | Verifies if specified blocks are in the main chain. |

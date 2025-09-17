@@ -1,9 +1,12 @@
 # GRPC Documentation - SubtreeValidationAPI
+
 <a name="top"></a>
 
 ## Table of Contents
 
 - [subtreevalidation_api.proto](#subtreevalidation_api.proto)
+    - [CheckBlockSubtreesRequest](#CheckBlockSubtreesRequest)
+    - [CheckBlockSubtreesResponse](#CheckBlockSubtreesResponse)
     - [CheckSubtreeFromBlockRequest](#CheckSubtreeFromBlockRequest)
     - [CheckSubtreeFromBlockResponse](#CheckSubtreeFromBlockResponse)
     - [EmptyMessage](#EmptyMessage)
@@ -14,11 +17,42 @@
 - [Scalar Value Types](#scalar-value-types)
 
 
-
 <a name="subtreevalidation_api.proto"></a>
 <p align="right"><a href="#top">Top</a></p>
 
 ## subtreevalidation_api.proto
+
+SubtreeValidationAPI provides gRPC services for validating blockchain subtrees. The service exposes endpoints for health monitoring and subtree validation operations.
+
+
+<a name="CheckBlockSubtreesRequest"></a>
+
+### CheckBlockSubtreesRequest
+Defines the input parameters for checking subtrees in a block.
+
+swagger:model CheckBlockSubtreesRequest
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| block | [bytes](#bytes) |  | Block containing the subtrees to be checked |
+| base_url | [string](#string) |  | Endpoint for retrieving missing transaction data |
+
+
+
+
+<a name="CheckBlockSubtreesResponse"></a>
+
+### CheckBlockSubtreesResponse
+Contains the validation results for subtrees in a block.
+
+swagger:model CheckBlockSubtreesResponse
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| blessed | [bool](#bool) |  | Indicates if all subtrees in the block pass validation |
+
 
 
 
@@ -41,8 +75,6 @@ swagger:model CheckSubtreeFromBlockRequest
 
 
 
-
-
 <a name="CheckSubtreeFromBlockResponse"></a>
 
 ### CheckSubtreeFromBlockResponse
@@ -58,16 +90,12 @@ swagger:model CheckSubtreeFromBlockResponse
 
 
 
-
-
 <a name="EmptyMessage"></a>
 
 ### EmptyMessage
 Represents an empty message structure used for health check requests.
 
 swagger:model EmptyMessage
-
-
 
 
 
@@ -84,9 +112,7 @@ swagger:model HealthResponse
 | ----- | ---- | ----- | ----------- |
 | ok | [bool](#bool) |  | Indicates if the service is operating normally |
 | details | [string](#string) |  | Provides additional context about the service health status |
-| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Records when the health check was performed |
-
-
+| timestamp | [google.protobuf.Timestamp](#google.protobuf.Timestamp) |  | Records when the health check was performed |
 
 
 
@@ -104,11 +130,11 @@ Provides gRPC services for validating blockchain subtrees. The service exposes e
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [EmptyMessage](#subtreevalidation_api-EmptyMessage) | [HealthResponse](#subtreevalidation_api-HealthResponse) | Checks the service's health status. It takes an empty request message and returns a response indicating the service's health. |
-| CheckSubtreeFromBlock | [CheckSubtreeFromBlockRequest](#subtreevalidation_api-CheckSubtreeFromBlockRequest) | [CheckSubtreeFromBlockResponse](#subtreevalidation_api-CheckSubtreeFromBlockResponse) | Validates a subtree within a specified block in the blockchain. It takes a request containing the subtree's merkle root hash and block details, returning a response indicating the subtree's validity status. |
+| HealthGRPC | [EmptyMessage](#EmptyMessage) | [HealthResponse](#HealthResponse) | Checks the service's health status. It takes an empty request message and returns a response indicating the service's health. |
+| CheckSubtreeFromBlock | [CheckSubtreeFromBlockRequest](#CheckSubtreeFromBlockRequest) | [CheckSubtreeFromBlockResponse](#CheckSubtreeFromBlockResponse) | Validates a subtree within a specified block in the blockchain. It takes a request containing the subtree's merkle root hash and block details, returning a response indicating the subtree's validity status. |
+| CheckBlockSubtrees | [CheckBlockSubtreesRequest](#CheckBlockSubtreesRequest) | [CheckBlockSubtreesResponse](#CheckBlockSubtreesResponse) | Validates all subtrees within a block. Takes a request containing the block data and returns validation results for all subtrees. |
 
  <!-- end services -->
-
 
 
 ## Scalar Value Types

@@ -11,15 +11,15 @@ The Propagation Server is a component of a Bitcoin SV implementation that handle
 ```go
 type PropagationServer struct {
     propagation_api.UnsafePropagationAPIServer
-    logger                       ulogger.Logger
-    settings                     *settings.Settings
-    stats                        *gocore.Stat
-    txStore                      blob.Store
-    validator                    validator.Interface
-    blockchainClient             blockchain.ClientI
-    validatorKafkaProducerClient kafka.KafkaAsyncProducerI
-    httpServer                   *echo.Echo
-    validatorHTTPAddr            *url.URL
+    logger                       ulogger.Logger                // Structured logging interface
+    settings                     *settings.Settings           // Service configuration settings
+    stats                        *gocore.Stat                 // Performance metrics collection
+    txStore                      blob.Store                   // Transaction storage backend
+    validator                    validator.Interface          // Transaction validation service
+    blockchainClient             blockchain.ClientI           // Blockchain state interface
+    validatorKafkaProducerClient kafka.KafkaAsyncProducerI    // Kafka producer for async validation
+    httpServer                   *echo.Echo                   // HTTP server for REST endpoints
+    validatorHTTPAddr            *url.URL                     // Validator HTTP endpoint URL
 }
 ```
 
@@ -93,7 +93,6 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 
 Processes a batch of transactions.
 
-
 ## Additional Methods
 
 ### StartUDP6Listeners
@@ -156,6 +155,12 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 
 Sends a transaction to the validator's HTTP endpoint. This is used as a fallback when Kafka message size limits are exceeded.
 
+```go
+func (ps *PropagationServer) txSanityChecks(btTx *bt.Tx) error
+```
+
+Performs basic sanity checks on transactions to ensure they have at least one input and one output.
+
 ## Key Processes
 
 ### Transaction Processing
@@ -193,11 +198,13 @@ The server uses a Kafka producer to send transactions to a validator service for
 The Propagation Server is configured through the settings system instead of directly using `gocore.Config()`, including:
 
 - `settings.Propagation.IPv6Addresses`: Comma-separated list of IPv6 multicast addresses for UDP listeners
+- `settings.Propagation.IPv6Interface`: Network interface for IPv6 multicast (default: "en0")
 - `settings.Propagation.HTTPListenAddress`: HTTP addresses for transaction submission endpoints
+- `settings.Propagation.HTTPRateLimit`: HTTP request rate limiting (requests per second)
 - `settings.Propagation.GRPCListenAddress`: gRPC server address for the Propagation API
 - `settings.Propagation.GRPCMaxConnectionAge`: Maximum age for gRPC connections before forced refresh
 - `settings.Validator.HTTPAddress`: HTTP address for the validator service (used for fallback validation)
-- `settings.Validator.KafkaTopic`: Kafka topic for validator transactions
+- `settings.Validator.KafkaMaxMessageBytes`: Maximum Kafka message size for transaction routing
 
 ## Dependencies
 

@@ -25,6 +25,7 @@ type Blockchain struct {
     stateChangeTimestamp          time.Time                            // Timestamp of last state change
     AppCtx                        context.Context                      // Application context
     localTestStartState           string                               // Initial state for testing
+    subscriptionManagerReady      atomic.Bool                          // Flag indicating subscription manager is ready
 }
 ```
 
@@ -333,6 +334,102 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 
 Retrieves blocks whose subtrees have not been set.
 
+## Subscription and Notification Functions
+
+### Subscribe
+
+```go
+func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error
+```
+
+Handles subscription requests to blockchain notifications. Establishes a persistent gRPC streaming connection for real-time blockchain event notifications.
+
+### SendNotification
+
+```go
+func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error)
+```
+
+Broadcasts a notification to all subscribers.
+
+## State Management Functions
+
+### GetState
+
+```go
+func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error)
+```
+
+Retrieves a value from the blockchain state storage by its key.
+
+### SetState
+
+```go
+func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateRequest) (*emptypb.Empty, error)
+```
+
+Stores a value in the blockchain state storage with the specified key.
+
+## Block Validation Functions
+
+### InvalidateBlock
+
+```go
+func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_api.InvalidateBlockRequest) (*blockchain_api.InvalidateBlockResponse, error)
+```
+
+Marks a block as invalid in the blockchain.
+
+### RevalidateBlock
+
+```go
+func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_api.RevalidateBlockRequest) (*emptypb.Empty, error)
+```
+
+Restores a previously invalidated block.
+
+## Additional Block Functions
+
+### GetNextBlockID
+
+```go
+func (b *Blockchain) GetNextBlockID(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetNextBlockIDResponse, error)
+```
+
+Retrieves the next available block ID.
+
+### GetChainTips
+
+```go
+func (b *Blockchain) GetChainTips(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetChainTipsResponse, error)
+```
+
+Retrieves information about all known tips in the block tree.
+
+### GetLatestBlockHeaderFromBlockLocatorRequest
+
+```go
+func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Context, request *blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest) (*blockchain_api.GetBlockHeaderResponse, error)
+```
+
+Retrieves the latest block header from a block locator request.
+
+### GetBlockHeadersFromOldestRequest
+
+```go
+func (b *Blockchain) GetBlockHeadersFromOldestRequest(ctx context.Context, request *blockchain_api.GetBlockHeadersFromOldestRequest) (*blockchain_api.GetBlockHeadersResponse, error)
+```
+
+Retrieves block headers from the oldest request.
+
+### GetBlockHeadersFromCommonAncestor
+
+```go
+func (b *Blockchain) GetBlockHeadersFromCommonAncestor(ctx context.Context, request *blockchain_api.GetBlockHeadersFromCommonAncestorRequest) (*blockchain_api.GetBlockHeadersResponse, error)
+```
+
+Retrieves block headers from a common ancestor.
+
 ## Finite State Machine (FSM) Related Functions
 
 ### GetFSMCurrentState
@@ -346,10 +443,18 @@ Retrieves the current state of the finite state machine.
 ### WaitForFSMtoTransitionToGivenState (Internal Method)
 
 ```go
-func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targetState blockchain_api.FSMStateType) error
+func (b *Blockchain) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState blockchain_api.FSMStateType) error
 ```
 
 Waits for the FSM to transition to a given state. **Note: This is an internal helper method and is not exposed as a gRPC endpoint.**
+
+### WaitUntilFSMTransitionFromIdleState
+
+```go
+func (b *Blockchain) WaitUntilFSMTransitionFromIdleState(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
+```
+
+Waits for the FSM to transition from the IDLE state.
 
 ### SendFSMEvent
 
@@ -375,22 +480,6 @@ func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*empt
 
 Transitions the FSM to the CATCHINGBLOCKS state.
 
-### CatchUpTransactions
-
-```go
-func (b *Blockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
-```
-
-Transitions the FSM to the CATCHINGTXS state.
-
-### Restore
-
-```go
-func (b *Blockchain) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
-```
-
-Transitions the FSM to the RESTORING state.
-
 ### LegacySync
 
 ```go
@@ -399,13 +488,13 @@ func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb
 
 Transitions the FSM to the LEGACYSYNCING state.
 
-### Unavailable
+### Idle
 
 ```go
-func (b *Blockchain) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
+func (b *Blockchain) Idle(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 ```
 
-Transitions the FSM to the RESOURCE_UNAVAILABLE state.
+Transitions the FSM to the IDLE state.
 
 ## Legacy Endpoints
 

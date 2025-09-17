@@ -184,7 +184,7 @@ Methods for managing peer bans. BanPeer adds the peer's IP address to the ban li
 #### Consensus Management
 
 ```go
-func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund) (*models.BlacklistResponse, error)
+func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund) (*models.AddToConsensusBlacklistResponse, error)
 ```
 
 Adds funds to the consensus blacklist, setting specified UTXOs as un-spendable. Supports both freezing and unfreezing based on enforcement height.
@@ -194,6 +194,26 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 ```
 
 Re-assigns UTXOs to confiscation transactions, allowing them to be spent.
+
+#### Helper Methods
+
+```go
+func (n *Node) getAddToConsensusBlacklistResponse(fund models.Fund, err error) models.AddToConsensusBlacklistNotProcessed
+```
+
+Creates a standardized response for failed blacklist operations. Formats consistent response objects for UTXOs that could not be blacklisted, including the original fund details and the specific error that prevented processing.
+
+```go
+func (n *Node) getAddToConfiscationTransactionWhitelistResponse(txID string, err error) models.AddToConfiscationTransactionWhitelistNotProcessed
+```
+
+Creates a standardized response for failed whitelist operations. Formats consistent response objects for confiscation transactions that could not be whitelisted, including the transaction ID and the specific error that prevented processing.
+
+```go
+func extractPublicKey(scriptSig []byte) ([]byte, error)
+```
+
+Extracts the public key from a P2PKH scriptSig. Parses the unlocking script from a transaction input to extract the public key used for signing. Handles the standard P2PKH script format: [signature] [public key].
 
 ## Configuration
 
@@ -210,9 +230,10 @@ The Alert Service uses a configuration structure (`config.Config`) that includes
 - Auto-migration settings
 - Support for:
 
-  - SQLite (including in-memory)
-  - PostgreSQL
-  - MySQL
+    - SQLite (including in-memory)
+    - PostgreSQL
+    - MySQL
+
 - Connection pooling options
 - Debug settings
 
@@ -241,10 +262,10 @@ The service implements comprehensive health checks:
 - Liveness check: Basic service health
 - Readiness check: Dependency health including:
 
-  - Blockchain client
-  - FSM status
-  - Blockassembly client
-  - UTXO store
+    - Blockchain client
+    - FSM status
+    - Blockassembly client
+    - UTXO store
 
 The health checks return appropriate HTTP status codes:
 
@@ -283,11 +304,11 @@ Core alert data structure containing:
 
 - **Alert ID**: Unique identifier for each alert
 - **Alert Type**: Type of alert operation
-  - UTXO freeze
-  - UTXO unfreeze
-  - UTXO reassignment
-  - Peer ban/unban
-  - Block invalidation
+    - UTXO freeze
+    - UTXO unfreeze
+    - UTXO reassignment
+    - Peer ban/unban
+    - Block invalidation
 - **Timestamp**: When the alert was created/received
 - **Status**: Alert processing status (pending, processed, failed)
 - **Payload**: Alert-specific data payload

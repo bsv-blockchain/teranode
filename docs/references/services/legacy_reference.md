@@ -240,8 +240,9 @@ Removes a ban on a specific peer, allowing it to reconnect immediately. The requ
 The Legacy Service implements an authentication system for its gRPC API:
 
 - Uses the `GRPCAdminAPIKey` setting for protected methods
-- Automatically generates a secure API key if none is provided
+- Automatically generates a secure 32-byte random API key if none is provided
 - Restricts access to sensitive methods (BanPeer, UnbanPeer) through API key authentication
+- Protected methods require the API key to be provided in the gRPC metadata
 
 ## Configuration
 

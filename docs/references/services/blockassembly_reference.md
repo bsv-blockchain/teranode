@@ -113,6 +113,9 @@ type BlockAssembler struct {
     // cleanupService manages background cleanup tasks
     cleanupService cleanup.Service
 
+    // cleanupServiceLoaded indicates if the cleanup service has been loaded
+    cleanupServiceLoaded atomic.Bool
+
     // unminedCleanupTicker manages periodic cleanup of old unmined transactions
     unminedCleanupTicker *time.Ticker
 
@@ -121,6 +124,9 @@ type BlockAssembler struct {
 
     // skipWaitForPendingBlocks allows tests to skip waiting for pending blocks during startup
     skipWaitForPendingBlocks bool
+
+    // unminedTransactionsLoading indicates if unmined transactions are currently being loaded
+    unminedTransactionsLoading atomic.Bool
 }
 ```
 
@@ -396,6 +402,22 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 ```
 
 Retrieves the current block assembly block candidate, including detailed information about the candidate's construction.
+
+#### GetBlockAssemblyTxs
+
+```go
+func (ba *BlockAssembly) GetBlockAssemblyTxs(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.GetBlockAssemblyTxsResponse, error)
+```
+
+Retrieves all transaction hashes currently held in the block assembly service. Returns both the count and list of transaction hashes for monitoring and debugging purposes.
+
+#### SetSkipWaitForPendingBlocks
+
+```go
+func (ba *BlockAssembly) SetSkipWaitForPendingBlocks(skip bool)
+```
+
+Sets the flag to skip waiting for pending blocks during startup. This is primarily used in test environments to prevent blocking on pending blocks.
 
 ### BlockAssembler
 

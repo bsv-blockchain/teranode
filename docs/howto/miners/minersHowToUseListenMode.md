@@ -112,12 +112,12 @@ When running a mining pool with listen mode:
 
 1. **Primary Mining Node**: Run in `full` mode
    - This node submits mined blocks
-   - Handles transaction propagation
+    - Handles transaction propagation
    - Participates fully in the network
 
 2. **Monitor Nodes**: Run in `listen_only` mode
    - Track blockchain state
-   - Provide redundancy
+    - Provide redundancy
    - Reduce operational costs
 
 3. **Configuration Example**:

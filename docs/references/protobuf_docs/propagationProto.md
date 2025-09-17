@@ -6,6 +6,8 @@
   - [propagation\_api.proto](#propagation_apiproto)
     - [EmptyMessage](#emptymessage)
     - [BatchTransactionItem](#batchtransactionitem)
+    - [GetRequest](#getrequest)
+    - [GetResponse](#getresponse)
     - [HealthResponse](#healthresponse)
     - [ProcessTransactionBatchRequest](#processtransactionbatchrequest)
     - [ProcessTransactionBatchResponse](#processtransactionbatchresponse)
@@ -19,6 +21,8 @@
 <p align="right"><a href="#top">Top</a></p>
 
 ## propagation_api.proto
+
+Package propagation_api provides gRPC services for Bitcoin SV transaction propagation. It handles individual and batch transaction processing, health checks, and debugging capabilities for the BSV network.
 
 
 
@@ -43,21 +47,39 @@ Represents a single transaction item in a batch request with trace context suppo
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | tx | [bytes](#bytes) |  | Raw transaction bytes to process |
-| trace_context | [BatchTransactionItem.TraceContextEntry](#batchtransactionitem-tracecontextentry) | repeated | Serialized OpenTelemetry trace context as key-value pairs for proper span propagation |
+| trace_context | map<string, string> |  | Serialized OpenTelemetry trace context as key-value pairs for proper span propagation |
 
 
 
 
-<a name="BatchTransactionItem.TraceContextEntry"></a>
+<a name="GetRequest"></a>
 
-### BatchTransactionItem.TraceContextEntry
+### GetRequest
+Represents a request to retrieve a transaction by its ID.
 
+swagger:model GetRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| key | [string](#string) |  |  |
-| value | [string](#string) |  |  |
+| txid | [bytes](#bytes) |  | Transaction ID in bytes |
+
+
+
+
+
+
+<a name="GetResponse"></a>
+
+### GetResponse
+Contains the retrieved transaction data.
+
+swagger:model GetResponse
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| tx | [bytes](#bytes) |  | Raw transaction bytes |
 
 
 

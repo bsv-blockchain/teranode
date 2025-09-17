@@ -9,103 +9,116 @@ type Server struct {
     // UnimplementedBlockValidationAPIServer provides default implementations of gRPC methods
     blockvalidation_api.UnimplementedBlockValidationAPIServer
 
-    // logger provides structured logging with contextual information
-    logger                ulogger.Logger
+    logger                    ulogger.Logger                          // Structured logging with contextual information
 
-    // settings contains operational parameters for block validation,
-    // including timeouts, concurrency limits, and feature flags
-    settings             *settings.Settings
+    settings                  *settings.Settings                      // Operational parameters and configuration
+    blockchainClient          blockchain.ClientI                      // Blockchain state and operations client
 
-    // blockchainClient provides access to the blockchain state and operations
-    // like block storage, header retrieval, and chain reorganization
-    blockchainClient     blockchain.ClientI
+    subtreeStore              blob.Store                              // Persistent storage for block subtrees
+    txStore                   blob.Store                              // Permanent storage for transactions
 
-    // subtreeStore provides persistent storage for block subtrees,
-    // enabling efficient block organization and validation
-    subtreeStore         blob.Store
+    utxoStore                 utxo.Store                              // UTXO set management for transaction validation
+    blockAssemblyClient       blockassembly.ClientI                   // Block assembly service client
 
-    // txStore handles permanent storage of individual transactions,
-    // allowing retrieval of historical transaction data
-    txStore              blob.Store
+    blockFoundCh              chan processBlockFound                  // Channel for newly discovered blocks
+    catchupCh                 chan processBlockCatchup                // Channel for catchup block processing
 
-    // utxoStore manages the Unspent Transaction Output (UTXO) set,
-    // tracking available outputs for transaction validation
-    utxoStore            utxo.Store
+    blockValidation           *BlockValidation                        // Core validation logic and state
+    validatorClient           validator.Interface                     // Transaction validation services
 
-    // blockFoundCh receives notifications of newly discovered blocks
-    // that need validation. This channel buffers requests when high load occurs.
-    blockFoundCh         chan processBlockFound
-
-    // catchupCh handles blocks that need processing during chain catchup operations.
-    // This channel is used when the node falls behind the chain tip.
-    catchupCh            chan processBlockCatchup
-
-    // blockValidation contains the core validation logic and state
-    blockValidation      *BlockValidation
-
-    // kafkaConsumerClient handles subscription to and consumption of
-    // Kafka messages for distributed coordination
-    kafkaConsumerClient  kafka.KafkaConsumerGroupI
-
-    // processSubtreeNotify caches subtree processing state to prevent duplicate
-    // processing of the same subtree from multiple miners
-    processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
-
-    // stats tracks operational metrics for monitoring and troubleshooting
-    stats                *gocore.Stat
+    kafkaConsumerClient       kafka.KafkaConsumerGroupI              // Kafka message consumption client
+    processSubtreeNotify      *ttlcache.Cache[chainhash.Hash, bool]   // Cache for subtree processing state
+    stats                     *gocore.Stat                            // Operational metrics tracking
+    peerCircuitBreakers       *catchup.PeerCircuitBreakers            // Circuit breakers for peer management
+    peerMetrics               *catchup.CatchupMetrics                 // Peer performance metrics
+    headerChainCache          *catchup.HeaderChainCache               // Block header cache for catchup
+    isCatchingUp              atomic.Bool                             // Atomic flag for catchup operations
+    catchupStatsMu            sync.RWMutex                            // Mutex for catchup statistics
+    lastCatchupTime           time.Time                               // Timestamp of last catchup attempt
+    lastCatchupResult         bool                                    // Result of last catchup operation
+    catchupAttempts           atomic.Int64                            // Total catchup attempts counter
+    catchupSuccesses          atomic.Int64                            // Successful catchup operations counter
 }
 ```
 
-The `Server` type is the main structure for the Block Validation Service. It implements the `UnimplementedBlockValidationAPIServer` and contains components for managing block validation, storage, and communication with other services.
+The `Server` type implements a high-performance block validation service for Bitcoin SV. It coordinates block validation, subtree management, and transaction metadata processing across multiple subsystems while maintaining chain consistency. The server supports both synchronous and asynchronous validation modes, with automatic catchup capabilities when falling behind the chain tip.
+
+### processBlockFound
+
+```go
+type processBlockFound struct {
+    hash    *chainhash.Hash // Block identifier using double SHA256 hash
+    baseURL string          // Peer URL for additional block data retrieval
+    peerID  string          // P2P peer identifier for metrics tracking
+    errCh   chan error      // Error channel for validation completion
+}
+```
+
+The `processBlockFound` type encapsulates information about a newly discovered block that requires validation. It includes both the block identifier and communication channels for handling validation results.
+
+### processBlockCatchup
+
+```go
+type processBlockCatchup struct {
+    block   *model.Block // Full block data for validation
+    baseURL string       // Peer URL for additional data retrieval
+    peerID  string       // P2P peer identifier for metrics tracking
+}
+```
+
+The `processBlockCatchup` type contains information needed to process a block during chain catchup operations when the node has fallen behind the current chain tip.
 
 ### BlockValidation
 
 ```go
 type BlockValidation struct {
     // logger provides structured logging capabilities
-    logger                        ulogger.Logger
+    logger ulogger.Logger
 
     // settings contains operational parameters and feature flags
-    settings                      *settings.Settings
+    settings *settings.Settings
 
     // blockchainClient interfaces with the blockchain for operations
-    blockchainClient              blockchain.ClientI
+    blockchainClient blockchain.ClientI
 
     // subtreeStore provides persistent storage for block subtrees
-    subtreeStore                  blob.Store
+    subtreeStore blob.Store
 
     // subtreeBlockHeightRetention specifies how long subtrees should be retained
-    subtreeBlockHeightRetention   uint32
+    subtreeBlockHeightRetention uint32
 
     // txStore handles permanent storage of transactions
-    txStore                       blob.Store
+    txStore blob.Store
 
     // utxoStore manages the UTXO set for transaction validation
-    utxoStore                     utxo.Store
+    utxoStore utxo.Store
+
+    // validatorClient handles transaction validation operations
+    validatorClient validator.Interface
 
     // recentBlocksBloomFilters maintains bloom filters for recent blocks
-    recentBlocksBloomFilters      *txmap.SyncedMap[chainhash.Hash, *model.BlockBloomFilter]
+    recentBlocksBloomFilters *txmap.SyncedMap[chainhash.Hash, *model.BlockBloomFilter]
 
     // bloomFilterRetentionSize defines the number of blocks to keep the bloom filter for
-    bloomFilterRetentionSize      uint32
+    bloomFilterRetentionSize uint32
 
     // subtreeValidationClient manages subtree validation processes
-    subtreeValidationClient       subtreevalidation.Interface
+    subtreeValidationClient subtreevalidation.Interface
 
     // subtreeDeDuplicator prevents duplicate processing of subtrees
-    subtreeDeDuplicator           *DeDuplicator
+    subtreeDeDuplicator *DeDuplicator
 
     // lastValidatedBlocks caches recently validated blocks for 2 minutes
-    lastValidatedBlocks           *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
+    lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
 
     // blockExists tracks validated block hashes for 2 hours
-    blockExists                   *expiringmap.ExpiringMap[chainhash.Hash, bool]
+    blockExists *expiringmap.ExpiringMap[chainhash.Hash, bool]
 
     // subtreeExists tracks validated subtree hashes for 10 minutes
-    subtreeExists                 *expiringmap.ExpiringMap[chainhash.Hash, bool]
+    subtreeExists *expiringmap.ExpiringMap[chainhash.Hash, bool]
 
     // subtreeCount tracks the number of subtrees being processed
-    subtreeCount                  atomic.Int32
+    subtreeCount atomic.Int32
 
     // blockHashesCurrentlyValidated tracks blocks in validation process
     blockHashesCurrentlyValidated *txmap.SwissMap
@@ -114,47 +127,33 @@ type BlockValidation struct {
     blockBloomFiltersBeingCreated *txmap.SwissMap
 
     // bloomFilterStats collects statistics about bloom filter operations
-    bloomFilterStats              *model.BloomStats
+    bloomFilterStats *model.BloomStats
 
     // setMinedChan receives block hashes that need to be marked as mined
-    setMinedChan                  chan *chainhash.Hash
+    setMinedChan chan *chainhash.Hash
 
     // revalidateBlockChan receives blocks that need revalidation
-    revalidateBlockChan           chan revalidateBlockData
+    revalidateBlockChan chan revalidateBlockData
 
     // stats tracks operational metrics for monitoring
-    stats                         *gocore.Stat
-
-    // lastUsedBaseURL stores the most recent source URL used for retrievals
-    lastUsedBaseURL               string
+    stats *gocore.Stat
 
     // invalidBlockKafkaProducer publishes invalid block events to Kafka
-    invalidBlockKafkaProducer     kafka.KafkaAsyncProducerI
+    invalidBlockKafkaProducer kafka.KafkaAsyncProducerI
 
-    // bloomFilterStats collects statistics about bloom filter operations
-    bloomFilterStats              *model.BloomStats
-
-    // setMinedChan receives block hashes that need to be marked as mined
-    setMinedChan                  chan *chainhash.Hash
-
-    // revalidateBlockChan receives blocks that need revalidation
-    revalidateBlockChan           chan revalidateBlockData
-
-    // stats tracks operational metrics for monitoring
-    stats                         *gocore.Stat
-
-    // lastUsedBaseURL stores the most recent source URL used for retrievals
-    lastUsedBaseURL               string
+    // backgroundTasks tracks background goroutines to ensure proper shutdown
+    backgroundTasks sync.WaitGroup
 }
 ```
 
-The `BlockValidation` type handles the core logic for validating blocks and managing related data structures.
+The `BlockValidation` type handles the core validation logic for blocks in Teranode. It manages block validation, subtree processing, and bloom filter creation.
 
 ## Functions
 
 ### Server
 
 #### New
+
 ```go
 func New(logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store, txStore blob.Store, utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, kafkaConsumerClient kafka.KafkaConsumerGroupI) *Server
 ```
@@ -166,6 +165,7 @@ Creates a new instance of the `Server` with:
 - Configuration of validation components
 
 #### Health
+
 ```go
 func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error)
 ```
@@ -183,52 +183,7 @@ Performs comprehensive health checks:
     - UTXO store
 
 #### Init
-```go
-func (u *Server) Init(ctx context.Context) (err error)
-```
 
-Initializes the Block Validation Service:
-
-- Creates subtree validation client
-- Configures UTXO store and expiration settings
-- Initializes the BlockValidation instance
-- Starts background processors for transaction metadata
-- Sets up communication channels
-
-#### Start
-```go
-func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
-```
-
-Starts the Block Validation Service:
-
-- Waits for blockchain FSM to transition from IDLE state
-- Starts Kafka consumer for blocks
-- Initializes and starts the gRPC server
-- Signals readiness through readyCh channel
-
-#### Stop
-```go
-func (u *Server) Stop(_ context.Context) error
-```
-
-Gracefully shuts down the Block Validation Service:
-
-- Stops the subtree notification cache
-- Closes the Kafka consumer
-
-#### HealthGRPC
-```go
-func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error)
-```
-
-Performs a gRPC health check on the service, including:
-
-- Full dependency verification
-- Detailed status reporting
-- Timestamp information
-
-#### Init
 ```go
 func (u *Server) Init(ctx context.Context) (err error)
 ```
@@ -240,7 +195,20 @@ Initializes the service:
 - Initializes Kafka consumer
 - Sets up metadata processing queue
 
+#### HealthGRPC
+
+```go
+func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error)
+```
+
+Performs a gRPC health check on the service, including:
+
+- Full dependency verification
+- Detailed status reporting
+- Timestamp information
+
 #### Start
+
 ```go
 func (u *Server) Start(ctx context.Context) error
 ```
@@ -253,6 +221,7 @@ Starts all service components:
 - Background processors
 
 #### Stop
+
 ```go
 func (u *Server) Stop(_ context.Context) error
 ```
@@ -264,6 +233,7 @@ Gracefully stops the service:
 - Cleans up resources
 
 #### BlockFound
+
 ```go
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error)
 ```
@@ -275,6 +245,7 @@ Handles notification of new blocks:
 - Optionally waits for validation completion
 
 #### ProcessBlock
+
 ```go
 func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.ProcessBlockRequest) (*blockvalidation_api.EmptyMessage, error)
 ```
@@ -286,6 +257,7 @@ Processes complete blocks:
 - Integrates with blockchain state
 
 #### SubtreeFound
+
 ```go
 func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*blockvalidation_api.EmptyMessage, error)
 ```
@@ -293,6 +265,7 @@ func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.Subtre
 Handles notification of new subtrees.
 
 #### Get
+
 ```go
 func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error)
 ```
@@ -300,6 +273,7 @@ func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtre
 Retrieves subtree data from storage.
 
 #### Exists
+
 ```go
 func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.ExistsSubtreeRequest) (*blockvalidation_api.ExistsSubtreeResponse, error)
 ```
@@ -307,6 +281,7 @@ func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.Exists
 Verifies subtree existence in storage.
 
 #### SetTxMeta
+
 ```go
 func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error)
 ```
@@ -314,6 +289,7 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 Queues transaction metadata updates.
 
 #### DelTxMeta
+
 ```go
 func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.DelTxMetaRequest) (*blockvalidation_api.DelTxMetaResponse, error)
 ```
@@ -321,6 +297,7 @@ func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.Del
 Removes transaction metadata.
 
 #### SetMinedMulti
+
 ```go
 func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api.SetMinedMultiRequest) (*blockvalidation_api.SetMinedMultiResponse, error)
 ```
@@ -330,6 +307,7 @@ Marks multiple transactions as mined in a block.
 ### BlockValidation
 
 #### ValidateBlock
+
 ```go
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error
 ```
@@ -342,21 +320,23 @@ Performs comprehensive block validation:
 - Optional optimistic mining
 
 #### GetBlockExists
+
 ```go
 func (u *BlockValidation) GetBlockExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
 ```
 
 Checks block existence in validation system.
 
-
 ## Core Features
 
 ### Chain Catchup Process
+
 The Chain Catchup system automatically handles situations when the node falls behind the main blockchain. When activated, it:
 
 The system detects missing blocks by comparing the current node's block height with the network height. When it identifies a gap, it initiates the catchup process. The service retrieves blocks in batches of up to 100 blocks at a time to optimize network usage. During catchup, multiple blocks are validated simultaneously using configurable concurrency settings, typically defaulting to 32 concurrent validations. The service manages state transitions through the FSM (Finite State Machine), moving from normal operation to catchup mode and back once synchronization is complete.
 
 ### Optimistic Mining Support
+
 Optimistic Mining is a performance optimization technique that allows faster block processing. In this mode:
 
 The system accepts new blocks before completing full validation, provisionally adding them to the chain. While the block is being added, validation continues in the background without blocking the main processing pipeline. This behavior can be configured through settings, allowing operators to balance between performance and validation thoroughness based on their requirements.
@@ -372,24 +352,28 @@ Creates filters dynamically as new blocks are validated, maintaining them in mem
 The service configuration is managed through several key areas:
 
 ### Validation Settings
+
 - Maximum block size limits
 - Block validation timeouts
 - Transaction verification parameters
 - Signature checking requirements
 
 ### Performance Controls
+
 - Maximum concurrent validations
 - Batch processing sizes
 - Queue buffer sizes
 - Cache retention periods
 
 ### Network Configuration
+
 - Kafka broker addresses and topics
 - HTTP server binding and ports
 - Connection timeout values
 - TLS/SSL settings
 
 ### Chain Catchup Parameters
+
 - Maximum blocks per batch
 - Catchup trigger thresholds
 - Validation concurrency limits
@@ -400,9 +384,11 @@ The service configuration is managed through several key areas:
 The service implements a structured error handling system:
 
 ### Error Categories
+
 Recoverable errors include temporary network issues or resource constraints that can be resolved through retries. Unrecoverable errors indicate fundamental problems like invalid block structures or consensus violations.
 
 ### Error Processing
+
 All errors are wrapped with appropriate context for the gRPC interface, maintaining error type information while adding relevant metadata. The system implements exponential backoff for retryable operations, with configurable retry limits and delays.
 
 ## Performance Monitoring
@@ -410,12 +396,14 @@ All errors are wrapped with appropriate context for the gRPC interface, maintain
 The service provides comprehensive performance monitoring through Prometheus metrics:
 
 ### Block Processing Metrics
+
 - Time to validate blocks (histogram)
 - Number of blocks in processing queue
 - Block acceptance/rejection rates
 - Chain catchup progress
 
 ### Resource Usage Metrics
+
 - Transaction queue lengths
 - Memory cache utilization
 - Store operation latencies

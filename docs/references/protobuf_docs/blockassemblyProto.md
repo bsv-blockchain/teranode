@@ -3,9 +3,7 @@
 
 ## Table of Contents
 
-- [GRPC Documentation - BlockAssemblyAPI](#grpc-documentation---blockassemblyapi)
-  - [Table of Contents](#table-of-contents)
-  - [blockassembly\_api.proto](#blockassembly_apiproto)
+- [blockassembly\_api.proto](#blockassembly_apiproto)
     - [AddTxBatchRequest](#addtxbatchrequest)
     - [AddTxBatchResponse](#addtxbatchresponse)
     - [AddTxRequest](#addtxrequest)
@@ -21,8 +19,9 @@
     - [SubmitMiningSolutionRequest](#submitminingsolutionrequest)
     - [OKResponse](#okresponse)
     - [GetBlockAssemblyBlockCandidateResponse](#getblockassemblyblockcandidateresponse)
+    - [GetBlockAssemblyTxsResponse](#getblockassemblytxsresponse)
     - [BlockAssemblyAPI](#blockassemblyapi)
-  - [Scalar Value Types](#scalar-value-types)
+    - [Scalar Value Types](#scalar-value-types)
 
 
 
@@ -30,6 +29,8 @@
 <p align="right"><a href="#top">Top</a></p>
 
 ## blockassembly_api.proto
+
+> Package blockassembly_api defines the gRPC service interface for block assembly operations.
 
 
 
@@ -218,6 +219,8 @@ Message containing the state of the block assembly service.
 | queueCount | [int64](#int64) |  | the size of the queue |
 | currentHeight | [uint32](#uint32) |  | the height of the chaintip |
 | currentHash | [string](#string) |  | the hash of the chaintip |
+| removeMapCount | [uint32](#uint32) |  | the number of transactions in the remove map |
+| subtrees | [string](#string) | repeated | the hashes of the current subtrees |
 
 
 
@@ -269,6 +272,22 @@ Response for the GetBlockAssemblyBlockCandidate method.
 
 
 
+
+
+<a name="GetBlockAssemblyTxsResponse"></a>
+
+### GetBlockAssemblyTxsResponse
+Response for the GetBlockAssemblyTxs method.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| txCount | [uint64](#uint64) |  | the number of transactions in the block assembly |
+| txs | [string](#string) | repeated | the transactions currently being assembled in the block assembly |
+
+
+
+
  <!-- end messages -->
 
  <!-- end enums -->
@@ -279,7 +298,7 @@ Response for the GetBlockAssemblyBlockCandidate method.
 <a name="BlockAssemblyAPI"></a>
 
 ### BlockAssemblyAPI
-The Block Assembly Service is responsible for assembling new blocks and adding them to the blockchain.
+Responsible for assembling new blocks and managing the blockchain's block creation process. This service handles transaction management, mining operations, and block state management.
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
@@ -295,6 +314,7 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
 | GenerateBlocks | [GenerateBlocksRequest](#blockassembly_api-GenerateBlocksRequest) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Creates new blocks (typically for testing purposes). Allows specification of block count and recipient address. |
 | CheckBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [OKResponse](#blockassembly_api-OKResponse) | Checks the current state of block assembly. This verifies that the block assembly and subtree processor are functioning correctly. |
 | GetBlockAssemblyBlockCandidate | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetBlockAssemblyBlockCandidateResponse](#blockassembly_api-GetBlockAssemblyBlockCandidateResponse) | Retrieves the current block candidate from block assembly. |
+| GetBlockAssemblyTxs | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetBlockAssemblyTxsResponse](#blockassembly_api-GetBlockAssemblyTxsResponse) | Retrieves the transactions currently being assembled in the block assembly. This provides visibility into the transactions that are candidates for inclusion in the next block. NOTE: this method is primarily for debugging purposes and may not be suitable for production use. |
 
  <!-- end services -->
 

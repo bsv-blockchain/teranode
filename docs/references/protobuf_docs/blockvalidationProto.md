@@ -32,6 +32,7 @@ swagger:model BlockFoundRequest
 | hash | [bytes](#bytes) |  | The hash of the found block |
 | base_url | [string](#string) |  | Base URL where the block can be retrieved from |
 | wait_to_complete | [bool](#bool) |  | Whether to wait for the block processing to complete |
+| peer_id | [string](#string) |  | P2P peer identifier for peerMetrics tracking |
 
 <a name="EmptyMessage"></a>
 

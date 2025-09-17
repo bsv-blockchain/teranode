@@ -19,6 +19,7 @@ type Server struct {
     bitcoinProtocolID                 string             // Bitcoin protocol identifier (format: "teranode/bitcoin/{version}")
     blockchainClient                  blockchain.ClientI // Client for blockchain interactions
     blockValidationClient             blockvalidation.Interface
+    blockAssemblyClient               blockassembly.ClientI     // Client for block assembly operations
     AssetHTTPAddressURL               string                    // HTTP address URL for assets
     e                                 *echo.Echo                // Echo server instance
     notificationCh                    chan *notificationMsg     // Channel for notifications
@@ -29,17 +30,28 @@ type Server struct {
     blocksKafkaProducerClient         kafka.KafkaAsyncProducerI // Kafka producer for blocks
     banList                           BanListI                  // List of banned peers
     banChan                           chan BanEvent             // Channel for ban events
-    banManager                        *PeerBanManager           // Manager for peer banning
+    banManager                        PeerBanManagerI           // Manager for peer banning (interface)
     gCtx                              context.Context
     blockTopicName                    string
     subtreeTopicName                  string
     miningOnTopicName                 string
     rejectedTxTopicName               string
-    invalidBlocksTopicName            string   // Kafka topic for invalid blocks
-    invalidSubtreeTopicName           string   // Kafka topic for invalid subtrees
-    handshakeTopicName                string   // pubsub topic for version/verack
-    blockPeerMap                      sync.Map // Map to track which peer sent each block (hash -> peerID)
-    subtreePeerMap                    sync.Map // Map to track which peer sent each subtree (hash -> peerID)
+    invalidBlocksTopicName            string       // Kafka topic for invalid blocks
+    invalidSubtreeTopicName           string       // Kafka topic for invalid subtrees
+    handshakeTopicName                string       // pubsub topic for version/verack
+    nodeStatusTopicName               string       // pubsub topic for node status messages
+    topicPrefix                       string       // Chain identifier prefix for topic validation
+    blockPeerMap                      sync.Map     // Map to track which peer sent each block (hash -> peerMapEntry)
+    subtreePeerMap                    sync.Map     // Map to track which peer sent each subtree (hash -> peerMapEntry)
+    startTime                         time.Time    // Server start time for uptime calculation
+    syncManager                       *SyncManager // Manager for peer synchronization and best peer selection
+    peerBlockHashes                   sync.Map     // Map to track peer best block hashes (peerID -> hash string)
+    syncConnectionTimes               sync.Map     // Map to track when we first connected to each sync peer (peerID -> timestamp)
+
+    // Cleanup configuration
+    peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
+    peerMapMaxSize       int           // Maximum number of entries in peer maps
+    peerMapTTL           time.Duration // Time-to-live for peer map entries
 }
 ```
 
@@ -223,13 +235,11 @@ type PeerBanManager struct {
 }
 ```
 
-The `PeerBanManager` maintains scores for peers and automatically bans them when they exceed a threshold. It provides methods like:
+The `PeerBanManager` implements the `PeerBanManagerI` interface and maintains scores for peers, automatically banning them when they exceed a threshold. It provides methods like:
 
 - `AddScore`: Increments a peer's score for specific violations
 - `GetBanScore`: Retrieves the current ban score and status
 - `IsBanned`: Checks if a peer is currently banned
-- `ListBanned`: Returns all currently banned peers
-- `ResetBanScore`: Clears a peer's ban score
 
 The system defines standard ban reasons with associated scoring:
 
@@ -241,6 +251,7 @@ const (
     ReasonInvalidSubtree     // 10 points
     ReasonProtocolViolation  // 20 points
     ReasonSpam              // 50 points
+    ReasonInvalidBlock      // 10 points
 )
 ```
 
@@ -252,6 +263,7 @@ Peer scores automatically decay over time to allow for recovery from temporary i
 - `handleBlockTopic`: Handles incoming block messages.
 - `handleSubtreeTopic`: Handles incoming subtree messages.
 - `handleMiningOnTopic`: Handles incoming mining-on messages.
+- `handleNodeStatusTopic`: Handles incoming node status update messages.
 - `handleBanEvent`: Handles banning and unbanning events.
 
 ### Message Structures
@@ -375,21 +387,22 @@ The following settings can be configured for the p2p service:
 ### Chain Configuration
 
 - `ChainCfgParams.TopicPrefix`: **REQUIRED** - Chain identifier prefix (e.g., "mainnet", "testnet", "stn")
-  - Used during P2P handshake to ensure network isolation
-  - Peers with different topic prefixes will reject connections
-  - Prevents accidental cross-chain connections
-  - Must match across all nodes in the same network
+    - Used during P2P handshake to ensure network isolation
+    - Peers with different topic prefixes will reject connections
+    - Prevents accidental cross-chain connections
+    - Must match across all nodes in the same network
 
 ### Network Configuration
 
 - `p2p_listen_addresses`: Specifies the IP addresses for the P2P service to bind to.
 - `p2p_advertise_addresses`: Addresses to advertise to other peers in the network. Each address can be specified with or without a port (e.g., `192.168.1.1` or `example.com:9906`). When a port is not specified, the system will use the value from `p2p_port` as the default. Both IP addresses and domain names are supported. Format examples: `192.168.1.1`, `example.com:9906`, `node.local:8001`.
-- `p2p_port`: Defines the port number on which the P2P service listens.
-- `p2p_block_topic`: The topic name used for block-related messages in the P2P network.
-- `p2p_subtree_topic`: Specifies the topic for subtree-related messages within the P2P network.
-- `p2p_handshake_topic`: Defines the topic for peer handshake messages, used for version and verack exchanges.
-- `p2p_mining_on_topic`: The topic used for messages related to the start of mining a new block.
-- `p2p_rejected_tx_topic`: Specifies the topic for broadcasting information about rejected transactions.
+- `p2p_port`: **REQUIRED** - Defines the port number on which the P2P service listens.
+- `p2p_block_topic`: **REQUIRED** - The topic name used for block-related messages in the P2P network.
+- `p2p_subtree_topic`: **REQUIRED** - Specifies the topic for subtree-related messages within the P2P network.
+- `p2p_handshake_topic`: **REQUIRED** - Defines the topic for peer handshake messages, used for version and verack exchanges.
+- `p2p_mining_on_topic`: **REQUIRED** - The topic used for messages related to the start of mining a new block.
+- `p2p_rejected_tx_topic`: **REQUIRED** - Specifies the topic for broadcasting information about rejected transactions.
+- `p2p_node_status_topic`: Topic for node status update messages.
 - `p2p_shared_key`: A shared key for securing P2P communications, required for private network configurations.
 - `p2p_dht_protocol_id`: Identifier for the DHT protocol used by the P2P network.
 - `p2p_dht_use_private`: A boolean flag indicating whether a private Distributed Hash Table (DHT) should be used, enhancing network privacy.

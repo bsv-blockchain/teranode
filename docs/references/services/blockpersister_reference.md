@@ -195,7 +195,41 @@ Parameters:
 
 Returns an error if shutdown fails, or nil on successful shutdown.
 
-### Block Processing
+### Internal Methods
+
+#### persistBlock
+
+```go
+func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBytes []byte) error
+```
+
+Stores a block and its associated data to persistent storage.
+
+This is a core function of the blockpersister service that handles the complete persistence workflow for a single block. It ensures all components of a block (header, transactions, and UTXO changes) are properly stored in a consistent and recoverable manner.
+
+!!! abstract "Processing Steps"
+    The function implements a multi-stage persistence process:
+
+    1. **Convert raw block bytes** into a structured block model
+    2. **Create a new UTXO difference set** for tracking changes
+    3. **Process the coinbase transaction** if no subtrees are present
+    4. **For blocks with subtrees**, process each subtree concurrently according to configured limits
+    5. **Close and finalize** the UTXO difference set once all transactions are processed
+    6. **Write the complete block** to persistent storage
+
+**Parameters:**
+
+- `ctx`: Context for the operation, used for cancellation and tracing
+- `hash`: Hash identifier of the block to persist
+- `blockBytes`: Raw serialized bytes of the complete block
+
+**Returns** an error if any part of the persistence process fails. The error will be wrapped with appropriate context to identify the specific failure point.
+
+!!! note "Concurrency Management"
+    Concurrency is managed through errgroup with configurable parallel processing limits to optimize performance while avoiding resource exhaustion.
+
+!!! warning "Atomicity"
+    Block persistence is atomic - if any part fails, the entire operation is considered failed and should be retried after resolving the underlying issue.
 
 #### getNextBlockToProcess
 
@@ -224,36 +258,91 @@ This method determines the next block to persist by comparing the last persisted
 - `*model.Block`: The next block to process, or nil if no block needs processing yet
 - `error`: Any error encountered during the operation
 
+#### readSubtree
+
+```go
+func (u *Server) readSubtree(ctx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.Subtree, error)
+```
+
+Retrieves a subtree from the subtree store and deserializes it.
+
+This function is responsible for loading a subtree structure from persistent storage, which contains the hierarchical organization of transactions within a block. It retrieves the subtree file using the provided hash and deserializes it into a usable subtree object.
+
+!!! abstract "Processing Steps"
+    The process includes:
+
+    1. **Attempting to read the subtree** from the store using the provided hash
+    2. **If the primary read fails**, it attempts to read from a secondary location (FileTypeSubtreeToCheck)
+    3. **Deserializing the retrieved subtree data** into a subtree object
+
+**Parameters:**
+
+- `ctx`: Context for the operation, enabling cancellation and timeout handling
+- `subtreeHash`: Hash identifier of the subtree to retrieve and deserialize
+
+**Returns:**
+
+- `*subtreepkg.Subtree`: The deserialized subtree object ready for further processing
+- `error`: Any error encountered during retrieval or deserialization
+
+#### readSubtreeData
+
+```go
+func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.SubtreeData, error)
+```
+
+Retrieves and deserializes subtree data from the subtree store.
+
+This internal method handles the two-stage process of loading subtree information: first retrieving the subtree structure itself, then loading the associated subtree data that contains the actual transaction references and metadata.
+
+!!! abstract "Processing Steps"
+    The function performs these operations:
+
+    1. **Retrieves the subtree structure** from the subtree store using the provided hash
+    2. **Deserializes the subtree** to understand its structure and transaction organization
+    3. **Retrieves the corresponding subtree data file** containing transaction references
+    4. **Deserializes the subtree data** into a usable format for transaction processing
+
+**Parameters:**
+
+- `ctx`: Context for the operation, enabling cancellation and timeout handling
+- `subtreeHash`: Hash identifier of the subtree to retrieve and deserialize
+
+**Returns:**
+
+- `*subtreepkg.SubtreeData`: The deserialized subtree data ready for transaction processing
+- `error`: Any error encountered during retrieval or deserialization
+
 ### Subtree Processing
 
 #### ProcessSubtree
 
 ```go
-func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error
+func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx) error
 ```
 
 Processes a subtree of transactions, validating and storing them.
 
-A subtree represents a hierarchical structure containing transaction references that make up part of a block. This method retrieves a subtree from the subtree store, processes all the transactions it contains, and writes them to the block store while updating the UTXO set differences.
+A subtree represents a hierarchical structure containing transaction references that make up part of a block. This method retrieves a subtree from the subtree store, processes all the transactions it contains, and creates subtree data for persistent storage.
 
 !!! note "Processing Steps"
     The process follows these key steps:
 
-    1. **Retrieve the subtree** from the subtree store using its hash
-    2. **Deserialize the subtree structure** to extract transaction hashes
-    3. **Load transaction metadata** from the UTXO store, either in batch mode or individually
-    4. **Create a file storer** for writing transactions to persistent storage
-    5. **Write all transactions** and process their UTXO changes
+    1. **Check if subtree data already exists** - if it does, just set DAH and skip processing
+    2. **Retrieve the subtree** from the subtree store using its hash
+    3. **Create subtree data** from the subtree structure
+    4. **Add coinbase transaction** if the first node is a coinbase placeholder
+    5. **Process transaction metadata** using the store
+    6. **Serialize and store** the complete subtree data
 
 !!! tip "Performance Optimization"
-    Transaction metadata retrieval can use batching if configured, which optimizes performance for high transaction volumes by reducing the number of individual store requests.
+    The method includes an optimization to skip processing if subtree data already exists, only updating the Delete-At-Height (DAH) setting for persistence.
 
 **Parameters:**
 
 - `pCtx`: Parent context for the operation, used for cancellation and tracing
 - `subtreeHash`: Hash identifier of the subtree to process
 - `coinbaseTx`: The coinbase transaction for the block containing this subtree
-- `utxoDiff`: UTXO set difference tracker to record all changes resulting from processing
 
 **Returns** an error if any part of the subtree processing fails. Errors are wrapped with appropriate context to identify the specific failure point (storage, processing, etc.).
 
@@ -263,7 +352,7 @@ A subtree represents a hierarchical structure containing transaction references 
 #### WriteTxs
 
 ```go
-func WriteTxs(ctx context.Context, logger ulogger.Logger, writer *filestorer.FileStorer, txMetaSlice []*meta.Data, utxoDiff *utxopersister.UTXOSet) error
+func WriteTxs(_ context.Context, logger ulogger.Logger, writer *filestorer.FileStorer, txs []*bt.Tx, utxoDiff *utxopersister.UTXOSet) error
 ```
 
 Writes a series of transactions to storage and processes their UTXO changes.
@@ -273,26 +362,25 @@ This function handles the final persistence of transaction data to storage and o
 !!! abstract "Processing Steps"
     The function performs the following steps:
 
-    1. **Write the number of transactions** as a 32-bit integer header
-    2. **For each transaction** in the provided slice:
+    1. **For each transaction** in the provided slice:
 
-        - Write the raw transaction bytes to storage
+        - Check for nil transactions and log errors if found
+        - Write the raw transaction bytes to storage (using normal bytes, not extended)
         - If a UTXO diff is provided, process the transaction's UTXO changes
-    3. **Report any errors** or validation issues encountered
+    2. **Report any errors** or validation issues encountered
 
-The function includes safety checks to handle nil transaction metadata or transactions, logging errors but continuing processing when possible to maximize resilience.
+The function includes safety checks to handle nil transactions, logging errors but continuing processing when possible to maximize resilience.
 
 **Parameters:**
 
-- `ctx`: Context for the operation, enabling cancellation and tracing
+- `_`: Context parameter (currently unused in implementation)
 - `logger`: Logger for recording operations, errors, and warnings
 - `writer`: FileStorer destination for writing serialized transaction data
-- `txMetaSlice`: Slice of transaction metadata objects containing the transactions to write
+- `txs`: Slice of transaction objects to write
 - `utxoDiff`: UTXO set difference tracker (optional, can be nil if UTXO tracking not needed)
 
 **Returns** an error if writing fails at any point. Specific error conditions include:
 
-- **Failure to write the transaction count header**
 - **Failure to write individual transaction data**
 - **Errors during UTXO processing** for transactions
 

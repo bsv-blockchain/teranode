@@ -130,7 +130,7 @@ type RPCServer struct {
 
     // blockAssemblyClient provides access to block assembly and mining services
     // Used for mining-related RPC commands like getminingcandidate and generate
-    blockAssemblyClient *blockassembly.Client
+    blockAssemblyClient blockassembly.ClientI
 
     // peerClient provides access to legacy peer network services
     // Used for peer management and information retrieval
@@ -164,10 +164,10 @@ The RPCServer is designed for concurrent operation, employing synchronization me
 ### NewServer
 
 ```go
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store) (*RPCServer, error)
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI) (*RPCServer, error)
 ```
 
-Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, and UTXO store.
+Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, UTXO store, and service clients.
 
 This factory function creates a fully configured RPCServer instance, setting up:
 
@@ -175,6 +175,16 @@ This factory function creates a fully configured RPCServer instance, setting up:
 - Connection limits and parameters
 - Command handlers and help text
 - Client connections to required services
+
+**Parameters:**
+
+- `logger`: Structured logger for operational and debug messages
+- `tSettings`: Configuration settings for the RPC server and related features
+- `blockchainClient`: Interface to the blockchain service for block and chain operations
+- `utxoStore`: Interface to the UTXO database for transaction validation
+- `blockAssemblyClient`: Interface to the block assembly service for mining operations
+- `peerClient`: Interface to the legacy peer network services
+- `p2pClient`: Interface to the P2P network services
 
 The RPC server requires connections to several other Teranode services to function properly, as it primarily serves as an API gateway to underlying node functionality. These dependencies are injected through this constructor to maintain proper service separation and testability.
 
