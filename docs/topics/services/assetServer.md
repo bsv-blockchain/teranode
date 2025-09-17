@@ -173,7 +173,6 @@ Generic hash search. The server searches for a hash in the Blockchain, the UTXO 
 
 ### 4.1.8. GetBlockStats()
 
-
 Retrieves block statistics.
 
 - **URL**: `/block/:hash/stats`
@@ -336,7 +335,7 @@ Key technologies involved:
     ├── GetLegacyBlock_test.go # Tests for GetLegacyBlock functionality.
     ├── repository.go          # Core repository implementation.
     └── repository_test.go     # Tests for the repository implementation.
-```text
+```
 
 ## 7. How to run
 
@@ -346,7 +345,7 @@ To run the Asset Server locally, you can execute the following command:
 
 ```shell
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Asset=1
-```text
+```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Asset Server locally.
 
@@ -461,6 +460,13 @@ Centrifuge supports the following subscription channels:
 
 **P2P Settings for Response Signing:**
 
+- **P2P HTTP Address (`p2p_httpAddress`)**: P2P server HTTP address for WebSocket connection.
+    - Type: `string`
+    - Default: `""` (empty string)
+    - Environment Variable: `TERANODE_P2P_HTTPADDRESS`
+    - Impact: **Required for Centrifuge** - Centrifuge server cannot start without valid P2P connection
+    - Code Usage: Used for P2P WebSocket listener initialization
+
 - **P2P Private Key (`p2p_private_key`)**: Private key for HTTP response signing.
     - Type: `string`
     - Default: `""` (empty string)
@@ -502,27 +508,27 @@ Centrifuge supports the following subscription channels:
 ```text
 Error: "no asset_httpListenAddress setting found"
 Cause: Missing or empty asset_httpListenAddress setting
-```text
+```
 
 ```text
 Error: "asset_httpAddress not found in config"
 Cause: Missing asset_httpAddress when Centrifuge is enabled
-```text
+```
 
 ```text
 Error: "asset_httpAddress is not a valid URL"
 Cause: Invalid URL format in asset_httpAddress setting
-```text
+```
 
 ```text
 Error: "server_certFile is required for HTTPS"
 Cause: Missing server_certFile when securityLevelHTTP is non-zero
-```text
+```
 
 ```text
 Error: "server_keyFile is required for HTTPS"
 Cause: Missing server_keyFile when securityLevelHTTP is non-zero
-```text
+```
 
 #### 7.2.6 Environment Variables
 
@@ -538,6 +544,7 @@ Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 - `TERANODE_SECURITYLEVELHTTP` - HTTP security level
 - `TERANODE_SERVER_CERTFILE` - TLS certificate file
 - `TERANODE_SERVER_KEYFILE` - TLS private key file
+- `TERANODE_P2P_HTTPADDRESS` - P2P server HTTP address
 - `TERANODE_P2P_PRIVATE_KEY` - P2P private key for signing
 
 **Special Environment Variables:**
@@ -565,17 +572,17 @@ txstore=blob://localhost:8080/tx
 subtreestore=blob://localhost:8080/subtree
 block_persisterStore=blob://localhost:8080/blocks
 blockchain_grpcAddress=localhost:8082
-```text
+```
 
 #### 7.2.8 Environment Variable Examples
 
 All configuration options can be set using environment variables with the prefix `TERANODE_`. For example:
 
 ```bash
-export TERANODE_ASSET_HTTP_LISTEN_ADDRESS=:8090
-export TERANODE_SECURITY_LEVEL_HTTP=1
-export TERANODE_SERVER_CERT_FILE=/path/to/cert.pem
-```text
+export TERANODE_ASSET_HTTPLISTENADDRESS=:8090
+export TERANODE_SECURITYLEVELHTTP=1
+export TERANODE_SERVER_CERTFILE=/path/to/cert.pem
+```
 
 ### 7.3 Configuration Examples
 
@@ -601,7 +608,7 @@ asset_httpListenAddress=:8443
 securityLevelHTTP=1
 server_certFile=/path/to/cert.pem
 server_keyFile=/path/to/key.pem
-```text
+```
 
 #### Centrifuge Configuration Example
 
@@ -609,7 +616,7 @@ server_keyFile=/path/to/key.pem
 asset_centrifugeDisable=false
 asset_centrifugeListenAddress=:8101
 asset_httpAddress=http://localhost:8090
-```text
+```
 
 ### 7.4 FSM Configuration
 

@@ -100,13 +100,16 @@ The Alert Service initializes the necessary components and services to start pro
 ![alert_freeze_utxo.svg](img/plantuml/alert/alert_freeze_utxo.svg)
 
 1. The P2P Alert library initiates the process by calling `AddToConsensusBlacklist` with a list of funds to freeze.
-2. The Alert Service iterates through each fund:
 
+2. The Alert Service iterates through each fund:
     - It retrieves the transaction data from the UTXO Store.
     - Calculates the UTXO hash.
     - Calls the UTXO Store to freeze the UTXO.
+
 3. The UTXO Store interacts with the database to mark the UTXO as frozen.
+
 4. Depending on the success of the freeze operation, the Alert Service adds the result to either the processed or notProcessed list.
+
 5. Finally, the Alert Service returns a BlacklistResponse to the P2P network.
 
 ### 2.3. UTXO Unfreezing
@@ -114,19 +117,20 @@ The Alert Service initializes the necessary components and services to start pro
 ![alert_unfreeze_utxo.svg](img/plantuml/alert/alert_unfreeze_utxo.svg)
 
 1. The P2P Alert library initiates the process by calling `AddToConsensusBlacklist` with a list of funds to potentially unfreeze.
-2. The Alert Service iterates through each fund:
 
+2. The Alert Service iterates through each fund:
     - It retrieves the transaction data from the UTXO Store.
     - Calculates the UTXO hash.
     - Checks if the fund is eligible for unfreezing by comparing the EnforceAtHeight.Stop with the current block height.
-3. If the fund is eligible for unfreezing:
 
+3. If the fund is eligible for unfreezing:
     - The Alert Service calls the UTXO Store to unfreeze the UTXO.
     - The UTXO Store interacts with the database to mark the UTXO as unfrozen.
     - Depending on the success of the unfreeze operation, the Alert Service adds the result to either the processed or notProcessed list.
-4. If the fund is not eligible for unfreezing:
 
+4. If the fund is not eligible for unfreezing:
     - The Alert Service adds it to the notProcessed list with a reason.
+
 5. Finally, the Alert Service returns a BlacklistResponse to the P2P network.
 
 ### 2.4. UTXO Reassignment
@@ -137,6 +141,7 @@ The Alert Service initializes the necessary components and services to start pro
 2. The Alert Service iterates through each transaction:
 
     - It parses the transaction from the provided hex string.
+
 3. For each input in the transaction:
 
     - The Alert Service retrieves the parent transaction data from the UTXO Store.
@@ -144,12 +149,15 @@ The Alert Service initializes the necessary components and services to start pro
     - It extracts the public key from the input's unlocking script.
     - It creates a new locking script using the extracted public key.
     - It calculates a new UTXO hash based on the new locking script.
+
 4. The Alert Service calls the UTXO Store to reassign the UTXO:
 
     - The UTXO Store updates the database to reflect the new UTXO assignment.
+
 5. Depending on the success of the reassignment operation:
 
     - The Alert Service adds the result to either the processed or notProcessed list.
+
 6. After processing all inputs of all transactions, the Alert Service returns an AddToConfiscationTransactionWhitelistResponse to the P2P network.
 
 ### 2.5. Block Invalidation
@@ -193,10 +201,12 @@ The Alert Service initializes the necessary components and services to start pro
 
         - SQLite for development and lightweight deployments.
         - PostgreSQL for production environments.
+
     - GORM ORM is used for database operations, with a custom logger (`gorm_logger.go`).
 
 4. **gocore Library:**
     - Utilized for managing application configurations.
+
     - Handles statistics gathering and operational settings.
 
 5. **P2P Networking:**
@@ -276,10 +286,13 @@ The Alert Service can be configured using various settings that control its beha
     - Example: `alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768 | 03aec1d40f02ac7f6df701ef8f629515812f1bcd949b6aa6c7a8dd778b748b2433"`
 
 - **P2P Private Key (`alert_p2p_private_key`)**: Private key for P2P communication.
-    - Type: `string`
-    - Impact: Establishes node identity in the P2P network
-    - Note: If not provided, a default key will be created in the data directory
-    - Example: `alert_p2p_private_key = "08c7fec91e75046d0ac6a2b4edb2daaae34b1e4c3c25a48b1ebdffe5955e33bc"`
+    - **Type**: string
+    - **Default**: "" (empty - triggers auto-generation)
+    - **Environment Variable**: `TERANODE_alert_p2p_private_key`
+    - **Impact**: Establishes node identity in the P2P network
+    - **Auto-Generation**: If not provided, creates private key file at `$HOME/.alert-system/private_key.pem`
+    - **Directory Creation**: Automatically creates `~/.alert-system/` directory with 0750 permissions
+    - **Example**: `alert_p2p_private_key = "08c7fec91e75046d0ac6a2b4edb2daaae34b1e4c3c25a48b1ebdffe5955e33bc"`
 
 - **Protocol ID (`alert_protocol_id`)**: Protocol identifier for the P2P alert network.
     - Type: `string`
@@ -288,10 +301,17 @@ The Alert Service can be configured using various settings that control its beha
     - Example: `alert_protocol_id = "/bsv/alert/1.0.0"`
 
 - **Topic Name (`alert_topic_name`)**: P2P topic name for alert propagation.
-    - Type: `string`
-    - Default: "bitcoin_alert_system"
-    - Note: Automatically prefixed with network name if not on mainnet
-    - Example: `alert_topic_name = "bitcoin_alert_system"`
+    - **Type**: string
+    - **Default**: "bitcoin_alert_system"
+    - **Environment Variable**: `TERANODE_alert_topic_name`
+    - **Network Dependency**: Automatically prefixed with network name if not on mainnet
+    - **Network-Specific Behavior**:
+
+        - **Mainnet**: Uses configured topic name as-is
+        - **Testnet**: Prefixed as "bitcoin_alert_system_testnet"
+        - **Regtest**: Prefixed as "bitcoin_alert_system_regtest"
+
+    - **Example**: `alert_topic_name = "bitcoin_alert_system"`
 
 - **P2P Port (`alert_p2p_port`)**: Port number for P2P communication.
     - Type: `int`
@@ -316,6 +336,7 @@ The SQLite database will be stored in the `DataFolder` directory specified in th
 
     - Max Idle Connections: 1
     - Max Open Connections: 1
+
 - **Table Prefix**: Uses the database name as prefix
 
 #### 6.2.2 In-Memory SQLite
@@ -329,6 +350,7 @@ sqlitememory:///database_name
 
     - Max Idle Connections: 1
     - Max Open Connections: 1
+
 - **Storage**: In-memory only
 - **Table Prefix**: Uses the database name as prefix
 
@@ -341,6 +363,7 @@ postgres://username:password@host:port/database?param1=value1&param2=value2
 - **Parameters**:
 
     - `sslmode`: SSL mode for the connection (default: `disable`)
+
 - **Connection Pool Settings (hardcoded)**:
 
     - Max Idle Connections: 2
@@ -348,6 +371,7 @@ postgres://username:password@host:port/database?param1=value1&param2=value2
     - Max Connection Idle Time: 20 seconds
     - Max Connection Time: 20 seconds
     - Transaction Timeout: 20 seconds
+
 - **Table Prefix**: "alert_system"
 
 #### 6.2.4 MySQL
@@ -359,6 +383,7 @@ mysql://username:password@host:port/database?param1=value1&param2=value2
 - **Parameters**:
 
     - `sslmode`: SSL mode for the connection (default: `disable`)
+
 - **Connection Pool Settings (hardcoded)**: Same as PostgreSQL
 - **Table Prefix**: "alert_system"
 

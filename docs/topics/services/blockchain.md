@@ -503,14 +503,13 @@ The Blockchain service configuration is organized into several categories to man
         - SQLite: `sqlite:///path/to/db`
         - PostgreSQL: `postgres://user:password@host:port/dbname`
 
-    - Impact: Determines where all blockchain data is persisted
+    - Impact: Stores block data and service state
     - Performance Impact: Choice of database affects scalability and performance
 
 - **DB Timeout (`blockchain_store_dbTimeoutMillis`)**: The timeout in milliseconds for database operations.
     - Type: integer
     - Default Value: `5000` (5 seconds)
-    - Impact: Affects error handling for database operations and resilience during DB latency
-    - Tuning Advice: Increase for slower database connections or when operating at high scale
+    - Impact: Not currently implemented
 
 ### State Machine Configuration
 
@@ -524,18 +523,17 @@ The Blockchain service configuration is organized into several categories to man
         - `"LEGACY_SYNC"`: Legacy synchronization mode
         - `"CATCHUP_BLOCKS"`: Block catch-up mode
 
-    - Impact: Controls the service's startup behavior and initial operational mode
+    - Impact: Not currently implemented
 
-- **FSM State Restore (`FSMStateRestore`)**: Controls whether the service restores its previous FSM state from storage on startup.
+- **FSM State Restore (`fsm_state_restore`)**: Controls whether the service restores its previous FSM state from storage on startup.
     - Type: boolean
     - Default Value: `false`
-    - Impact: When enabled, the service will attempt to resume from its last known state instead of starting fresh
-    - Use Cases: Enable for production systems where state continuity across restarts is important
+    - Impact: Not currently implemented
 
-- **FSM State Change Delay (`FSMStateChangeDelay`)**: FOR TESTING ONLY - introduces an artificial delay when changing FSM states.
-    - Type: duration
-    - Default Value: Not set
-    - Impact: Testing only - allows test code to observe state transitions
+- **FSM State Change Delay (`fsm_state_change_delay`)**: FOR TESTING ONLY - introduces an artificial delay when changing FSM states.
+    - Type: integer (milliseconds)
+    - Default Value: `0`
+    - Impact: Used only in tests for state transition synchronization
     - Warning: Should not be used in production environments
 
 ### Operational Settings
@@ -543,37 +541,42 @@ The Blockchain service configuration is organized into several categories to man
 - **Maximum Retries (`blockchain_maxRetries`)**: Maximum number of retry attempts for blockchain operations that encounter transient errors.
     - Type: integer
     - Default Value: `3`
-    - Impact: Affects resilience and error handling for blockchain operations
-    - Tuning Advice: Increase in unstable environments, decrease for faster failure reporting
+    - Impact: Not currently implemented
 
 - **Retry Sleep Duration (`blockchain_retrySleep`)**: The wait time in milliseconds between retry attempts, implementing a back-off mechanism.
     - Type: integer
     - Default Value: `1000` (1 second)
-    - Impact: Controls the pace of retries, affecting both system load during retries and recovery time
+    - Impact: Not currently implemented
     - Tuning Advice: Adjust based on the nature of expected failures (shorter for quick-recovery scenarios)
 
 ### Mining and Difficulty Settings
 
-- **Difficulty Adjustment Flag (`difficulty_adjustment`)**: Enables or disables dynamic difficulty adjustments based on network conditions.
+- **Difficulty Cache (`blockassembly_difficultyCache`)**: Enables difficulty calculation caching for performance optimization.
     - Type: boolean
-    - Default Value: `false`
-    - Impact: Controls whether the blockchain will adjust mining difficulty dynamically
-    - Usage: Enable for production networks where difficulty should adjust automatically
+    - Default Value: `true`
+    - Impact: Improves performance when enabled
 
 ### Configuration Interactions and Dependencies
 
 Some configuration settings work together or depend on other settings:
 
-1. **State Machine Settings**: The `blockchain_initializeNodeInState` and `FSMStateRestore` settings interact to determine the initial state of the service. If `FSMStateRestore` is true, the service tries to restore its previous state from the database, potentially overriding `blockchain_initializeNodeInState`.
+1. **gRPC Server Management**: `blockchain_grpcListenAddress` controls server startup and health checks; `blockchain_grpcAddress` required for client connections
 
-2. **Network Settings**: The `blockchain_grpcAddress` setting should be accessible from other services that need to communicate with the blockchain service. If your deployment uses service discovery, this may need to match registered service names.
+2. **HTTP Administrative Interface**: `blockchain_httpListenAddress` must be configured for service startup; empty causes failure
 
-3. **Database Performance**: The `blockchain_store_dbTimeoutMillis` setting should be tuned based on the database type specified in `blockchain_store` and expected load. Slower databases or high-load environments may require longer timeouts.
+3. **Difficulty Calculation**: `blockassembly_difficultyCache` improves performance; Chain parameters control difficulty algorithm behavior
 
-4. **Resilience Configuration**: The `blockchain_maxRetries` and `blockchain_retrySleep` settings together determine the retry behavior. The total maximum retry duration will be approximately `maxRetries * retrySleep` milliseconds.
+4. **FSM State Management**: `fsm_state_restore` and `blockchain_initializeNodeInState` control service startup behavior and state persistence
 
-### FSM Settings
-- **FSM State Restore (`fsm_state_restore`)**: Boolean flag for FSM state restoration. When enabled, the service will attempt to restore its previous state after restart. Default: false.
+5. **Database Operations**: `blockchain_store` determines persistence backend; `blockchain_store_dbTimeoutMillis` controls operation limits
+
+### Critical Configuration Requirements
+
+1. **`blockchain_httpListenAddress`** must be configured (empty causes service startup failure)
+2. **`blockchain_grpcAddress`** must be configured for client functionality
+3. **`blockchain_grpcListenAddress`** can be empty (disables gRPC server)
+4. **`blockchain_store`** must be valid URL format for blockchain persistence
+5. **`Chain configuration parameters`** must be properly configured for difficulty calculations
 
 ## 9. Additional Technical Details
 

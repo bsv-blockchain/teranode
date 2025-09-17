@@ -314,22 +314,19 @@ The Block Assembly service implements real-time fork detection through the follo
 
 - **Real-time Block Monitoring**: Implemented via `blockchainSubscriptionCh` in the Block Assembler, which continuously monitors for new blocks and chain updates.
 
-- **Fork Detection Criteria**: The Block Assembly service uses three main criteria to detect and handle forks:
+**Fork Detection Criteria**: The Block Assembly service uses three main criteria to detect and handle forks:
 
 1. **Chain Height Tracking**:
-
     - Maintains current blockchain height through `bestBlockHeight`
     - Compares incoming block heights with current chain tip
     - Used to determine if incoming blocks represent a longer chain
 
 2. **Block Hash Verification**:
-
     - Uses `HashPrevBlock` to verify block connectivity
     - Ensures each block properly references its predecessor
     - Helps identify where chains diverge
 
 3. **Reorganization Size Protection**:
-
     - Monitors the size of potential chain reorganizations
     - If a reorganization would require moving more than 5 blocks either backwards or forwards
     - AND the current chain height is greater than 1000 blocks
@@ -376,23 +373,24 @@ The following diagram illustrates how the Block Assembly service handles a chain
 
 - `err = b.handleReorg(ctx, bestBlockchainBlockHeader)`:
 
-  - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
-  - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
-  - **Getting Reorg Blocks**:
+    - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
+    - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
+
+- **Getting Reorg Blocks**:
 
     - `moveBackBlocks, moveForwardBlocks, err := b.getReorgBlocks(ctx, header)`:
 
-      - Calls `getReorgBlocks` to determine the blocks to move down (to revert) and move up (to apply) for aligning with the network's consensus chain.
-      - `header` is the new block header that triggered the reorg.
-      - This step involves finding the common ancestor and getting the blocks from the current chain (move down) and the new chain (move up).
+        - Calls `getReorgBlocks` to determine the blocks to move down (to revert) and move up (to apply) for aligning with the network's consensus chain.
+        - `header` is the new block header that triggered the reorg.
+        - This step involves finding the common ancestor and getting the blocks from the current chain (move down) and the new chain (move up).
 
   - **Performing Reorg in Subtree Processor**:
 
     - `b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks)`:
 
-      - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
-      - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
-      - This step involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
+        - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
+        - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
+            - This step involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
 
 Note: If other nodes propose blocks containing a transaction that Teranode has identified as a double-spend (based on the First-Seen rule), Teranode will only build on top of such blocks when the network has reached consensus on which transaction to accept, even if it differs from Teranode's initial first-seen assessment. For more information, please review the [Double Spend Detection documentation](../architecture/understandingDoubleSpends.md).
 
@@ -605,12 +603,6 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
     - Code Usage: `Server.Init()` method (line 235)
     - Impact: Controls how many subtree retry operations can be queued before blocking.
 
-3. **`blockassembly_subtreeBlockHeightRetention`**: Number of blocks for which to retain subtrees.
-    - Type: uint32
-    - Default: 1000
-    - Code Usage: Subtree data retention management
-    - Impact: Controls data retention period for subtrees, affecting storage requirements and historical data availability.
-
 ### Subtree Size Management
 
 > **Dynamic Sizing**: When `blockassembly_useDynamicSubtreeSize` is enabled, subtree sizes automatically adjust between min/max bounds to target ~1 subtree/second.
@@ -651,7 +643,7 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
 
 2. **`blockassembly_sendBatchTimeout`**: Maximum time in milliseconds to wait before sending a batch of transactions.
     - Type: int
-    - Default: 100
+    - Default: 2
     - Code Usage: Transaction batch timeout control
     - Impact: Balances latency against batch efficiency in transaction processing.
 
@@ -661,25 +653,19 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
     - Code Usage: `SubtreeProcessor.go` (line 519)
     - Impact: Controls memory usage and processing efficiency of transaction batches.
 
-4. **`tx_chan_buffer_size`**: Buffer size for transaction channel.
-    - Type: int
-    - Default: 1000
-    - Code Usage: Transaction channel buffering
-    - Impact: Controls how many transactions can be queued before backpressure is applied.
-
-5. **`blockassembly_subtreeProcessorConcurrentReads`**: Number of concurrent read operations in the subtree processor.
+4. **`blockassembly_subtreeProcessorConcurrentReads`**: Number of concurrent read operations in the subtree processor.
     - Type: int
     - Default: 375
     - Code Usage: `Server.removeSubtreesDAH()` (line 1177)
     - Impact: Controls parallelism for reading subtree data, affecting throughput.
 
-6. **`blockassembly_moveBackBlockConcurrency`**: Number of concurrent goroutines for block rollback during reorganization.
+5. **`blockassembly_moveBackBlockConcurrency`**: Number of concurrent goroutines for block rollback during reorganization.
     - Type: int
     - Default: 375
     - Code Usage: `SubtreeProcessor.go` (lines 1383, 1597)
     - Impact: Controls parallelism during blockchain reorganizations.
 
-7. **`blockassembly_processRemainderTxHashesConcurrency`**: Number of concurrent goroutines for processing remaining transaction hashes.
+6. **`blockassembly_processRemainderTxHashesConcurrency`**: Number of concurrent goroutines for processing remaining transaction hashes.
     - Type: int
     - Default: 375
     - Code Usage: Transaction hash processing during reorganizations
@@ -736,7 +722,13 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
     - Code Usage: Difficulty calculation optimization
     - Impact: Reduces redundant calculations, improves performance.
 
-3. **`miner_wallet_private_keys`**: Private keys used for mining rewards (pipe-separated).
+3. **`blockassembly_miningCandidateCacheTimeout`**: Timeout for mining candidate cache.
+    - Type: time.Duration
+    - Default: 5s
+    - Code Usage: `BlockAssembler.getMiningCandidate()` caching logic
+    - Impact: Controls how long mining candidates are cached to avoid redundant generation.
+
+4. **`miner_wallet_private_keys`**: Private keys used for mining rewards (pipe-separated).
     - Type: []string
     - Default: [] (empty array)
     - Code Usage: Mining reward distribution
@@ -750,23 +742,45 @@ Subtrees are a critical component in the Block Assembly process, organizing tran
     - Code Usage: `Server.AddTx()`, `RemoveTx()`, `AddTxBatch()` (lines 621, 671, 716)
     - Impact: When true, disables all transaction processing operations.
 
-2. **`fsm_state_restore`**: Boolean flag for FSM (Finite State Machine) state restoration.
-    - Type: bool
-    - Default: false
-    - Code Usage: Service state restoration on startup
-    - Impact: Controls whether the service attempts to restore its previous state on startup.
+2. **`blockassembly_localDAHCache`**: Local DAH cache path for temporary storage.
+    - Type: string
+    - Default: "" (empty)
+    - Code Usage: Local caching configuration
+    - Impact: Controls local caching behavior for DAH operations.
 
-3. **`blockmaxsize`**: Maximum block size in bytes.
+### Reorganization Limits
+
+1. **`blockassembly_maxBlockReorgCatchup`**: Maximum blocks to catch up during reorganization.
     - Type: int
+    - Default: 100
+    - Code Usage: Reorganization processing limits
+    - Impact: Controls maximum reorganization depth for catchup operations.
+
+2. **`blockassembly_maxBlockReorgRollback`**: Maximum blocks to roll back during reorganization.
+    - Type: int
+    - Default: 100
+    - Code Usage: Reorganization processing limits
+    - Impact: Controls maximum reorganization depth for rollback operations.
+
+### Dependency-Injected Settings
+
+The following settings are not directly part of BlockAssembly configuration but are used by the service:
+
+1. **`Policy.BlockMaxSize`**: Maximum block size in bytes for mining candidates.
     - Default: 0 (unlimited)
-    - Code Usage: `BlockAssembler.go` block size validation (lines 764, 769, 817)
+    - Code Usage: `BlockAssembler.go` block size validation
     - Impact: Controls maximum block size for mining candidates.
 
-4. **Chain Configuration Parameters**: Network-specific parameters from `ChainCfgParams`.
-    - **`PowLimitBits`**: Mining difficulty target (lines 181, 872)
-    - **`MaxCoinbaseScriptSigSize`**: Coinbase script size limit (line 905)
-    - **`GenerateSupported`**: Block generation capability (line 1344)
+2. **`ChainCfgParams`**: Network-specific blockchain parameters.
+    - **`GenerateSupported`**: Block generation capability
+    - **`MaxCoinbaseScriptSigSize`**: Coinbase script size limit
+    - **`ReduceMinDifficulty`**: Affects mining candidate caching
     - Impact: These are network-specific and should not be modified unless creating a custom network.
+
+3. **`GlobalBlockHeightRetention`**: Global block height retention for DAH calculations.
+    - Default: 288 blocks (approximately 2 days)
+    - Code Usage: DAH calculation in subtree storage
+    - Impact: Controls data retention period for cleanup operations.
 
 ## 10. Other Resources
 

@@ -143,8 +143,8 @@ The following parameters can be specified in Kafka URLs:
 1. **`partitions`**
     - **Type**: Integer
     - **Default**: 1
-    - **Description**: Number of partitions for the Kafka topic
-    - **Impact**: Higher values increase parallelism but require more resources
+    - **Description**: Number of partitions for the topic
+    - **Impact**: Higher values increase parallelism but also resource usage
 
 2. **`replication`**
     - **Type**: Integer
@@ -173,7 +173,7 @@ The following parameters can be specified in Kafka URLs:
 
 6. **`flush_bytes`**
     - **Type**: Integer
-    - **Default**: 1048576 (1MB)
+    - **Default**: 1024
     - **Description**: Number of bytes to accumulate before forcing a flush
     - **Impact**: Larger values improve throughput but increase risk of data loss
 
@@ -192,10 +192,28 @@ The following parameters can be specified in Kafka URLs:
 9. **`consumer_ratio`**
     - **Type**: Integer
     - **Default**: 1
-    - **Description**: Ratio of partitions to consumers
-    - **Impact**: Determines how many consumer instances process messages
+    - **Description**: Controls the number of consumers per partition
+    - **Usage**: `consumers = partitions / consumer_ratio`
+    - **Impact**: Higher values reduce concurrency, lower values increase consumer count
+    - **Example**: `kafka://localhost:9092/blocks?consumer_ratio=2` creates half as many consumers as partitions
 
-10. **`replay`**
+10. **`flush_timeout`**
+    - **Type**: Duration
+    - **Default**: 10s
+    - **Description**: Maximum time to wait before flushing pending messages
+    - **Usage**: Producer timeout configuration
+    - **Impact**: Ensures messages are sent even with low throughput
+    - **Example**: `kafka://localhost:9092/blocks?flush_timeout=5s`
+
+11. **`segment_bytes`**
+    - **Type**: Integer
+    - **Default**: 1073741824 (1GB)
+    - **Description**: Maximum size of a single log segment file
+    - **Usage**: Topic configuration for log management
+    - **Impact**: Affects log retention and cleanup performance
+    - **Example**: `kafka://localhost:9092/blocks?segment_bytes=536870912` (512MB)
+
+12. **`replay`**
     - **Type**: Integer (boolean: 0 or 1)
     - **Default**: 1 (true)
     - **Description**: Whether to replay messages from the beginning for new consumer groups
@@ -210,48 +228,48 @@ Teranode implements different auto-commit strategies based on message criticalit
 These topics require guaranteed message processing and cannot tolerate message loss:
 
 - **`kafka_blocksConfig`**: Block distribution for validation
-  - **Reason**: Missing blocks would break blockchain validation
-  - **Consumer Behavior**: Manual commit after successful processing
-  - **Failure Handling**: Message redelivery on processing failure
+    - **Reason**: Missing blocks would break blockchain validation
+    - **Consumer Behavior**: Manual commit after successful processing
+    - **Failure Handling**: Message redelivery on processing failure
 
 - **`kafka_blocksFinalConfig`**: Finalized blocks for storage
-  - **Reason**: Missing finalized blocks would corrupt blockchain state
-  - **Consumer Behavior**: Manual commit after successful storage
-  - **Failure Handling**: Message redelivery on storage failure
+    - **Reason**: Missing finalized blocks would corrupt blockchain state
+    - **Consumer Behavior**: Manual commit after successful storage
+    - **Failure Handling**: Message redelivery on storage failure
 
 #### Non-Critical Topics (Auto-Commit: true)
 
 These topics can tolerate occasional message loss for performance:
 
 - **`kafka_validatortxsConfig`**: New transactions from propagation
-  - **Reason**: Transactions will be re-propagated if lost
-  - **Consumer Behavior**: Automatic commit for performance
-  - **Failure Handling**: Message loss acceptable
+    - **Reason**: Transactions will be re-propagated if lost
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Message loss acceptable
 
 - **`kafka_txmetaConfig`**: Transaction metadata for caching
-  - **Reason**: Cache can be rebuilt from other sources
-  - **Consumer Behavior**: Automatic commit for performance
-  - **Failure Handling**: Cache miss acceptable
+    - **Reason**: Cache can be rebuilt from other sources
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Cache miss acceptable
 
 - **`kafka_rejectedTxConfig`**: Invalid transaction notifications
-  - **Reason**: Rejection notifications are not critical for consensus
-  - **Consumer Behavior**: Automatic commit for performance
-  - **Failure Handling**: Message loss acceptable
+    - **Reason**: Rejection notifications are not critical for consensus
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Message loss acceptable
 
 - **`kafka_subtreesConfig`**: Subtree distribution for validation
-  - **Reason**: Subtrees will be re-propagated if lost
-  - **Consumer Behavior**: Automatic commit for performance
-  - **Failure Handling**: Message loss acceptable
+    - **Reason**: Subtrees will be re-propagated if lost
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Message loss acceptable
 
 - **`kafka_invalidBlocksConfig`**: Invalid block notifications
-  - **Reason**: Invalid block notifications are not critical for consensus
-  - **Consumer Behavior**: Automatic commit for performance
-  - **Failure Handling**: Message loss acceptable
+    - **Reason**: Invalid block notifications are not critical for consensus
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Message loss acceptable
 
 - **`kafka_invalidSubtreesConfig`**: Invalid subtree notifications
-  - **Reason**: Invalid subtree notifications are not critical for consensus
-  - **Consumer Behavior**: Automatic commit for performance
-  - **Failure Handling**: Message loss acceptable
+    - **Reason**: Invalid subtree notifications are not critical for consensus
+    - **Consumer Behavior**: Automatic commit for performance
+    - **Failure Handling**: Message loss acceptable
 
 **Implementation Note**: This auto-commit behavior is hardcoded in the Kafka consumer creation logic and cannot be overridden via URL parameters. The decision is based on the specific topic's role in maintaining blockchain consistency.
 
@@ -262,160 +280,159 @@ These settings define the Kafka endpoints used across the Teranode system:
 #### Core Topic Configuration URLs
 
 - **`kafka_validatortxsConfig`**: Kafka URL - Used in Propagation and Validator services
-  - **Environment Variable**: `kafka_validatortxsConfig`
-  - **Settings Path**: `settings.Kafka.ValidatorTxsConfig`
-  - **Critical Impact**: Manages new transaction flow from Propagation to Validator
-  - **Auto-Commit**: true (can tolerate message loss)
-  - **Required**: Yes
+    - **Environment Variable**: `kafka_validatortxsConfig`
+    - **Settings Path**: `settings.Kafka.ValidatorTxsConfig`
+    - **Critical Impact**: Manages new transaction flow from Propagation to Validator
+    - **Auto-Commit**: true (can tolerate message loss)
+    - **Required**: Yes
 
 - **`kafka_txmetaConfig`**: Kafka URL - Used in Subtree Validation and Validator services
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.TxMetaConfig`
-  - **Critical Impact**: Carries transaction metadata for subtree construction
-  - **Auto-Commit**: true (cache population, can tolerate loss)
-  - **Required**: Yes
+    - **Environment Variable**: `kafka_txmetaConfig`
+    - **Settings Path**: `settings.Kafka.TxMetaConfig`
+    - **Critical Impact**: Carries transaction metadata for subtree construction
+    - **Auto-Commit**: true (cache population, can tolerate loss)
+    - **Required**: Yes
 
 - **`kafka_rejectedTxConfig`**: Kafka URL - Used in P2P and Validator services
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.RejectedTxConfig`
-  - **Critical Impact**: Notifies network about invalid transactions
-  - **Auto-Commit**: true (can tolerate message loss)
-  - **Required**: Yes
+    - **Environment Variable**: `kafka_rejectedTxConfig`
+    - **Settings Path**: `settings.Kafka.RejectedTxConfig`
+    - **Critical Impact**: Notifies network about invalid transactions
+    - **Auto-Commit**: true (can tolerate message loss)
+    - **Required**: Yes
 
 - **`kafka_blocksConfig`**: Kafka URL - Used in Block Validation and P2P services
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.BlocksConfig`
-  - **Critical Impact**: Distributes new blocks for validation
-  - **Auto-Commit**: false (critical - cannot miss blocks)
-  - **Required**: Yes
+    - **Environment Variable**: `kafka_blocksConfig`
+    - **Settings Path**: `settings.Kafka.BlocksConfig`
+    - **Critical Impact**: Distributes new blocks for validation
+    - **Auto-Commit**: false (critical - cannot miss blocks)
+    - **Required**: Yes
 
 - **`kafka_subtreesConfig`**: Kafka URL - Used in Subtree Validation and P2P services
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.SubtreesConfig`
-  - **Critical Impact**: Distributes subtrees for validation
-  - **Auto-Commit**: true (can tolerate message loss)
-  - **Required**: Yes
+    - **Environment Variable**: `kafka_subtreesConfig`
+    - **Settings Path**: `settings.Kafka.SubtreesConfig`
+    - **Critical Impact**: Distributes subtrees for validation
+    - **Auto-Commit**: true (can tolerate message loss)
+    - **Required**: Yes
 
 - **`kafka_blocksFinalConfig`**: Kafka URL - Used in Blockchain and Blockpersister services
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.BlocksFinalConfig`
-  - **Critical Impact**: Finalizes validated blocks for permanent storage
-  - **Auto-Commit**: false (critical - cannot miss finalized blocks)
-  - **Required**: Yes
+    - **Environment Variable**: `kafka_blocksFinalConfig`
+    - **Settings Path**: `settings.Kafka.BlocksFinalConfig`
+    - **Critical Impact**: Finalizes validated blocks for permanent storage
+    - **Auto-Commit**: false (critical - cannot miss finalized blocks)
+    - **Required**: Yes
 
 - **`kafka_invalidBlocksConfig`**: Kafka URL - Used in Block Validation and P2P services
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.InvalidBlocksConfig`
-  - **Critical Impact**: Notifies network about invalid blocks
-  - **Auto-Commit**: true (can tolerate message loss)
-  - **Required**: Yes
+    - **Environment Variable**: `kafka_invalidBlocksConfig`
+    - **Settings Path**: `settings.Kafka.InvalidBlocksConfig`
+    - **Critical Impact**: Notifies network about invalid blocks
+    - **Auto-Commit**: true (can tolerate message loss)
+    - **Required**: Yes
 
 - **`kafka_invalidSubtreesConfig`**: Kafka URL - Used in Subtree Validation and P2P services
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.InvalidSubtreesConfig`
-  - **Critical Impact**: Notifies network about invalid subtrees
-  - **Auto-Commit**: true (can tolerate message loss)
-  - **Required**: Yes
+    - **Environment Variable**: `kafka_invalidSubtreesConfig`
+    - **Settings Path**: `settings.Kafka.InvalidSubtreesConfig`
+    - **Critical Impact**: Notifies network about invalid subtrees
+    - **Auto-Commit**: true (can tolerate message loss)
+    - **Required**: Yes
 
 #### TLS/Security Configuration
 
 - **`kafka_enableTLS`**: Boolean - Enable TLS encryption for Kafka connections
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.EnableTLS`
-  - **Default Value**: false
-  - **Impact**: High - Secure Kafka communication
-  - **Required**: No (recommended for production)
+    - **Environment Variable**: `KAFKA_ENABLE_TLS`
+    - **Settings Path**: `settings.Kafka.EnableTLS`
+    - **Default Value**: false
+    - **Impact**: High - Secure Kafka communication
+    - **Required**: No (recommended for production)
 
 - **`kafka_tlsSkipVerify`**: Boolean - Skip TLS certificate verification
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.TLSSkipVerify`
-  - **Default Value**: false
-  - **Impact**: Security - Certificate validation bypass
-  - **Required**: No (development only)
+    - **Environment Variable**: `KAFKA_TLS_SKIP_VERIFY`
+    - **Settings Path**: `settings.Kafka.TLSSkipVerify`
+    - **Default Value**: false
+    - **Impact**: Security - Certificate validation bypass
+    - **Required**: No (development only)
 
 - **`kafka_tlsCAFile`**: String - Path to TLS Certificate Authority file
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.TLSCAFile`
-  - **Default Value**: "" (empty)
-  - **Impact**: Security - Certificate authority validation
-  - **Required**: No (required if EnableTLS=true)
+    - **Environment Variable**: `KAFKA_TLS_CA_FILE`
+    - **Settings Path**: `settings.Kafka.TLSCAFile`
+    - **Default Value**: "" (empty)
+    - **Impact**: Security - Certificate authority validation
+    - **Required**: No (required if EnableTLS=true)
 
 - **`kafka_tlsCertFile`**: String - Path to TLS client certificate file
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.TLSCertFile`
-  - **Default Value**: "" (empty)
-  - **Impact**: Security - Client certificate authentication
-  - **Required**: No (required for mutual TLS)
+    - **Environment Variable**: `KAFKA_TLS_CERT_FILE`
+    - **Settings Path**: `settings.Kafka.TLSCertFile`
+    - **Default Value**: "" (empty)
+    - **Impact**: Security - Client certificate authentication
+    - **Required**: No (required for mutual TLS)
 
 - **`kafka_tlsKeyFile`**: String - Path to TLS client private key file
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.TLSKeyFile`
-  - **Default Value**: "" (empty)
-  - **Impact**: Security - Client private key authentication
-  - **Required**: No (required for mutual TLS)
+    - **Environment Variable**: `KAFKA_TLS_KEY_FILE`
+    - **Settings Path**: `settings.Kafka.TLSKeyFile`
+    - **Default Value**: "" (empty)
+    - **Impact**: Security - Client private key authentication
+    - **Required**: No (required for mutual TLS)
 
 #### Legacy Configuration (Backward Compatibility)
 
 - **`kafka_hosts`**: String - Kafka broker hosts configuration
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.Hosts`
-  - **Critical Impact**: Defines the Kafka broker endpoints for connection
-  - **Required**: Yes (legacy format)
-  - **Format**: Comma-separated list of host:port pairs (e.g., "localhost:9092,broker2:9092")
+    - **Environment Variable**: `KAFKA_HOSTS`
+    - **Settings Path**: `settings.Kafka.Hosts`
+    - **Critical Impact**: Defines the Kafka broker endpoints for connection
+    - **Required**: Yes (legacy format)
+    - **Format**: Comma-separated list of host:port pairs (e.g., "localhost:9092,broker2:9092")
 
 - **`kafka_unitTest`**: String - Unit test topic configuration
-  - **Environment Variable**: Not directly mapped (configured via settings)
-  - **Settings Path**: `settings.Kafka.UnitTest`
-  - **Critical Impact**: Defines Kafka topic used during unit testing
-  - **Required**: No (testing only)
-  - **Usage**: Used by test suites to isolate test messages from production topics
-  - **Environment**: Test environments only
+    - **Environment Variable**: `KAFKA_UNITTEST`
+    - **Settings Path**: `settings.Kafka.UnitTest`
+    - **Critical Impact**: Defines Kafka topic used during unit testing
+    - **Required**: No (testing only)
+    - **Usage**: Used by test suites to isolate test messages from production topics
+    - **Environment**: Test environments only
 
 ### Service-Specific Settings
 
 #### Block Settings
 
 - **`block_kafkaWorkers`**
-  - **Type**: Integer
-  - **Default**: 0
-  - **Description**: Number of worker goroutines processing Kafka messages (currently unused)
-  - **Impact**: This setting is defined but not currently implemented
+    - **Type**: Integer
+    - **Default**: 0
+    - **Description**: Number of worker goroutines processing Kafka messages (currently unused)
+    - **Impact**: This setting is defined but not currently implemented
 
 #### Block Validation
 
 - **`blockvalidation_kafkaWorkers`**
-  - **Type**: Integer
-  - **Default**: 0
-  - **Description**: Number of worker goroutines processing Kafka messages (currently unused)
-  - **Impact**: This setting is defined but not currently implemented
+    - **Type**: Integer
+    - **Default**: 0
+    - **Description**: Number of worker goroutines processing Kafka messages (currently unused)
+    - **Impact**: This setting is defined but not currently implemented
 
 #### Processing Concurrency (Non-Kafka)
 
 These settings control internal processing concurrency, not Kafka consumer counts:
 
 - **Block Validation Processing**:
-
-  - `blockvalidation_processTxMetaUsingStoreBatchSize`: max(4, runtime.NumCPU()/2)
-  - `blockvalidation_validateBlockSubtreesConcurrency`: max(4, runtime.NumCPU()/2)
-  - `blockvalidation_catchupConcurrency`: max(4, runtime.NumCPU()/2)
+    - `blockvalidation_processTxMetaUsingStoreBatchSize`: max(4, runtime.NumCPU()/2)
+    - `blockvalidation_validateBlockSubtreesConcurrency`: max(4, runtime.NumCPU()/2)
+    - `blockvalidation_catchupConcurrency`: max(4, runtime.NumCPU()/2)
 
 - **Subtree Validation Processing**:
-
-  - `subtreevalidation_getMissingTransactions`: max(4, runtime.NumCPU()/2)
+    - `subtreevalidation_getMissingTransactions`: max(4, runtime.NumCPU()/2)
 
 #### Validator
 
 - **`validator_kafkaWorkers`**
-  - **Type**: Integer
-  - **Default**: 0
-  - **Description**: Number of worker goroutines processing Kafka messages (currently unused)
-  - **Impact**: This setting is defined but not currently implemented
+    - **Type**: Integer
+    - **Default**: 0
+    - **Description**: Number of worker goroutines processing Kafka messages (currently unused)
+    - **Impact**: This setting is defined but not currently implemented
+
 - **`validator_kafka_maxMessageBytes`**
-  - **Type**: Integer
-  - **Default**: 1048576 (1MB)
-  - **Description**: Size threshold for routing decisions
-  - **Purpose**: Determines when to use HTTP fallback vs Kafka
-  - **Usage**: Large transactions routed via HTTP to avoid Kafka message size limits
+    - **Type**: Integer
+    - **Default**: 1048576 (1MB)
+    - **Description**: Size threshold for routing decisions
+    - **Purpose**: Determines when to use HTTP fallback vs Kafka
+    - **Usage**: Large transactions routed via HTTP to avoid Kafka message size limits
 
 ### Consumer Group Configuration
 
@@ -424,18 +441,16 @@ Kafka consumers in Teranode are organized into consumer groups, which determine 
 - **Consumer Group ID**: Each service uses a unique consumer group ID to ensure proper message distribution. This is typically passed as a parameter when creating a consumer group.
 
 - **Auto-Commit**:
-
-  - **Type**: Boolean
-  - **Description**: Controls whether Kafka offsets are automatically committed
-  - **Default**: Varies by service
-  - **Impact**: Critical for message processing guarantees
-  - **Service-Specific Settings**:
-
-    - **TxMeta Cache**: true (can tolerate missed messages)
-    - **Rejected Transactions**: true (can tolerate missed messages)
-    - **Subtree Validation**: false (requires exactly-once processing)
-    - **Block Persister**: false (requires exactly-once processing)
-    - **Block Validation**: false (requires exactly-once processing)
+    - **Type**: Boolean
+    - **Description**: Controls whether Kafka offsets are automatically committed
+    - **Default**: Varies by service
+    - **Impact**: Critical for message processing guarantees
+    - **Service-Specific Settings**:
+        - **TxMeta Cache**: true (can tolerate missed messages)
+        - **Rejected Transactions**: true (can tolerate missed messages)
+        - **Subtree Validation**: false (requires exactly-once processing)
+        - **Block Persister**: false (requires exactly-once processing)
+        - **Block Validation**: false (requires exactly-once processing)
 
 ### Configuration Interactions
 
@@ -568,34 +583,34 @@ Kafka consumer auto-commit behavior varies by service based on processing critic
 These services can tolerate potential message loss for performance:
 
 - **TxMeta Cache (Subtree Validation)**: `autoCommit=true`
-  - Rationale: Metadata can be regenerated if lost
-  - Performance priority over strict delivery guarantees
+    - Rationale: Metadata can be regenerated if lost
+    - Performance priority over strict delivery guarantees
 
 - **Rejected Transactions (P2P)**: `autoCommit=true`
-  - Rationale: Rejection notifications are not critical for consistency
-  - Network efficiency prioritized
+    - Rationale: Rejection notifications are not critical for consistency
+    - Network efficiency prioritized
 
 #### Auto-Commit Disabled Services
 
 These services require exactly-once processing guarantees:
 
 - **Subtree Validation**: `autoCommit=false`
-  - Rationale: Transaction processing must be atomic
-  - Manual commit after successful processing
+    - Rationale: Transaction processing must be atomic
+    - Manual commit after successful processing
 
 - **Block Persister**: `autoCommit=false`
-  - Rationale: Block finalization is critical for blockchain integrity
-  - Manual commit ensures durability
+    - Rationale: Block finalization is critical for blockchain integrity
+    - Manual commit ensures durability
 
 - **Block Validation**: `autoCommit=false`
-  - Rationale: Block processing affects consensus
-  - Manual commit prevents duplicate processing
+    - Rationale: Block processing affects consensus
+    - Manual commit prevents duplicate processing
 
 ### Kafka Consumer Concurrency
 
 **Important**: Unlike what the service-specific `kafkaWorkers` settings might suggest, Kafka consumer concurrency in Teranode is actually controlled through the `consumer_ratio` URL parameter for each topic. The actual number of consumers is calculated as:
 
-```
+```text
 consumerCount = partitions / consumer_ratio
 ```
 
@@ -609,22 +624,22 @@ Common consumer ratios in use:
 #### Propagation Service Settings
 
 - **`validator_kafka_maxMessageBytes`**: Size threshold for routing decisions
-  - **Purpose**: Determines when to use HTTP fallback vs Kafka
-  - **Default**: 1048576 (1MB)
-  - **Usage**: Large transactions routed via HTTP to avoid Kafka message size limits
+    - **Purpose**: Determines when to use HTTP fallback vs Kafka
+    - **Default**: 1048576 (1MB)
+    - **Usage**: Large transactions routed via HTTP to avoid Kafka message size limits
 
 #### Validator Service Settings
 
 - **`validator_kafkaWorkers`**: Number of concurrent Kafka processing workers
-  - **Purpose**: Controls parallel transaction processing capacity
-  - **Tuning**: Should match CPU cores and expected transaction volume
-  - **Integration**: Works with Block Assembly via direct gRPC (not Kafka)
+    - **Purpose**: Controls parallel transaction processing capacity
+    - **Tuning**: Should match CPU cores and expected transaction volume
+    - **Integration**: Works with Block Assembly via direct gRPC (not Kafka)
 
 #### Block Validation Service Settings
 
 **Note**: Kafka consumer concurrency is actually controlled via the `consumer_ratio` URL parameter, not through service-specific worker settings. The formula is:
 
-```
+```text
 consumerCount = partitions / consumer_ratio
 ```
 
