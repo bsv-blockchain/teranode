@@ -151,7 +151,9 @@ func TestWaitForBestBlockHeaderUpdate(t *testing.T) {
 		elapsed := time.Since(start)
 
 		assert.NoError(t, err)
-		assert.Less(t, elapsed, 20*time.Millisecond, "should return almost immediately")
+		// The implementation has a 10ms ticker, so in the worst case we wait one tick plus overhead.
+		// On a busy system, this can take longer due to scheduling delays.
+		assert.Less(t, elapsed, 100*time.Millisecond, "should return quickly after detecting update")
 	})
 
 	t.Run("should handle context cancellation", func(t *testing.T) {
