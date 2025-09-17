@@ -22,6 +22,7 @@ Usage: teranode-cli <command> [options]
     checkblocktemplate   Check block template
     export-blocks        Export blockchain to CSV
     filereader           File Reader
+    fix-chainwork        Fix incorrect chainwork values in blockchain database
     getfsmstate          Get the current FSM State
     import-blocks        Import blockchain from CSV
     seeder               Seeder
@@ -73,6 +74,16 @@ Usage: teranode-cli <command> [options]
 | `getfsmstate`        | Get the current FSM state     | None                                                             |
 | `setfsmstate`        | Set the FSM state             | `--fsmstate` - Target FSM state                                  |
 |                      |                               | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
+
+### Database Maintenance
+
+| Command              | Description                                    | Key Options                                                      |
+|----------------------|------------------------------------------------|------------------------------------------------------------------|
+| `fix-chainwork`      | Fix incorrect chainwork values in blockchain  | `--db-url` - Database URL (required)                            |
+|                      | database                                       | `--dry-run` - Preview changes without updating (default: true)   |
+|                      |                                                | `--batch-size` - Updates per transaction (default: 1000)        |
+|                      |                                                | `--start-height` - Starting block height (default: 650286)      |
+|                      |                                                | `--end-height` - Ending block height (default: 0 for tip)       |
 
 ## Detailed Command Reference
 
@@ -174,6 +185,24 @@ Options:
 - `--hash`: Hash of the UTXO set / headers to process (required)
 - `--skipHeaders`: Skip processing headers
 - `--skipUTXOs`: Skip processing UTXOs
+
+### Fix Chainwork
+
+```bash
+teranode-cli fix-chainwork --db-url=<database-url> [options]
+```
+
+Fixes incorrect chainwork values in the blockchain database. This command is used for database maintenance and should be used with caution.
+
+Options:
+
+- `--db-url`: Database URL (postgres://... or sqlite://...) (required)
+- `--dry-run`: Preview changes without updating database (default: true)
+- `--batch-size`: Number of updates to batch in a transaction (default: 1000)
+- `--start-height`: Starting block height (default: 650286)
+- `--end-height`: Ending block height (0 for current tip) (default: 0)
+
+⚠️ **Warning**: This command modifies blockchain database records. Always run with `--dry-run=true` first to preview changes before applying them to production databases.
 
 ## Error Handling
 
