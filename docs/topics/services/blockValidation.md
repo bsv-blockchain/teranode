@@ -50,6 +50,12 @@ The Legacy Service communicates with the Block Validation over the gRPC protocol
 
 ![Block_Validation_Service_Component_Diagram.png](img/Block_Validation_Service_Component_Diagram.png)
 
+### Detailed Component Diagram
+
+The detailed component diagram below shows the internal architecture of the Block Validation Service:
+
+![Block_Validation_Component](img/plantuml/blockvalidation/Block_Validation_Component.svg)
+
 > **Note**: For information about how the Block Validation service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
 Finally, note that the Block Validation service benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
@@ -80,14 +86,14 @@ The block validator is a service that validates blocks. After validating them, i
 - The server will request the block data from the remote node (`DoHTTPRequest()`).
 - If the parent block is not known, it will be added to the catchupCh channel for processing. We stop at this point, as we can no longer proceed. The catchup process will be explained in the next section (section 2.2.2).
 - If the parent is known, the block will be validated.
-    - First, the service validates all the block subtrees.
-        - For each subtree, we check if it is known. If not, we kick off a subtree validation process (see section 2.2.3 for more details).
-    - The validator retrieves the last 100 block headers, which are used to validate the block data. We can see more about this specific step in the section 2.2.4.
-    - The validator stores the coinbase Tx in the UTXO Store and the Tx Store.
-    - The validator adds the block to the Blockchain.
-    - For each Subtree in the block, the validator updates the TTL (Time To Live) to zero for the subtree. This allows the Store to clear out data the services will no longer use.
-    - For each Tx for each Subtree, we set the Tx as mined in the UTXO Store. This allows the UTXO Store to know which block(s) the Tx is in.
-    - Should an error occur during the validation process, the block will be invalidated and removed from the blockchain.
+  - First, the service validates all the block subtrees.
+    - For each subtree, we check if it is known. If not, we kick off a subtree validation process (see section 2.2.3 for more details).
+  - The validator retrieves the last 100 block headers, which are used to validate the block data. We can see more about this specific step in the section 2.2.4.
+  - The validator stores the coinbase Tx in the UTXO Store and the Tx Store.
+  - The validator adds the block to the Blockchain.
+  - For each Subtree in the block, the validator updates the TTL (Time To Live) to zero for the subtree. This allows the Store to clear out data the services will no longer use.
+  - For each Tx for each Subtree, we set the Tx as mined in the UTXO Store. This allows the UTXO Store to know which block(s) the Tx is in.
+  - Should an error occur during the validation process, the block will be invalidated and removed from the blockchain.
 
 Note - there is a `optimisticMining` setting that allows to reverse the block validation and block addition to the blockchain steps.
 
@@ -164,6 +170,7 @@ Should the validation process for a block encounter a subtree it does not know a
 
 If any transaction under the subtree is also missing, the subtree validation process will kick off a recovery process for those transactions.
 
+
 #### 2.2.5. Block Data Validation
 
 As part of the overall block validation, the service will validate the block data, ensuring the format and integrity of the data, as well as confirming that coinbase tx, subtrees and transactions are valid. This is done in the `Valid()` method under the `Block` struct.
@@ -181,6 +188,7 @@ Effectively, the following validations are performed:
 - A block must include at least one transaction, which is the Coinbase transaction.
 
 - A block timestamp must not be too far in the past or the future.
+
     - The block time specified in the header must be larger than the Median-Time-Past (MTP) calculated from the previous block index. MTP is calculated by taking the timestamps of the last 11 blocks and finding the median (More details in BIP113).
     - The block time specified in the header must not be larger than the adjusted current time plus two hours ("maximum future block time").
 
@@ -206,8 +214,8 @@ Teranode maintains bloom filters for recent blocks to efficiently detect re-pres
 - **Storage**: Bloom filters are stored in both memory (for active validation) and in the subtree store (for persistence)
 - **Retention**: Filters are maintained for a configurable number of recent blocks (`blockvalidation_bloom_filter_retention_size`)
 - **TTL Ordering**: The system enforces a strict TTL (Time-To-Live) ordering: txmetacache < utxo store < bloom filter
-    - This ensures that even if a transaction is pruned from txmetacache, the bloom filter can still detect its re-presentation
-    - The longer retention period for bloom filters provides an extended window for detecting re-presented transactions
+  - This ensures that even if a transaction is pruned from txmetacache, the bloom filter can still detect its re-presentation
+  - The longer retention period for bloom filters provides an extended window for detecting re-presented transactions
 
 ##### The validOrderAndBlessed Mechanism
 

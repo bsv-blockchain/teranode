@@ -1,0 +1,189 @@
+skinparam defaultTextAlignment center
+skinparam rectangle {
+  BackgroundColor #e6f0ff
+  BorderColor #3366cc
+  FontColor black
+  RoundCorner 10
+}
+skinparam component {
+  BackgroundColor #e6f0ff
+  BorderColor #3366cc
+  FontColor black
+  RoundCorner 10
+}
+skinparam database {
+  BackgroundColor #f2f2f2
+  BorderColor #999999
+  FontColor black
+  RoundCorner 10
+}
+skinparam shadowing false
+skinparam ArrowColor #666666
+
+@startuml Block_Validation_Component
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title Block Validation Service - Component Diagram
+
+Container_Boundary(block_validation, "Block Validation Service") {
+
+Component(grpc_server, "gRPC Server", "Go gRPC", "Handles block validation API requests")
+
+Component(http_server, "HTTP Server", "Go HTTP", "Health checks and monitoring")
+
+
+
+Component(kafka_consumer, "Kafka Consumer", "Go Kafka", "Consumes block notifications from P2P")
+
+Component(kafka_producer, "Kafka Producer", "Go Kafka", "Publishes invalid block notifications")
+
+
+
+Component(block_validation_core, "Block Validation Core", "Go", "Core block validation logic")
+
+Component(block_processor, "Block Processor", "Go", "Processes discovered blocks")
+
+Component(catchup_manager, "Catchup Manager", "Go", "Handles chain catchup operations")
+
+
+
+Component(block_found_handler, "Block Found Handler", "Go", "Handles new block notifications")
+
+Component(subtree_processor, "Subtree Processor", "Go", "Processes block subtrees")
+
+Component(transaction_validator, "Transaction Validator", "Go", "Validates block transactions")
+
+
+
+Component(http_client, "HTTP Client", "Go HTTP", "Fetches blocks from asset servers")
+
+Component(blockchain_client, "Blockchain Client", "Go", "Blockchain service integration")
+
+Component(validator_interface, "Validator Interface", "Go", "Transaction validation interface")
+
+Component(subtree_validation_client, "Subtree Validation Client", "Go", "Subtree validation integration")
+
+
+
+Component(metrics_collector, "Metrics Collector", "Prometheus", "Collects validation performance metrics")
+
+Component(health_monitor, "Health Monitor", "Go", "Monitors service and dependency health")
+
+}
+
+Container_Boundary(external_services, "External Services") {
+
+Container(blockchain, "Blockchain Service", "Go", "Blockchain state management")
+
+Container(validator, "Validator Service", "Go", "Transaction validation")
+
+Container(subtree_validation, "Subtree Validation Service", "Go", "Subtree validation")
+
+Container(subtree_store, "Subtree Store", "Blob Store", "Block subtree storage")
+
+Container(tx_store, "Transaction Store", "Blob Store", "Transaction data storage")
+
+Container(utxo_store, "UTXO Store", "Database", "UTXO state management")
+
+ContainerQueue(kafka, "Kafka", "Message Queue", "Message broker")
+
+Container(asset_servers, "Asset Servers", "HTTP", "Remote block data")
+
+}
+
+System_Ext(p2p_service, "P2P Service", "P2P network communication")
+
+System_Ext(legacy_service, "Legacy Service", "Bitcoin protocol sync")
+
+Person(admin, "Administrator", "Node operator")
+
+' External API interactions
+
+Rel(p2p_service, grpc_server, "Block found notifications", "gRPC")
+
+Rel(legacy_service, grpc_server, "Process blocks during sync", "gRPC")
+
+Rel(admin, http_server, "Health checks", "HTTP")
+
+Rel(admin, grpc_server, "Administrative operations", "gRPC")
+
+' API request processing
+
+Rel(grpc_server, block_found_handler, "Process block notifications")
+
+Rel(grpc_server, block_processor, "Process block requests")
+
+Rel(http_server, health_monitor, "Health check requests")
+
+' Kafka message processing
+
+Rel(kafka, kafka_consumer, "Block notifications", "Kafka")
+
+Rel(kafka_consumer, block_found_handler, "Route block notifications")
+
+Rel(kafka_producer, kafka, "Invalid block notifications", "Kafka")
+
+' Core validation flow
+
+Rel(block_found_handler, block_validation_core, "Validate blocks")
+
+Rel(block_processor, block_validation_core, "Process blocks")
+
+Rel(block_validation_core, subtree_processor, "Process subtrees")
+
+Rel(block_validation_core, transaction_validator, "Validate transactions")
+
+Rel(block_validation_core, catchup_manager, "Handle catchup")
+
+' External service interactions
+
+Rel(http_client, asset_servers, "Fetch block data", "HTTP")
+
+Rel(blockchain_client, blockchain, "Store validated blocks", "gRPC")
+
+Rel(validator_interface, validator, "Validate transactions", "Interface")
+
+Rel(subtree_validation_client, subtree_validation, "Validate subtrees", "gRPC")
+
+' Storage operations
+
+Rel(subtree_processor, subtree_store, "Store/retrieve subtrees", "gRPC")
+
+Rel(transaction_validator, tx_store, "Store/retrieve transactions", "gRPC")
+
+Rel(block_validation_core, utxo_store, "Manage UTXO state", "gRPC")
+
+' Internal coordination
+
+Rel(block_validation_core, http_client, "Fetch missing data")
+
+Rel(block_validation_core, blockchain_client, "Update blockchain state")
+
+Rel(catchup_manager, http_client, "Fetch catchup blocks")
+
+Rel(block_validation_core, kafka_producer, "Report invalid blocks")
+
+' Health and monitoring
+
+Rel(health_monitor, blockchain, "Health checks")
+
+Rel(health_monitor, validator, "Health checks")
+
+Rel(health_monitor, subtree_validation, "Health checks")
+
+Rel(health_monitor, subtree_store, "Health checks")
+
+Rel(health_monitor, utxo_store, "Health checks")
+
+' Metrics collection
+
+Rel(block_validation_core, metrics_collector, "Validation metrics")
+
+Rel(block_processor, metrics_collector, "Processing metrics")
+
+Rel(catchup_manager, metrics_collector, "Catchup metrics")
+
+SHOW_LEGEND()
+
+@enduml
