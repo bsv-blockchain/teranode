@@ -1,9 +1,8 @@
 # Teranode Project Structure
 
-
 The Teranode project is structured as follows:
 
-```
+```text
 teranode/
 │
 ├── main.go                       # Entry point to start the services
@@ -29,6 +28,7 @@ teranode/
 │   ├── seeder/                   # Seeder functionality
 │   ├── setfsmstate/              # Tool to set FSM state
 │   ├── settings/                 # Settings management tools
+│   ├── teranode/                 # Teranode main executable
 │   ├── teranodecli/              # Teranode command-line interface
 │   └── utxopersister/            # UTXO persistence utility
 │
@@ -63,17 +63,19 @@ teranode/
 │   │   └── kafkaMessageFormat.md # Kafka message format documentation
 │   └── images/                   # Documentation images
 │
-├── errors/                       # Error handling and definitions
-│
-├── k8sresolver/                  # Kubernetes resolver for gRPC
-│
-├── model/                        # Data models
-│
-├── chaincfg/                     # Chain configuration parameters
-│
 ├── compose/                      # Docker compose configurations
 │
 ├── daemon/                       # Daemon implementation
+│
+├── deploy/                       # Deployment configurations and scripts
+│
+├── errors/                       # Error handling and definitions
+│
+├── interfaces/                   # Interface definitions
+│
+├── model/                        # Data models
+│
+├── pkg/                          # Reusable packages
 │
 ├── scripts/                      # Various utility scripts
 │
@@ -81,14 +83,12 @@ teranode/
 │
 ├── test/                         # Test utilities and integration tests
 │
-├── testutil/                     # Test utilities
-│
-├── tracing/                      # Tracing and metrics utilities
-│
 ├── ui/                           # User interface components
 │   └── dashboard/                # Teranode Dashboard UI
 │
 ├── ulogger/                      # Unified logging implementation
 │
-└── util/                         # Common utilities
+├── util/                         # Common utilities
+│
+└── venv/                         # Python virtual environment (local development)
 ```

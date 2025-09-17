@@ -74,6 +74,9 @@ type MinedBlockInfo struct {
 
     // SubtreeIdx is the index of the subtree where the transaction appears
     SubtreeIdx  int
+
+    // UnsetMined if true, the mined info will be removed from the tx
+    UnsetMined  bool
 }
 ```
 
@@ -205,7 +208,7 @@ type Store interface {
     BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...fields.FieldName) error
 
     // PreviousOutputsDecorate fetches information about transaction inputs' previous outputs.
-    PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error
+    PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error
 
     // FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
     // This is used by the alert system to prevent spending of UTXOs.
@@ -258,8 +261,7 @@ type Store interface {
     // ProcessExpiredPreservations handles transactions whose preservation period has expired.
     ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error
 
-    // Close closes the UTXO store and releases resources.
-    Close(ctx context.Context) error
+    // Note: Close method is not part of the Store interface in the current implementation
 }
 ```
 
@@ -276,8 +278,8 @@ type Store interface {
 - `FreezeUTXOs`/`UnFreezeUTXOs`: Manages frozen status of UTXOs for the alert system.
 - `SetConflicting`/`SetLocked`: Controls transaction conflict and spendability status.
 - `GetMeta`: Retrieves transaction metadata for a single transaction.
-- `SetMinedMulti`: Updates block information for multiple mined transactions.
-- `PreviousOutputsDecorate`: Fetches information about transaction inputs' previous outputs.
+- `SetMinedMulti`: Updates block information for multiple mined transactions and returns a map of transaction hashes to block IDs.
+- `PreviousOutputsDecorate`: Fetches information about transaction inputs' previous outputs from a transaction.
 - `ReAssignUTXO`: Reassigns a UTXO to a new transaction output with safety measures.
 - `GetCounterConflicting`/`GetConflictingChildren`: Manages conflict relationships between transactions.
 - `SetBlockHeight`/`GetBlockHeight`/`SetMedianBlockTime`/`GetMedianBlockTime`: Manages blockchain state.
@@ -285,7 +287,6 @@ type Store interface {
 - `QueryOldUnminedTransactions`: Identifies unmined transactions older than a specified block height for cleanup.
 - `PreserveTransactions`: Protects transactions from deletion by setting a preservation period.
 - `ProcessExpiredPreservations`: Handles cleanup of expired preservation markers.
-- `Close`: Properly closes the UTXO store and releases associated resources.
 
 ## Create Options
 

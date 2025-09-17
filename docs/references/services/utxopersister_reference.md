@@ -166,16 +166,6 @@ type UTXOSet struct {
 
 - `GetUTXOSetReader(optionalBlockHash ...*chainhash.Hash) (io.ReadCloser, error)`: Returns a reader for accessing the UTXO set. It creates a reader for the UTXO set file of the current block or a specified block.
 
-#### Utility Functions
-
-- `filterUTXOs(utxos []*UTXO, deletions map[UTXODeletion]struct{}, txID *chainhash.Hash) []*UTXO`: Filters out UTXOs that are present in the deletions map. It removes any UTXOs that have been spent (present in the deletions map) from the provided list.
-
-- `PadUTXOsWithNil(utxos []*UTXO) []*UTXO`: Pads a slice of UTXOs with nil values to match their indices. It creates a new slice with nil values at positions where no UTXO exists, ensuring that UTXOs are at positions matching their output index.
-
-- `UnpadSlice[T any](padded []*T) []*T`: Removes nil values from a padded slice. It creates a new slice containing only the non-nil elements from the input slice.
-
-- `checkMagic(r io.Reader, magic string) error`: Verifies the magic number in a file header. It reads and validates that the magic identifier in the header matches the expected value.
-
 ### UTXO
 
 The `UTXO` struct represents an individual Unspent Transaction Output. It contains the essential components of a Bitcoin transaction output: index, value, and script.
@@ -263,13 +253,68 @@ type UTXODeletion struct {
 - `DeletionBytes() []byte`: Returns the bytes representation of the UTXODeletion, used when marking a UTXO as spent.
 - `String() string`: Returns a string representation of the UTXODeletion for debugging purposes.
 
+### BlockIndex
+
+The `BlockIndex` struct contains metadata about a block for UTXO set validation and linking.
+
+```go
+type BlockIndex struct {
+    // Hash contains the block hash
+    Hash *chainhash.Hash
+
+    // Height represents the block height
+    Height uint32
+
+    // TxCount represents the number of transactions
+    TxCount uint64
+
+    // BlockHeader contains the block header information
+    BlockHeader *model.BlockHeader
+}
+```
+
+#### Methods
+
+- `Serialise(writer io.Writer) error`: Writes the BlockIndex data to the provided writer for persistent storage.
+- `String() string`: Returns a string representation of the BlockIndex including hash, height, and transaction count.
+
+#### Factory Methods
+
+- `NewUTXOHeaderFromReader(reader io.Reader) (*BlockIndex, error)`: Creates a new BlockIndex from the provided reader by deserializing block metadata.
+
+### Consolidator
+
+The `consolidator` manages the consolidation of UTXO additions and deletions across multiple blocks to create accurate UTXO sets.
+
+```go
+type consolidator struct {
+    logger              ulogger.Logger
+    settings            *settings.Settings
+    blockchainStore     headerIfc
+    blockchainClient    headerIfc
+    blockStore          blob.Store
+    insertCounter       uint64
+    additions           map[UTXODeletion]*Addition
+    deletions           map[UTXODeletion]struct{}
+    firstBlockHeight    uint32
+    lastBlockHeight     uint32
+    // Additional fields for block tracking
+}
+```
+
+#### Methods
+
+- `NewConsolidator(logger, settings, blockchainStore, blockchainClient, blockStore, previousBlockHash) *consolidator`: Creates a new consolidator instance.
+- `ConsolidateBlockRange(ctx context.Context, startBlock, endBlock uint32) error`: Consolidates UTXOs across the specified block range, resolving conflicts when outputs are created and spent within the range.
+- `getSortedUTXOWrappers() []*UTXOWrapper`: Returns deterministically sorted UTXO wrappers for output.
+
 ## File Formats
 
-The UTXO Persister Service uses three types of files:
+The UTXO Persister service uses specific binary file formats for storing UTXO data:
 
-1. UTXO Additions (extension: `utxo-additions`)
+### UTXO Additions (extension: `utxo-additions`)
 
-```
+```text
 - Transaction ID (32 bytes)
 - Encoded Height and Coinbase (4 bytes)
   * Height << 1 | coinbase_flag
@@ -282,21 +327,20 @@ For each output:
     - Script (variable)
 ```
 
-2. UTXO Deletions (extension: `utxo-deletions`)
+### UTXO Deletions (extension: `utxo-deletions`)
 
-```
+```text
 - Transaction ID (32 bytes)
 - Output Index (4 bytes)
 ```
 
-3. UTXO Set (extension: `utxo-set`)
+### UTXO Set (extension: `utxo-set`)
 
-```
+```text
 - EOF Marker (32 zero bytes)
 - Transaction Count (8 bytes)
 - UTXO/Deletion Count (8 bytes)
 ```
-
 
 Each file type has a specific header format and contains serialized UTXO data.
 
@@ -305,6 +349,8 @@ Each file type has a specific header format and contains serialized UTXO data.
 - `BuildHeaderBytes(magic string, blockHash *chainhash.Hash, blockHeight uint32, previousBlockHash ...*chainhash.Hash) ([]byte, error)`: Builds the header bytes for UTXO files.
 - `GetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint32, error)`: Reads and parses the header from a reader.
 - `GetUTXOSetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint32, *chainhash.Hash, error)`: Reads and parses the UTXO set header from a reader.
-- `filterUTXOs(utxos []*UTXO, deletions map[UTXODeletion]struct{}, txID *chainhash.Hash) []*UTXO`: Filters UTXOs based on deletions.
-- `PadUTXOsWithNil(utxos []*UTXO) []*UTXO`: Pads a UTXO slice with nil values.
-- `UnpadSlice[T any](padded []*T) []*T`: Removes nil values from a padded slice.
+- `GetFooter(r io.Reader) (uint64, uint64, error)`: Retrieves transaction and UTXO counts from the footer of a UTXO file. Requires a seekable reader and reads the last 16 bytes containing transaction count and UTXO count.
+- `filterUTXOs(utxos []*UTXO, deletions map[UTXODeletion]struct{}, txID *chainhash.Hash) []*UTXO`: Filters out UTXOs that are present in the deletions map. It removes any UTXOs that have been spent (present in the deletions map) from the provided list.
+- `PadUTXOsWithNil(utxos []*UTXO) []*UTXO`: Pads a slice of UTXOs with nil values to match their indices. It creates a new slice with nil values at positions where no UTXO exists, ensuring that UTXOs are at positions matching their output index.
+- `UnpadSlice[T any](padded []*T) []*T`: Removes nil values from a padded slice. It creates a new slice containing only the non-nil elements from the input slice.
+- `checkMagic(r io.Reader, magic string) error`: Verifies the magic number in a file header. It reads and validates that the magic identifier in the header matches the expected value.

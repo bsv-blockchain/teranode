@@ -136,6 +136,7 @@ The block notification message is defined in protobuf as `KafkaBlockTopicMessage
 message KafkaBlockTopicMessage {
   string hash = 1;  // Block hash (as hex string)
   string URL = 2;  // URL pointing to block data
+  string peer_id = 3; // P2P peer identifier for peerMetrics tracking
 }
 ```
 
@@ -153,6 +154,12 @@ message KafkaBlockTopicMessage {
 - Description: URL pointing to the location where the full block data can be retrieved
 - Required: Yes
 
+#### peer_id
+
+- Type: string
+- Description: P2P peer identifier used for peer metrics tracking
+- Required: Yes
+
 ### Example
 
 Here's a JSON representation of the message content (for illustration purposes only; actual messages are protobuf-encoded):
@@ -160,7 +167,8 @@ Here's a JSON representation of the message content (for illustration purposes o
 ```json
 {
   "hash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
-  "URL": "https://datahub.example.com/blocks/123"
+  "URL": "https://datahub.example.com/blocks/123",
+  "peer_id": "peer_12345"
 }
 ```
 
@@ -177,6 +185,7 @@ dataHubUrl := "https://datahub.example.com/blocks/123"
 message := &kafkamessage.KafkaBlockTopicMessage{
     Hash: blockHash.String(), // convert the hash to a string
     URL:  dataHubUrl,
+    PeerId: "peer_12345", // P2P peer identifier
 }
 
 // Serialize to protobuf format
@@ -212,11 +221,12 @@ func handleBlockMessage(msg *kafka.Message) error {
         return fmt.Errorf("invalid block hash: %w", err)
     }
 
-    // Extract DataHub URL
+    // Extract DataHub URL and peer ID
     dataHubUrl := blockMessage.URL
+    peerID := blockMessage.PeerId
 
     // Process the block notification...
-    log.Printf("Received block notification for %s, data at: %s", blockHash.String(), dataHubUrl)
+    log.Printf("Received block notification for %s from peer %s, data at: %s", blockHash.String(), peerID, dataHubUrl)
     return nil
 }
 ```
@@ -741,7 +751,7 @@ enum KafkaTxMetaActionType {
 }
 
 message KafkaTxMetaTopicMessage {
-  bytes txHash = 1;                 // Transaction hash (32 bytes)
+  string txHash = 1;                // Transaction hash (as hex string)
   KafkaTxMetaActionType action = 2; // Action type (add or delete)
   bytes content = 3;                // Serialized transaction metadata (only used for ADD)
 }
@@ -751,8 +761,8 @@ message KafkaTxMetaTopicMessage {
 
 #### txHash
 
-- Type: bytes
-- Description: Raw bytes representation of the transaction hash (32 bytes)
+- Type: string
+- Description: Hexadecimal string representation of the transaction hash
 - Required: Yes
 
 #### action
@@ -790,7 +800,7 @@ Here's a JSON representation of an ADD message (for illustration purposes only; 
 
 ```json
 {
-  "txHash": "<binary data - 32 bytes>",
+  "txHash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
   "action": 0,  // ADD
   "content": "<binary data - serialized transaction metadata>"
 }
@@ -800,7 +810,7 @@ Here's a JSON representation of a DELETE message:
 
 ```json
 {
-  "txHash": "<binary data - 32 bytes>",
+  "txHash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
   "action": 1,  // DELETE
   "content": ""  // Empty for DELETE operations
 }
@@ -812,7 +822,7 @@ Here's a JSON representation of a DELETE message:
 
 ```go
 // Example 1: Send ADD transaction metadata message
-txHash := tx.TxID().Bytes() // returns 32-byte transaction hash
+txHash := tx.TxID().String() // returns hex string representation
 metadataContent := serializeMetadata(metadata) // serialize transaction metadata
 
 // Create a new protobuf message for adding metadata
@@ -834,7 +844,7 @@ producer.Publish(&kafka.Message{
 })
 
 // Example 2: Send DELETE transaction metadata message
-txHash := tx.TxID().Bytes() // returns 32-byte transaction hash
+txHash := tx.TxID().String() // returns hex string representation
 
 // Create a new protobuf message for deleting metadata
 deleteMessage := &kafkamessage.KafkaTxMetaTopicMessage{
@@ -871,8 +881,13 @@ func handleTxMetaMessage(msg *kafka.Message) error {
     }
 
     // Extract transaction hash
-    var txHash chainhash.Hash
-    copy(txHash[:], txMetaMessage.TxHash)
+    txHashStr := txMetaMessage.TxHash
+
+    // Convert hex string to chainhash.Hash
+    txHash, err := chainhash.NewHashFromStr(txHashStr)
+    if err != nil {
+        return fmt.Errorf("invalid transaction hash: %w", err)
+    }
 
     // Process based on action type
     switch txMetaMessage.Action {
@@ -894,7 +909,7 @@ func handleTxMetaMessage(msg *kafka.Message) error {
 ### Error Cases
 
 - Invalid message format: Message cannot be unmarshaled to KafkaTxMetaTopicMessage
-- Empty or invalid transaction hash: Hash does not contain exactly 32 bytes
+- Empty or invalid transaction hash: Hash is not a valid hexadecimal string
 - Unknown action type: Action is not a recognized KafkaTxMetaActionType enum value
 - Missing content for ADD: Content field is empty when Action is ADD
 
@@ -912,7 +927,7 @@ The rejected transaction message is defined in protobuf as `KafkaRejectedTxTopic
 
 ```protobuf
 message KafkaRejectedTxTopicMessage {
-  bytes txHash = 1;  // Transaction hash (32 bytes)
+  string txHash = 1;  // Transaction hash (as hex string)
   string reason = 2; // Rejection reason
 }
 ```
@@ -921,8 +936,8 @@ message KafkaRejectedTxTopicMessage {
 
 #### txHash
 
-- Type: bytes
-- Description: Raw bytes of the transaction hash (32 bytes), computed as double SHA256 hash
+- Type: string
+- Description: Hexadecimal string representation of the transaction hash, computed as double SHA256 hash
 - Computation: `sha256(sha256(transaction_bytes))`
 - Required: Yes
 
@@ -938,7 +953,7 @@ Here's a JSON representation of the message content (for illustration purposes o
 
 ```json
 {
-  "txHash": "<binary data - 32 bytes>",
+  "txHash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
   "reason": "Insufficient fee for transaction size"
 }
 ```
@@ -949,7 +964,7 @@ Here's a JSON representation of the message content (for illustration purposes o
 
 ```go
 // Create the rejected transaction message
-txHash := tx.TxID().Bytes() // returns 32-byte transaction hash
+txHash := tx.TxID().String() // returns hex string representation
 reasonStr := "Insufficient fee for transaction size"
 
 // Create a new protobuf message
@@ -985,12 +1000,15 @@ func handleRejectedTxMessage(msg *kafka.Message) error {
         return fmt.Errorf("failed to deserialize rejected transaction message: %w", err)
     }
 
-    // Extract transaction hash
-    var txHash chainhash.Hash
-    copy(txHash[:], rejectedTxMessage.TxHash)
-
-    // Extract rejection reason
+    // Extract transaction hash and reason
+    txHashStr := rejectedTxMessage.TxHash
     reason := rejectedTxMessage.Reason
+
+    // Convert hex string to chainhash.Hash if needed
+    txHash, err := chainhash.NewHashFromStr(txHashStr)
+    if err != nil {
+        return fmt.Errorf("invalid transaction hash: %w", err)
+    }
 
     // Process the rejected transaction notification...
     log.Printf("Transaction %s was rejected: %s", txHash.String(), reason)
@@ -1001,7 +1019,7 @@ func handleRejectedTxMessage(msg *kafka.Message) error {
 ### Error Cases
 
 - Invalid message format: Message cannot be unmarshaled to KafkaRejectedTxTopicMessage
-- Empty or invalid transaction hash: Hash does not contain exactly 32 bytes
+- Empty or invalid transaction hash: Hash is not a valid hexadecimal string
 - Missing reason: Reason field is empty
 
 ## Inventory Message Format
@@ -1022,7 +1040,7 @@ message KafkaInvTopicMessage {
 
 message Inv {
   InvType type = 1;  // Type of inventory item
-  bytes hash = 2;    // Hash of the inventory item
+  string hash = 2;   // Hash of the inventory item (as hex string)
 }
 
 enum InvType {
@@ -1044,27 +1062,7 @@ enum InvType {
 #### inv
 
 - Type: repeated Inv
-- Description: List of inventory items
-- Required: Yes
-
-##### Inv
-
-###### type
-
-- Type: InvType (enum)
-- Description: Type of inventory item
-- Required: Yes
-- Values:
-
-    - Error (0): Error or unknown type
-    - Tx (1): Transaction
-    - Block (2): Block
-    - FilteredBlock (3): Filtered block
-
-###### hash
-
-- Type: bytes
-- Description: Hash of the inventory item (32 bytes)
+- Description: List of inventory items (see Inv message structure defined above)
 - Required: Yes
 
 ### Example
@@ -1077,11 +1075,11 @@ Here's a JSON representation of the message content (for illustration purposes o
   "inv": [
     {
       "type": 1,  // Tx
-      "hash": "<binary data - 32 bytes>"
+      "hash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456"
     },
     {
       "type": 2,  // Block
-      "hash": "<binary data - 32 bytes>"
+      "hash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
     }
   ]
 }
@@ -1099,11 +1097,11 @@ peerAddress := "192.168.1.10:8333"
 invItems := []*kafkamessage.Inv{
     {
         Type: kafkamessage.InvType_Tx,
-        Hash: txHash[:], // 32-byte transaction hash
+        Hash: txHash.String(), // hex string representation
     },
     {
         Type: kafkamessage.InvType_Block,
-        Hash: blockHash[:], // 32-byte block hash
+        Hash: blockHash.String(), // hex string representation
     },
 }
 
@@ -1145,8 +1143,11 @@ func handleInvMessage(msg *kafka.Message) error {
 
     // Process inventory items
     for _, inv := range invMessage.Inv {
-        var hash chainhash.Hash
-        copy(hash[:], inv.Hash)
+        // Convert hex string to chainhash.Hash
+        hash, err := chainhash.NewHashFromStr(inv.Hash)
+        if err != nil {
+            return fmt.Errorf("invalid inventory hash: %w", err)
+        }
 
         switch inv.Type {
         case kafkamessage.InvType_Tx:
@@ -1174,7 +1175,7 @@ func handleInvMessage(msg *kafka.Message) error {
 
 - Invalid message format: Message cannot be unmarshaled to KafkaInvTopicMessage
 - Empty peer address: PeerAddress field is empty
-- Invalid inventory item: Hash does not contain exactly 32 bytes or Type is unrecognized
+- Invalid inventory item: Hash is not a valid hexadecimal string or Type is unrecognized
 
 ## Final Block Message Format
 

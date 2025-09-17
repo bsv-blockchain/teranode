@@ -72,6 +72,24 @@ type Server struct {
 
     // invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages
     invalidSubtreeDeDuplicateMap *expiringmap.ExpiringMap[string, struct{}]
+
+    // orphanage is used to store transactions that are missing parents that can be validated later
+    orphanage *expiringmap.ExpiringMap[chainhash.Hash, *bt.Tx]
+
+    // orphanageLock is used to make sure we only process the orphanage once at a time
+    orphanageLock sync.Mutex
+
+    // pauseSubtreeProcessing is used to pause subtree processing while a block is being processed
+    pauseSubtreeProcessing atomic.Bool
+
+    // bestBlockHeader is used to store the current best block header
+    bestBlockHeader atomic.Pointer[model.BlockHeader]
+
+    // bestBlockHeaderMeta is used to store the current best block header metadata
+    bestBlockHeaderMeta atomic.Pointer[model.BlockHeaderMeta]
+
+    // currentBlockIDsMap is used to store the current block IDs for the current best block height
+    currentBlockIDsMap atomic.Pointer[map[uint32]bool]
 }
 ```
 
@@ -132,6 +150,15 @@ func New(
 
 Creates a new `Server` instance with the provided dependencies. This factory function constructs and initializes a fully configured subtree validation service, injecting all required dependencies. It follows the dependency injection pattern to ensure testability and proper separation of concerns.
 
+**Initialization Features:**
+
+- **Quorum management**: Initializes singleton quorum manager for distributed locking
+- **Transaction metadata caching**: Optionally wraps UTXO store with caching layer
+- **Kafka producer setup**: Configures invalid subtree event publishing if enabled
+- **Orphanage initialization**: Sets up orphaned transaction storage with configurable timeout
+- **Blockchain subscription**: Establishes blockchain event listener for block updates
+- **Best block tracking**: Initializes current blockchain state tracking
+
 !!! info "Initialization Process"
     The method ensures that the service is configured with proper stores, clients, and settings before it's made available for use. It also initializes internal tracking structures and statistics for monitoring.
 
@@ -148,10 +175,10 @@ Checks the health status of the service and its dependencies. This method implem
 !!! success "Health Check Components"
     The method performs checks appropriate to the service's role, including:
 
-- **Store access verification**: Subtree, transaction, and UTXO data stores
-- **Service connections**: Validator and blockchain service connectivity
-- **Kafka consumer health**: Message processing capability
-- **Internal state consistency**: Service operational status
+    - **Store access verification**: Subtree, transaction, and UTXO data stores
+    - **Service connections**: Validator and blockchain service connectivity
+    - **Kafka consumer health**: Message processing capability
+    - **Internal state consistency**: Service operational status
 
 ### HealthGRPC
 
@@ -181,14 +208,21 @@ Initializes and starts the server components including Kafka consumers and gRPC 
 
 **Components Started:**
 
-- **Kafka consumers**: For subtree and transaction metadata messages
+- **FSM state synchronization**: Waits for blockchain FSM to transition from IDLE state
+- **Kafka consumers**: For subtree and transaction metadata messages with retry configuration
 - **gRPC server**: For API access and inter-service communication
 - **Background workers**: Any timers or workers required for operation
+
+**Startup Configuration:**
+
+- **Subtree consumer**: Configured with retry-and-move-on policy (3 retries, 2 second backoff)
+- **Transaction metadata consumer**: Configured with no retries (0 retries, 1 second backoff)
+- **gRPC registration**: Registers SubtreeValidationAPI service endpoints
 
 !!! info "Startup Sequence"
     The method implements a safe startup sequence to ensure all components are properly initialized before the service is marked as ready. It also handles proper error propagation if any component fails to start.
 
-Once all components are successfully started, the method signals readiness through the provided channel and then blocks until the context is canceled or an error occurs. This design allows the caller to coordinate the startup of multiple services.
+    Once all components are successfully started, the method signals readiness through the provided channel and then blocks until the context is canceled or an error occurs. This design allows the caller to coordinate the startup of multiple services.
 
 ### Stop
 
@@ -201,10 +235,10 @@ Gracefully shuts down the server components including Kafka consumers. This meth
 !!! warning "Shutdown Sequence"
     The method follows a consistent shutdown sequence:
 
-1. **Stop accepting new requests** - Prevents new work from starting
-2. **Pause Kafka consumers** - Prevents new messages from being processed
-3. **Wait for completion** - Allows in-progress operations to complete (with timeouts)
-4. **Release resources** - Closes connections and frees allocated resources
+    1. **Stop accepting new requests** - Prevents new work from starting
+    2. **Pause Kafka consumers** - Prevents new messages from being processed
+    3. **Wait for completion** - Allows in-progress operations to complete (with timeouts)
+    4. **Release resources** - Closes connections and frees allocated resources
 
 The method is designed to be called when the service needs to be terminated, either for normal shutdown or in response to system signals.
 
@@ -223,17 +257,48 @@ Validates a subtree and its transactions based on the provided request. This met
 - **Backward compatibility**: Support for both legacy and current validation paths
 - **Resource cleanup**: Proper cleanup even in error conditions
 - **Structured responses**: Appropriate gRPC status codes
+- **Orphan processing**: Handles orphaned transactions after subtree validation
 
 !!! check "Validation Criteria"
     The validation process ensures that:
 
-- **Consensus compliance**: All transactions are valid according to consensus rules
-- **Input validity**: All transaction inputs refer to unspent outputs or other transactions in the subtree
-- **No double-spending**: No conflicts exist within the subtree or with existing chain state
-- **Policy compliance**: Transactions satisfy all policy rules (fees, standardness, etc.)
+    - **Consensus compliance**: All transactions are valid according to consensus rules
+    - **Input validity**: All transaction inputs refer to unspent outputs or other transactions in the subtree
+    - **No double-spending**: No conflicts exist within the subtree or with existing chain state
+    - **Policy compliance**: Transactions satisfy all policy rules (fees, standardness, etc.)
 
 !!! tip "Resilience"
     The method will retry lock acquisition for up to 20 seconds with exponential backoff, making it resilient to temporary contention when multiple services attempt to validate the same subtree simultaneously.
+
+### CheckBlockSubtrees
+
+```go
+func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest) (*subtreevalidation_api.CheckBlockSubtreesResponse, error)
+```
+
+Validates all subtrees referenced in a block to ensure they exist in storage and are properly validated. This method is used during block validation to verify that all subtrees in a block are available and valid before the block can be accepted.
+
+**Key Features:**
+
+- **Pause mechanism**: Temporarily pauses subtree processing during validation to avoid conflicts
+- **Chain awareness**: Only pauses processing for blocks on the current chain or extending it
+- **Parallel processing**: Validates multiple subtrees concurrently for performance
+- **Level-based validation**: Processes transactions in dependency order across all subtrees
+- **Stream processing**: Efficiently processes subtree data directly from HTTP streams
+- **Orphan handling**: Manages orphaned transactions discovered during validation
+
+**Validation Process:**
+
+1. **Chain verification**: Determines if the block is on the current chain or extending it
+2. **Subtree existence check**: Verifies which subtrees are missing from local storage
+3. **Data retrieval**: Fetches missing subtree data from network sources
+4. **Transaction extraction**: Extracts all transactions from all subtrees
+5. **Level-based processing**: Validates transactions in dependency order
+6. **Subtree validation**: Validates individual subtrees after transaction processing
+7. **Orphan processing**: Handles any orphaned transactions found during validation
+
+!!! info "Performance Optimization"
+    The method uses several optimization techniques including stream processing for direct HTTP data handling, block-wide validation for better dependency resolution, parallel subtree processing, and efficient memory management during large block processing.
 
 ## Transaction Metadata Management
 
@@ -260,6 +325,9 @@ func (u *Server) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMet
 ```
 
 Stores transaction metadata in the cache if caching is enabled. This method optimizes validation performance by caching frequently accessed transaction metadata.
+
+!!! note "Implementation Note"
+    This method signature is documented but the actual implementation may delegate to the underlying UTXO store's caching mechanism.
 
 ### SetTxMetaCacheFromBytes
 
@@ -319,21 +387,21 @@ Performs the actual validation of a subtree. This is the core method of the subt
 !!! note "Validation Process Steps"
     The validation process includes several key steps:
 
-1. **Retrieving the subtree structure** and transaction list
-2. **Identifying which transactions need validation** (missing metadata)
-3. **Retrieving missing transactions** from appropriate sources
-4. **Validating transaction dependencies** and ordering
-5. **Applying consensus rules** to each transaction
-6. **Managing transaction metadata** storage and updates
-7. **Handling any conflicts** or validation failures
+    1. **Retrieving the subtree structure** and transaction list
+    2. **Identifying which transactions need validation** (missing metadata)
+    3. **Retrieving missing transactions** from appropriate sources
+    4. **Validating transaction dependencies** and ordering
+    5. **Applying consensus rules** to each transaction
+    6. **Managing transaction metadata** storage and updates
+    7. **Handling any conflicts** or validation failures
 
-**Performance Optimization Techniques:**
+    **Performance Optimization Techniques:**
 
-- **Batch processing** of transaction validations where possible
-- **Caching of transaction metadata** to avoid redundant validation
-- **Parallel processing** of independent transaction validations
-- **Early termination** for invalid subtrees (when `AllowFailFast` is true)
-- **Efficient retrieval** of missing transactions in batches
+    - **Batch processing** of transaction validations where possible
+    - **Caching of transaction metadata** to avoid redundant validation
+    - **Parallel processing** of independent transaction validations
+    - **Early termination** for invalid subtrees (when `AllowFailFast` is true)
+    - **Efficient retrieval** of missing transactions in batches
 
 ### blessMissingTransaction
 
@@ -347,12 +415,12 @@ Validates a transaction and retrieves its metadata, performing the core consensu
 !!! abstract "Validation Components"
     The validation includes:
 
-- **Transaction format**: Structure and format validation
-- **Input signatures**: Cryptographic signature verification
-- **UTXO availability**: Input UTXO availability and spending authorization
-- **Fee calculation**: Fee calculation and policy enforcement
-- **Script execution**: Script execution and validation
-- **Double-spend prevention**: Conflict detection and prevention
+    - **Transaction format**: Structure and format validation
+    - **Input signatures**: Cryptographic signature verification
+    - **UTXO availability**: Input UTXO availability and spending authorization
+    - **Fee calculation**: Fee calculation and policy enforcement
+    - **Script execution**: Script execution and validation
+    - **Double-spend prevention**: Conflict detection and prevention
 
 Upon successful validation, the transaction's metadata is calculated and stored, making it available for future reference and for validation of dependent transactions.
 
@@ -374,6 +442,12 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 Retrieves transaction hashes for a subtree from a remote source. This method fetches the list of transactions that are part of a given subtree from a network peer or another service.
 
+**Retrieval Strategy:**
+
+- **Local first**: Checks for existing `.subtreeToCheck` files in local storage
+- **Network fallback**: Fetches subtree hash list from remote URL if not available locally
+- **Buffered processing**: Uses buffered I/O for efficient hash list processing
+
 ### processMissingTransactions
 
 ```go
@@ -385,7 +459,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 Handles the retrieval and validation of missing transactions in a subtree, coordinating both the retrieval process and the validation workflow. This method is a critical part of the subtree validation process.
 
 !!! important "Key Responsibilities"
-        1. **Retrieving transactions** that are referenced in the subtree but not available locally
+    1. **Retrieving transactions** that are referenced in the subtree but not available locally
     2. **Organizing transactions** into dependency levels for ordered processing
     3. **Validating each transaction** according to consensus rules
     4. **Managing parallel processing** of independent transaction validations
@@ -401,10 +475,17 @@ Handles the retrieval and validation of missing transactions in a subtree, coord
 ### prepareTxsPerLevel
 
 ```go
-func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, map[uint32][]missingTx)
+func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, [][]missingTx, error)
 ```
 
 Organizes transactions by their dependency level for ordered processing. This method implements a topological sorting algorithm to organize transactions based on their dependency relationships. Transactions are grouped into levels, where each level contains transactions that can be processed independently of each other, but depend on transactions from previous levels.
+
+**Algorithm Details:**
+
+- **Dependency graph construction**: Builds adjacency lists for efficient parent-child lookups
+- **Level assignment**: Assigns each transaction to the appropriate dependency level
+- **Memory optimization**: Pre-allocates slices based on calculated level sizes
+- **Coinbase handling**: Properly handles coinbase transactions in dependency analysis
 
 ### getSubtreeMissingTxs
 
@@ -418,14 +499,15 @@ Retrieves transactions that are referenced in a subtree but not available locall
 !!! tip "Intelligent Retrieval Strategy"
     The method first checks if a complete subtree data file exists locally, which would contain all transactions. If not available, it makes a decision based on the percentage of missing transactions:
 
-- **High missing percentage**: Attempts to fetch the entire subtree data file from the peer to optimize network usage
-- **Low missing percentage**: Retrieves only the specific missing transactions individually
+    - **High missing percentage**: Attempts to fetch the entire subtree data file from the peer to optimize network usage (configurable threshold via `PercentageMissingGetFullData` setting)
+    - **Low missing percentage**: Retrieves only the specific missing transactions individually
+    - **Automatic fallback**: Falls back to individual transaction retrieval if subtree data fetch fails
 
-**Resilience Features:**
+    **Resilience Features:**
 
-- **Fallback mechanisms**: Ensures maximum resilience with automatic failover
-- **Multiple retrieval methods**: Switches between file-based and network-based retrieval as needed
-- **Network optimization**: Minimizes bandwidth usage through intelligent batching decisions
+    - **Fallback mechanisms**: Ensures maximum resilience with automatic failover
+    - **Multiple retrieval methods**: Switches between file-based and network-based retrieval as needed
+    - **Network optimization**: Minimizes bandwidth usage through intelligent batching decisions
 
 ### getMissingTransactionsFromFile
 
@@ -434,7 +516,14 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
     allTxs []chainhash.Hash) (missingTxs []missingTx, err error)
 ```
 
-Retrieves missing transactions from a file. This method attempts to read transaction data from a locally stored subtree file, which can be more efficient than retrieving individual transactions from the network.
+Retrieves missing transactions from a locally stored subtree data file. This method attempts to read transaction data from a locally stored subtree file, which can be more efficient than retrieving individual transactions from the network.
+
+**File Processing:**
+
+- **Subtree reconstruction**: Rebuilds subtree structure from transaction hashes if needed
+- **Data file reading**: Reads from `.subtreeData` files in blob storage
+- **Transaction mapping**: Maps requested transaction hashes to their positions in the subtree
+- **Efficient lookup**: Uses subtree lookup maps for fast transaction retrieval
 
 ### getMissingTransactionsFromPeer
 
@@ -461,6 +550,35 @@ func (u *Server) isPrioritySubtreeCheckActive(subtreeHash string) bool
 
 Checks if a priority subtree check is active for the given subtree hash. Priority checks get special handling and resource allocation to ensure critical subtrees are validated promptly.
 
+### processOrphans
+
+```go
+func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, blockHeight uint32, blockIds map[uint32]bool)
+```
+
+Processes orphaned transactions that were discovered during subtree validation. This method attempts to validate transactions that were previously missing parents, organizing them by dependency level and processing them in parallel where possible.
+
+**Orphan Processing:**
+
+- **Dependency analysis**: Organizes orphaned transactions by dependency level
+- **Parallel validation**: Processes independent transactions concurrently
+- **Automatic cleanup**: Removes successfully validated transactions from the orphanage
+- **Metrics tracking**: Tracks the number of orphans processed for monitoring
+
+### publishInvalidSubtree
+
+```go
+func (u *Server) publishInvalidSubtree(ctx context.Context, subtreeHash, peerURL, reason string)
+```
+
+Publishes invalid subtree events to Kafka for system-wide notification. This method helps coordinate the handling of invalid subtrees across the network by notifying other services.
+
+**Features:**
+
+- **Deduplication**: Prevents duplicate notifications for the same invalid subtree
+- **State awareness**: Only publishes during normal operation (not during sync)
+- **Structured messaging**: Uses protobuf messages for reliable communication
+
 ## Kafka Handlers
 
 ### consumerMessageHandler
@@ -474,10 +592,10 @@ Returns a function that processes Kafka messages for subtree validation. It hand
 !!! gear "Handler Features"
     Key features include:
 
-- **Error categorization**: Different handling for recoverable vs. non-recoverable errors
-- **State-aware processing**: Considers the current blockchain state
-- **Context handling**: Proper context cancellation handling
-- **Idempotent processing**: Prevents duplicate validation
+    - **Error categorization**: Different handling for recoverable vs. non-recoverable errors
+    - **State-aware processing**: Considers the current blockchain state
+    - **Context handling**: Proper context cancellation handling
+    - **Idempotent processing**: Prevents duplicate validation
 
 ### subtreesHandler
 
@@ -494,3 +612,35 @@ func (u *Server) txmetaHandler(msg *kafka.KafkaMessage) error
 ```
 
 Handles incoming transaction metadata messages from Kafka. This method processes updates to transaction metadata that might be required for proper subtree validation, ensuring the metadata store remains consistent with the latest transaction state.
+
+## Additional Internal Methods
+
+### updateBestBlock
+
+```go
+func (u *Server) updateBestBlock(ctx context.Context) error
+```
+
+Updates the service's cached best block information by querying the blockchain client. This method maintains current blockchain state for validation operations.
+
+**State Updates:**
+
+- **Best block header**: Updates cached best block header
+- **Block metadata**: Updates cached block metadata including height
+- **Block ID mapping**: Updates current block IDs map for chain validation
+- **Store synchronization**: Updates subtree store's current block height
+
+### blockchainSubscriptionListener
+
+```go
+func (u *Server) blockchainSubscriptionListener(ctx context.Context)
+```
+
+Background goroutine that listens for blockchain events and updates the service's cached blockchain state. This method ensures the service maintains current blockchain information for validation operations.
+
+**Subscription Features:**
+
+- **Automatic reconnection**: Handles subscription failures with backoff and retry
+- **Block notifications**: Processes block addition notifications
+- **State synchronization**: Updates best block information on block events
+- **Graceful shutdown**: Properly handles context cancellation

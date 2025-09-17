@@ -3,6 +3,7 @@
 ## Framework Components
 
 ### TeranodeTestEnv Structure
+
 ```go
 type TeranodeTestEnv struct {
     TConfig              tconfig.TConfig       // Test configuration
@@ -18,6 +19,7 @@ type TeranodeTestEnv struct {
 ```
 
 ### TeranodeTestClient Structure
+
 ```go
 type TeranodeTestClient struct {
     Name                string                  // Node identifier
@@ -39,6 +41,7 @@ type TeranodeTestClient struct {
 ```
 
 ### SVNodeTestClient Structure
+
 ```go
 type SVNodeTestClient struct {
     Name      string // Node identifier
@@ -126,28 +129,32 @@ func TestSomeFunctionality(t *testing.T) {
 ## Test Categories and Tags
 
 ### Core Test Categories
+
 | Category | Tag | Description |
 |----------|-----|-------------|
 | TNA | tnatests | Node responsibilities and network communication |
 | TNB | tnbtests | Transaction validation and processing |
-| TNC | tnctests | Block assembly and Merkle tree construction |
 | TND | tndtests | Block propagation through network |
-| TNE | tnetests | Block validation |
 | TNF | tnftests | Longest chain management |
 | TNJ | tnjtests | Consensus rules compliance |
 | TEC | tectests | Error handling and recovery scenarios |
 
 ### Service Port Mappings
+
 | Service | Internal Port | External Port Pattern |
 |---------|--------------|----------------------|
+| Health Check | 8090/tcp | 1009X |
 | Coinbase GRPC | 8093/tcp | 1009X |
 | Blockchain GRPC | 8087/tcp | 1208X |
 | Block Assembly GRPC | 8085/tcp | 1408X |
 | Propagation GRPC | 8084/tcp | 1608X |
+| Asset HTTP | 8091/tcp | Variable |
+| RPC | 8092/tcp | Variable |
 
 ## Configuration Reference
 
 ### Environment Variables
+
 ```bash
 # Core Settings
 SETTINGS_CONTEXT      # Configuration context for the test run
@@ -161,29 +168,33 @@ SETTINGS_CONTEXT_3   # Configuration for node 3
 ```
 
 ### Docker Compose Configuration
+
 ```yaml
 # Base Configuration (docker-compose.e2etest.yml)
 services:
-teranode-1:
-image: teranode
-environment:
+  teranode1:
+    image: teranode
+    environment:
 
-- SETTINGS_CONTEXT=${SETTINGS_CONTEXT_1}
-ports:
+      - SETTINGS_CONTEXT=${SETTINGS_CONTEXT_1}
+    ports:
 
-- "10090:8090"  # Health check port
-- "10093:8093"  # Coinbase service
-- "10087:8087"  # Blockchain service
-- "10085:8085"  # Block assembly
+      - "10090:8090"  # Health check port
+      - "10093:8093"  # Coinbase service
+      - "10087:8087"  # Blockchain service
+      - "10085:8085"  # Block assembly
+      - "10091:8091"  # Asset service
+      - "10092:8092"  # RPC service
 
-teranode-2:
-# Similar configuration with different ports
+  teranode2:
+    # Similar configuration with ports 12090, 12093, 12087, etc.
 
-teranode-3:
-# Similar configuration with different ports
+  teranode3:
+    # Similar configuration with ports 14090, 14093, 14087, etc.
 ```
 
 ### Test Suite Configuration
+
 ```go
 // Default Compose Files
 func (suite *BitcoinTestSuite) DefaultComposeFiles() []string {
@@ -203,6 +214,7 @@ func (suite *BitcoinTestSuite) DefaultSettingsMap() map[string]string {
 ## Utility Methods
 
 ### Node Management Methods
+
 ```go
 // StartNode starts a specific TeraNode by name
 func (t *TeranodeTestEnv) StartNode(nodeName string) error {
@@ -229,6 +241,7 @@ func (t *TeranodeTestEnv) StopDockerNodes() error {
 ```
 
 ### Client Setup Methods
+
 ```go
 // Sets up HTTP stores for blocks and subtrees
 func (t *TeranodeTestEnv) setupBlobStores() error {
@@ -261,6 +274,7 @@ func (t *TeranodeTestEnv) GetMappedPort(nodeName string, port nat.Port) (nat.Por
 ```
 
 ### Transaction Utilities
+
 ```go
 // CreateAndSendTx creates and sends a transaction
 func (n *TeranodeTestClient) CreateAndSendTx(t *testing.T, ctx context.Context, parentTx *bt.Tx) (*bt.Tx, error) {
@@ -322,6 +336,7 @@ type ClientI interface {
 ```
 
 #### Block Assembly Client
+
 ```go
 type Client interface {
     BlockAssemblyAPIClient() blockassembly_api.BlockAssemblyAPIClient
@@ -330,6 +345,7 @@ type Client interface {
 ```
 
 #### Coinbase Client
+
 ```go
 type Client interface {
     Health(ctx context.Context) (*HealthResponse, error)
@@ -340,6 +356,7 @@ type Client interface {
 ## Test Data Structures
 
 ### Health Response
+
 ```go
 type HealthResponse struct {
     Ok      bool   `json:"ok"`
@@ -348,6 +365,7 @@ type HealthResponse struct {
 ```
 
 ### Transaction Structure
+
 ```go
 type Transaction struct {
     ID        string    `json:"id"`
@@ -357,6 +375,7 @@ type Transaction struct {
 ```
 
 ## Error Types
+
 ```go
 // Common error categories
 errors.NewConfigurationError(format string, args ...interface{}) error
@@ -367,6 +386,7 @@ errors.NewValidationError(format string, args ...interface{}) error
 ## Testing Constants
 
 ### Node URLs
+
 ```go
 const (
     NodeURL1 = "http://localhost:10090" // Node 1 base URL
@@ -376,6 +396,7 @@ const (
 ```
 
 ### Timeouts and Delays
+
 ```go
 const (
     DefaultSetupTimeout    = 30 * time.Second
@@ -385,23 +406,29 @@ const (
 ```
 
 ## Directory Structure
-```
+
+```text
 test/
-├── blockassembly/        # Block assembly test data
-├── explorer/             # Blockchain explorer tests
-├── fixtures/            # Test fixtures and data
-├── fsm/                # Finite State Machine tests
-├── seed/               # Seed data for tests
-├── settings/           # Test settings
-├── setup/             # Test setup utilities
-├── smoke/             # Smoke tests
-├── system/            # System integration tests
-├── tec/               # Error case tests
-├── test_framework/    # Core framework code
-├── testenv/           # Test environment utilities
+├── aerospike/           # Aerospike database tests
+├── config/             # Test configuration files
+├── consensus/          # Consensus mechanism tests
+├── e2e/               # End-to-end integration tests
+├── fsm/               # Finite State Machine tests
+├── longtest/          # Long-running performance tests
+├── nodeHelpers/       # Node helper utilities
+├── postgres/          # PostgreSQL database tests
+├── rpc/              # RPC service tests
+├── scripts/          # Test automation scripts
+├── sequentialtest/   # Sequential test execution
+├── tec/              # Error case tests
+├── testcontainers/   # Docker container test utilities
 ├── tna/              # Node responsibility tests
 ├── tnb/              # Transaction validation tests
-└── utils/            # Utility functions
+├── tnd/              # Block propagation tests
+├── tnf/              # Longest chain management tests
+├── tnj/              # Consensus rules compliance tests
+├── txregistry/       # Transaction registry tests
+└── utils/            # Utility functions and test framework
 ```
 
 ## Other Resources

@@ -33,6 +33,7 @@ Creates a new `HTTPBlobServer` instance with the provided logger and store URL.
 
 - `Start(ctx context.Context, addr string) error`: Starts the HTTP server on the specified address.
 - `ServeHTTP(w http.ResponseWriter, r *http.Request)`: Handles incoming HTTP requests.
+- `setCurrentBlockHeight(height uint32) error`: Updates the current block height in the underlying store if it supports this operation. Used for DAH (Delete-At-Height) functionality.
 
 ### Store Interface
 
@@ -156,11 +157,13 @@ type Store interface {
 The service exposes the following HTTP endpoints:
 
 - `GET /health`: Check the health status of the service.
-- `HEAD /blob/{key}`: Check if a blob exists.
-- `GET /blob/{key}`: Retrieve a blob.
-- `POST /blob/{key}`: Store a new blob.
-- `PATCH /blob/{key}`: Set the delete-at-height (DAH) value for a blob.
-- `DELETE /blob/{key}`: Delete a blob.
+- `HEAD /blob/{key}.{fileType}`: Check if a blob exists.
+- `GET /blob/{key}.{fileType}`: Retrieve a blob (supports Range headers for partial content).
+- `POST /blob/{key}.{fileType}`: Store a new blob.
+- `PATCH /blob/{key}.{fileType}`: Set the delete-at-height (DAH) value for a blob via `dah` query parameter.
+- `DELETE /blob/{key}.{fileType}`: Delete a blob.
+
+Note: `{key}` is a base64-encoded blob identifier and `{fileType}` is the file extension corresponding to the blob type.
 
 ## Key Features
 
@@ -177,10 +180,11 @@ The service uses HTTP status codes to indicate the result of operations:
 - 200 OK: Successful operation
 - 201 Created: Blob successfully stored
 - 204 No Content: Blob successfully deleted
+- 206 Partial Content: Range request successfully processed
 - 400 Bad Request: Invalid input
 - 404 Not Found: Blob not found
-- 409 Conflict: Blob already exists (on creation attempts)
-- 416 Range Not Satisfiable: Invalid range request
+- 405 Method Not Allowed: Unsupported HTTP method
+- 409 Conflict: Blob already exists
 - 500 Internal Server Error: Server-side error
 
 ## Key Functions
@@ -196,8 +200,15 @@ The service uses HTTP status codes to indicate the result of operations:
 ## Utility Functions
 
 - `parseRange`: Parses the `Range` header for partial content requests.
-- `getKeyFromPath`: Extracts and decodes the blob key from the request path.
+- `getKeyFromPath`: Extracts and decodes the base64-encoded blob key and file type from the request path.
 
 ## Configuration
 
-The service can be configured with various options through the `options.StoreOption` parameter in the constructor.
+The service can be configured with various options through the `options.StoreOption` parameter in the constructor. The server includes built-in timeouts:
+
+- ReadTimeout: 15 seconds
+- WriteTimeout: 15 seconds
+- IdleTimeout: 60 seconds
+- Shutdown timeout: 5 seconds
+
+Query parameters are automatically converted to `options.FileOption` using `options.QueryToFileOptions()` for per-request configuration.

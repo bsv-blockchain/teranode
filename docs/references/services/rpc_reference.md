@@ -33,6 +33,7 @@
     - [getmininginfo](#getmininginfo) - Returns mining-related information
     - [getpeerinfo](#getpeerinfo) - Returns data about each connected network node
     - [getrawtransaction](#getrawtransaction) - Returns raw transaction data
+    - [help](#help) - Returns help text for RPC commands
     - [getminingcandidate](#getminingcandidate) - Returns mining candidate information for generating a new block
     - [invalidateblock](#invalidateblock) - Permanently marks a block as invalid
     - [isbanned](#isbanned) - Checks if an IP/subnet is banned
@@ -190,11 +191,13 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error
 
     This method performs several critical initialization tasks:
 
-    1. **Validates the server** has not already been started (using atomic operations)
-    2. **Initializes network listeners** on all configured interfaces and ports
-    3. **Launches goroutines** to accept and process incoming connections
-    4. **Sets up proper handling** for clean shutdown
-    5. **Signals readiness** through the provided channel
+```text
+1. **Validates the server** has not already been started (using atomic operations)
+2. **Initializes network listeners** on all configured interfaces and ports
+3. **Launches goroutines** to accept and process incoming connections
+4. **Sets up proper handling** for clean shutdown
+5. **Signals readiness** through the provided channel
+```
 
 The server supports binding to multiple addresses simultaneously, allowing both IPv4 and IPv6 connections, as well as restricting access to localhost-only if configured for development or testing environments.
 
@@ -204,7 +207,14 @@ The server supports binding to multiple addresses simultaneously, allowing both 
 func (s *RPCServer) Stop(ctx context.Context) error
 ```
 
-Gracefully shuts down the RPC server and its associated resources. It ensures that any in-progress requests are allowed to complete before terminating, and that all network connections are properly closed.
+Gracefully stops the RPC server by:
+
+```text
+1. **Setting shutdown flag** to prevent new connections
+2. **Closing all active listeners** to stop accepting new requests
+3. **Waiting for active connections** to complete their current operations
+4. **Cleaning up resources** and releasing network ports
+```
 
 This method implements a thread-safe shutdown mechanism using atomic operations to prevent multiple concurrent shutdown attempts. When called, it closes the quit channel to signal all goroutines to terminate, then waits for them to exit using the wait group before returning.
 
@@ -356,8 +366,6 @@ Some key handlers include:
     **Compatibility Settings:**
 
     - **`rpc_quirks`**: Enables compatibility quirks for legacy clients (default: false)
-
-
 !!! warning "Production Warnings"
     - **`rpc_disable_auth`**: Disables authentication (NOT recommended for production)
     - **`rpc_cross_origin`**: Allows cross-origin requests (NOT recommended for production)
@@ -1415,10 +1423,10 @@ Returns information about all known chain tips in the block tree, including the 
 
 - `array` - Array of chain tip objects, each containing:
 
-  - `height` (number) - Height of the chain tip
-  - `hash` (string) - Block hash of the chain tip
-  - `branchlen` (number) - Zero for main chain, otherwise length of branch connecting the tip to the main chain
-  - `status` (string) - Status of the chain tip ("active" for main chain, "valid-fork", "valid-headers", "headers-only", "invalid")
+    - `height` (number) - Height of the chain tip
+    - `hash` (string) - Block hash of the chain tip
+    - `branchlen` (number) - Zero for main chain, otherwise length of branch connecting the tip to the main chain
+    - `status` (string) - Status of the chain tip ("active" for main chain, "valid-fork", "valid-headers", "headers-only", "invalid")
 
 **Example Request:**
 
@@ -1664,6 +1672,39 @@ Mines blocks immediately to a specified address (for testing only).
 }
 ```
 
+### help
+
+Returns help text for RPC commands.
+
+**Parameters:**
+
+1. `command` (string, optional) - The command to get help for. If not provided, returns a list of all commands.
+
+**Returns:**
+
+- `string` - Help text for the specified command or list of all commands
+
+**Example Request:**
+
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "help",
+    "params": ["getblock"]
+}
+```
+
+**Example Response:**
+
+```json
+{
+    "result": "getblock \"blockhash\" ( verbosity )\n\nReturns information about a block.\n\nArguments:\n1. blockhash (string, required) The block hash\n2. verbosity (numeric, optional, default=1) 0 for hex-encoded data, 1 for a json object, 2 for json object with tx data\n\nResult:\n...",
+    "error": null,
+    "id": "curltest"
+}
+```
+
 ### getrawtransaction
 
 Returns raw transaction data for a specific transaction.
@@ -1762,11 +1803,18 @@ The following commands are recognized by the RPC server but are not currently im
 - `getmempoolinfo` - Returns mempool information (Not in scope for Teranode)
 - `getnettotals` - Returns network statistics
 - `getnetworkhashps` - Returns estimated network hashes per second
-- `getrawmempool` - Returns raw mempool contents (Not in scope for Teranode)
 - `gettxout` - Returns unspent transaction output
 - `gettxoutproof` - Returns proof that transaction was included in a block
 - `node` - Attempts to add or remove a node
 - `ping` - Pings the server
+- `searchrawtransactions` - Searches for raw transactions
+- `setgenerate` - Sets generation on or off
+- `submitblock` - Submits a block to the network
+- `uptime` - Returns the server uptime
+- `validateaddress` - Validates a Bitcoin address
+- `verifychain` - Verifies the blockchain
+- `verifymessage` - Verifies a signed message
+- `verifytxoutproof` - Verifies a transaction output proof
 
 - `addmultisigaddress` - Add a multisignature address to the wallet
 - `backupwallet` - Safely copies wallet.dat to the specified file
@@ -1965,6 +2013,6 @@ The RPC Service implements several security features:
 - Secure credential handling to prevent information leakage
 - TLS support for encrypted communications (when configured)
 
-# Related Documents
+## Related Documents
 
 - [RPC API Docs](https://bsv-blockchain.github.io/teranode/references/open-rpc/)
