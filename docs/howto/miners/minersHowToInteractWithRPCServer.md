@@ -31,7 +31,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Parameters:
         None
 
-    - Returns: Object containing block height, current block size and weight, current difficulty, and network hashrate
+    - Returns: Object containing block height, current block size and weight, current difficulty, and estimated network hashrate
 
 3. `getminingcandidate`: Obtain a mining candidate
     - Parameters:
@@ -165,10 +165,9 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
         - `hexstring` (string, required): Hex-encoded raw transaction
         - `allowhighfees` (boolean, optional): Allow high fees
-        - `dontcheckfee` (boolean, optional): Skip fee checks
 
     - Returns: Transaction hash (txid) if successful
-    - Validation process: Transaction is validated for correct format, script correctness, and fee policy before being accepted into the mempool and propagated to the network
+    - Validation process: Transaction is validated for correct format, script correctness, and fee policy before being accepted and propagated to the network
     - Example Request:
 
       ```json
@@ -180,28 +179,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
       }
       ```
 
-4. `getrawmempool`: Returns information about unconfirmed transactions in the mempool
-    - Parameters:
-
-        - `verbose` (boolean, optional, default=false): If true, returns detailed transaction information
-
-    - Returns:
-
-        - If verbose=false: Array of transaction IDs (txids) in the mempool
-        - If verbose=true: Object with transaction IDs as keys and detailed transaction information as values
-
-    - Example Request:
-
-      ```json
-      {
-          "jsonrpc": "1.0",
-          "id": "curltext",
-          "method": "getrawmempool",
-          "params": [false]
-      }
-      ```
-
-5. `freeze`: Freezes a specific UTXO, preventing it from being spent
+4. `freeze`: Freezes a specific UTXO, preventing it from being spent
     - Parameters:
 
         - `txid` (string, required): The transaction ID of the UTXO
@@ -245,7 +223,18 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `testnet`: Whether running on testnet
         - `timeoffset`: Time offset in seconds
 
-2. `getpeerinfo`: Returns information about connected peers
+2. `getchaintips`: Returns information about all known chain tips
+    - Parameters:
+        None
+
+    - Returns:
+
+        - `height`: Height of the chain tip
+        - `hash`: Block hash of the chain tip
+        - `branchlen`: Zero for main chain, otherwise length of branch
+        - `status`: Status of the chain tip ("active" for main chain, "valid-fork", etc.)
+
+3. `getpeerinfo`: Returns information about connected peers
     - Parameters:
         None
 
@@ -267,7 +256,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `startingheight`: Starting height of the peer
         - `banscore`: Ban score (for misbehavior)
 
-3. `setban`: Manages banned IP addresses/subnets
+4. `setban`: Manages banned IP addresses/subnets
     - Parameters:
 
         - `subnet` (string, required): The IP/Subnet to ban (e.g. 192.168.0.0/24)
@@ -278,7 +267,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Returns: null on success
     - Note: Successfully executes across both P2P and legacy peer services. The underlying GRPC operations require API key authentication, which is handled automatically by the RPC server.
 
-4. `isbanned`: Checks if a network address is currently banned
+5. `isbanned`: Checks if a network address is currently banned
     - Parameters:
 
         - `subnet` (string, required): The IP/Subnet to check
@@ -286,7 +275,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Returns: Boolean `true` if the address is banned, `false` otherwise
     - Note: This command accesses GRPC ban status methods which require API key authentication when accessed directly. The RPC command handles this authentication automatically.
 
-5. `listbanned`: Returns list of all banned IP addresses/subnets
+6. `listbanned`: Returns list of all banned IP addresses/subnets
     - Parameters:
         None
 
@@ -297,7 +286,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         - `ban_created`: The timestamp when the ban was created
         - `ban_reason`: The reason for the ban (if provided)
 
-6. `clearbanned`: Removes all IP address bans
+7. `clearbanned`: Removes all IP address bans
     - Parameters:
         None
 

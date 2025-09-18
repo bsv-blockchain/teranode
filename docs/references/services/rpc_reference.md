@@ -376,6 +376,7 @@ Some key handlers include:
     **Compatibility Settings:**
 
     - **`rpc_quirks`**: Enables compatibility quirks for legacy clients (default: false)
+
 !!! warning "Production Warnings"
     - **`rpc_disable_auth`**: Disables authentication (NOT recommended for production)
     - **`rpc_cross_origin`**: Allows cross-origin requests (NOT recommended for production)
@@ -1203,67 +1204,6 @@ Removes invalidity status of a block and its descendants, reconsidering them for
 ```json
 {
     "result": null,
-    "error": null,
-    "id": "curltest"
-}
-```
-
-### getrawmempool
-
-Returns information about unconfirmed transactions in the mempool.
-
-**Parameters:**
-
-1. `verbose` (boolean, optional, default=false) - If true, returns detailed transaction information
-
-**Returns:**
-
-- If verbose=false: Array of transaction IDs (txids) in the mempool
-- If verbose=true: Object with transaction IDs as keys and detailed transaction information as values
-
-**Example Request:**
-
-```json
-{
-    "jsonrpc": "1.0",
-    "id": "curltest",
-    "method": "getrawmempool",
-    "params": [false]
-}
-```
-
-**Example Response (verbose=false):**
-
-```json
-{
-    "result": [
-        "b4749f017444b051c44dfd2720e88f314ff94f3dd6d56d40ef65854fcd7fff6b",
-        "e7db1cff44f298de8b637d9e63e2841a8b2e4b2e3e8e4e4e4e4e4e4e4e4e4e4e"
-    ],
-    "error": null,
-    "id": "curltest"
-}
-```
-
-**Example Response (verbose=true):**
-
-```json
-{
-    "result": {
-        "b4749f017444b051c44dfd2720e88f314ff94f3dd6d56d40ef65854fcd7fff6b": {
-            "size": 225,
-            "fee": 0.00000678,
-            "modifiedfee": 0.00000678,
-            "time": 1621500000,
-            "height": 700001,
-            "descendantcount": 1,
-            "descendantsize": 225,
-            "descendantfees": 678,
-            "ancestorcount": 1,
-            "ancestorsize": 225,
-            "ancestorfees": 678
-        }
-    },
     "error": null,
     "id": "curltest"
 }

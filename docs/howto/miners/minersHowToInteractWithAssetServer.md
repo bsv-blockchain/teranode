@@ -60,7 +60,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
     - Returns: Transaction data in structured JSON format
 
-- POST `/api/v1/subtree/:hash/txs`
+- POST `/api/v1/txs`
     - Description: Batch retrieves multiple transactions
     - Request Body:
 
@@ -179,7 +179,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Response Format:
 
         JSON array of recent block information including:
-        
+
         - `hash`: Block hash
         - `height`: Block height
         - `time`: Block timestamp
@@ -276,6 +276,28 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 - GET `/api/v1/headers_to_common_ancestor/:hash/json`
     - Description: Same as above but in JSON format
 
+- GET `/api/v1/headers_from_common_ancestor/:hash`
+    - Description: Retrieves headers from common ancestor to specified hash
+    - Parameters:
+
+        - `hash`: Target block hash (hex string)
+        - `locator` (required): Comma-separated list of block hashes for locator
+
+    - Returns: Headers in binary format
+
+- GET `/api/v1/headers_from_common_ancestor/:hash/hex`
+    - Description: Same as above but in hexadecimal format
+
+- GET `/api/v1/headers_from_common_ancestor/:hash/json`
+    - Description: Same as above but in JSON format
+
+- GET `/api/v1/block_locator`
+    - Description: Retrieves block locator information for blockchain synchronization
+    - Parameters:
+        None
+
+    - Returns: JSON object with block locator data
+
 - GET `/api/v1/bestblockheader`
     - Description: Retrieves the current best block header
     - Parameters:
@@ -296,7 +318,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: UTXO transaction hash (hex string)
-        - `vout` (required): Output index
+        - `vout` (required): Output index (query parameter)
 
     - Returns: UTXO data in binary format
 
@@ -305,7 +327,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: UTXO transaction hash (hex string)
-        - `vout` (required): Output index
+        - `vout` (required): Output index (query parameter)
 
     - Returns: UTXO data as hex string
 
@@ -314,7 +336,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Parameters:
 
         - `hash`: UTXO transaction hash (hex string)
-        - `vout` (required): Output index
+        - `vout` (required): Output index (query parameter)
 
     - Returns: UTXO data in structured JSON format
 
@@ -351,6 +373,14 @@ Many endpoints support multiple response formats, indicated by the URL path or a
         - `hash`: Subtree hash (hex string)
 
     - Returns: Subtree data in structured JSON format
+
+- GET `/api/v1/subtree_data/:hash`
+    - Description: Retrieves subtree metadata and information
+    - Parameters:
+
+        - `hash`: Subtree hash (hex string)
+
+    - Returns: Subtree metadata in JSON format
 
 - GET `/api/v1/subtree/:hash/txs/json`
     - Description: Retrieves transactions within a subtree
@@ -559,7 +589,7 @@ Response:
 Request:
 
 ```http
-POST /api/v1/subtree/:hash/txs
+POST /api/v1/txs
 Content-Type: application/octet-stream
 
 <binary data: concatenated 32-byte transaction hashes>

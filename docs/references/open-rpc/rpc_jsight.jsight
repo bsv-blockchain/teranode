@@ -252,7 +252,6 @@ URL /rpc
       [
         "0200000001a0962f8bb905715ddb0b3232c7f82f5ef9f2311b900ba1443c6edbdb0769e60a0000000000ffffffff0140420f00000000001976a914ae56cbe296ec9035fc4a284b6a42555abb27cb5a88ac00000000", // The hex string of the raw transaction
         true, // Allow high fees, default=false
-        false // Skip fee checking, default=false
       ]
     Result
       "a08e6907dbdb6e3c44a10b901b31f2f95e2ff8c732320bdb5d7105b98b2f96a0" // The transaction hash
@@ -276,35 +275,6 @@ URL /rpc
       "0200000001a0962f8bb905715ddb0b3232c7f82f5ef9f2311b900ba1443c6edbdb0769e60a0000000000ffffffff0140420f00000000001976a914ae56cbe296ec9035fc4a284b6a42555abb27cb5a88ac00000000" // When verbose=false
     // Note: Retrieves transactions from both mempool and blockchain. Returns error if transaction not found.
 
-  Method getrawmempool // Returns information about unconfirmed transactions in the mempool.
-    Params
-      [
-        false // Verbose output (true=detailed info, false=txid array), default=false
-      ]
-    Result
-      [
-        "b4749f017444b051c44dfd2720e88f314ff94f3dd6d56d40ef65854fcd7fff6b", // Transaction ID
-        "e7db1cff44f298de8b637d9e63e2841a8b2e4b2e3e8e4e4e4e4e4e4e4e4e4e4e" // Transaction ID
-      ] // When verbose=false
-      // OR
-      {
-        "b4749f017444b051c44dfd2720e88f314ff94f3dd6d56d40ef65854fcd7fff6b": {
-          "size": 225, // Transaction size in bytes
-          "fee": 0.00000678, // Transaction fee in BSV
-          "modifiedfee": 0.00000678, // Modified fee (includes fee deltas from prioritisetransaction)
-          "time": 1621500000, // Local time transaction entered pool in seconds since epoch
-          "height": 700001, // Block height when transaction entered the pool
-          "descendantcount": 1, // Number of in-mempool descendant transactions (including this one)
-          "descendantsize": 225, // Virtual transaction size of in-mempool descendants (including this one)
-          "descendantfees": 678, // Modified fees (see above) of in-mempool descendants (including this one)
-          "ancestorcount": 1, // Number of in-mempool ancestor transactions (including this one)
-          "ancestorsize": 225, // Virtual transaction size of in-mempool ancestors (including this one)
-          "ancestorfees": 678 // Modified fees (see above) of in-mempool ancestors (including this one)
-        }
-      } // When verbose=true
-    // Note: Returns all transaction IDs in mempool as a json array of string transaction IDs
-    // When verbose=true, returns a json object with transaction details for each mempool transaction
-    // In Teranode, this reflects transactions across all active subtrees rather than a single mempool
 
   # Mining Commands
 
@@ -353,19 +323,6 @@ URL /rpc
     // Note: Returns true if the solution was accepted, false if invalid
     // Common errors: Block not found (code: -8), Block solution invalid (code: -5), Duplicate block (code: -8)
 
-  Method getmininginfo // Returns mining-related information.
-    Params
-      []
-    Result
-      {
-        "blocks": 680000, // Current block count
-        "currentblocksize": 43560, // Last block size in bytes
-        "currentblocktx": 120, // Number of transactions in the last block
-        "difficulty": 21865558044610.55, // Current difficulty
-        "networkhashps": 193806209315858.78, // Estimated network hashes per second
-        "pooledtx": 10478, // Count of transactions waiting to be confirmed
-        "chain": "main" // Chain name (main, test, regtest)
-      }
 
   Method generate // Generates blocks (for testing purposes).
     Params
