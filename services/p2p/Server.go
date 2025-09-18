@@ -586,18 +586,18 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
 	// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
 	// Therefore, autocommit is set to true.
-	s.rejectedTxKafkaConsumerClient.Start(ctx, s.rejectedHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
+	s.rejectedTxKafkaConsumerClient.Start(ctx, s.rejectedHandler(ctx), kafka.WithLogErrorAndMoveOn())
 
 	// Handler for invalid blocks Kafka messages
 	if s.invalidBlocksKafkaConsumerClient != nil {
 		s.logger.Infof("[Start] Starting invalid blocks Kafka consumer on topic: %s", s.invalidBlocksTopicName)
-		s.invalidBlocksKafkaConsumerClient.Start(ctx, s.invalidBlockHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
+		s.invalidBlocksKafkaConsumerClient.Start(ctx, s.invalidBlockHandler(ctx), kafka.WithLogErrorAndMoveOn())
 	}
 
 	// Handler for invalid subtrees Kafka messages
 	if s.invalidSubtreeKafkaConsumerClient != nil {
 		s.logger.Infof("[Start] Starting invalid subtrees Kafka consumer on topic: %s", s.invalidSubtreeTopicName)
-		s.invalidSubtreeKafkaConsumerClient.Start(ctx, s.invalidSubtreeHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
+		s.invalidSubtreeKafkaConsumerClient.Start(ctx, s.invalidSubtreeHandler(ctx), kafka.WithLogErrorAndMoveOn())
 	}
 
 	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))

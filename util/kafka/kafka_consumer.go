@@ -238,12 +238,13 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig, kafkaSettings ...*settings.K
 type ConsumerOption func(*consumerOptions)
 
 type consumerOptions struct {
-	withRetryAndMoveOn  bool
-	withRetryAndStop    bool
-	maxRetries          int
-	backoffMultiplier   int
-	backoffDurationType time.Duration
-	stopFn              func()
+	withRetryAndMoveOn    bool
+	withRetryAndStop      bool
+	withLogErrorAndMoveOn bool
+	maxRetries            int
+	backoffMultiplier     int
+	backoffDurationType   time.Duration
+	stopFn                func()
 }
 
 // WithRetryAndMoveOn configures error behaviour for the consumer function
@@ -272,17 +273,29 @@ func WithRetryAndStop(maxRetries, backoffMultiplier int, backoffDurationType tim
 	}
 }
 
+// WithLogErrorAndMoveOn configures error behaviour for the consumer function
+// When an error occurs, it is logged and the message is skipped without any retries
+// Use this for non-critical messages where you want visibility of failures but don't want to block processing
+func WithLogErrorAndMoveOn() ConsumerOption {
+	return func(o *consumerOptions) {
+		o.withLogErrorAndMoveOn = true
+		o.withRetryAndMoveOn = false
+		o.withRetryAndStop = false
+	}
+}
+
 func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message *KafkaMessage) error, opts ...ConsumerOption) {
 	if k == nil {
 		return
 	}
 
 	options := &consumerOptions{
-		withRetryAndMoveOn:  false,
-		withRetryAndStop:    false,
-		maxRetries:          3,
-		backoffMultiplier:   2,
-		backoffDurationType: time.Second,
+		withRetryAndMoveOn:    false,
+		withRetryAndStop:      false,
+		withLogErrorAndMoveOn: false,
+		maxRetries:            3,
+		backoffMultiplier:     2,
+		backoffDurationType:   time.Second,
 	}
 	for _, opt := range opts {
 		opt(options)
@@ -345,6 +358,25 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			}
 
 			return nil
+		}
+	}
+
+	if options.withLogErrorAndMoveOn {
+		originalFn := consumerFn
+		consumerFn = func(msg *KafkaMessage) error {
+			err := originalFn(msg)
+
+			// if we can't process the message, log the error and skip to the next message
+			if err != nil {
+				key := ""
+				if msg != nil && msg.Key != nil {
+					key = utils.ReverseAndHexEncodeSlice(msg.Key)
+				}
+
+				k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), skipping: %v", k.Config.Topic, key, err)
+			}
+
+			return nil // always move on to the next message
 		}
 	}
 

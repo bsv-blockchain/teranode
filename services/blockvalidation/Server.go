@@ -727,7 +727,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	// start blocks kafka consumer
-	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
+	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithLogErrorAndMoveOn())
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {

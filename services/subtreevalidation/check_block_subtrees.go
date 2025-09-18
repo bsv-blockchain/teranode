@@ -139,7 +139,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		g.Go(func() (err error) {
 			subtreeDataExists, err := u.subtreeStore.Exists(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 			if err != nil {
-				return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to check if subtree data exists in store: %v", subtreeHash.String(), err)
+				return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to check if subtree data exists in store", subtreeHash.String(), err)
 			}
 
 			if !subtreeDataExists {
@@ -148,7 +148,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 				body, subtreeDataErr := util.DoHTTPRequestBodyReader(gCtx, url)
 				if subtreeDataErr != nil {
-					return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s: %v", subtreeHash.String(), url, subtreeDataErr)
+					return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s", subtreeHash.String(), url, subtreeDataErr)
 				}
 
 				// Process transactions directly from the stream while storing to disk
@@ -156,13 +156,13 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 				_ = body.Close()
 
 				if err != nil {
-					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to process subtree data stream: %v", subtreeHash.String(), err)
+					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to process subtree data stream", subtreeHash.String(), err)
 				}
 			} else {
 				// SubtreeData exists, extract transactions from stored file
 				err = u.extractAndCollectTransactions(gCtx, subtreeHash, &subtreeTxs[subtreeIdx])
 				if err != nil {
-					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to extract transactions: %v", subtreeHash.String(), err)
+					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to extract transactions", subtreeHash.String(), err)
 				}
 			}
 
@@ -232,7 +232,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					validator.WithCreateConflicting(true),
 					validator.WithIgnoreLocked(true),
 				); err != nil {
-					u.logger.Debugf("[CheckBlockSubtreesRequest] Failed to validate subtree %s: %v", subtreeHash.String(), err)
+					u.logger.Debugf("[CheckBlockSubtreesRequest] Failed to validate subtree %s", subtreeHash.String(), err)
 					revalidateSubtreesMutex.Lock()
 					revalidateSubtrees = append(revalidateSubtrees, subtreeHash)
 					revalidateSubtreesMutex.Unlock()
@@ -251,7 +251,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 		// Wait for all parallel validations to complete
 		if err = g.Wait(); err != nil {
-			return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed during parallel subtree validation: %v", err)
+			return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed during parallel subtree validation", err)
 		}
 
 		// Now validate the subtrees, in order, which should be much faster since we already validated all transactions
@@ -273,7 +273,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 				validator.WithCreateConflicting(true),
 				validator.WithIgnoreLocked(true),
 			); err != nil {
-				return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to validate subtree %s: %v", subtreeHash.String(), err)
+				return nil, errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to validate subtree %s", subtreeHash.String(), err)
 			}
 
 			// Remove validated transactions from orphanage
@@ -345,7 +345,7 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtreeHash chain
 	// Now store the buffered data to disk
 	err = u.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData, buffer.Bytes())
 	if err != nil {
-		return errors.NewProcessingError("[processSubtreeDataStream] failed to store subtree data: %v", err)
+		return errors.NewProcessingError("[processSubtreeDataStream] failed to store subtree data", err)
 	}
 
 	u.logger.Debugf("[processSubtreeDataStream] Processed %d transactions from subtree %s directly from stream",
@@ -368,7 +368,7 @@ func (u *Server) readTransactionsFromSubtreeDataStream(reader io.Reader, subtree
 				// End of stream reached
 				break
 			}
-			return txCount, errors.NewProcessingError("[readTransactionsFromSubtreeDataStream] error reading transaction: %v", err)
+			return txCount, errors.NewProcessingError("[readTransactionsFromSubtreeDataStream] error reading transaction", err)
 		}
 
 		tx.SetTxHash(tx.TxIDChainHash()) // Cache the transaction hash to avoid recomputing it
@@ -412,7 +412,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	// Use the existing prepareTxsPerLevel logic to organize transactions by dependency levels
 	maxLevel, txsPerLevel, err := u.prepareTxsPerLevel(ctx, missingTxs)
 	if err != nil {
-		return errors.NewProcessingError("[processTransactionsInLevels] Failed to prepare transactions per level: %v", err)
+		return errors.NewProcessingError("[processTransactionsInLevels] Failed to prepare transactions per level", err)
 	}
 
 	u.logger.Infof("[processTransactionsInLevels] Processing transactions across %d levels", maxLevel+1)

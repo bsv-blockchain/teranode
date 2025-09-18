@@ -367,7 +367,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	if v.consumerClient != nil {
-		v.consumerClient.Start(ctx, kafkaMessageHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
+		v.consumerClient.Start(ctx, kafkaMessageHandler, kafka.WithLogErrorAndMoveOn())
 	}
 
 	if err = v.startHTTPServer(ctx, v.settings.Validator.HTTPListenAddress); err != nil {
