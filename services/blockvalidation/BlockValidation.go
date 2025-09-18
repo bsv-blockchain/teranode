@@ -823,7 +823,10 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	}
 
 	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2)); err != nil || len(ids) == 0 {
-		return errors.NewServiceError("[setTxMined][%s] failed to get block header ids", blockHash.String(), err)
+		if err != nil {
+			return errors.NewServiceError("[setTxMined][%s] failed to get block header ids", blockHash.String(), err)
+		}
+		return errors.NewServiceError("[setTxMined][%s] failed to get block header ids", blockHash.String())
 	}
 
 	// add the transactions in this block to the block IDs in the utxo store
@@ -1154,7 +1157,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(decoupledCtx, block.Header.HashPrevBlock, u.settings.BlockValidation.MaxPreviousBlockHeadersToCheck)
 				if err != nil {
-					u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
+					u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %v", block.String(), err)
 
 					u.ReValidateBlock(block, baseURL)
 

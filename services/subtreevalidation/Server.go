@@ -342,7 +342,7 @@ func (u *Server) updateBestBlock(ctx context.Context) error {
 
 	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, bestBlockHeader.Hash(), uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
 	if err != nil {
-		return errors.NewProcessingError("[SubtreeValidation:blockchainSubscriptionListener] failed to get block header IDs: %s", err)
+		return errors.NewProcessingError("[SubtreeValidation:blockchainSubscriptionListener] failed to get block header IDs", err)
 	}
 
 	blockIDsMap := make(map[uint32]bool, len(ids))
