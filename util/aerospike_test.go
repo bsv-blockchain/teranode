@@ -356,11 +356,11 @@ func TestGetAerospikeClient_CachedConnections(t *testing.T) {
 	// Mock settings for testing
 	testSettings := &settings.Settings{
 		Aerospike: settings.AerospikeSettings{
-			UseDefaultBasePolicies: true,
+			UseDefaultBasePolicies: false,
 		},
 	}
 
-	u, err := url.Parse("aerospike://localhost:3000/test")
+	u, err := url.Parse("aerospike://localhost:3000/test?Timeout=100ms&LoginTimeout=100ms")
 	require.NoError(t, err)
 
 	// First call should create a new connection
@@ -405,7 +405,7 @@ func TestGetAerospikeClient_InvalidNamespace(t *testing.T) {
 	}
 
 	// Test with missing namespace (no path)
-	u, err := url.Parse("aerospike://localhost:3000")
+	u, err := url.Parse("aerospike://localhost:3000?Timeout=100ms&LoginTimeout=100ms")
 	require.NoError(t, err)
 
 	_, err = GetAerospikeClient(logger, u, testSettings)
@@ -423,12 +423,12 @@ func TestGetAerospikeClient_AuthenticationSetup(t *testing.T) {
 
 	testSettings := &settings.Settings{
 		Aerospike: settings.AerospikeSettings{
-			UseDefaultBasePolicies: true,
+			UseDefaultBasePolicies: false,
 		},
 	}
 
 	// Test with authentication credentials
-	u, err := url.Parse("aerospike://user:password@localhost:1111/test")
+	u, err := url.Parse("aerospike://user:password@localhost:1111/test?Timeout=100ms&LoginTimeout=100ms")
 	require.NoError(t, err)
 
 	// This will fail on actual connection but we can test the auth setup
@@ -446,7 +446,7 @@ func TestGetAerospikeClient_MultipleHosts(t *testing.T) {
 
 	testSettings := &settings.Settings{
 		Aerospike: settings.AerospikeSettings{
-			UseDefaultBasePolicies: true,
+			UseDefaultBasePolicies: false,
 		},
 	}
 
@@ -457,7 +457,7 @@ func TestGetAerospikeClient_MultipleHosts(t *testing.T) {
 	}{
 		{
 			name:        "single host with port",
-			urlString:   "aerospike://localhost:9999/namespace",
+			urlString:   "aerospike://localhost:9999/namespace?Timeout=100ms&LoginTimeout=100ms",
 			expectError: true, // Connection will fail but host parsing should work
 		},
 		// {
@@ -467,12 +467,12 @@ func TestGetAerospikeClient_MultipleHosts(t *testing.T) {
 		// },
 		{
 			name:        "multiple hosts with ports",
-			urlString:   "aerospike://host1:3000,host2:3001/namespace",
+			urlString:   "aerospike://host1:3000,host2:3001/namespace?Timeout=100ms&LoginTimeout=100ms",
 			expectError: true, // Connection will fail but host parsing should work
 		},
 		{
 			name:        "invalid port - connection will fail",
-			urlString:   "aerospike://localhost:99999/namespace",
+			urlString:   "aerospike://localhost:99999/namespace?Timeout=100ms&LoginTimeout=100ms",
 			expectError: true,
 		},
 	}
@@ -787,14 +787,22 @@ func TestPackageInitialization(t *testing.T) {
 func TestHostParsing_EdgeCases(t *testing.T) {
 	logger := ulogger.New("test")
 
+	// For edge case testing, provide minimal policy URLs
+	readPolicy, _ := url.Parse("aerospike://dummy?Timeout=100ms")
+	writePolicy, _ := url.Parse("aerospike://dummy?Timeout=100ms")
+	batchPolicy, _ := url.Parse("aerospike://dummy?Timeout=100ms")
+
 	testSettings := &settings.Settings{
 		Aerospike: settings.AerospikeSettings{
-			UseDefaultBasePolicies: true,
+			UseDefaultBasePolicies: false,
+			ReadPolicyURL:          readPolicy,
+			WritePolicyURL:         writePolicy,
+			BatchPolicyURL:         batchPolicy,
 		},
 	}
 
 	t.Run("empty host should fail", func(t *testing.T) {
-		u, err := url.Parse("aerospike:///namespace")
+		u, err := url.Parse("aerospike:///namespace?Timeout=100ms&LoginTimeout=100ms")
 		require.NoError(t, err)
 
 		_, err = GetAerospikeClient(logger, u, testSettings)
@@ -802,7 +810,7 @@ func TestHostParsing_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("invalid port parsing", func(t *testing.T) {
-		u, err := url.Parse("aerospike://localhost:99999999999999999999/namespace")
+		u, err := url.Parse("aerospike://localhost:99999999999999999999/namespace?Timeout=100ms&LoginTimeout=100ms")
 		require.NoError(t, err)
 
 		_, err = GetAerospikeClient(logger, u, testSettings)
@@ -815,13 +823,21 @@ func TestHostParsing_EdgeCases(t *testing.T) {
 func TestAerospikeBufferSize(t *testing.T) {
 	logger := ulogger.New("test")
 
+	// For edge case testing, provide minimal policy URLs
+	readPolicy, _ := url.Parse("aerospike://dummy?Timeout=100ms")
+	writePolicy, _ := url.Parse("aerospike://dummy?Timeout=100ms")
+	batchPolicy, _ := url.Parse("aerospike://dummy?Timeout=100ms")
+
 	testSettings := &settings.Settings{
 		Aerospike: settings.AerospikeSettings{
-			UseDefaultBasePolicies: true,
+			UseDefaultBasePolicies: false,
+			ReadPolicyURL:          readPolicy,
+			WritePolicyURL:         writePolicy,
+			BatchPolicyURL:         batchPolicy,
 		},
 	}
 
-	u, err := url.Parse("aerospike://localhost:9999/test")
+	u, err := url.Parse("aerospike://localhost:9999/test?Timeout=100ms&LoginTimeout=100ms")
 	require.NoError(t, err)
 
 	// Store original buffer size

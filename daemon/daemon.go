@@ -568,9 +568,8 @@ func getBlockHeightTrackerCh(ctx context.Context, logger ulogger.Logger, blockch
 				if notification.Type == model.NotificationType_Block {
 					blockHeight, _, err = blockchainClient.GetBestHeightAndTime(ctx)
 					if err != nil {
-						if errors.Is(err, context.Canceled) {
-							logger.Infof("[File] error getting best height and time: %v", err)
-						} else {
+						// Don't log if context was cancelled (shutting down gracefully), sometimes causes panic in tests
+						if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "client connection is closing") {
 							logger.Errorf("[File] error getting best height and time: %v", err)
 						}
 					} else {

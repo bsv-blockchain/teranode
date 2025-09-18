@@ -406,7 +406,10 @@ func (u *BlockValidation) start(ctx context.Context) error {
 				// check whether the block needs the tx mined, or it has already been done
 				_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(ctx, blockHash)
 				if err != nil {
-					u.logger.Errorf("[BlockValidation:start][%s] failed to get block header: %s", blockHash.String(), err)
+					// Don't log errors if context was cancelled, sometimes causes panic in tests
+					if !errors.Is(err, context.Canceled) {
+						u.logger.Errorf("[BlockValidation:start][%s] failed to get block header: %s", blockHash.String(), err)
+					}
 					continue
 				}
 

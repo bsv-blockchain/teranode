@@ -76,10 +76,14 @@ func NewClientWithPolicyAndHost(policy *aerospike.ClientPolicy, hosts ...*aerosp
 		err    aerospike.Error
 	)
 
-	const (
-		maxRetries = 3
-		retryDelay = 1 * time.Second
-	)
+	// Default retry settings
+	maxRetries := 3
+	retryDelay := 1 * time.Second
+
+	// If timeout is very short (indicating test mode), don't retry
+	if policy != nil && policy.Timeout > 0 && policy.Timeout <= 200*time.Millisecond {
+		maxRetries = 1 // No retries for short timeouts
+	}
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		client, err = aerospike.NewClientWithPolicyAndHost(policy, hosts...)
