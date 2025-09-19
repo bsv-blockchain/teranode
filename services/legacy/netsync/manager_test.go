@@ -109,7 +109,6 @@ func (tc *testContext) Setup(t *testing.T, config *testConfig) error {
 		validatorClient,
 		utxoStore,
 		subtreeStore,
-		subtreeStore, // tempStore
 		subtreeValidation,
 		blockvalidationClient,
 		nil,

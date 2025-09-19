@@ -5,12 +5,10 @@
 package netsync
 
 import (
-	"bufio"
 	"bytes"
 	"container/list"
 	"context"
 	"fmt"
-	"io"
 	"math/rand/v2"
 	"net"
 	"net/url"
@@ -31,7 +29,6 @@ import (
 	"github.com/bitcoin-sv/teranode/services/validator"
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob"
-	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/teranode/stores/utxo"
 	"github.com/bitcoin-sv/teranode/stores/utxo/fields"
 	"github.com/bitcoin-sv/teranode/stores/utxo/meta"
@@ -275,7 +272,6 @@ type SyncManager struct {
 	validationClient  validator.Interface
 	utxoStore         utxostore.Store
 	subtreeStore      blob.Store
-	tempStore         blob.Store
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
 	blockAssembly     blockassembly.ClientI
@@ -1731,7 +1727,6 @@ func (sm *SyncManager) blockHandler() {
 
 	// create a block queue to handle block messages in a separate goroutine, in order
 	blockQueue := make(chan *blockQueueMsg, maxBlockQueue)
-	blockDiskWriter := make(chan struct{}, 1) // buffer size 1, allows only one block to be written to disk at a time
 
 	// start the block queue handler
 	go func() {
@@ -1792,68 +1787,15 @@ out:
 				}(msg)
 
 			case *blockMsg:
-				// we process the block message in the background, so we do not block the main loop
-				go func(msg *blockMsg) {
-					// block the disk writer until we are done with the previous block
-					// we must make sure the block is written to disk before continuing
-					blockDiskWriter <- struct{}{}
+				sm.logger.Debugf("[blockHandler][%s] queueing block for validation", msg.block.Hash())
 
-					ctx, _, _ := tracing.Tracer("SyncManager").Start(sm.ctx, "blockHandler",
-						tracing.WithLogMessage(sm.logger, "[blockHandler][%s] processing block message", msg.block.Hash()),
-					)
-
-					var msgBlock *wire.MsgBlock
-					if sm.settings.Legacy.WriteMsgBlocksToDisk {
-						// write the block directly to disk and queue for validation in a reader pipe
-						reader, writer := io.Pipe()
-
-						bufferSize := 4 * 1024 * 1024
-						bufferedReader := io.NopCloser(bufio.NewReaderSize(reader, bufferSize))
-
-						// start writing to the pipe in the background
-						go func() {
-							if err := msg.block.MsgBlock().Serialize(writer); err != nil {
-								sm.logger.Errorf("failed to serialize block: %v", err)
-							}
-
-							// close the writer to signal the end of the block
-							if err := writer.Close(); err != nil {
-								sm.logger.Errorf("failed to close writer: %v", err)
-							}
-						}()
-
-						sm.logger.Debugf("[blockHandler][%s] writing block to disk", msg.block.Hash())
-						if err := sm.tempStore.SetFromReader(ctx,
-							msg.block.Hash().CloneBytes(),
-							fileformat.FileTypeMsgBlock,
-							bufferedReader,
-							options.WithDeleteAt(10),
-							options.WithSubDirectory("blocks"),
-							options.WithAllowOverwrite(true),
-						); err != nil {
-							sm.logger.Errorf("failed to write block to disk: %v", err)
-						}
-
-						// close the reader to signal the end of the block
-						if err := reader.Close(); err != nil {
-							sm.logger.Errorf("failed to close reader: %v", err)
-						}
-					} else {
-						msgBlock = msg.block.MsgBlock()
-					}
-
-					sm.logger.Debugf("[blockHandler][%s] queueing block for validation", msg.block.Hash())
-					blockQueue <- &blockQueueMsg{
-						block:       msgBlock,
-						blockHash:   *msg.block.Hash(),
-						blockHeight: msg.block.Height(),
-						peer:        msg.peer,
-						reply:       msg.reply,
-					}
-
-					// unblock the disk writer
-					<-blockDiskWriter
-				}(msg)
+				blockQueue <- &blockQueueMsg{
+					block:       msg.block.MsgBlock(),
+					blockHash:   *msg.block.Hash(),
+					blockHeight: msg.block.Height(),
+					peer:        msg.peer,
+					reply:       msg.reply,
+				}
 
 			case *invMsg:
 				go sm.handleInvMsg(msg)
@@ -2067,7 +2009,7 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 // New constructs a new SyncManager. Use Start to begin processing asynchronous
 // block, tx, and inv updates.
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient teranodeblockchain.ClientI,
-	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, tempStore blob.Store,
+	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
 	blockAssembly blockassembly.ClientI, config *Config) (*SyncManager, error) {
 	initPrometheusMetrics()
@@ -2096,7 +2038,6 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		validationClient:  validationClient,
 		utxoStore:         utxoStore,
 		subtreeStore:      subtreeStore,
-		tempStore:         tempStore,
 		subtreeValidation: subtreeValidation,
 		blockValidation:   blockValidation,
 		blockAssembly:     blockAssembly,

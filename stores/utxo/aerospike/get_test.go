@@ -265,7 +265,6 @@ func runTestGetExternalFromLargeBlock(t *testing.T, blockHex string, blockHeight
 		nil,
 		nil,
 		nil,
-		nil,
 		&netsync.Config{
 			PeerNotifier:            nil,
 			ChainParams:             store.GetSettings().ChainCfgParams,

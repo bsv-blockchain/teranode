@@ -477,7 +477,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PrintInvMessages:                 getBool("legacy_printInvMessages", false, alternativeContext...),
 			GRPCAddress:                      getString("legacy_grpcAddress", "", alternativeContext...),
 			AllowBlockPriority:               getBool("legacy_allowBlockPriority", false, alternativeContext...),
-			WriteMsgBlocksToDisk:             getBool("legacy_writeMsgBlocksToDisk", false, alternativeContext...),
 			GRPCListenAddress:                getString("legacy_grpcListenAddress", "", alternativeContext...),
 			SavePeers:                        getBool("legacy_savePeers", false, alternativeContext...), // by default we do not save the peers
 			AllowSyncCandidateFromLocalPeers: getBool("legacy_allowSyncCandidateFromLocalPeers", false, alternativeContext...),

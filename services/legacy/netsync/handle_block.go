@@ -1,11 +1,9 @@
 package netsync
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -53,48 +51,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return nil
 	}
 
-	var (
-		blockReader io.ReadCloser
-		block       *bsvutil.Block
-	)
-
-	if msgBlock == nil {
-		// read block from disk
-		blockReader, err = sm.tempStore.GetIoReader(ctx,
-			blockHash.CloneBytes(),
-			fileformat.FileTypeMsgBlock,
-			options.WithSubDirectory("blocks"),
-		)
-		if err != nil {
-			sm.logger.Errorf("[HandleBlockDirect][%s] failed to get block reader from disk: %s", blockHash.String(), err)
-			return errors.NewStorageError("failed to get block reader from disk", err)
-		}
-
-		block, err = bsvutil.NewBlockFromReader(bufio.NewReaderSize(blockReader, 4*1024*1024))
-		if err != nil {
-			sm.logger.Errorf("[HandleBlockDirect][%s] failed to read block from disk: %s", blockHash.String(), err)
-			return errors.NewProcessingError("failed to read block from disk", err)
-		}
-
-		// close the reader
-		if err = blockReader.Close(); err != nil {
-			sm.logger.Errorf("[HandleBlockDirect][%s] failed to close block reader: %s", blockHash.String(), err)
-			return errors.NewStorageError("failed to close block reader", err)
-		}
-
-		defer func() {
-			// delete the temporarily saved block from disk after this function completes
-			if err = sm.tempStore.Del(ctx,
-				blockHash.CloneBytes(),
-				fileformat.FileTypeMsgBlock,
-				options.WithSubDirectory("blocks"),
-			); err != nil {
-				sm.logger.Errorf("failed to delete block from disk: %v", err)
-			}
-		}()
-	} else {
-		block = bsvutil.NewBlock(msgBlock)
-	}
+	block := bsvutil.NewBlock(msgBlock)
 
 	// Lookup previous block height from blockchain
 	_, previousBlockHeaderMeta, err = sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)

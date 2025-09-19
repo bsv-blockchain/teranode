@@ -2778,7 +2778,6 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		validationClient,
 		utxoStore,
 		subtreeStore,
-		tempStore,
 		subtreeValidation,
 		blockValidation,
 		blockAssembly,
