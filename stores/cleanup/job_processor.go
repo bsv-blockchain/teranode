@@ -154,9 +154,8 @@ func (m *JobManager) TriggerCleanup(blockHeight uint32, doneCh ...chan string) e
 
 				// If the job is already completed or failed, signal the new doneCh with the same status
 				if status == JobStatusCompleted || status == JobStatusFailed {
-					if len(doneCh) > 0 && doneCh[0] != nil {
-						utils.SafeSend(doneCh[0], status.String())
-						safeClose(doneCh[0])
+					if len(doneCh) > 0 {
+						m.sendAndClose(doneCh[0], status.String())
 					}
 
 					return nil
@@ -166,10 +165,7 @@ func (m *JobManager) TriggerCleanup(blockHeight uint32, doneCh ...chan string) e
 				// This ensures that the new test will get the signal when the job completes
 				if status == JobStatusPending || status == JobStatusRunning {
 					// If there's an existing doneCh, close it with a cancelled status
-					if m.jobs[i].DoneCh != nil {
-						utils.SafeSend(m.jobs[i].DoneCh, JobStatusCancelled.String())
-						safeClose(m.jobs[i].DoneCh)
-					}
+					m.sendAndClose(m.jobs[i].DoneCh, JobStatusCancelled.String())
 
 					// Replace with the new doneCh
 					if len(doneCh) > 0 {
@@ -185,8 +181,7 @@ func (m *JobManager) TriggerCleanup(blockHeight uint32, doneCh ...chan string) e
 
 		// If we didn't find a job with this block height, signal the doneCh
 		if len(doneCh) > 0 {
-			utils.SafeSend(doneCh[0], JobStatusCancelled.String())
-			safeClose(doneCh[0])
+			m.sendAndClose(doneCh[0], JobStatusCancelled.String())
 		}
 
 		return nil
@@ -199,10 +194,7 @@ func (m *JobManager) TriggerCleanup(blockHeight uint32, doneCh ...chan string) e
 			m.jobs[i].SetStatus(JobStatusCancelled)
 			m.jobs[i].Ended = time.Now()
 
-			if m.jobs[i].DoneCh != nil {
-				utils.SafeSend(m.jobs[i].DoneCh, JobStatusCancelled.String())
-				safeClose(m.jobs[i].DoneCh)
-			}
+			m.sendAndClose(m.jobs[i].DoneCh, JobStatusCancelled.String())
 
 			m.jobs[i].Cancel()
 		} else {
@@ -224,10 +216,7 @@ func (m *JobManager) TriggerCleanup(blockHeight uint32, doneCh ...chan string) e
 			m.jobs[0].SetStatus(JobStatusCancelled)
 			m.jobs[0].Ended = time.Now()
 
-			if m.jobs[0].DoneCh != nil {
-				utils.SafeSend(m.jobs[0].DoneCh, JobStatusCancelled.String())
-				safeClose(m.jobs[0].DoneCh)
-			}
+			m.sendAndClose(m.jobs[0].DoneCh, JobStatusCancelled.String())
 
 			m.jobs[0].Cancel()
 		}
@@ -303,19 +292,19 @@ func (m *JobManager) worker(workerID int) {
 		// Process the job
 		m.jobProcessor(job, workerID)
 
-		if job.DoneCh != nil {
-			utils.SafeSend(job.DoneCh, job.GetStatus().String())
-			safeClose(job.DoneCh)
-		}
+		m.sendAndClose(job.DoneCh, job.GetStatus().String())
 	}
 }
 
-func safeClose[T any](ch chan T) {
-	defer func() {
-		_ = recover()
-	}()
+// sendAndClose attempts to send a value to a channel and then closes it.
+// It handles the case where the channel might already be closed, logging any failures.
+func (m *JobManager) sendAndClose(ch chan string, value string) {
+	if ch == nil {
+		return
+	}
 
-	close(ch)
+	utils.SafeSend(ch, value, time.Millisecond*10) // need timeout to avoid blocking
+	utils.SafeClose(ch)
 }
 
 // getNextJob gets the next job from the queue
