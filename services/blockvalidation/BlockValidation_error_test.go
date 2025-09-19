@@ -266,7 +266,7 @@ func createBlock(t *testing.T, header *model.BlockHeader, coinbaseTx *bt.Tx, sub
 		[]*chainhash.Hash{subtreeRoot},
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(totalSize),        //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 
 	return block
@@ -345,7 +345,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()),  //nolint:gosec
 		uint64(coinbaseTx.Size()), //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 
 	// make the block invalid
@@ -477,7 +477,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()),  //nolint:gosec
 		uint64(coinbaseTx.Size()), //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 
 	// make the block invalid

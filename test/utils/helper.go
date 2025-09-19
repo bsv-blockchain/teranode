@@ -174,7 +174,7 @@ func GetBlockHeight(url string) (uint32, error) {
 
 // isTxInBlock checks if a transaction with the specified txid exists in the block represented by the provided reader.
 func isTxInBlock(ctx context.Context, l ulogger.Logger, storeSubtree blob.Store, blockReader io.Reader, queryTxId chainhash.Hash) (bool, error) {
-	block, err := blockmodel.NewBlockFromReader(blockReader, nil)
+	block, err := blockmodel.NewBlockFromReader(blockReader)
 	if err != nil {
 		return false, errors.NewProcessingError("error reading block", err)
 	}
@@ -245,7 +245,7 @@ func GetBlockSubtreeHashes(ctx context.Context, _ ulogger.Logger, blockHash []by
 		return nil, errors.NewProcessingError("error getting block reader", err)
 	}
 
-	block, err := blockmodel.NewBlockFromReader(blockReader, nil)
+	block, err := blockmodel.NewBlockFromReader(blockReader)
 	if err != nil {
 		return nil, errors.NewProcessingError("error reading block", err)
 	}

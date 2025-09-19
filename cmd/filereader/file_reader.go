@@ -300,7 +300,7 @@ func handleBlockHeader(br *bufio.Reader) error {
 
 // handleBlock processes FileTypeBlock files.
 func handleBlock(br *bufio.Reader, logger ulogger.Logger, settings *settings.Settings, dir string) error {
-	block, err := blockmodel.NewBlockFromReader(br, nil)
+	block, err := blockmodel.NewBlockFromReader(br)
 	if err != nil {
 		return errors.NewBlockError("error reading block", err)
 	}

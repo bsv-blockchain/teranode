@@ -106,7 +106,6 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 		TransactionCount: uint64(subtree.Length()),
 		SizeInBytes:      123123,
 	}
-	block.SetSettings(tSettings)
 
 	// Mock blockchain client
 	mockBlockchain := new(blockchain.Mock)
@@ -131,7 +130,6 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 		Subtrees:   []*chainhash.Hash{},
 		Height:     0,
 	}
-	prevBlock.SetSettings(tSettings)
 	mockBlockchain.On("GetBlock", mock.Anything, prevBlockHeader.Hash()).Return(prevBlock, nil).Maybe()
 
 	// Mock GetBestBlockHeader for bloom filter pruning
@@ -236,7 +234,6 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 		TransactionCount: uint64(subtree.Length()),
 		SizeInBytes:      123123,
 	}
-	block.SetSettings(tSettings)
 
 	// Mock blockchain client
 	mockBlockchain := new(blockchain.Mock)
@@ -261,7 +258,6 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 		Subtrees:   []*chainhash.Hash{},
 		Height:     0,
 	}
-	prevBlock.SetSettings(tSettings)
 	mockBlockchain.On("GetBlock", mock.Anything, prevBlockHeader.Hash()).Return(prevBlock, nil).Maybe()
 
 	// Mock GetBestBlockHeader for bloom filter pruning
@@ -378,7 +374,6 @@ func TestValidateBlock_ValidDifficulty(t *testing.T) {
 		TransactionCount: 1, // Just the coinbase
 		SizeInBytes:      uint64(coinbaseTx.Size()),
 	}
-	block.SetSettings(tSettings)
 
 	// Mock blockchain client
 	mockBlockchain := new(blockchain.Mock)
@@ -403,7 +398,6 @@ func TestValidateBlock_ValidDifficulty(t *testing.T) {
 		Subtrees:   []*chainhash.Hash{},
 		Height:     0,
 	}
-	prevBlock.SetSettings(tSettings)
 	mockBlockchain.On("GetBlock", mock.Anything, prevBlockHeader.Hash()).Return(prevBlock, nil).Maybe()
 
 	// Mock GetBestBlockHeader for bloom filter pruning

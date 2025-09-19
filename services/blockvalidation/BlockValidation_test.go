@@ -355,7 +355,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 		subtreeHashes,            // should be the subtree with placeholder
 		uint64(subtree.Length()), // nolint:gosec
 		123123,
-		0, 0, tSettings)
+		0, 0)
 	require.NoError(t, err)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
@@ -484,7 +484,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 		subtreeHashes,            // should be the subtree with placeholder
 		uint64(subtree.Length()), // nolint:gosec
 		123123,
-		1, 0, tSettings)
+		1, 0)
 	require.NoError(t, err)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
@@ -578,7 +578,6 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
-	block.SetSettings(tSettings)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
@@ -663,7 +662,6 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
-	block.SetSettings(tSettings)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
@@ -777,9 +775,6 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes, // should be the subtree with placeholder
 	}
-	block.SetSettings(tSettings)
-
-	block.SetSettings(tSettings)
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
@@ -889,7 +884,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 			subtreeHashes,            // should be the subtree with placeholder
 			uint64(subtree.Length()), // nolint:gosec
 			123123,
-			0, 0, tSettings)
+			0, 0)
 		require.NoError(t, err)
 
 		blocks = append(blocks, block)
@@ -1020,7 +1015,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		123123,
-		101, 0, tSettings)
+		101, 0)
 	require.NoError(t, err)
 
 	// Setup blockchain store and client
@@ -1066,7 +1061,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 		[]*chainhash.Hash{subtree.RootHash()},
 		uint64(subtree.Length()), //nolint:gosec
 		123123,
-		0, 0, tSettings)
+		0, 0)
 	require.NoError(t, err)
 
 	// Test invalid merkle root
@@ -1183,7 +1178,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 
 			return uint64(totalSize)
 		}(),
-		0, 0, tSettings)
+		0, 0)
 
 	require.NoError(t, err)
 
@@ -1396,7 +1391,6 @@ func TestBlockValidationExcessiveBlockSize(t *testing.T) {
 				Subtrees:         []*chainhash.Hash{}, // Initialize empty subtrees slice
 			}
 			// Set the settings to avoid nil pointer dereference
-			block.SetSettings(tSettings)
 
 			// Validate the block
 			err = blockValidator.ValidateBlock(ctx, block, "test", nil)
@@ -1450,7 +1444,6 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			Header:   blockHeader,
 			Subtrees: make([]*chainhash.Hash, 0),
 		}
-		block.SetSettings(tSettings)
 
 		err = blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000")
 		require.NoError(t, err)
@@ -1476,7 +1469,6 @@ func Test_validateBlockSubtrees(t *testing.T) {
 				subtree2.RootHash(),
 			},
 		}
-		block.SetSettings(tSettings)
 
 		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000"))
 	})
@@ -1510,7 +1502,6 @@ func Test_validateBlockSubtrees(t *testing.T) {
 				subtree2.RootHash(),
 			},
 		}
-		block.SetSettings(tSettings)
 
 		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000"))
 
@@ -1632,7 +1623,7 @@ func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore ut
 		subtreeHashes,
 		uint64(subtree.Length()),             //nolint:gosec
 		uint64(coinbaseTx.Size()+tx1.Size()), //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 	require.NoError(t, err)
 
@@ -1763,7 +1754,7 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(coinbaseTx.Size()+tx1.Size()+tx2.Size()), //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
@@ -1876,7 +1867,7 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(coinbaseTx.Size()+tx1.Size()+tx2.Size()), //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
@@ -1986,7 +1977,7 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()),             //nolint:gosec
 		uint64(coinbaseTx.Size()+tx1.Size()), //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
@@ -2110,7 +2101,6 @@ func Test_createAppendBloomFilter(t *testing.T) {
 	}
 
 	// Create a test block with specified size and valid header
-	tSettings := test.CreateBaseTestSettings(t)
 	block := &model.Block{
 		Header:           blockHeader,
 		SizeInBytes:      123,
@@ -2118,7 +2108,6 @@ func Test_createAppendBloomFilter(t *testing.T) {
 		CoinbaseTx:       tx1,                 // Using tx1 from test setup
 		Subtrees:         []*chainhash.Hash{}, // Initialize empty subtrees slice
 	}
-	block.SetSettings(tSettings)
 
 	t.Run("smoke test", func(t *testing.T) {
 		blockchainMock := &blockchain.Mock{}
@@ -2130,6 +2119,7 @@ func Test_createAppendBloomFilter(t *testing.T) {
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 			subtreeStore:                  blobmemory.New(),
+			settings:                      test.CreateBaseTestSettings(t),
 		}
 
 		blockchainMock.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{
@@ -2150,6 +2140,7 @@ func Test_createAppendBloomFilter(t *testing.T) {
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
 			subtreeStore:                  blobmemory.New(),
+			settings:                      test.CreateBaseTestSettings(t),
 		}
 
 		blockchainMock.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{
@@ -2347,7 +2338,7 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(coinbaseTx.Size()+parentTx.Size()+childTx1.Size()), //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
@@ -2464,7 +2455,7 @@ func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(totalSize),        //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 	require.NoError(t, err)
 
@@ -2565,7 +2556,7 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(totalSize),        //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 	require.NoError(t, err)
 
@@ -2673,7 +2664,6 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 		SizeInBytes:      uint64(coinbaseTx.Size()), //nolint:gosec
 		Subtrees:         subtreeHashes,
 	}
-	block.SetSettings(tSettings)
 
 	// Call ValidateBlock (should trigger ReValidateBlock due to header error)
 	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
@@ -2862,7 +2852,7 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(coinbaseTx.Size()+parentTx.Size()+childTx1.Size()), //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 
 	blockHash := block.Header.Hash()
@@ -2951,7 +2941,7 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()),  //nolint:gosec
 		uint64(coinbaseTx.Size()), //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 
 	// Use a mock blockchain client that always returns error for GetBlockHeaders
@@ -3050,7 +3040,7 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()),  //nolint:gosec
 		uint64(coinbaseTx.Size()), //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 
 	// Create a channel to signal when InvalidateBlock is called
@@ -3198,7 +3188,7 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(totalSize),        //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 	require.NoError(t, err)
 
@@ -3317,7 +3307,7 @@ func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(totalSize),        //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 	require.NoError(t, err)
 
@@ -3432,7 +3422,7 @@ func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(totalSize),        //nolint:gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 	require.NoError(t, err)
 
@@ -3540,7 +3530,7 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), // nolint: gosec
 		uint64(totalSize),        // nolint: gosec
-		100, 0, tSettings,
+		100, 0,
 	)
 	require.NoError(t, err)
 

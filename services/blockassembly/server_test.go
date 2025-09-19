@@ -129,7 +129,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		blockBytes := resp.Block
 		require.NotNil(t, blockBytes)
 
-		block, err := model.NewBlockFromBytes(blockBytes, nil)
+		block, err := model.NewBlockFromBytes(blockBytes)
 		require.NoError(t, err)
 
 		require.NotNil(t, block)
@@ -155,7 +155,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		blockBytes := resp.Block
 		require.NotNil(t, blockBytes)
 
-		block, err := model.NewBlockFromBytes(blockBytes, nil)
+		block, err := model.NewBlockFromBytes(blockBytes)
 		require.NoError(t, err)
 
 		require.NotNil(t, block)
@@ -191,7 +191,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		blockBytes := resp.Block
 		require.NotNil(t, blockBytes)
 
-		block, err := model.NewBlockFromBytes(blockBytes, nil)
+		block, err := model.NewBlockFromBytes(blockBytes)
 		require.NoError(t, err)
 
 		require.NotNil(t, block)

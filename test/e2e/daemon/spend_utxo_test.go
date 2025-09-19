@@ -107,7 +107,7 @@ func TestShouldAllowSpendAllUtxos(t *testing.T) {
 	block102, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 102)
 	require.NoError(t, err)
 
-	err = block102.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
+	err = block102.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, td.Settings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	err = block102.CheckMerkleRoot(td.Ctx)

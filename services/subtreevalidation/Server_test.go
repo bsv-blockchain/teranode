@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
 	"github.com/bitcoin-sv/teranode/stores/blob/memory"
 	"github.com/bitcoin-sv/teranode/ulogger"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -39,6 +40,8 @@ var (
 
 func TestOneTransaction(t *testing.T) {
 	var err error
+
+	tSettings := test.CreateBaseTestSettings(t)
 
 	subtrees := make([]*subtree.Subtree, 1)
 
@@ -71,7 +74,7 @@ func TestOneTransaction(t *testing.T) {
 		HashMerkleRoot: merkleRootHash,
 	},
 		coinbaseTx,
-		subtreeHashes, 0, 0, 0, 0, nil)
+		subtreeHashes, 0, 0, 0, 0)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -81,7 +84,7 @@ func TestOneTransaction(t *testing.T) {
 	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 
 	// loads the subtrees into the block
-	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore)
+	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
@@ -98,6 +101,8 @@ func TestTwoTransactions(t *testing.T) {
 	assert.Equal(t, coinbaseTxID, coinbaseTx.TxIDChainHash())
 
 	var err error
+
+	tSettings := test.CreateBaseTestSettings(t)
 
 	subtrees := make([]*subtree.Subtree, 1)
 	subtrees[0], err = subtree.NewTree(1)
@@ -132,7 +137,7 @@ func TestTwoTransactions(t *testing.T) {
 	block, err := model.NewBlock(&model.BlockHeader{
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: expectedMerkleRootHash,
-	}, coinbaseTx, subtreeHashes, 0, 0, 0, 0, nil)
+	}, coinbaseTx, subtreeHashes, 0, 0, 0, 0)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -142,7 +147,7 @@ func TestTwoTransactions(t *testing.T) {
 	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 
 	// loads the subtrees into the block
-	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore)
+	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
@@ -152,6 +157,8 @@ func TestTwoTransactions(t *testing.T) {
 
 func TestMerkleRoot(t *testing.T) {
 	var err error
+
+	tSettings := test.CreateBaseTestSettings(t)
 
 	subtrees := make([]*subtree.Subtree, 2)
 
@@ -220,14 +227,14 @@ func TestMerkleRoot(t *testing.T) {
 		HashPrevBlock:  prevBlockHash,
 		HashMerkleRoot: merkleRoot,
 		Bits:           *nBits,
-	}, coinbaseTx, subtreeHashes, 0, 0, 0, 0, nil)
+	}, coinbaseTx, subtreeHashes, 0, 0, 0, 0)
 	require.NoError(t, err)
 
 	// blockValidationService, err := New(ulogger.TestLogger{}, nil, nil, nil, nil)
 	// require.NoError(t, err)
 
 	// loads the subtrees into the block
-	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore)
+	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)

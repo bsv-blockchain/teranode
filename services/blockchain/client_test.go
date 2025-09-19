@@ -491,7 +491,7 @@ func TestClientGetBlocks(t *testing.T) {
 	subtreeHashes := []*chainhash.Hash{subtreeHash1, subtreeHash2}
 
 	// Create a valid block and convert to bytes
-	validBlock, _ := model.NewBlock(validHeader, validCoinbase, subtreeHashes, 1, 1000, 100, 1, tSettings)
+	validBlock, _ := model.NewBlock(validHeader, validCoinbase, subtreeHashes, 1, 1000, 100, 1)
 	validBlockBytes, _ := validBlock.Bytes()
 
 	// Create another valid block with different data
@@ -503,7 +503,7 @@ func TestClientGetBlocks(t *testing.T) {
 		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
 		Nonce:          456,
 	}
-	validBlock2, _ := model.NewBlock(validHeader2, validCoinbase, subtreeHashes, 2, 2000, 101, 2, tSettings)
+	validBlock2, _ := model.NewBlock(validHeader2, validCoinbase, subtreeHashes, 2, 2000, 101, 2)
 	validBlock2Bytes, _ := validBlock2.Bytes()
 
 	t.Run("success with single block", func(t *testing.T) {

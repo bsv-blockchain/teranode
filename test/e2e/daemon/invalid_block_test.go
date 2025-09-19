@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/test/testcontainers"
 	helper "github.com/bitcoin-sv/teranode/test/utils"
+	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/tracing"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
@@ -22,6 +23,8 @@ import (
 )
 
 func TestOrphanTx(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC: true,
 		EnableP2P: true,
@@ -185,13 +188,13 @@ func TestOrphanTx(t *testing.T) {
 	block3, err := node1.BlockchainClient.GetBlockByHeight(node1Ctx, 3)
 	require.NoError(t, err)
 
-	err = block3.GetAndValidateSubtrees(node1Ctx, node1.Logger, node1.SubtreeStore)
+	err = block3.GetAndValidateSubtrees(node1Ctx, node1.Logger, node1.SubtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	err = block3.CheckMerkleRoot(node1Ctx)
 	require.NoError(t, err)
 
-	subtree, err := block3.GetSubtrees(node1Ctx, node1.Logger, node1.SubtreeStore)
+	subtree, err := block3.GetSubtrees(node1Ctx, node1.Logger, node1.SubtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	blFound := false

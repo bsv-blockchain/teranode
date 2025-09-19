@@ -779,8 +779,6 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		if block, err = u.blockchainClient.GetBlock(ctx, blockHash); err != nil {
 			return errors.NewServiceError("[setTxMined][%s] failed to get block from blockchain", blockHash.String(), err)
 		}
-		// Ensure the block has settings initialized
-		block.SetSettings(u.settings)
 	}
 
 	_, _, err = u.blockchainClient.GetBlockHeader(ctx, blockHash)
@@ -816,7 +814,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		}
 	} else {
 		// All subtrees should already be available for fully processed blocks
-		_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore)
+		_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore, u.settings.Block.GetAndValidateSubtreesConcurrency)
 		if err != nil {
 			return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
 		}
@@ -1178,7 +1176,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					return
 				}
 
-				if ok, err := block.Valid(decoupledCtx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+				if ok, err := block.Valid(decoupledCtx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats, u.settings); !ok {
 					u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
 					if errors.Is(err, errors.ErrBlockInvalid) {
@@ -1240,7 +1238,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				return errors.NewServiceError("[ValidateBlock][%s] failed to collect necessary bloom filters", block.String(), err)
 			}
 
-			if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+			if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats, u.settings); !ok {
 				reason := "unknown"
 				if err != nil {
 					reason = err.Error()
@@ -1584,7 +1582,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
+	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats, u.settings); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		if errors.Is(err, errors.ErrBlockInvalid) {
@@ -1635,7 +1633,7 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 		BlockHeight:  block.Height,
 	}
 
-	bbf.Filter, err = block.NewOptimizedBloomFilter(ctx, u.logger, u.subtreeStore)
+	bbf.Filter, err = block.NewOptimizedBloomFilter(ctx, u.logger, u.subtreeStore, u.settings.Block.GetAndValidateSubtreesConcurrency)
 	if err != nil {
 		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to create bloom filter", block.Hash().String(), err)
 	}

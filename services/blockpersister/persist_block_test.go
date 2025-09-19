@@ -215,7 +215,7 @@ func TestBlock(t *testing.T) {
 	newBlockBytes, err := blockStore.Get(context.Background(), mockUTXOStore.subtrees[0].RootHash()[:], fileformat.FileTypeBlock)
 	require.NoError(t, err)
 
-	newBlockModel, err := model.NewBlockFromBytes(newBlockBytes, tSettings)
+	newBlockModel, err := model.NewBlockFromBytes(newBlockBytes)
 	require.NoError(t, err)
 
 	assert.Equal(t, block.Header.Hash().String(), newBlockModel.Header.Hash().String())

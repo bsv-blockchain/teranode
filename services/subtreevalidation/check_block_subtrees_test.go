@@ -55,7 +55,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		}
 
 		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{}, 1, 250, 0, 0, nil)
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{}, 1, 250, 0, 0)
 		require.NoError(t, err)
 
 		blockBytes, err := block.Bytes()
@@ -115,7 +115,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		}
 
 		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0, nil)
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
 		require.NoError(t, err)
 
 		blockBytes, err := block.Bytes()
@@ -199,7 +199,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		}
 
 		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0, nil)
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0)
 		require.NoError(t, err)
 
 		blockBytes, err := block.Bytes()
@@ -245,7 +245,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		}
 
 		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0, nil)
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0)
 		require.NoError(t, err)
 
 		blockBytes, err := block.Bytes()
@@ -293,7 +293,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		}
 
 		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0, nil)
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0)
 		require.NoError(t, err)
 
 		blockBytes, err := block.Bytes()
@@ -356,7 +356,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		}
 
 		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&existingSubtreeHash, &missingSubtreeHash}, 2, 500, 0, 0, nil)
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&existingSubtreeHash, &missingSubtreeHash}, 2, 500, 0, 0)
 		require.NoError(t, err)
 
 		blockBytes, err := block.Bytes()
@@ -1034,7 +1034,7 @@ func TestCheckBlockSubtrees_ConcurrentProcessing(t *testing.T) {
 	}
 
 	coinbaseTx := &bt.Tx{Version: 1}
-	block, err := model.NewBlock(header, coinbaseTx, subtreeHashes, 5, 1000, 0, 0, nil)
+	block, err := model.NewBlock(header, coinbaseTx, subtreeHashes, 5, 1000, 0, 0)
 	require.NoError(t, err)
 
 	blockBytes, err := block.Bytes()
@@ -1432,7 +1432,7 @@ func TestCheckBlockSubtrees_ParentBlockErrors(t *testing.T) {
 	}
 
 	coinbaseTx := &bt.Tx{Version: 1}
-	block, err := model.NewBlock(childHeader, coinbaseTx, []*chainhash.Hash{}, 1, 250, 0, 0, nil)
+	block, err := model.NewBlock(childHeader, coinbaseTx, []*chainhash.Hash{}, 1, 250, 0, 0)
 	require.NoError(t, err)
 	blockBytes, err := block.Bytes()
 	require.NoError(t, err)
@@ -1598,7 +1598,7 @@ func TestCheckBlockSubtrees_ProcessTransactionsError(t *testing.T) {
 	}
 
 	coinbaseTx := &bt.Tx{Version: 1}
-	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 250, 0, 0, nil)
+	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 250, 0, 0)
 	require.NoError(t, err)
 
 	blockBytes, err := block.Bytes()

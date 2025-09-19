@@ -56,7 +56,7 @@ func TestInvalidBlock(t *testing.T) {
 	blockBytes, err := os.ReadFile("testdata/000000000000000013fe95f5780829671cf1b5e62d5fb3fa9672403fdb0d1786.block")
 	require.NoError(t, err)
 
-	block, err := NewBlockFromBytes(blockBytes, nil)
+	block, err := NewBlockFromBytes(blockBytes)
 	require.NoError(t, err)
 
 	_ = block
@@ -91,8 +91,7 @@ func TestInvalidBlock(t *testing.T) {
 func TestZeroCoverageFunctions(t *testing.T) {
 	t.Run("checkParentTransactions basic", func(t *testing.T) {
 		block := &Block{
-			settings: settings.NewSettings(),
-			txMap:    txmap.NewSplitSwissMapUint64(10),
+			txMap: txmap.NewSplitSwissMapUint64(10),
 		}
 
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
@@ -150,38 +149,16 @@ func TestZeroCoverageFunctions(t *testing.T) {
 			BlockIDs: []uint32{1, 2, 3},
 		}
 
-		block := &Block{
-			settings: settings.NewSettings(),
-		}
+		block := &Block{}
 
 		err := ErrCheckParentExistsOnChain(context.Background(), make(map[uint32]struct{}), parentTxMeta, createTestUTXOStore(t), parentTxStruct, block, make(map[uint32]struct{}))
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "parent transaction")
 	})
 
-	t.Run("getFromAerospike basic", func(t *testing.T) {
-		// Test the getFromAerospike method - just to call it
-		block := &Block{
-			settings: settings.NewSettings(),
-		}
-
-		parentHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
-		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-
-		parentTxStruct := missingParentTx{
-			parentTxHash: *parentHash,
-			txHash:       *txHash,
-		}
-
-		// This function exists just to call it
-		_ = block.getFromAerospike(ulogger.TestLogger{}, parentTxStruct)
-	})
-
 	t.Run("getSubtreeMetaSlice basic", func(t *testing.T) {
 		// Test with empty inputs
-		block := &Block{
-			settings: settings.NewSettings(),
-		}
+		block := &Block{}
 
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
@@ -205,8 +182,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 		}()
 
 		block := &Block{
-			settings: settings.NewSettings(),
-			txMap:    txmap.NewSplitSwissMapUint64(10),
+			txMap: txmap.NewSplitSwissMapUint64(10),
 		}
 
 		// Create empty subtree
@@ -233,9 +209,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 	})
 
 	t.Run("checkTxInRecentBlocks minimal", func(t *testing.T) {
-		block := &Block{
-			settings: settings.NewSettings(),
-		}
+		block := &Block{}
 
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 		subtreeNode := subtreepkg.SubtreeNode{Hash: *txHash}
@@ -258,9 +232,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 	})
 
 	t.Run("checkParentExistsOnChain minimal", func(t *testing.T) {
-		block := &Block{
-			settings: settings.NewSettings(),
-		}
+		block := &Block{}
 
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 		parentHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
@@ -283,6 +255,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 // TestBlock_Valid_ComprehensiveCoverage tests various paths in the Valid function
 func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 	t.Run("valid block with all checks", func(t *testing.T) {
+		settings := test.CreateBaseTestSettings(t)
 		// Create a proper block with valid header
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
@@ -291,7 +264,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Test with minimal valid parameters
@@ -308,13 +281,14 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		bloomStats := NewBloomStats()
 
 		// This should hit many validation paths
-		valid, err := block.Valid(ctx, logger, subtreeStore, txMetaStore, oldBlockIDsMap, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats)
+		valid, err := block.Valid(ctx, logger, subtreeStore, txMetaStore, oldBlockIDsMap, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats, settings)
 		// May pass or fail, but we're testing coverage
 		_ = valid
 		_ = err
 	})
 
 	t.Run("block with future timestamp", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		// Create a valid block header but with future timestamp
 		prevHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
 		merkleRoot, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
@@ -332,19 +306,20 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx := context.Background()
 		logger := ulogger.TestLogger{}
 
 		// This should fail validation (may hit difficulty or timestamp validation)
-		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, NewBloomStats())
+		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 		assert.False(t, valid)
 		assert.Error(t, err) // Just verify it fails - the specific error depends on validation order
 	})
 
 	t.Run("block with nil coinbase", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		// Create block with nil coinbase
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
@@ -356,20 +331,20 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 			TransactionCount: 1,
 			SizeInBytes:      123,
 			Subtrees:         []*chainhash.Hash{},
-			settings:         settings.NewSettings(),
 		}
 
 		ctx := context.Background()
 		logger := ulogger.TestLogger{}
 
 		// This should hit the nil coinbase validation path
-		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, NewBloomStats())
+		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 		assert.False(t, valid)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no coinbase tx")
 	})
 
 	t.Run("block with median timestamp validation", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		// Create block header
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
@@ -378,7 +353,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create current chain with some block headers for median timestamp validation
@@ -395,7 +370,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should hit the median timestamp validation path
-		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, currentChain, []uint32{}, NewBloomStats())
+		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, currentChain, []uint32{}, NewBloomStats(), tSettings)
 		// May pass or fail, but we're testing the median timestamp code path
 		_ = valid
 		_ = err
@@ -403,6 +378,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 
 	t.Run("block with version 2 height validation", func(t *testing.T) {
 		// Create block header with version > 1
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -412,14 +388,14 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set height higher than LastV1Block to trigger height validation
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, LastV1Block+100, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, LastV1Block+100, 0)
 		require.NoError(t, err)
 
 		ctx := context.Background()
 		logger := ulogger.TestLogger{}
 
 		// This should hit the coinbase height validation path
-		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, NewBloomStats())
+		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 		// Will likely fail due to height mismatch, but we're testing the code path
 		_ = valid
 		_ = err
@@ -427,6 +403,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 
 	t.Run("block with subtrees validation", func(t *testing.T) {
 		// Create block header
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -436,7 +413,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 
 		// Create block with subtrees
 		subtreeHash, _ := chainhash.NewHashFromStr("9daba5e5c8ecdb80e811ef93558e960a6ffed0c481182bd47ac381547361ff25")
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -446,7 +423,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		subtreeStore := &mockSubtreeStore{shouldError: true} // Empty store
 
 		// This should hit the subtree validation path
-		valid, err := block.Valid(ctx, logger, subtreeStore, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, NewBloomStats())
+		valid, err := block.Valid(ctx, logger, subtreeStore, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 		// Will likely fail due to missing subtree, but we're testing the code path
 		_ = valid
 		_ = err
@@ -454,6 +431,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 
 	t.Run("block with empty current chain", func(t *testing.T) {
 		// Create valid block
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -461,14 +439,14 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx := context.Background()
 		logger := ulogger.TestLogger{}
 
 		// This should skip median timestamp validation due to empty chain
-		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, NewBloomStats())
+		valid, err := block.Valid(ctx, logger, nil, createTestUTXOStore(t), txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 		// Should hit the empty chain path
 		_ = valid
 		_ = err
@@ -478,6 +456,7 @@ func TestBlock_Valid_ComprehensiveCoverage(t *testing.T) {
 // TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage tests various paths in NewOptimizedBloomFilter
 func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 	t.Run("error from GetAndValidateSubtrees", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		// Create block with subtrees that will cause GetAndValidateSubtrees to fail
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
@@ -488,7 +467,7 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 
 		// Create block with a subtree hash that doesn't exist in store
 		subtreeHash, _ := chainhash.NewHashFromStr("9daba5e5c8ecdb80e811ef93558e960a6ffed0c481182bd47ac381547361ff25")
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 2, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 2, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -498,13 +477,14 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 		emptySubtreeStore := &mockSubtreeStore{shouldError: true} // Empty store will cause error
 
 		// This should hit the error path from GetAndValidateSubtrees (timeout to avoid retries)
-		filter, err := block.NewOptimizedBloomFilter(ctx, logger, emptySubtreeStore)
+		filter, err := block.NewOptimizedBloomFilter(ctx, logger, emptySubtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		assert.Nil(t, filter)
 		assert.Error(t, err)
 	})
 
 	t.Run("success with empty subtrees", func(t *testing.T) {
 		// Create block with no subtrees
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -512,7 +492,7 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Set empty SubtreeSlices to simulate successful GetAndValidateSubtrees
@@ -522,12 +502,13 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should succeed and create an empty bloom filter
-		filter, err := block.NewOptimizedBloomFilter(ctx, logger, nil)
+		filter, err := block.NewOptimizedBloomFilter(ctx, logger, nil, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		assert.NoError(t, err)
 		assert.NotNil(t, filter)
 	})
 
 	t.Run("nil subtree error path", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		// Skip the GetAndValidateSubtrees call by manually setting up the scenario
 		defer func() {
 			if r := recover(); r != nil {
@@ -544,7 +525,7 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Set SubtreeSlices with a nil subtree to trigger error
@@ -554,11 +535,12 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should hit the nil subtree error path (may panic)
-		_, _ = block.NewOptimizedBloomFilter(ctx, logger, nil)
+		_, _ = block.NewOptimizedBloomFilter(ctx, logger, nil, tSettings.Block.GetAndValidateSubtreesConcurrency)
 	})
 
 	t.Run("success with coinbase placeholder", func(t *testing.T) {
 		// Create block
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -566,7 +548,7 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 2, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 2, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create subtree with coinbase placeholder as first node
@@ -588,13 +570,14 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should succeed and skip the coinbase placeholder
-		filter, err := block.NewOptimizedBloomFilter(ctx, logger, nil)
+		filter, err := block.NewOptimizedBloomFilter(ctx, logger, nil, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		assert.NoError(t, err)
 		assert.NotNil(t, filter)
 	})
 
 	t.Run("success with multiple subtrees and transactions", func(t *testing.T) {
 		// Create block
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -602,7 +585,7 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 4, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 4, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create multiple subtrees
@@ -636,7 +619,7 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should succeed and add all transactions to the bloom filter
-		filter, err := block.NewOptimizedBloomFilter(ctx, logger, nil)
+		filter, err := block.NewOptimizedBloomFilter(ctx, logger, nil, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		assert.NoError(t, err)
 		assert.NotNil(t, filter)
 
@@ -650,6 +633,7 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 
 	t.Run("success with mixed subtree - coinbase and regular txs", func(t *testing.T) {
 		// Create block
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -657,7 +641,7 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 3, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 3, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create first subtree with coinbase placeholder and regular tx
@@ -686,7 +670,7 @@ func TestBlock_NewOptimizedBloomFilter_ComprehensiveCoverage(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should succeed, skip coinbase, and add regular transactions
-		filter, err := block.NewOptimizedBloomFilter(ctx, logger, nil)
+		filter, err := block.NewOptimizedBloomFilter(ctx, logger, nil, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		assert.NoError(t, err)
 		assert.NotNil(t, filter)
 
@@ -869,7 +853,6 @@ func TestBlock_NewBlockFromMsgBlock_ComprehensiveCoverage(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, block)
 		assert.Equal(t, uint32(2), block.Header.Version)
-		assert.Equal(t, customSettings, block.settings)
 	})
 
 	t.Run("edge cases and boundary values", func(t *testing.T) {
@@ -919,7 +902,7 @@ func TestBlock_CheckMerkleRoot_ComprehensiveCoverage(t *testing.T) {
 		require.NoError(t, err)
 
 		subtreeHash, _ := chainhash.NewHashFromStr("9daba5e5c8ecdb80e811ef93558e960a6ffed0c481182bd47ac381547361ff25")
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Set SubtreeSlices to different length than Subtrees
@@ -940,7 +923,7 @@ func TestBlock_CheckMerkleRoot_ComprehensiveCoverage(t *testing.T) {
 		require.NoError(t, err)
 
 		subtreeHash, _ := chainhash.NewHashFromStr("9daba5e5c8ecdb80e811ef93558e960a6ffed0c481182bd47ac381547361ff25")
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Set SubtreeSlices with nil subtree
@@ -963,7 +946,7 @@ func TestBlock_CheckMerkleRoot_ComprehensiveCoverage(t *testing.T) {
 		// Set merkle root to coinbase txid to match the default case
 		blockHeader.HashMerkleRoot = coinbase.TxIDChainHash()
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Set empty subtree slices
@@ -998,7 +981,7 @@ func TestBlock_CheckMerkleRoot_ComprehensiveCoverage(t *testing.T) {
 		blockHeader.HashMerkleRoot = rootHash
 
 		subtreeHash := subtree.RootHash()
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Set subtree slices
@@ -1054,7 +1037,7 @@ func TestBlock_CheckMerkleRoot_ComprehensiveCoverage(t *testing.T) {
 		blockHeader.HashMerkleRoot = rootTree.RootHash()
 
 		subtreeHashes := []*chainhash.Hash{subtree1.RootHash(), subtree2.RootHash()}
-		block, err := NewBlock(blockHeader, coinbase, subtreeHashes, 2, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, subtreeHashes, 2, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Set subtree slices
@@ -1077,7 +1060,7 @@ func TestBlock_CheckMerkleRoot_ComprehensiveCoverage(t *testing.T) {
 		wrongHash, _ := chainhash.NewHashFromStr("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
 		blockHeader.HashMerkleRoot = wrongHash
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Set empty subtree slices (default case will use coinbase txid)
@@ -1105,7 +1088,7 @@ func TestBlock_CheckMerkleRoot_ComprehensiveCoverage(t *testing.T) {
 		// (The actual error depends on the internal implementation)
 
 		subtreeHash := subtree.RootHash()
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		block.SubtreeSlices = []*subtreepkg.Subtree{subtree}
@@ -1168,7 +1151,7 @@ func TestBlock_CheckMerkleRoot_ComprehensiveCoverage(t *testing.T) {
 
 		blockHeader.HashMerkleRoot = rootTree.RootHash()
 
-		block, err := NewBlock(blockHeader, coinbase, subtreeHashes, 4, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, subtreeHashes, 4, 123, 0, 0)
 		require.NoError(t, err)
 
 		block.SubtreeSlices = subtrees
@@ -1219,7 +1202,7 @@ func TestBlock_Bytes(t *testing.T) {
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
 
-		blockFromBytes, err := NewBlockFromBytes(blockBytes, nil)
+		blockFromBytes, err := NewBlockFromBytes(blockBytes)
 		require.NoError(t, err)
 
 		assert.Equal(t, block1Header, hex.EncodeToString(blockFromBytes.Header.Bytes()))
@@ -1254,7 +1237,7 @@ func TestBlock_Bytes(t *testing.T) {
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
 
-		blockFromBytes, err := NewBlockFromBytes(blockBytes, nil)
+		blockFromBytes, err := NewBlockFromBytes(blockBytes)
 		require.NoError(t, err)
 
 		assert.Len(t, blockFromBytes.Subtrees, 2)
@@ -1284,7 +1267,7 @@ func TestBlock_Bytes(t *testing.T) {
 		require.NoError(t, err)
 
 		buf := bytes.NewReader(blockBytes)
-		blockFromBytes, err := NewBlockFromReader(buf, nil)
+		blockFromBytes, err := NewBlockFromReader(buf)
 		require.NoError(t, err)
 
 		assert.Len(t, blockFromBytes.Subtrees, 2)
@@ -1320,7 +1303,7 @@ func TestBlock_Bytes(t *testing.T) {
 
 		// read 4 blocks
 		for i := 0; i < 4; i++ {
-			blockFromBytes, err := NewBlockFromReader(buf, nil)
+			blockFromBytes, err := NewBlockFromReader(buf)
 			require.NoError(t, err)
 
 			assert.Len(t, blockFromBytes.Subtrees, 2)
@@ -1331,7 +1314,7 @@ func TestBlock_Bytes(t *testing.T) {
 		}
 
 		// no more blocks to read
-		_, err = NewBlockFromReader(buf, nil)
+		_, err = NewBlockFromReader(buf)
 		require.Error(t, err)
 	})
 }
@@ -1412,7 +1395,7 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 		coinbase,
 		[]*chainhash.Hash{},
 		1,
-		123, 0, 0, nil)
+		123, 0, 0)
 	require.NoError(t, err)
 
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
@@ -1442,7 +1425,7 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
-	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, utxoStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
+	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, utxoStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats(), settings)
 	require.NoError(t, err)
 	require.True(t, v)
 
@@ -1451,6 +1434,7 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 }
 
 func TestGetAndValidateSubtrees(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
 	blockHeaderBytes, _ := hex.DecodeString(block1Header)
 	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 	require.NoError(t, err)
@@ -1466,15 +1450,16 @@ func TestGetAndValidateSubtrees(t *testing.T) {
 			subtreeHash,
 		},
 		1,
-		123, 0, 0, nil)
+		123, 0, 0)
 	require.NoError(t, err)
 
 	mockBlobStore, _ := New(ulogger.TestLogger{})
-	err = b.GetAndValidateSubtrees(context.Background(), ulogger.TestLogger{}, mockBlobStore)
+	err = b.GetAndValidateSubtrees(context.Background(), ulogger.TestLogger{}, mockBlobStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 }
 
 func TestCheckDuplicateTransactions(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
 	leafCount := 4
 	subtree, err := subtreepkg.NewTreeByLeafCount(leafCount)
 	require.NoError(t, err)
@@ -1509,10 +1494,10 @@ func TestCheckDuplicateTransactions(t *testing.T) {
 			subtree.RootHash(),
 		},
 		1,
-		123, 0, 0, nil)
+		123, 0, 0)
 	require.NoError(t, err)
 
-	err = b.checkDuplicateTransactions(context.Background())
+	err = b.checkDuplicateTransactions(context.Background(), tSettings.Block.CheckDuplicateTransactionsConcurrency)
 	_ = err // To stop lint warning
 }
 
@@ -1522,12 +1507,12 @@ func TestCheckDuplicateTransactions(t *testing.T) {
 func TestCheckParentExistsOnChain(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
-	settings := test.CreateBaseTestSettings(t)
+	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
 
-	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
 
 	blockID1 := uint32(1)
@@ -1615,7 +1600,7 @@ var blockBytesForBenchmark, _ = hex.DecodeString("010000006fe28c0ab6f1b372c1a6a2
 
 func Benchmark_NewBlockFromBytes(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_, _ = NewBlockFromBytes(blockBytesForBenchmark, nil)
+		_, _ = NewBlockFromBytes(blockBytesForBenchmark)
 	}
 }
 
@@ -1762,48 +1747,6 @@ func TestGenesisBytesFromModelBlock(t *testing.T) {
 	}
 }
 
-func TestNewBlockSettings(t *testing.T) {
-	blockHeaderBytes, _ := hex.DecodeString(block1Header)
-	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
-	require.NoError(t, err)
-
-	coinbase, err := bt.NewTxFromString(CoinbaseHex)
-	require.NoError(t, err)
-
-	tSettings := &settings.Settings{
-		ChainCfgParams: &chaincfg.RegressionNetParams,
-	}
-
-	b, err := NewBlock(
-		blockHeader,
-		coinbase,
-		[]*chainhash.Hash{},
-		0, 0, 0, 0,
-		tSettings)
-	require.NoError(t, err)
-
-	assert.Equal(t, b.settings, tSettings)
-}
-
-func TestBlock_SetSettings(t *testing.T) {
-	blockHeaderBytes, _ := hex.DecodeString(block1Header)
-	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
-	require.NoError(t, err)
-
-	coinbase, err := bt.NewTxFromString(CoinbaseHex)
-	require.NoError(t, err)
-
-	b, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 0, 0, 0, 0, nil)
-	require.NoError(t, err)
-
-	newSettings := &settings.Settings{
-		ChainCfgParams: &chaincfg.RegressionNetParams,
-	}
-
-	b.SetSettings(newSettings)
-	assert.Equal(t, newSettings, b.settings)
-}
-
 func TestBlock_ExtractCoinbaseHeight(t *testing.T) {
 	t.Run("valid coinbase with height", func(t *testing.T) {
 		// Use the existing coinbase transaction from the test constants
@@ -1814,7 +1757,7 @@ func TestBlock_ExtractCoinbaseHeight(t *testing.T) {
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
 
-		b, err := NewBlock(blockHeader, coinbaseTx, []*chainhash.Hash{}, 1, 123, 1, 0, nil)
+		b, err := NewBlock(blockHeader, coinbaseTx, []*chainhash.Hash{}, 1, 123, 1, 0)
 		require.NoError(t, err)
 
 		height, err := b.ExtractCoinbaseHeight()
@@ -1870,7 +1813,7 @@ func TestBlock_SubTreesFromBytes(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create block with subtrees
-		originalBlock, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1, hash2}, 1, 123, 0, 0, nil)
+		originalBlock, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1, hash2}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Get subtree bytes
@@ -1878,7 +1821,7 @@ func TestBlock_SubTreesFromBytes(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create new block and load subtrees from bytes
-		newBlock, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		newBlock, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		err = newBlock.SubTreesFromBytes(subtreeBytes)
@@ -1897,7 +1840,7 @@ func TestBlock_SubTreesFromBytes(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Test with invalid bytes (too short)
@@ -1909,6 +1852,7 @@ func TestBlock_SubTreesFromBytes(t *testing.T) {
 
 func TestBlock_NewOptimizedBloomFilter(t *testing.T) {
 	t.Run("error getting subtrees", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		// Create a test block with subtrees
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
@@ -1919,7 +1863,7 @@ func TestBlock_NewOptimizedBloomFilter(t *testing.T) {
 
 		subtreeHash, _ := chainhash.NewHashFromStr("9daba5e5c8ecdb80e811ef93558e960a6ffed0c481182bd47ac381547361ff25")
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1000, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1000, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create a mock subtree store that will fail
@@ -1931,13 +1875,14 @@ func TestBlock_NewOptimizedBloomFilter(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This will fail because the subtree doesn't exist
-		_, err = block.NewOptimizedBloomFilter(ctx, logger, mockSubtreeStore)
+		_, err = block.NewOptimizedBloomFilter(ctx, logger, mockSubtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		require.Error(t, err)
 		// With timeout, we expect context deadline exceeded
 		assert.True(t, err != nil)
 	})
 
 	t.Run("missing subtree slice", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -1947,7 +1892,7 @@ func TestBlock_NewOptimizedBloomFilter(t *testing.T) {
 
 		subtreeHash, _ := chainhash.NewHashFromStr("9daba5e5c8ecdb80e811ef93558e960a6ffed0c481182bd47ac381547361ff25")
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -1957,7 +1902,7 @@ func TestBlock_NewOptimizedBloomFilter(t *testing.T) {
 		mockSubtreeStore := &mockSubtreeStore{shouldError: true}
 
 		// This will fail because the subtree doesn't exist in the store
-		err = block.GetAndValidateSubtrees(ctx, logger, mockSubtreeStore)
+		err = block.GetAndValidateSubtrees(ctx, logger, mockSubtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		require.Error(t, err)
 		// With timeout, we expect context deadline exceeded or mock error
 		assert.True(t, err != nil)
@@ -1966,18 +1911,18 @@ func TestBlock_NewOptimizedBloomFilter(t *testing.T) {
 
 func TestBlock_CheckBlockRewardAndFees(t *testing.T) {
 	t.Run("valid block reward and fees", func(t *testing.T) {
-		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeaderBytes, _ := hex.DecodeString(block1Header) // This is a teratestnet block at height 1.  Therefore, the block reward is 50.00000000
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
 
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 800000, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 1, 0)
 		require.NoError(t, err)
 
 		// Test the function exists and handles basic input
-		err = block.checkBlockRewardAndFees(0)
+		err = block.checkBlockRewardAndFees(&chaincfg.MainNetParams)
 		require.NoError(t, err)
 	})
 }
@@ -1991,7 +1936,7 @@ func TestBlock_CheckDuplicateTransactionsInSubtree(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create a simple subtree with no duplicates
@@ -2021,7 +1966,7 @@ func TestBlock_CheckDuplicateTransactionsInSubtree(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create a simple subtree with no duplicates
@@ -2093,6 +2038,7 @@ func TestBlock_CheckDuplicateTransactionsInSubtree(t *testing.T) {
 
 func TestBlock_GetSubtrees(t *testing.T) {
 	t.Run("get subtrees with missing store", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -2102,7 +2048,7 @@ func TestBlock_GetSubtrees(t *testing.T) {
 
 		subtreeHash, _ := chainhash.NewHashFromStr("9daba5e5c8ecdb80e811ef93558e960a6ffed0c481182bd47ac381547361ff25")
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{subtreeHash}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -2111,7 +2057,7 @@ func TestBlock_GetSubtrees(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		mockSubtreeStore := &mockSubtreeStore{shouldError: true}
 
-		_, err = block.GetSubtrees(ctx, logger, mockSubtreeStore)
+		_, err = block.GetSubtrees(ctx, logger, mockSubtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		require.Error(t, err)
 		// With timeout, we get context deadline exceeded instead of file not found
 		assert.True(t, err != nil)
@@ -2120,6 +2066,7 @@ func TestBlock_GetSubtrees(t *testing.T) {
 
 func TestBlock_ValidOrderAndBlessed_ErrorCases(t *testing.T) {
 	t.Run("nil txMap", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -2127,7 +2074,7 @@ func TestBlock_ValidOrderAndBlessed_ErrorCases(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Don't initialize txMap (leave it nil)
@@ -2144,7 +2091,7 @@ func TestBlock_ValidOrderAndBlessed_ErrorCases(t *testing.T) {
 			oldBlockIDsMap:           txmap.NewSyncedMap[chainhash.Hash, []uint32](),
 		}
 
-		err = block.validOrderAndBlessed(ctx, logger, deps)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "txMap is nil")
 	})
@@ -2152,6 +2099,7 @@ func TestBlock_ValidOrderAndBlessed_ErrorCases(t *testing.T) {
 
 func TestBlock_ValidOrderAndBlessed_WithSubtrees(t *testing.T) {
 	t.Run("with empty subtree slices", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -2159,7 +2107,7 @@ func TestBlock_ValidOrderAndBlessed_WithSubtrees(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Initialize txMap but leave SubtreeSlices empty
@@ -2179,7 +2127,7 @@ func TestBlock_ValidOrderAndBlessed_WithSubtrees(t *testing.T) {
 			oldBlockIDsMap:           txmap.NewSyncedMap[chainhash.Hash, []uint32](),
 		}
 
-		err = block.validOrderAndBlessed(ctx, logger, deps)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency)
 		require.NoError(t, err) // Should succeed with empty subtrees
 	})
 }
@@ -2213,7 +2161,7 @@ func TestBlock_CheckMerkleRoot_MoreCases(t *testing.T) {
 
 		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Mismatch: 1 subtree hash but 0 subtree slices
@@ -2234,7 +2182,7 @@ func TestBlock_CheckMerkleRoot_MoreCases(t *testing.T) {
 
 		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Set a nil subtree slice
@@ -2253,7 +2201,7 @@ func TestBlock_CheckMerkleRoot_MoreCases(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Both empty - should use coinbase txid
@@ -2274,12 +2222,12 @@ func TestBlock_NewFromMsgBlock_ErrorCases(t *testing.T) {
 
 func TestBlock_NewFromBytes_ErrorCases(t *testing.T) {
 	t.Run("empty bytes", func(t *testing.T) {
-		_, err := NewBlockFromBytes([]byte{}, nil)
+		_, err := NewBlockFromBytes([]byte{})
 		require.Error(t, err)
 	})
 
 	t.Run("invalid bytes", func(t *testing.T) {
-		_, err := NewBlockFromBytes([]byte{0x01, 0x02}, nil)
+		_, err := NewBlockFromBytes([]byte{0x01, 0x02})
 		require.Error(t, err)
 	})
 }
@@ -2293,12 +2241,12 @@ func TestBlock_CheckRewardAndFees_WithHeight(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 800000, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 800000, 0)
 		require.NoError(t, err)
 
 		// Test with a height that triggers the reward calculation logic
 		// This should error because coinbase output is too high
-		err = block.checkBlockRewardAndFees(800000)
+		err = block.checkBlockRewardAndFees(&chaincfg.MainNetParams)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "coinbase output")
 	})
@@ -2318,7 +2266,7 @@ func TestValidationFunctions(t *testing.T) {
 	hash2, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
 
 	t.Run("getSubtreeMetaSlice error", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx := context.Background()
@@ -2338,7 +2286,7 @@ func TestValidationFunctions(t *testing.T) {
 	})
 
 	t.Run("checkParentTransactions basic", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		block.txMap = txmap.NewSplitSwissMapUint64(10)
@@ -2351,7 +2299,7 @@ func TestValidationFunctions(t *testing.T) {
 	})
 
 	t.Run("checkParentTransactions with missing parent", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		block.txMap = txmap.NewSplitSwissMapUint64(10)
@@ -2366,7 +2314,7 @@ func TestValidationFunctions(t *testing.T) {
 	})
 
 	t.Run("checkParentTransactions with parent in same block", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		block.txMap = txmap.NewSplitSwissMapUint64(10)
@@ -2383,7 +2331,7 @@ func TestValidationFunctions(t *testing.T) {
 	})
 
 	t.Run("checkParentTransactions with invalid order", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		block.txMap = txmap.NewSplitSwissMapUint64(10)
@@ -2402,6 +2350,7 @@ func TestValidationFunctions(t *testing.T) {
 
 func TestBlock_Valid_MoreCoverage(t *testing.T) {
 	t.Run("valid block with txMetaStore", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -2409,7 +2358,7 @@ func TestBlock_Valid_MoreCoverage(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		mockBlobStore := &mockSubtreeStore{shouldError: true}
@@ -2421,7 +2370,7 @@ func TestBlock_Valid_MoreCoverage(t *testing.T) {
 
 		// Call with txMetaStore to trigger validOrderAndBlessed path
 		valid, err := block.Valid(ctx, logger, mockBlobStore, txMetaStore, oldBlockIDs,
-			nil, []*BlockHeader{}, []uint32{}, NewBloomStats())
+			nil, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 
 		// This might error due to missing subtrees, but we're testing the path
 		_ = valid
@@ -2440,7 +2389,7 @@ func TestBlock_CoverageBoost(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Test multiple methods to increase coverage
@@ -2472,7 +2421,7 @@ func TestBlock_CoverageBoost(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Get block bytes
@@ -2481,12 +2430,13 @@ func TestBlock_CoverageBoost(t *testing.T) {
 
 		// Test reading from bytes reader
 		reader := bytes.NewReader(blockBytes)
-		blockFromReader, err := NewBlockFromReader(reader, nil)
+		blockFromReader, err := NewBlockFromReader(reader)
 		require.NoError(t, err)
 		assert.Equal(t, block.Hash().String(), blockFromReader.Hash().String())
 	})
 
 	t.Run("validation concurrency settings", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
 		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 		require.NoError(t, err)
@@ -2495,12 +2445,11 @@ func TestBlock_CoverageBoost(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test with different settings
-		testSettings := &settings.Settings{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, testSettings)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Test getValidationConcurrency
-		concurrency := block.getValidationConcurrency()
+		concurrency := block.getValidationConcurrency(tSettings.Block.GetAndValidateSubtreesConcurrency)
 		assert.Greater(t, concurrency, 0)
 
 		// Test buildBlockHeaderHashesMap
@@ -2582,7 +2531,7 @@ func TestBlock_CoverageBoost(t *testing.T) {
 		coinbase, err := bt.NewTxFromString(CoinbaseHex)
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Test SubTreesFromBytes with valid empty bytes
@@ -2608,7 +2557,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("checkTxInRecentBlocks basic path", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx := context.Background()
@@ -2629,7 +2578,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 	})
 
 	t.Run("validateTransaction error paths", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Initialize txMap but don't add any transactions
@@ -2665,9 +2614,10 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 	// Skip problematic checkDuplicateInputs test for now
 
 	t.Run("NewOptimizedBloomFilter error with get subtrees", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1000, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1000, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -2677,12 +2627,13 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 		mockSubtreeStore := &mockSubtreeStore{shouldError: true}
 
 		// This should error trying to get subtrees
-		_, err = block.NewOptimizedBloomFilter(ctx, logger, mockSubtreeStore)
+		_, err = block.NewOptimizedBloomFilter(ctx, logger, mockSubtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		require.Error(t, err)
 	})
 
 	t.Run("Valid function path coverage", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		tSettings := test.CreateBaseTestSettings(t)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx := context.Background()
@@ -2693,7 +2644,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 
 		// Test with nil subtreeStore to skip the subtree check
 		valid, err := block.Valid(ctx, logger, nil, nil, oldBlockIDs,
-			nil, []*BlockHeader{}, []uint32{}, NewBloomStats())
+			nil, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 
 		// Should succeed because we're skipping most validation
 		require.NoError(t, err)
@@ -2701,7 +2652,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 
 		// Test with subtreeStore but no txMetaStore to test different paths
 		valid, err = block.Valid(ctx, logger, mockSubtreeStore, nil, oldBlockIDs,
-			nil, []*BlockHeader{}, []uint32{}, NewBloomStats())
+			nil, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 
 		// This will error due to missing subtrees but tests the path
 		_ = valid
@@ -2709,7 +2660,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 
 		// Test with txMetaStore to trigger validOrderAndBlessed
 		valid, err = block.Valid(ctx, logger, nil, txMetaStore, oldBlockIDs,
-			nil, []*BlockHeader{}, []uint32{}, NewBloomStats())
+			nil, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 
 		_ = valid
 		_ = err
@@ -2718,7 +2669,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 	t.Run("CheckMerkleRoot more scenarios", func(t *testing.T) {
 		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create a subtree for testing
@@ -2760,32 +2711,18 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
 
-	t.Run("getFromAerospike basic test", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
-		require.NoError(t, err)
-
-		// Create test missing parent tx
-		missingParent := missingParentTx{
-			parentTxHash: chainhash.Hash{},
-			txHash:       chainhash.Hash{},
-		}
-
-		// Test getFromAerospike - will error due to nil UtxoStore but tests the code path
-		err = block.getFromAerospike(ulogger.TestLogger{}, missingParent)
-		assert.Error(t, err) // Expected to error with nil UtxoStore
-	})
-
 	t.Run("NewOptimizedBloomFilter additional paths", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		tSettings := test.CreateBaseTestSettings(t)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Test with nil subtree store - may or may not error depending on empty subtrees
-		_, err = block.NewOptimizedBloomFilter(context.Background(), ulogger.TestLogger{}, nil)
+		_, err = block.NewOptimizedBloomFilter(context.Background(), ulogger.TestLogger{}, nil, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		_ = err // Don't assert error as it may be nil with empty subtrees
 	})
 
 	t.Run("getSubtreeMetaSlice with mock store", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create test subtree
@@ -2805,8 +2742,9 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 	})
 
 	t.Run("NewOptimizedBloomFilter with subtrees", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create mock subtree store
@@ -2816,7 +2754,7 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
-		_, err = block.NewOptimizedBloomFilter(ctx, ulogger.TestLogger{}, subtreeStore)
+		_, err = block.NewOptimizedBloomFilter(ctx, ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		// This will likely error but tests the code paths
 		_ = err
 	})
@@ -2835,16 +2773,17 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 	t.Run("NewBlockFromBytes edge cases", func(t *testing.T) {
 		// Test with very short byte array
 		shortBytes := []byte{0x01}
-		_, err := NewBlockFromBytes(shortBytes, nil)
+		_, err := NewBlockFromBytes(shortBytes)
 		assert.Error(t, err)
 
 		// Test with empty byte array
-		_, err = NewBlockFromBytes([]byte{}, nil)
+		_, err = NewBlockFromBytes([]byte{})
 		assert.Error(t, err)
 	})
 
 	t.Run("Valid function with different combinations", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		tSettings := test.CreateBaseTestSettings(t)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -2856,14 +2795,14 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 		// Test with only subtreeStore
 		mockSubtreeStore := &mockSubtreeStore{shouldError: true}
 		_, err = block.Valid(ctx, logger, mockSubtreeStore, nil, oldBlockIDs,
-			nil, []*BlockHeader{}, []uint32{}, NewBloomStats())
+			nil, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 		// Will error but exercises the subtree validation path
 		_ = err
 
 		// Test checkBlockRewardAndFees path with height > 0
 		block.Height = 100
 		_, err = block.Valid(ctx, logger, nil, nil, oldBlockIDs,
-			nil, []*BlockHeader{}, []uint32{}, NewBloomStats())
+			nil, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 		// Will error but exercises checkBlockRewardAndFees path
 		_ = err
 	})
@@ -2876,7 +2815,6 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 			TransactionCount: 1,
 			SizeInBytes:      100,
 			Subtrees:         []*chainhash.Hash{},
-			settings:         settings.NewSettings(),
 		}
 
 		_, err := block.Bytes()
@@ -2884,9 +2822,9 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 	})
 
 	t.Run("validOrderAndBlessed with subtree slices", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		tSettings := test.CreateBaseTestSettings(t)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
-
 		// Create a test subtree with nodes
 		subtree, err := subtreepkg.NewTreeByLeafCount(4)
 		require.NoError(t, err)
@@ -2925,13 +2863,14 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This should now trigger validateSubtree function
-		err = block.validOrderAndBlessed(ctx, logger, deps)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency)
 		// Will likely error due to missing metadata but exercises the validateSubtree path
 		_ = err
 	})
 
 	t.Run("comprehensive validation coverage", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		tSettings := test.CreateBaseTestSettings(t)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create multiple test hashes
@@ -2996,7 +2935,7 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 		logger := ulogger.TestLogger{}
 
 		// This exercises more complex validation paths
-		err = block.validOrderAndBlessed(ctx, logger, deps)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency)
 		// Will error but exercises multiple validation functions
 		_ = err
 	})
@@ -3012,6 +2951,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Valid function comprehensive paths", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
 
@@ -3019,7 +2959,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
 		// Test path 1: checkBlockRewardAndFees with height > 0 - avoid crash with proper subtree setup
-		block1, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 100, 0, nil)
+		block1, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 100, 0)
 		require.NoError(t, err)
 
 		block1.Height = 100
@@ -3031,11 +2971,11 @@ func TestMaximumCoverageBoost(t *testing.T) {
 
 		block1.SubtreeSlices = []*subtreepkg.Subtree{subtree}
 		_, err = block1.Valid(ctx, logger, nil, nil, oldBlockIDs,
-			nil, []*BlockHeader{}, []uint32{}, NewBloomStats())
+			nil, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 		_ = err // Exercises checkBlockRewardAndFees path safely
 
 		// Test path 2: GetAndValidateSubtrees path
-		block2, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block2, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
@@ -3043,19 +2983,19 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		mockSubtreeStore := &mockSubtreeStore{shouldError: true}
 
 		_, err = block2.Valid(ctx, logger, mockSubtreeStore, nil, oldBlockIDs,
-			nil, []*BlockHeader{}, []uint32{}, NewBloomStats())
+			nil, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 		_ = err // Exercises GetAndValidateSubtrees path
 
 		// Test path 3: validOrderAndBlessed path with txMetaStore
-		block3, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block3, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 		txMetaStore := createTestUTXOStore(t)
 		_, err = block3.Valid(ctx, logger, nil, txMetaStore, oldBlockIDs,
-			nil, []*BlockHeader{}, []uint32{}, NewBloomStats())
+			nil, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 		_ = err // Exercises validOrderAndBlessed path
 
 		// Test path 4: CheckMerkleRoot path
-		block4, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block4, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 		subtree2, err := subtreepkg.NewTreeByLeafCount(4)
 		require.NoError(t, err)
@@ -3066,12 +3006,13 @@ func TestMaximumCoverageBoost(t *testing.T) {
 
 		block4.SubtreeSlices = []*subtreepkg.Subtree{subtree2}
 		_, err = block4.Valid(ctx, logger, nil, nil, oldBlockIDs,
-			nil, []*BlockHeader{}, []uint32{}, NewBloomStats())
+			nil, []*BlockHeader{}, []uint32{}, NewBloomStats(), tSettings)
 		_ = err // Exercises CheckMerkleRoot path
 	})
 
 	t.Run("validateSubtree deep paths", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		tSettings := test.CreateBaseTestSettings(t)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create subtree with multiple nodes including coinbase
@@ -3139,12 +3080,13 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		// - validateSubtree with multiple nodes
 		// - checkTxInRecentBlocks with bloom filter hits
 		// - validateTransaction for each transaction
-		err = block.validOrderAndBlessed(ctx, logger, deps)
+		err = block.validOrderAndBlessed(ctx, logger, deps, tSettings.Block.ValidOrderAndBlessedConcurrency)
 		_ = err // Will error but exercises many code paths
 	})
 
 	t.Run("checkDuplicateTransactions edge cases", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		tSettings := test.CreateBaseTestSettings(t)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create subtrees with overlapping transactions to test duplicate detection
@@ -3168,7 +3110,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		block.SubtreeSlices = []*subtreepkg.Subtree{subtree1, subtree2}
 
 		// Test checkDuplicateTransactions
-		err = block.checkDuplicateTransactions(context.Background())
+		err = block.checkDuplicateTransactions(context.Background(), tSettings.Block.CheckDuplicateTransactionsConcurrency)
 		assert.Error(t, err) // Should detect duplicates
 		assert.Contains(t, err.Error(), "duplicate transaction")
 	})
@@ -3186,13 +3128,10 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		err = subtree.AddNode(*hash1, 1, 100) // Duplicate within subtree
 		require.NoError(t, err)
 
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Initialize the block's settings and txMap to avoid nil pointer
-		if block.settings == nil {
-			block.settings = settings.NewSettings()
-		}
 
 		block.txMap = txmap.NewSplitSwissMapUint64(10)
 
@@ -3249,8 +3188,9 @@ func TestMaximumCoverageBoost(t *testing.T) {
 	})
 
 	t.Run("NewOptimizedBloomFilter comprehensive", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Test with various subtree store configurations
@@ -3260,7 +3200,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel1()
 
-		_, err = block.NewOptimizedBloomFilter(ctx1, ulogger.TestLogger{}, subtreeStore)
+		_, err = block.NewOptimizedBloomFilter(ctx1, ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		_ = err // May error but exercises code paths
 
 		// Case 2: Create actual subtree data
@@ -3282,7 +3222,7 @@ func TestMaximumCoverageBoost(t *testing.T) {
 		err = subtreeStore.Set(context.Background(), hash1[:], fileformat.FileTypeSubtreeMeta, metadataBytes)
 		require.NoError(t, err)
 
-		_, err = block.NewOptimizedBloomFilter(context.Background(), ulogger.TestLogger{}, subtreeStore)
+		_, err = block.NewOptimizedBloomFilter(context.Background(), ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 		_ = err // Should exercise more paths with real data
 	})
 }
@@ -3303,7 +3243,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 			Nonce:          2,
 		}
 		coinbase := &bt.Tx{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create subtree meta slice with valid inpoints
@@ -3340,7 +3280,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 			Nonce:          2,
 		}
 		coinbase := &bt.Tx{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create validation context with pre-populated parent spends map
@@ -3384,7 +3324,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 			Nonce:          2,
 		}
 		coinbase := &bt.Tx{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create validation context
@@ -3422,7 +3362,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 			Nonce:          2,
 		}
 		coinbase := &bt.Tx{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create validation context
@@ -3471,7 +3411,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 			Nonce:          2,
 		}
 		coinbase := &bt.Tx{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create validation dependencies with empty bloom filters
@@ -3512,7 +3452,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 			Nonce:          2,
 		}
 		coinbase := &bt.Tx{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create bloom filter
@@ -3564,7 +3504,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 			Nonce:          2,
 		}
 		coinbase := &bt.Tx{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create bloom filter
@@ -3618,7 +3558,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 			Nonce:          2,
 		}
 		coinbase := &bt.Tx{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create bloom filter and add a hash to it
@@ -3743,7 +3683,7 @@ func TestBlock_ValidateSubtree_ComprehensiveCoverage(t *testing.T) {
 			Nonce:          2,
 		}
 		coinbase := &bt.Tx{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Create a mock subtree store with fast error (no retries)
@@ -3795,7 +3735,7 @@ func TestBlock_ValidateSubtree_ComprehensiveCoverage(t *testing.T) {
 			Nonce:          2,
 		}
 		coinbase := &bt.Tx{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Initialize txMap
@@ -3853,7 +3793,7 @@ func TestBlock_ValidateSubtree_ComprehensiveCoverage(t *testing.T) {
 			Nonce:          2,
 		}
 		coinbase := &bt.Tx{}
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0, nil)
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		// Initialize txMap
@@ -3933,7 +3873,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		Nonce:          2,
 	}
 	coinbase := &bt.Tx{}
-	block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 1, settings.NewSettings())
+	block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 1)
 	require.NoError(t, err)
 
 	// Initialize txMap since it's needed for validateSubtree
@@ -4131,9 +4071,8 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 			Bits:           *bits,
 			Nonce:          12345,
 		},
-		ID:       1,
-		txMap:    txmap.NewSplitSwissMapUint64(10),
-		settings: settings.NewSettings(),
+		ID:    1,
+		txMap: txmap.NewSplitSwissMapUint64(10),
 	}
 
 	// Test transaction hashes
@@ -4410,9 +4349,8 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			Bits:           *bits,
 			Nonce:          12345,
 		},
-		ID:       1,
-		txMap:    txmap.NewSplitSwissMapUint64(10),
-		settings: settings.NewSettings(),
+		ID:    1,
+		txMap: txmap.NewSplitSwissMapUint64(10),
 	}
 
 	// Test transaction hashes

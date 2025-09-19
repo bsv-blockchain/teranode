@@ -28,7 +28,7 @@ import (
 // Pauses subtree processing during validation to avoid conflicts and returns missing
 // subtree information for blocks that reference unavailable subtrees.
 func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest) (*subtreevalidation_api.CheckBlockSubtreesResponse, error) {
-	block, err := model.NewBlockFromBytes(request.Block, nil)
+	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
 		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block from blockchain client", err)
 	}

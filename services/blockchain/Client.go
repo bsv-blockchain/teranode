@@ -283,7 +283,7 @@ func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*mode
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
-	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id, c.settings)
+	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id)
 }
 
 // GetBlocks retrieves multiple blocks starting from a specific hash.
@@ -299,7 +299,7 @@ func (c *Client) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numbe
 	blocks := make([]*model.Block, 0, len(resp.Blocks))
 
 	for _, blockBytes := range resp.Blocks {
-		block, err := model.NewBlockFromBytes(blockBytes, c.settings)
+		block, err := model.NewBlockFromBytes(blockBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -386,7 +386,7 @@ func (c *Client) blockFromResponse(resp *blockchain_api.GetBlockResponse) (*mode
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
-	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id, c.settings)
+	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height, resp.Id)
 }
 
 // GetBlockStats retrieves statistical information about the blockchain.
@@ -1329,7 +1329,7 @@ func (c *Client) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, erro
 	blocks := make([]*model.Block, 0, len(resp.BlockBytes))
 
 	for _, blockBytes := range resp.BlockBytes {
-		block, err := model.NewBlockFromBytes(blockBytes, c.settings)
+		block, err := model.NewBlockFromBytes(blockBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -1391,7 +1391,7 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 	blocks := make([]*model.Block, 0, len(resp.BlockBytes))
 
 	for _, blockBytes := range resp.BlockBytes {
-		block, err := model.NewBlockFromBytes(blockBytes, c.settings)
+		block, err := model.NewBlockFromBytes(blockBytes)
 		if err != nil {
 			return nil, err
 		}

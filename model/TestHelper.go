@@ -13,7 +13,6 @@ import (
 
 	"github.com/bitcoin-sv/teranode/errors"
 	"github.com/bitcoin-sv/teranode/pkg/fileformat"
-	"github.com/bitcoin-sv/teranode/settings"
 	"github.com/bitcoin-sv/teranode/stores/blob/options"
 	"github.com/bitcoin-sv/teranode/stores/txmetacache"
 	"github.com/bitcoin-sv/teranode/stores/utxo"
@@ -61,7 +60,7 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 
 		_ = blockFile.Close()
 
-		block, err := NewBlockFromBytes(blockBytes, nil)
+		block, err := NewBlockFromBytes(blockBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -338,7 +337,6 @@ func GenerateTestBlock(transactionIDCount uint64, subtreeStore *TestLocalSubtree
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes,
 		Height:           123,
-		settings:         settings.NewSettings(),
 	}
 
 	blockFile, err = os.Create(TestFileNameTemplateBlock)

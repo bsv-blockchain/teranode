@@ -136,7 +136,7 @@ func TestOneTransaction(t *testing.T) {
 		},
 		coinbaseTx,
 		subtreeHashes,
-		0, 0, 0, 0, tSettings)
+		0, 0, 0, 0)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -146,7 +146,7 @@ func TestOneTransaction(t *testing.T) {
 	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 
 	// loads the subtrees into the block
-	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore)
+	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
@@ -202,7 +202,7 @@ func TestTwoTransactions(t *testing.T) {
 		},
 		coinbaseTx,
 		subtreeHashes,
-		0, 0, 0, 0, tSettings)
+		0, 0, 0, 0)
 	assert.NoError(t, err)
 
 	ctx := context.Background()
@@ -212,7 +212,7 @@ func TestTwoTransactions(t *testing.T) {
 	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 
 	// loads the subtrees into the block
-	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore)
+	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
@@ -294,14 +294,14 @@ func TestMerkleRoot(t *testing.T) {
 		},
 		coinbaseTx,
 		subtreeHashes,
-		0, 0, 0, 0, tSettings)
+		0, 0, 0, 0)
 	assert.NoError(t, err)
 
 	// blockValidationService, err := New(ulogger.TestLogger{}, nil, nil, nil, nil)
 	// require.NoError(t, err)
 
 	// loads the subtrees into the block
-	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore)
+	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	// err = blockValidationService.CheckMerkleRoot(block)
@@ -388,7 +388,7 @@ func Test_Server_processBlockFound(t *testing.T) {
 	blockBytes, err := hex.DecodeString(blockHex)
 	require.NoError(t, err)
 
-	block, err := model.NewBlockFromBytes(blockBytes, tSettings)
+	block, err := model.NewBlockFromBytes(blockBytes)
 	require.NoError(t, err)
 
 	blockchainStore := blockchain_store.NewMockStore()

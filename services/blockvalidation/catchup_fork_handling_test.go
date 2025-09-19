@@ -273,7 +273,7 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 				reader := bytes.NewReader(blockData)
 				var testBlocks []*model.Block
 				for {
-					block, err := model.NewBlockFromReader(reader, nil)
+					block, err := model.NewBlockFromReader(reader)
 					if err != nil {
 						if err.Error() == "BLOCK_INVALID (11): error reading block header -> UNKNOWN (0): EOF" {
 							break

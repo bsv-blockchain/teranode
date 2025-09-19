@@ -285,13 +285,13 @@ func testLargeBlockCreation(t *testing.T) {
 		require.NoError(t, err, "Failed to get block for subtree validation")
 
 		// Verify block contains subtrees and validate them
-		err = block.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
+		err = block.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, td.Settings.Block.GetAndValidateSubtreesConcurrency)
 		require.NoError(t, err, "Failed to get and validate subtrees")
 
 		err = block.CheckMerkleRoot(td.Ctx)
 		require.NoError(t, err, "Failed to check merkle root")
 
-		subtrees, err := block.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
+		subtrees, err := block.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore, td.Settings.Block.GetAndValidateSubtreesConcurrency)
 		require.NoError(t, err, "Failed to get subtrees")
 
 		t.Logf("🔍 Block contains %d subtrees", len(subtrees))
@@ -568,13 +568,13 @@ func testBlockSizeEnforcement(t *testing.T) {
 			require.NoError(t, err, "Failed to get block for subtree validation")
 
 			// Verify block contains subtrees and validate them
-			err = block.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
+			err = block.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, td.Settings.Block.GetAndValidateSubtreesConcurrency)
 			require.NoError(t, err, "Failed to get and validate subtrees")
 
 			err = block.CheckMerkleRoot(td.Ctx)
 			require.NoError(t, err, "Failed to check merkle root")
 
-			subtrees, err := block.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
+			subtrees, err := block.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore, td.Settings.Block.GetAndValidateSubtreesConcurrency)
 			require.NoError(t, err, "Failed to get subtrees")
 
 			t.Logf("🔍 Block contains %d subtrees", len(subtrees))
@@ -635,7 +635,6 @@ func testBlockSizeEnforcement(t *testing.T) {
 
 func testLargeBlockValidation(t *testing.T) {
 	t.Log("Testing large block validation performance...")
-
 	// Create test daemon with large block support for performance testing
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
@@ -1059,7 +1058,7 @@ func testP2PLargeBlocks(t *testing.T) {
 					}
 
 					// Verify block contains subtrees and validate them
-					err = block.GetAndValidateSubtrees(ctx, node.Logger, node.SubtreeStore)
+					err = block.GetAndValidateSubtrees(ctx, node.Logger, node.SubtreeStore, node.Settings.Block.GetAndValidateSubtreesConcurrency)
 					if err != nil {
 						t.Logf("⚠️ Node %d failed to validate subtrees: %v", i+1, err)
 						continue
@@ -1071,7 +1070,7 @@ func testP2PLargeBlocks(t *testing.T) {
 						continue
 					}
 
-					subtrees, err := block.GetSubtrees(ctx, node.Logger, node.SubtreeStore)
+					subtrees, err := block.GetSubtrees(ctx, node.Logger, node.SubtreeStore, node.Settings.Block.GetAndValidateSubtreesConcurrency)
 					if err != nil {
 						t.Logf("⚠️ Node %d failed to get subtrees: %v", i+1, err)
 						continue
@@ -1412,7 +1411,7 @@ func testP2PHighTxCount(t *testing.T) {
 				}
 
 				// Verify block contains subtrees and validate them
-				err = block.GetAndValidateSubtrees(ctx, node.Logger, node.SubtreeStore)
+				err = block.GetAndValidateSubtrees(ctx, node.Logger, node.SubtreeStore, node.Settings.Block.GetAndValidateSubtreesConcurrency)
 				if err != nil {
 					t.Logf("⚠️ Node %d failed to validate subtrees: %v", i+1, err)
 					continue
@@ -1424,7 +1423,7 @@ func testP2PHighTxCount(t *testing.T) {
 					continue
 				}
 
-				subtrees, err := block.GetSubtrees(ctx, node.Logger, node.SubtreeStore)
+				subtrees, err := block.GetSubtrees(ctx, node.Logger, node.SubtreeStore, node.Settings.Block.GetAndValidateSubtreesConcurrency)
 				if err != nil {
 					t.Logf("⚠️ Node %d failed to get subtrees: %v", i+1, err)
 					continue

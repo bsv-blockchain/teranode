@@ -110,7 +110,7 @@ func Test_HandleBlockDirect(t *testing.T) {
 
 	tSettings := &settings.Settings{}
 
-	mBlock, err := model.NewBlockFromBytes(blockBytes, tSettings)
+	mBlock, err := model.NewBlockFromBytes(blockBytes)
 	require.NoError(t, err)
 
 	mBlock.Height = 1

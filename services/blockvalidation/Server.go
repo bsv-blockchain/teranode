@@ -848,7 +848,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 //
 // Returns an EmptyMessage on successful validation or an error if validation fails.
 func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.ProcessBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
-	block, err := model.NewBlockFromBytes(request.Block, u.settings)
+	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to create block from bytes", err))
 	}
@@ -901,7 +901,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 //   - A response indicating the validation result
 //   - An error if validation fails
 func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api.ValidateBlockRequest) (*blockvalidation_api.ValidateBlockResponse, error) {
-	block, err := model.NewBlockFromBytes(request.Block, u.settings)
+	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[Server:ValidateBlock] failed to create block from bytes", err))
 	}
@@ -941,7 +941,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		return nil, errors.WrapGRPC(errors.NewServiceError("[ValidateBlock][%s] failed to collect necessary bloom filters", block.String(), err))
 	}
 
-	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, nil); !ok {
+	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, nil, u.settings); !ok {
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 

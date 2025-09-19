@@ -591,7 +591,7 @@ func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n u
 	blocks := make([]*model.Block, 0)
 
 	for {
-		block, err := model.NewBlockFromReader(blockReader, u.settings)
+		block, err := model.NewBlockFromReader(blockReader)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				break
@@ -627,7 +627,7 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, bas
 		return nil, errors.NewProcessingError("[catchup:fetchSingleBlock][%s] failed to get block from peer", hash.String(), err)
 	}
 
-	block, err := model.NewBlockFromBytes(blockBytes, u.settings)
+	block, err := model.NewBlockFromBytes(blockBytes)
 	if err != nil {
 		return nil, errors.NewProcessingError("[catchup:fetchSingleBlock][%s] failed to create block from bytes", hash.String(), err)
 	}

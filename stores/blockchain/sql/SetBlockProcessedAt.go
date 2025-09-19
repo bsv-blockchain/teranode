@@ -51,5 +51,9 @@ func (s *SQL) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash
 	// and ResetBlocksCache is expensive
 	s.ResetResponseCache()
 
+	if err = s.ResetBlocksCache(ctx); err != nil {
+		return errors.NewStorageError("error clearing caches", err)
+	}
+
 	return nil
 }

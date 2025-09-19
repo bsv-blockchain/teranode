@@ -50,7 +50,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	)
 	defer deferFn()
 
-	block, err := model.NewBlockFromBytes(blockBytes, u.settings)
+	block, err := model.NewBlockFromBytes(blockBytes)
 	if err != nil {
 		return errors.NewProcessingError("error creating block from bytes", err)
 	}

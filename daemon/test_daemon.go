@@ -66,6 +66,7 @@ type TestDaemon struct {
 	AssetURL              string
 	BlockAssemblyClient   *blockassembly.Client
 	BlockValidationClient *blockvalidation.Client
+	BlockValidation       *blockvalidation.BlockValidation
 	BlockchainClient      blockchain.ClientI
 	Ctx                   context.Context
 	DistributorClient     *distributor.Distributor
@@ -402,6 +403,12 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	)
 	require.NoError(t, err)
 
+	validatorClient, err := d.daemonStores.GetValidatorClient(ctx, logger, appSettings)
+	require.NoError(t, err)
+
+	subtreeValidationClient, err := d.daemonStores.GetSubtreeValidationClient(ctx, logger, appSettings)
+	require.NoError(t, err)
+
 	pk, err := bec.PrivateKeyFromWif(appSettings.BlockAssembly.MinerWalletPrivateKeys[0])
 	require.NoError(t, err)
 
@@ -418,6 +425,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	p2pClient, err = p2p.NewClient(ctx, logger, appSettings)
 	require.NoError(t, err)
 
+	txStore, err := d.daemonStores.GetTxStore(logger, appSettings)
+	require.NoError(t, err)
+
 	if opts.FSMState.String() != "" {
 		switch opts.FSMState {
 		case blockchain.FSMStateRUNNING:
@@ -432,6 +442,18 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		}
 	}
 
+	blockValidation := blockvalidation.NewBlockValidation(
+		d.Ctx,
+		logger,
+		appSettings,
+		blockchainClient,
+		subtreeStore,
+		txStore,
+		utxoStore,
+		validatorClient,
+		subtreeValidationClient,
+	)
+
 	assert.NotNil(t, blockchainClient)
 	assert.NotNil(t, blockAssemblyClient)
 	assert.NotNil(t, propagationClient)
@@ -440,11 +462,13 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	assert.NotNil(t, utxoStore)
 	assert.NotNil(t, p2pClient)
 	assert.NotNil(t, distributorClient)
+	assert.NotNil(t, blockValidation)
 
 	return &TestDaemon{
 		AssetURL:              fmt.Sprintf("http://127.0.0.1:%d", appSettings.Asset.HTTPPort),
 		BlockAssemblyClient:   blockAssemblyClient,
 		BlockValidationClient: blockValidationClient,
+		BlockValidation:       blockValidation,
 		BlockchainClient:      blockchainClient,
 		Ctx:                   ctx,
 		DistributorClient:     distributorClient,
@@ -1220,6 +1244,64 @@ finished:
 	}
 }
 
+func (td *TestDaemon) WaitForBlock(t *testing.T, expectedBlock *model.Block, timeout time.Duration, skipVerifyChain ...bool) {
+	deadline := time.Now().Add(timeout)
+
+	var (
+		err   error
+		state *blockassembly_api.StateMessage
+	)
+
+finished:
+	for {
+		switch {
+		case time.Now().After(deadline):
+			t.Fatalf("Timeout waiting for block %s", expectedBlock.Header.Hash().String())
+		default:
+			_, err = td.BlockchainClient.GetBlock(td.Ctx, expectedBlock.Header.Hash())
+			if err == nil {
+				break finished
+			}
+
+			if !errors.Is(err, errors.ErrBlockNotFound) {
+				t.Fatalf("Failed to get block at hash %s: %v", expectedBlock.Header.Hash().String(), err)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	for state == nil || state.CurrentHash != expectedBlock.Header.Hash().String() {
+		state, err = td.BlockAssemblyClient.GetBlockAssemblyState(td.Ctx)
+		require.NoError(t, err)
+
+		if time.Now().After(deadline) {
+			t.Logf("Timeout waiting for block %s", expectedBlock.Header.Hash().String())
+			break
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	require.Equal(t, expectedBlock.Header.Hash().String(), state.CurrentHash, "Expected block assembly to reach hash %s but got %s", expectedBlock.Header.Hash().String(), state.CurrentHash)
+
+	if len(skipVerifyChain) > 0 && skipVerifyChain[0] {
+		return
+	}
+
+	previousBlockHash := expectedBlock.Header.HashPrevBlock
+
+	for height := expectedBlock.Height - 1; height > 0; height-- {
+		var getBlockByHeight *model.Block
+
+		getBlockByHeight, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, height)
+		require.NoError(t, err)
+
+		require.Equal(t, previousBlockHash.String(), getBlockByHeight.Header.Hash().String(), blockHashMismatch, height)
+
+		previousBlockHash = getBlockByHeight.Header.HashPrevBlock
+	}
+}
+
 // createAndSaveSubtrees creates a new subtree with the given transactions and saves it to the subtree store.
 func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*bt.Tx) (*subtreepkg.Subtree, error) {
 	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(len(txs) + 1)
@@ -1276,7 +1358,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 	err = subtreeStore.Set(
 		ctx,
 		subtree.RootHash()[:],
-		fileformat.FileTypeSubtreeToCheck,
+		fileformat.FileTypeSubtree,
 		subtreeBytes,
 		options.WithDeleteAt(100),
 		options.WithAllowOverwrite(true),

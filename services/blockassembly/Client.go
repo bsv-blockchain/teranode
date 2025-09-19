@@ -435,7 +435,7 @@ func (s *Client) GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Blo
 		return nil, errors.UnwrapGRPC(err)
 	}
 
-	block, err := model.NewBlockFromBytes(resp.Block, nil)
+	block, err := model.NewBlockFromBytes(resp.Block)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to create block from bytes", err)
 	}

@@ -58,10 +58,8 @@ import (
 //   - BlockNotFoundError if the specified block doesn't exist in the database
 //   - StorageError for database errors, transaction failures, or if no rows were affected
 //   - ProcessingError for internal processing failures
-func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
+func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (invalidatedHashes []chainhash.Hash, err error) {
 	s.logger.Debugf("InvalidateBlock %s", blockHash.String())
-
-	s.blocksCache.RebuildBlockchain(nil, nil) // reset cache so that GetBlockExists goes to the DB
 
 	exists, err := s.GetBlockExists(ctx, blockHash)
 	if err != nil {
@@ -92,17 +90,25 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([
 	`
 
 	var (
-		rows              *sql.Rows
-		hashBytes         []byte
-		hash              *chainhash.Hash
-		invalidatedHashes []chainhash.Hash
+		rows      *sql.Rows
+		hashBytes []byte
+		hash      *chainhash.Hash
 	)
 
 	if rows, err = s.db.QueryContext(ctx, q, blockHash.CloneBytes()); err != nil {
 		return nil, errors.NewStorageError("error querying blocks to invalidate", err)
 	}
 
-	defer rows.Close()
+	defer func() {
+		err = errors.Join(err, rows.Close())
+
+		s.ResetResponseCache()
+
+		if err = s.ResetBlocksCache(ctx); err != nil {
+			err = errors.Join(err, errors.NewStorageError("error clearing caches", err))
+			return
+		}
+	}()
 
 	for rows.Next() {
 		if err = rows.Scan(&hashBytes); err != nil {
@@ -119,12 +125,6 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([
 	if len(invalidatedHashes) == 0 {
 		return nil, errors.NewStorageError("no blocks were invalidated", errors.ErrProcessing)
 	}
-
-	if err = s.ResetBlocksCache(ctx); err != nil {
-		return nil, errors.NewStorageError("error clearing caches", err)
-	}
-
-	s.ResetResponseCache()
 
 	return invalidatedHashes, nil
 }

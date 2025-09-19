@@ -29,5 +29,9 @@ func (s *SQL) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) e
 	// Invalidate response cache to ensure cached blocks reflect updated processed_at timestamp
 	s.ResetResponseCache()
 
+	if err = s.ResetBlocksCache(ctx); err != nil {
+		return errors.NewStorageError("error clearing caches", err)
+	}
+
 	return nil
 }

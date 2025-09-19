@@ -249,7 +249,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		err = chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), tSettings)
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
 		require.NoError(t, err)
 
 		// Create a best block header with proper fields
@@ -1524,7 +1524,7 @@ func TestBlockAssembler_CacheInvalidation(t *testing.T) {
 		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), createTestSettings(t))
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
 		require.NoError(t, err)
 
 		// setBestBlockHeader should invalidate cache
@@ -1604,7 +1604,7 @@ func TestBlockAssembler_CacheInvalidation(t *testing.T) {
 		var buf bytes.Buffer
 		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), createTestSettings(t))
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
 		require.NoError(t, err)
 
 		ba.bestBlockHeader.Store(genesisBlock.Header)
@@ -1690,7 +1690,7 @@ func TestBlockAssembly_CurrentBlock(t *testing.T) {
 		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
 		require.NoError(t, err)
 
-		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes(), testItems.blockAssembler.settings)
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
 		require.NoError(t, err)
 
 		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)

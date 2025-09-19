@@ -123,7 +123,7 @@ func TestSendTxAndCheckState(t *testing.T) {
 
 	block := td.MineAndWait(t, 1)
 
-	err = block.GetAndValidateSubtrees(ctx, td.Logger, td.SubtreeStore)
+	err = block.GetAndValidateSubtrees(ctx, td.Logger, td.SubtreeStore, td.Settings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	err = block.CheckMerkleRoot(ctx)
@@ -131,7 +131,7 @@ func TestSendTxAndCheckState(t *testing.T) {
 
 	var subtree []*subtree.Subtree
 
-	subtree, err = block.GetSubtrees(ctx, td.Logger, td.SubtreeStore)
+	subtree, err = block.GetSubtrees(ctx, td.Logger, td.SubtreeStore, td.Settings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	blFound := false
@@ -253,6 +253,9 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.ChainCfgParams.CSVHeight = 10
+		},
 	})
 
 	defer td.Stop(t)
@@ -501,7 +504,7 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 
 	// now try add a block with the transaction
 	_, block102 := td.CreateTestBlock(t, block101, 10101, newTx)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height)
+	err = td.BlockValidationClient.ValidateBlock(td.Ctx, block102)
 	require.Error(t, err)
 }
 
@@ -620,13 +623,13 @@ func TestShouldAllowChainedTransactionsUseRpc(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify block103 contains TX2
-	err = block103.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
+	err = block103.GetAndValidateSubtrees(td.Ctx, td.Logger, td.SubtreeStore, td.Settings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	err = block103.CheckMerkleRoot(td.Ctx)
 	require.NoError(t, err)
 
-	subtree, err := block103.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore)
+	subtree, err := block103.GetSubtrees(td.Ctx, td.Logger, td.SubtreeStore, td.Settings.Block.GetAndValidateSubtreesConcurrency)
 	require.NoError(t, err)
 
 	tx2Found := false
