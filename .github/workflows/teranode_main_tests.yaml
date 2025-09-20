@@ -5,7 +5,7 @@ on:
 env:
   REPO: teranode
   ECR_REGION: eu-north-1
-  GO_VERSION: '1.25.0'
+  GO_VERSION: '1.25.1'
 
 permissions:
   contents: read

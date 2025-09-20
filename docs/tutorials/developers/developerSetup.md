@@ -33,7 +33,7 @@ This guide assists you in setting up the Teranode project on your machine. The b
 
 ---
 
-Download and install the latest version of Go. As of August 2025, it's `1.25.0`.
+Download and install the latest version of Go. As of September 2025, it's `1.25.1`.
 
 [Go Installation Guide](https://go.dev/doc/install)
 
@@ -42,7 +42,7 @@ Open a new terminal and execute:
 ```bash
 go version
 ```
-It should display `go1.25.0` or above.
+It should display `go1.25.1` or above.
 
 
 
