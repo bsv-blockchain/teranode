@@ -47,7 +47,8 @@ import (
  - 4: mark tx_double_spend as not conflicting
  - 5: mark tx_parent1 & tx_parent2 & tx_parent4 as spendable again
 */
-func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chainhash.Hash) (losingTxHashesMap txmap.TxMap, err error) {
+func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chainhash.Hash,
+	processedConflictingHashesMap map[chainhash.Hash]bool) (losingTxHashesMap txmap.TxMap, err error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "ProcessConflicting")
 
 	defer deferFn()
@@ -78,7 +79,10 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 			}
 
 			// the transaction should be marked as conflicting, otherwise it shouldn't be in this process
-			if !txMeta.Conflicting {
+			// unless it was already processed in this run, then it will be in the processedConflictingHashesMap.
+			// This can occur when a transaction is in multiple forks, and we are moving back from one fork to another
+			// and the transaction was already processed in the previous fork.
+			if !txMeta.Conflicting && !processedConflictingHashesMap[txHash] {
 				return errors.NewProcessingError("[ProcessConflicting][%s] tx is not conflicting", txHash.String())
 			}
 
@@ -170,6 +174,17 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 	return losingTxHashesMap, nil
 }
 
+// markConflictingRecursively marks the given transactions as conflicting, and recursively marks all their spending
+// children as conflicting too.
+//
+// Parameters:
+//   - ctx: The context for managing request-scoped values, cancellation signals, and deadlines.
+//   - s: The UTXO store interface used to interact with the underlying data store.
+//   - hashes: A slice of transaction hashes to be marked as conflicting.
+//
+// Returns:
+//   - A slice of pointers to Spend structs representing the affected parent spends.
+//   - An error if any issues occur during the process.
 func markConflictingRecursively(ctx context.Context, s Store, hashes []chainhash.Hash) ([]*Spend, error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "markConflictingRecursively")
 

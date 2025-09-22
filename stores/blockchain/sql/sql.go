@@ -682,8 +682,8 @@ func (s *SQL) ResetResponseCache() {
 //   - StorageError when database operations fail during best block header retrieval
 //   - ProcessingError when header reconstruction or cache population fails
 func (s *SQL) ResetBlocksCache(ctx context.Context) error {
-	s.logger.Warnf("Reset")
-	defer s.logger.Warnf("Reset completed")
+	s.logger.Warnf("Reset blocks cache")
+	defer s.logger.Warnf("Reset blocks cache completed")
 
 	// empty the cache
 	s.blocksCache.RebuildBlockchain(nil, nil)

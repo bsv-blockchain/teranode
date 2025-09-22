@@ -57,6 +57,9 @@ func TestDoubleSpendSQLite(t *testing.T) {
 	t.Run("test_non_conflicting_tx_after_reorg", func(t *testing.T) {
 		testNonConflictingTxReorg(t, utxoStore)
 	})
+	t.Run("test_conflicting_tx_processed_after_reorg", func(t *testing.T) {
+		testConflictingTxReorg(t, utxoStore)
+	})
 	t.Run("test_non_conflicting_tx_after_block_assembly_reset", func(t *testing.T) {
 		testNonConflictingTxBlockAssemblyReset(t, utxoStore)
 	})
@@ -106,6 +109,9 @@ func TestDoubleSpendPostgres(t *testing.T) {
 	t.Run("test_non_conflicting_tx_after_reorg", func(t *testing.T) {
 		testNonConflictingTxReorg(t, utxoStore)
 	})
+	t.Run("test_conflicting_tx_processed_after_reorg", func(t *testing.T) {
+		testConflictingTxReorg(t, utxoStore)
+	})
 	t.Run("test_non_conflicting_tx_after_block_assembly_reset", func(t *testing.T) {
 		testNonConflictingTxBlockAssemblyReset(t, utxoStore)
 	})
@@ -152,6 +158,9 @@ func TestDoubleSpendAerospike(t *testing.T) {
 	})
 	t.Run("test_non_conflicting_tx_after_reorg", func(t *testing.T) {
 		testNonConflictingTxReorg(t, utxoStore)
+	})
+	t.Run("test_conflicting_tx_processed_after_reorg", func(t *testing.T) {
+		testConflictingTxReorg(t, utxoStore)
 	})
 	t.Run("test_non_conflicting_tx_after_block_assembly_reset", func(t *testing.T) {
 		testNonConflictingTxBlockAssemblyReset(t, utxoStore)
@@ -776,6 +785,70 @@ func testNonConflictingTxReorg(t *testing.T, utxoStore string) {
 
 	td.VerifyConflictingInUtxoStore(t, false, txX0)
 	td.VerifyConflictingInSubtrees(t, block105a.Subtrees[0]) // Should not have any conflicts
+}
+
+func testConflictingTxReorg(t *testing.T, utxoStore string) {
+	// Setup test environment
+	td, _, txOriginal, _, block102a, _ := setupDoubleSpendTest(t, utxoStore)
+	defer func() {
+		td.Stop(t)
+	}()
+
+	tx1 := td.CreateTransaction(t, txOriginal, 0)
+	tx1Conflicting := td.CreateTransaction(t, txOriginal, 0) // Conflicts with tx1
+
+	// 0 -> 1 ... 101 -> 102a (*)
+
+	// send tx1 to the block assembly
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, tx1), "Failed to process transaction tx1")
+
+	// send tx1Conflicting to the block assembly
+	require.Error(t, td.PropagationClient.ProcessTransaction(td.Ctx, tx1Conflicting), "Failed to reject conflicting transaction tx1Conflicting")
+
+	// Create block 103a with the conflicting tx
+	_, block103a := td.CreateTestBlock(t, block102a, 10301, tx1Conflicting)
+
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height), "Failed to process block")
+
+	// Create block 103b with the conflicting tx
+	_, block103b := td.CreateTestBlock(t, block102a, 10302, tx1Conflicting)
+
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height), "Failed to process block")
+
+	td.WaitForBlockHeight(t, block103a, blockWait)
+
+	//                   / 103a {tx1Conflicting} (*)
+	// 0 -> 1 ... 102a ->
+	//                   \ 103b {tx1Conflicting}
+
+	// Check the tx1Conflicting is marked as conflicting
+	td.VerifyConflictingInSubtrees(t, block103a.Subtrees[0], tx1Conflicting)
+	td.VerifyConflictingInSubtrees(t, block103b.Subtrees[0], tx1Conflicting)
+	td.VerifyConflictingInUtxoStore(t, true, tx1)
+	td.VerifyConflictingInUtxoStore(t, false, tx1Conflicting)
+
+	td.VerifyNotInBlockAssembly(t, tx1)
+	td.VerifyNotInBlockAssembly(t, tx1Conflicting)
+
+	// fork to the new chain and check that everything is processed properly
+	_, block104b := td.CreateTestBlock(t, block103b, 10402) // Empty block
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height), "Failed to process block")
+
+	// When we reorg, tx1Conflicting should be processed properly and removed from block assembly
+	//                   / 103a {tx1Conflicting}
+	// 0 -> 1 ... 102a ->
+	//                   \ 103b {tx1Conflicting} -> 104b (*)
+
+	td.WaitForBlockHeight(t, block104b, blockWait)
+
+	td.VerifyNotInBlockAssembly(t, tx1Conflicting)
+
+	// check that tx1Conflicting has not been marked again as conflicting
+	td.VerifyConflictingInUtxoStore(t, false, tx1Conflicting)
+
+	// check that both transactions are still marked as conflicting in the subtrees
+	td.VerifyConflictingInSubtrees(t, block103a.Subtrees[0], tx1Conflicting)
+	td.VerifyConflictingInSubtrees(t, block103b.Subtrees[0], tx1Conflicting)
 }
 
 func testNonConflictingTxBlockAssemblyReset(t *testing.T, utxoStore string) {

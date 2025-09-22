@@ -240,6 +240,8 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	require.NoError(t, err)
 	appSettings.SubtreeValidation.GRPCListenAddress = listenAddr
 	appSettings.SubtreeValidation.GRPCAddress = clientAddr
+	appSettings.SubtreeValidation.SubtreeStore, err = url.Parse("memory:///")
+	require.NoError(t, err)
 
 	// Asset
 	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "asset", "http://", ":0")
@@ -764,7 +766,7 @@ func (td *TestDaemon) VerifyNotInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 		for _, tx := range txs {
 			hash := *tx.TxIDChainHash()
 			found := subtree.HasNode(hash)
-			assert.False(t, found, "Expected subtree to not contain transaction %s", hash.String())
+			assert.False(t, found, "Expected candidate subtree to not contain transaction %s", hash.String())
 		}
 	}
 }
@@ -1123,9 +1125,11 @@ func (td *TestDaemon) CreateTestBlock(t *testing.T, previousBlock *model.Block, 
 	coinbaseTx, err = model.CreateCoinbase(previousBlock.Height+1, 50e8, "test", []string{address.AddressString})
 	require.NoError(t, err)
 
-	var merkleRoot *chainhash.Hash
-	var subtree *subtreepkg.Subtree
-	var subtrees []*chainhash.Hash
+	var (
+		merkleRoot *chainhash.Hash
+		subtree    *subtreepkg.Subtree
+		subtrees   []*chainhash.Hash
+	)
 
 	// Calculate the total size and transaction count
 	transactionCount := uint64(len(txs) + 1) // +1 for coinbase
@@ -1358,7 +1362,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 	err = subtreeStore.Set(
 		ctx,
 		subtree.RootHash()[:],
-		fileformat.FileTypeSubtree,
+		fileformat.FileTypeSubtreeToCheck, // this needs to be FileTypeSubtreeToCheck for tx processing to occur
 		subtreeBytes,
 		options.WithDeleteAt(100),
 		options.WithAllowOverwrite(true),
