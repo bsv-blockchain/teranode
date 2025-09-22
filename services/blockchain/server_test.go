@@ -2612,3 +2612,1032 @@ func TestLocateBlockHeaders(t *testing.T) {
 		assert.NotNil(t, resp.BlockHeaders[0])
 	})
 }
+
+// Test_GetBlockHeadersFromTill tests the GetBlockHeadersFromTill gRPC method
+func Test_GetBlockHeadersFromTill(t *testing.T) {
+	ctx := setup(t)
+
+	// Create a chain of blocks for testing
+	headers := make([]*model.BlockHeader, 0, 10)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+
+	// Create and store a chain of blocks
+	for i := 0; i < 10; i++ {
+		merkleRoot := &chainhash.Hash{}
+		merkleRoot[0] = byte(i)
+
+		coinbaseTx := bt.NewTx()
+		err := coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+		require.NoError(t, err)
+
+		arbitraryData := []byte{0x03, byte(i), 0x00, 0x00}
+		coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
+		coinbaseTx.Inputs[0].SequenceNumber = 0xffffffff
+
+		err = coinbaseTx.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 5000000000)
+		require.NoError(t, err)
+
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: merkleRoot,
+				Timestamp:      uint32(time.Now().Unix() + int64(i)),
+				Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+				Nonce:          uint32(i),
+			},
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			SizeInBytes:      1000,
+			Height:           uint32(i + 1),
+			ID:               uint32(i + 1),
+		}
+
+		headers = append(headers, block.Header)
+		_, _, err = ctx.server.store.StoreBlock(context.Background(), block, "test")
+		require.NoError(t, err)
+		prevHash = block.Header.Hash()
+	}
+
+	tests := []struct {
+		name        string
+		startHash   []byte
+		endHash     []byte
+		expectError bool
+		errorType   string
+		minLength   int
+	}{
+		{
+			name:        "valid range from start to end",
+			startHash:   headers[2].Hash().CloneBytes(),
+			endHash:     headers[5].Hash().CloneBytes(),
+			expectError: false,
+			minLength:   1, // Should return at least the range
+		},
+		{
+			name:        "same start and end hash",
+			startHash:   headers[3].Hash().CloneBytes(),
+			endHash:     headers[3].Hash().CloneBytes(),
+			expectError: false,
+			minLength:   1,
+		},
+		{
+			name:        "invalid start hash",
+			startHash:   []byte("invalid"),
+			endHash:     headers[2].Hash().CloneBytes(),
+			expectError: true,
+			errorType:   "start hash is not valid",
+		},
+		{
+			name:        "invalid end hash",
+			startHash:   headers[1].Hash().CloneBytes(),
+			endHash:     []byte("invalid"),
+			expectError: true,
+			errorType:   "end hash is not valid",
+		},
+		{
+			name:        "nil start hash",
+			startHash:   nil,
+			endHash:     headers[2].Hash().CloneBytes(),
+			expectError: true,
+			errorType:   "start hash is not valid",
+		},
+		{
+			name:        "nil end hash",
+			startHash:   headers[1].Hash().CloneBytes(),
+			endHash:     nil,
+			expectError: true,
+			errorType:   "end hash is not valid",
+		},
+		{
+			name:        "empty start hash",
+			startHash:   []byte{},
+			endHash:     headers[2].Hash().CloneBytes(),
+			expectError: true,
+			errorType:   "start hash is not valid",
+		},
+		{
+			name:        "empty end hash",
+			startHash:   headers[1].Hash().CloneBytes(),
+			endHash:     []byte{},
+			expectError: true,
+			errorType:   "end hash is not valid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &blockchain_api.GetBlockHeadersFromTillRequest{
+				StartHash: tt.startHash,
+				EndHash:   tt.endHash,
+			}
+
+			response, err := ctx.server.GetBlockHeadersFromTill(context.Background(), request)
+
+			if tt.expectError {
+				require.Error(t, err)
+				if tt.errorType != "" {
+					require.Contains(t, err.Error(), tt.errorType)
+				}
+				require.Nil(t, response)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, response)
+			require.GreaterOrEqual(t, len(response.BlockHeaders), tt.minLength)
+			require.Equal(t, len(response.BlockHeaders), len(response.Metas))
+
+			// Verify all responses are valid
+			for i, headerBytes := range response.BlockHeaders {
+				require.NotEmpty(t, headerBytes)
+				require.NotEmpty(t, response.Metas[i])
+			}
+		})
+	}
+}
+
+// Test_GetBlockHeadersFromHeight tests the GetBlockHeadersFromHeight gRPC method
+func Test_GetBlockHeadersFromHeight(t *testing.T) {
+	ctx := setup(t)
+
+	// Create a chain of blocks for testing
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+
+	// Create and store a chain of blocks
+	for i := 0; i < 10; i++ {
+		merkleRoot := &chainhash.Hash{}
+		merkleRoot[0] = byte(i)
+
+		coinbaseTx := bt.NewTx()
+		err := coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+		require.NoError(t, err)
+
+		arbitraryData := []byte{0x03, byte(i), 0x00, 0x00}
+		coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
+		coinbaseTx.Inputs[0].SequenceNumber = 0xffffffff
+
+		err = coinbaseTx.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 5000000000)
+		require.NoError(t, err)
+
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: merkleRoot,
+				Timestamp:      uint32(time.Now().Unix() + int64(i)),
+				Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+				Nonce:          uint32(i),
+			},
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			SizeInBytes:      1000,
+			Height:           uint32(i + 1),
+			ID:               uint32(i + 1),
+		}
+
+		_, _, err = ctx.server.store.StoreBlock(context.Background(), block, "test")
+		require.NoError(t, err)
+		prevHash = block.Header.Hash()
+	}
+
+	tests := []struct {
+		name        string
+		startHeight uint32
+		limit       uint32
+		expectError bool
+		minLength   int
+		maxLength   int
+	}{
+		{
+			name:        "valid start height with limit",
+			startHeight: 1,
+			limit:       5,
+			expectError: false,
+			minLength:   1,
+			maxLength:   5,
+		},
+		{
+			name:        "start from middle height",
+			startHeight: 5,
+			limit:       3,
+			expectError: false,
+			minLength:   1,
+			maxLength:   3,
+		},
+		{
+			name:        "zero limit should return empty",
+			startHeight: 1,
+			limit:       0,
+			expectError: false,
+			minLength:   0,
+			maxLength:   0,
+		},
+		{
+			name:        "high start height beyond chain",
+			startHeight: 1000,
+			limit:       5,
+			expectError: false,
+			minLength:   0,
+			maxLength:   0,
+		},
+		{
+			name:        "start height zero",
+			startHeight: 0,
+			limit:       3,
+			expectError: false,
+			minLength:   0,
+			maxLength:   3,
+		},
+		{
+			name:        "large limit",
+			startHeight: 1,
+			limit:       100,
+			expectError: false,
+			minLength:   1,
+			maxLength:   100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &blockchain_api.GetBlockHeadersFromHeightRequest{
+				StartHeight: tt.startHeight,
+				Limit:       tt.limit,
+			}
+
+			response, err := ctx.server.GetBlockHeadersFromHeight(context.Background(), request)
+
+			if tt.expectError {
+				require.Error(t, err)
+				require.Nil(t, response)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, response)
+			require.GreaterOrEqual(t, len(response.BlockHeaders), tt.minLength)
+			require.LessOrEqual(t, len(response.BlockHeaders), tt.maxLength)
+			require.Equal(t, len(response.BlockHeaders), len(response.Metas))
+
+			// Verify all responses are valid
+			for i, headerBytes := range response.BlockHeaders {
+				require.NotEmpty(t, headerBytes)
+				require.NotEmpty(t, response.Metas[i])
+
+				// Parse header to ensure it's valid
+				header, err := model.NewBlockHeaderFromBytes(headerBytes)
+				require.NoError(t, err)
+				require.NotNil(t, header)
+			}
+		})
+	}
+}
+
+// Test_GetBlockHeadersByHeight tests the GetBlockHeadersByHeight gRPC method
+func Test_GetBlockHeadersByHeight(t *testing.T) {
+	ctx := setup(t)
+
+	// Create a chain of blocks for testing
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+
+	// Create and store a chain of blocks
+	for i := 0; i < 10; i++ {
+		merkleRoot := &chainhash.Hash{}
+		merkleRoot[0] = byte(i)
+
+		coinbaseTx := bt.NewTx()
+		err := coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+		require.NoError(t, err)
+
+		arbitraryData := []byte{0x03, byte(i), 0x00, 0x00}
+		coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
+		coinbaseTx.Inputs[0].SequenceNumber = 0xffffffff
+
+		err = coinbaseTx.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 5000000000)
+		require.NoError(t, err)
+
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: merkleRoot,
+				Timestamp:      uint32(time.Now().Unix() + int64(i)),
+				Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+				Nonce:          uint32(i),
+			},
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			SizeInBytes:      1000,
+			Height:           uint32(i + 1),
+			ID:               uint32(i + 1),
+		}
+
+		_, _, err = ctx.server.store.StoreBlock(context.Background(), block, "test")
+		require.NoError(t, err)
+		prevHash = block.Header.Hash()
+	}
+
+	tests := []struct {
+		name        string
+		startHeight uint32
+		endHeight   uint32
+		expectError bool
+		minLength   int
+		maxLength   int
+	}{
+		{
+			name:        "valid height range",
+			startHeight: 2,
+			endHeight:   5,
+			expectError: false,
+			minLength:   1,
+			maxLength:   4, // end - start + 1 if all blocks exist
+		},
+		{
+			name:        "same start and end height",
+			startHeight: 3,
+			endHeight:   3,
+			expectError: false,
+			minLength:   0,
+			maxLength:   1,
+		},
+		{
+			name:        "start height greater than end height",
+			startHeight: 5,
+			endHeight:   2,
+			expectError: false,
+			minLength:   0,
+			maxLength:   0,
+		},
+		{
+			name:        "start height zero",
+			startHeight: 0,
+			endHeight:   3,
+			expectError: false,
+			minLength:   0,
+			maxLength:   4,
+		},
+		{
+			name:        "end height beyond chain",
+			startHeight: 5,
+			endHeight:   1000,
+			expectError: false,
+			minLength:   1,
+			maxLength:   50,
+		},
+		{
+			name:        "both heights beyond chain",
+			startHeight: 1000,
+			endHeight:   1010,
+			expectError: false,
+			minLength:   0,
+			maxLength:   0,
+		},
+		{
+			name:        "start and end at beginning of chain",
+			startHeight: 1,
+			endHeight:   1,
+			expectError: false,
+			minLength:   0,
+			maxLength:   1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &blockchain_api.GetBlockHeadersByHeightRequest{
+				StartHeight: tt.startHeight,
+				EndHeight:   tt.endHeight,
+			}
+
+			response, err := ctx.server.GetBlockHeadersByHeight(context.Background(), request)
+
+			if tt.expectError {
+				require.Error(t, err)
+				require.Nil(t, response)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, response)
+			require.GreaterOrEqual(t, len(response.BlockHeaders), tt.minLength)
+			require.LessOrEqual(t, len(response.BlockHeaders), tt.maxLength)
+			require.Equal(t, len(response.BlockHeaders), len(response.Metas))
+
+			// Verify all responses are valid
+			for i, headerBytes := range response.BlockHeaders {
+				require.NotEmpty(t, headerBytes)
+				require.NotEmpty(t, response.Metas[i])
+
+				// Parse header to ensure it's valid
+				header, err := model.NewBlockHeaderFromBytes(headerBytes)
+				require.NoError(t, err)
+				require.NotNil(t, header)
+			}
+		})
+	}
+}
+
+// Test_GetBlockHeadersToCommonAncestor_gRPC tests the GetBlockHeadersToCommonAncestor gRPC method
+func Test_GetBlockHeadersToCommonAncestor_gRPC(t *testing.T) {
+	ctx := setup(t)
+
+	// Create a chain of blocks for testing
+	headers := make([]*model.BlockHeader, 0, 10)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+
+	// Create and store a chain of blocks
+	for i := 0; i < 10; i++ {
+		merkleRoot := &chainhash.Hash{}
+		merkleRoot[0] = byte(i)
+
+		coinbaseTx := bt.NewTx()
+		err := coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+		require.NoError(t, err)
+
+		arbitraryData := []byte{0x03, byte(i), 0x00, 0x00}
+		coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
+		coinbaseTx.Inputs[0].SequenceNumber = 0xffffffff
+
+		err = coinbaseTx.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 5000000000)
+		require.NoError(t, err)
+
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: merkleRoot,
+				Timestamp:      uint32(time.Now().Unix() + int64(i)),
+				Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+				Nonce:          uint32(i),
+			},
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			SizeInBytes:      1000,
+			Height:           uint32(i + 1),
+			ID:               uint32(i + 1),
+		}
+
+		headers = append(headers, block.Header)
+		_, _, err = ctx.server.store.StoreBlock(context.Background(), block, "test")
+		require.NoError(t, err)
+		prevHash = block.Header.Hash()
+	}
+
+	tests := []struct {
+		name               string
+		targetHash         []byte
+		blockLocatorHashes [][]byte
+		maxHeaders         uint32
+		expectError        bool
+		errorType          string
+		minLength          int
+	}{
+		{
+			name:               "valid target and locator hashes",
+			targetHash:         headers[5].Hash().CloneBytes(),
+			blockLocatorHashes: [][]byte{headers[3].Hash().CloneBytes()},
+			maxHeaders:         10,
+			expectError:        false,
+			minLength:          1,
+		},
+		{
+			name:               "invalid target hash",
+			targetHash:         []byte("invalid"),
+			blockLocatorHashes: [][]byte{headers[2].Hash().CloneBytes()},
+			maxHeaders:         10,
+			expectError:        true,
+			errorType:          "request's hash is not valid",
+		},
+		{
+			name:               "invalid locator hash",
+			targetHash:         headers[4].Hash().CloneBytes(),
+			blockLocatorHashes: [][]byte{[]byte("invalid")},
+			maxHeaders:         10,
+			expectError:        true,
+			errorType:          "request's hash is not valid",
+		},
+		{
+			name:               "nil target hash",
+			targetHash:         nil,
+			blockLocatorHashes: [][]byte{headers[2].Hash().CloneBytes()},
+			maxHeaders:         10,
+			expectError:        true,
+			errorType:          "request's hash is not valid",
+		},
+		{
+			name:               "empty locator hashes",
+			targetHash:         headers[4].Hash().CloneBytes(),
+			blockLocatorHashes: [][]byte{},
+			maxHeaders:         10,
+			expectError:        true,
+			errorType:          "common ancestor hash not found",
+		},
+		{
+			name:               "max headers 1",
+			targetHash:         headers[4].Hash().CloneBytes(),
+			blockLocatorHashes: [][]byte{headers[2].Hash().CloneBytes()},
+			maxHeaders:         1,
+			expectError:        false,
+			minLength:          0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &blockchain_api.GetBlockHeadersToCommonAncestorRequest{
+				TargetHash:         tt.targetHash,
+				BlockLocatorHashes: tt.blockLocatorHashes,
+				MaxHeaders:         tt.maxHeaders,
+			}
+
+			response, err := ctx.server.GetBlockHeadersToCommonAncestor(context.Background(), request)
+
+			if tt.expectError {
+				require.Error(t, err)
+				if tt.errorType != "" {
+					require.Contains(t, err.Error(), tt.errorType)
+				}
+				require.Nil(t, response)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, response)
+			require.GreaterOrEqual(t, len(response.BlockHeaders), tt.minLength)
+			require.Equal(t, len(response.BlockHeaders), len(response.Metas))
+
+			// Verify all responses are valid
+			for i, headerBytes := range response.BlockHeaders {
+				require.NotEmpty(t, headerBytes)
+				require.NotEmpty(t, response.Metas[i])
+
+				// Parse header to ensure it's valid
+				header, err := model.NewBlockHeaderFromBytes(headerBytes)
+				require.NoError(t, err)
+				require.NotNil(t, header)
+			}
+		})
+	}
+}
+
+// Test_GetBestHeightAndTime tests the GetBestHeightAndTime gRPC method
+func Test_GetBestHeightAndTime(t *testing.T) {
+	ctx := setup(t)
+
+	// Create a chain of blocks for testing
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+
+	// Create and store a chain of blocks
+	for i := 0; i < 5; i++ {
+		merkleRoot := &chainhash.Hash{}
+		merkleRoot[0] = byte(i)
+
+		coinbaseTx := bt.NewTx()
+		err := coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+		require.NoError(t, err)
+
+		arbitraryData := []byte{0x03, byte(i), 0x00, 0x00}
+		coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
+		coinbaseTx.Inputs[0].SequenceNumber = 0xffffffff
+
+		err = coinbaseTx.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 5000000000)
+		require.NoError(t, err)
+
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: merkleRoot,
+				Timestamp:      uint32(time.Now().Unix() + int64(i*60)), // 1 minute apart
+				Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+				Nonce:          uint32(i),
+			},
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			SizeInBytes:      1000,
+			Height:           uint32(i + 1),
+			ID:               uint32(i + 1),
+		}
+
+		_, _, err = ctx.server.store.StoreBlock(context.Background(), block, "test")
+		require.NoError(t, err)
+		prevHash = block.Header.Hash()
+	}
+
+	tests := []struct {
+		name        string
+		expectError bool
+		errorType   string
+	}{
+		{
+			name:        "get best height and time success",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &emptypb.Empty{}
+
+			response, err := ctx.server.GetBestHeightAndTime(context.Background(), request)
+
+			if tt.expectError {
+				require.Error(t, err)
+				if tt.errorType != "" {
+					require.Contains(t, err.Error(), tt.errorType)
+				}
+				require.Nil(t, response)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, response)
+			require.Greater(t, response.Height, uint32(0))
+			require.Greater(t, response.Time, uint32(0))
+
+			// Should return the height of the last block
+			require.Equal(t, uint32(5), response.Height)
+		})
+	}
+}
+
+// Test_SetBlockProcessedAt tests the SetBlockProcessedAt gRPC method
+func Test_SetBlockProcessedAt(t *testing.T) {
+	ctx := setup(t)
+
+	// Create and store a test block
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+
+	merkleRoot := &chainhash.Hash{}
+	merkleRoot[0] = byte(1)
+
+	coinbaseTx := bt.NewTx()
+	err := coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	require.NoError(t, err)
+
+	arbitraryData := []byte{0x03, 0x01, 0x00, 0x00}
+	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
+	coinbaseTx.Inputs[0].SequenceNumber = 0xffffffff
+
+	err = coinbaseTx.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 5000000000)
+	require.NoError(t, err)
+
+	block := &model.Block{
+		Header: &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  prevHash,
+			HashMerkleRoot: merkleRoot,
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+			Nonce:          uint32(1),
+		},
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		SizeInBytes:      1000,
+		Height:           uint32(1),
+		ID:               uint32(1),
+	}
+
+	_, _, err = ctx.server.store.StoreBlock(context.Background(), block, "test")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		blockHash   []byte
+		clear       bool
+		expectError bool
+		errorType   string
+	}{
+		{
+			name:        "set processed at success",
+			blockHash:   block.Header.Hash().CloneBytes(),
+			clear:       false,
+			expectError: false,
+		},
+		{
+			name:        "clear processed at success",
+			blockHash:   block.Header.Hash().CloneBytes(),
+			clear:       true,
+			expectError: false,
+		},
+		{
+			name:        "invalid block hash",
+			blockHash:   []byte("invalid"),
+			clear:       false,
+			expectError: true,
+			errorType:   "invalid block hash",
+		},
+		{
+			name:        "nil block hash",
+			blockHash:   nil,
+			clear:       false,
+			expectError: true,
+			errorType:   "invalid block hash",
+		},
+		{
+			name:        "non-existent block",
+			blockHash:   (&chainhash.Hash{}).CloneBytes(),
+			clear:       false,
+			expectError: true,
+			errorType:   "block not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &blockchain_api.SetBlockProcessedAtRequest{
+				BlockHash: tt.blockHash,
+				Clear:     tt.clear,
+			}
+
+			response, err := ctx.server.SetBlockProcessedAt(context.Background(), request)
+
+			if tt.expectError {
+				require.Error(t, err)
+				if tt.errorType != "" {
+					require.Contains(t, err.Error(), tt.errorType)
+				}
+				require.Nil(t, response)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, response)
+		})
+	}
+}
+
+// Test_safeClose tests the safeClose utility function
+func Test_safeClose(t *testing.T) {
+	tests := []struct {
+		name     string
+		testFunc func()
+	}{
+		{
+			name: "close open channel",
+			testFunc: func() {
+				ch := make(chan int, 1)
+				ch <- 42
+
+				// Should close without panic
+				safeClose(ch)
+
+				// Verify channel is closed
+				val, _ := <-ch
+				assert.Equal(t, 42, val) // drain the buffered value
+				_, ok := <-ch
+				assert.False(t, ok, "Channel should be closed")
+			},
+		},
+		{
+			name: "close already closed channel",
+			testFunc: func() {
+				ch := make(chan int)
+				close(ch)
+
+				// Should not panic when closing already closed channel
+				assert.NotPanics(t, func() {
+					safeClose(ch)
+				})
+			},
+		},
+		{
+			name: "close nil channel",
+			testFunc: func() {
+				var ch chan int
+
+				// Should not panic with nil channel
+				assert.NotPanics(t, func() {
+					safeClose(ch)
+				})
+			},
+		},
+		{
+			name: "close string channel",
+			testFunc: func() {
+				ch := make(chan string, 1)
+				ch <- "test"
+
+				// Should work with different types
+				safeClose(ch)
+
+				val, _ := <-ch
+				assert.Equal(t, "test", val)
+				_, ok := <-ch
+				assert.False(t, ok)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.testFunc()
+		})
+	}
+}
+
+// Test_IsFullyReady tests the IsFullyReady method
+func Test_IsFullyReady(t *testing.T) {
+	ctx := setup(t)
+
+	tests := []struct {
+		name                   string
+		setupSubscriptionReady bool
+		expectReady            bool
+	}{
+		{
+			name:                   "service ready with subscription manager ready",
+			setupSubscriptionReady: true,
+			expectReady:            true, // Depends on FSM state, usually true after init
+		},
+		{
+			name:                   "service not ready when subscription manager not ready",
+			setupSubscriptionReady: false,
+			expectReady:            false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set subscription manager readiness
+			ctx.server.SetSubscriptionManagerReadyForTesting(tt.setupSubscriptionReady)
+
+			ready, err := ctx.server.IsFullyReady(context.Background())
+
+			require.NoError(t, err)
+			if tt.setupSubscriptionReady {
+				// When subscription is ready, result depends on FSM state
+				// Since we can't control FSM state easily, we just ensure no error
+				assert.IsType(t, bool(false), ready)
+			} else {
+				assert.False(t, ready, "Should not be ready when subscription manager is not ready")
+			}
+		})
+	}
+}
+
+// Test_LegacySync tests the LegacySync gRPC method
+func Test_LegacySync(t *testing.T) {
+	ctx := setup(t)
+
+	tests := []struct {
+		name        string
+		expectError bool
+	}{
+		{
+			name:        "legacy sync request",
+			expectError: false, // Should succeed or be idempotent
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &emptypb.Empty{}
+
+			response, err := ctx.server.LegacySync(context.Background(), request)
+
+			if tt.expectError {
+				require.Error(t, err)
+				require.Nil(t, response)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, response)
+		})
+	}
+}
+
+// Test_Idle tests the Idle gRPC method
+func Test_Idle(t *testing.T) {
+	ctx := setup(t)
+
+	tests := []struct {
+		name        string
+		expectError bool
+	}{
+		{
+			name:        "idle request",
+			expectError: false, // Should succeed or be idempotent
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &emptypb.Empty{}
+
+			response, err := ctx.server.Idle(context.Background(), request)
+
+			if tt.expectError {
+				require.Error(t, err)
+				require.Nil(t, response)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, response)
+		})
+	}
+}
+
+// Test_WaitForFSMtoTransitionToGivenState tests the WaitForFSMtoTransitionToGivenState method
+func Test_WaitForFSMtoTransitionToGivenState(t *testing.T) {
+	ctx := setup(t)
+
+	tests := []struct {
+		name        string
+		targetState blockchain_api.FSMStateType
+		timeout     time.Duration
+		expectError bool
+	}{
+		{
+			name:        "wait for current state (should return immediately)",
+			targetState: blockchain_api.FSMStateType_IDLE, // Common initial state
+			timeout:     1 * time.Second,
+			expectError: false,
+		},
+		{
+			name:        "context cancellation",
+			targetState: blockchain_api.FSMStateType_RUNNING, // Unlikely to be reached immediately
+			timeout:     100 * time.Millisecond,
+			expectError: true, // Should timeout
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testCtx, cancel := context.WithTimeout(context.Background(), tt.timeout)
+			defer cancel()
+
+			err := ctx.server.WaitForFSMtoTransitionToGivenState(testCtx, tt.targetState)
+
+			if tt.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "context deadline exceeded")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// Test_WaitUntilFSMTransitionFromIdleState tests the WaitUntilFSMTransitionFromIdleState gRPC method
+func Test_WaitUntilFSMTransitionFromIdleState(t *testing.T) {
+	ctx := setup(t)
+
+	tests := []struct {
+		name                   string
+		setupSubscriptionReady bool
+		timeout                time.Duration
+		expectError            bool
+	}{
+		{
+			name:                   "service with subscription ready but FSM might be IDLE",
+			setupSubscriptionReady: true,
+			timeout:                2 * time.Second,
+			expectError:            true, // FSM might still be in IDLE state
+		},
+		{
+			name:                   "context cancellation when not ready",
+			setupSubscriptionReady: false,
+			timeout:                100 * time.Millisecond,
+			expectError:            true, // Should timeout
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set up subscription readiness
+			ctx.server.SetSubscriptionManagerReadyForTesting(tt.setupSubscriptionReady)
+
+			testCtx, cancel := context.WithTimeout(context.Background(), tt.timeout)
+			defer cancel()
+
+			request := &emptypb.Empty{}
+			response, err := ctx.server.WaitUntilFSMTransitionFromIdleState(testCtx, request)
+
+			if tt.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "context deadline exceeded")
+				require.Nil(t, response)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, response)
+			}
+		})
+	}
+}

@@ -4931,26 +4931,106 @@ func TestP2PNodeConnectedCoverage(t *testing.T) {
 	ctx := context.Background()
 	server := createTestServer(t)
 
-	// Skip if P2PNode is not initialized in test server
-	if server.P2PNode == nil {
-		t.Skip("P2PNode not initialized in test server - skipping P2PNodeConnected test")
+	// Create and configure mock P2P node
+	mockP2PNode := &MockServerP2PNode{}
+	server.P2PNode = mockP2PNode
+
+	// Create and configure mock blockchain client
+	mockBlockchainClient := new(blockchain.Mock)
+	prevHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	merkleRoot, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
+	nBit, _ := model.NewNBitFromString("1d00ffff")
+	mockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  prevHash,
+		HashMerkleRoot: merkleRoot,
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           *nBit,
+		Nonce:          0,
 	}
+	mockHeaderMeta := &model.BlockHeaderMeta{Height: 1000}
+	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(mockHeader, mockHeaderMeta, nil)
+	server.blockchainClient = mockBlockchainClient
 
 	// Create a test peer ID
-	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
-	require.NoError(t, err)
-	peerID, err := peer.IDFromPublicKey(pub)
+	testPeerID, err := peer.Decode("12D3KooWJpBNhwgvoZ15EB1JwRTRpxgM9NVaqpDtWZXfTf6CpCQd")
 	require.NoError(t, err)
 
-	// Test peer connection - this function should execute without error
-	// It logs and calls addPeer internally, along with starting a goroutine
-	server.P2PNodeConnected(ctx, peerID)
+	t.Run("peer connected with existing height", func(t *testing.T) {
+		// Setup mock expectations for peer with existing height
+		mockPeerInfo := p2p.PeerInfo{
+			ID:            testPeerID,
+			CurrentHeight: 100,
+		}
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{mockPeerInfo})
+		mockP2PNode.On("GetPeerStartingHeight", testPeerID).Return(int32(50), true)        // Already has height
+		mockP2PNode.On("HostID").Return(testPeerID)                                        // For sendDirectHandshake
+		mockP2PNode.On("SendToPeer", mock.Anything, testPeerID, mock.Anything).Return(nil) // For sendDirectHandshake
 
-	// Give time for the goroutine to execute
-	time.Sleep(200 * time.Millisecond)
+		// Call the function under test
+		server.P2PNodeConnected(ctx, testPeerID)
 
-	// The function was called successfully if no panic occurred
-	// This covers the main execution path of P2PNodeConnected
+		// Wait for goroutine to complete
+		time.Sleep(600 * time.Millisecond)
+
+		// Verify peer was added to registry
+		peers := server.peerRegistry.GetAllPeers()
+		found := false
+		for _, peer := range peers {
+			if peer.ID.String() == testPeerID.String() {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Peer should be added to registry")
+
+		// Verify mock calls
+		mockP2PNode.AssertExpectations(t)
+
+		// Clear expectations for next test
+		mockP2PNode.ExpectedCalls = nil
+	})
+
+	t.Run("peer connected without existing height", func(t *testing.T) {
+		// Setup mock expectations for peer without existing height
+		mockPeerInfo := p2p.PeerInfo{
+			ID:            testPeerID,
+			CurrentHeight: 200,
+		}
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{mockPeerInfo})
+		mockP2PNode.On("GetPeerStartingHeight", testPeerID).Return(int32(0), false) // No existing height
+		mockP2PNode.On("SetPeerStartingHeight", testPeerID, int32(200)).Return()
+		mockP2PNode.On("HostID").Return(testPeerID)                                        // For sendDirectHandshake
+		mockP2PNode.On("SendToPeer", mock.Anything, testPeerID, mock.Anything).Return(nil) // For sendDirectHandshake
+
+		// Call the function under test
+		server.P2PNodeConnected(ctx, testPeerID)
+
+		// Wait for goroutine to complete
+		time.Sleep(600 * time.Millisecond)
+
+		// Verify mock calls
+		mockP2PNode.AssertExpectations(t)
+
+		// Clear expectations for next test
+		mockP2PNode.ExpectedCalls = nil
+	})
+
+	t.Run("peer connected but not in peer info list", func(t *testing.T) {
+		// Setup mock expectations for empty peer list (peer not found)
+		mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{})                          // Empty list
+		mockP2PNode.On("HostID").Return(testPeerID)                                        // For sendDirectHandshake
+		mockP2PNode.On("SendToPeer", mock.Anything, testPeerID, mock.Anything).Return(nil) // For sendDirectHandshake
+
+		// Call the function under test
+		server.P2PNodeConnected(ctx, testPeerID)
+
+		// Wait for goroutine to complete
+		time.Sleep(600 * time.Millisecond)
+
+		// Verify mock calls
+		mockP2PNode.AssertExpectations(t)
+	})
 }
 
 func TestOnPeerBannedCoverage(t *testing.T) {

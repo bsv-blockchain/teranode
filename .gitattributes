@@ -1,0 +1,23 @@
+# Exclude large test data files from Go module archives
+test/longtest/ export-ignore
+
+# Exclude other test directories that might have large files
+**/testdata/ export-ignore
+
+# Exclude documentation images (they're large and not needed for module usage)
+docs/topics/services/img/ export-ignore
+
+# Exclude build artifacts and deployment files
+deploy/ export-ignore
+.github/ export-ignore
+.claude/ export-ignore
+
+# Exclude Docker-related files
+.dockerignore export-ignore
+Dockerfile* export-ignore
+docker-compose*.yml export-ignore
+
+# Exclude development configuration
+.vscode/ export-ignore
+.idea/ export-ignore
+*.code-workspace export-ignore
