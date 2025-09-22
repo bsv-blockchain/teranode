@@ -81,6 +81,7 @@ services:
     volumes:
       - ./aerospike.conf:/etc/aerospike.conf
       - ${DATA_PATH}/aerospike/data:/opt/aerospike/data
+      - ${DATA_PATH}/aerospike/smd:/opt/aerospike/smd
     privileged: true  # Allow the container to access raw devices
     hostname: aerospike
 
@@ -101,6 +102,7 @@ services:
     volumes:
       - ./aerospike.conf:/etc/aerospike.conf
       - ${DATA_PATH}/aerospike-2/data:/opt/aerospike/data
+      - ${DATA_PATH}/aerospike-2/smd:/opt/aerospike/smd
     privileged: true
     hostname: aerospike-2
 
@@ -121,10 +123,34 @@ services:
     volumes:
       - ./aerospike.conf:/etc/aerospike.conf
       - ${DATA_PATH}/aerospike-3/data:/opt/aerospike/data
+      - ${DATA_PATH}/aerospike-3/smd:/opt/aerospike/smd
     privileged: true
     hostname: aerospike-3
 
-  # Aerospike exporter for the primary node
+  # Aerospike Enterprise Edition, single node in evaluation mode
+  aerospike-ee:
+    container_name: aerospike
+    image: aerospike/aerospike-server-enterprise:8.1
+    networks:
+      - teranode-network
+    ports:
+      - 3000:3000
+    expose:
+      - 3000
+      - 3001
+      - 3002
+    restart: unless-stopped
+    stop_grace_period: 600s # to allow ASMT to backup the indexes for warm restarts
+    volumes:
+      - ./aerospike-ee.conf:/etc/aerospike.conf
+      - ./aerospike-asmt-wrapper.sh:/aerospike-asmt-wrapper.sh:ro
+      - ${DATA_PATH}/aerospike/data:/opt/aerospike/data
+      - ${DATA_PATH}/aerospike/smd:/opt/aerospike/smd
+      - ${DATA_PATH}/aerospike/asmt:/backup/indexes
+    entrypoint: ["/bin/bash", "/aerospike-asmt-wrapper.sh"]
+    privileged: true  # Allow the container to access raw devices
+    hostname: aerospike
+
   aerospike-exporter:
     image: aerospike/aerospike-prometheus-exporter:latest
     container_name: aerospike-exporter
@@ -133,18 +159,6 @@ services:
       AS_PORT: 3000
       AGENT_BIND_PORT: 10145
       METRIC_LABELS: "type='development',source='aerospike'"
-    networks:
-      - teranode-network
-
-  # Optional exporter for the second node
-  aerospike-exporter-2:
-    image: aerospike/aerospike-prometheus-exporter:latest
-    container_name: aerospike-exporter-2
-    environment:
-      AS_HOST: aerospike-2
-      AS_PORT: 3000
-      AGENT_BIND_PORT: 10146
-      METRIC_LABELS: "type='development',source='aerospike-2',node='2'"
     networks:
       - teranode-network
 

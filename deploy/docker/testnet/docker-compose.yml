@@ -95,7 +95,7 @@ services:
   aerospike:
     extends:
       file: ../base/docker-services.yml
-      service: aerospike
+      service: aerospike-ee
 
   aerospike-exporter:
     extends:

@@ -95,22 +95,12 @@ services:
   aerospike:
     extends:
       file: ../base/docker-services.yml
-      service: aerospike
-
-  aerospike-2:
-    extends:
-      file: ../base/docker-services.yml
-      service: aerospike-2
+      service: aerospike-ee
 
   aerospike-exporter:
     extends:
       file: ../base/docker-services.yml
       service: aerospike-exporter
-
-  aerospike-exporter-2:
-    extends:
-      file: ../base/docker-services.yml
-      service: aerospike-exporter-2
 
   prometheus:
     extends:

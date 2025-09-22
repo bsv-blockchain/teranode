@@ -1,8 +1,6 @@
 networks:
   teranode-network:
     name: my-teranode-network
-    # if your docker setup supports IPv6, you can enable it here
-    # enable_ipv6: true
 
 services:
   aerospike:
