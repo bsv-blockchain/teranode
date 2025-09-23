@@ -83,6 +83,7 @@ local FIELD_BLOCK_IDS = "blockIDs"
 local FIELD_ERRORS = "errors"
 local FIELD_CHILD_COUNT = "childCount"
 local FIELD_SPENDING_DATA = "spendingData"
+-- local FIELD_DEBUG = "debug"
 
 -- Helper functions
 
@@ -254,6 +255,13 @@ function spend(rec, offset, utxoHash, spendingData, ignoreConflicting, ignoreLoc
     return spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHeight, blockHeightRetention)
 end
 
+local function bytesToHex(b)
+    local hex = ""
+    for i = 1, bytes.size(b) do
+        hex = hex .. string.format("%02x", b[i])
+    end
+    return hex
+end
 --                           _ __  __       _ _   _ 
 --  ___ _ __   ___ _ __   __| |  \/  |_   _| | |_(_)
 -- / __| '_ \ / _ \ '_ \ / _` | |\/| | | | | | __| |
@@ -320,6 +328,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         local offset = spend['offset']
         local utxoHash = spend['utxoHash']
         local spendingData = spend['spendingData']
+        local idx = spend['idx']
         
         -- Get and validate specific UTXO
         local utxo, existingSpendingData, errorInfo = getUTXOAndSpendingData(utxos, offset, utxoHash)
@@ -329,7 +338,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
             error[FIELD_ERROR_CODE] = errorInfo.errorCode
             error[FIELD_MESSAGE] = errorInfo.message
 
-            errors[offset] = error
+            errors[idx] = error
 
             goto continue
         end
@@ -341,15 +350,19 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
                 error[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN_UNTIL
                 error[FIELD_MESSAGE] = MSG_FROZEN_UNTIL .. rec[BIN_UTXO_SPENDABLE_IN][offset]
 
-                errors[offset] = error
+                errors[idx] = error
 
                 goto continue
             end
         end
 
         -- Handle already spent UTXO
-        if existingSpendingData then            
+        if existingSpendingData then
+            
             if bytes_equal(existingSpendingData, spendingData) then
+                -- local res = response[FIELD_DEBUG] or ""
+                -- response[FIELD_DEBUG] = res .. "\nEQUAL: existing: " .. bytesToHex(existingSpendingData) .. ", spending: " .. bytesToHex(spendingData)           
+                
                 -- Already spent with same data
 
                 if deletedChildren ~= nil then
@@ -362,7 +375,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
                         error[FIELD_MESSAGE] = MSG_INVALID_SPEND
                         error[FIELD_SPENDING_DATA] = spendingDataBytesToHex(existingSpendingData)
 
-                        errors[offset] = error
+                        errors[idx] = error
                     end
                 end
 
@@ -373,17 +386,20 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
                 error[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN
                 error[FIELD_MESSAGE] = MSG_FROZEN
 
-                errors[offset] = error
+                errors[idx] = error
 
                 goto continue
             else
+                -- local res = response[FIELD_DEBUG] or ""
+                -- response[FIELD_DEBUG] = res .. "\nDEFAULT: existing: " .. bytesToHex(existingSpendingData) .. ", spending: " .. bytesToHex(spendingData)           
+                
                 local error = map()
 
                 error[FIELD_ERROR_CODE] = ERROR_CODE_SPENT
                 error[FIELD_MESSAGE] = MSG_SPENT
                 error[FIELD_SPENDING_DATA] = spendingDataBytesToHex(existingSpendingData)
-
-                errors[offset] = error
+            
+                errors[idx] = error
 
                 goto continue
             end

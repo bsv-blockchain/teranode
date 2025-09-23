@@ -419,7 +419,9 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client, tSettings *sett
 							}
 						case map[string]interface{}:
 							if counter, ok := aerospikePrometheusMetrics.Get(prometheusKey); ok {
-								counter.Add(subStat["count"].(float64))
+								if f, ok := subStat["count"].(float64); ok {
+									counter.Add(f)
+								}
 							}
 
 							if buckets, ok := subStat["buckets"].([]interface{}); ok && len(buckets) == len(aerospikeLatencyBuckets) {

@@ -70,7 +70,7 @@ import (
 //go:embed teranode.lua
 var teranodeLUA []byte
 
-var LuaPackage = "teranode_v46" // N.B. Do not have any "." in this string
+var LuaPackage = "teranode_v47" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = subtree.FrozenBytes[:]
@@ -268,6 +268,7 @@ type LuaMapResponse struct {
 	BlockIDs   []int                `json:"blockIDs,omitempty"`
 	Errors     map[int]LuaErrorInfo `json:"errors,omitempty"`
 	ChildCount int                  `json:"childCount,omitempty"`
+	// Debug      string               `json:"debug,omitempty"`
 }
 
 // ParseLuaMapResponse parses the map response from Lua scripts.
@@ -287,6 +288,12 @@ func (s *Store) ParseLuaMapResponse(response interface{}) (*LuaMapResponse, erro
 	} else {
 		return nil, errors.NewProcessingError("missing or invalid status in response")
 	}
+
+	// Add debug field if it exists
+	// if debug, ok := respMap["debug"].(string); ok {
+	// 	fmt.Printf("*******************\ndebug: %s\n************************\n", debug)
+	// 	result.Debug = debug
+	// }
 
 	// Parse optional fields
 	if errorCode, ok := respMap["errorCode"].(string); ok {

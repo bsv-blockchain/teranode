@@ -2,7 +2,9 @@ package aerospike_test
 
 import (
 	"context"
+	"encoding/hex"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,12 +19,14 @@ import (
 	spendpkg "github.com/bitcoin-sv/teranode/stores/utxo/spend"
 	"github.com/bitcoin-sv/teranode/stores/utxo/tests"
 	utxo2 "github.com/bitcoin-sv/teranode/test/longtest/stores/utxo"
+	"github.com/bitcoin-sv/teranode/test/utils/transactions"
 	"github.com/bitcoin-sv/teranode/ulogger"
 	"github.com/bitcoin-sv/teranode/util"
 	"github.com/bitcoin-sv/teranode/util/test"
 	"github.com/bitcoin-sv/teranode/util/uaerospike"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1865,6 +1869,106 @@ func TestStore_AerospikeSplitTx(t *testing.T) {
 		assert.NotNil(t, res)
 		assert.False(t, res.Bins[fields.Locked.String()].(bool), "Record %d should be false", i)
 	}
+}
+
+func TestRespendSameUTXO(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	privKey, _ := bec.PrivateKeyFromBytes([]byte("ALWAYS_THE_SAME"))
+
+	parentTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(1, 100000, privKey.PubKey()),
+	)
+
+	t.Logf("Parent tx: %s", parentTx.TxIDChainHash().String())
+
+	// Create the parent tx
+	_, err := store.Create(ctx, parentTx, 0)
+	require.NoError(t, err)
+
+	parentKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parentTx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+
+	parentResp, err := client.Get(nil, parentKey, fields.Utxos.String())
+	require.NoError(t, err)
+	utxos := parentResp.Bins[fields.Utxos.String()].([]interface{})
+	require.Equal(t, 1, len(utxos))
+	h := hex.EncodeToString(utxos[0].([]byte))
+	require.Equal(t, "323ad5e6f4e332dfcc0995d4ab11491498da4935b3b5478d696df0b62e14a554", h)
+
+	// Create the tx
+	childTx1 := transactions.Create(t,
+		transactions.WithInput(parentTx, 0, privKey),
+		transactions.WithP2PKHOutputs(1, 100, privKey.PubKey()),
+	)
+
+	t.Logf("Child tx1: %s", childTx1.TxIDChainHash().String())
+
+	// Now let's create an alternative conflicting transaction
+	childTx2 := transactions.Create(t,
+		transactions.WithInput(parentTx, 0, privKey),
+		transactions.WithP2PKHOutputs(1, 101, privKey.PubKey()),
+	)
+
+	t.Logf("Child tx2: %s", childTx2.TxIDChainHash().String())
+
+	spendFn := func(tx *bt.Tx, expectError bool) {
+		spends, err := store.Spend(ctx, tx)
+
+		require.Len(t, spends, 1)
+		if expectError {
+			assert.Error(t, err)
+			assert.Error(t, spends[0].Err)
+		} else {
+			assert.NoError(t, err)
+			assert.NoError(t, spends[0].Err)
+		}
+
+		// parentResp, err := client.Get(nil, parentKey, fields.Utxos.String())
+		// require.NoError(t, err)
+		// t.Logf("Parent utxos: %x", parentResp.Bins[fields.Utxos.String()])
+		// t.Logf("Spend %s: %v", tx.TxIDChainHash().String(), spends[0])
+	}
+
+	// Explicitly spend childTx1 first
+	spendFn(childTx1, false)
+
+	// parentResp, err = client.Get(nil, parentKey, fields.Utxos.String())
+	// require.NoError(t, err)
+	// utxo := fmt.Sprintf("%x", parentResp.Bins[fields.Utxos.String()])
+	// require.Len(t, utxo, 136) // 32 + 32 + 4 bytes are hex
+	// require.Equal(t, "323ad5e6f4e332dfcc0995d4ab11491498da4935b3b5478d696df0b62e14a554", utxo[0:64])
+	// require.Equal(t, "87251f9f8ecb3d5a80a71e0b2d409b1f9c63a13e7b6eb35843b32c7094d6fd75", utxo[64:128])
+	// require.Equal(t, "00000000", utxo[128:])
+
+	wg := sync.WaitGroup{}
+	wg.Add(20)
+
+	for i := 0; i < 10; i++ {
+		go func() {
+			defer wg.Done()
+
+			spendFn(childTx1, false)
+		}()
+	}
+
+	for i := 0; i < 10; i++ {
+		go func() {
+			defer wg.Done()
+
+			spendFn(childTx2, true)
+		}()
+	}
+
+	wg.Wait()
 }
 
 func TestDeleteByBin(t *testing.T) {

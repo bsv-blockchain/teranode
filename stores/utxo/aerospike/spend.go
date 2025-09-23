@@ -303,6 +303,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	}
 
 	batchRecords, batchRecordKeys := s.createBatchRecords(batchesByKey)
+
 	if err := s.executeSpendBatch(batchRecords, batch, batchID); err != nil {
 		return
 	}
@@ -582,29 +583,12 @@ func (s *Store) createGeneralError(errorCode LuaErrorCode, txID *chainhash.Hash,
 func (s *Store) handleIndividualErrors(errors map[int]LuaErrorInfo, batchByKey []aerospike.MapValue, batch []*batchSpend, txID *chainhash.Hash) {
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
-		offset := s.extractOffset(batchItem, batch, idx, txID)
-		if offset < 0 {
-			continue
-		}
 
-		if errMsg, hasError := errors[offset]; hasError {
+		if errMsg, hasError := errors[idx]; hasError {
 			batch[idx].errCh <- s.createSpendError(errMsg, batch[idx], txID)
 		} else {
 			batch[idx].errCh <- nil
 		}
-	}
-}
-
-// extractOffset extracts the offset from batch item
-func (s *Store) extractOffset(batchItem aerospike.MapValue, batch []*batchSpend, idx int, txID *chainhash.Hash) int {
-	switch v := batchItem["offset"].(type) {
-	case int:
-		return v
-	case uint32:
-		return int(v)
-	default:
-		batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] invalid offset type: %T", txID.String(), v)
-		return -1
 	}
 }
 
