@@ -259,12 +259,28 @@ main() {
 
     log_success "Aerospike started with PID: $AEROSPIKE_PID"
 
-    # Wait for Aerospike to become ready
-    local ready_timeout=60
+    # Wait for Aerospike to become ready (increased timeout for ASMT restore)
+    local ready_timeout=300  # 5 minutes to handle large index restores
     local ready_count=0
+    log_info "Waiting for Aerospike to become ready (max ${ready_timeout}s)..."
+
+    # Give Aerospike a moment to fully initialize before we start poking it
+    sleep 5
+
     while [ $ready_count -lt $ready_timeout ]; do
-        if asinfo -v "status" -p 3000 2>/dev/null | grep -q "ok"; then
-            log_success "Aerospike is ready and accepting connections"
+        # Check if Aerospike process is still running
+        if ! kill -0 "$AEROSPIKE_PID" 2>/dev/null; then
+            log_error "Aerospike process died during startup (PID $AEROSPIKE_PID no longer exists)"
+            return 1
+        fi
+
+        # Test if asinfo command works without causing issues
+        local asinfo_result
+        asinfo_result=$(asinfo -v "status" -p 3000 2>&1)
+        local asinfo_exit=$?
+
+        if [ $asinfo_exit -eq 0 ] && echo "$asinfo_result" | grep -q "ok"; then
+            log_success "Aerospike is ready and accepting connections after $((ready_count + 5))s"
 
             # Clean up stale backup after successful warm start
             if [ -f /tmp/restore-successful ]; then
@@ -275,12 +291,19 @@ main() {
             fi
             break
         fi
+
+        # Log progress every 10 seconds during startup
+        if [ $((ready_count % 10)) -eq 0 ] && [ $ready_count -gt 0 ]; then
+            log_info "Still waiting for Aerospike startup... ${ready_count}s elapsed"
+        fi
+
         sleep 1
         ((ready_count++))
     done
 
     if [ $ready_count -ge $ready_timeout ]; then
-        log_warn "Aerospike readiness check timed out after ${ready_timeout}s"
+        log_error "Aerospike readiness check timed out after ${ready_timeout}s - this may indicate ASMT restore issues"
+        return 1
     fi
 
     # Wait for Aerospike process to exit
@@ -291,7 +314,35 @@ main() {
 
     # If we get here without a signal, something went wrong
     if [ $exit_code -ne 0 ]; then
-        log_error "Aerospike exited unexpectedly"
+        log_error "Aerospike exited unexpectedly with code $exit_code"
+
+        # Check for common causes
+        if [ $exit_code -eq 1 ]; then
+            log_error "Exit code 1 usually indicates:"
+            log_error "  - Out of memory during startup"
+            log_error "  - Corrupted data files or indexes"
+            log_error "  - Configuration errors"
+            log_error "  - File permission issues"
+
+            # Check memory usage
+            log_info "Current memory usage:"
+            free -h || true
+
+            # Check disk space
+            log_info "Disk space:"
+            df -h /opt/aerospike/ || true
+
+            # Check for core dumps or error logs
+            log_info "Checking for additional error information..."
+            if [ -f /var/log/aerospike/aerospike.log ]; then
+                log_info "Last 10 lines from aerospike.log:"
+                tail -10 /var/log/aerospike/aerospike.log || true
+            fi
+        fi
+
+        # Don't backup if Aerospike crashed
+        log_warn "Skipping backup due to unexpected Aerospike exit"
+        exit $exit_code
     fi
 
     # Run backup before final exit
