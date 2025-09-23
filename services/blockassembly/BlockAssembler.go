@@ -1124,7 +1124,7 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		return errors.NewProcessingError("error getting reorg blocks", err)
 	}
 
-	if (len(moveBackBlocksWithMeta) > 5 || len(moveForwardBlocksWithMeta) > 5) && b.bestBlockHeight.Load() > 1000 {
+	if (len(moveBackBlocksWithMeta) >= int(b.settings.ChainCfgParams.CoinbaseMaturity) || len(moveForwardBlocksWithMeta) >= int(b.settings.ChainCfgParams.CoinbaseMaturity)) && b.bestBlockHeight.Load() > 1000 {
 		// large reorg, log it and Reset the block assembler
 		b.Reset()
 
