@@ -194,7 +194,6 @@ func NewBlockFromBytes(blockBytes []byte) (block *Block, err error) {
 func NewBlockFromReader(blockReader io.Reader) (block *Block, err error) {
 	startTime := time.Now()
 
-
 	defer func() {
 		prometheusBlockFromBytes.Observe(time.Since(startTime).Seconds())
 
@@ -420,6 +419,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 			logger.Warnf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
 		}
 	}
+
 	// 4. Check that the coinbase transaction is valid (reward checked later).
 	if b.CoinbaseTx == nil {
 		return false, errors.NewBlockInvalidError("[BLOCK][%s] block has no coinbase tx", b.String())

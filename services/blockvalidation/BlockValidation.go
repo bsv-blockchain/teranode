@@ -1384,6 +1384,13 @@ func (u *BlockValidation) collectNecessaryBloomFilters(ctx context.Context, bloc
 				if err = u.createAppendBloomFilter(ctx, blockToCreateBloomFilter); err != nil {
 					return nil, errors.NewProcessingError("[collectNecessaryBloomFilters][%s] failed to create bloom filter %s from store", block.String(), h.Hash().String(), err)
 				}
+
+				// After creating the bloom filter, retrieve it from the map and append to the return slice
+				if createdBf, ok := u.recentBlocksBloomFilters.Get(*h.Hash()); ok {
+					bloomFilters = append(bloomFilters, createdBf)
+				} else {
+					return nil, errors.NewProcessingError("[collectNecessaryBloomFilters][%s] bloom filter was created but not found in recentBlocksBloomFilters map for %s", block.String(), h.Hash().String())
+				}
 			}
 		}
 	}
