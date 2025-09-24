@@ -42,8 +42,8 @@ services:
       context: ..
       dockerfile: Dockerfile
       args:
-        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:build-latest
-        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:run-latest
+        BASE_IMG: ghcr.io/bsv-blockchain/teranode-base:build-latest
+        RUN_IMG: ghcr.io/bsv-blockchain/teranode-base:run-latest
     entrypoint: [ "pwd" ]
 
   jaeger:
@@ -99,7 +99,7 @@ services:
       - "9093"
     volumes:
       - ../data/test/${TEST_ID:-chainintegrity}/kafka:/var/lib/kafka
-  
+
 
   teranode1:
     <<: *teranode-base
@@ -229,7 +229,7 @@ services:
       - "9091"
       - "9905"
       - "9292"
-  
+
   miner-1:
     <<: *teranode-commands-base
     profiles:
@@ -299,7 +299,7 @@ services:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
       profilerAddr: "localhost:17092"
     volumes:
-      - ../settings.conf:/app/settings.conf 
+      - ../settings.conf:/app/settings.conf
       - ../settings_local.conf:/app/settings_local.conf
       - ../data/coinbase1:/app/data
 
@@ -325,7 +325,7 @@ services:
       SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
       profilerAddr: "localhost:27092"
     volumes:
-      - ../settings.conf:/app/settings.conf 
+      - ../settings.conf:/app/settings.conf
       - ../settings_local.conf:/app/settings_local.conf
       - ../data/coinbase2:/app/data
 
@@ -351,7 +351,7 @@ services:
       SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
       profilerAddr: "localhost:37092"
     volumes:
-      - ../settings.conf:/app/settings.conf 
+      - ../settings.conf:/app/settings.conf
       - ../settings_local.conf:/app/settings_local.conf
       - ../data/coinbase3:/app/data
 
@@ -374,7 +374,7 @@ services:
       # - ../settings_local.conf:/app/settings_local.conf
       - ../data/txblaster1:/app/data
       # - ../data/txblaster.log:/app/data/txblaster.log
-    
+
   tx-blaster-2:
     <<: *teranode-coinbase-base
     container_name: tx-blaster-2

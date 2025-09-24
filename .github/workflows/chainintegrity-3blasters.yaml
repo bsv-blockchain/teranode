@@ -66,9 +66,9 @@ jobs:
             tag="${{ github.sha }}"
             echo "version tag is $tag"
           fi
-          echo "Pulling image ghcr.io/bitcoin-sv/teranode:$tag"
-          docker pull "ghcr.io/bitcoin-sv/teranode:$tag"
-          docker tag "ghcr.io/bitcoin-sv/teranode:$tag" teranode:latest
+          echo "Pulling image ghcr.io/${{ github.repository_owner }}/teranode:$tag"
+          docker pull "ghcr.io/${{ github.repository_owner }}/teranode:$tag"
+          docker tag "ghcr.io/${{ github.repository_owner }}/teranode:$tag" teranode:latest
           docker images | grep teranode
 
       - name: Remove old data

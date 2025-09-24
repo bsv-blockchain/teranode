@@ -39,7 +39,7 @@ jobs:
   # Run remote build and deploy workflow
   build-and-deploy:
     needs: calculate-version
-    uses: bitcoin-sv/.github/.github/workflows/build_and_deploy.yaml@main
+    uses: bsv-blockchain/teranode-shared-workflows/.github/workflows/build_and_deploy.yaml@main
     permissions:
       contents: read
       packages: write
@@ -52,10 +52,6 @@ jobs:
         GIT_VERSION=${{ needs.calculate-version.outputs.git_version }}
         GIT_COMMIT=${{ needs.calculate-version.outputs.git_commit }}
         GIT_SHA=${{ needs.calculate-version.outputs.git_sha }}
-      use_packages: true
-      use_ecr: true
-      ecr_region: "eu-north-1"
-      ecr_repo: "teranode"
       architectures: '["amd64", "arm64"]'
       runner_labels: '{"amd64":"teranode-runner","arm64":"teranode-runner-arm","manifest":"ubuntu-latest"}'
     secrets: inherit

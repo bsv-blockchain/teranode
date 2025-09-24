@@ -25,11 +25,11 @@ walkthrough](https://github.com/gabrieldemarmiesse/getting_started_open_source)
 covers what we expect contributors to follow.
 
 To briefly summarize, we expect users to:
-1. Fork this repository
-1. Checkout a branch that tracks `master`
-1. Commit changes locally
-1. Pushes the branch to their remote fork
-1. Open a pull request with a detailed description of the changes
+1. Fork this repository 
+2. Checkout a branch that tracks `main`
+3. Commit changes locally
+4. Pushes the branch to their remote fork
+5. Open a pull request with a detailed description of the changes
 
 The commands for this are shown
 [here](https://github.com/gabrieldemarmiesse/getting_started_open_source?tab=readme-ov-file#All-commands).

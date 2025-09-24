@@ -1,6 +1,6 @@
 # These base images are able to be customized via build-args override
-ARG BASE_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:build-latest
-ARG RUN_IMG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:run-latest
+ARG BASE_IMG=ghcr.io/bsv-blockchain/teranode-base:build-latest
+ARG RUN_IMG=ghcr.io/bsv-blockchain/teranode-base:run-latest
 
 # Enter the build environment
 FROM ${BASE_IMG}

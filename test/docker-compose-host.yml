@@ -36,8 +36,8 @@ services:
       context: ..
       dockerfile: Dockerfile
       args:
-        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:build-latest
-        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-base:run-latest
+        BASE_IMG: ghcr.io/bsv-blockchain/teranode-base:build-latest
+        RUN_IMG: ghcr.io/bsv-blockchain/teranode-base:run-latest
     entrypoint: [ "pwd" ]
 
   postgres:
