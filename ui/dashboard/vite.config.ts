@@ -5,11 +5,6 @@ import svg from '@poppanator/sveltekit-svg'
 import browserslistToEsbuild from 'browserslist-to-esbuild'
 
 export default defineConfig({
-  resolve: {
-    alias: {
-      '@zerodevx/svelte-toast': '@zerodevx/svelte-toast/dist',
-    },
-  },
   build: {
     sourcemap: true,
     minify: true,
