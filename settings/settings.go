@@ -404,6 +404,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			HandshakeTopicTimeout: getDuration("p2p_handshake_topic_timeout", 5*time.Second),
 			NodeStatusTopic:       getString("p2p_node_status_topic", "", alternativeContext...),
 			SharePrivateAddresses: getBool("p2p_share_private_addresses", true, alternativeContext...),
+			// Peer health checker configuration
+			PeerHealthCheckInterval:       getDuration("p2p_health_check_interval", 30*time.Second, alternativeContext...),
+			PeerHealthHTTPTimeout:         getDuration("p2p_health_http_timeout", 5*time.Second, alternativeContext...),
+			PeerHealthRemoveAfterFailures: getInt("p2p_health_remove_after_failures", 3, alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                          getString("coinbaseDB", "", alternativeContext...),

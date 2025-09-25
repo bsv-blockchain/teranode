@@ -1,6 +1,8 @@
 package p2p
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/bitcoin-sv/teranode/ulogger"
@@ -18,6 +20,52 @@ func TestPeerSelector_SelectSyncPeer_NoPeers(t *testing.T) {
 	})
 
 	assert.Equal(t, peer.ID(""), selected, "Should return empty peer ID when no peers")
+}
+
+func TestSelector_SkipsPeerMarkedUnhealthyByHealthChecker(t *testing.T) {
+	logger := ulogger.New("test")
+	ps := NewPeerSelector(logger)
+
+	// Health check servers: one OK, one 500
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okSrv.Close()
+
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failSrv.Close()
+
+	// Registry and health checker
+	registry := NewPeerRegistry()
+	settings := CreateTestSettings()
+	hc := NewPeerHealthChecker(logger, registry, settings)
+
+	// Add two peers
+	healthyID := peer.ID("H")
+	unhealthyID := peer.ID("U")
+	registry.AddPeer(healthyID)
+	registry.AddPeer(unhealthyID)
+	// Set heights so both are ahead
+	registry.UpdateHeight(healthyID, 120, "hashH")
+	registry.UpdateHeight(unhealthyID, 125, "hashU")
+	// Assign DataHub URLs
+	registry.UpdateDataHubURL(healthyID, okSrv.URL)
+	registry.UpdateDataHubURL(unhealthyID, failSrv.URL)
+	// Mark URLs responsive to satisfy selector
+	registry.UpdateURLResponsiveness(healthyID, true)
+	registry.UpdateURLResponsiveness(unhealthyID, true)
+
+	// Run immediate health checks
+	hc.CheckPeerNow(healthyID)
+	hc.CheckPeerNow(unhealthyID)
+
+	// Fetch peers and select
+	peers := registry.GetAllPeers()
+	selected := ps.SelectSyncPeer(peers, SelectionCriteria{LocalHeight: 100})
+
+	assert.Equal(t, healthyID, selected, "selector should skip peer marked unhealthy by health checker")
 }
 
 func TestPeerSelector_SelectSyncPeer_NoEligiblePeers(t *testing.T) {

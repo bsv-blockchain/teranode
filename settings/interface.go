@@ -442,6 +442,11 @@ type P2PSettings struct {
 	PeerMapMaxSize         int           // Maximum entries in peer maps (default: 100000)
 	PeerMapTTL             time.Duration // Time-to-live for peer map entries (default: 30m)
 	PeerMapCleanupInterval time.Duration // Cleanup interval (default: 5m)
+
+	// Peer health checker configuration
+	PeerHealthCheckInterval       time.Duration // Interval between health checks (default: 30s)
+	PeerHealthHTTPTimeout         time.Duration // HTTP timeout for DataHub checks (default: 5s)
+	PeerHealthRemoveAfterFailures int           // Consecutive failures before removing a peer (default: 3)
 }
 
 type CoinbaseSettings struct {

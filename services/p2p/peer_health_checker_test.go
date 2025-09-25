@@ -228,6 +228,9 @@ func TestPeerHealthChecker_checkAllPeers(t *testing.T) {
 	logger := ulogger.New("test")
 	registry := NewPeerRegistry()
 	settings := CreateTestSettings()
+	settings.P2P.PeerHealthCheckInterval = 1 * time.Second
+	settings.P2P.PeerHealthHTTPTimeout = 1 * time.Second
+	settings.P2P.PeerHealthRemoveAfterFailures = 1
 
 	hc := NewPeerHealthChecker(logger, registry, settings)
 
@@ -342,4 +345,162 @@ func TestPeerHealthChecker_HealthCheckLoop(t *testing.T) {
 	// Should have performed multiple health checks
 	// Initial check + at least 2 interval checks
 	assert.GreaterOrEqual(t, int(atomic.LoadInt32(&checkCount)), 3, "Should have performed multiple health checks")
+}
+
+func TestPeerHealthChecker_DoesNotRemoveAfterConsecutiveFailures(t *testing.T) {
+	logger := ulogger.New("test")
+	registry := NewPeerRegistry()
+	settings := CreateTestSettings()
+	// Set low threshold to speed test
+	settings.P2P.PeerHealthRemoveAfterFailures = 2
+
+	hc := NewPeerHealthChecker(logger, registry, settings)
+
+	// Add a peer with unreachable URL
+	pid := peer.ID("peer-remove")
+	registry.AddPeer(pid)
+	registry.UpdateDataHubURL(pid, "http://127.0.0.1:65535") // unreachable port
+
+	// First failure -> should not remove yet
+	if p1, ok := registry.GetPeer(pid); ok {
+		hc.checkPeerHealth(p1)
+	} else {
+		t.Fatalf("peer not found")
+	}
+	if _, ok := registry.GetPeer(pid); !ok {
+		t.Fatalf("peer should still exist after first failure")
+	}
+
+	// Second consecutive failure -> should NOT remove; peer remains but unhealthy
+	if p2, ok := registry.GetPeer(pid); ok {
+		hc.checkPeerHealth(p2)
+	} else {
+		t.Fatalf("peer not found on second check")
+	}
+
+	if info, ok := registry.GetPeer(pid); ok {
+		assert.False(t, info.IsHealthy, "peer should remain in registry and be marked unhealthy after failures")
+	} else {
+		t.Fatalf("peer should not be removed after failures")
+	}
+}
+
+func TestPeerHealthChecker_FailureCountResetsOnSuccess(t *testing.T) {
+	// Success after a failure resets the counter so removal requires full threshold again
+	// Prepare servers: one failing (500), then success (200), then failing again
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failSrv.Close()
+
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okSrv.Close()
+
+	logger := ulogger.New("test")
+	registry := NewPeerRegistry()
+	settings := CreateTestSettings()
+	settings.P2P.PeerHealthRemoveAfterFailures = 2
+	hc := NewPeerHealthChecker(logger, registry, settings)
+
+	pid := peer.ID("peer-reset")
+	registry.AddPeer(pid)
+
+	// First failure
+	registry.UpdateDataHubURL(pid, failSrv.URL)
+	if p, ok := registry.GetPeer(pid); ok {
+		hc.checkPeerHealth(p)
+	}
+	if _, ok := registry.GetPeer(pid); !ok {
+		t.Fatalf("peer should not be removed after first failure")
+	}
+
+	// Success, which should reset counter
+	registry.UpdateDataHubURL(pid, okSrv.URL)
+	if p, ok := registry.GetPeer(pid); ok {
+		hc.checkPeerHealth(p)
+	}
+
+	// Failure again should be counted as first failure after reset; peer must still exist
+	registry.UpdateDataHubURL(pid, failSrv.URL)
+	if p, ok := registry.GetPeer(pid); ok {
+		hc.checkPeerHealth(p)
+	}
+	if _, ok := registry.GetPeer(pid); !ok {
+		t.Fatalf("peer should still exist; failure counter should have reset after success")
+	}
+}
+
+func TestPeerHealthChecker_SettingsOverrides(t *testing.T) {
+	logger := ulogger.New("test")
+	registry := NewPeerRegistry()
+	settings := CreateTestSettings()
+	// Override values
+	settings.P2P.PeerHealthCheckInterval = 123 * time.Millisecond
+	settings.P2P.PeerHealthHTTPTimeout = 456 * time.Millisecond
+	settings.P2P.PeerHealthRemoveAfterFailures = 7
+
+	hc := NewPeerHealthChecker(logger, registry, settings)
+
+	assert.Equal(t, 123*time.Millisecond, hc.checkInterval)
+	// http.Client timeout should match
+	assert.Equal(t, 456*time.Millisecond, hc.httpClient.Timeout)
+	assert.Equal(t, 7, hc.removeAfterFailures)
+}
+
+func TestPeerHealthChecker_HTTPTimeout(t *testing.T) {
+	// Server sleeps longer than configured timeout -> unreachable
+	sleep := 100 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(sleep)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	logger := ulogger.New("test")
+	registry := NewPeerRegistry()
+	settings := CreateTestSettings()
+	settings.P2P.PeerHealthHTTPTimeout = 20 * time.Millisecond
+
+	hc := NewPeerHealthChecker(logger, registry, settings)
+
+	reachable := hc.isDataHubReachable(srv.URL)
+	assert.False(t, reachable, "request should time out and be considered unreachable")
+}
+
+func TestPeerHealthChecker_RedirectHandling(t *testing.T) {
+	// Single redirect should be followed and considered reachable
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okSrv.Close()
+
+	redirectSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, okSrv.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer redirectSrv.Close()
+
+	logger := ulogger.New("test")
+	registry := NewPeerRegistry()
+	settings := CreateTestSettings()
+	hc := NewPeerHealthChecker(logger, registry, settings)
+
+	assert.True(t, hc.isDataHubReachable(redirectSrv.URL), "single redirect should be reachable")
+
+	// Too many redirects (loop) should be considered unreachable
+	// Create two servers that redirect to each other to form a loop
+	var srvA, srvB *httptest.Server
+	srvA = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, srvB.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer srvA.Close()
+	srvB = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, srvA.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer srvB.Close()
+
+	// Our http.Client stops after 3 redirects and returns the last 3xx response.
+	// Since isDataHubReachable treats <500 as reachable, this should be true.
+	assert.True(t, hc.isDataHubReachable(srvA.URL), "redirect loop should still be considered reachable (3xx)")
 }

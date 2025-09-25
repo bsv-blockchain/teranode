@@ -23,17 +23,38 @@ type PeerHealthChecker struct {
 	checkInterval time.Duration
 	stopCh        chan struct{}
 	wg            sync.WaitGroup
+	// track consecutive health check failures to avoid flapping removals
+	countsMu        sync.Mutex
+	unhealthyCounts map[peer.ID]int
+	// threshold for consecutive failures before removal
+	removeAfterFailures int
 }
 
 // NewPeerHealthChecker creates a new health checker
 func NewPeerHealthChecker(logger ulogger.Logger, registry *PeerRegistry, settings *settings.Settings) *PeerHealthChecker {
+	// Sane defaults; only override with positive values
+	checkInterval := 30 * time.Second
+	httpTimeout := 5 * time.Second
+	removeAfter := 3
+
+	if settings != nil {
+		if settings.P2P.PeerHealthCheckInterval > 0 {
+			checkInterval = settings.P2P.PeerHealthCheckInterval
+		}
+		if settings.P2P.PeerHealthHTTPTimeout > 0 {
+			httpTimeout = settings.P2P.PeerHealthHTTPTimeout
+		}
+		if settings.P2P.PeerHealthRemoveAfterFailures > 0 {
+			removeAfter = settings.P2P.PeerHealthRemoveAfterFailures
+		}
+	}
 	return &PeerHealthChecker{
 		logger:        logger,
 		registry:      registry,
 		settings:      settings,
-		checkInterval: 30 * time.Second, // Check every 30 seconds
+		checkInterval: checkInterval,
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second, // Reasonable timeout for health checks
+			Timeout: httpTimeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				// Allow redirects but limit to 3 to prevent loops
 				if len(via) >= 3 {
@@ -48,7 +69,9 @@ func NewPeerHealthChecker(logger ulogger.Logger, registry *PeerRegistry, setting
 				IdleConnTimeout:   30 * time.Second,
 			},
 		},
-		stopCh: make(chan struct{}),
+		stopCh:              make(chan struct{}),
+		unhealthyCounts:     make(map[peer.ID]int),
+		removeAfterFailures: removeAfter,
 	}
 }
 
@@ -95,7 +118,7 @@ func (hc *PeerHealthChecker) checkAllPeers() {
 	hc.logger.Debugf("[HealthChecker] Checking health of %d peers", len(peers))
 
 	// Check peers concurrently but limit concurrency
-	semaphore := make(chan struct{}, 5) // Max 5 concurrent checks
+	Semaphore := make(chan struct{}, 5) // Max 5 concurrent checks
 	var wg sync.WaitGroup
 
 	for _, p := range peers {
@@ -107,8 +130,8 @@ func (hc *PeerHealthChecker) checkAllPeers() {
 		go func(peer *PeerInfo) {
 			defer wg.Done()
 
-			semaphore <- struct{}{}        // Acquire
-			defer func() { <-semaphore }() // Release
+			Semaphore <- struct{}{}        // Acquire
+			defer func() { <-Semaphore }() // Release
 
 			hc.checkPeerHealth(peer)
 		}(p)
@@ -121,13 +144,33 @@ func (hc *PeerHealthChecker) checkAllPeers() {
 func (hc *PeerHealthChecker) checkPeerHealth(p *PeerInfo) {
 	healthy := hc.isDataHubReachable(p.DataHubURL)
 
+	// Update health status in registry
 	hc.registry.UpdateHealth(p.ID, healthy)
 
+	// Handle consecutive failures and potential removal
+	hc.countsMu.Lock()
+	defer hc.countsMu.Unlock()
 	if healthy {
+		// reset on success
+		if hc.unhealthyCounts[p.ID] != 0 {
+			delete(hc.unhealthyCounts, p.ID)
+		}
 		hc.logger.Debugf("[HealthChecker] Peer %s is healthy (DataHub: %s)", p.ID, p.DataHubURL)
-	} else {
-		hc.logger.Warnf("[HealthChecker] Peer %s is unhealthy (DataHub: %s unreachable)", p.ID, p.DataHubURL)
+		return
 	}
+
+	// increment failure count
+	failures := hc.unhealthyCounts[p.ID] + 1
+	hc.unhealthyCounts[p.ID] = failures
+
+	// Do not remove or ban here; just warn. Selection logic should ignore unhealthy peers.
+	if failures >= hc.removeAfterFailures && hc.removeAfterFailures > 0 {
+		hc.logger.Warnf("[HealthChecker] Peer %s reached failure threshold %d (DataHub: %s). Keeping peer but marking unhealthy.", p.ID, hc.removeAfterFailures, p.DataHubURL)
+		return
+	}
+
+	// Not yet at threshold, warn with current failure count
+	hc.logger.Warnf("[HealthChecker] Peer %s is unhealthy (DataHub: %s unreachable) [consecutive_failures=%d/%d]", p.ID, p.DataHubURL, failures, hc.removeAfterFailures)
 }
 
 // isDataHubReachable checks if a DataHub URL is reachable
@@ -147,8 +190,12 @@ func (hc *PeerHealthChecker) isDataHubReachable(dataHubURL string) bool {
 
 	blockURL := dataHubURL + "/block/" + genesisHash
 
-	// Create request with timeout context
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Create request with timeout context (use configured HTTP timeout)
+	timeout := hc.httpClient.Timeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", blockURL, nil)
