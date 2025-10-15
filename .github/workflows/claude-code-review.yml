@@ -1,0 +1,111 @@
+name: Claude Code Review
+
+# This workflow performs automated code review using Claude Code when a PR is ready for review.
+#
+# How it works:
+# 1. Triggers when a PR is marked "Ready for review" (or opened/updated)
+# 2. Claude analyzes the code and posts inline comments for specific issues
+# 3. Claude posts a summary comment with overall feedback
+# 4. Claude submits a formal GitHub review:
+#    - REQUEST CHANGES (❌) if critical issues found → blocks merge
+#    - APPROVE (✅) if code quality is good → allows merge
+# 5. When new commits are pushed, Claude automatically re-reviews:
+#    - Checks if previous issues were properly fixed
+#    - Auto-resolves comment threads where issues are verified as fixed
+#    - Keeps unresolved comments where issues persist
+#    - Posts new comments for any new issues found
+#    - Updates formal review based on current state
+#
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize, reopened]
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    if: '!github.event.pull_request.draft'
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: true
+          use_sticky_comment: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            **Review Guidelines:**
+
+            **CRITICAL - Avoid Redundant Reviews:**
+            - DO NOT submit multiple formal reviews in quick succession
+            - Only submit ONE formal review per iteration (approve OR request-changes, never both)
+            - Do NOT submit empty COMMENTED reviews - only use APPROVE or REQUEST_CHANGES
+
+            **Be Concise - Avoid Repetition:**
+            - Keep summary comments brief and focused (max 3-4 short paragraphs)
+            - Only reference line numbers when pointing to specific issues, not for general observations
+            - Avoid verbose section headers like "Summary", "Code Quality Assessment", "Recommendation" unless truly necessary
+            - Do NOT use promotional language like "Excellent", "Strong", "Sophisticated" - be objective
+            - Limit use of emoji/checkmarks - use sparingly only for critical status indicators
+
+            **For Initial Reviews:**
+            1. Read the PR changes carefully
+            2. Create inline comments ONLY for specific issues that need fixing (use mcp__github_inline_comment__create_inline_comment)
+               - DO NOT create inline comments for compliments or general observations
+            3. Post a brief summary comment covering:
+               - Critical issues (if any) - what blocks merging
+               - Notable concerns (if any) - what should be addressed
+               - Positive aspects (1-2 sentences max)
+            4. Submit ONE formal review:
+               - `gh pr review --request-changes --body "Brief 1-2 sentence summary"` if blocking issues found
+               - `gh pr review --approve --body "LGTM"` if no blocking issues
+
+            **For Follow-up Reviews (after new commits):**
+            1. Check previous comments: `gh pr view ${{ github.event.pull_request.number }} --json comments`
+            2. For each previous issue:
+               - If fixed: Resolve the thread using `gh api --method PATCH /repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/{comment_id} -f state=resolved`
+               - If NOT fixed: Leave unresolved, optionally add brief clarification
+            3. Check for new issues only
+            4. Post a concise update comment:
+               - "Fixed: [list]" (if applicable)
+               - "Still needs attention: [list]" (if applicable)
+               - "New issues: [list]" (if applicable)
+            5. Submit ONE updated review (approve if all critical issues resolved, request-changes if not)
+
+            **When Issues Persist Across Multiple Reviews:**
+            - Do NOT repeat the full explanation
+            - Simply state: "Issue from previous review still present at [location]: [brief reminder]"
+            - After 2 mentions of the same unfixed issue, keep it very short: "BLOCKING issue at line X still not fixed (3rd review)"
+
+            **Focus Areas:**
+            - Critical bugs or security issues (MUST fix before merge)
+            - Logic errors or incorrect implementations
+            - Performance problems with measurable impact
+            - Missing error handling for likely failure cases
+
+            **De-prioritize:**
+            - Style preferences unless they violate project conventions in CLAUDE.md
+            - Hypothetical edge cases without evidence they'll occur
+            - Micro-optimizations without performance justification
+            - Commented-out code unless it's clearly debug code left in by mistake
+
+            Use CLAUDE.md for project conventions. Be direct, factual, and respectful
+
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://docs.claude.com/en/docs/claude-code/cli-reference for available options
+          claude_args: '--allowed-tools "mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh api:*)"'
+
