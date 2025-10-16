@@ -29,6 +29,7 @@
 
 ### Development Tutorials
 
+- [Fork and Pull Request Guidelines](./tutorials/developers/forkAndPullRequestGuidelines.md)
 - [Setting Up for Development](./tutorials/developers/developerSetup.md)
 
 ### Miner Tutorials
