@@ -504,6 +504,8 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 
 	e.GET("/p2p-ws", s.HandleWebSocket(s.notificationCh, s.AssetHTTPAddressURL))
 
+	e.GET("/peers", s.HandleGetPeers())
+
 	return e
 }
 
