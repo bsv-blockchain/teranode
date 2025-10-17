@@ -201,7 +201,7 @@ All developers work in forked repositories with `upstream` remote pointing to th
 ```bash
 # Always sync with upstream first
 git fetch upstream
-git merge upstream/main
+git reset --hard upstream/main
 
 # If conflicts occur: STOP and ask user for resolution guidance
 # After resolving (or if no conflicts):
@@ -216,11 +216,12 @@ git push origin <current-branch>
 ```bash
 # Always branch from synced main
 git checkout main
-git pull upstream main
+git fetch upstream
+git reset --hard upstream/main
 git checkout -b <new-branch-name>
 ```
 
 ### Quick Reference
 - **Push work**: Sync upstream → resolve conflicts (with user approval) → push to fork → show PR link
 - **New branch**: Switch to main → sync upstream → create branch
-- **Sync with upstream**: `git checkout main && git pull upstream main`
+- **Sync with upstream**: `git checkout main && git fetch upstream && git reset --hard upstream/main`

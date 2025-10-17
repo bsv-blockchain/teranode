@@ -251,7 +251,8 @@ Always work in a dedicated branch, never directly in `main`:
 ```bash
 # First, make sure you're up to date
 git checkout main
-git pull upstream main
+git fetch upstream
+git reset --hard upstream/main
 
 # Create and switch to a new feature branch
 git checkout -b feature/your-feature-name
@@ -282,7 +283,7 @@ Before submitting a PR, ensure your branch is up to date with upstream to avoid 
 ```bash
 # Fetch the latest changes from upstream
 git fetch upstream
-git merge upstream/main
+git reset --hard upstream/main
 ```
 
 ### 4. Resolve Merge Conflicts (if any)
@@ -356,7 +357,8 @@ chmod +x .git/hooks/pre-commit
 # ================
 # Sync with upstream
 git checkout main
-git pull upstream main
+git fetch upstream
+git reset --hard upstream/main
 git push origin main
 
 # Create feature branch
@@ -367,7 +369,8 @@ git add .
 git commit -m "Descriptive commit message"
 
 # Update feature branch with latest upstream
-git pull upstream main
+git fetch upstream
+git reset --hard upstream/main
 
 # Push feature branch
 git push -u origin feature/new-feature
