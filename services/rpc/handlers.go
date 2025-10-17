@@ -118,10 +118,17 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		}
 
 		if !isOnMainChain {
-			// Type assert to modify confirmations field
-			if blockVerboseTx, ok := result.(bsvjson.GetBlockVerboseTxResult); ok {
-				blockVerboseTx.GetBlockBaseVerboseResult.Confirmations = -1
-				return blockVerboseTx, nil
+			// Type switch to modify confirmations field for orphaned blocks
+			switch v := result.(type) {
+			case bsvjson.GetBlockVerboseTxResult:
+				v.GetBlockBaseVerboseResult.Confirmations = -1
+				return v, nil
+			case bsvjson.GetBlockVerboseResult:
+				v.GetBlockBaseVerboseResult.Confirmations = -1
+				return v, nil
+			default:
+				// Should not happen with current implementation, but be defensive
+				return result, nil
 			}
 		}
 	}
@@ -282,15 +289,15 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 
 		if !isOnMainChain {
 			headerReply.Confirmations = -1
-		} else {
-			// Get the best block header for confirmation calculation
-			_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
-			if err != nil {
-				return nil, err
-			}
-			// Block is on the main chain, calculate confirmations
-			headerReply.Confirmations = 1 + int64(bestBlockMeta.Height) - int64(meta.Height)
+			return headerReply, nil
 		}
+
+		// Block is on the main chain, calculate confirmations
+		_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+		if err != nil {
+			return nil, err
+		}
+		headerReply.Confirmations = 1 + int64(bestBlockMeta.Height) - int64(meta.Height)
 
 		return headerReply, nil
 	}
