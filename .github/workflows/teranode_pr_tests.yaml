@@ -129,6 +129,8 @@ jobs:
     name: Sonarqube
     runs-on: teranode-runner
     needs: test
+    # Only run for internal PRs - fork PRs use sonar-fork-pr-analyze.yaml workflow
+    if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout
         uses: actions/checkout@v4

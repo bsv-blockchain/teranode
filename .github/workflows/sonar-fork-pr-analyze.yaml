@@ -1,0 +1,109 @@
+name: SonarQube Analysis for Fork PRs
+
+# This workflow handles SonarCloud analysis for pull requests from forks.
+#
+# Why needed:
+# - Fork PRs cannot access repository secrets (SONAR_TOKEN) for security reasons
+# - This workflow uses workflow_run trigger to run in the repository context with secrets
+#
+# How it works:
+# 1. teranode_pr_tests.yaml runs on fork PR (no secrets) and generates artifacts
+# 2. When that completes, this workflow triggers (has access to secrets)
+# 3. Downloads artifacts and runs SonarQube scan with proper PR decoration
+
+on:
+  workflow_run:
+    workflows: ["Teranode main pull request tests"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+
+env:
+  GO_VERSION: "1.25.2"
+
+jobs:
+  sonarqube-fork:
+    name: SonarQube Analysis (Fork PR)
+    runs-on: teranode-runner
+    # Only run if:
+    # 1. The triggering workflow succeeded
+    # 2. It was triggered by a pull_request event (not push to main)
+    # 3. The PR is from a fork (external repo)
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name != github.repository
+
+    steps:
+      - name: Get PR number and metadata
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = github.event.workflow_run.pull_requests[0].number;
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            core.setOutput('number', prNumber);
+            core.setOutput('base', pr.data.base.ref);
+            core.setOutput('head', pr.data.head.ref);
+            core.setOutput('head_sha', pr.data.head.sha);
+
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.base }}
+          fetch-depth: 0
+
+      - name: Checkout PR head
+        run: |
+          git fetch origin pull/${{ steps.pr.outputs.number }}/head:pr-${{ steps.pr.outputs.number }}
+          git checkout pr-${{ steps.pr.outputs.number }}
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run filename check script
+        run: |
+          ./scripts/check_filenames.sh
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      # Re-run golangci-lint to generate report for SonarQube
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          args: --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PR_KEY: ${{ steps.pr.outputs.number }}
+        with:
+          args: >
+            -Dsonar.pullrequest.key=${{ steps.pr.outputs.number }}
+            -Dsonar.pullrequest.branch=${{ steps.pr.outputs.head }}
+            -Dsonar.pullrequest.base=${{ steps.pr.outputs.base }}
+
+      - name: SonarQube Quality Gate check
+        uses: sonarsource/sonarqube-quality-gate-action@v1.2.0
+        timeout-minutes: 10
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
