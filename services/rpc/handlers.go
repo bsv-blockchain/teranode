@@ -237,16 +237,29 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 			return nil, err
 		}
 
+		diff := b.Bits.CalculateDifficulty()
+		diffFloat, _ := diff.Float64()
+		headerReply := &bsvjson.GetBlockHeaderVerboseResult{
+			Hash:         b.Hash().String(),
+			Version:      versionInt32,
+			VersionHex:   fmt.Sprintf("%08x", b.Version),
+			PreviousHash: b.HashPrevBlock.String(),
+			Nonce:        nonceUint64,
+			Time:         timeInt64,
+			Bits:         b.Bits.String(),
+			Difficulty:   diffFloat,
+			MerkleRoot:   b.HashMerkleRoot.String(),
+			Height:       heightInt32,
+		}
+
 		// Check if this block is on the main chain
 		isOnMainChain, err := s.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{meta.ID})
 		if err != nil {
 			return nil, err
 		}
 
-		var confirmations int64
 		if !isOnMainChain {
-			// Block is not on the main chain
-			confirmations = -1
+			headerReply.Confirmations = -1
 		} else {
 			// Get the best block header for confirmation calculation
 			_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
@@ -254,23 +267,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 				return nil, err
 			}
 			// Block is on the main chain, calculate confirmations
-			confirmations = int64(1 + bestBlockMeta.Height - meta.Height)
-		}
-
-		diff := b.Bits.CalculateDifficulty()
-		diffFloat, _ := diff.Float64()
-		headerReply := &bsvjson.GetBlockHeaderVerboseResult{
-			Hash:          b.Hash().String(),
-			Version:       versionInt32,
-			VersionHex:    fmt.Sprintf("%08x", b.Version),
-			PreviousHash:  b.HashPrevBlock.String(),
-			Nonce:         nonceUint64,
-			Time:          timeInt64,
-			Bits:          b.Bits.String(),
-			Difficulty:    diffFloat,
-			MerkleRoot:    b.HashMerkleRoot.String(),
-			Confirmations: confirmations,
-			Height:        heightInt32,
+			headerReply.Confirmations = int64(1 + bestBlockMeta.Height - meta.Height)
 		}
 
 		return headerReply, nil
