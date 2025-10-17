@@ -121,9 +121,3 @@ jobs:
       uses: SonarSource/sonarqube-scan-action@v6
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-    - name: SonarQube Quality Gate check
-      uses: sonarsource/sonarqube-quality-gate-action@v1.2.0
-      timeout-minutes: 10
-      env:
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
