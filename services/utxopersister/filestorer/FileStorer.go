@@ -1,7 +1,7 @@
 // Package filestorer provides specialized file storage functionality for the UTXO Persister service.
-// It offers a high-level interface for efficiently persisting UTXO data to blob storage with buffering,
-// hashing, and asynchronous writing capabilities. This package is designed to support the storage
-// requirements for UTXO set files, additions, and deletions in the Teranode blockchain.
+// It offers a high-level interface for efficiently persisting UTXO data to blob storage with buffering.
+// This package is designed to support the storage requirements for UTXO set files, additions, and
+// deletions in the Teranode blockchain.
 package filestorer
 
 import (
@@ -22,9 +22,9 @@ import (
 )
 
 // FileStorer handles the storage and management of blockchain-related files.
-// It provides buffered writing with concurrent processing, automatic hashing,
-// and verification capabilities. FileStorer abstracts the complexity of
-// interacting with the underlying blob storage system.
+// It provides buffered writing capabilities for efficient I/O operations.
+// FileStorer streams data through a pipe to the underlying blob storage,
+// which handles temp file creation and atomic rename internally.
 type FileStorer struct {
 	// logger provides logging functionality
 	logger ulogger.Logger
@@ -35,33 +35,38 @@ type FileStorer struct {
 	// key represents the unique identifier for the file
 	key []byte
 
-	// fileType represents the file fileType
+	// fileType represents the file type
 	fileType fileformat.FileType
 
-	// writer is the underlying pipe writer
+	// writer is the pipe writer for streaming data to storage
 	writer *io.PipeWriter
 
 	// bufferedWriter provides buffered writing capabilities
 	bufferedWriter *bufio.Writer
 
-	// wg manages goroutine synchronization
+	// wg tracks the background goroutine
 	wg sync.WaitGroup
 
-	// mu provides mutex locking for thread safety
+	// mu protects readerError and bufferedWriter writes
 	mu sync.Mutex
 
-	// done is a channel that signals when the reader goroutine is done
+	// done signals when the background goroutine completes
 	done chan struct{}
 
-	// readerError stores any error encountered by the reader goroutine
+	// readerError stores any error from the background reader
 	readerError error
+
+	// fileOptions contains options for the file operation
+	fileOptions []options.FileOption
+
+	// ctx is the context for the operation
+	ctx context.Context
 }
 
 // NewFileStorer creates a new FileStorer instance with the provided parameters.
-// It sets up an efficient pipeline for writing data with buffering and hashing.
-// The function initiates a background goroutine that reads from a pipe and writes to blob storage.
+// It creates a pipe and spawns a background goroutine that streams data to the blob storage.
+// The blob storage (SetFromReader) handles temp file creation and atomic rename internally.
 // Returns a pointer to the initialized FileStorer ready for use.
-// It initializes the file storage system with buffering and hashing capabilities.
 func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, key []byte, fileType fileformat.FileType, fileOptions ...options.FileOption) (*FileStorer, error) {
 	exists, err := store.Exists(ctx, key, fileType, fileOptions...)
 	if err != nil {
@@ -83,11 +88,10 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 
 	logger.Infof("Using %s buffer for file storer", bufferSize)
 
-	// Note that the reader will close when the writer closes and vice versa.
+	// Create pipe for streaming data to blob storage
 	reader, writer := io.Pipe()
 
-	bufferedReader := io.NopCloser(bufio.NewReaderSize(reader, bufferSize.Int()))
-
+	// Create buffered writer for efficient I/O
 	bufferedWriter := bufio.NewWriterSize(writer, bufferSize.Int())
 
 	fs := &FileStorer{
@@ -98,38 +102,36 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		writer:         writer,
 		bufferedWriter: bufferedWriter,
 		done:           make(chan struct{}),
+		fileOptions:    fileOptions,
+		ctx:            ctx,
 	}
 
-	fs.wg.Add(1) // Increment the WaitGroup counter
-
+	// Start background goroutine to stream data to blob storage
+	fs.wg.Add(1)
 	go func() {
-		defer func() {
-			close(fs.done) // Signal that the goroutine is done
-			fs.wg.Done()   // Decrement the WaitGroup counter
-		}()
+		defer fs.wg.Done()
+		defer close(fs.done)
 
-		err := store.SetFromReader(ctx, key, fileType, bufferedReader, fileOptions...)
+		// SetFromReader will create its own temp file and handle atomic rename
+		// Note: Buffered reader is NOT used on the read side despite having a buffered writer
+		// on the write side. This is intentional - adding buffering here causes test hangs
+		// when SetFromReader returns errors without consuming the pipe, as the buffered
+		// reader's interaction with the pipe can create deadlocks in error scenarios.
+		err := store.SetFromReader(ctx, key, fileType, reader, fileOptions...)
 		if err != nil {
-			logger.Errorf("%s", errors.NewStorageError("[BlockPersister] error setting additions reader", err))
 			fs.mu.Lock()
 			fs.readerError = err
 			fs.mu.Unlock()
-		}
-
-		// Close the reader after we're done with it
-		if err := reader.Close(); err != nil {
-			logger.Errorf("Failed to close reader: %v", err)
 		}
 	}()
 
 	return fs, nil
 }
 
-// Write writes the provided bytes to the file storage.
-// It ensures thread-safety with mutex locking and writes to both the buffered writer
-// and the hasher simultaneously through a MultiWriter.
+// Write writes the provided bytes to the pipe via the buffered writer.
 // Returns the number of bytes written and any error encountered.
-// It returns the number of bytes written and any error encountered.
+// If the background reader has encountered an error, it will be returned here.
+// This method is safe for concurrent use.
 func (f *FileStorer) Write(b []byte) (n int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -141,30 +143,19 @@ func (f *FileStorer) Write(b []byte) (n int, err error) {
 	return f.bufferedWriter.Write(b)
 }
 
-// Close finalizes the file storage operation and ensures all data is written.
-// It flushes the buffer, closes the writer, waits for the background goroutine to complete,
-// sets the DAH for the file, and creates a SHA256 checksum file.
+// Close finalizes the file storage operation.
+// It flushes the buffer, closes the pipe writer, waits for the background goroutine to complete,
+// and sets the DAH for the file.
 // Returns any error encountered during the closing process.
-// It returns any error encountered during the closing process.
 func (f *FileStorer) Close(ctx context.Context) error {
-	// Flush the buffered writer
-	if err := f.bufferedWriter.Flush(); err != nil {
-		// Even if flush fails, we need to close the pipe writer to prevent deadlocks
+	// Flush the buffered writer to ensure all data is written to the pipe
+	f.mu.Lock()
+	flushErr := f.bufferedWriter.Flush()
+	f.mu.Unlock()
+
+	if flushErr != nil {
 		_ = f.writer.Close()
-
-		// Wait for the goroutine to finish
-		f.wg.Wait()
-
-		// Check if the reader encountered an error
-		f.mu.Lock()
-		readerErr := f.readerError
-		f.mu.Unlock()
-
-		if readerErr != nil {
-			return errors.NewStorageError("Error in reader goroutine", readerErr)
-		}
-
-		return errors.NewStorageError("Error flushing writer", err)
+		return errors.NewStorageError("Error flushing writer", flushErr)
 	}
 
 	// Close the pipe writer to signal EOF to the reader
@@ -172,10 +163,10 @@ func (f *FileStorer) Close(ctx context.Context) error {
 		return errors.NewStorageError("Error closing writer", err)
 	}
 
-	// Wait for the goroutine to finish
+	// Wait for the background goroutine to complete
 	f.wg.Wait()
 
-	// Check if the reader encountered an error
+	// Check if the background reader encountered an error
 	f.mu.Lock()
 	readerErr := f.readerError
 	f.mu.Unlock()
@@ -186,7 +177,7 @@ func (f *FileStorer) Close(ctx context.Context) error {
 
 	// Set DAH to 0 (no expiration) as per the memory about Aerospike DAH usage
 	if err := f.store.SetDAH(ctx, f.key, f.fileType, 0); err != nil {
-		return errors.NewStorageError("Error setting DAH on additions file", err)
+		return errors.NewStorageError("Error setting DAH on file", err)
 	}
 
 	if err := f.waitUntilFileIsAvailable(ctx); err != nil {

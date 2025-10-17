@@ -652,22 +652,27 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 		}, nil)
 	})
 
-	// Start the block assembler component which handles the core block creation logic
+	<-grpcReady
+
 	// This must succeed for the service to be functional
 	if err = ba.blockAssembler.Start(ctx); err != nil {
 		return errors.NewServiceError("failed to start block assembler", err)
 	}
 
-	<-grpcReady
 	// Signal that the service is ready to accept requests
-	closeOnce.Do(func() { close(readyCh) })
+	closeOnce.Do(func() { close(readyCh) }) // Start the block assembler component which handles the core block creation logic
 
-	// Wait for all goroutines to complete
-	if err := g.Wait(); err != nil {
-		return errors.NewServiceError("block assembly service ended with error", err)
-	}
-
-	return nil
+	// Wait for gRPC server completion or error
+	// This blocks until either:
+	// 1. The gRPC server encounters an error and terminates
+	// 2. The context is cancelled, causing graceful shutdown
+	// 3. The server is explicitly stopped from elsewhere
+	//
+	// The function returns the error from gRPC server operation, which could be:
+	// - nil if server shut down gracefully
+	// - context cancellation error if shutdown was requested
+	// - network or configuration errors if startup failed
+	return g.Wait()
 }
 
 // Stop gracefully shuts down the BlockAssembly service.

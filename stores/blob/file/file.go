@@ -45,6 +45,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/ordishs/go-utils"
+	"golang.org/x/sync/semaphore"
 )
 
 const checksumExtension = ".sha256"
@@ -129,13 +130,12 @@ const (
 // 2. INITIALIZATION REQUIREMENT:
 //    InitSemaphores() MUST be called in main() before ANY file store operations begin.
 //    The function uses sync.Once to ensure one-time initialization. Calling it after
-//    file operations have started may result in some operations using stale channel
-//    references due to Go's memory model not guaranteeing atomicity of channel variable
-//    replacement.
+//    file operations have started may result in some operations using stale references
+//    due to Go's memory model not guaranteeing atomicity of variable replacement.
 //
 // 3. RACE CONDITION RISK:
-//    Replacing global channel variables (as InitSemaphores does) while other goroutines
-//    read them creates a data race. This is mitigated by:
+//    Replacing global variables (as InitSemaphores does) while other goroutines read
+//    them creates a data race. This is mitigated by:
 //    - Calling InitSemaphores exactly once during startup (sync.Once protection)
 //    - Calling it before any file operations that use the semaphores
 //    - Not testing the initialization function in the same suite as code using it
@@ -155,17 +155,18 @@ const (
 //    they're exhausted. The 768/256 split maintains the original 1024 total capacity
 //    while providing independent resource pools for reads vs writes.
 
-// readSemaphore limits concurrent read operations (Get, Exists, etc.) to protect against
-// Linux ulimit (file descriptor) exhaustion. Each read operation opens a file descriptor
-// which counts toward the system's open file limit (ulimit -n). Default: 768 slots.
-var readSemaphore chan struct{}
+// readSemaphore is a global weighted semaphore for controlling concurrent read operations.
+// It limits the total number of concurrent read file operations (Get, Exists, etc.) to
+// prevent file descriptor exhaustion. Uses golang.org/x/sync/semaphore.Weighted
+// for context-aware blocking with proper timeout support. Default: 768 slots.
+var readSemaphore *semaphore.Weighted
 
-// writeSemaphore limits concurrent write operations (Set, Del, etc.) to protect against
-// Linux ulimit (file descriptor) exhaustion. Each write operation opens a file descriptor
-// which counts toward the system's open file limit. Default: 256 slots.
-// Separate from readSemaphore to prevent read/write deadlocks where writes block on pipe
-// data while reads (that would provide that data) wait for semaphore slots.
-var writeSemaphore chan struct{}
+// writeSemaphore is a global weighted semaphore for controlling concurrent write operations.
+// It limits the total number of concurrent write file operations (Set, Del, etc.) to
+// prevent file descriptor exhaustion. Separate from readSemaphore to prevent read/write
+// deadlocks where writes block on pipe data while reads wait for semaphore slots.
+// Default: 256 slots.
+var writeSemaphore *semaphore.Weighted
 
 // semaphoreInitOnce ensures InitSemaphores is called exactly once in production.
 var semaphoreInitOnce sync.Once
@@ -175,8 +176,8 @@ func init() {
 	// if it's called, and sync.Once ensures thread-safe one-time initialization.
 	// Total capacity (768 + 256 = 1024) matches the original single semaphore limit
 	// to maintain the same system performance characteristics.
-	readSemaphore = make(chan struct{}, defaultReadLimit)
-	writeSemaphore = make(chan struct{}, defaultWriteLimit)
+	readSemaphore = semaphore.NewWeighted(defaultReadLimit)
+	writeSemaphore = semaphore.NewWeighted(defaultWriteLimit)
 }
 
 // InitSemaphores initializes the read and write semaphores with configured limits.
@@ -192,11 +193,11 @@ func init() {
 //  1. MUST be called in main() before creating any file store instances
 //  2. MUST be called before any goroutines that perform file operations are started
 //  3. Uses sync.Once to ensure one-time execution (subsequent calls are no-ops)
-//  4. Replaces global channel variables - NOT safe to call after file operations begin
+//  4. Replaces global variables - NOT safe to call after file operations begin
 //
 // RACE CONDITION WARNING:
-// This function replaces global channel variables. Due to Go's memory model, there is no
-// way to atomically replace a channel variable that other goroutines are reading without
+// This function replaces global variables. Due to Go's memory model, there is no
+// way to atomically replace a variable that other goroutines are reading without
 // using atomic.Value (which requires changing all semaphore access patterns). Therefore,
 // this function MUST be called during startup before any file operations begin. Calling
 // it after file operations have started creates a data race where goroutines may read the
@@ -254,11 +255,57 @@ func InitSemaphores(readLimit, writeLimit int) error {
 		}
 
 		// Create new semaphores with validated limits
-		readSemaphore = make(chan struct{}, readLimit)
-		writeSemaphore = make(chan struct{}, writeLimit)
+		readSemaphore = semaphore.NewWeighted(int64(readLimit))
+		writeSemaphore = semaphore.NewWeighted(int64(writeLimit))
 	})
 
 	return initErr
+}
+
+// acquireReadPermit acquires a single read permit with a timeout.
+// This prevents goroutines from blocking indefinitely if the semaphore is full.
+func acquireReadPermit(ctx context.Context) error {
+	// Create a context with 30 second timeout
+	acquireCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if err := readSemaphore.Acquire(acquireCtx, 1); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return errors.NewServiceUnavailableError("[File] read operation timed out waiting for semaphore permit")
+		}
+
+		return errors.NewProcessingError("[File] failed to acquire read permit: %w", err)
+	}
+
+	return nil
+}
+
+// releaseReadPermit releases a single read permit.
+func releaseReadPermit() {
+	readSemaphore.Release(1)
+}
+
+// acquireWritePermit acquires a single write permit with a timeout.
+// This prevents goroutines from blocking indefinitely if the semaphore is full.
+func acquireWritePermit(ctx context.Context) error {
+	// Create a context with 30 second timeout
+	acquireCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if err := writeSemaphore.Acquire(acquireCtx, 1); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return errors.NewServiceUnavailableError("[File] write operation timed out waiting for semaphore permit")
+		}
+
+		return errors.NewProcessingError("[File] failed to acquire write permit: %w", err)
+	}
+
+	return nil
+}
+
+// releaseWritePermit releases a single write permit.
+func releaseWritePermit() {
+	writeSemaphore.Release(1)
 }
 
 // New creates a new filesystem-based blob store with the specified configuration.
@@ -416,28 +463,42 @@ func (s *File) loadDAHs() error {
 		var cleaned int
 
 		for _, tmpFile := range tmpFiles {
-			// Protect file stat operation
-			readSemaphore <- struct{}{}
-			info, err := os.Stat(tmpFile)
-			<-readSemaphore
-
-			if err != nil {
-				continue
-			}
-
-			// Check if file is older than the threshold
-			if now.Sub(info.ModTime()) > cleanupThreshold {
-				// Protect file removal operation
-				writeSemaphore <- struct{}{}
-				err := os.Remove(tmpFile)
-				<-writeSemaphore
-
-				if err != nil && !os.IsNotExist(err) {
-					s.logger.Warnf("[File] failed to remove leftover tmp file: %s", tmpFile)
-				} else {
-					cleaned++
+			// Use anonymous function to create scope for defer statements.
+			// In Go, defer inside a loop doesn't execute until the outer function returns,
+			// which would cause semaphore permits to accumulate and not be released until
+			// the entire loop completes. The anonymous function ensures defer executes
+			// after each iteration, properly releasing permits and preventing resource exhaustion.
+			func() {
+				// Protect file stat operation
+				ctx := context.Background()
+				if err := acquireReadPermit(ctx); err != nil {
+					s.logger.Warnf("[File] failed to acquire read permit for stat: %v", err)
+					return
 				}
-			}
+				defer releaseReadPermit()
+
+				info, err := os.Stat(tmpFile)
+				if err != nil {
+					return
+				}
+
+				// Check if file is older than the threshold
+				if now.Sub(info.ModTime()) > cleanupThreshold {
+					// Protect file removal operation
+					if err := acquireWritePermit(ctx); err != nil {
+						s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
+						return
+					}
+					defer releaseWritePermit()
+
+					err := os.Remove(tmpFile)
+					if err != nil && !os.IsNotExist(err) {
+						s.logger.Warnf("[File] failed to remove leftover tmp file: %s", tmpFile)
+					} else {
+						cleaned++
+					}
+				}
+			}()
 		}
 
 		if cleaned > 0 {
@@ -454,40 +515,51 @@ func (s *File) loadDAHs() error {
 	var dah uint32
 
 	for _, fileName := range files {
-		if fileName[len(fileName)-4:] != ".dah" {
-			continue
-		}
-
-		dah, err = s.readDAHFromFile(fileName)
-		if err != nil {
-			// Log the error but continue processing other files
-			s.logger.Warnf("[File] error reading DAH file %s: %v", fileName, err)
-
-			// If it's an invalid DAH file (0 or corrupt), remove it
-			var terr *errors.Error
-			if errors.As(err, &terr) && terr.Code() == errors.ERR_PROCESSING {
-				s.logger.Warnf("[File] removing invalid DAH file during initialization: %s", fileName)
-				// Protect file removal operation
-				writeSemaphore <- struct{}{}
-				removeErr := os.Remove(fileName)
-				<-writeSemaphore
-
-				if removeErr != nil && !os.IsNotExist(removeErr) {
-					s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName)
-				}
+		// Use anonymous function to create scope for defer statements.
+		// In Go, defer inside a loop doesn't execute until the outer function returns,
+		// which would cause semaphore permits to accumulate and not be released until
+		// the entire loop completes. The anonymous function ensures defer executes
+		// after each iteration, properly releasing permits and preventing resource exhaustion.
+		func() {
+			if fileName[len(fileName)-4:] != ".dah" {
+				return
 			}
-			continue
-		}
 
-		// This should not happen anymore with the validation in readDAHFromFile
-		if dah == 0 {
-			s.logger.Warnf("[File] unexpected DAH value 0 for file %s", fileName)
-			continue
-		}
+			dah, err = s.readDAHFromFile(fileName)
+			if err != nil {
+				// Log the error but continue processing other files
+				s.logger.Warnf("[File] error reading DAH file %s: %v", fileName, err)
 
-		s.fileDAHsMu.Lock()
-		s.fileDAHs[fileName[:len(fileName)-4]] = dah
-		s.fileDAHsMu.Unlock()
+				// If it's an invalid DAH file (0 or corrupt), remove it
+				var terr *errors.Error
+				if errors.As(err, &terr) && terr.Code() == errors.ERR_PROCESSING {
+					s.logger.Warnf("[File] removing invalid DAH file during initialization: %s", fileName)
+					// Protect file removal operation
+					ctx := context.Background()
+					if err := acquireWritePermit(ctx); err != nil {
+						s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
+						return
+					}
+					defer releaseWritePermit()
+
+					removeErr := os.Remove(fileName)
+					if removeErr != nil && !os.IsNotExist(removeErr) {
+						s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName)
+					}
+				}
+				return
+			}
+
+			// This should not happen anymore with the validation in readDAHFromFile
+			if dah == 0 {
+				s.logger.Warnf("[File] unexpected DAH value 0 for file %s", fileName)
+				return
+			}
+
+			s.fileDAHsMu.Lock()
+			s.fileDAHs[fileName[:len(fileName)-4]] = dah
+			s.fileDAHsMu.Unlock()
+		}()
 	}
 
 	return nil
@@ -528,10 +600,11 @@ func (s *File) readDAHFromFile_internal(fileName string) (uint32, error) {
 // readDAHFromFile reads a DAH value from file WITH semaphore protection.
 // Use this for background operations or when caller doesn't hold a semaphore.
 func (s *File) readDAHFromFile(fileName string) (uint32, error) {
-	readSemaphore <- struct{}{}
-	defer func() {
-		<-readSemaphore
-	}()
+	ctx := context.Background()
+	if err := acquireReadPermit(ctx); err != nil {
+		return 0, err
+	}
+	defer releaseReadPermit()
 
 	return s.readDAHFromFile_internal(fileName)
 }
@@ -558,10 +631,11 @@ func (s *File) writeDAHToFile_internal(dahFilename string, dah uint32) error {
 // writeDAHToFile writes a DAH value to file WITH semaphore protection.
 // Use this when caller doesn't already hold a semaphore.
 func (s *File) writeDAHToFile(dahFilename string, dah uint32) error {
-	writeSemaphore <- struct{}{}
-	defer func() {
-		<-writeSemaphore
-	}()
+	ctx := context.Background()
+	if err := acquireWritePermit(ctx); err != nil {
+		return err
+	}
+	defer releaseWritePermit()
 
 	return s.writeDAHToFile_internal(dahFilename, dah)
 }
@@ -616,9 +690,14 @@ func (s *File) cleanupExpiredFile(fileName string) {
 
 			// Remove the invalid DAH file, but keep the blob files
 			// Protect file removal operation
-			writeSemaphore <- struct{}{}
+			ctx := context.Background()
+			if err := acquireWritePermit(ctx); err != nil {
+				s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
+				return
+			}
+			defer releaseWritePermit()
+
 			removeErr := os.Remove(fileName + ".dah")
-			<-writeSemaphore
 
 			if removeErr != nil && !os.IsNotExist(removeErr) {
 				s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName+".dah")
@@ -639,10 +718,14 @@ func (s *File) cleanupExpiredFile(fileName string) {
 
 		// Remove the invalid DAH file, but keep the blob files
 		// Protect file removal operation
-		writeSemaphore <- struct{}{}
-		err := os.Remove(fileName + ".dah")
-		<-writeSemaphore
+		ctx := context.Background()
+		if err := acquireWritePermit(ctx); err != nil {
+			s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
+			return
+		}
+		defer releaseWritePermit()
 
+		err := os.Remove(fileName + ".dah")
 		if err != nil && !os.IsNotExist(err) {
 			s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName+".dah")
 		}
@@ -703,10 +786,12 @@ func (s *File) removeFiles_internal(fileName string) {
 // removeFiles removes files WITH semaphore protection.
 // Use this when caller doesn't already hold a semaphore.
 func (s *File) removeFiles(fileName string) {
-	writeSemaphore <- struct{}{}
-	defer func() {
-		<-writeSemaphore
-	}()
+	ctx := context.Background()
+	if err := acquireWritePermit(ctx); err != nil {
+		s.logger.Warnf("[File] failed to acquire write permit for file removal: %v", err)
+		return
+	}
+	defer releaseWritePermit()
 
 	s.removeFiles_internal(fileName)
 }
@@ -730,13 +815,16 @@ func (s *File) removeDAHFromMap(fileName string) {
 //   - int: HTTP status code indicating health status (200 for healthy, 500 for unhealthy)
 //   - string: Description of the health status ("OK" or an error message)
 //   - error: Any error that occurred during the health check
-func (s *File) Health(_ context.Context, _ bool) (int, string, error) {
-	writeSemaphore <- struct{}{}
-	readSemaphore <- struct{}{}
-	defer func() {
-		<-writeSemaphore
-		<-readSemaphore
-	}()
+func (s *File) Health(ctx context.Context, _ bool) (int, string, error) {
+	if err := acquireWritePermit(ctx); err != nil {
+		return http.StatusServiceUnavailable, "File Store: Write concurrency limit reached", err
+	}
+	defer releaseWritePermit()
+
+	if err := acquireReadPermit(ctx); err != nil {
+		return http.StatusServiceUnavailable, "File Store: Read concurrency limit reached", err
+	}
+	defer releaseReadPermit()
 
 	// Check if the path exists
 	if _, err := os.Stat(s.path); os.IsNotExist(err) {
@@ -829,11 +917,11 @@ func (s *File) errorOnOverwrite(filename string, opts *options.Options) error {
 //
 // Returns:
 //   - error: Any error that occurred during the operation
-func (s *File) SetFromReader(_ context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
-	writeSemaphore <- struct{}{}
-	defer func() {
-		<-writeSemaphore
-	}()
+func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
+	if err := acquireWritePermit(ctx); err != nil {
+		return errors.NewStorageError("[File][SetFromReader] failed to acquire write permit", err)
+	}
+	defer releaseWritePermit()
 
 	filename, err := s.constructFilename(key, fileType, opts)
 	if err != nil {
@@ -1007,12 +1095,11 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 //
 // Returns:
 //   - error: Any error that occurred during the operation, including if the blob doesn't exist
-func (s *File) SetDAH(_ context.Context, key []byte, fileType fileformat.FileType, newDAH uint32, opts ...options.FileOption) error {
-	// limit the number of concurrent file operations
-	writeSemaphore <- struct{}{}
-	defer func() {
-		<-writeSemaphore
-	}()
+func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, newDAH uint32, opts ...options.FileOption) error {
+	if err := acquireWritePermit(ctx); err != nil {
+		return errors.NewStorageError("[File][SetDAH] failed to acquire write permit", err)
+	}
+	defer releaseWritePermit()
 
 	merged := options.MergeOptions(s.options, opts)
 
@@ -1122,10 +1209,10 @@ func (s *File) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 //   - io.ReadCloser: Reader for streaming the blob data
 //   - error: Any error that occurred during the operation
 func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
-	readSemaphore <- struct{}{}
-	defer func() {
-		<-readSemaphore
-	}()
+	if err := acquireReadPermit(ctx); err != nil {
+		return nil, errors.NewStorageError("[File][GetIoReader] failed to acquire read permit", err)
+	}
+	defer releaseReadPermit()
 
 	merged := options.MergeOptions(s.options, opts)
 
@@ -1289,10 +1376,10 @@ func (s *File) Exists(ctx context.Context, key []byte, fileType fileformat.FileT
 //   - error: Any error that occurred during deletion, or nil if the blob was successfully deleted
 //     or didn't exist
 func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
-	writeSemaphore <- struct{}{}
-	defer func() {
-		<-writeSemaphore
-	}()
+	if err := acquireWritePermit(ctx); err != nil {
+		return errors.NewStorageError("[File][Del] failed to acquire write permit", err)
+	}
+	defer releaseWritePermit()
 
 	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(key))
 

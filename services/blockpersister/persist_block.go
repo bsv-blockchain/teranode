@@ -58,6 +58,16 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
 
 	concurrency := u.settings.Block.BlockPersisterConcurrency
+
+	// In all-in-one mode, reduce concurrency to avoid resource starvation across multiple services
+	if u.settings.IsAllInOneMode {
+		concurrency = concurrency / 2
+		if concurrency < 1 {
+			concurrency = 1 // Ensure at least 1
+		}
+		u.logger.Infof("[BlockPersister] All-in-one mode detected: reducing concurrency to %d", concurrency)
+	}
+
 	u.logger.Infof("[BlockPersister] Processing subtrees with concurrency %d", concurrency)
 
 	// Create a new UTXO diff
