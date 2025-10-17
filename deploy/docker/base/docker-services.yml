@@ -1,13 +1,14 @@
 services:
   postgres:
     container_name: postgres
-    image: postgres:latest
+    image: postgres:17
     networks:
       - teranode-network
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: really_strong_password_change_me
       POSTGRES_DB: postgres
+      PGDATA: /var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
