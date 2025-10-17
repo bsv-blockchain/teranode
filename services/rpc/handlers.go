@@ -123,7 +123,13 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 			case bsvjson.GetBlockVerboseTxResult:
 				v.GetBlockBaseVerboseResult.Confirmations = -1
 				return v, nil
+			case *bsvjson.GetBlockVerboseTxResult:
+				v.GetBlockBaseVerboseResult.Confirmations = -1
+				return v, nil
 			case bsvjson.GetBlockVerboseResult:
+				v.GetBlockBaseVerboseResult.Confirmations = -1
+				return v, nil
+			case *bsvjson.GetBlockVerboseResult:
 				v.GetBlockBaseVerboseResult.Confirmations = -1
 				return v, nil
 			default:
