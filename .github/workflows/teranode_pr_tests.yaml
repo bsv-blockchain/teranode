@@ -89,8 +89,8 @@ jobs:
       - name: golangci-lint report for SonarQube
         uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
-          args: --timeout=5m --issues-exit-code=0 --out-format=checkstyle:golangci-lint-report.xml
+          version: v2.5.0
+          args: --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
 
       - name: Upload golangci-lint report
         if: always()
