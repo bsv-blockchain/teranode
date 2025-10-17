@@ -74,22 +74,19 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run filename check script
-        run: |
-          ./scripts/check_filenames.sh
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Download golangci-lint report
+        uses: actions/download-artifact@v4
         with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
+          name: golangci-lint-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Re-run golangci-lint to generate report for SonarQube
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+      - name: Download filename check report
+        uses: actions/download-artifact@v4
         with:
-          version: latest
-          args: --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
+          name: sonar-filename-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
