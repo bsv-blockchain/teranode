@@ -83,7 +83,7 @@ func TestCleanupServiceEnabled(t *testing.T) {
 	assert.Nil(t, service)
 }
 
-func TestCleanupServiceContextPassed(t *testing.T) {
+func TestCleanupServiceWithContext(t *testing.T) {
 	// Reset singleton state for testing
 	ResetCleanupServiceForTests()
 
