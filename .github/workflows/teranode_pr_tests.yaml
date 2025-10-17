@@ -1,4 +1,4 @@
-name: Teranode main pull request tests
+name: Teranode PR tests
 
 on:
   pull_request:
