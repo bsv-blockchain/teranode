@@ -200,7 +200,8 @@ All developers work in forked repositories with `upstream` remote pointing to th
 ### Pushing Work
 ```bash
 # Always sync with upstream first
-git pull upstream main
+git fetch upstream
+git merge upstream/main
 
 # If conflicts occur: STOP and ask user for resolution guidance
 # After resolving (or if no conflicts):

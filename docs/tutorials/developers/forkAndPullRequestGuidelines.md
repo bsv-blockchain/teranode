@@ -231,7 +231,8 @@ This merges all changes from `upstream/main` into your fork's `main` branch.
 git checkout main
 
 # Fetch and merge changes from upstream
-git pull upstream main
+git fetch upstream
+git reset --hard upstream/main
 
 # Push the updates to your fork on GitHub
 git push origin main
@@ -280,7 +281,8 @@ Before submitting a PR, ensure your branch is up to date with upstream to avoid 
 
 ```bash
 # Fetch the latest changes from upstream
-git pull upstream main
+git fetch upstream
+git merge upstream/main
 ```
 
 ### 4. Resolve Merge Conflicts (if any)
