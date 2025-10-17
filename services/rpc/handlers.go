@@ -289,7 +289,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 				return nil, err
 			}
 			// Block is on the main chain, calculate confirmations
-			headerReply.Confirmations = int64(1 + bestBlockMeta.Height - meta.Height)
+			headerReply.Confirmations = 1 + int64(bestBlockMeta.Height) - int64(meta.Height)
 		}
 
 		return headerReply, nil
@@ -362,7 +362,7 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 		PreviousHash:  b.Header.HashPrevBlock.String(),
 		Nonce:         b.Header.Nonce,
 		Time:          int64(b.Header.Timestamp),
-		Confirmations: int64(1 + bestBlockMeta.Height - b.Height),
+		Confirmations: 1 + int64(bestBlockMeta.Height) - int64(b.Height),
 		Height:        int64(b.Height),
 		Size:          blkBytesInt32,
 		Bits:          b.Header.Bits.String(),
