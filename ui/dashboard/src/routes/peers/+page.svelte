@@ -56,7 +56,10 @@
         throw new Error(result.error)
       }
 
-      data = result.peers || []
+      // Filter out peers whose last message was over 1 minute ago
+      const now = Math.floor(Date.now() / 1000)
+      const oneMinuteAgo = now - 60
+      data = (result.peers || []).filter(peer => peer.last_message_time > oneMinuteAgo)
     } catch (err) {
       console.error('Failed to fetch peers:', err)
       error = err instanceof Error ? err.message : 'Unknown error'
@@ -202,11 +205,15 @@
       } else if (!isHealthy) {
         status = 'Unhealthy'
         className = 'status-unhealthy'
+      } else if (isHealthy && isConnected) {
+        // For connected and healthy peers, show as Healthy regardless of URL status
+        status = 'Healthy'
+        className = 'status-healthy'
       } else if (!urlResponsive) {
         status = 'URL Down'
         className = 'status-url-down'
       } else {
-        status = 'Healthy'
+        status = 'Connected'
         className = 'status-healthy'
       }
 
