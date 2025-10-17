@@ -1146,7 +1146,7 @@ func TestInvalidateHandler(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "invalid hash")
 	})
 
-	t.Run("invalidation fails", func(t *testing.T) {
+	t.Run("invalidation of non-existent block is idempotent", func(t *testing.T) {
 		validHash := chainhash.DoubleHashH([]byte("abc")).String()
 		req := httptest.NewRequest(http.MethodPost, "/invalidate/"+validHash, nil)
 		rec := httptest.NewRecorder()
@@ -1157,8 +1157,9 @@ func TestInvalidateHandler(t *testing.T) {
 		err := server.invalidateHandler(c)
 		require.NoError(t, err)
 
-		assert.Equal(t, http.StatusInternalServerError, rec.Code)
-		assert.Contains(t, rec.Body.String(), "error invalidating block")
+		// InvalidateBlock is now idempotent - returns success even if block doesn't exist
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "block invalidated")
 	})
 
 	t.Run("success", func(t *testing.T) {

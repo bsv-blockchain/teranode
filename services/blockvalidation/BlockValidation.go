@@ -16,6 +16,7 @@ package blockvalidation
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -37,6 +38,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -431,11 +433,6 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 				if blockHeaderMeta.MinedSet {
 					u.logger.Infof("[BlockValidation:start][%s] block already has mined_set true, skipping setTxMined", blockHash.String())
-					continue
-				}
-
-				if blockHeaderMeta != nil && blockHeaderMeta.Invalid {
-					u.logger.Warnf("[BlockValidation:start][%s] block is marked as invalid, skipping setTxMined", blockHash.String())
 					continue
 				}
 
@@ -1033,7 +1030,19 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// If there's an error checking existence, proceed with validation
 				u.logger.Warnf("[ValidateBlock][%s] error checking block existence: %v, proceeding with validation", block.Header.Hash().String(), err)
 			} else if blockExists {
-				u.logger.Warnf("[ValidateBlock][%s] tried to validate existing block", block.Header.Hash().String())
+				// Block exists - check if it's invalid
+				_, blockMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.Hash())
+				if err != nil {
+					u.logger.Warnf("[ValidateBlock][%s] failed to get block metadata for existing block: %v, assuming valid", block.Header.Hash().String(), err)
+					return nil
+				}
+
+				if blockMeta != nil && blockMeta.Invalid {
+					u.logger.Warnf("[ValidateBlock][%s] block already exists and is marked as invalid", block.Header.Hash().String())
+					return errors.NewBlockInvalidError("[ValidateBlock][%s] block already exists as invalid", block.Header.Hash().String())
+				}
+
+				u.logger.Warnf("[ValidateBlock][%s] tried to validate existing valid block", block.Header.Hash().String())
 				return nil
 			}
 		} else {
@@ -1084,6 +1093,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			} else {
 				u.logger.Infof("[ValidateBlock][%s] using %d cached headers", block.Header.Hash().String(), len(blockHeaders))
 			}
+
+			// Check if parent block is invalid - if so, child is automatically invalid
+			// This optimization skips expensive validation when parent is already invalid
+			// For catchup mode with cached headers, we need to query parent metadata
+			_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
+			if err != nil {
+				u.logger.Warnf("[ValidateBlock][%s] failed to get parent block metadata: %v, continuing with validation", block.Hash().String(), err)
+				// Continue with validation - this is defensive programming
+			}
+			if err := u.checkParentInvalidAndStore(ctx, block, baseURL, parentMeta); err != nil {
+				return err
+			}
 		} else {
 			// Fetch headers from blockchain service
 			if opts.IsCatchupMode {
@@ -1095,12 +1116,22 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// get all X previous block headers, 100 is the default
 			previousBlockHeaderCount := u.settings.BlockValidation.PreviousBlockHeaderCount
 
-			blockHeaders, _, err = u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, previousBlockHeaderCount)
+			var parentBlockHeadersMeta []*model.BlockHeaderMeta
+			blockHeaders, parentBlockHeadersMeta, err = u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, previousBlockHeaderCount)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 				u.ReValidateBlock(block, baseURL)
 
 				return errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err)
+			}
+
+			// Check if parent block is invalid using the metadata we just got
+			var parentMeta *model.BlockHeaderMeta
+			if len(parentBlockHeadersMeta) > 0 {
+				parentMeta = parentBlockHeadersMeta[0]
+			}
+			if err := u.checkParentInvalidAndStore(ctx, block, baseURL, parentMeta); err != nil {
+				return err
 			}
 		}
 
@@ -1135,6 +1166,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		if err = u.validateBlockSubtrees(ctx, block, baseURL); err != nil {
 			if errors.Is(err, errors.ErrTxInvalid) || errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxNotFound) {
 				u.logger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
+				reason := fmt.Sprintf("block contains invalid transactions: %s", err.Error())
+				u.storeInvalidBlock(ctx, block, baseURL, reason)
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
 			}
 
@@ -1169,6 +1202,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 			// Compare the block's nBits with the expected nBits
 			if expectedNBits != nil && block.Header.Bits != *expectedNBits {
+				reason := fmt.Sprintf("incorrect difficulty bits: got %v, expected %v", block.Header.Bits, *expectedNBits)
+				u.storeInvalidBlock(ctx, block, baseURL, reason)
+
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
 					block.Header.Hash().String(), block.Header.Bits, expectedNBits)
 			}
@@ -1176,6 +1212,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// Then check that the block hash meets the difficulty target
 			headerValid, _, err := block.Header.HasMetTargetDifficulty()
 			if !headerValid {
+				reason := "block does not meet target difficulty"
+				if err != nil {
+					reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
+				}
+				u.storeInvalidBlock(ctx, block, baseURL, reason)
+
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
 			}
 		}
@@ -1305,12 +1347,17 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					reason = err.Error()
 				}
 
-				u.kafkaNotifyBlockInvalid(block, reason)
+				u.storeInvalidBlock(ctx, block, baseURL, reason)
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
 			}
 
 			if iterationError := u.checkOldBlockIDs(ctx, oldBlockIDsMap, block); iterationError != nil {
+				if errors.Is(iterationError, errors.ErrBlockInvalid) {
+					reason := iterationError.Error()
+					u.storeInvalidBlock(ctx, block, baseURL, reason)
+				}
+
 				return iterationError
 			}
 
@@ -1393,6 +1440,46 @@ func (u *BlockValidation) markBlockAsInvalid(ctx context.Context, block *model.B
 	if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); invalidateBlockErr != nil {
 		u.logger.Errorf("[ValidateBlock][%s] Failed to invalidate block: %v", block.String(), invalidateBlockErr)
 	}
+}
+
+// storeInvalidBlock stores a block marked as invalid in the blockchain database.
+// This helper function centralizes the logic for persisting invalid blocks and updating caches.
+func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Block, baseURL string, reason string) {
+	u.logger.Warnf("[ValidateBlock][%s] storing block as invalid: %s", block.Hash().String(), reason)
+
+	// Store the block marked as invalid so we have a record of it
+	if storeErr := u.blockchainClient.AddBlock(ctx, block, baseURL, blockchainoptions.WithInvalid(true)); storeErr != nil {
+		u.logger.Errorf("[ValidateBlock][%s] failed to store invalid block: %v", block.Hash().String(), storeErr)
+	} else {
+		// Update cache to reflect that block exists
+		if cacheErr := u.SetBlockExists(block.Header.Hash()); cacheErr != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), cacheErr)
+		}
+	}
+
+	u.kafkaNotifyBlockInvalid(block, reason)
+}
+
+// checkParentInvalidAndStore checks if the parent block is invalid and stores
+// the child block as invalid if so. This is an optimization to skip expensive
+// validation when the parent is already invalid.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - block: Child block being validated
+//   - baseURL: Source URL for the block
+//   - parentMeta: Metadata of the parent block (can be nil)
+//
+// Returns:
+//   - nil if parent is valid or metadata is nil
+//   - error if parent is invalid (child is stored as invalid)
+func (u *BlockValidation) checkParentInvalidAndStore(ctx context.Context, block *model.Block, baseURL string, parentMeta *model.BlockHeaderMeta) error {
+	if parentMeta != nil && parentMeta.Invalid {
+		reason := fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String())
+		u.storeInvalidBlock(ctx, block, baseURL, reason)
+		return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
+	}
+	return nil
 }
 
 func (u *BlockValidation) kafkaNotifyBlockInvalid(block *model.Block, reason string) {
@@ -1637,6 +1724,13 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	blockHeaderIDs := make([]uint32, len(blockHeadersMeta))
 	for i, blockHeaderMeta := range blockHeadersMeta {
 		blockHeaderIDs[i] = blockHeaderMeta.ID
+	}
+
+	// Check if parent block is invalid during revalidation
+	// If parent is invalid, no point revalidating the child
+	if len(blockHeadersMeta) > 0 && blockHeadersMeta[0].Invalid {
+		u.logger.Warnf("[reValidateBlock][%s] parent block %s is invalid, child cannot be revalidated as valid", blockData.block.Hash().String(), blockData.block.Header.HashPrevBlock.String())
+		return errors.NewBlockInvalidError("[reValidateBlock][%s] parent block is invalid", blockData.block.Hash().String())
 	}
 
 	// only get the bloom filters for the current chain

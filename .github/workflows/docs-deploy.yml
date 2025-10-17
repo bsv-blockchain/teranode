@@ -1,0 +1,47 @@
+name: Deploy MkDocs Documentation
+
+# Trigger on pushes to main branch that modify docs or mkdocs.yml
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - '.github/workflows/docs-deploy.yml'
+
+  # Allow manual trigger from Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for proper git info
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install MkDocs
+        run: pip install mkdocs-material
+
+      - name: Configure Git for deployment
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Deploy documentation to GitHub Pages
+        run: mkdocs gh-deploy --force
+
+      - name: Deployment summary
+        run: |
+          echo "📚 Documentation deployed successfully to GitHub Pages"
+          echo "🔗 Your docs will be available at: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"

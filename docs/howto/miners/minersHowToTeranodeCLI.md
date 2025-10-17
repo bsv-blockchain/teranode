@@ -19,6 +19,7 @@ Usage: teranode-cli <command> [options]
     Available Commands:
     aerospikereader      Aerospike Reader
     bitcointoutxoset     Bitcoin to Utxoset
+    checkblock           Validate an existing block
     checkblocktemplate   Check block template
     export-blocks        Export blockchain to CSV
     filereader           File Reader
@@ -29,6 +30,7 @@ Usage: teranode-cli <command> [options]
     setfsmstate          Set the FSM State
     settings             Settings
     utxopersister        Utxo Persister
+    utxovalidator        Validate UTXO sets
 
     Use 'teranode-cli <command> --help' for more information about a command
 
@@ -63,6 +65,7 @@ Usage: teranode-cli <command> [options]
 
 | Command              | Description                   | Key Options                                                      |
 |----------------------|-------------------------------|------------------------------------------------------------------|
+| `checkblock`         | Validate an existing block    | `<blockhash>` - Hash of the block to validate                    |
 | `checkblocktemplate` | Check block template validity | None                                                             |
 | `seeder`             | Seed initial blockchain data  | `--inputDir` - Input directory for data                          |
 |                      |                               | `--hash` - Hash of the data to process                           |
@@ -71,6 +74,9 @@ Usage: teranode-cli <command> [options]
 | `filereader`         | Read and process files        | `--verbose` - Enable verbose output                              |
 |                      |                               | `--checkHeights` - Check heights in UTXO headers                 |
 |                      |                               | `--useStore` - Use store                                         |
+| `utxovalidator`      | Validate UTXO sets            | `--inputDir` - Input directory containing UTXO data              |
+|                      |                               | `--blockHash` - Block hash to validate against                   |
+|                      |                               | `--verbose` - Enable verbose output                              |
 | `getfsmstate`        | Get the current FSM state     | None                                                             |
 | `setfsmstate`        | Set the FSM state             | `--fsmstate` - Target FSM state                                  |
 |                      |                               | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
@@ -111,6 +117,25 @@ Options:
 - `--previousBlockHash`: Previous block hash
 - `--blockHeight`: Block height to start from
 - `--dumpRecords`: Dump records from index
+
+### Check Block
+
+```bash
+teranode-cli checkblock <blockhash>
+```
+
+Validates an existing block by its hash. This command performs comprehensive validation including:
+
+- Transaction validation
+- Merkle tree verification
+- Proof of work validation
+- Consensus rule checks
+
+**Example:**
+
+```bash
+teranode-cli checkblock 000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
+```
 
 ### File Reader
 
@@ -185,6 +210,27 @@ Options:
 - `--hash`: Hash of the UTXO set / headers to process (required)
 - `--skipHeaders`: Skip processing headers
 - `--skipUTXOs`: Skip processing UTXOs
+
+### UTXO Validator
+
+```bash
+teranode-cli utxovalidator --inputDir=<input-dir> [options]
+```
+
+Validates UTXO sets by reading and verifying UTXO data from specified directories. This tool is useful for ensuring UTXO set integrity and detecting any inconsistencies.
+
+Options:
+
+- `--inputDir`: Input directory containing UTXO data (required)
+- `--blockHash`: Specific block hash to validate against
+- `--verbose`: Enable verbose output for detailed validation information
+- `--batchSize`: Number of UTXOs to process in each batch (default: 10000)
+
+**Example:**
+
+```bash
+teranode-cli utxovalidator --inputDir=/data/utxos --verbose
+```
 
 ### Fix Chainwork
 

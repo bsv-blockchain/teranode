@@ -72,6 +72,9 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	// Create the application count based on the services that are going to be started
 	d.appCount += len(d.externalServices)
 
+	// Set all-in-one mode flag: true if running multiple services in one container
+	appSettings.IsAllInOneMode = d.appCount > 1
+
 	// If no services are started, print usage and exit
 	if help || d.appCount == 0 {
 		printUsage()

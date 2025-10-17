@@ -272,20 +272,13 @@ func (b *BlockAssembler) SubtreeCount() int {
 //
 // Parameters:
 //   - ctx: Context for cancellation
-func (b *BlockAssembler) startChannelListeners(ctx context.Context) error {
-	var (
-		err       error
-		readyOnce sync.Once
-	)
-
+func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) {
 	// start a subscription for the best block header and the FSM state
 	// this will be used to reset the subtree processor when a new block is mined
 	b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, "BlockAssembler")
 	if err != nil {
 		return errors.NewProcessingError("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 	}
-
-	readyCh := make(chan struct{})
 
 	go func() {
 		// variables are defined here to prevent unnecessary allocations
@@ -375,54 +368,11 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) error {
 				}
 
 				b.setCurrentRunningState(StateRunning)
-
-				readyOnce.Do(func() {
-					readyCh <- struct{}{}
-				})
 			} // select
 		} // for
 	}()
 
-	// Use a smart polling loop that resets timeout while FSM is catching up
-	checkInterval := 10 * time.Second
-	ticker := time.NewTicker(checkInterval)
-	defer ticker.Stop()
-
-	timeoutTimer := time.NewTimer(b.settings.BlockAssembly.BlockchainSubscriptionTimeout)
-	defer timeoutTimer.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			// Check if we're catching blocks - if so, reset the timeout
-			isCatching, err := b.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateCATCHINGBLOCKS)
-			if err != nil {
-				b.logger.Errorf("[BlockAssembler] Failed to get current state: %s", err)
-			}
-
-			isLegacySync, err := b.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateLEGACYSYNCING)
-			if err != nil {
-				b.logger.Errorf("[BlockAssembler] Failed to get current state: %s", err)
-			}
-
-			if err == nil && (isCatching || isLegacySync) {
-				b.logger.Infof("[BlockAssembler] FSM is CATCHINGBLOCKS or LEGACYSYNCING, resetting subscription timeout and waiting patiently")
-				if !timeoutTimer.Stop() {
-					<-timeoutTimer.C
-				}
-				timeoutTimer.Reset(b.settings.BlockAssembly.BlockchainSubscriptionTimeout)
-			}
-
-		case <-timeoutTimer.C:
-			return errors.NewProcessingError("[BlockAssembler] timeout waiting for blockchain subscription to be ready")
-
-		case <-readyCh:
-			return nil
-
-		case <-ctx.Done():
-			return nil
-		}
-	}
+	return nil
 }
 
 func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
