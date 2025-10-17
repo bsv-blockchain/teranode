@@ -32,6 +32,7 @@ func TestStartUnminedTransactionCleanup(t *testing.T) {
 			logger:          logger,
 			settings:        settings,
 			bestBlockHeight: atomic.Uint32{},
+			cachedCandidate: &CachedMiningCandidate{},
 		}
 
 		// Set block height to trigger cleanup
@@ -66,6 +67,7 @@ func TestStartUnminedTransactionCleanup(t *testing.T) {
 			logger:          logger,
 			settings:        settings,
 			bestBlockHeight: atomic.Uint32{},
+			cachedCandidate: &CachedMiningCandidate{},
 		}
 
 		// Block height is 0
@@ -129,6 +131,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 			bestBlockHeight:  atomic.Uint32{},
 			subtreeProcessor: subtreeProcessor,
 			blockchainClient: blockchainClient,
+			cachedCandidate:  &CachedMiningCandidate{},
 		}
 
 		// Set block height
@@ -225,6 +228,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 			bestBlockHeight:  atomic.Uint32{},
 			subtreeProcessor: mockSubtreeProcessor,
 			blockchainClient: blockchainClient,
+			cachedCandidate:  &CachedMiningCandidate{},
 		}
 
 		// Set block height

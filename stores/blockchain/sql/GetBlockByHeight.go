@@ -24,15 +24,12 @@ package sql
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
-	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils"
 )
 
 // GetBlockByHeight retrieves a block at a specific height in the blockchain.
@@ -144,70 +141,19 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 		)
 	`
 
-	block := &model.Block{
-		Header: &model.BlockHeader{},
-	}
-
-	var (
-		subtreeCount     uint64
-		transactionCount uint64
-		sizeInBytes      uint64
-		subtreeBytes     []byte
-		hashPrevBlock    []byte
-		hashMerkleRoot   []byte
-		coinbaseTx       []byte
-		nBits            []byte
-		err              error
-	)
-
-	if err = s.db.QueryRowContext(ctx, q, height).Scan(
-		&block.ID,
-		&block.Header.Version,
-		&block.Header.Timestamp,
-		&nBits,
-		&block.Header.Nonce,
-		&hashPrevBlock,
-		&hashMerkleRoot,
-		&transactionCount,
-		&sizeInBytes,
-		&coinbaseTx,
-		&subtreeCount,
-		&subtreeBytes,
-		&block.Height,
-	); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.NewBlockNotFoundError("failed to get block by height for height %d", height, err)
-		}
-
+	rows, err := s.db.QueryContext(ctx, q, height)
+	if err != nil {
 		return nil, errors.NewStorageError("failed to get block by height", err)
 	}
+	defer rows.Close()
 
-	bits, _ := model.NewNBitFromSlice(nBits)
-	block.Header.Bits = *bits
-
-	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
-	if err != nil {
-		return nil, errors.NewInvalidArgumentError("failed to convert hashPrevBlock: %s", utils.ReverseAndHexEncodeSlice(hashPrevBlock), err)
+	if !rows.Next() {
+		return nil, errors.NewBlockNotFoundError("failed to get block by height for height %d", height, nil)
 	}
 
-	block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
+	block, err := s.scanFullBlockRow(rows)
 	if err != nil {
-		return nil, errors.NewInvalidArgumentError("failed to convert hashMerkleRoot: %s", utils.ReverseAndHexEncodeSlice(hashMerkleRoot), err)
-	}
-
-	block.TransactionCount = transactionCount
-	block.SizeInBytes = sizeInBytes
-
-	if len(coinbaseTx) > 0 {
-		block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
-		if err != nil {
-			return nil, errors.NewInvalidArgumentError("failed to convert coinbaseTx", err)
-		}
-	}
-
-	err = block.SubTreesFromBytes(subtreeBytes)
-	if err != nil {
-		return nil, errors.NewInvalidArgumentError("failed to convert subtrees", err)
+		return nil, err
 	}
 
 	s.responseCache.Set(cacheID, block, s.cacheTTL)

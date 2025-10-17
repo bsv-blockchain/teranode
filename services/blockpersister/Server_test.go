@@ -842,6 +842,12 @@ func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, he
 func (m *MockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
+func (m *MockBlockchainClient) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxBlocks uint32) ([]*model.Block, error) {
+	return nil, nil
+}
 func (m *MockBlockchainClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 	return nil, nil
 }

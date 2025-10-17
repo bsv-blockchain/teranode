@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/cmd/checkblocktemplate"
 	"github.com/bsv-blockchain/teranode/cmd/filereader"
 	"github.com/bsv-blockchain/teranode/cmd/getfsmstate"
+	"github.com/bsv-blockchain/teranode/cmd/resetblockassembly"
 	"github.com/bsv-blockchain/teranode/cmd/seeder"
 	"github.com/bsv-blockchain/teranode/cmd/setfsmstate"
 	cmdSettings "github.com/bsv-blockchain/teranode/cmd/settings"
@@ -303,6 +304,17 @@ func Start(args []string, version, commit string) {
 			}
 
 			fmt.Printf("Checked block successfully: %s\n", blockTemplate.String())
+
+			return nil
+		}
+	case "resetblockassembly":
+		fullReset := cmd.FlagSet.Bool("full-reset", false, "Perform a full reset, including clearing mempool and unmined transactions")
+
+		cmd.Execute = func(args []string) error {
+			err := resetblockassembly.ResetBlockAssembly(logger, tSettings, *fullReset)
+			if err != nil {
+				return errors.NewProcessingError("Failed to reset block assembly", err)
+			}
 
 			return nil
 		}

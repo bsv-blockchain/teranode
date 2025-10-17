@@ -4146,18 +4146,19 @@ func TestHandleGetchaintipsComprehensive(t *testing.T) {
 
 // Mock blockchain client for testing
 type mockBlockchainClient struct {
-	getBlockFunc             func(context.Context, *chainhash.Hash) (*model.Block, error)
-	getBlockByHeightFunc     func(context.Context, uint32) (*model.Block, error)
-	getBlockHeaderFunc       func(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
-	getBestBlockHeaderFunc   func(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
-	getBestHeightAndTimeFunc func(context.Context) (uint32, uint32, error)
-	getChainTipsFunc         func(context.Context) ([]*model.ChainTip, error)
-	invalidateBlockFunc      func(context.Context, *chainhash.Hash) ([]chainhash.Hash, error)
-	revalidateBlockFunc      func(context.Context, *chainhash.Hash) error
-	healthFunc               func(context.Context, bool) (int, string, error)
-	getFSMCurrentStateFunc   func(context.Context) (*blockchain.FSMStateType, error)
-	getBlockHeadersFunc      func(context.Context, *chainhash.Hash, uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-	getBlockStatsFunc        func(context.Context) (*model.BlockStats, error)
+	getBlockFunc                    func(context.Context, *chainhash.Hash) (*model.Block, error)
+	getBlockByHeightFunc            func(context.Context, uint32) (*model.Block, error)
+	getBlockHeaderFunc              func(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+	getBestBlockHeaderFunc          func(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+	getBestHeightAndTimeFunc        func(context.Context) (uint32, uint32, error)
+	getChainTipsFunc                func(context.Context) ([]*model.ChainTip, error)
+	invalidateBlockFunc             func(context.Context, *chainhash.Hash) ([]chainhash.Hash, error)
+	revalidateBlockFunc             func(context.Context, *chainhash.Hash) error
+	healthFunc                      func(context.Context, bool) (int, string, error)
+	getFSMCurrentStateFunc          func(context.Context) (*blockchain.FSMStateType, error)
+	getBlockHeadersFunc             func(context.Context, *chainhash.Hash, uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	getBlockStatsFunc               func(context.Context) (*model.BlockStats, error)
+	findBlocksContainingSubtreeFunc func(context.Context, *chainhash.Hash, uint32) ([]*model.Block, error)
 }
 
 func (m *mockBlockchainClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -4393,6 +4394,15 @@ func (m *mockBlockchainClient) LocateBlockHeaders(ctx context.Context, locator [
 }
 func (m *mockBlockchainClient) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error {
 	return nil
+}
+func (m *mockBlockchainClient) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error) {
+	return nil, nil
+}
+func (m *mockBlockchainClient) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxBlocks uint32) ([]*model.Block, error) {
+	if m.findBlocksContainingSubtreeFunc != nil {
+		return m.findBlocksContainingSubtreeFunc(ctx, subtreeHash, maxBlocks)
+	}
+	return nil, errors.New(errors.ERR_ERROR, "not implemented")
 }
 
 // TestHandleFreezeComprehensive tests the handleFreeze handler

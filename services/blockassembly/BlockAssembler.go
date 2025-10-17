@@ -139,10 +139,7 @@ type BlockAssembler struct {
 	defaultMiningNBits *model.NBit
 
 	// resetCh handles reset requests for the assembler
-	resetCh chan chan error
-
-	// resetFullCh handles full reset requests for the assembler
-	resetFullCh chan chan error
+	resetCh chan resetRequest
 
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
@@ -232,8 +229,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		currentChainMap:     make(map[chainhash.Hash]uint32, tSettings.BlockAssembly.MaxBlockReorgCatchup),
 		currentChainMapIDs:  make(map[uint32]struct{}, tSettings.BlockAssembly.MaxBlockReorgCatchup),
 		defaultMiningNBits:  defaultMiningBits,
-		resetCh:             make(chan chan error, 2),
-		resetFullCh:         make(chan chan error, 2),
+		resetCh:             make(chan resetRequest, 2),
 		currentRunningState: atomic.Value{},
 		cachedCandidate:     &CachedMiningCandidate{},
 	}
@@ -293,40 +289,21 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 				// it's created by the blockchain client's Subscribe method
 				return
 
-			case errCh := <-b.resetCh:
+			case resetReq := <-b.resetCh:
 				b.setCurrentRunningState(StateResetting)
 
-				err := b.reset(ctx, false)
+				err := b.reset(ctx, resetReq.FullReset)
 
 				// empty out the reset channel
 				for len(b.resetCh) > 0 {
-					bufferedErrCh := <-b.resetCh
-					if bufferedErrCh != nil {
-						bufferedErrCh <- nil
+					bufferedCh := <-b.resetCh
+					if bufferedCh.ErrCh != nil {
+						bufferedCh.ErrCh <- nil
 					}
 				}
 
-				if errCh != nil {
-					errCh <- err
-				}
-
-				b.setCurrentRunningState(StateRunning)
-
-			case errCh := <-b.resetFullCh:
-				b.setCurrentRunningState(StateResetting)
-
-				err := b.reset(ctx, true)
-
-				// empty out the reset channel
-				for len(b.resetFullCh) > 0 {
-					bufferedErrCh := <-b.resetFullCh
-					if bufferedErrCh != nil {
-						bufferedErrCh <- nil
-					}
-				}
-
-				if errCh != nil {
-					errCh <- err
+				if resetReq.ErrCh != nil {
+					resetReq.ErrCh <- err
 				}
 
 				b.setCurrentRunningState(StateRunning)
@@ -749,6 +726,11 @@ func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
 	return b.subtreeProcessor.Remove(hash)
 }
 
+type resetRequest struct {
+	FullReset bool
+	ErrCh     chan error
+}
+
 // Reset triggers a reset of the block assembler state.
 // This operation runs asynchronously to prevent blocking.
 func (b *BlockAssembler) Reset(fullReset bool) {
@@ -756,10 +738,9 @@ func (b *BlockAssembler) Reset(fullReset bool) {
 	go func() {
 		errCh := make(chan error, 1)
 
-		if fullReset {
-			b.resetFullCh <- errCh
-		} else {
-			b.resetCh <- errCh
+		b.resetCh <- resetRequest{
+			FullReset: fullReset,
+			ErrCh:     errCh,
 		}
 
 		if err := <-errCh; err != nil {

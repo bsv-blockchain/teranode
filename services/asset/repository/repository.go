@@ -42,6 +42,7 @@ type Interface interface {
 	GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error)
 	GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
 	GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
@@ -51,6 +52,7 @@ type Interface interface {
 	GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error)
 	GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
 	GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, int, error)
+	FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash) ([]uint32, []uint32, []int, error)
 	GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error)
@@ -289,6 +291,26 @@ func (repo *Repository) GetBlockByHeight(ctx context.Context, height uint32) (*m
 	return block, nil
 }
 
+// GetBlockByID retrieves a block by its ID.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - id: The ID of the block to retrieve
+//
+// Returns:
+//   - *model.Block: The retrieved block
+//   - error: Any error encountered during retrieval
+func (repo *Repository) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
+	repo.logger.Debugf("[Repository] GetBlockByID: %d", id)
+
+	block, err := repo.BlockchainClient.GetBlockByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return block, nil
+}
+
 // GetBlockHeader retrieves a block header and its metadata by block hash.
 //
 // Parameters:
@@ -445,6 +467,31 @@ func (repo *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, l
 	}
 
 	return blockHeaders, metas, nil
+}
+
+// GetBlocksByHeight retrieves full blocks within a specified height range.
+// This method provides an efficient way to fetch complete blocks including
+// headers, subtrees, and transaction metadata for a range of consecutive blocks.
+// It's particularly optimized for operations like subtree searching where
+// multiple blocks need to be examined for specific subtree hashes.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - startHeight: Starting block height (inclusive)
+//   - endHeight: Ending block height (inclusive)
+//
+// Returns:
+//   - []*model.Block: Array of complete blocks in ascending height order
+//   - error: Any error encountered during retrieval
+func (repo *Repository) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error) {
+	repo.logger.Debugf("[Repository] GetBlocksByHeight: %d-%d", startHeight, endHeight)
+
+	blocks, err := repo.BlockchainClient.GetBlocksByHeight(ctx, startHeight, endHeight)
+	if err != nil {
+		return nil, err
+	}
+
+	return blocks, nil
 }
 
 // GetSubtreeBytes retrieves the raw bytes of a subtree.
@@ -756,16 +803,4 @@ func (repo *Repository) GetBlockLocator(ctx context.Context, blockHeaderHash *ch
 	}
 
 	return locator, nil
-}
-
-// GetBlockByID retrieves a block by its database ID
-func (repo *Repository) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
-	repo.logger.Debugf("[Repository] GetBlockByID: %d", id)
-
-	block, err := repo.BlockchainClient.GetBlockByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	return block, nil
 }

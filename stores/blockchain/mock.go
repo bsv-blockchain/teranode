@@ -493,7 +493,54 @@ func (m *MockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit
 	panic(implementMe)
 }
 
+// GetBlockHeadersByHeight retrieves block headers within a specified height range.
+// This method returns headers and metadata for all blocks between startHeight and endHeight (inclusive).
+//
+// Parameters:
+//   - ctx: Context for the operation (unused in this implementation)
+//   - startHeight: The lower bound of the height range (inclusive)
+//   - endHeight: The upper bound of the height range (inclusive)
+//
+// Returns:
+//   - []*model.BlockHeader: Slice of block headers in ascending height order
+//   - []*model.BlockHeaderMeta: Slice of metadata for the corresponding block headers
+//   - error: Always nil in this implementation
 func (m *MockStore) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Handle reverse range
+	if startHeight > endHeight {
+		return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
+	}
+
+	headers := make([]*model.BlockHeader, 0, endHeight-startHeight+1)
+	metas := make([]*model.BlockHeaderMeta, 0, endHeight-startHeight+1)
+
+	// Iterate through the height range and collect blocks
+	for height := startHeight; height <= endHeight; height++ {
+		block, ok := m.BlockByHeight[height]
+		if !ok {
+			continue
+		}
+
+		headers = append(headers, block.Header)
+		metas = append(metas, &model.BlockHeaderMeta{
+			ID:        block.ID,
+			Height:    block.Height,
+			TxCount:   block.TransactionCount,
+			BlockTime: block.Header.Timestamp,
+		})
+	}
+
+	return headers, metas, nil
+}
+
+func (m *MockStore) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxBlocks uint32) ([]*model.Block, error) {
 	panic(implementMe)
 }
 

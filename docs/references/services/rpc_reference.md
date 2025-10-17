@@ -1180,13 +1180,16 @@ Permanently marks a block as invalid, as if it violated a consensus rule.
 
 Removes invalidity status of a block and its descendants, reconsidering them for activation.
 
+**Important:** This command performs **full block validation** to ensure the block meets all consensus rules before removing the invalid status. The block must pass complete validation including all transaction validations, merkle root checks, and consensus rules.
+
 **Parameters:**
 
 1. `blockhash` (string, required) - The hash of the block to reconsider
 
 **Returns:**
 
-- `null` on success
+- `null` on success (block passed full validation)
+- Error if the block fails validation
 
 **Example Request:**
 

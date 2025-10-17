@@ -1,4 +1,4 @@
-name: Teranode main pull request tests
+name: Teranode PR tests
 
 on:
   pull_request:
@@ -14,8 +14,8 @@ env:
   GO_VERSION: "1.25.2"
 
 jobs:
-  golangci:
-    name: lint
+  golangci-lint:
+    name: golangci-lint
     runs-on: teranode-runner
     steps:
       - uses: actions/checkout@v4
@@ -25,12 +25,19 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
-      - name: golangci-lint
+      - name: golangci-lint with checkstyle report
         uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
-          only-new-issues: true
-          args: --timeout=5m
+          version: v2.5.0
+          args: --timeout=5m --output.checkstyle.path=golangci-lint-report.xml --output.text.path=stdout
+
+      - name: Upload golangci-lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golangci-lint-report
+          path: golangci-lint-report.xml
+          retention-days: 1
 
   test:
     name: test
@@ -75,31 +82,6 @@ jobs:
       #   if: always()
       #   run: npx github-actions-ctrf ctrf-report.json
 
-  golangci-lint-report:
-    name: golangci-lint report
-    runs-on: teranode-runner
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
-
-      - name: golangci-lint report for SonarQube
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.5.0
-          args: --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
-
-      - name: Upload golangci-lint report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: golangci-lint-report
-          path: golangci-lint-report.xml
-          retention-days: 1
-
   filename-check-report:
     name: filename check report
     runs-on: teranode-runner
@@ -117,90 +99,3 @@ jobs:
           path: sonar_filename_report.json
           retention-days: 1
 
-  smoketest:
-    name: smoketest
-    runs-on: teranode-runner
-    steps:
-      # Only login to Docker Hub for internal PRs to avoid rate limits.
-      # Fork PRs won't have access to secrets and will skip this step.
-      - name: Login to Docker Hub
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: docker/login-action@v3
-        with:
-          username: ${{ vars.DOCKER_ORG }}
-          password: ${{ secrets.DOCKER_ORG_TOKEN }}
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: "false"
-
-      - name: Run Smoke tests
-        run: make smoketest
-        continue-on-error: false
-        env:
-          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
-
-      - name: Run Long tests
-        run: make sequentialtest
-        continue-on-error: false
-        env:
-          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
-
-      - name: Upload smoketest results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoketest-results
-          path: /tmp/teranode-test-results/smoketest-results.txt
-          retention-days: 2
-
-      - name: Upload sequentialtest results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sequentialtest-results
-          path: /tmp/teranode-test-results/sequentialtest-results.txt
-          retention-days: 2
-
-  sonarqube:
-    name: Sonarqube
-    runs-on: teranode-runner
-    needs: [test, golangci-lint-report, filename-check-report]
-    # Only run for internal PRs - fork PRs use sonar-fork-pr-analyze.yaml workflow
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download coverage report
-        uses: actions/download-artifact@v4
-        with:
-          name: coverage-report
-
-      - name: Download golangci-lint report
-        uses: actions/download-artifact@v4
-        with:
-          name: golangci-lint-report
-
-      - name: Download filename check report
-        uses: actions/download-artifact@v4
-        with:
-          name: sonar-filename-report
-
-      - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v6
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-      - name: SonarQube Quality Gate check
-        uses: sonarsource/sonarqube-quality-gate-action@v1.2.0
-        timeout-minutes: 10
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

@@ -266,7 +266,8 @@
         "title": "Subtree Details #{{ height }}",
         "tab": {
           "overview": "Overview",
-          "json": "JSON"
+          "json": "JSON",
+          "merkleproof": "Merkle Proof"
         },
         "fields": {
           "block": "Block",

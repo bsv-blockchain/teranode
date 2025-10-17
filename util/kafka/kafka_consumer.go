@@ -522,7 +522,7 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 		Config:        cfg,
 		ConsumerGroup: consumerGroup,
 		watchdog:      &consumeWatchdog{}, // Initialize watchdog
-		saramaConfig:  config,              // Store config for force recovery
+		saramaConfig:  config,             // Store config for force recovery
 	}, nil
 }
 

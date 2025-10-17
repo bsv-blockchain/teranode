@@ -1512,6 +1512,73 @@ func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchai
 	}, nil
 }
 
+// GetBlocksByHeight retrieves full blocks within a specified height range.
+// This method implements the gRPC service endpoint for fetching complete blocks
+// between two heights in a single efficient operation. It delegates to the
+// blockchain store's GetBlocksByHeight method and serializes the results
+// for gRPC transmission.
+//
+// Parameters:
+//   - ctx: Request context for timeout and cancellation
+//   - req: GetBlocksByHeightRequest containing startHeight and endHeight
+//
+// Returns:
+//   - GetBlocksByHeightResponse containing serialized full blocks
+//   - error: Any error encountered during block retrieval
+func (b *Blockchain) GetBlocksByHeight(ctx context.Context, req *blockchain_api.GetBlocksByHeightRequest) (*blockchain_api.GetBlocksByHeightResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocksByHeight",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlocksByHeight),
+	)
+	defer deferFn()
+
+	blocks, err := b.store.GetBlocksByHeight(ctx, req.StartHeight, req.EndHeight)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockBytes := make([][]byte, len(blocks))
+	for i, block := range blocks {
+		blockBytes[i], err = block.Bytes()
+		if err != nil {
+			return nil, errors.WrapGRPC(err)
+		}
+	}
+
+	return &blockchain_api.GetBlocksByHeightResponse{
+		Blocks: blockBytes,
+	}, nil
+}
+
+func (b *Blockchain) FindBlocksContainingSubtree(ctx context.Context, req *blockchain_api.FindBlocksContainingSubtreeRequest) (*blockchain_api.FindBlocksContainingSubtreeResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "FindBlocksContainingSubtree",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	subtreeHash, err := chainhash.NewHash(req.SubtreeHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid subtree hash"))
+	}
+
+	blocks, err := b.store.FindBlocksContainingSubtree(ctx, subtreeHash, req.MaxBlocks)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockBytes := make([][]byte, len(blocks))
+	for i, block := range blocks {
+		blockBytes[i], err = block.Bytes()
+		if err != nil {
+			return nil, errors.WrapGRPC(err)
+		}
+	}
+
+	return &blockchain_api.FindBlocksContainingSubtreeResponse{
+		Blocks: blockBytes,
+	}, nil
+}
+
 // Subscribe handles subscription requests to blockchain notifications.
 // This method establishes a persistent gRPC streaming connection that allows
 // clients to receive real-time notifications about blockchain events. It serves

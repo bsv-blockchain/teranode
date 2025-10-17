@@ -1,19 +1,19 @@
-name: SonarQube Analysis for Fork PRs
+name: SonarQube Analysis for PRs
 
-# This workflow handles SonarCloud analysis for pull requests from forks.
+# This workflow handles SonarCloud analysis for ALL pull requests (internal and fork).
 #
-# Why needed:
+# Why use workflow_run instead of running directly in teranode_pr_tests.yaml:
 # - Fork PRs cannot access repository secrets (SONAR_TOKEN) for security reasons
-# - This workflow uses workflow_run trigger to run in the repository context with secrets
+# - workflow_run always runs in the base repository context with access to secrets
 #
 # How it works:
-# 1. teranode_pr_tests.yaml runs on fork PR (no secrets) and generates artifacts
-# 2. When that completes, this workflow triggers (has access to secrets)
+# 1. teranode_pr_tests.yaml runs on PR (fork or internal) and generates artifacts
+# 2. When that completes, this workflow triggers with access to SONAR_TOKEN
 # 3. Downloads artifacts and runs SonarQube scan with proper PR decoration
 
 on:
   workflow_run:
-    workflows: ["Teranode main pull request tests"]
+    workflows: ["Teranode PR tests"]
     types:
       - completed
 
@@ -26,19 +26,18 @@ env:
   GO_VERSION: "1.25.2"
 
 jobs:
-  sonarqube-fork:
-    name: SonarQube Analysis (Fork PR)
+  sonarqube:
+    name: SonarQube Analysis
     runs-on: teranode-runner
     # Only run if:
-    # 1. The triggering workflow succeeded
+    # 1. The triggering workflow succeeded (ensures all artifacts were generated)
     # 2. It was triggered by a pull_request event (not push to main)
-    # 3. The PR is from a fork (external repo)
     if: |
-      github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.head_repository.full_name != github.repository
+      github.event.workflow_run.conclusion == 'success'
 
     steps:
+
       - name: Get PR number and metadata
         id: pr
         uses: actions/github-script@v7

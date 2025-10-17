@@ -240,6 +240,11 @@ func (hc *PeerHealthChecker) isDataHubReachable(dataHubURL string) (time.Duratio
 // CheckPeerNow performs an immediate health check for a specific peer
 func (hc *PeerHealthChecker) CheckPeerNow(peerID peer.ID) {
 	if p, exists := hc.registry.GetPeer(peerID); exists {
+		// Skip listen-only peers (no DataHub URL)
+		if p.DataHubURL == "" {
+			hc.logger.Debugf("[HealthChecker] Skipping health check for listen-only peer %s (no DataHub URL)", peerID)
+			return
+		}
 		hc.checkPeerHealth(p)
 	}
 }
