@@ -104,7 +104,29 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
-	return s.blockToJSON(ctx, b, *c.Verbosity)
+	result, err := s.blockToJSON(ctx, b, *c.Verbosity)
+	if err != nil {
+		return nil, err
+	}
+
+	// If verbosity > 0, check if block is on main chain and adjust confirmations
+	if *c.Verbosity > 0 {
+		// Check if this block is on the main chain
+		isOnMainChain, err := s.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{b.ID})
+		if err != nil {
+			return nil, err
+		}
+
+		if !isOnMainChain {
+			// Type assert to modify confirmations field
+			if blockVerboseTx, ok := result.(bsvjson.GetBlockVerboseTxResult); ok {
+				blockVerboseTx.GetBlockBaseVerboseResult.Confirmations = -1
+				return blockVerboseTx, nil
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // handleGetBlockByHeight implements the getblockbyheight command, which retrieves information

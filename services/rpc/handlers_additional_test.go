@@ -1237,6 +1237,130 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "blockchain error")
 	})
+
+	t.Run("block not on main chain should return -1 confirmations", func(t *testing.T) {
+		prevHash := chainhash.Hash{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+		merkleRoot := chainhash.Hash{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}
+		blockHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &prevHash,
+			HashMerkleRoot: &merkleRoot,
+			Timestamp:      1234567890,
+			Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+			Nonce:          12345,
+		}
+
+		orphanBlock := &model.Block{
+			Header: blockHeader,
+			Height: 100000,
+			ID:     200,
+		}
+
+		bestBlockMeta := &model.BlockHeaderMeta{
+			Height: 100010,
+		}
+
+		mockClient := &mockBlockchainClient{
+			getBlockFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
+				return orphanBlock, nil
+			},
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return blockHeader, bestBlockMeta, nil
+			},
+			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
+				return nil, errors.ErrBlockNotFound
+			},
+			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
+				return false, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		validHash := "0000000000000000000000000000000000000000000000000000000000000002"
+		verbosity := uint32(1)
+		cmd := &bsvjson.GetBlockCmd{
+			Hash:      validHash,
+			Verbosity: &verbosity,
+		}
+
+		result, err := handleGetBlock(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		blockResult, ok := result.(bsvjson.GetBlockVerboseTxResult)
+		assert.True(t, ok)
+		assert.NotNil(t, blockResult)
+		assert.Equal(t, int64(-1), blockResult.Confirmations, "orphan block should have -1 confirmations")
+	})
+
+	t.Run("block on main chain should return correct confirmations", func(t *testing.T) {
+		prevHash := chainhash.Hash{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+		merkleRoot := chainhash.Hash{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}
+		blockHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &prevHash,
+			HashMerkleRoot: &merkleRoot,
+			Timestamp:      1234567890,
+			Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+			Nonce:          12345,
+		}
+
+		validBlock := &model.Block{
+			Header: blockHeader,
+			Height: 100000,
+			ID:     100,
+		}
+
+		bestBlockMeta := &model.BlockHeaderMeta{
+			Height: 100010,
+		}
+
+		mockClient := &mockBlockchainClient{
+			getBlockFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
+				return validBlock, nil
+			},
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return blockHeader, bestBlockMeta, nil
+			},
+			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
+				return nil, errors.ErrBlockNotFound
+			},
+			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
+				return true, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		validHash := "0000000000000000000000000000000000000000000000000000000000000001"
+		verbosity := uint32(1)
+		cmd := &bsvjson.GetBlockCmd{
+			Hash:      validHash,
+			Verbosity: &verbosity,
+		}
+
+		result, err := handleGetBlock(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		blockResult, ok := result.(bsvjson.GetBlockVerboseTxResult)
+		assert.True(t, ok)
+		assert.NotNil(t, blockResult)
+		assert.Equal(t, int64(11), blockResult.Confirmations)
+	})
 }
 
 // TestHandleGetBlockByHeightComprehensive tests the handleGetBlockByHeight handler
