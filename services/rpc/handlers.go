@@ -120,13 +120,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		if !isOnMainChain {
 			// Type switch to modify confirmations field for orphaned blocks
 			switch v := result.(type) {
-			case bsvjson.GetBlockVerboseTxResult:
-				v.GetBlockBaseVerboseResult.Confirmations = -1
-				return v, nil
 			case *bsvjson.GetBlockVerboseTxResult:
-				v.GetBlockBaseVerboseResult.Confirmations = -1
-				return v, nil
-			case bsvjson.GetBlockVerboseResult:
 				v.GetBlockBaseVerboseResult.Confirmations = -1
 				return v, nil
 			case *bsvjson.GetBlockVerboseResult:
@@ -412,7 +406,7 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 		// 		}
 		// 		rawTxns[i] = *rawTxn
 		// 	}
-		blockReply = bsvjson.GetBlockVerboseTxResult{
+		blockReply = &bsvjson.GetBlockVerboseTxResult{
 			GetBlockBaseVerboseResult: baseBlockReply,
 
 			// Tx: rawTxns,

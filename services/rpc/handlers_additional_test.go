@@ -554,8 +554,8 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		// Should return a GetBlockVerboseTxResult
-		blockResult, ok := result.(bsvjson.GetBlockVerboseTxResult)
+		// Should return a *GetBlockVerboseTxResult
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
 		assert.True(t, ok)
 
 		// Verify basic fields
@@ -618,8 +618,8 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		// Should return a GetBlockVerboseTxResult
-		blockResult, ok := result.(bsvjson.GetBlockVerboseTxResult)
+		// Should return a *GetBlockVerboseTxResult
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
 		assert.True(t, ok)
 
 		// Verify the size field is populated
@@ -1294,7 +1294,7 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		blockResult, ok := result.(bsvjson.GetBlockVerboseTxResult)
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
 		assert.True(t, ok)
 		assert.NotNil(t, blockResult)
 		assert.Equal(t, int64(-1), blockResult.Confirmations, "orphan block should have -1 confirmations")
@@ -1356,7 +1356,7 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		blockResult, ok := result.(bsvjson.GetBlockVerboseTxResult)
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
 		assert.True(t, ok)
 		assert.NotNil(t, blockResult)
 		assert.Equal(t, int64(11), blockResult.Confirmations)
