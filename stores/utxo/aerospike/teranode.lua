@@ -547,28 +547,40 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
 
     if unsetMined then
         -- Remove the block id and height/subtreeIdx at the same index from the bin if it exists, the block was invalidated
-        local newBlocks = list()
-        local newBlockHeights = list()
-        local newSubtreeIdxs = list()
-
+        local foundIdx = nil
         for i = 1, #blocks do
-            local b = blocks[i]
-            if b ~= blockID then
-                newBlocks[#newBlocks + 1] = b
-                newBlockHeights[#newBlockHeights + 1] = heights[i]
-                newSubtreeIdxs[#newSubtreeIdxs + 1] = subtreeIdxs[i]
+            if blocks[i] == blockID then
+                foundIdx = i
+                break
             end
         end
 
-        rec[BIN_BLOCK_IDS] = newBlocks
-        rec[BIN_BLOCK_HEIGHTS] = newBlockHeights
-        rec[BIN_SUBTREE_IDXS] = newSubtreeIdxs
+        -- Only rebuild lists if we found the blockID to remove
+        if foundIdx then
+            local newBlocks = list()
+            local newBlockHeights = list()
+            local newSubtreeIdxs = list()
+
+            for i = 1, #blocks do
+                if i ~= foundIdx then
+                    newBlocks[#newBlocks + 1] = blocks[i]
+                    newBlockHeights[#newBlockHeights + 1] = heights[i]
+                    newSubtreeIdxs[#newSubtreeIdxs + 1] = subtreeIdxs[i]
+                end
+            end
+
+            rec[BIN_BLOCK_IDS] = newBlocks
+            rec[BIN_BLOCK_HEIGHTS] = newBlockHeights
+            rec[BIN_SUBTREE_IDXS] = newSubtreeIdxs
+
+            blocks = newBlocks  -- Update local reference for response
+        end
     else
         -- Append the value to the list in the specified bin if it doesn't already exist
         local blockExists = false
 
-        for b in list.iterator(blocks) do
-            if b == blockID then
+        for i = 1, #blocks do
+            if blocks[i] == blockID then
                 blockExists = true
                 break
             end
@@ -590,7 +602,8 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     response[FIELD_BLOCK_IDS] = blocks
 
     -- if we have a block in the record on the longest chain, then it is no longer unmined
-    if blocks and #blocks > 0 then
+    local hasBlocks = #blocks > 0
+    if hasBlocks then
         if onLongestChain then
             rec[BIN_UNMINED_SINCE] = nil
         end
