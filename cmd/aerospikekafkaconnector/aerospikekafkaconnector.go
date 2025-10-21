@@ -54,9 +54,9 @@ func ReadAerospikeKafka(
 	logger ulogger.Logger,
 	tSettings *settings.Settings,
 	kafkaURLStr string,
-	txIDFilter string,      // 64-char hex string (optional)
-	namespaceFilter string, // Optional namespace filter
-	setFilter string,       // Optional set filter
+	txIDFilter string,
+	namespaceFilter string,
+	setFilter string,
 	statsIntervalSecs int,
 ) error {
 	logger.Infof("Starting Aerospike Kafka connector reader")
@@ -266,7 +266,7 @@ func formatBins(bins map[string]interface{}) string {
 		return "(no bins)"
 	}
 
-	var parts []string
+	parts := make([]string, 0, 32)
 	for k, v := range bins {
 		if k == "txID" {
 			continue // Already shown in header
