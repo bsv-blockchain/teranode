@@ -11,6 +11,8 @@
     - [GetBlockByHeightRequest](#GetBlockByHeightRequest)
     - [GetChainTipsResponse](#GetChainTipsResponse)
     - [GetBlockByIDRequest](#GetBlockByIDRequest)
+    - [GetBlocksByHeightRequest](#GetBlocksByHeightRequest)
+    - [GetBlocksByHeightResponse](#GetBlocksByHeightResponse)
     - [GetBlockExistsResponse](#GetBlockExistsResponse)
     - [GetBlockGraphDataRequest](#GetBlockGraphDataRequest)
     - [GetBlockHeaderIDsResponse](#GetBlockHeaderIDsResponse)
@@ -24,6 +26,7 @@
     - [GetBlockHeadersRequest](#GetBlockHeadersRequest)
     - [GetBlockHeadersResponse](#GetBlockHeadersResponse)
     - [GetBlockHeadersToCommonAncestorRequest](#GetBlockHeadersToCommonAncestorRequest)
+    - [GetBlockHeadersFromCommonAncestorRequest](#GetBlockHeadersFromCommonAncestorRequest)
     - [GetBlockInChainByHeightHashRequest](#GetBlockInChainByHeightHashRequest)
     - [GetBlockIsMinedRequest](#GetBlockIsMinedRequest)
     - [GetBlockIsMinedResponse](#GetBlockIsMinedResponse)
@@ -49,11 +52,16 @@
     - [GetMedianTimeResponse](#GetMedianTimeResponse)
     - [GetNextWorkRequiredRequest](#GetNextWorkRequiredRequest)
     - [GetNextWorkRequiredResponse](#GetNextWorkRequiredResponse)
+    - [GetNextBlockIDResponse](#GetNextBlockIDResponse)
     - [GetStateRequest](#GetStateRequest)
     - [GetSuitableBlockRequest](#GetSuitableBlockRequest)
     - [GetSuitableBlockResponse](#GetSuitableBlockResponse)
     - [HealthResponse](#HealthResponse)
     - [InvalidateBlockRequest](#InvalidateBlockRequest)
+    - [InvalidateBlockResponse](#InvalidateBlockResponse)
+    - [FindBlocksContainingSubtreeRequest](#FindBlocksContainingSubtreeRequest)
+    - [FindBlocksContainingSubtreeResponse](#FindBlocksContainingSubtreeResponse)
+    - [ReportPeerFailureRequest](#ReportPeerFailureRequest)
     - [LocateBlockHeadersRequest](#LocateBlockHeadersRequest)
     - [LocateBlockHeadersResponse](#LocateBlockHeadersResponse)
     - [Notification](#Notification)
@@ -1039,6 +1047,7 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | GetBlocks | [GetBlocksRequest](#blockchain_api-GetBlocksRequest) | [GetBlocksResponse](#blockchain_api-GetBlocksResponse) | Retrieves multiple blocks starting from a specific hash. |
 | GetBlockByHeight | [GetBlockByHeightRequest](#blockchain_api-GetBlockByHeightRequest) | [GetBlockResponse](#blockchain_api-GetBlockResponse) | Retrieves a block at a specific height. |
 | GetBlockByID | [GetBlockByIDRequest](#blockchain_api-GetBlockByIDRequest) | [GetBlockResponse](#blockchain_api-GetBlockResponse) | Retrieves a block by its id. |
+| GetNextBlockID | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetNextBlockIDResponse](#blockchain_api-GetNextBlockIDResponse) | Retrieves the next available block ID. |
 | GetBlockStats | [.google.protobuf.Empty](#google-protobuf-Empty) | [.model.BlockStats](#model-BlockStats) | Retrieves statistical information about the blockchain. |
 | GetBlockGraphData | [GetBlockGraphDataRequest](#blockchain_api-GetBlockGraphDataRequest) | [.model.BlockDataPoints](#model-BlockDataPoints) | Retrieves data points for blockchain visualization. |
 | GetLastNBlocks | [GetLastNBlocksRequest](#blockchain_api-GetLastNBlocksRequest) | [GetLastNBlocksResponse](#blockchain_api-GetLastNBlocksResponse) | Retrieves the most recent N blocks from the blockchain. |
@@ -1048,10 +1057,13 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | GetNextWorkRequired | [GetNextWorkRequiredRequest](#blockchain_api-GetNextWorkRequiredRequest) | [GetNextWorkRequiredResponse](#blockchain_api-GetNextWorkRequiredResponse) | Calculates the required proof of work for the next block. |
 | GetBlockExists | [GetBlockRequest](#blockchain_api-GetBlockRequest) | [GetBlockExistsResponse](#blockchain_api-GetBlockExistsResponse) | Checks if a block exists in the blockchain. |
 | GetBlockHeaders | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers for multiple blocks. |
-| GetBlockHeadersToCommonAncestor | [GetBlockHeadersToCommonAncestorRequest](#blockchain_api-GetBlockHeadersToCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers up to a common ancestor point between chains. |
+| GetBlockHeadersToCommonAncestor | [GetBlockHeadersToCommonAncestorRequest](#blockchain_api-GetBlockHeadersToCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers from a block to its common ancestor. |
+| GetBlockHeadersFromCommonAncestor | [GetBlockHeadersFromCommonAncestorRequest](#blockchain_api-GetBlockHeadersFromCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers from a common ancestor to a target block. |
 | GetBlockHeadersFromTill | [GetBlockHeadersFromTillRequest](#blockchain_api-GetBlockHeadersFromTillRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers between two specified blocks. |
 | GetBlockHeadersFromHeight | [GetBlockHeadersFromHeightRequest](#blockchain_api-GetBlockHeadersFromHeightRequest) | [GetBlockHeadersFromHeightResponse](#blockchain_api-GetBlockHeadersFromHeightResponse) | Retrieves block headers starting from a specific height. |
 | GetBlockHeadersByHeight | [GetBlockHeadersByHeightRequest](#blockchain_api-GetBlockHeadersByHeightRequest) | [GetBlockHeadersByHeightResponse](#blockchain_api-GetBlockHeadersByHeightResponse) | Retrieves block headers between two specified heights. |
+| GetBlocksByHeight | [GetBlocksByHeightRequest](#blockchain_api-GetBlocksByHeightRequest) | [GetBlocksByHeightResponse](#blockchain_api-GetBlocksByHeightResponse) | Retrieves full blocks between two specified heights. |
+| FindBlocksContainingSubtree | [FindBlocksContainingSubtreeRequest](#blockchain_api-FindBlocksContainingSubtreeRequest) | [FindBlocksContainingSubtreeResponse](#blockchain_api-FindBlocksContainingSubtreeResponse) | Finds all blocks that contain the specified subtree hash. |
 | GetLatestBlockHeaderFromBlockLocator | [GetLatestBlockHeaderFromBlockLocatorRequest](#blockchain_api-GetLatestBlockHeaderFromBlockLocatorRequest) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) | Retrieves the latest block header using a block locator. |
 | GetBlockHeadersFromOldest | [GetBlockHeadersFromOldestRequest](#blockchain_api-GetBlockHeadersFromOldestRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers starting from the oldest block. |
 | GetBlockHeaderIDs | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeaderIDsResponse](#blockchain_api-GetBlockHeaderIDsResponse) | Retrieves block header IDs for a range of blocks. |
@@ -1059,7 +1071,7 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | CheckBlockIsInCurrentChain | [CheckBlockIsCurrentChainRequest](#blockchain_api-CheckBlockIsCurrentChainRequest) | [CheckBlockIsCurrentChainResponse](#blockchain_api-CheckBlockIsCurrentChainResponse) | Verifies if specified blocks are in the main chain. |
 | GetChainTips | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetChainTipsResponse](#blockchain_api-GetChainTipsResponse) | Retrieves information about all known tips in the block tree. |
 | GetBlockHeader | [GetBlockHeaderRequest](#blockchain_api-GetBlockHeaderRequest) | [GetBlockHeaderResponse](#blockchain_api-GetBlockHeaderResponse) | Retrieves the header of a specific block. |
-| InvalidateBlock | [InvalidateBlockRequest](#blockchain_api-InvalidateBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Marks a block as invalid in the blockchain. |
+| InvalidateBlock | [InvalidateBlockRequest](#blockchain_api-InvalidateBlockRequest) | [InvalidateBlockResponse](#blockchain_api-InvalidateBlockResponse) | Marks a block as invalid in the blockchain. |
 | RevalidateBlock | [RevalidateBlockRequest](#blockchain_api-RevalidateBlockRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Restores a previously invalidated block. |
 | Subscribe | [SubscribeRequest](#blockchain_api-SubscribeRequest) | stream [Notification](#blockchain_api-Notification) | Creates a subscription for blockchain notifications. |
 | SendNotification | [Notification](#blockchain_api-Notification) | [.google.protobuf.Empty](#google-protobuf-Empty) | Broadcasts a notification to subscribers. |
@@ -1082,6 +1094,7 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | GetBlockLocator | [GetBlockLocatorRequest](#blockchain_api-GetBlockLocatorRequest) | [GetBlockLocatorResponse](#blockchain_api-GetBlockLocatorResponse) | Retrieves a block locator for chain synchronization. |
 | LocateBlockHeaders | [LocateBlockHeadersRequest](#blockchain_api-LocateBlockHeadersRequest) | [LocateBlockHeadersResponse](#blockchain_api-LocateBlockHeadersResponse) | Finds block headers using a locator. |
 | GetBestHeightAndTime | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBestHeightAndTimeResponse](#blockchain_api-GetBestHeightAndTimeResponse) | Retrieves the current best height and median time. |
+| ReportPeerFailure | [ReportPeerFailureRequest](#blockchain_api-ReportPeerFailureRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Notifies about peer download failures (catchup, subtree, block, etc). |
 
  <!-- end services -->
 
