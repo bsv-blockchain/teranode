@@ -927,6 +927,8 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 		CommitHash:          nodeStatusMessage.CommitHash,
 		BestBlockHash:       nodeStatusMessage.BestBlockHash,
 		BestHeight:          nodeStatusMessage.BestHeight,
+		TxCount:             nodeStatusMessage.TxCount,
+		SubtreeCount:        nodeStatusMessage.SubtreeCount,
 		FSMState:            nodeStatusMessage.FSMState,
 		StartTime:           nodeStatusMessage.StartTime,
 		Uptime:              nodeStatusMessage.Uptime,
