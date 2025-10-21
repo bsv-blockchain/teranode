@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/bsv-blockchain/teranode/cmd/aerospikekafkaconnector"
 	"github.com/bsv-blockchain/teranode/cmd/aerospikereader"
 	"github.com/bsv-blockchain/teranode/cmd/bitcointoutxoset"
 	"github.com/bsv-blockchain/teranode/cmd/checkblock"
@@ -28,9 +29,10 @@ import (
 
 // commandHelp stores the command descriptions
 var commandHelp = map[string]string{
-	"filereader":         "File Reader",
-	"aerospikereader":    "Aerospike Reader",
-	"seeder":             "Seeder",
+	"filereader":              "File Reader",
+	"aerospikereader":         "Aerospike Reader",
+	"aerospikekafkaconnector": "Read Aerospike CDC from Kafka and filter by txID bin",
+	"seeder":                  "Seeder",
 	"getfsmstate":        "Get the current FSM State",
 	"setfsmstate":        "Set the FSM State",
 	"settings":           "Settings",
@@ -160,6 +162,25 @@ func Start(args []string, version, commit string) {
 			aerospikereader.ReadAerospike(logger, tSettings, args[0])
 
 			return nil
+		}
+	case "aerospikekafkaconnector":
+		kafkaURL := cmd.FlagSet.String("kafka-url", "", "Kafka broker URL (required, e.g., kafka://localhost:9092/aerospike-cdc)")
+		txid := cmd.FlagSet.String("txid", "", "Filter by 64-char hex transaction ID (optional)")
+		namespace := cmd.FlagSet.String("namespace", "", "Filter by Aerospike namespace (optional)")
+		set := cmd.FlagSet.String("set", "txmeta", "Filter by Aerospike set")
+		statsInterval := cmd.FlagSet.Int("stats-interval", 30, "Statistics logging interval in seconds")
+
+		cmd.Execute = func(args []string) error {
+			if *kafkaURL == "" {
+				return errors.NewProcessingError("--kafka-url is required")
+			}
+
+			if *txid != "" && len(*txid) != 64 {
+				return errors.NewProcessingError("Invalid txid: must be 64 hex characters")
+			}
+
+			return aerospikekafkaconnector.ReadAerospikeKafka(
+				logger, tSettings, *kafkaURL, *txid, *namespace, *set, *statsInterval)
 		}
 	case "utxopersister":
 		cmd.Execute = func(args []string) error {
