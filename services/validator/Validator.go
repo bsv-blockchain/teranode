@@ -802,6 +802,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 	}
 
 	v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+		Key:   []byte(txHash.String()),
 		Value: value,
 	})
 
