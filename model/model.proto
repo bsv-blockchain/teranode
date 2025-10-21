@@ -41,6 +41,7 @@ enum NotificationType {
   FSMState = 4;
   BlockSubtreesSet = 5;
   PeerFailure = 6;  // Peer failed to provide data (catchup, subtree, block, etc)
+  BlockPersisted = 7;  // Block persister completed processing a block (includes height in metadata)
 }
 
 // swagger:model NotificationMetadata
