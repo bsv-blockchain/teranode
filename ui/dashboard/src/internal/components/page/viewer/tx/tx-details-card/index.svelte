@@ -81,7 +81,7 @@
         variant={isJson ? 'tertiary' : 'primary'}
         on:click={() => onDisplay('json')}>{t(`${baseKey}.tab.json`)}</Button
       >
-      {#if (d?.blockHashes && d?.blockHashes.length > 0) || (d?.blockIDs && d?.blockIDs.length > 0)}
+      {#if (data?.blockHashes && data?.blockHashes.length > 0) || (data?.blockIDs && data?.blockIDs.length > 0)}
         <Button
           size="medium"
           hasFocusRect={false}
