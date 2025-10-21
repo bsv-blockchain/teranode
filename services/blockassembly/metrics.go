@@ -18,7 +18,8 @@ var (
 	prometheusBlockAssemblyHealth prometheus.Counter
 
 	// prometheusBlockAssemblyAddTx measures transaction addition time
-	prometheusBlockAssemblyAddTx prometheus.Histogram
+	prometheusBlockAssemblyAddTxA prometheus.Histogram
+	prometheusBlockAssemblyAddTxB prometheus.Histogram
 
 	// prometheusBlockAssemblyRemoveTx measures transaction removal time
 	prometheusBlockAssemblyRemoveTx prometheus.Histogram
@@ -81,11 +82,21 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockAssemblyAddTx = promauto.NewHistogram(
+	prometheusBlockAssemblyAddTxA = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
 			Subsystem: "blockassembly",
-			Name:      "add_tx",
+			Name:      "add_tx_a",
+			Help:      "Histogram of AddTx in the blockassembly service",
+			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyAddTxB = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "add_tx_b",
 			Help:      "Histogram of AddTx in the blockassembly service",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},

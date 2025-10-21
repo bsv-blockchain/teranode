@@ -707,7 +707,7 @@ var txsProcessed = atomic.Uint64{}
 func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "AddTx",
 		tracing.WithParentStat(ba.stats),
-		tracing.WithHistogram(prometheusBlockAssemblyAddTx),
+		tracing.WithHistogram(prometheusBlockAssemblyAddTxA),
 		tracing.WithTag("txid", utils.ReverseAndHexEncodeSlice(req.Txid)),
 		tracing.WithLogMessage(ba.logger, "[AddTx][%s] add tx called", utils.ReverseAndHexEncodeSlice(req.Txid)),
 	)
@@ -837,7 +837,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 				SizeInBytes: req.Size,
 			}, txInpoints)
 
-			prometheusBlockAssemblyAddTx.Observe(float64(time.Since(startTxTime).Microseconds()) / 1_000_000)
+			prometheusBlockAssemblyAddTxB.Observe(float64(time.Since(startTxTime).Microseconds()) / 1_000_000)
 		}
 	}
 
