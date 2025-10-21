@@ -117,7 +117,7 @@ func createTestServer(t *testing.T) *Server {
 		logger:       logger,
 		settings:     settings,
 		peerRegistry: NewPeerRegistry(),
-		banManager:   NewPeerBanManager(context.Background(), nil, settings),
+		banManager:   NewPeerBanManager(context.Background(), nil, settings, registry),
 	}
 
 	return s
@@ -3591,7 +3591,7 @@ func createEnhancedTestServer(t *testing.T) (*Server, *MockServerP2PClient, *Moc
 		logger:       logger,
 		settings:     settings,
 		peerRegistry: NewPeerRegistry(),
-		banManager:   NewPeerBanManager(context.Background(), nil, settings),
+		banManager:   NewPeerBanManager(context.Background(), nil, settings, registry),
 		P2PClient:    mockP2PNode,
 		banList:      mockBanList,
 		gCtx:         context.Background(),

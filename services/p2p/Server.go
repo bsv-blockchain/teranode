@@ -382,13 +382,14 @@ func NewServer(
 		p2pServer.peerMapTTL = tSettings.P2P.PeerMapTTL
 	}
 
-	// Initialize the ban manager first so it can be used by sync coordinator
-	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings)
-
 	// Initialize new clean architecture components
+	// Note: peer registry must be created first so it can be passed to ban manager
 	p2pServer.peerRegistry = NewPeerRegistry()
 	p2pServer.peerSelector = NewPeerSelector(logger, tSettings)
 	p2pServer.peerHealthChecker = NewPeerHealthChecker(logger, p2pServer.peerRegistry, tSettings)
+
+	// Initialize the ban manager with peer registry so it can sync ban statuses
+	p2pServer.banManager = NewPeerBanManager(ctx, &myBanEventHandler{server: p2pServer}, tSettings, p2pServer.peerRegistry)
 	p2pServer.syncCoordinator = NewSyncCoordinator(
 		logger,
 		tSettings,
@@ -854,6 +855,31 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 	}
 }
 
+// updateBytesReceived increments the bytes received counter for a peer
+// It updates both the direct sender and the originator (if different) for gossiped messages
+func (s *Server) updateBytesReceived(from string, originatorPeerID string, messageSize uint64) {
+	if s.peerRegistry == nil {
+		return
+	}
+
+	// Update bytes for the sender (peer we're directly connected to)
+	senderID := peer.ID(from)
+	if info, exists := s.peerRegistry.GetPeer(senderID); exists {
+		newTotal := info.BytesReceived + messageSize
+		s.peerRegistry.UpdateNetworkStats(senderID, newTotal)
+	}
+
+	// Also update for the originator if different (gossiped message)
+	if originatorPeerID != "" {
+		if peerID, err := peer.Decode(originatorPeerID); err == nil && peerID != senderID {
+			if info, exists := s.peerRegistry.GetPeer(peerID); exists {
+				newTotal := info.BytesReceived + messageSize
+				s.peerRegistry.UpdateNetworkStats(peerID, newTotal)
+			}
+		}
+	}
+}
+
 func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string) {
 	var nodeStatusMessage NodeStatusMessage
 
@@ -882,6 +908,9 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 
 		// Update last message time for the sender and originator
 		s.updatePeerLastMessageTime(from, nodeStatusMessage.PeerID)
+
+		// Track bytes received from this message
+		s.updateBytesReceived(from, nodeStatusMessage.PeerID, uint64(len(m)))
 
 		// Skip processing from unhealthy peers (but still forward to WebSocket for monitoring)
 		if s.shouldSkipUnhealthyPeer(from, "handleNodeStatusTopic") {
@@ -1647,6 +1676,9 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
 	// Update last message time for the sender and originator
 	s.updatePeerLastMessageTime(from, blockMessage.PeerID)
 
+	// Track bytes received from this message
+	s.updateBytesReceived(from, blockMessage.PeerID, uint64(len(m)))
+
 	// Skip notifications from banned peers
 	if s.shouldSkipBannedPeer(from, "handleBlockTopic") {
 		return
@@ -1762,6 +1794,9 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, from string) {
 
 	// Update last message time for the sender and originator
 	s.updatePeerLastMessageTime(from, subtreeMessage.PeerID)
+
+	// Track bytes received from this message
+	s.updateBytesReceived(from, subtreeMessage.PeerID, uint64(len(m)))
 
 	// Skip notifications from banned peers
 	if s.shouldSkipBannedPeer(from, "handleSubtreeTopic") {
@@ -1881,6 +1916,9 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, from string)
 	}
 
 	s.updatePeerLastMessageTime(from, rejectedTxMessage.PeerID)
+
+	// Track bytes received from this message
+	s.updateBytesReceived(from, rejectedTxMessage.PeerID, uint64(len(m)))
 
 	if s.shouldSkipBannedPeer(from, "handleRejectedTxTopic") {
 		return

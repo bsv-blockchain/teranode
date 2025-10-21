@@ -19,7 +19,7 @@ func TestSyncCoordinator_FSMTransitionBansPeerAndUpdatesRegistry(t *testing.T) {
 	registry := NewPeerRegistry()
 	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -95,7 +95,7 @@ func TestSyncCoordinator_BannedPeerNotReselected(t *testing.T) {
 	registry := NewPeerRegistry()
 	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
