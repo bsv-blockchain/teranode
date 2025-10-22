@@ -38,8 +38,8 @@ import (
 	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -492,7 +492,7 @@ func TestHandleSendRawTransactionValidation(t *testing.T) {
 
 		// Create mock UTXO store that returns metadata for the transaction
 		mockUtxoStore := &utxo.MockUtxostore{}
-		mockUtxoStore.On("Create", mock.Anything, tx, uint32(0), mock.Anything).Return(&utxometa.Data{
+		mockUtxoStore.On("Create", mock.Anything, mock.Anything, uint32(0), mock.Anything).Return(&utxometa.Data{
 			Tx:          tx,
 			SizeInBytes: uint64(len(tx.Bytes())),
 			Fee:         1000,
