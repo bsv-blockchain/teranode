@@ -477,6 +477,86 @@ func TestHandleSendRawTransactionValidation(t *testing.T) {
 		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
 	})
 
+	t.Run("blob store failure returns error", func(t *testing.T) {
+		logger := mocklogger.NewTestLogger()
+
+		// Create mock blob store that returns an error
+		mockBlobStore := &blob.MockStore{}
+		mockBlobStore.On("Set", mock.Anything, mock.Anything, fileformat.FileTypeTx, mock.Anything, mock.MatchedBy(func(opts []bloboptions.FileOption) bool {
+			return true
+		})).Return(assert.AnError)
+
+		// Create a simple test transaction
+		tx := bt.NewTx()
+		require.NotNil(t, tx)
+
+		s := &RPCServer{
+			logger: logger,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+			txStore: mockBlobStore,
+		}
+
+		// Create command with hex-encoded transaction
+		cmd := &bsvjson.SendRawTransactionCmd{
+			HexTx: hex.EncodeToString(tx.Bytes()),
+		}
+
+		result, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+		assert.Nil(t, result)
+
+		// Verify it's an RPC error
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Failed to store transaction")
+	})
+
+	t.Run("validation failure returns error", func(t *testing.T) {
+		logger := mocklogger.NewTestLogger()
+
+		// Create mock blob store that returns success
+		mockBlobStore := &blob.MockStore{}
+		mockBlobStore.On("Set", mock.Anything, mock.Anything, fileformat.FileTypeTx, mock.Anything, mock.MatchedBy(func(opts []bloboptions.FileOption) bool {
+			return true
+		})).Return(nil)
+
+		// Create a simple test transaction
+		tx := bt.NewTx()
+		require.NotNil(t, tx)
+
+		// Create mock validator that returns an error
+		mockValidator := &validator.MockValidatorClient{
+			Errors: []error{assert.AnError},
+		}
+
+		s := &RPCServer{
+			logger: logger,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+			txStore:         mockBlobStore,
+			validatorClient: mockValidator,
+		}
+
+		// Create command with hex-encoded transaction
+		cmd := &bsvjson.SendRawTransactionCmd{
+			HexTx: hex.EncodeToString(tx.Bytes()),
+		}
+
+		result, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+		assert.Nil(t, result)
+
+		// Verify it's an RPC error
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "TX rejected")
+	})
+
 	t.Run("successful transaction returns string txid", func(t *testing.T) {
 		logger := mocklogger.NewTestLogger()
 
