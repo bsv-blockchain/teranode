@@ -25,6 +25,17 @@ type PeerInfoResponse struct {
 	LastMessageTime int64  `json:"last_message_time"` // Unix timestamp
 	URLResponsive   bool   `json:"url_responsive"`
 	LastURLCheck    int64  `json:"last_url_check"` // Unix timestamp
+
+	// Catchup metrics
+	CatchupAttempts        int64   `json:"catchup_attempts"`
+	CatchupSuccesses       int64   `json:"catchup_successes"`
+	CatchupFailures        int64   `json:"catchup_failures"`
+	CatchupLastAttempt     int64   `json:"catchup_last_attempt"`      // Unix timestamp
+	CatchupLastSuccess     int64   `json:"catchup_last_success"`      // Unix timestamp
+	CatchupLastFailure     int64   `json:"catchup_last_failure"`      // Unix timestamp
+	CatchupReputationScore float64 `json:"catchup_reputation_score"`  // 0-100
+	CatchupMaliciousCount  int64   `json:"catchup_malicious_count"`
+	CatchupAvgResponseTime int64   `json:"catchup_avg_response_ms"`   // Duration in milliseconds
 }
 
 // PeersResponse represents the JSON response containing all peers
@@ -74,6 +85,17 @@ func (s *Server) HandleGetPeers() echo.HandlerFunc {
 				LastMessageTime: timeToUnix(peer.LastMessageTime),
 				URLResponsive:   peer.URLResponsive,
 				LastURLCheck:    timeToUnix(peer.LastURLCheck),
+
+				// Catchup metrics
+				CatchupAttempts:        peer.CatchupAttempts,
+				CatchupSuccesses:       peer.CatchupSuccesses,
+				CatchupFailures:        peer.CatchupFailures,
+				CatchupLastAttempt:     timeToUnix(peer.CatchupLastAttempt),
+				CatchupLastSuccess:     timeToUnix(peer.CatchupLastSuccess),
+				CatchupLastFailure:     timeToUnix(peer.CatchupLastFailure),
+				CatchupReputationScore: peer.CatchupReputationScore,
+				CatchupMaliciousCount:  peer.CatchupMaliciousCount,
+				CatchupAvgResponseTime: peer.CatchupAvgResponseTime.Milliseconds(),
 			})
 		}
 

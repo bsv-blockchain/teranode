@@ -228,3 +228,139 @@ func (c *Client) DisconnectPeer(ctx context.Context, peerID string) error {
 
 	return nil
 }
+
+// RecordCatchupAttempt records that a catchup attempt was made to a peer.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The peer ID to record the attempt for
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) RecordCatchupAttempt(ctx context.Context, peerID string) error {
+	req := &p2p_api.RecordCatchupAttemptRequest{
+		PeerId: peerID,
+	}
+
+	resp, err := c.client.RecordCatchupAttempt(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Ok {
+		return errors.NewServiceError("failed to record catchup attempt")
+	}
+
+	return nil
+}
+
+// RecordCatchupSuccess records a successful catchup from a peer.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The peer ID to record the success for
+//   - durationMs: Duration of the catchup operation in milliseconds
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) RecordCatchupSuccess(ctx context.Context, peerID string, durationMs int64) error {
+	req := &p2p_api.RecordCatchupSuccessRequest{
+		PeerId:     peerID,
+		DurationMs: durationMs,
+	}
+
+	resp, err := c.client.RecordCatchupSuccess(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Ok {
+		return errors.NewServiceError("failed to record catchup success")
+	}
+
+	return nil
+}
+
+// RecordCatchupFailure records a failed catchup attempt from a peer.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The peer ID to record the failure for
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) RecordCatchupFailure(ctx context.Context, peerID string) error {
+	req := &p2p_api.RecordCatchupFailureRequest{
+		PeerId: peerID,
+	}
+
+	resp, err := c.client.RecordCatchupFailure(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Ok {
+		return errors.NewServiceError("failed to record catchup failure")
+	}
+
+	return nil
+}
+
+// RecordCatchupMalicious records malicious behavior detected during catchup.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The peer ID to record malicious behavior for
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) RecordCatchupMalicious(ctx context.Context, peerID string) error {
+	req := &p2p_api.RecordCatchupMaliciousRequest{
+		PeerId: peerID,
+	}
+
+	resp, err := c.client.RecordCatchupMalicious(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Ok {
+		return errors.NewServiceError("failed to record catchup malicious behavior")
+	}
+
+	return nil
+}
+
+// UpdateCatchupReputation updates the reputation score for a peer.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The peer ID to update reputation for
+//   - score: Reputation score between 0 and 100
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error {
+	req := &p2p_api.UpdateCatchupReputationRequest{
+		PeerId: peerID,
+		Score:  score,
+	}
+
+	resp, err := c.client.UpdateCatchupReputation(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Ok {
+		return errors.NewServiceError("failed to update catchup reputation")
+	}
+
+	return nil
+}
+
+// GetPeersForCatchup returns peers suitable for catchup operations.
+// Parameters:
+//   - ctx: Context for the operation
+//
+// Returns:
+//   - *p2p_api.GetPeersForCatchupResponse: Response containing peer information
+//   - error: Any error encountered during the operation
+func (c *Client) GetPeersForCatchup(ctx context.Context) (*p2p_api.GetPeersForCatchupResponse, error) {
+	req := &p2p_api.GetPeersForCatchupRequest{}
+	return c.client.GetPeersForCatchup(ctx, req)
+}

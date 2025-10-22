@@ -800,6 +800,14 @@ func (d *Daemon) startValidationService(
 			return err
 		}
 
+		// Create the P2P client for the BlockValidation service
+		var p2pClient p2p.ClientI
+
+		p2pClient, err = p2p.NewClient(ctx, createLogger(loggerP2P), appSettings)
+		if err != nil {
+			return err
+		}
+
 		// Create the BlockValidation service
 		d.blockValidationSrv = blockvalidation.New(
 			createLogger(loggerBlockValidation),
@@ -811,6 +819,7 @@ func (d *Daemon) startValidationService(
 			blockchainClient,
 			kafkaConsumerClient,
 			blockAssemblyClient,
+			p2pClient,
 		)
 
 		// Add the BlockValidation service to the ServiceManager

@@ -95,6 +95,9 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 		peerID = baseURL
 	}
 
+	// Report catchup attempt to P2P service
+	u.reportCatchupAttempt(ctx, peerID)
+
 	catchupCtx := &CatchupContext{
 		blockUpTo: blockUpTo,
 		baseURL:   baseURL,
@@ -169,6 +172,9 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL st
 
 	// Step 11: Clean up resources
 	u.cleanup(catchupCtx)
+
+	// Report successful catchup to P2P service
+	u.reportCatchupSuccess(ctx, catchupCtx.peerID, time.Since(catchupCtx.startTime))
 
 	return nil
 }
@@ -703,15 +709,14 @@ func (u *Server) filterExistingBlocks(ctx context.Context, headers []*model.Bloc
 //   - peerID: P2P peer identifier of the malicious peer
 //   - reason: Description of the malicious behavior
 func (u *Server) recordMaliciousAttempt(peerID string, reason string) {
-	if u.peerMetrics != nil && peerID != "" {
-		peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(peerID)
-		peerMetric.RecordMaliciousAttempt()
-		u.logger.Warnf("Recorded malicious attempt from peer %s: %s", peerID, reason)
+	if peerID == "" {
+		return
 	}
 
-	if peerID != "" {
-		u.logger.Errorf("SECURITY: Peer %s attempted %s - should be banned (banning not yet implemented)", peerID, reason)
-	}
+	// Report to P2P service (uses helper that falls back to local metrics)
+	u.reportCatchupMalicious(context.Background(), peerID, reason)
+
+	u.logger.Errorf("SECURITY: Peer %s attempted %s - should be banned (banning not yet implemented)", peerID, reason)
 }
 
 // setFSMCatchingBlocks sets the FSM state to CATCHINGBLOCKS.
@@ -831,6 +836,15 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 
 					return err
 				}
+
+				// Report successful block validation to P2P service
+				// This tracks individual block successes, not just overall catchup success
+				blockValidationDuration := time.Since(catchupCtx.startTime)
+				u.reportCatchupSuccess(gCtx, peerID, blockValidationDuration)
+			} else {
+				// Quick validation succeeded, also report success
+				blockValidationDuration := time.Since(catchupCtx.startTime)
+				u.reportCatchupSuccess(gCtx, peerID, blockValidationDuration)
 			}
 
 			// Update the remaining block count
@@ -952,11 +966,7 @@ func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockU
 		currentHeight-commonAncestorMeta.Height, u.settings.BlockValidation.SecretMiningThreshold)
 
 	// Record the malicious attempt for this peer
-	if u.peerMetrics != nil && peerID != "" {
-		peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(peerID)
-		peerMetric.RecordMaliciousAttempt()
-		u.logger.Warnf("[catchup][%s] recorded malicious attempt from peer %s for secret mining", blockUpTo.Hash().String(), baseURL)
-	}
+	u.reportCatchupMalicious(ctx, peerID, "secret_mining")
 
 	// Log ban request - actual banning should be handled by the P2P service
 	u.logger.Errorf("[catchup][%s] SECURITY: Peer %s attempted secret mining - should be banned (banning not yet implemented)", blockUpTo.Hash().String(), baseURL)

@@ -87,4 +87,26 @@ type ClientI interface {
 	// DisconnectPeer disconnects from a specific peer using their peer ID
 	// Returns an error if the disconnection fails.
 	DisconnectPeer(ctx context.Context, peerID string) error
+
+	// RecordCatchupAttempt records that a catchup attempt was made to a peer.
+	// This is used by BlockValidation to track peer reliability during catchup operations.
+	RecordCatchupAttempt(ctx context.Context, peerID string) error
+
+	// RecordCatchupSuccess records a successful catchup from a peer.
+	// The duration parameter indicates how long the catchup operation took.
+	RecordCatchupSuccess(ctx context.Context, peerID string, durationMs int64) error
+
+	// RecordCatchupFailure records a failed catchup attempt from a peer.
+	RecordCatchupFailure(ctx context.Context, peerID string) error
+
+	// RecordCatchupMalicious records malicious behavior detected during catchup.
+	RecordCatchupMalicious(ctx context.Context, peerID string) error
+
+	// UpdateCatchupReputation updates the reputation score for a peer.
+	// Score should be between 0 and 100.
+	UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error
+
+	// GetPeersForCatchup returns peers suitable for catchup operations.
+	// Returns peers sorted by reputation (highest first).
+	GetPeersForCatchup(ctx context.Context) (*p2p_api.GetPeersForCatchupResponse, error)
 }

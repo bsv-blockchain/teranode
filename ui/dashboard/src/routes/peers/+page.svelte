@@ -31,6 +31,16 @@
     last_message_time: number
     url_responsive: boolean
     last_url_check: number
+    // Catchup metrics
+    catchup_attempts: number
+    catchup_successes: number
+    catchup_failures: number
+    catchup_last_attempt: number
+    catchup_last_success: number
+    catchup_last_failure: number
+    catchup_reputation_score: number
+    catchup_malicious_count: number
+    catchup_avg_response_ms: number
   }
 
   let data: PeerData[] = []
@@ -108,7 +118,7 @@
         name: 'Peer ID',
         type: 'string',
         props: {
-          width: '15%',
+          width: '12%',
         },
       },
       {
@@ -116,7 +126,7 @@
         name: 'Status',
         type: 'string',
         props: {
-          width: '10%',
+          width: '8%',
         },
       },
       {
@@ -124,15 +134,39 @@
         name: 'Height',
         type: 'number',
         props: {
+          width: '8%',
+        },
+      },
+      {
+        id: 'catchup_reputation_score',
+        name: 'Reputation',
+        type: 'number',
+        props: {
+          width: '9%',
+        },
+      },
+      {
+        id: 'catchup_success_rate',
+        name: 'Success Rate',
+        type: 'number',
+        props: {
           width: '10%',
         },
       },
       {
-        id: 'block_hash',
-        name: 'Block Hash',
-        type: 'string',
+        id: 'catchup_attempts',
+        name: 'Attempts',
+        type: 'number',
         props: {
-          width: '15%',
+          width: '8%',
+        },
+      },
+      {
+        id: 'catchup_avg_response_ms',
+        name: 'Avg Response',
+        type: 'number',
+        props: {
+          width: '10%',
         },
       },
       {
@@ -144,27 +178,19 @@
         },
       },
       {
-        id: 'ban_score',
-        name: 'Ban Score',
+        id: 'last_message_time',
+        name: 'Last Message',
         type: 'number',
         props: {
           width: '10%',
         },
       },
       {
-        id: 'bytes_received',
-        name: 'Data Received',
+        id: 'ban_score',
+        name: 'Ban Score',
         type: 'number',
         props: {
-          width: '12%',
-        },
-      },
-      {
-        id: 'last_message_time',
-        name: 'Last Message',
-        type: 'number',
-        props: {
-          width: '13%',
+          width: '10%',
         },
       },
     ]
@@ -293,6 +319,110 @@
         props: {
           value: formatRelativeTime(timestamp),
           className: 'time',
+        },
+        value: '',
+      }
+    },
+    catchup_reputation_score: (idField, item, colId) => {
+      const score = item[colId] || 0
+      let className = 'num reputation'
+      let displayValue = score.toFixed(1)
+
+      // Color based on score
+      if (score >= 80) {
+        className += ' reputation-excellent'
+      } else if (score >= 60) {
+        className += ' reputation-good'
+      } else if (score >= 40) {
+        className += ' reputation-fair'
+      } else if (score > 0) {
+        className += ' reputation-poor'
+      } else {
+        displayValue = '-'
+      }
+
+      return {
+        component: RenderSpan,
+        props: {
+          value: displayValue,
+          className: className,
+        },
+        value: '',
+      }
+    },
+    catchup_success_rate: (idField, item, colId) => {
+      const attempts = item.catchup_attempts || 0
+      const successes = item.catchup_successes || 0
+
+      if (attempts === 0) {
+        return {
+          component: RenderSpan,
+          props: {
+            value: '-',
+            className: 'num',
+          },
+          value: '',
+        }
+      }
+
+      const rate = (successes / attempts) * 100
+      let className = 'num'
+
+      if (rate >= 90) {
+        className += ' success-rate-excellent'
+      } else if (rate >= 75) {
+        className += ' success-rate-good'
+      } else if (rate >= 50) {
+        className += ' success-rate-fair'
+      } else {
+        className += ' success-rate-poor'
+      }
+
+      return {
+        component: RenderSpan,
+        props: {
+          value: `${rate.toFixed(1)}%`,
+          className: className,
+        },
+        value: '',
+      }
+    },
+    catchup_attempts: (idField, item, colId) => {
+      const attempts = item.catchup_attempts || 0
+      const successes = item.catchup_successes || 0
+      const failures = item.catchup_failures || 0
+
+      const tooltipText = `Successes: ${successes}\nFailures: ${failures}\nTotal: ${attempts}`
+
+      return {
+        component: RenderSpanWithTooltip,
+        props: {
+          value: attempts.toString(),
+          tooltip: tooltipText,
+          className: 'num',
+        },
+        value: '',
+      }
+    },
+    catchup_avg_response_ms: (idField, item, colId) => {
+      const ms = item[colId] || 0
+
+      if (ms === 0) {
+        return {
+          component: RenderSpan,
+          props: {
+            value: '-',
+            className: 'num',
+          },
+          value: '',
+        }
+      }
+
+      return {
+        component: RenderSpan,
+        props: {
+          value: formatDuration(ms),
+          className: 'num',
         },
         value: '',
       }
@@ -538,19 +668,70 @@
   /* Right-align numeric column headers */
   :global(th:nth-child(3)),
   /* Height */
+  :global(th:nth-child(4)),
+  /* Reputation */
+  :global(th:nth-child(5)),
+  /* Success Rate */
   :global(th:nth-child(6)),
-  /* Ban Score */
+  /* Attempts */
   :global(th:nth-child(7)),
-  /* Data Received */
-  :global(th:nth-child(8))
-    /* Last Message */ {
+  /* Avg Response */
+  :global(th:nth-child(9)),
+  /* Last Message */
+  :global(th:nth-child(10))
+    /* Ban Score */ {
     text-align: right !important;
   }
 
   :global(th:nth-child(3) .table-cell-row),
+  :global(th:nth-child(4) .table-cell-row),
+  :global(th:nth-child(5) .table-cell-row),
   :global(th:nth-child(6) .table-cell-row),
   :global(th:nth-child(7) .table-cell-row),
-  :global(th:nth-child(8) .table-cell-row) {
+  :global(th:nth-child(9) .table-cell-row),
+  :global(th:nth-child(10) .table-cell-row) {
     justify-content: flex-end !important;
+  }
+
+  /* Catchup reputation score colors */
+  :global(.reputation-excellent) {
+    color: #15b241 !important;
+    font-weight: 600;
+  }
+
+  :global(.reputation-good) {
+    color: #52c41a !important;
+    font-weight: 600;
+  }
+
+  :global(.reputation-fair) {
+    color: #ffa500 !important;
+    font-weight: 600;
+  }
+
+  :global(.reputation-poor) {
+    color: #ff6b6b !important;
+    font-weight: 600;
+  }
+
+  /* Success rate colors */
+  :global(.success-rate-excellent) {
+    color: #15b241 !important;
+    font-weight: 600;
+  }
+
+  :global(.success-rate-good) {
+    color: #52c41a !important;
+    font-weight: 600;
+  }
+
+  :global(.success-rate-fair) {
+    color: #ffa500 !important;
+    font-weight: 600;
+  }
+
+  :global(.success-rate-poor) {
+    color: #ff6b6b !important;
+    font-weight: 600;
   }
 </style>

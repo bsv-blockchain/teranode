@@ -19,15 +19,21 @@ type MockGRPCClientConn struct {
 
 // MockPeerServiceClient is a mock implementation of p2p_api.PeerServiceClient
 type MockPeerServiceClient struct {
-	GetPeersFunc       func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error)
-	BanPeerFunc        func(ctx context.Context, in *p2p_api.BanPeerRequest, opts ...grpc.CallOption) (*p2p_api.BanPeerResponse, error)
-	UnbanPeerFunc      func(ctx context.Context, in *p2p_api.UnbanPeerRequest, opts ...grpc.CallOption) (*p2p_api.UnbanPeerResponse, error)
-	IsBannedFunc       func(ctx context.Context, in *p2p_api.IsBannedRequest, opts ...grpc.CallOption) (*p2p_api.IsBannedResponse, error)
-	ListBannedFunc     func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.ListBannedResponse, error)
-	ClearBannedFunc    func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.ClearBannedResponse, error)
-	AddBanScoreFunc    func(ctx context.Context, in *p2p_api.AddBanScoreRequest, opts ...grpc.CallOption) (*p2p_api.AddBanScoreResponse, error)
-	ConnectPeerFunc    func(ctx context.Context, in *p2p_api.ConnectPeerRequest, opts ...grpc.CallOption) (*p2p_api.ConnectPeerResponse, error)
-	DisconnectPeerFunc func(ctx context.Context, in *p2p_api.DisconnectPeerRequest, opts ...grpc.CallOption) (*p2p_api.DisconnectPeerResponse, error)
+	GetPeersFunc                   func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error)
+	BanPeerFunc                    func(ctx context.Context, in *p2p_api.BanPeerRequest, opts ...grpc.CallOption) (*p2p_api.BanPeerResponse, error)
+	UnbanPeerFunc                  func(ctx context.Context, in *p2p_api.UnbanPeerRequest, opts ...grpc.CallOption) (*p2p_api.UnbanPeerResponse, error)
+	IsBannedFunc                   func(ctx context.Context, in *p2p_api.IsBannedRequest, opts ...grpc.CallOption) (*p2p_api.IsBannedResponse, error)
+	ListBannedFunc                 func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.ListBannedResponse, error)
+	ClearBannedFunc                func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.ClearBannedResponse, error)
+	AddBanScoreFunc                func(ctx context.Context, in *p2p_api.AddBanScoreRequest, opts ...grpc.CallOption) (*p2p_api.AddBanScoreResponse, error)
+	ConnectPeerFunc                func(ctx context.Context, in *p2p_api.ConnectPeerRequest, opts ...grpc.CallOption) (*p2p_api.ConnectPeerResponse, error)
+	DisconnectPeerFunc             func(ctx context.Context, in *p2p_api.DisconnectPeerRequest, opts ...grpc.CallOption) (*p2p_api.DisconnectPeerResponse, error)
+	RecordCatchupAttemptFunc       func(ctx context.Context, in *p2p_api.RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupAttemptResponse, error)
+	RecordCatchupSuccessFunc       func(ctx context.Context, in *p2p_api.RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupSuccessResponse, error)
+	RecordCatchupFailureFunc       func(ctx context.Context, in *p2p_api.RecordCatchupFailureRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupFailureResponse, error)
+	RecordCatchupMaliciousFunc     func(ctx context.Context, in *p2p_api.RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupMaliciousResponse, error)
+	UpdateCatchupReputationFunc    func(ctx context.Context, in *p2p_api.UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupReputationResponse, error)
+	GetPeersForCatchupFunc         func(ctx context.Context, in *p2p_api.GetPeersForCatchupRequest, opts ...grpc.CallOption) (*p2p_api.GetPeersForCatchupResponse, error)
 }
 
 func (m *MockPeerServiceClient) GetPeers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {
@@ -91,6 +97,48 @@ func (m *MockPeerServiceClient) DisconnectPeer(ctx context.Context, in *p2p_api.
 		return m.DisconnectPeerFunc(ctx, in, opts...)
 	}
 	return nil, nil
+}
+
+func (m *MockPeerServiceClient) RecordCatchupAttempt(ctx context.Context, in *p2p_api.RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupAttemptResponse, error) {
+	if m.RecordCatchupAttemptFunc != nil {
+		return m.RecordCatchupAttemptFunc(ctx, in, opts...)
+	}
+	return &p2p_api.RecordCatchupAttemptResponse{Ok: true}, nil
+}
+
+func (m *MockPeerServiceClient) RecordCatchupSuccess(ctx context.Context, in *p2p_api.RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupSuccessResponse, error) {
+	if m.RecordCatchupSuccessFunc != nil {
+		return m.RecordCatchupSuccessFunc(ctx, in, opts...)
+	}
+	return &p2p_api.RecordCatchupSuccessResponse{Ok: true}, nil
+}
+
+func (m *MockPeerServiceClient) RecordCatchupFailure(ctx context.Context, in *p2p_api.RecordCatchupFailureRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupFailureResponse, error) {
+	if m.RecordCatchupFailureFunc != nil {
+		return m.RecordCatchupFailureFunc(ctx, in, opts...)
+	}
+	return &p2p_api.RecordCatchupFailureResponse{Ok: true}, nil
+}
+
+func (m *MockPeerServiceClient) RecordCatchupMalicious(ctx context.Context, in *p2p_api.RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupMaliciousResponse, error) {
+	if m.RecordCatchupMaliciousFunc != nil {
+		return m.RecordCatchupMaliciousFunc(ctx, in, opts...)
+	}
+	return &p2p_api.RecordCatchupMaliciousResponse{Ok: true}, nil
+}
+
+func (m *MockPeerServiceClient) UpdateCatchupReputation(ctx context.Context, in *p2p_api.UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupReputationResponse, error) {
+	if m.UpdateCatchupReputationFunc != nil {
+		return m.UpdateCatchupReputationFunc(ctx, in, opts...)
+	}
+	return &p2p_api.UpdateCatchupReputationResponse{Ok: true}, nil
+}
+
+func (m *MockPeerServiceClient) GetPeersForCatchup(ctx context.Context, in *p2p_api.GetPeersForCatchupRequest, opts ...grpc.CallOption) (*p2p_api.GetPeersForCatchupResponse, error) {
+	if m.GetPeersForCatchupFunc != nil {
+		return m.GetPeersForCatchupFunc(ctx, in, opts...)
+	}
+	return &p2p_api.GetPeersForCatchupResponse{Peers: []*p2p_api.PeerInfoForCatchup{}}, nil
 }
 
 func TestSimpleClientGetPeers(t *testing.T) {

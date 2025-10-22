@@ -26,6 +26,17 @@ type PeerInfo struct {
 	URLResponsive   bool      // Whether the DataHub URL is responsive
 	LastURLCheck    time.Time // Last time we checked URL responsiveness
 	Storage         string    // Storage mode: "full", "pruned", or empty (unknown/old version)
+
+	// Catchup metrics - track peer reliability during blockchain synchronization
+	CatchupAttempts        int64         // Total number of catchup attempts to this peer
+	CatchupSuccesses       int64         // Number of successful catchup operations
+	CatchupFailures        int64         // Number of failed catchup operations
+	CatchupLastAttempt     time.Time     // Last time catchup was attempted from this peer
+	CatchupLastSuccess     time.Time     // Last successful catchup from this peer
+	CatchupLastFailure     time.Time     // Last failed catchup from this peer
+	CatchupReputationScore float64       // Reputation score (0-100) for catchup reliability
+	CatchupMaliciousCount  int64         // Count of malicious behavior detections during catchup
+	CatchupAvgResponseTime time.Duration // Average response time for catchup requests
 }
 
 // PeerRegistry maintains peer information
@@ -229,5 +240,180 @@ func (pr *PeerRegistry) GetConnectedPeers() []*PeerInfo {
 			result = append(result, &copy)
 		}
 	}
+	return result
+}
+
+// RecordCatchupAttempt records that a catchup attempt was made to a peer
+func (pr *PeerRegistry) RecordCatchupAttempt(id peer.ID) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if info, exists := pr.peers[id]; exists {
+		info.CatchupAttempts++
+		info.CatchupLastAttempt = time.Now()
+	}
+}
+
+// RecordCatchupSuccess records a successful catchup from a peer
+// Updates success count and calculates running average response time
+// Automatically recalculates reputation score based on success/failure ratio
+func (pr *PeerRegistry) RecordCatchupSuccess(id peer.ID, duration time.Duration) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if info, exists := pr.peers[id]; exists {
+		info.CatchupSuccesses++
+		info.CatchupLastSuccess = time.Now()
+
+		// Calculate running average response time
+		if info.CatchupAvgResponseTime == 0 {
+			info.CatchupAvgResponseTime = duration
+		} else {
+			// Weighted average: 80% previous average, 20% new value
+			info.CatchupAvgResponseTime = time.Duration(
+				int64(float64(info.CatchupAvgResponseTime)*0.8 + float64(duration)*0.2),
+			)
+		}
+
+		// Automatically update reputation score based on metrics
+		pr.calculateAndUpdateReputation(info)
+	}
+}
+
+// RecordCatchupFailure records a failed catchup attempt from a peer
+// Automatically recalculates reputation score based on success/failure ratio
+func (pr *PeerRegistry) RecordCatchupFailure(id peer.ID) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if info, exists := pr.peers[id]; exists {
+		info.CatchupFailures++
+		info.CatchupLastFailure = time.Now()
+
+		// Automatically update reputation score based on metrics
+		pr.calculateAndUpdateReputation(info)
+	}
+}
+
+// RecordCatchupMalicious records malicious behavior detected during catchup
+// Significantly reduces reputation score for malicious activity
+func (pr *PeerRegistry) RecordCatchupMalicious(id peer.ID) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if info, exists := pr.peers[id]; exists {
+		info.CatchupMaliciousCount++
+
+		// Automatically update reputation score (heavily penalized)
+		pr.calculateAndUpdateReputation(info)
+	}
+}
+
+// UpdateCatchupReputation updates the reputation score for a peer
+// Score should be between 0 and 100
+func (pr *PeerRegistry) UpdateCatchupReputation(id peer.ID, score float64) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if info, exists := pr.peers[id]; exists {
+		// Clamp score to valid range
+		if score < 0 {
+			score = 0
+		} else if score > 100 {
+			score = 100
+		}
+		info.CatchupReputationScore = score
+	}
+}
+
+// calculateAndUpdateReputation calculates and updates the reputation score based on metrics
+// This method should be called with the lock already held
+//
+// Reputation algorithm:
+// - Base score: 50 (neutral)
+// - Success rate (0-100): weight 60%
+// - Malicious penalty: -20 per malicious attempt (capped at -50)
+// - Recency bonus: +10 if successful in last hour
+// - Final score is clamped to 0-100 range
+func (pr *PeerRegistry) calculateAndUpdateReputation(info *PeerInfo) {
+	const (
+		baseScore        = 50.0
+		successWeight    = 0.6
+		maliciousPenalty = 20.0
+		maliciousCap     = 50.0
+		recencyBonus     = 10.0
+		recencyWindow    = 1 * time.Hour
+	)
+
+	// Calculate success rate (0-100)
+	totalAttempts := info.CatchupSuccesses + info.CatchupFailures
+	successRate := 0.0
+	if totalAttempts > 0 {
+		successRate = (float64(info.CatchupSuccesses) / float64(totalAttempts)) * 100.0
+	} else {
+		// No history yet, use neutral score
+		info.CatchupReputationScore = baseScore
+		return
+	}
+
+	// Start with weighted success rate
+	score := successRate * successWeight
+
+	// Add base score weighted component
+	score += baseScore * (1.0 - successWeight)
+
+	// Apply malicious penalty
+	maliciousDeduction := float64(info.CatchupMaliciousCount) * maliciousPenalty
+	if maliciousDeduction > maliciousCap {
+		maliciousDeduction = maliciousCap
+	}
+	score -= maliciousDeduction
+
+	// Add recency bonus if peer was successful recently
+	if !info.CatchupLastSuccess.IsZero() && time.Since(info.CatchupLastSuccess) < recencyWindow {
+		score += recencyBonus
+	}
+
+	// Clamp to valid range
+	if score < 0 {
+		score = 0
+	} else if score > 100 {
+		score = 100
+	}
+
+	info.CatchupReputationScore = score
+}
+
+// GetPeersForCatchup returns peers suitable for catchup operations
+// Filters for healthy peers with DataHub URLs, sorted by reputation
+func (pr *PeerRegistry) GetPeersForCatchup() []*PeerInfo {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+
+	result := make([]*PeerInfo, 0, len(pr.peers))
+	for _, info := range pr.peers {
+		// Only include peers with DataHub URLs that are healthy and not banned
+		if info.DataHubURL != "" && info.IsHealthy && !info.IsBanned {
+			copy := *info
+			result = append(result, &copy)
+		}
+	}
+
+	// Sort by reputation score (highest first)
+	// Secondary sort by last success time (most recent first)
+	for i := 0; i < len(result); i++ {
+		for j := i + 1; j < len(result); j++ {
+			// Compare reputation scores
+			if result[i].CatchupReputationScore < result[j].CatchupReputationScore {
+				result[i], result[j] = result[j], result[i]
+			} else if result[i].CatchupReputationScore == result[j].CatchupReputationScore {
+				// If same reputation, prefer more recently successful peer
+				if result[i].CatchupLastSuccess.Before(result[j].CatchupLastSuccess) {
+					result[i], result[j] = result[j], result[i]
+				}
+			}
+		}
+	}
+
 	return result
 }

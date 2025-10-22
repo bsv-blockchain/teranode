@@ -23,11 +23,11 @@ func TestSyncCoordination_FullFlow(t *testing.T) {
 	settings := CreateTestSettings()
 	settings.P2P.BanThreshold = 50
 
-	// Create ban manager
-	banManager := NewPeerBanManager(blockchainSetup.Ctx, nil, settings)
-
 	// Create peer registry and add test peers
 	registry := NewPeerRegistry()
+
+	// Create ban manager
+	banManager := NewPeerBanManager(blockchainSetup.Ctx, nil, settings, registry)
 
 	// Add healthy peer with DataHub URL
 	healthyPeer := peer.ID("healthy")
@@ -229,9 +229,9 @@ func TestSyncCoordination_WithHTTPServer(t *testing.T) {
 	settings := CreateTestSettings()
 
 	// Create components
-	banManager := NewPeerBanManager(blockchainSetup.Ctx, nil, settings)
 	registry := NewPeerRegistry()
 	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(blockchainSetup.Ctx, nil, settings, registry)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 
 	// Add peer with test server URL
@@ -279,9 +279,9 @@ func TestSyncCoordination_ConcurrentOperations(t *testing.T) {
 	logger := CreateTestLogger(t)
 	settings := CreateTestSettings()
 
-	banManager := NewPeerBanManager(blockchainSetup.Ctx, nil, settings)
 	registry := NewPeerRegistry()
 	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(blockchainSetup.Ctx, nil, settings, registry)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 
 	coordinator := NewSyncCoordinator(
@@ -374,12 +374,11 @@ func TestSyncCoordination_CatchupFailures(t *testing.T) {
 	settings := CreateTestSettings()
 	settings.P2P.BanThreshold = 30
 
-	// Create ban manager with handler
-	banHandler := &testBanHandler{}
-	banManager := NewPeerBanManager(blockchainSetup.Ctx, banHandler, settings)
-
+	// Create registry and ban manager with handler
 	registry := NewPeerRegistry()
 	selector := NewPeerSelector(logger, nil)
+	banHandler := &testBanHandler{}
+	banManager := NewPeerBanManager(blockchainSetup.Ctx, banHandler, settings, registry)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 
 	coordinator := NewSyncCoordinator(
@@ -437,9 +436,9 @@ func TestSyncCoordination_PeerEvaluation(t *testing.T) {
 	logger := CreateTestLogger(t)
 	settings := CreateTestSettings()
 
-	banManager := NewPeerBanManager(blockchainSetup.Ctx, nil, settings)
 	registry := NewPeerRegistry()
 	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(blockchainSetup.Ctx, nil, settings, registry)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 
 	coordinator := NewSyncCoordinator(

@@ -294,3 +294,303 @@ func TestPeerRegistry_GetPeerReturnsCopy(t *testing.T) {
 	info3, _ := pr.GetPeer(peerID)
 	assert.Equal(t, int32(100), info3.Height)
 }
+
+// Catchup-related tests
+
+func TestPeerRegistry_RecordCatchupAttempt(t *testing.T) {
+	pr := NewPeerRegistry()
+	peerID := peer.ID("test-peer-1")
+
+	pr.AddPeer(peerID)
+
+	// Initial state
+	info, _ := pr.GetPeer(peerID)
+	assert.Equal(t, int64(0), info.CatchupAttempts)
+	assert.True(t, info.CatchupLastAttempt.IsZero())
+
+	// Record first attempt
+	pr.RecordCatchupAttempt(peerID)
+	info, _ = pr.GetPeer(peerID)
+	assert.Equal(t, int64(1), info.CatchupAttempts)
+	assert.False(t, info.CatchupLastAttempt.IsZero())
+
+	firstAttemptTime := info.CatchupLastAttempt
+
+	// Record second attempt
+	time.Sleep(10 * time.Millisecond)
+	pr.RecordCatchupAttempt(peerID)
+	info, _ = pr.GetPeer(peerID)
+	assert.Equal(t, int64(2), info.CatchupAttempts)
+	assert.True(t, info.CatchupLastAttempt.After(firstAttemptTime))
+
+	// Attempt on non-existent peer should not panic
+	pr.RecordCatchupAttempt(peer.ID("non-existent"))
+}
+
+func TestPeerRegistry_RecordCatchupSuccess(t *testing.T) {
+	pr := NewPeerRegistry()
+	peerID := peer.ID("test-peer-1")
+
+	pr.AddPeer(peerID)
+
+	// Initial state
+	info, _ := pr.GetPeer(peerID)
+	assert.Equal(t, int64(0), info.CatchupSuccesses)
+	assert.True(t, info.CatchupLastSuccess.IsZero())
+	assert.Equal(t, time.Duration(0), info.CatchupAvgResponseTime)
+
+	// Record first success with 100ms duration
+	pr.RecordCatchupSuccess(peerID, 100*time.Millisecond)
+	info, _ = pr.GetPeer(peerID)
+	assert.Equal(t, int64(1), info.CatchupSuccesses)
+	assert.False(t, info.CatchupLastSuccess.IsZero())
+	assert.Equal(t, 100*time.Millisecond, info.CatchupAvgResponseTime)
+
+	// Record second success with 200ms duration
+	// Should calculate weighted average: 80% of 100ms + 20% of 200ms = 120ms
+	time.Sleep(10 * time.Millisecond)
+	pr.RecordCatchupSuccess(peerID, 200*time.Millisecond)
+	info, _ = pr.GetPeer(peerID)
+	assert.Equal(t, int64(2), info.CatchupSuccesses)
+	expectedAvg := time.Duration(int64(float64(100*time.Millisecond)*0.8 + float64(200*time.Millisecond)*0.2))
+	assert.Equal(t, expectedAvg, info.CatchupAvgResponseTime)
+
+	// Success on non-existent peer should not panic
+	pr.RecordCatchupSuccess(peer.ID("non-existent"), 100*time.Millisecond)
+}
+
+func TestPeerRegistry_RecordCatchupFailure(t *testing.T) {
+	pr := NewPeerRegistry()
+	peerID := peer.ID("test-peer-1")
+
+	pr.AddPeer(peerID)
+
+	// Initial state
+	info, _ := pr.GetPeer(peerID)
+	assert.Equal(t, int64(0), info.CatchupFailures)
+	assert.True(t, info.CatchupLastFailure.IsZero())
+
+	// Record first failure
+	pr.RecordCatchupFailure(peerID)
+	info, _ = pr.GetPeer(peerID)
+	assert.Equal(t, int64(1), info.CatchupFailures)
+	assert.False(t, info.CatchupLastFailure.IsZero())
+
+	firstFailureTime := info.CatchupLastFailure
+
+	// Record second failure
+	time.Sleep(10 * time.Millisecond)
+	pr.RecordCatchupFailure(peerID)
+	info, _ = pr.GetPeer(peerID)
+	assert.Equal(t, int64(2), info.CatchupFailures)
+	assert.True(t, info.CatchupLastFailure.After(firstFailureTime))
+
+	// Failure on non-existent peer should not panic
+	pr.RecordCatchupFailure(peer.ID("non-existent"))
+}
+
+func TestPeerRegistry_RecordCatchupMalicious(t *testing.T) {
+	pr := NewPeerRegistry()
+	peerID := peer.ID("test-peer-1")
+
+	pr.AddPeer(peerID)
+
+	// Initial state
+	info, _ := pr.GetPeer(peerID)
+	assert.Equal(t, int64(0), info.CatchupMaliciousCount)
+
+	// Record malicious behavior
+	pr.RecordCatchupMalicious(peerID)
+	info, _ = pr.GetPeer(peerID)
+	assert.Equal(t, int64(1), info.CatchupMaliciousCount)
+
+	pr.RecordCatchupMalicious(peerID)
+	info, _ = pr.GetPeer(peerID)
+	assert.Equal(t, int64(2), info.CatchupMaliciousCount)
+
+	// Malicious on non-existent peer should not panic
+	pr.RecordCatchupMalicious(peer.ID("non-existent"))
+}
+
+func TestPeerRegistry_UpdateCatchupReputation(t *testing.T) {
+	pr := NewPeerRegistry()
+	peerID := peer.ID("test-peer-1")
+
+	pr.AddPeer(peerID)
+
+	// Initial state
+	info, _ := pr.GetPeer(peerID)
+	assert.Equal(t, float64(0), info.CatchupReputationScore)
+
+	// Update to valid score
+	pr.UpdateCatchupReputation(peerID, 75.5)
+	info, _ = pr.GetPeer(peerID)
+	assert.Equal(t, 75.5, info.CatchupReputationScore)
+
+	// Test clamping - score above 100
+	pr.UpdateCatchupReputation(peerID, 150.0)
+	info, _ = pr.GetPeer(peerID)
+	assert.Equal(t, 100.0, info.CatchupReputationScore)
+
+	// Test clamping - score below 0
+	pr.UpdateCatchupReputation(peerID, -50.0)
+	info, _ = pr.GetPeer(peerID)
+	assert.Equal(t, 0.0, info.CatchupReputationScore)
+
+	// Update on non-existent peer should not panic
+	pr.UpdateCatchupReputation(peer.ID("non-existent"), 50.0)
+}
+
+func TestPeerRegistry_GetPeersForCatchup(t *testing.T) {
+	pr := NewPeerRegistry()
+
+	// Add multiple peers with different states
+	ids := GenerateTestPeerIDs(5)
+
+	// Peer 0: Healthy with DataHub URL, good reputation
+	pr.AddPeer(ids[0])
+	pr.UpdateDataHubURL(ids[0], "http://peer0.test")
+	pr.UpdateHealth(ids[0], true)
+	pr.UpdateCatchupReputation(ids[0], 90.0)
+
+	// Peer 1: Healthy with DataHub URL, medium reputation
+	pr.AddPeer(ids[1])
+	pr.UpdateDataHubURL(ids[1], "http://peer1.test")
+	pr.UpdateHealth(ids[1], true)
+	pr.UpdateCatchupReputation(ids[1], 50.0)
+
+	// Peer 2: Unhealthy with DataHub URL (should be excluded)
+	pr.AddPeer(ids[2])
+	pr.UpdateDataHubURL(ids[2], "http://peer2.test")
+	pr.UpdateHealth(ids[2], false)
+	pr.UpdateCatchupReputation(ids[2], 80.0)
+
+	// Peer 3: Healthy but no DataHub URL (should be excluded)
+	pr.AddPeer(ids[3])
+	pr.UpdateHealth(ids[3], true)
+	pr.UpdateCatchupReputation(ids[3], 85.0)
+
+	// Peer 4: Healthy with DataHub URL but banned (should be excluded)
+	pr.AddPeer(ids[4])
+	pr.UpdateDataHubURL(ids[4], "http://peer4.test")
+	pr.UpdateHealth(ids[4], true)
+	pr.UpdateBanStatus(ids[4], 100, true)
+	pr.UpdateCatchupReputation(ids[4], 95.0)
+
+	// Get peers for catchup
+	peers := pr.GetPeersForCatchup()
+
+	// Should only return peers 0 and 1 (healthy, with DataHub URL, not banned)
+	require.Len(t, peers, 2)
+
+	// Should be sorted by reputation (highest first)
+	assert.Equal(t, ids[0], peers[0].ID, "Peer 0 should be first (highest reputation)")
+	assert.Equal(t, 90.0, peers[0].CatchupReputationScore)
+	assert.Equal(t, ids[1], peers[1].ID, "Peer 1 should be second")
+	assert.Equal(t, 50.0, peers[1].CatchupReputationScore)
+}
+
+func TestPeerRegistry_GetPeersForCatchup_SameReputation(t *testing.T) {
+	pr := NewPeerRegistry()
+
+	ids := GenerateTestPeerIDs(3)
+
+	// All peers have same reputation, but different success times
+	baseTime := time.Now()
+
+	// Peer 0: Last success 1 hour ago
+	pr.AddPeer(ids[0])
+	pr.UpdateDataHubURL(ids[0], "http://peer0.test")
+	pr.UpdateHealth(ids[0], true)
+	pr.UpdateCatchupReputation(ids[0], 75.0)
+	pr.RecordCatchupSuccess(ids[0], 100*time.Millisecond)
+	// Manually set last success to older time
+	pr.peers[ids[0]].CatchupLastSuccess = baseTime.Add(-1 * time.Hour)
+
+	// Peer 1: Last success 10 minutes ago (most recent)
+	pr.AddPeer(ids[1])
+	pr.UpdateDataHubURL(ids[1], "http://peer1.test")
+	pr.UpdateHealth(ids[1], true)
+	pr.UpdateCatchupReputation(ids[1], 75.0)
+	pr.RecordCatchupSuccess(ids[1], 100*time.Millisecond)
+	pr.peers[ids[1]].CatchupLastSuccess = baseTime.Add(-10 * time.Minute)
+
+	// Peer 2: Last success 30 minutes ago
+	pr.AddPeer(ids[2])
+	pr.UpdateDataHubURL(ids[2], "http://peer2.test")
+	pr.UpdateHealth(ids[2], true)
+	pr.UpdateCatchupReputation(ids[2], 75.0)
+	pr.RecordCatchupSuccess(ids[2], 100*time.Millisecond)
+	pr.peers[ids[2]].CatchupLastSuccess = baseTime.Add(-30 * time.Minute)
+
+	peers := pr.GetPeersForCatchup()
+
+	require.Len(t, peers, 3)
+	// When reputation is equal, should sort by most recent success first
+	assert.Equal(t, ids[1], peers[0].ID, "Peer 1 should be first (most recent success)")
+	assert.Equal(t, ids[2], peers[1].ID, "Peer 2 should be second")
+	assert.Equal(t, ids[0], peers[2].ID, "Peer 0 should be last (oldest success)")
+}
+
+func TestPeerRegistry_CatchupMetrics_ConcurrentAccess(t *testing.T) {
+	pr := NewPeerRegistry()
+	peerID := peer.ID("test-peer-1")
+	pr.AddPeer(peerID)
+	pr.UpdateDataHubURL(peerID, "http://test.com")
+	pr.UpdateHealth(peerID, true)
+
+	done := make(chan bool)
+
+	// Concurrent attempts
+	go func() {
+		for i := 0; i < 100; i++ {
+			pr.RecordCatchupAttempt(peerID)
+		}
+		done <- true
+	}()
+
+	// Concurrent successes
+	go func() {
+		for i := 0; i < 50; i++ {
+			pr.RecordCatchupSuccess(peerID, time.Duration(i)*time.Millisecond)
+		}
+		done <- true
+	}()
+
+	// Concurrent failures
+	go func() {
+		for i := 0; i < 30; i++ {
+			pr.RecordCatchupFailure(peerID)
+		}
+		done <- true
+	}()
+
+	// Concurrent reputation updates
+	go func() {
+		for i := 0; i < 100; i++ {
+			pr.UpdateCatchupReputation(peerID, float64(i%101))
+		}
+		done <- true
+	}()
+
+	// Concurrent reads
+	go func() {
+		for i := 0; i < 100; i++ {
+			pr.GetPeersForCatchup()
+		}
+		done <- true
+	}()
+
+	// Wait for all
+	for i := 0; i < 5; i++ {
+		<-done
+	}
+
+	// Verify final state is consistent
+	info, exists := pr.GetPeer(peerID)
+	require.True(t, exists)
+	assert.Equal(t, int64(100), info.CatchupAttempts)
+	assert.Equal(t, int64(50), info.CatchupSuccesses)
+	assert.Equal(t, int64(30), info.CatchupFailures)
+	assert.NotZero(t, info.CatchupAvgResponseTime)
+}

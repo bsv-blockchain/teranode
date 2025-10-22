@@ -100,7 +100,70 @@ message AddBanScoreRequest {
     bool success = 1;
     string error = 2;
   }
-  
+
+  // Catchup metrics reporting messages
+  message RecordCatchupAttemptRequest {
+    string peer_id = 1;
+  }
+
+  message RecordCatchupAttemptResponse {
+    bool ok = 1;
+  }
+
+  message RecordCatchupSuccessRequest {
+    string peer_id = 1;
+    int64 duration_ms = 2; // Duration in milliseconds
+  }
+
+  message RecordCatchupSuccessResponse {
+    bool ok = 1;
+  }
+
+  message RecordCatchupFailureRequest {
+    string peer_id = 1;
+  }
+
+  message RecordCatchupFailureResponse {
+    bool ok = 1;
+  }
+
+  message RecordCatchupMaliciousRequest {
+    string peer_id = 1;
+  }
+
+  message RecordCatchupMaliciousResponse {
+    bool ok = 1;
+  }
+
+  message UpdateCatchupReputationRequest {
+    string peer_id = 1;
+    double score = 2; // Score between 0-100
+  }
+
+  message UpdateCatchupReputationResponse {
+    bool ok = 1;
+  }
+
+  message GetPeersForCatchupRequest {
+    // Empty for now, can add filtering params later
+  }
+
+  message PeerInfoForCatchup {
+    string id = 1;
+    int32 height = 2;
+    string block_hash = 3;
+    string data_hub_url = 4;
+    bool is_healthy = 5;
+    double catchup_reputation_score = 6;
+    int64 catchup_attempts = 7;
+    int64 catchup_successes = 8;
+    int64 catchup_failures = 9;
+  }
+
+  message GetPeersForCatchupResponse {
+    repeated PeerInfoForCatchup peers = 1;
+  }
+
   // Add new service for peer operations
   service PeerService {
     rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
@@ -112,5 +175,13 @@ message AddBanScoreRequest {
     rpc AddBanScore(AddBanScoreRequest) returns (AddBanScoreResponse) {}
     rpc ConnectPeer(ConnectPeerRequest) returns (ConnectPeerResponse) {}
     rpc DisconnectPeer(DisconnectPeerRequest) returns (DisconnectPeerResponse) {}
+
+    // Catchup metrics reporting endpoints
+    rpc RecordCatchupAttempt(RecordCatchupAttemptRequest) returns (RecordCatchupAttemptResponse) {}
+    rpc RecordCatchupSuccess(RecordCatchupSuccessRequest) returns (RecordCatchupSuccessResponse) {}
+    rpc RecordCatchupFailure(RecordCatchupFailureRequest) returns (RecordCatchupFailureResponse) {}
+    rpc RecordCatchupMalicious(RecordCatchupMaliciousRequest) returns (RecordCatchupMaliciousResponse) {}
+    rpc UpdateCatchupReputation(UpdateCatchupReputationRequest) returns (UpdateCatchupReputationResponse) {}
+    rpc GetPeersForCatchup(GetPeersForCatchupRequest) returns (GetPeersForCatchupResponse) {}
   }
   

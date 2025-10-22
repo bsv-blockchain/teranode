@@ -113,10 +113,11 @@ func createTestServer(t *testing.T) *Server {
 	}
 
 	// Create server with minimal setup
+	registry := NewPeerRegistry()
 	s := &Server{
 		logger:       logger,
 		settings:     settings,
-		peerRegistry: NewPeerRegistry(),
+		peerRegistry: registry,
 		banManager:   NewPeerBanManager(context.Background(), nil, settings, registry),
 	}
 
@@ -3587,10 +3588,11 @@ func createEnhancedTestServer(t *testing.T) (*Server, *MockServerP2PClient, *Moc
 	// Don't set default expectations for banList methods - let individual tests set them
 
 	// Create server with mocks
+	registry := NewPeerRegistry()
 	server := &Server{
 		logger:       logger,
 		settings:     settings,
-		peerRegistry: NewPeerRegistry(),
+		peerRegistry: registry,
 		banManager:   NewPeerBanManager(context.Background(), nil, settings, registry),
 		P2PClient:    mockP2PNode,
 		banList:      mockBanList,

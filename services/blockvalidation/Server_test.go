@@ -416,7 +416,7 @@ func Test_Server_processBlockFound(t *testing.T) {
 	subtreeStore := memory.New()
 	tSettings.GlobalBlockHeightRetention = uint32(1)
 
-	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient, nil)
+	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient, nil, nil)
 	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, nil)
 
 	err = s.processBlockFound(context.Background(), block.Hash(), "legacy", "", block)
