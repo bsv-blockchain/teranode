@@ -99,6 +99,7 @@ jobs:
         uses: anthropics/claude-code-action@e8bad572273ce919ba15fec95aef0ce974464753 # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ steps.pr.outputs.number }}
