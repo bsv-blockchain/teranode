@@ -440,11 +440,6 @@ type CoinbaseSettings struct {
 	StoreDBTimeoutMillis        int
 	WaitForPeers                bool
 	WalletPrivateKey            string
-	DistributorBackoffDuration  time.Duration
-	DistributorMaxRetries       int
-	DistributorFailureTolerance int
-	DistributerWaitTime         int
-	DistributorTimeout          time.Duration
 	PeerStatusTimeout           time.Duration
 	SlackChannel                string
 	SlackToken                  string

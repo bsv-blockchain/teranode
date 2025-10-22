@@ -103,10 +103,6 @@ func CreateTestSettings(addresses []string) *settings.Settings {
 		Propagation: settings.PropagationSettings{
 			GRPCAddresses: addresses,
 		},
-		Coinbase: settings.CoinbaseSettings{
-			DistributorTimeout:          5 * time.Second,
-			DistributorFailureTolerance: 50,
-		},
 	}
 }
 

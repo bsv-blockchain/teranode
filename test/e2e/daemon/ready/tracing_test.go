@@ -36,17 +36,8 @@ func TestCheckSpanPropagation(t *testing.T) {
 	ctx, _, endSpan := tracing.Tracer("test").Start(context.Background(), "TestCheckSpanPropagation")
 	defer endSpan(err)
 
-	distributor, err := rpc.NewDistributor(ctx, td.Logger, td.Settings,
-		rpc.WithBackoffDuration(1*time.Second),
-		rpc.WithRetryAttempts(1),
-		rpc.WithFailureTolerance(1),
-	)
-	require.NoError(t, err)
-
 	tx := bt.NewTx()
 
-	resp, err := distributor.SendTransaction(ctx, tx)
+	err = td.PropagationClient.ProcessTransaction(ctx, tx)
 	require.Error(t, err)
-
-	t.Logf("resp: %v", resp)
 }

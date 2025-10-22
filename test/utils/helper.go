@@ -461,7 +461,7 @@ loop:
 		return nilHash, errors.NewProcessingError("Failed to request funds", err)
 	}
 
-	_, err = node.DistributorClient.SendTransaction(ctx, faucetTx)
+	err = node.PropagationClient.ProcessTransaction(ctx, faucetTx)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send transaction", err)
 	}
@@ -491,7 +491,7 @@ loop:
 		return nilHash, errors.NewProcessingError("Error filling transaction inputs", err)
 	}
 
-	_, err = node.DistributorClient.SendTransaction(ctx, newTx)
+	err = node.PropagationClient.ProcessTransaction(ctx, newTx)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send new transaction", err)
 	}
@@ -516,7 +516,7 @@ func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []TeranodeTestClie
 	}
 
 	for _, node := range nodes {
-		_, err = node.DistributorClient.SendTransaction(ctx, faucetTx)
+	err = node.PropagationClient.ProcessTransaction(ctx, faucetTx)
 		if err != nil {
 			return nilHash, errors.NewProcessingError("Failed to send transaction", err)
 		}
@@ -547,7 +547,7 @@ func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []TeranodeTestClie
 	}
 
 	for _, node := range nodes {
-		_, err = node.DistributorClient.SendTransaction(ctx, newTx)
+	err = node.PropagationClient.ProcessTransaction(ctx, newTx)
 		if err != nil {
 			return nilHash, errors.NewProcessingError("Failed to send new transaction", err)
 		}
@@ -571,7 +571,7 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []TeranodeTestClient)
 		return nilHash, errors.NewProcessingError("Failed to request funds", err)
 	}
 
-	_, err = nodes[0].DistributorClient.SendTransaction(ctx, faucetTx)
+	err = nodes[0].PropagationClient.ProcessTransaction(ctx, faucetTx)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send transaction", err)
 	}
@@ -622,12 +622,12 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, nodes []TeranodeTestClient)
 		return nilHash, errors.NewProcessingError("Error filling transaction inputs", err)
 	}
 
-	_, err = nodes[0].DistributorClient.SendTransaction(ctx, newTx)
+	err = nodes[0].PropagationClient.ProcessTransaction(ctx, newTx)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send new transaction", err)
 	}
 
-	_, err = nodes[1].DistributorClient.SendTransaction(ctx, newTxDouble)
+	err = nodes[1].PropagationClient.ProcessTransaction(ctx, newTxDouble)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send new transaction", err)
 	}
@@ -761,7 +761,7 @@ func UseCoinbaseUtxo(ctx context.Context, node TeranodeTestClient, coinbaseTx *b
 		return nilHash, errors.NewProcessingError("Error filling transaction inputs", err)
 	}
 
-	_, err = node.DistributorClient.SendTransaction(ctx, newTx)
+	err = node.PropagationClient.ProcessTransaction(ctx, newTx)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send new transaction", err)
 	}
@@ -798,7 +798,7 @@ func UseCoinbaseUtxoV2(ctx context.Context, node TeranodeTestClient, coinbaseTx 
 		return nilHash, errors.NewProcessingError("Error filling transaction inputs", err)
 	}
 
-	_, err = node.DistributorClient.SendTransaction(ctx, newTx)
+	err = node.PropagationClient.ProcessTransaction(ctx, newTx)
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send new transaction", err)
 	}
@@ -813,7 +813,7 @@ func SendTXsWithDistributorV2(ctx context.Context, node TeranodeTestClient, logg
 	logger.Infof("Sending transactions with distributor setting fees to %v", tSettings.Propagation.GRPCAddresses)
 
 	// Send transactions
-	txDistributor := node.DistributorClient
+	txDistributor := &node.PropagationClient
 
 	coinbaseClient := node.CoinbaseClient
 
@@ -862,7 +862,7 @@ loop:
 
 	fmt.Printf("Request funds Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 
-	_, err = txDistributor.SendTransaction(ctx, tx)
+	err = txDistributor.ProcessTransaction(ctx, tx)
 	if err != nil {
 		return false, errors.NewProcessingError("Failed to send transaction", err)
 	}
@@ -897,7 +897,7 @@ loop:
 		return false, errors.NewProcessingError("Error filling transaction inputs", err)
 	}
 
-	_, err = txDistributor.SendTransaction(ctx, newTx)
+	err = txDistributor.ProcessTransaction(ctx, newTx)
 	if err != nil {
 		return false, errors.NewProcessingError("Failed to send new transaction", err)
 	}
@@ -1142,7 +1142,7 @@ func RequestFunds(ctx context.Context, node TeranodeTestClient, address string) 
 
 // SendTransaction sends a transaction using the TeranodeTestClient's distributor client and returns a boolean indicating success or failure.
 func SendTransaction(ctx context.Context, node TeranodeTestClient, tx *bt.Tx) (bool, error) {
-	_, err := node.DistributorClient.SendTransaction(ctx, tx)
+	err = node.PropagationClient.ProcessTransaction(ctx, tx)
 	if err != nil {
 		return false, err
 	}
@@ -1193,7 +1193,7 @@ func CreateTransactionObject(ctx context.Context, node TeranodeTestClient, addre
 		return nil, errors.NewProcessingError("Failed to request funds", err)
 	}
 
-	_, err = node.DistributorClient.SendTransaction(ctx, faucetTx)
+	err = node.PropagationClient.ProcessTransaction(ctx, faucetTx)
 	if err != nil {
 		return nil, errors.NewProcessingError("Failed to send faucet transaction", err)
 	}
