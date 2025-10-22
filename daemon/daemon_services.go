@@ -443,26 +443,10 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
-	// Create blob store for the RPC service
-	var txStore blob.Store
-
-	txStore, err = d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
-	if err != nil {
-		return err
-	}
-
-	// Create validator client for the RPC service
-	var validatorClient validator.Interface
-
-	validatorClient, err = d.daemonStores.GetValidatorClient(ctx, createLogger(loggerTxValidator), appSettings)
-	if err != nil {
-		return err
-	}
-
 	// Create the RPC server with the necessary parts
 	var rpcServer *rpc.RPCServer
 
-	rpcServer, err = rpc.NewServer(createLogger(loggerRPC), appSettings, blockchainClient, blockValidationClient, utxoStore, blockAssemblyClient, peerClient, p2pClient, txStore, validatorClient)
+	rpcServer, err = rpc.NewServer(createLogger(loggerRPC), appSettings, blockchainClient, blockValidationClient, utxoStore, blockAssemblyClient, peerClient, p2pClient)
 	if err != nil {
 		return err
 	}
