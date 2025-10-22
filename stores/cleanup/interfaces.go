@@ -11,6 +11,10 @@ type Service interface {
 	// UpdateBlockHeight updates the current block height and triggers cleanup if needed.
 	// If doneCh is provided, it will be closed when the job completes.
 	UpdateBlockHeight(height uint32, doneCh ...chan string) error
+
+	// SetPersistedHeightGetter sets the function used to get block persister progress.
+	// This allows cleanup to coordinate with block persister to avoid premature deletion.
+	SetPersistedHeightGetter(getter func() uint32)
 }
 
 // CleanupServiceProvider defines an interface for stores that can provide a cleanup service.

@@ -1016,8 +1016,12 @@ func TestStartStopIntensive(t *testing.T) {
 
 		// Start in goroutine since it blocks
 		var startErr error
+		var mu sync.Mutex
 		go func() {
-			startErr = server.Start(ctx, readyCh)
+			err := server.Start(ctx, readyCh)
+			mu.Lock()
+			startErr = err
+			mu.Unlock()
 		}()
 
 		// Wait for ready signal or timeout
@@ -1036,8 +1040,11 @@ func TestStartStopIntensive(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// Error is expected due to context cancellation
-		if startErr != nil {
-			assert.Contains(t, startErr.Error(), "context canceled")
+		mu.Lock()
+		err := startErr
+		mu.Unlock()
+		if err != nil {
+			assert.Contains(t, err.Error(), "context canceled")
 		}
 	})
 
