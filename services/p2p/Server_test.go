@@ -2190,6 +2190,207 @@ func TestServerInitHTTPPublicAddressEmpty(t *testing.T) {
 	require.Equal(t, "http://fallback.example.com", server.AssetHTTPAddressURL)
 }
 
+// TestServerInitAssetHealthCheck_Reachable tests that when the asset address is reachable,
+// the server remains in full mode
+func TestServerInitAssetHealthCheck_Reachable(t *testing.T) {
+	// Create test HTTP server that returns success
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer testServer.Close()
+
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	testSettings.Asset.HTTPPublicAddress = testServer.URL
+	testSettings.P2P.ListenMode = settings.ListenModeFull
+	testSettings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, testSettings, mockClient, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+
+	// Should remain in full mode since asset address is reachable
+	require.Equal(t, settings.ListenModeFull, server.settings.P2P.ListenMode)
+	require.Equal(t, testServer.URL, server.AssetHTTPAddressURL)
+}
+
+// TestServerInitAssetHealthCheck_Unreachable tests that when the asset address is unreachable,
+// the server automatically switches to listen-only mode
+func TestServerInitAssetHealthCheck_Unreachable(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	testSettings.Asset.HTTPPublicAddress = "http://localhost:65535" // Unreachable port
+	testSettings.P2P.ListenMode = settings.ListenModeFull
+	testSettings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, testSettings, mockClient, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+
+	// Should automatically switch to listen-only mode
+	require.Equal(t, settings.ListenModeListenOnly, server.settings.P2P.ListenMode)
+	require.Equal(t, "http://localhost:65535", server.AssetHTTPAddressURL)
+}
+
+// TestServerInitAssetHealthCheck_ServerError tests that 5xx errors are treated as unreachable
+func TestServerInitAssetHealthCheck_ServerError(t *testing.T) {
+	// Create test HTTP server that returns 500 error
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("Internal Server Error"))
+	}))
+	defer testServer.Close()
+
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	testSettings.Asset.HTTPPublicAddress = testServer.URL
+	testSettings.P2P.ListenMode = settings.ListenModeFull
+	testSettings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, testSettings, mockClient, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+
+	// Should automatically switch to listen-only mode due to 5xx error
+	require.Equal(t, settings.ListenModeListenOnly, server.settings.P2P.ListenMode)
+}
+
+// TestServerInitAssetHealthCheck_OfflineDetection tests that offline 404 responses are detected
+func TestServerInitAssetHealthCheck_OfflineDetection(t *testing.T) {
+	// Create test HTTP server that returns offline indication
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("Tunnel offline"))
+	}))
+	defer testServer.Close()
+
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	testSettings.Asset.HTTPPublicAddress = testServer.URL
+	testSettings.P2P.ListenMode = settings.ListenModeFull
+	testSettings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, testSettings, mockClient, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+
+	// Should automatically switch to listen-only mode due to offline detection
+	require.Equal(t, settings.ListenModeListenOnly, server.settings.P2P.ListenMode)
+}
+
+// TestServerInitAssetHealthCheck_Normal404 tests that normal 404s are still considered reachable
+func TestServerInitAssetHealthCheck_Normal404(t *testing.T) {
+	// Create test HTTP server that returns normal 404
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("Not Found"))
+	}))
+	defer testServer.Close()
+
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	testSettings.Asset.HTTPPublicAddress = testServer.URL
+	testSettings.P2P.ListenMode = settings.ListenModeFull
+	testSettings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, testSettings, mockClient, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+
+	// Should remain in full mode since normal 404 is considered reachable
+	require.Equal(t, settings.ListenModeFull, server.settings.P2P.ListenMode)
+}
+
+// TestServerInitAssetHealthCheck_ListenOnlyMode tests that listen-only mode nodes skip health check
+func TestServerInitAssetHealthCheck_ListenOnlyMode(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	testSettings.Asset.HTTPPublicAddress = "http://localhost:65535" // Unreachable, but shouldn't matter
+	testSettings.P2P.ListenMode = settings.ListenModeListenOnly     // Already in listen-only mode
+	testSettings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, testSettings, mockClient, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+
+	// Should remain in listen-only mode (health check should be skipped)
+	require.Equal(t, settings.ListenModeListenOnly, server.settings.P2P.ListenMode)
+}
+
+// TestServerInitAssetHealthCheck_EmptyAddress tests that empty asset address switches to listen-only
+func TestServerInitAssetHealthCheck_EmptyAddress(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	testSettings := createBaseTestSettings()
+	testSettings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	testSettings.Asset.HTTPPublicAddress = ""
+	testSettings.Asset.HTTPAddress = ""
+	testSettings.P2P.ListenMode = settings.ListenModeFull
+	testSettings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, testSettings, mockClient, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+
+	// Should automatically switch to listen-only mode since address is empty
+	require.Equal(t, settings.ListenModeListenOnly, server.settings.P2P.ListenMode)
+}
+
 func TestServerSetupHTTPServer(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.New("test-logger")

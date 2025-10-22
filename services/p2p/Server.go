@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -454,7 +455,9 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // It performs initial setup of HTTP endpoints and sets configuration variables used during the main Start phase.
 //
 // The initialization process configures the service's public-facing HTTP address for asset discovery
-// and prepares internal data structures and channels.
+// and prepares internal data structures and channels. It also performs a health check on the configured
+// asset address to ensure it is reachable. If the health check fails and the node is in full mode,
+// it automatically switches to listen-only mode to prevent other peers from attempting to fetch data.
 //
 // Returns an error if any component initialization fails, or nil if successful.
 func (s *Server) Init(ctx context.Context) (err error) {
@@ -467,7 +470,89 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 	s.AssetHTTPAddressURL = AssetHTTPAddressURLString
 
+	// Perform health check on the asset address if in full mode
+	// If the address is not reachable, automatically switch to listen-only mode
+	if s.settings.P2P.ListenMode == settings.ListenModeFull {
+		if !s.isAssetAddressReachable(ctx, s.AssetHTTPAddressURL) {
+			s.logger.Warnf("[Init] Asset HTTP address %s is not reachable. Automatically switching to listen-only mode to prevent peers from attempting to fetch data from this node. Please check your asset_httpPublicAddress configuration and ensure the endpoint is publicly accessible.", s.AssetHTTPAddressURL)
+			s.settings.P2P.ListenMode = settings.ListenModeListenOnly
+		} else {
+			s.logger.Infof("[Init] Asset HTTP address %s is reachable", s.AssetHTTPAddressURL)
+		}
+	}
+
 	return nil
+}
+
+// isAssetAddressReachable checks if the configured asset HTTP address is reachable.
+// This performs a basic health check by attempting to fetch the genesis block from the asset server.
+// It uses a timeout to prevent the initialization from hanging on unreachable endpoints.
+//
+// Returns true if the asset address is reachable and responds with a valid HTTP status code,
+// false otherwise (network errors, timeouts, or server errors).
+func (s *Server) isAssetAddressReachable(ctx context.Context, assetURL string) bool {
+	if assetURL == "" {
+		return false
+	}
+
+	// Get genesis hash for the health check
+	var genesisHash string
+	if s.settings != nil && s.settings.ChainCfgParams != nil && s.settings.ChainCfgParams.GenesisHash != nil {
+		genesisHash = s.settings.ChainCfgParams.GenesisHash.String()
+	} else {
+		// Default to regtest genesis if not available
+		genesisHash = "18e7664a7abf9bb0e96b889eaa3cb723a89a15b610cc40538e5ebe3e9222e8d2"
+	}
+
+	blockURL := assetURL + "/block/" + genesisHash
+
+	// Create request with timeout context (5 seconds should be sufficient for a local/public endpoint)
+	timeout := 5 * time.Second
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(checkCtx, "GET", blockURL, nil)
+	if err != nil {
+		s.logger.Debugf("[Init] Failed to create health check request for %s: %v", assetURL, err)
+		return false
+	}
+
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Allow redirects but limit to 3 to prevent loops
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		s.logger.Debugf("[Init] Asset address %s health check failed: %v", assetURL, err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	s.logger.Debugf("[Init] Asset address %s health check responded with status %d", assetURL, resp.StatusCode)
+
+	// Check for offline indicators in 404 responses
+	if resp.StatusCode == 404 {
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if err == nil {
+			bodyStr := strings.ToLower(string(body))
+			if strings.Contains(bodyStr, "offline") ||
+				strings.Contains(bodyStr, "tunnel not found") {
+				s.logger.Debugf("[Init] Asset address %s appears to be offline based on 404 response", assetURL)
+				return false
+			}
+		}
+	}
+
+	// Consider 2xx, 3xx, and 4xx (except offline 404s) as reachable
+	// This is consistent with peer health checking logic
+	return resp.StatusCode < 500
 }
 
 // Start begins the P2P server operations and starts listening for connections.
