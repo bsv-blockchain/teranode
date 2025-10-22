@@ -126,9 +126,10 @@ type Server struct {
 	syncConnectionTimes               sync.Map           // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
 	// Cleanup configuration
-	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
-	peerMapMaxSize       int           // Maximum number of entries in peer maps
-	peerMapTTL           time.Duration // Time-to-live for peer map entries
+	peerMapCleanupTicker    *time.Ticker  // Ticker for periodic cleanup of peer maps
+	peerMapMaxSize          int           // Maximum number of entries in peer maps
+	peerMapTTL              time.Duration // Time-to-live for peer map entries
+	registryCacheSaveTicker *time.Ticker  // Ticker for periodic saving of peer registry cache
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -386,6 +387,15 @@ func NewServer(
 	// Note: peer registry must be created first so it can be passed to ban manager
 	p2pServer.peerRegistry = NewPeerRegistry()
 	p2pServer.peerSelector = NewPeerSelector(logger, tSettings)
+
+	// Load cached peer registry data if available
+	if err := p2pServer.peerRegistry.LoadPeerRegistryCache(tSettings.P2P.PeerCacheDir); err != nil {
+		// Log error but continue - cache loading is not critical
+		logger.Warnf("Failed to load peer registry cache: %v", err)
+	} else {
+		logger.Infof("Loaded peer registry cache with %d peers", p2pServer.peerRegistry.PeerCount())
+	}
+
 	p2pServer.peerHealthChecker = NewPeerHealthChecker(logger, p2pServer.peerRegistry, tSettings)
 
 	// Initialize the ban manager with peer registry so it can sync ban statuses
@@ -620,6 +630,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start periodic cleanup of peer maps
 	s.startPeerMapCleanup(ctx)
+
+	// Start periodic save of peer registry cache
+	s.startPeerRegistryCacheSave(ctx)
 
 	// Start sync coordinator (it handles all sync logic internally)
 	if s.syncCoordinator != nil {
@@ -2840,4 +2853,41 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 	}()
 
 	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
+}
+
+// startPeerRegistryCacheSave starts periodic saving of peer registry cache
+func (s *Server) startPeerRegistryCacheSave(ctx context.Context) {
+	// Save every 5 minutes
+	saveInterval := 5 * time.Minute
+
+	s.registryCacheSaveTicker = time.NewTicker(saveInterval)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				// Save one final time before shutdown
+				if s.peerRegistry != nil {
+					if err := s.peerRegistry.SavePeerRegistryCache(s.settings.P2P.PeerCacheDir); err != nil {
+						s.logger.Errorf("[startPeerRegistryCacheSave] failed to save peer registry cache on shutdown: %v", err)
+					} else {
+						s.logger.Infof("[startPeerRegistryCacheSave] saved peer registry cache on shutdown")
+					}
+				}
+				s.logger.Infof("[startPeerRegistryCacheSave] stopping peer registry cache save")
+				return
+			case <-s.registryCacheSaveTicker.C:
+				if s.peerRegistry != nil {
+					if err := s.peerRegistry.SavePeerRegistryCache(s.settings.P2P.PeerCacheDir); err != nil {
+						s.logger.Errorf("[startPeerRegistryCacheSave] failed to save peer registry cache: %v", err)
+					} else {
+						peerCount := s.peerRegistry.PeerCount()
+						s.logger.Debugf("[startPeerRegistryCacheSave] saved peer registry cache with %d peers", peerCount)
+					}
+				}
+			}
+		}
+	}()
+
+	s.logger.Infof("[startPeerRegistryCacheSave] started peer registry cache save with interval %v", saveInterval)
 }
