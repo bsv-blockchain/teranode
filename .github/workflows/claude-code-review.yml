@@ -8,6 +8,7 @@ name: Claude Code Review for PRs
 #
 # How it works:
 # 1. teranode_pr_tests.yaml runs on PR (fork or internal) and completes successfully
+#    - Note: For fork PRs, tests require manual approval by a maintainer or run automatically for approved contributors
 # 2. When that completes, this workflow triggers with access to ANTHROPIC_API_KEY
 # 3. Claude Code analyzes the PR and provides automated review feedback
 
