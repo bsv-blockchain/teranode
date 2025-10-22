@@ -1,0 +1,69 @@
+name: Teranode PR chaos tests
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+
+env:
+  REPO: teranode
+  SETTINGS_CONTEXT_DEFAULT: test
+  GO_VERSION: "1.25.2"
+
+jobs:
+  chaostest:
+    name: chaostest
+    runs-on: teranode-runner
+    steps:
+      # Only login to Docker Hub for internal PRs to avoid rate limits.
+      # Fork PRs won't have access to secrets and will skip this step.
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Start required services for chaos testing
+        run: |
+          cd compose
+          docker compose -f docker-compose-ss.yml up -d postgres toxiproxy-postgres
+          # Wait for services to be healthy
+          timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps postgres | grep -q "healthy"; do sleep 2; done'
+          timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps toxiproxy-postgres | grep -q "healthy"; do sleep 2; done'
+        continue-on-error: false
+
+      - name: Run Chaos Test Scenario 01 (Database Latency)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/teranode-test-results
+          go test -v ./test/chaos -run TestScenario01_DatabaseLatency 2>&1 | tee /tmp/teranode-test-results/chaostest-results.txt
+        continue-on-error: false
+        timeout-minutes: 5
+
+      - name: Upload chaostest results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chaostest-results
+          path: /tmp/teranode-test-results/chaostest-results.txt
+          retention-days: 2
+          if-no-files-found: warn
+
+      - name: Cleanup chaos test services
+        if: always()
+        run: |
+          cd compose
+          docker compose -f docker-compose-ss.yml down -v

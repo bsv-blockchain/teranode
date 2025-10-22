@@ -116,7 +116,7 @@ jobs:
             You must maintain EXACTLY ONE top-level comment from Claude on this PR. Never create multiple separate comments.
 
             **Step 1: Find or create your sticky comment**
-            - Check for existing Claude comment: `gh api /repos/${{ github.repository }}/issues/$PR_NUMBER/comments --jq '.[] | select(.user.login == "claude[bot]") | .id' | head -1`
+            - Check for existing Claude comment: `gh api /repos/${{ github.repository }}/issues/$PR_NUMBER/comments --jq '.[] | select((.user.login == "claude[bot]" or .user.login == "github-actions[bot]") and (.body | startswith("🤖 **Claude Code Review**"))) | .id' | head -1`
             - If found, you will UPDATE that comment. If not found, CREATE it.
             - Store the comment ID for all future updates
 
