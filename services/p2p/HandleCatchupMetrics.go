@@ -107,10 +107,10 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, req *p2p_api.GetPeersFo
 			BlockHash:               p.BlockHash,
 			DataHubUrl:              p.DataHubURL,
 			IsHealthy:               p.IsHealthy,
-			CatchupReputationScore:  p.CatchupReputationScore,
-			CatchupAttempts:         p.CatchupAttempts,
-			CatchupSuccesses:        p.CatchupSuccesses,
-			CatchupFailures:         p.CatchupFailures,
+			CatchupReputationScore:  p.ReputationScore, // Map new field to API field
+			CatchupAttempts:         p.InteractionAttempts, // Map new field to API field
+			CatchupSuccesses:        p.InteractionSuccesses, // Map new field to API field
+			CatchupFailures:         p.InteractionFailures, // Map new field to API field
 		})
 	}
 

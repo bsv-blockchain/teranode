@@ -88,19 +88,6 @@
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
   }
 
-  // Format timestamp to relative time
-  function formatRelativeTime(timestamp: number): string {
-    if (timestamp === 0) return 'Never'
-
-    const now = Math.floor(Date.now() / 1000)
-    const diff = now - timestamp
-
-    if (diff < 60) return `${diff}s ago`
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-    return `${Math.floor(diff / 86400)}d ago`
-  }
-
   // Format duration in milliseconds
   function formatDuration(ms: number): string {
     if (ms === 0) return '0ms'
@@ -170,27 +157,19 @@
         },
       },
       {
+        id: 'bytes_received',
+        name: 'Bytes Received',
+        type: 'number',
+        props: {
+          width: '12%',
+        },
+      },
+      {
         id: 'data_hub_url',
         name: 'DataHub URL',
         type: 'string',
         props: {
-          width: '15%',
-        },
-      },
-      {
-        id: 'last_message_time',
-        name: 'Last Message',
-        type: 'number',
-        props: {
-          width: '10%',
-        },
-      },
-      {
-        id: 'ban_score',
-        name: 'Ban Score',
-        type: 'number',
-        props: {
-          width: '10%',
+          width: '23%',
         },
       },
     ]
@@ -287,20 +266,6 @@
         value: '',
       }
     },
-    ban_score: (idField, item, colId) => {
-      const score = item[colId] || 0
-      const isBanned = item.is_banned
-      const className = isBanned ? 'ban-score-banned num' : score > 50 ? 'ban-score-warning num' : 'num'
-
-      return {
-        component: RenderSpan,
-        props: {
-          value: score.toString(),
-          className: className,
-        },
-        value: '',
-      }
-    },
     bytes_received: (idField, item, colId) => {
       const bytes = item[colId] || 0
       return {
@@ -308,17 +273,6 @@
         props: {
           value: formatBytes(bytes),
           className: 'num',
-        },
-        value: '',
-      }
-    },
-    last_message_time: (idField, item, colId) => {
-      const timestamp = item[colId] || 0
-      return {
-        component: RenderSpan,
-        props: {
-          value: formatRelativeTime(timestamp),
-          className: 'time',
         },
         value: '',
       }
@@ -513,6 +467,7 @@
         pager={true}
         expandUp={true}
         {renderCells}
+        getRenderProps={null}
         getRowIconActions={null}
         on:action={() => {}}
       />

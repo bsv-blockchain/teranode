@@ -305,26 +305,26 @@ func TestPeerRegistry_RecordCatchupAttempt(t *testing.T) {
 
 	// Initial state
 	info, _ := pr.GetPeer(peerID)
-	assert.Equal(t, int64(0), info.CatchupAttempts)
-	assert.True(t, info.CatchupLastAttempt.IsZero())
+	assert.Equal(t, int64(0), info.InteractionAttempts)
+	assert.True(t, info.LastInteractionAttempt.IsZero())
 
 	// Record first attempt
-	pr.RecordCatchupAttempt(peerID)
+	pr.RecordInteractionAttempt(peerID)
 	info, _ = pr.GetPeer(peerID)
-	assert.Equal(t, int64(1), info.CatchupAttempts)
-	assert.False(t, info.CatchupLastAttempt.IsZero())
+	assert.Equal(t, int64(1), info.InteractionAttempts)
+	assert.False(t, info.LastInteractionAttempt.IsZero())
 
-	firstAttemptTime := info.CatchupLastAttempt
+	firstAttemptTime := info.LastInteractionAttempt
 
 	// Record second attempt
 	time.Sleep(10 * time.Millisecond)
-	pr.RecordCatchupAttempt(peerID)
+	pr.RecordInteractionAttempt(peerID)
 	info, _ = pr.GetPeer(peerID)
-	assert.Equal(t, int64(2), info.CatchupAttempts)
-	assert.True(t, info.CatchupLastAttempt.After(firstAttemptTime))
+	assert.Equal(t, int64(2), info.InteractionAttempts)
+	assert.True(t, info.LastInteractionAttempt.After(firstAttemptTime))
 
 	// Attempt on non-existent peer should not panic
-	pr.RecordCatchupAttempt(peer.ID("non-existent"))
+	pr.RecordInteractionAttempt(peer.ID("non-existent"))
 }
 
 func TestPeerRegistry_RecordCatchupSuccess(t *testing.T) {
@@ -335,28 +335,28 @@ func TestPeerRegistry_RecordCatchupSuccess(t *testing.T) {
 
 	// Initial state
 	info, _ := pr.GetPeer(peerID)
-	assert.Equal(t, int64(0), info.CatchupSuccesses)
-	assert.True(t, info.CatchupLastSuccess.IsZero())
-	assert.Equal(t, time.Duration(0), info.CatchupAvgResponseTime)
+	assert.Equal(t, int64(0), info.InteractionSuccesses)
+	assert.True(t, info.LastInteractionSuccess.IsZero())
+	assert.Equal(t, time.Duration(0), info.AvgResponseTime)
 
 	// Record first success with 100ms duration
-	pr.RecordCatchupSuccess(peerID, 100*time.Millisecond)
+	pr.RecordInteractionSuccess(peerID, 100*time.Millisecond)
 	info, _ = pr.GetPeer(peerID)
-	assert.Equal(t, int64(1), info.CatchupSuccesses)
-	assert.False(t, info.CatchupLastSuccess.IsZero())
-	assert.Equal(t, 100*time.Millisecond, info.CatchupAvgResponseTime)
+	assert.Equal(t, int64(1), info.InteractionSuccesses)
+	assert.False(t, info.LastInteractionSuccess.IsZero())
+	assert.Equal(t, 100*time.Millisecond, info.AvgResponseTime)
 
 	// Record second success with 200ms duration
 	// Should calculate weighted average: 80% of 100ms + 20% of 200ms = 120ms
 	time.Sleep(10 * time.Millisecond)
-	pr.RecordCatchupSuccess(peerID, 200*time.Millisecond)
+	pr.RecordInteractionSuccess(peerID, 200*time.Millisecond)
 	info, _ = pr.GetPeer(peerID)
-	assert.Equal(t, int64(2), info.CatchupSuccesses)
+	assert.Equal(t, int64(2), info.InteractionSuccesses)
 	expectedAvg := time.Duration(int64(float64(100*time.Millisecond)*0.8 + float64(200*time.Millisecond)*0.2))
-	assert.Equal(t, expectedAvg, info.CatchupAvgResponseTime)
+	assert.Equal(t, expectedAvg, info.AvgResponseTime)
 
 	// Success on non-existent peer should not panic
-	pr.RecordCatchupSuccess(peer.ID("non-existent"), 100*time.Millisecond)
+	pr.RecordInteractionSuccess(peer.ID("non-existent"), 100*time.Millisecond)
 }
 
 func TestPeerRegistry_RecordCatchupFailure(t *testing.T) {
@@ -367,26 +367,26 @@ func TestPeerRegistry_RecordCatchupFailure(t *testing.T) {
 
 	// Initial state
 	info, _ := pr.GetPeer(peerID)
-	assert.Equal(t, int64(0), info.CatchupFailures)
-	assert.True(t, info.CatchupLastFailure.IsZero())
+	assert.Equal(t, int64(0), info.InteractionFailures)
+	assert.True(t, info.LastInteractionFailure.IsZero())
 
 	// Record first failure
-	pr.RecordCatchupFailure(peerID)
+	pr.RecordInteractionFailure(peerID)
 	info, _ = pr.GetPeer(peerID)
-	assert.Equal(t, int64(1), info.CatchupFailures)
-	assert.False(t, info.CatchupLastFailure.IsZero())
+	assert.Equal(t, int64(1), info.InteractionFailures)
+	assert.False(t, info.LastInteractionFailure.IsZero())
 
-	firstFailureTime := info.CatchupLastFailure
+	firstFailureTime := info.LastInteractionFailure
 
 	// Record second failure
 	time.Sleep(10 * time.Millisecond)
-	pr.RecordCatchupFailure(peerID)
+	pr.RecordInteractionFailure(peerID)
 	info, _ = pr.GetPeer(peerID)
-	assert.Equal(t, int64(2), info.CatchupFailures)
-	assert.True(t, info.CatchupLastFailure.After(firstFailureTime))
+	assert.Equal(t, int64(2), info.InteractionFailures)
+	assert.True(t, info.LastInteractionFailure.After(firstFailureTime))
 
 	// Failure on non-existent peer should not panic
-	pr.RecordCatchupFailure(peer.ID("non-existent"))
+	pr.RecordInteractionFailure(peer.ID("non-existent"))
 }
 
 func TestPeerRegistry_RecordCatchupMalicious(t *testing.T) {
@@ -397,19 +397,19 @@ func TestPeerRegistry_RecordCatchupMalicious(t *testing.T) {
 
 	// Initial state
 	info, _ := pr.GetPeer(peerID)
-	assert.Equal(t, int64(0), info.CatchupMaliciousCount)
+	assert.Equal(t, int64(0), info.MaliciousCount)
 
 	// Record malicious behavior
-	pr.RecordCatchupMalicious(peerID)
+	pr.RecordMaliciousInteraction(peerID)
 	info, _ = pr.GetPeer(peerID)
-	assert.Equal(t, int64(1), info.CatchupMaliciousCount)
+	assert.Equal(t, int64(1), info.MaliciousCount)
 
-	pr.RecordCatchupMalicious(peerID)
+	pr.RecordMaliciousInteraction(peerID)
 	info, _ = pr.GetPeer(peerID)
-	assert.Equal(t, int64(2), info.CatchupMaliciousCount)
+	assert.Equal(t, int64(2), info.MaliciousCount)
 
 	// Malicious on non-existent peer should not panic
-	pr.RecordCatchupMalicious(peer.ID("non-existent"))
+	pr.RecordMaliciousInteraction(peer.ID("non-existent"))
 }
 
 func TestPeerRegistry_UpdateCatchupReputation(t *testing.T) {
@@ -418,27 +418,27 @@ func TestPeerRegistry_UpdateCatchupReputation(t *testing.T) {
 
 	pr.AddPeer(peerID)
 
-	// Initial state
+	// Initial state - should have default reputation of 50
 	info, _ := pr.GetPeer(peerID)
-	assert.Equal(t, float64(0), info.CatchupReputationScore)
+	assert.Equal(t, float64(50), info.ReputationScore)
 
 	// Update to valid score
-	pr.UpdateCatchupReputation(peerID, 75.5)
+	pr.UpdateReputation(peerID, 75.5)
 	info, _ = pr.GetPeer(peerID)
-	assert.Equal(t, 75.5, info.CatchupReputationScore)
+	assert.Equal(t, 75.5, info.ReputationScore)
 
 	// Test clamping - score above 100
-	pr.UpdateCatchupReputation(peerID, 150.0)
+	pr.UpdateReputation(peerID, 150.0)
 	info, _ = pr.GetPeer(peerID)
-	assert.Equal(t, 100.0, info.CatchupReputationScore)
+	assert.Equal(t, 100.0, info.ReputationScore)
 
 	// Test clamping - score below 0
-	pr.UpdateCatchupReputation(peerID, -50.0)
+	pr.UpdateReputation(peerID, -50.0)
 	info, _ = pr.GetPeer(peerID)
-	assert.Equal(t, 0.0, info.CatchupReputationScore)
+	assert.Equal(t, 0.0, info.ReputationScore)
 
 	// Update on non-existent peer should not panic
-	pr.UpdateCatchupReputation(peer.ID("non-existent"), 50.0)
+	pr.UpdateReputation(peer.ID("non-existent"), 50.0)
 }
 
 func TestPeerRegistry_GetPeersForCatchup(t *testing.T) {
@@ -451,31 +451,31 @@ func TestPeerRegistry_GetPeersForCatchup(t *testing.T) {
 	pr.AddPeer(ids[0])
 	pr.UpdateDataHubURL(ids[0], "http://peer0.test")
 	pr.UpdateHealth(ids[0], true)
-	pr.UpdateCatchupReputation(ids[0], 90.0)
+	pr.UpdateReputation(ids[0], 90.0)
 
 	// Peer 1: Healthy with DataHub URL, medium reputation
 	pr.AddPeer(ids[1])
 	pr.UpdateDataHubURL(ids[1], "http://peer1.test")
 	pr.UpdateHealth(ids[1], true)
-	pr.UpdateCatchupReputation(ids[1], 50.0)
+	pr.UpdateReputation(ids[1], 50.0)
 
 	// Peer 2: Unhealthy with DataHub URL (should be excluded)
 	pr.AddPeer(ids[2])
 	pr.UpdateDataHubURL(ids[2], "http://peer2.test")
 	pr.UpdateHealth(ids[2], false)
-	pr.UpdateCatchupReputation(ids[2], 80.0)
+	pr.UpdateReputation(ids[2], 80.0)
 
 	// Peer 3: Healthy but no DataHub URL (should be excluded)
 	pr.AddPeer(ids[3])
 	pr.UpdateHealth(ids[3], true)
-	pr.UpdateCatchupReputation(ids[3], 85.0)
+	pr.UpdateReputation(ids[3], 85.0)
 
 	// Peer 4: Healthy with DataHub URL but banned (should be excluded)
 	pr.AddPeer(ids[4])
 	pr.UpdateDataHubURL(ids[4], "http://peer4.test")
 	pr.UpdateHealth(ids[4], true)
 	pr.UpdateBanStatus(ids[4], 100, true)
-	pr.UpdateCatchupReputation(ids[4], 95.0)
+	pr.UpdateReputation(ids[4], 95.0)
 
 	// Get peers for catchup
 	peers := pr.GetPeersForCatchup()
@@ -485,9 +485,9 @@ func TestPeerRegistry_GetPeersForCatchup(t *testing.T) {
 
 	// Should be sorted by reputation (highest first)
 	assert.Equal(t, ids[0], peers[0].ID, "Peer 0 should be first (highest reputation)")
-	assert.Equal(t, 90.0, peers[0].CatchupReputationScore)
+	assert.Equal(t, 90.0, peers[0].ReputationScore)
 	assert.Equal(t, ids[1], peers[1].ID, "Peer 1 should be second")
-	assert.Equal(t, 50.0, peers[1].CatchupReputationScore)
+	assert.Equal(t, 50.0, peers[1].ReputationScore)
 }
 
 func TestPeerRegistry_GetPeersForCatchup_SameReputation(t *testing.T) {
@@ -502,26 +502,26 @@ func TestPeerRegistry_GetPeersForCatchup_SameReputation(t *testing.T) {
 	pr.AddPeer(ids[0])
 	pr.UpdateDataHubURL(ids[0], "http://peer0.test")
 	pr.UpdateHealth(ids[0], true)
-	pr.UpdateCatchupReputation(ids[0], 75.0)
-	pr.RecordCatchupSuccess(ids[0], 100*time.Millisecond)
+	pr.UpdateReputation(ids[0], 75.0)
+	pr.RecordInteractionSuccess(ids[0], 100*time.Millisecond)
 	// Manually set last success to older time
-	pr.peers[ids[0]].CatchupLastSuccess = baseTime.Add(-1 * time.Hour)
+	pr.peers[ids[0]].LastInteractionSuccess = baseTime.Add(-1 * time.Hour)
 
 	// Peer 1: Last success 10 minutes ago (most recent)
 	pr.AddPeer(ids[1])
 	pr.UpdateDataHubURL(ids[1], "http://peer1.test")
 	pr.UpdateHealth(ids[1], true)
-	pr.UpdateCatchupReputation(ids[1], 75.0)
-	pr.RecordCatchupSuccess(ids[1], 100*time.Millisecond)
-	pr.peers[ids[1]].CatchupLastSuccess = baseTime.Add(-10 * time.Minute)
+	pr.UpdateReputation(ids[1], 75.0)
+	pr.RecordInteractionSuccess(ids[1], 100*time.Millisecond)
+	pr.peers[ids[1]].LastInteractionSuccess = baseTime.Add(-10 * time.Minute)
 
 	// Peer 2: Last success 30 minutes ago
 	pr.AddPeer(ids[2])
 	pr.UpdateDataHubURL(ids[2], "http://peer2.test")
 	pr.UpdateHealth(ids[2], true)
-	pr.UpdateCatchupReputation(ids[2], 75.0)
-	pr.RecordCatchupSuccess(ids[2], 100*time.Millisecond)
-	pr.peers[ids[2]].CatchupLastSuccess = baseTime.Add(-30 * time.Minute)
+	pr.UpdateReputation(ids[2], 75.0)
+	pr.RecordInteractionSuccess(ids[2], 100*time.Millisecond)
+	pr.peers[ids[2]].LastInteractionSuccess = baseTime.Add(-30 * time.Minute)
 
 	peers := pr.GetPeersForCatchup()
 
@@ -544,7 +544,7 @@ func TestPeerRegistry_CatchupMetrics_ConcurrentAccess(t *testing.T) {
 	// Concurrent attempts
 	go func() {
 		for i := 0; i < 100; i++ {
-			pr.RecordCatchupAttempt(peerID)
+			pr.RecordInteractionAttempt(peerID)
 		}
 		done <- true
 	}()
@@ -552,7 +552,7 @@ func TestPeerRegistry_CatchupMetrics_ConcurrentAccess(t *testing.T) {
 	// Concurrent successes
 	go func() {
 		for i := 0; i < 50; i++ {
-			pr.RecordCatchupSuccess(peerID, time.Duration(i)*time.Millisecond)
+			pr.RecordInteractionSuccess(peerID, time.Duration(i)*time.Millisecond)
 		}
 		done <- true
 	}()
@@ -560,7 +560,7 @@ func TestPeerRegistry_CatchupMetrics_ConcurrentAccess(t *testing.T) {
 	// Concurrent failures
 	go func() {
 		for i := 0; i < 30; i++ {
-			pr.RecordCatchupFailure(peerID)
+			pr.RecordInteractionFailure(peerID)
 		}
 		done <- true
 	}()
@@ -568,7 +568,7 @@ func TestPeerRegistry_CatchupMetrics_ConcurrentAccess(t *testing.T) {
 	// Concurrent reputation updates
 	go func() {
 		for i := 0; i < 100; i++ {
-			pr.UpdateCatchupReputation(peerID, float64(i%101))
+			pr.UpdateReputation(peerID, float64(i%101))
 		}
 		done <- true
 	}()
@@ -589,8 +589,8 @@ func TestPeerRegistry_CatchupMetrics_ConcurrentAccess(t *testing.T) {
 	// Verify final state is consistent
 	info, exists := pr.GetPeer(peerID)
 	require.True(t, exists)
-	assert.Equal(t, int64(100), info.CatchupAttempts)
-	assert.Equal(t, int64(50), info.CatchupSuccesses)
-	assert.Equal(t, int64(30), info.CatchupFailures)
-	assert.NotZero(t, info.CatchupAvgResponseTime)
+	assert.Equal(t, int64(100), info.InteractionAttempts)
+	assert.Equal(t, int64(50), info.InteractionSuccesses)
+	assert.Equal(t, int64(30), info.InteractionFailures)
+	assert.NotZero(t, info.AvgResponseTime)
 }

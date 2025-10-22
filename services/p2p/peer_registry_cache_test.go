@@ -70,28 +70,28 @@ func TestPeerRegistryCache_SaveAndLoad(t *testing.T) {
 	assert.Equal(t, "http://peer1.example.com:8090", info1.DataHubURL)
 	assert.Equal(t, int32(123456), info1.Height)
 	assert.Equal(t, "hash-123456", info1.BlockHash)
-	assert.Equal(t, int64(1), info1.CatchupAttempts)
-	assert.Equal(t, int64(2), info1.CatchupSuccesses)
-	assert.Equal(t, int64(1), info1.CatchupFailures)
-	assert.True(t, info1.CatchupReputationScore > 0) // Should have auto-calculated reputation
+	assert.Equal(t, int64(1), info1.InteractionAttempts)
+	assert.Equal(t, int64(2), info1.InteractionSuccesses)
+	assert.Equal(t, int64(1), info1.InteractionFailures)
+	assert.True(t, info1.ReputationScore > 0) // Should have auto-calculated reputation
 	// Response time uses weighted average (80% of new, 20% of old)
 	// First success: 100ms (becomes avg = 100)
 	// Second success: 200ms (becomes avg = 0.8*200 + 0.2*100 = 160 + 20 = 180)
-	// But there's also a more complex weighted average calculation in RecordCatchupSuccess
+	// But there's also a more complex weighted average calculation in RecordInteractionSuccess
 	// that might result in 120ms, so we'll just check it's > 0
-	assert.True(t, info1.CatchupAvgResponseTime.Milliseconds() > 0)
+	assert.True(t, info1.AvgResponseTime.Milliseconds() > 0)
 
 	// Verify peer 2 data was restored
 	info2, exists := pr2.GetPeer(peerID2)
 	assert.True(t, exists)
 	assert.Equal(t, "http://peer2.example.com:8090", info2.DataHubURL)
-	assert.Equal(t, int64(1), info2.CatchupAttempts)
-	assert.Equal(t, int64(1), info2.CatchupMaliciousCount)
+	assert.Equal(t, int64(1), info2.InteractionAttempts)
+	assert.Equal(t, int64(1), info2.MaliciousCount)
 	// With 1 attempt, 0 successes, 0 failures, and 1 malicious count,
 	// the reputation should be base score (50) minus malicious penalty (20) = 30
 	// But the auto-calculation might result in exactly 50 if attempts=1 but no successes/failures
 	// Let's just check it's not high
-	assert.True(t, info2.CatchupReputationScore <= 50.0, "Should have low/neutral reputation due to malicious, got: %f", info2.CatchupReputationScore)
+	assert.True(t, info2.ReputationScore <= 50.0, "Should have low/neutral reputation due to malicious, got: %f", info2.ReputationScore)
 
 	// Verify peer 3 was not cached (no meaningful metrics)
 	// Since peer3 has no metrics, it should not have been saved to the cache
@@ -185,9 +185,9 @@ func TestPeerRegistryCache_MergeWithExisting(t *testing.T) {
 	// DataHubURL should NOT be overwritten since it was already set
 	assert.Equal(t, "http://different.example.com:8090", info1.DataHubURL)
 	// But metrics should be restored
-	assert.Equal(t, int64(1), info1.CatchupAttempts)
-	assert.Equal(t, int64(1), info1.CatchupSuccesses)
-	assert.True(t, info1.CatchupReputationScore > 0) // Should have auto-calculated reputation
+	assert.Equal(t, int64(1), info1.InteractionAttempts)
+	assert.Equal(t, int64(1), info1.InteractionSuccesses)
+	assert.True(t, info1.ReputationScore > 0) // Should have auto-calculated reputation
 
 	// Verify peer 2 still exists (was not in cache)
 	_, exists = pr2.GetPeer(peerID2)
@@ -293,9 +293,9 @@ func TestPeerRegistryCache_InvalidPeerID(t *testing.T) {
 		"last_updated": "2025-10-22T10:00:00Z",
 		"peers": {
 			"invalid-peer-id-!@#$": {
-				"catchup_attempts": 10,
-				"catchup_successes": 9,
-				"catchup_failures": 1,
+				"interaction_attempts": 10,
+				"interaction_successes": 9,
+				"interaction_failures": 1,
 				"data_hub_url": "http://test.com"
 			}
 		}
@@ -313,6 +313,6 @@ func TestPeerRegistryCache_InvalidPeerID(t *testing.T) {
 	// Verify the peer was loaded with correct metrics
 	info, exists := pr.GetPeer(peer.ID("invalid-peer-id-!@#$"))
 	assert.True(t, exists)
-	assert.Equal(t, int64(10), info.CatchupAttempts)
-	assert.Equal(t, int64(9), info.CatchupSuccesses)
+	assert.Equal(t, int64(10), info.InteractionAttempts)
+	assert.Equal(t, int64(9), info.InteractionSuccesses)
 }

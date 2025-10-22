@@ -37,7 +37,7 @@ func TestDistributedCatchupMetrics_RecordAttempt(t *testing.T) {
 	info, exists := p2pRegistry.GetPeer(testPeerID)
 	require.True(t, exists)
 	require.NotNil(t, info)
-	assert.Equal(t, int64(0), info.CatchupAttempts)
+	assert.Equal(t, int64(0), info.InteractionAttempts)
 
 	// Record catchup attempt via gRPC handler
 	req := &p2p_api.RecordCatchupAttemptRequest{
@@ -50,8 +50,8 @@ func TestDistributedCatchupMetrics_RecordAttempt(t *testing.T) {
 	// Verify attempt was recorded
 	info, exists = p2pRegistry.GetPeer(testPeerID)
 	require.True(t, exists)
-	assert.Equal(t, int64(1), info.CatchupAttempts)
-	assert.False(t, info.CatchupLastAttempt.IsZero())
+	assert.Equal(t, int64(1), info.InteractionAttempts)
+	assert.False(t, info.LastInteractionAttempt.IsZero())
 }
 
 // TestDistributedCatchupMetrics_RecordSuccess tests recording catchup success
@@ -86,9 +86,9 @@ func TestDistributedCatchupMetrics_RecordSuccess(t *testing.T) {
 	// Verify success was recorded
 	info, exists := p2pRegistry.GetPeer(testPeerID)
 	require.True(t, exists)
-	assert.Equal(t, int64(1), info.CatchupSuccesses)
-	assert.Equal(t, 100*time.Millisecond, info.CatchupAvgResponseTime)
-	assert.False(t, info.CatchupLastSuccess.IsZero())
+	assert.Equal(t, int64(1), info.InteractionSuccesses)
+	assert.Equal(t, 100*time.Millisecond, info.AvgResponseTime)
+	assert.False(t, info.LastInteractionSuccess.IsZero())
 
 	// Record second success with 200ms duration
 	req2 := &p2p_api.RecordCatchupSuccessRequest{
@@ -102,9 +102,9 @@ func TestDistributedCatchupMetrics_RecordSuccess(t *testing.T) {
 	// Verify weighted average: 80% of 100ms + 20% of 200ms = 120ms
 	info, exists = p2pRegistry.GetPeer(testPeerID)
 	require.True(t, exists)
-	assert.Equal(t, int64(2), info.CatchupSuccesses)
+	assert.Equal(t, int64(2), info.InteractionSuccesses)
 	expectedAvg := time.Duration(int64(float64(100*time.Millisecond)*0.8 + float64(200*time.Millisecond)*0.2))
-	assert.Equal(t, expectedAvg, info.CatchupAvgResponseTime)
+	assert.Equal(t, expectedAvg, info.AvgResponseTime)
 }
 
 // TestDistributedCatchupMetrics_RecordFailure tests recording catchup failures
@@ -137,8 +137,8 @@ func TestDistributedCatchupMetrics_RecordFailure(t *testing.T) {
 	// Verify failure was recorded
 	info, exists := p2pRegistry.GetPeer(testPeerID)
 	require.True(t, exists)
-	assert.Equal(t, int64(1), info.CatchupFailures)
-	assert.False(t, info.CatchupLastFailure.IsZero())
+	assert.Equal(t, int64(1), info.InteractionFailures)
+	assert.False(t, info.LastInteractionFailure.IsZero())
 }
 
 // TestDistributedCatchupMetrics_RecordMalicious tests recording malicious behavior
@@ -171,7 +171,7 @@ func TestDistributedCatchupMetrics_RecordMalicious(t *testing.T) {
 	// Verify malicious count was incremented
 	info, exists := p2pRegistry.GetPeer(testPeerID)
 	require.True(t, exists)
-	assert.Equal(t, int64(1), info.CatchupMaliciousCount)
+	assert.Equal(t, int64(1), info.MaliciousCount)
 }
 
 // TestDistributedCatchupMetrics_UpdateReputation tests updating reputation scores
@@ -205,7 +205,7 @@ func TestDistributedCatchupMetrics_UpdateReputation(t *testing.T) {
 	// Verify reputation was updated
 	info, exists := p2pRegistry.GetPeer(testPeerID)
 	require.True(t, exists)
-	assert.Equal(t, 75.5, info.CatchupReputationScore)
+	assert.Equal(t, 75.5, info.ReputationScore)
 }
 
 // TestDistributedCatchupMetrics_GetPeersForCatchup tests intelligent peer selection
@@ -228,19 +228,19 @@ func TestDistributedCatchupMetrics_GetPeersForCatchup(t *testing.T) {
 	p2pRegistry.UpdateHeight(peer1ID, 1000, "hash1")
 	p2pRegistry.UpdateDataHubURL(peer1ID, "http://peer1:8090")
 	p2pRegistry.UpdateHealth(peer1ID, true)
-	p2pRegistry.UpdateCatchupReputation(peer1ID, 95.0) // Best
+	p2pRegistry.UpdateReputation(peer1ID, 95.0) // Best
 
 	p2pRegistry.AddPeer(peer2ID)
 	p2pRegistry.UpdateHeight(peer2ID, 1001, "hash2")
 	p2pRegistry.UpdateDataHubURL(peer2ID, "http://peer2:8090")
 	p2pRegistry.UpdateHealth(peer2ID, true)
-	p2pRegistry.UpdateCatchupReputation(peer2ID, 85.0) // Second best
+	p2pRegistry.UpdateReputation(peer2ID, 85.0) // Second best
 
 	p2pRegistry.AddPeer(peer3ID)
 	p2pRegistry.UpdateHeight(peer3ID, 999, "hash3")
 	p2pRegistry.UpdateDataHubURL(peer3ID, "http://peer3:8090")
 	p2pRegistry.UpdateHealth(peer3ID, true)
-	p2pRegistry.UpdateCatchupReputation(peer3ID, 75.0) // Third
+	p2pRegistry.UpdateReputation(peer3ID, 75.0) // Third
 
 	// Query for peers suitable for catchup
 	req := &p2p_api.GetPeersForCatchupRequest{}
@@ -283,14 +283,14 @@ func TestDistributedCatchupMetrics_GetPeersForCatchup_FilterUnhealthy(t *testing
 	p2pRegistry.UpdateHeight(healthyPeerID, 1000, "hash1")
 	p2pRegistry.UpdateDataHubURL(healthyPeerID, "http://healthy:8090")
 	p2pRegistry.UpdateHealth(healthyPeerID, true)
-	p2pRegistry.UpdateCatchupReputation(healthyPeerID, 90.0)
+	p2pRegistry.UpdateReputation(healthyPeerID, 90.0)
 
 	// Add unhealthy peer
 	p2pRegistry.AddPeer(unhealthyPeerID)
 	p2pRegistry.UpdateHeight(unhealthyPeerID, 1000, "hash2")
 	p2pRegistry.UpdateDataHubURL(unhealthyPeerID, "http://unhealthy:8090")
 	p2pRegistry.UpdateHealth(unhealthyPeerID, false)
-	p2pRegistry.UpdateCatchupReputation(unhealthyPeerID, 95.0) // Higher score but unhealthy
+	p2pRegistry.UpdateReputation(unhealthyPeerID, 95.0) // Higher score but unhealthy
 
 	// Query for peers suitable for catchup
 	req := &p2p_api.GetPeersForCatchupRequest{}
@@ -326,15 +326,15 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 	// Initial reputation should be 0 (default)
 	info, exists := p2pRegistry.GetPeer(testPeerID)
 	require.True(t, exists)
-	assert.Equal(t, 0.0, info.CatchupReputationScore)
+	assert.Equal(t, 0.0, info.ReputationScore)
 
 	// Record first successful catchup - reputation should be automatically calculated
 	p2pRegistry.RecordCatchupSuccess(testPeerID, 100*time.Millisecond)
 	info, _ = p2pRegistry.GetPeer(testPeerID)
-	assert.Equal(t, int64(1), info.CatchupSuccesses)
+	assert.Equal(t, int64(1), info.InteractionSuccesses)
 	// With 100% success rate (1/1), reputation should be high
 	// Formula: 100 * 0.6 + 50 * 0.4 + 10 (recency bonus) = 60 + 20 + 10 = 90
-	assert.InDelta(t, 90.0, info.CatchupReputationScore, 1.0, "First success should give ~90 reputation")
+	assert.InDelta(t, 90.0, info.ReputationScore, 1.0, "First success should give ~90 reputation")
 
 	// Record more successful catchups
 	for i := 0; i < 4; i++ {
@@ -343,26 +343,26 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 
 	// Verify successes were recorded and reputation is still high
 	info, _ = p2pRegistry.GetPeer(testPeerID)
-	assert.Equal(t, int64(5), info.CatchupSuccesses)
+	assert.Equal(t, int64(5), info.InteractionSuccesses)
 	// Still 100% success rate, reputation should remain high
-	assert.Greater(t, info.CatchupReputationScore, 85.0, "Perfect success rate should maintain high reputation")
+	assert.Greater(t, info.ReputationScore, 85.0, "Perfect success rate should maintain high reputation")
 
 	// Record a failure - reputation should decrease
 	p2pRegistry.RecordCatchupFailure(testPeerID)
 	info, _ = p2pRegistry.GetPeer(testPeerID)
-	assert.Equal(t, int64(1), info.CatchupFailures)
+	assert.Equal(t, int64(1), info.InteractionFailures)
 	// Success rate is now 5/6 = 83.3%
 	// Formula: 83.3 * 0.6 + 50 * 0.4 = 50 + 20 = 70 (roughly)
-	assert.Less(t, info.CatchupReputationScore, 90.0, "Failure should decrease reputation")
-	assert.Greater(t, info.CatchupReputationScore, 60.0, "One failure shouldn't tank reputation")
+	assert.Less(t, info.ReputationScore, 90.0, "Failure should decrease reputation")
+	assert.Greater(t, info.ReputationScore, 60.0, "One failure shouldn't tank reputation")
 
 	// Record malicious behavior - reputation should drop significantly
-	previousScore := info.CatchupReputationScore
+	previousScore := info.ReputationScore
 	p2pRegistry.RecordCatchupMalicious(testPeerID)
 	info, _ = p2pRegistry.GetPeer(testPeerID)
-	assert.Equal(t, int64(1), info.CatchupMaliciousCount)
+	assert.Equal(t, int64(1), info.MaliciousCount)
 	// Malicious penalty is -20 per occurrence
-	assert.Less(t, info.CatchupReputationScore, previousScore-15.0, "Malicious behavior should significantly reduce reputation")
+	assert.Less(t, info.ReputationScore, previousScore-15.0, "Malicious behavior should significantly reduce reputation")
 
 	// Test manual reputation score update via gRPC
 	req := &p2p_api.UpdateCatchupReputationRequest{
@@ -374,7 +374,7 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 	assert.True(t, resp.Ok)
 
 	info, _ = p2pRegistry.GetPeer(testPeerID)
-	assert.Equal(t, 95.5, info.CatchupReputationScore)
+	assert.Equal(t, 95.5, info.ReputationScore)
 
 	// Reputation should never exceed 100 (clamping test)
 	req = &p2p_api.UpdateCatchupReputationRequest{
@@ -386,7 +386,7 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 	assert.True(t, resp.Ok)
 
 	info, _ = p2pRegistry.GetPeer(testPeerID)
-	assert.Equal(t, 100.0, info.CatchupReputationScore)
+	assert.Equal(t, 100.0, info.ReputationScore)
 
 	// Reputation should never go below 0 (clamping test)
 	req = &p2p_api.UpdateCatchupReputationRequest{
@@ -398,7 +398,7 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 	assert.True(t, resp.Ok)
 
 	info, _ = p2pRegistry.GetPeer(testPeerID)
-	assert.Equal(t, 0.0, info.CatchupReputationScore)
+	assert.Equal(t, 0.0, info.ReputationScore)
 }
 
 // TestDistributedCatchupMetrics_ConcurrentUpdates tests that concurrent
@@ -459,10 +459,10 @@ func TestDistributedCatchupMetrics_ConcurrentUpdates(t *testing.T) {
 	expectedSuccesses := int64(numGoroutines * updatesPerGoroutine / 2)
 	expectedFailures := int64(numGoroutines * updatesPerGoroutine / 2)
 
-	assert.Equal(t, expectedSuccesses, info.CatchupSuccesses)
-	assert.Equal(t, expectedFailures, info.CatchupFailures)
-	assert.False(t, info.CatchupLastSuccess.IsZero())
-	assert.False(t, info.CatchupLastFailure.IsZero())
+	assert.Equal(t, expectedSuccesses, info.InteractionSuccesses)
+	assert.Equal(t, expectedFailures, info.InteractionFailures)
+	assert.False(t, info.LastInteractionSuccess.IsZero())
+	assert.False(t, info.LastInteractionFailure.IsZero())
 }
 
 // TestDistributedCatchupMetrics_InvalidPeerID tests error handling for invalid peer IDs

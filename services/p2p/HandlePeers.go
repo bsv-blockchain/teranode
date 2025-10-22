@@ -86,16 +86,16 @@ func (s *Server) HandleGetPeers() echo.HandlerFunc {
 				URLResponsive:   peer.URLResponsive,
 				LastURLCheck:    timeToUnix(peer.LastURLCheck),
 
-				// Catchup metrics
-				CatchupAttempts:        peer.CatchupAttempts,
-				CatchupSuccesses:       peer.CatchupSuccesses,
-				CatchupFailures:        peer.CatchupFailures,
-				CatchupLastAttempt:     timeToUnix(peer.CatchupLastAttempt),
-				CatchupLastSuccess:     timeToUnix(peer.CatchupLastSuccess),
-				CatchupLastFailure:     timeToUnix(peer.CatchupLastFailure),
-				CatchupReputationScore: peer.CatchupReputationScore,
-				CatchupMaliciousCount:  peer.CatchupMaliciousCount,
-				CatchupAvgResponseTime: peer.CatchupAvgResponseTime.Milliseconds(),
+				// Interaction metrics (API still uses catchup naming for backward compatibility)
+				CatchupAttempts:        peer.InteractionAttempts,
+				CatchupSuccesses:       peer.InteractionSuccesses,
+				CatchupFailures:        peer.InteractionFailures,
+				CatchupLastAttempt:     timeToUnix(peer.LastInteractionAttempt),
+				CatchupLastSuccess:     timeToUnix(peer.LastInteractionSuccess),
+				CatchupLastFailure:     timeToUnix(peer.LastInteractionFailure),
+				CatchupReputationScore: peer.ReputationScore,
+				CatchupMaliciousCount:  peer.MaliciousCount,
+				CatchupAvgResponseTime: peer.AvgResponseTime.Milliseconds(),
 			})
 		}
 

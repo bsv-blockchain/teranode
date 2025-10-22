@@ -2139,6 +2139,38 @@ func (s *Server) getIPFromMultiaddr(ctx context.Context, maddr ma.Multiaddr) (ne
 	return nil, nil // not an IP or resolvable DNS address
 }
 
+// ReportValidBlock records a successful block reception from a peer
+// This should be called when a block is successfully validated and accepted
+func (s *Server) ReportValidBlock(ctx context.Context, blockHash string) error {
+	// Look up the peer ID that sent this block
+	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
+	if err != nil {
+		// If we can't find the peer, just log and continue
+		s.logger.Debugf("[ReportValidBlock] Could not find peer for block %s: %v", blockHash, err)
+		return nil // Don't error, as this is not critical
+	}
+
+	// Record successful block reception
+	startTime := time.Now()
+	if entry, ok := s.blockPeerMap.Load(blockHash); ok {
+		if peerEntry, ok := entry.(peerMapEntry); ok {
+			duration := time.Since(peerEntry.timestamp)
+			s.peerRegistry.RecordBlockReceived(peer.ID(peerID), duration)
+			s.logger.Debugf("[ReportValidBlock] Recorded successful block %s from peer %s (latency: %v)",
+				blockHash, peerID, duration)
+		}
+	} else {
+		// If we don't have timing info, just record the success without duration
+		s.peerRegistry.RecordBlockReceived(peer.ID(peerID), time.Since(startTime))
+		s.logger.Debugf("[ReportValidBlock] Recorded successful block %s from peer %s", blockHash, peerID)
+	}
+
+	// Remove the block from the map to avoid memory leaks
+	s.blockPeerMap.Delete(blockHash)
+
+	return nil
+}
+
 // ReportInvalidBlock adds ban score to the peer that sent an invalid block.
 // This method is called by the block validation service when a block is found to be invalid.
 // Parameters:
@@ -2156,6 +2188,9 @@ func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reaso
 
 	// Add ban score to the peer
 	s.logger.Infof("[ReportInvalidBlock] adding ban score to peer %s for invalid block %s: %s", peerID, blockHash, reason)
+
+	// Record as malicious interaction for reputation tracking
+	s.peerRegistry.RecordMaliciousInteraction(peer.ID(peerID))
 
 	// Create the request to add ban score
 	req := &p2p_api.AddBanScoreRequest{
@@ -2191,6 +2226,38 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 	return ""
 }
 
+// ReportValidSubtree records a successful subtree reception from a peer
+// This should be called when a subtree is successfully validated and accepted
+func (s *Server) ReportValidSubtree(ctx context.Context, subtreeHash string) error {
+	// Look up the peer ID that sent this subtree
+	peerID, err := s.getPeerFromMap(&s.subtreePeerMap, subtreeHash, "subtree")
+	if err != nil {
+		// If we can't find the peer, just log and continue
+		s.logger.Debugf("[ReportValidSubtree] Could not find peer for subtree %s: %v", subtreeHash, err)
+		return nil // Don't error, as this is not critical
+	}
+
+	// Record successful subtree reception
+	startTime := time.Now()
+	if entry, ok := s.subtreePeerMap.Load(subtreeHash); ok {
+		if peerEntry, ok := entry.(peerMapEntry); ok {
+			duration := time.Since(peerEntry.timestamp)
+			s.peerRegistry.RecordSubtreeReceived(peer.ID(peerID), duration)
+			s.logger.Debugf("[ReportValidSubtree] Recorded successful subtree %s from peer %s (latency: %v)",
+				subtreeHash, peerID, duration)
+		}
+	} else {
+		// If we don't have timing info, just record the success without duration
+		s.peerRegistry.RecordSubtreeReceived(peer.ID(peerID), time.Since(startTime))
+		s.logger.Debugf("[ReportValidSubtree] Recorded successful subtree %s from peer %s", subtreeHash, peerID)
+	}
+
+	// Remove the subtree from the map to avoid memory leaks
+	s.subtreePeerMap.Delete(subtreeHash)
+
+	return nil
+}
+
 // ReportInvalidSubtree handles invalid subtree reports with explicit peer URL
 func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, peerURL string, reason string) error {
 	var peerID string
@@ -2218,6 +2285,9 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, p
 	// Add ban score to the peer
 	s.logger.Infof("[ReportInvalidSubtree] adding ban score to peer %s for invalid subtree %s: %s",
 		peerID, subtreeHash, reason)
+
+	// Record as malicious interaction for reputation tracking
+	s.peerRegistry.RecordMaliciousInteraction(peer.ID(peerID))
 
 	// Create the request to add ban score
 	req := &p2p_api.AddBanScoreRequest{
