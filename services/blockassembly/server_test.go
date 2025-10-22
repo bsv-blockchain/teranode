@@ -1011,17 +1011,14 @@ func TestStartStopIntensive(t *testing.T) {
 		server, _ := setupServer(t)
 
 		readyCh := make(chan struct{})
+		errCh := make(chan error, 1)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
 		// Start in goroutine since it blocks
-		var startErr error
-		var mu sync.Mutex
 		go func() {
 			err := server.Start(ctx, readyCh)
-			mu.Lock()
-			startErr = err
-			mu.Unlock()
+			errCh <- err
 		}()
 
 		// Wait for ready signal or timeout
@@ -1036,15 +1033,12 @@ func TestStartStopIntensive(t *testing.T) {
 		// Cancel to stop the service
 		cancel()
 
-		// Give some time for cleanup
-		time.Sleep(100 * time.Millisecond)
+		// Wait for Start to complete and get the error
+		startErr := <-errCh
 
 		// Error is expected due to context cancellation
-		mu.Lock()
-		err := startErr
-		mu.Unlock()
-		if err != nil {
-			assert.Contains(t, err.Error(), "context canceled")
+		if startErr != nil {
+			assert.Contains(t, startErr.Error(), "context canceled")
 		}
 	})
 
