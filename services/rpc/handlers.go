@@ -45,7 +45,6 @@ import (
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -786,18 +785,10 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 
 	s.logger.Debugf("tx to send: %v", tx)
 
-	// Store the transaction in blob store first (following the pattern from propagation service)
-	err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())
-	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: "Failed to store transaction: " + err.Error(),
-		}
-	}
-
-	// Validate the transaction synchronously
-	// This will validate scripts, check UTXOs, spend them, create new UTXOs, and send to block assembly
-	_, err = s.validatorClient.Validate(ctx, tx, 0)
+	// Submit transaction to the cluster's propagation service via gRPC client
+	// This aligns with Issue #22's specification to use propagation client
+	// The client's ProcessTransaction call blocks until validation completes (synchronous)
+	err = s.propagationClient.ProcessTransaction(ctx, tx)
 	if err != nil {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCVerify,
