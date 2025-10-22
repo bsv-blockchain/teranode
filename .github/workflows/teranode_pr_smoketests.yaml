@@ -42,12 +42,6 @@ jobs:
         env:
           settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
 
-      - name: Run Long tests
-        run: make sequentialtest
-        continue-on-error: false
-        env:
-          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
-
       - name: Upload smoketest results
         if: always()
         uses: actions/upload-artifact@v4
@@ -56,10 +50,104 @@ jobs:
           path: /tmp/teranode-test-results/smoketest-results.txt
           retention-days: 2
 
+  sequential-sqlite:
+    name: sequential-sqlite
+    runs-on: teranode-runner
+    steps:
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Run Sequential tests (SQLite)
+        run: make sequentialtest-sqlite
+        continue-on-error: false
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
       - name: Upload sequentialtest results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sequentialtest-results
-          path: /tmp/teranode-test-results/sequentialtest-results.txt
+          name: sequentialtest-sqlite-results
+          path: /tmp/teranode-test-results/sequentialtest-sqlite-results.txt
+          retention-days: 2
+
+  sequential-postgres:
+    name: sequential-postgres
+    runs-on: teranode-runner
+    steps:
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Run Sequential tests (Postgres)
+        run: make sequentialtest-postgres
+        continue-on-error: false
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
+      - name: Upload sequentialtest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sequentialtest-postgres-results
+          path: /tmp/teranode-test-results/sequentialtest-postgres-results.txt
+          retention-days: 2
+
+  sequential-aerospike:
+    name: sequential-aerospike
+    runs-on: teranode-runner
+    steps:
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Run Sequential tests (Aerospike)
+        run: make sequentialtest-aerospike
+        continue-on-error: false
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
+      - name: Upload sequentialtest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sequentialtest-aerospike-results
+          path: /tmp/teranode-test-results/sequentialtest-aerospike-results.txt
           retention-days: 2

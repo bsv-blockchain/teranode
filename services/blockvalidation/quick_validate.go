@@ -23,6 +23,13 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// bufioReaderPool reduces GC pressure by reusing bufio.Reader instances.
+var bufioReaderPool = sync.Pool{
+	New: func() interface{} {
+		return bufio.NewReaderSize(nil, 512*1024) // 512KB buffer
+	},
+}
+
 // quickValidateBlock performs optimized validation for blocks below checkpoints.
 // This follows the legacy sync approach: create all UTXOs first, then validate later.
 // This is safe because checkpoints guarantee these blocks are valid.
@@ -285,8 +292,13 @@ func (u *BlockValidation) getBlockTransactions(ctx context.Context, block *model
 			}
 			defer subtreeReader.Close()
 
-			// create a buffered reader to read the subtree
-			bufferedReader := bufio.NewReaderSize(subtreeReader, 1024*512) // 512KB buffer size
+			// Use pooled buffered reader to reduce GC pressure
+			bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+			bufferedReader.Reset(subtreeReader)
+			defer func() {
+				bufferedReader.Reset(nil)
+				bufioReaderPool.Put(bufferedReader)
+			}()
 
 			// subtree only contains the tx hashes (nodes) of the subtree. It is missing the fee and sizeInBytes
 			subtree, err := subtreepkg.NewSubtreeFromReader(bufferedReader)
@@ -299,9 +311,10 @@ func (u *BlockValidation) getBlockTransactions(ctx context.Context, block *model
 			if err != nil {
 				return errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree data %s", block.Hash().String(), subtreeHash.String(), err)
 			}
+			defer subtreeDataReader.Close()
 
-			// create a buffered reader to read the subtree data
-			bufferedReader = bufio.NewReaderSize(subtreeDataReader, 1024*512) // 512KB buffer size
+			// Reuse the same pooled reader for subtree data
+			bufferedReader.Reset(subtreeDataReader)
 
 			// the subtree data reader will make sure the data matches the transaction ids from the subtree
 			subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufferedReader)

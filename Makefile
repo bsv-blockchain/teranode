@@ -162,6 +162,22 @@ sequentialtest:
 	@mkdir -p /tmp/teranode-test-results
 	logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt
 
+# run sequential tests for specific database backends
+.PHONY: sequentialtest-sqlite
+sequentialtest-sqlite:
+	@mkdir -p /tmp/teranode-test-results
+	logLevel=INFO test/scripts/run_tests_sequentially.sh --db sqlite 2>&1 | tee /tmp/teranode-test-results/sequentialtest-sqlite-results.txt
+
+.PHONY: sequentialtest-postgres
+sequentialtest-postgres:
+	@mkdir -p /tmp/teranode-test-results
+	logLevel=INFO test/scripts/run_tests_sequentially.sh --db postgres 2>&1 | tee /tmp/teranode-test-results/sequentialtest-postgres-results.txt
+
+.PHONY: sequentialtest-aerospike
+sequentialtest-aerospike:
+	@mkdir -p /tmp/teranode-test-results
+	logLevel=INFO test/scripts/run_tests_sequentially.sh --db aerospike 2>&1 | tee /tmp/teranode-test-results/sequentialtest-aerospike-results.txt
+
 .PHONY: testall
 testall: test longtest sequentialtest
 

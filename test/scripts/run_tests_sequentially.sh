@@ -2,6 +2,22 @@
 
 set -euo pipefail
 
+# Parse command line arguments
+DB_FILTER=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --db)
+            DB_FILTER="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--db sqlite|postgres|aerospike]"
+            exit 1
+            ;;
+    esac
+done
+
 # Common test flags
 TEST_FLAGS="-timeout 120 -tags aerospike,native,functional,test_sequentially,test_all,memory,postgres,sqlite -count=1"
 
@@ -95,7 +111,17 @@ for test_file in $test_files; do
         
         # Extract the test function name
         test_func=$(echo "$line" | awk '{print $2}' | cut -d'(' -f1)
-        
+
+        # Skip test if DB filter is set and test doesn't match
+        if [ ! -z "$DB_FILTER" ]; then
+            # Normalize both to lowercase for case-insensitive matching
+            test_func_lower=$(echo "$test_func" | tr '[:upper:]' '[:lower:]')
+            db_filter_lower=$(echo "$DB_FILTER" | tr '[:upper:]' '[:lower:]')
+            if [[ ! "$test_func_lower" =~ $db_filter_lower ]]; then
+                continue
+            fi
+        fi
+
         # Find the next test function to get the end line
         next_line_num=
         if [ $((i + 1)) -lt "${#test_functions[@]}" ]; then
