@@ -38,7 +38,7 @@ jobs:
 
       - name: Get PR number and metadata
         id: pr
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             // Try to get PR number from workflow_run.pull_requests first
@@ -87,7 +87,7 @@ jobs:
 
       - name: Checkout PR code
         if: steps.pr.outputs.is_draft == 'false'
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           repository: ${{ steps.pr.outputs.repo_full_name }}
           ref: ${{ steps.pr.outputs.head_sha }}
@@ -96,7 +96,7 @@ jobs:
       - name: Run Claude Code Review
         if: steps.pr.outputs.is_draft == 'false'
         id: claude-review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@e8bad572273ce919ba15fec95aef0ce974464753 # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
