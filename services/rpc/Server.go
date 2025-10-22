@@ -65,7 +65,9 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
+	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -684,6 +686,14 @@ type RPCServer struct {
 	// utxoStore provides access to the UTXO (Unspent Transaction Output) database
 	// Used for transaction validation and UTXO queries
 	utxoStore utxo.Store
+
+	// txStore provides access to the transaction blob store for persisting transactions
+	// Used for storing raw transaction data before validation
+	txStore blob.Store
+
+	// validatorClient provides access to the transaction validator service
+	// Used for synchronous transaction validation in sendrawtransaction RPC
+	validatorClient validator.Interface
 }
 
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
@@ -1367,12 +1377,18 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 //   - logger: Structured logger for operational and debug messages
 //   - tSettings: Configuration settings for the RPC server and related features
 //   - blockchainClient: Interface to the blockchain service for block and chain operations
+//   - blockValidationClient: Interface to the block validation service
 //   - utxoStore: Interface to the UTXO database for transaction validation
+//   - blockAssemblyClient: Interface to the block assembly service for mining operations
+//   - peerClient: Interface to the legacy peer service
+//   - p2pClient: Interface to the P2P network service
+//   - txStore: Interface to the transaction blob store for persisting transactions
+//   - validatorClient: Interface to the validator service for transaction validation
 //
 // Returns:
 //   - *RPCServer: Configured server instance ready for initialization
 //   - error: Any error encountered during configuration
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI) (*RPCServer, error) {
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI, txStore blob.Store, validatorClient validator.Interface) (*RPCServer, error) {
 	initPrometheusMetrics()
 
 	assetHTTPAddress := tSettings.Asset.HTTPAddress
@@ -1399,6 +1415,8 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		blockAssemblyClient:    blockAssemblyClient,
 		peerClient:             peerClient,
 		p2pClient:              p2pClient,
+		txStore:                txStore,
+		validatorClient:        validatorClient,
 	}
 
 	rpcUser := tSettings.RPC.RPCUser

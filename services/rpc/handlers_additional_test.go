@@ -13,12 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -27,11 +29,17 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/peer_api"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
+	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/mock"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -467,6 +475,57 @@ func TestHandleSendRawTransactionValidation(t *testing.T) {
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		assert.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+	})
+
+	t.Run("successful transaction returns string txid", func(t *testing.T) {
+		logger := mocklogger.NewTestLogger()
+
+		// Create mock blob store that returns success
+		mockBlobStore := &blob.MockStore{}
+		mockBlobStore.On("Set", mock.Anything, mock.Anything, fileformat.FileTypeTx, mock.Anything, mock.MatchedBy(func(opts []bloboptions.FileOption) bool {
+			return true
+		})).Return(nil)
+
+		// Create a simple test transaction
+		tx := bt.NewTx()
+		require.NotNil(t, tx)
+
+		// Create mock UTXO store that returns metadata for the transaction
+		mockUtxoStore := &utxo.MockUtxostore{}
+		mockUtxoStore.On("Create", mock.Anything, tx, uint32(0), mock.Anything).Return(&utxometa.Data{
+			Tx:          tx,
+			SizeInBytes: uint64(len(tx.Bytes())),
+			Fee:         1000,
+		}, nil)
+
+		// Create mock validator that returns success with metadata
+		mockValidator := &validator.MockValidatorClient{
+			UtxoStore: mockUtxoStore,
+		}
+
+		s := &RPCServer{
+			logger: logger,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+			txStore:         mockBlobStore,
+			validatorClient: mockValidator,
+		}
+
+		// Create command with hex-encoded transaction
+		cmd := &bsvjson.SendRawTransactionCmd{
+			HexTx: hex.EncodeToString(tx.Bytes()),
+		}
+
+		result, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+
+		// Verify result is a string
+		txidResult, ok := result.(string)
+		require.True(t, ok, "result should be a string")
+
+		// Verify the string matches the transaction ID
+		assert.Equal(t, tx.TxID(), txidResult)
 	})
 }
 

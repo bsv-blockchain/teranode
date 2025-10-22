@@ -909,7 +909,7 @@ func TestNewServer(t *testing.T) {
 			},
 		}
 
-		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil)
+		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil, nil, nil)
 
 		require.Error(t, err)
 		assert.Nil(t, server)
@@ -923,7 +923,7 @@ func TestNewServer(t *testing.T) {
 			},
 		}
 
-		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil)
+		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil, nil, nil)
 
 		require.Error(t, err)
 		assert.Nil(t, server)
@@ -940,7 +940,7 @@ func TestNewServer(t *testing.T) {
 			},
 		}
 
-		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil)
+		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil, nil, nil)
 
 		require.Error(t, err)
 		assert.Nil(t, server)
