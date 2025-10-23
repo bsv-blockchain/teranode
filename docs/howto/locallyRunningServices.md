@@ -70,11 +70,11 @@ Teranode supports multiple database backends for UTXO storage, configured via se
 
 3. **Aerospike** (High-performance option):
 
-   !!! warning "Aerospike Requirements"
-
-       - Requires both the appropriate settings AND the 'aerospike' build tag
-       - See the Aerospike Integration section below
-       - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
+   > **Warning: Aerospike Requirements**
+   >
+   > - Requires both the appropriate settings AND the 'aerospike' build tag
+   > - See the Aerospike Integration section below
+   > - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
 
 > **Note:** The database backend is determined by the connection string prefix in your settings:
 >
@@ -163,40 +163,39 @@ Launch the node with specific components using command-line options. This allows
 rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike . [OPTIONS]
 ```
 
-Enable or disable components by setting the corresponding option to `1` or `0`. Options are not case-sensitive.
+Enable or disable components by setting the corresponding option to `1` or `0`. **Note: Options are case-sensitive and must be lowercase.**
 
 | Component          | Option                      | Description                           |
 |--------------------|---------------------------|---------------------------------------|
-| Alert              | `-Alert=1`                  | Alert system for network notifications|
-| Asset              | `-Asset=1`                  | Asset handling service                |
-| Block Assembly     | `-BlockAssembly=1`          | Block assembly service                |
-| Block Persister    | `-BlockPersister=1`         | Block persistence service             |
-| Block Validation   | `-BlockValidation=1`        | Block validation service              |
-| Blockchain         | `-Blockchain=1`             | Blockchain processing service         |
-| Legacy             | `-Legacy=1`                 | Legacy API support                    |
-| P2P                | `-P2P=1`                    | Peer-to-peer networking service       |
-| Propagation        | `-Propagation=1`            | Data propagation service              |
-| RPC                | `-RPC=1`                    | RPC interface service                 |
-| Subtree Validation | `-SubtreeValidation=1`      | Subtree validation service            |
-| UTXO Persister     | `-UTXOPersister=1`          | UTXO persistence service              |
-| Validator          | `-Validator=1`              | Transaction validation service        |
+| Alert              | `-alert=1`                  | Alert system for network notifications|
+| Asset              | `-asset=1`                  | Asset handling service                |
+| Block Assembly     | `-blockassembly=1`          | Block assembly service                |
+| Block Persister    | `-blockpersister=1`         | Block persistence service             |
+| Block Validation   | `-blockvalidation=1`        | Block validation service              |
+| Blockchain         | `-blockchain=1`             | Blockchain processing service         |
+| Legacy             | `-legacy=1`                 | Legacy API support                    |
+| P2P                | `-p2p=1`                    | Peer-to-peer networking service       |
+| Propagation        | `-propagation=1`            | Data propagation service              |
+| RPC                | `-rpc=1`                    | RPC interface service                 |
+| Subtree Validation | `-subtreevalidation=1`      | Subtree validation service            |
+| UTXO Persister     | `-utxopersister=1`          | UTXO persistence service              |
+| Validator          | `-validator=1`              | Transaction validation service        |
 
 #### Additional Options
 
 | Option                        | Description                                     |
 |-------------------------------|-------------------------------------------------|
-|-------------------------------|-------------------------------------------------|
-| `-all=<1|0>`                  | Enable/disable all services unless explicitly overridden by other flags. By default (when no flags are specified), the system behaves as if `-all=1` was set. |
+| `-all=<1\|0>`                 | Enable/disable all services unless explicitly overridden by other flags. By default (when no flags are specified), the system behaves as if `-all=1` was set. |
 | `-help=1`                     | Display command-line help information            |
 | `-wait_for_postgres=1`        | Wait for PostgreSQL to be available before starting |
 | `-localTestStartFromState=X`  | Start blockchain FSM from a specific state (for testing) |
 
-#### Example Usage:
+#### Examples
 
 To start the node with only validation and UTXO storage:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -Validator=1 -UTXOPersister=1
+SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -validator=1 -utxopersister=1
 ```
 
 ### Wait For PostgreSQL
@@ -224,14 +223,14 @@ Teranode respects the `NO_COLOR` environment variable to disable colored output 
 NO_COLOR=1 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
 ```
 
-#### Example Usage:
+#### Component Selection Examples
 
 **Running specific components only:**
 
 To initiate the node with only specific components, such as `Validator`:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -Validator=1
+SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -validator=1
 ```
 
 **Disabling all services by default and enabling only specific ones:**
@@ -239,7 +238,7 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -Validator=1
 This is particularly useful for development:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -all=0 -Validator=1 -RPC=1
+SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -all=0 -validator=1 -rpc=1
 ```
 
 ## 🔧 Running Individual Services
