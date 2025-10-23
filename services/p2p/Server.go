@@ -2141,7 +2141,7 @@ func (s *Server) getIPFromMultiaddr(ctx context.Context, maddr ma.Multiaddr) (ne
 
 // ReportValidBlock records a successful block reception from a peer
 // This should be called when a block is successfully validated and accepted
-func (s *Server) ReportValidBlock(ctx context.Context, blockHash string) error {
+func (s *Server) reportValidBlockInternal(ctx context.Context, blockHash string) error {
 	// Look up the peer ID that sent this block
 	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
 	if err != nil {
@@ -2228,7 +2228,7 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 
 // ReportValidSubtree records a successful subtree reception from a peer
 // This should be called when a subtree is successfully validated and accepted
-func (s *Server) ReportValidSubtree(ctx context.Context, subtreeHash string) error {
+func (s *Server) reportValidSubtreeInternal(ctx context.Context, subtreeHash string) error {
 	// Look up the peer ID that sent this subtree
 	peerID, err := s.getPeerFromMap(&s.subtreePeerMap, subtreeHash, "subtree")
 	if err != nil {

@@ -116,3 +116,51 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, req *p2p_api.GetPeersFo
 
 	return &p2p_api.GetPeersForCatchupResponse{Peers: protoPeers}, nil
 }
+
+// ReportValidSubtree is a gRPC handler for reporting valid subtree reception
+func (s *Server) ReportValidSubtree(ctx context.Context, req *p2p_api.ReportValidSubtreeRequest) (*p2p_api.ReportValidSubtreeResponse, error) {
+	if req.SubtreeHash == "" {
+		return &p2p_api.ReportValidSubtreeResponse{
+			Success: false,
+			Message: "subtree hash is required",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("subtree hash is required"))
+	}
+
+	// Call the internal reportValidSubtreeInternal method
+	err := s.reportValidSubtreeInternal(ctx, req.SubtreeHash)
+	if err != nil {
+		return &p2p_api.ReportValidSubtreeResponse{
+			Success: false,
+			Message: err.Error(),
+		}, nil // Don't wrap error, just return unsuccessful response
+	}
+
+	return &p2p_api.ReportValidSubtreeResponse{
+		Success: true,
+		Message: "subtree validation recorded",
+	}, nil
+}
+
+// ReportValidBlock is a gRPC handler for reporting valid block reception
+func (s *Server) ReportValidBlock(ctx context.Context, req *p2p_api.ReportValidBlockRequest) (*p2p_api.ReportValidBlockResponse, error) {
+	if req.BlockHash == "" {
+		return &p2p_api.ReportValidBlockResponse{
+			Success: false,
+			Message: "block hash is required",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("block hash is required"))
+	}
+
+	// Call the internal reportValidBlockInternal method
+	err := s.reportValidBlockInternal(ctx, req.BlockHash)
+	if err != nil {
+		return &p2p_api.ReportValidBlockResponse{
+			Success: false,
+			Message: err.Error(),
+		}, nil // Don't wrap error, just return unsuccessful response
+	}
+
+	return &p2p_api.ReportValidBlockResponse{
+		Success: true,
+		Message: "block validation recorded",
+	}, nil
+}

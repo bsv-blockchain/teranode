@@ -231,7 +231,7 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
 	if err != nil {
 		panic(err)
 	}

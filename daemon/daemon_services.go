@@ -752,6 +752,14 @@ func (d *Daemon) startValidationService(
 			return err
 		}
 
+		// Create the P2P client for the SubtreeValidation service
+		var p2pClient p2p.ClientI
+
+		p2pClient, err = p2p.NewClient(ctx, createLogger(loggerP2P), appSettings)
+		if err != nil {
+			return err
+		}
+
 		// Create the SubtreeValidation service
 		var service *subtreevalidation.Server
 
@@ -766,6 +774,7 @@ func (d *Daemon) startValidationService(
 			blockchainClient,
 			subtreeConsumerClient,
 			txMetaConsumerClient,
+			p2pClient,
 		)
 		if err != nil {
 			return err

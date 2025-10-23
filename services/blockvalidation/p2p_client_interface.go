@@ -29,4 +29,7 @@ type P2PClientI interface {
 
 	// GetPeersForCatchup returns peers suitable for catchup operations.
 	GetPeersForCatchup(ctx context.Context) (*p2p_api.GetPeersForCatchupResponse, error)
+
+	// ReportValidBlock reports that a block was successfully received and validated from a peer.
+	ReportValidBlock(ctx context.Context, blockHash string) error
 }

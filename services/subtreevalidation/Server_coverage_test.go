@@ -178,7 +178,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := &mockKafkaConsumer{}
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
 
 		require.Error(t, err)
 		require.Nil(t, server)
@@ -209,7 +209,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)
@@ -247,7 +247,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-cache")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)
@@ -279,7 +279,7 @@ func TestServerNew(t *testing.T) {
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-invalid")
 
 		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
-			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer)
+			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, server)

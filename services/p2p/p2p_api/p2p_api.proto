@@ -164,6 +164,26 @@ message AddBanScoreRequest {
     repeated PeerInfoForCatchup peers = 1;
   }
 
+  // Report valid subtree reception
+  message ReportValidSubtreeRequest {
+    string subtree_hash = 1;
+  }
+
+  message ReportValidSubtreeResponse {
+    bool success = 1;
+    string message = 2;
+  }
+
+  // Report valid block reception
+  message ReportValidBlockRequest {
+    string block_hash = 1;
+  }
+
+  message ReportValidBlockResponse {
+    bool success = 1;
+    string message = 2;
+  }
+
   // Add new service for peer operations
   service PeerService {
     rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
@@ -183,5 +203,9 @@ message AddBanScoreRequest {
     rpc RecordCatchupMalicious(RecordCatchupMaliciousRequest) returns (RecordCatchupMaliciousResponse) {}
     rpc UpdateCatchupReputation(UpdateCatchupReputationRequest) returns (UpdateCatchupReputationResponse) {}
     rpc GetPeersForCatchup(GetPeersForCatchupRequest) returns (GetPeersForCatchupResponse) {}
+
+    // Subtree and block validation reporting
+    rpc ReportValidSubtree(ReportValidSubtreeRequest) returns (ReportValidSubtreeResponse) {}
+    rpc ReportValidBlock(ReportValidBlockRequest) returns (ReportValidBlockResponse) {}
   }
   

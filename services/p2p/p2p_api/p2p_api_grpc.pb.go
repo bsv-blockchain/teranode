@@ -35,6 +35,8 @@ const (
 	PeerService_RecordCatchupMalicious_FullMethodName  = "/p2p_api.PeerService/RecordCatchupMalicious"
 	PeerService_UpdateCatchupReputation_FullMethodName = "/p2p_api.PeerService/UpdateCatchupReputation"
 	PeerService_GetPeersForCatchup_FullMethodName      = "/p2p_api.PeerService/GetPeersForCatchup"
+	PeerService_ReportValidSubtree_FullMethodName      = "/p2p_api.PeerService/ReportValidSubtree"
+	PeerService_ReportValidBlock_FullMethodName        = "/p2p_api.PeerService/ReportValidBlock"
 )
 
 // PeerServiceClient is the client API for PeerService service.
@@ -59,6 +61,9 @@ type PeerServiceClient interface {
 	RecordCatchupMalicious(ctx context.Context, in *RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*RecordCatchupMaliciousResponse, error)
 	UpdateCatchupReputation(ctx context.Context, in *UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*UpdateCatchupReputationResponse, error)
 	GetPeersForCatchup(ctx context.Context, in *GetPeersForCatchupRequest, opts ...grpc.CallOption) (*GetPeersForCatchupResponse, error)
+	// Subtree and block validation reporting
+	ReportValidSubtree(ctx context.Context, in *ReportValidSubtreeRequest, opts ...grpc.CallOption) (*ReportValidSubtreeResponse, error)
+	ReportValidBlock(ctx context.Context, in *ReportValidBlockRequest, opts ...grpc.CallOption) (*ReportValidBlockResponse, error)
 }
 
 type peerServiceClient struct {
@@ -219,6 +224,26 @@ func (c *peerServiceClient) GetPeersForCatchup(ctx context.Context, in *GetPeers
 	return out, nil
 }
 
+func (c *peerServiceClient) ReportValidSubtree(ctx context.Context, in *ReportValidSubtreeRequest, opts ...grpc.CallOption) (*ReportValidSubtreeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportValidSubtreeResponse)
+	err := c.cc.Invoke(ctx, PeerService_ReportValidSubtree_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) ReportValidBlock(ctx context.Context, in *ReportValidBlockRequest, opts ...grpc.CallOption) (*ReportValidBlockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportValidBlockResponse)
+	err := c.cc.Invoke(ctx, PeerService_ReportValidBlock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PeerServiceServer is the server API for PeerService service.
 // All implementations must embed UnimplementedPeerServiceServer
 // for forward compatibility.
@@ -241,6 +266,9 @@ type PeerServiceServer interface {
 	RecordCatchupMalicious(context.Context, *RecordCatchupMaliciousRequest) (*RecordCatchupMaliciousResponse, error)
 	UpdateCatchupReputation(context.Context, *UpdateCatchupReputationRequest) (*UpdateCatchupReputationResponse, error)
 	GetPeersForCatchup(context.Context, *GetPeersForCatchupRequest) (*GetPeersForCatchupResponse, error)
+	// Subtree and block validation reporting
+	ReportValidSubtree(context.Context, *ReportValidSubtreeRequest) (*ReportValidSubtreeResponse, error)
+	ReportValidBlock(context.Context, *ReportValidBlockRequest) (*ReportValidBlockResponse, error)
 	mustEmbedUnimplementedPeerServiceServer()
 }
 
@@ -295,6 +323,12 @@ func (UnimplementedPeerServiceServer) UpdateCatchupReputation(context.Context, *
 }
 func (UnimplementedPeerServiceServer) GetPeersForCatchup(context.Context, *GetPeersForCatchupRequest) (*GetPeersForCatchupResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetPeersForCatchup not implemented")
+}
+func (UnimplementedPeerServiceServer) ReportValidSubtree(context.Context, *ReportValidSubtreeRequest) (*ReportValidSubtreeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportValidSubtree not implemented")
+}
+func (UnimplementedPeerServiceServer) ReportValidBlock(context.Context, *ReportValidBlockRequest) (*ReportValidBlockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportValidBlock not implemented")
 }
 func (UnimplementedPeerServiceServer) mustEmbedUnimplementedPeerServiceServer() {}
 func (UnimplementedPeerServiceServer) testEmbeddedByValue()                     {}
@@ -587,6 +621,42 @@ func _PeerService_GetPeersForCatchup_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerService_ReportValidSubtree_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportValidSubtreeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).ReportValidSubtree(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_ReportValidSubtree_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).ReportValidSubtree(ctx, req.(*ReportValidSubtreeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_ReportValidBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportValidBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).ReportValidBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_ReportValidBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).ReportValidBlock(ctx, req.(*ReportValidBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PeerService_ServiceDesc is the grpc.ServiceDesc for PeerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -653,6 +723,14 @@ var PeerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPeersForCatchup",
 			Handler:    _PeerService_GetPeersForCatchup_Handler,
+		},
+		{
+			MethodName: "ReportValidSubtree",
+			Handler:    _PeerService_ReportValidSubtree_Handler,
+		},
+		{
+			MethodName: "ReportValidBlock",
+			Handler:    _PeerService_ReportValidBlock_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

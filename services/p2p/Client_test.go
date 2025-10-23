@@ -34,6 +34,8 @@ type MockPeerServiceClient struct {
 	RecordCatchupMaliciousFunc     func(ctx context.Context, in *p2p_api.RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.RecordCatchupMaliciousResponse, error)
 	UpdateCatchupReputationFunc    func(ctx context.Context, in *p2p_api.UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*p2p_api.UpdateCatchupReputationResponse, error)
 	GetPeersForCatchupFunc         func(ctx context.Context, in *p2p_api.GetPeersForCatchupRequest, opts ...grpc.CallOption) (*p2p_api.GetPeersForCatchupResponse, error)
+	ReportValidSubtreeFunc         func(ctx context.Context, in *p2p_api.ReportValidSubtreeRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidSubtreeResponse, error)
+	ReportValidBlockFunc           func(ctx context.Context, in *p2p_api.ReportValidBlockRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockResponse, error)
 }
 
 func (m *MockPeerServiceClient) GetPeers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {
@@ -139,6 +141,20 @@ func (m *MockPeerServiceClient) GetPeersForCatchup(ctx context.Context, in *p2p_
 		return m.GetPeersForCatchupFunc(ctx, in, opts...)
 	}
 	return &p2p_api.GetPeersForCatchupResponse{Peers: []*p2p_api.PeerInfoForCatchup{}}, nil
+}
+
+func (m *MockPeerServiceClient) ReportValidSubtree(ctx context.Context, in *p2p_api.ReportValidSubtreeRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidSubtreeResponse, error) {
+	if m.ReportValidSubtreeFunc != nil {
+		return m.ReportValidSubtreeFunc(ctx, in, opts...)
+	}
+	return &p2p_api.ReportValidSubtreeResponse{Success: true}, nil
+}
+
+func (m *MockPeerServiceClient) ReportValidBlock(ctx context.Context, in *p2p_api.ReportValidBlockRequest, opts ...grpc.CallOption) (*p2p_api.ReportValidBlockResponse, error) {
+	if m.ReportValidBlockFunc != nil {
+		return m.ReportValidBlockFunc(ctx, in, opts...)
+	}
+	return &p2p_api.ReportValidBlockResponse{Success: true}, nil
 }
 
 func TestSimpleClientGetPeers(t *testing.T) {

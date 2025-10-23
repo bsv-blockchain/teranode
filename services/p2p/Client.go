@@ -364,3 +364,51 @@ func (c *Client) GetPeersForCatchup(ctx context.Context) (*p2p_api.GetPeersForCa
 	req := &p2p_api.GetPeersForCatchupRequest{}
 	return c.client.GetPeersForCatchup(ctx, req)
 }
+
+// ReportValidSubtree reports that a subtree was successfully fetched and validated from a peer.
+// Parameters:
+//   - ctx: Context for the operation
+//   - subtreeHash: Hash of the validated subtree
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) ReportValidSubtree(ctx context.Context, subtreeHash string) error {
+	req := &p2p_api.ReportValidSubtreeRequest{
+		SubtreeHash: subtreeHash,
+	}
+
+	resp, err := c.client.ReportValidSubtree(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Success {
+		return errors.NewServiceError("failed to report valid subtree: %s", resp.Message)
+	}
+
+	return nil
+}
+
+// ReportValidBlock reports that a block was successfully received and validated from a peer.
+// Parameters:
+//   - ctx: Context for the operation
+//   - blockHash: Hash of the validated block
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) ReportValidBlock(ctx context.Context, blockHash string) error {
+	req := &p2p_api.ReportValidBlockRequest{
+		BlockHash: blockHash,
+	}
+
+	resp, err := c.client.ReportValidBlock(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Success {
+		return errors.NewServiceError("failed to report valid block: %s", resp.Message)
+	}
+
+	return nil
+}

@@ -647,5 +647,12 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, bas
 			hash.String(), len(blockBytes))
 	}
 
+	// Report successful block fetch to improve peer reputation
+	if u.p2pClient != nil {
+		if err := u.p2pClient.ReportValidBlock(ctx, hash.String()); err != nil {
+			u.logger.Warnf("[fetchSingleBlock][%s] failed to report valid block: %v", hash.String(), err)
+		}
+	}
+
 	return block, nil
 }
