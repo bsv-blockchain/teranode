@@ -15,6 +15,7 @@ theme:
 nav:
   - Home: index.md
   - Tutorials:
+      - Fork and Pull Request Guidelines: tutorials/developers/forkAndPullRequestGuidelines.md
       - Developer Setup: tutorials/developers/developerSetup.md
       - Miners Getting Started: tutorials/miners/minersGettingStarted.md
   - How-To Guides:

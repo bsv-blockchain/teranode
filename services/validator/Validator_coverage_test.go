@@ -153,14 +153,19 @@ func TestValidator_Validate_CallsValidateWithOptions(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 
-	nullStore, _ := nullstore.NewNullStore()
+	// Use sqlitememory store so we have a real UTXO store without the parent UTXO
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
 	settings := test.CreateBaseTestSettings(t)
+	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	require.NoError(t, err)
 
 	// Create a block assembler to avoid nil pointer issues
 	blockAssemblyClient, err := blockassembly.NewClient(ctx, logger, settings)
 	require.NoError(t, err)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, blockAssemblyClient, nil)
+	validator, err := New(ctx, logger, settings, utxoStore, nil, nil, blockAssemblyClient, nil)
 	require.NoError(t, err)
 
 	// Create a simple transaction using the transactions helper
@@ -178,7 +183,7 @@ func TestValidator_Validate_CallsValidateWithOptions(t *testing.T) {
 
 	// This should call ValidateWithOptions internally
 	_, err = validator.Validate(ctx, tx, 100)
-	// The error is expected since we don't have proper UTXOs set up
+	// The error is expected since the parent UTXO doesn't exist in the store
 	assert.Error(t, err)
 }
 

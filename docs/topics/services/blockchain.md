@@ -569,11 +569,49 @@ The Blockchain Service employs several strategies to handle errors and maintain 
 - Blocks with invalid headers, merkle roots, or proofs are rejected with appropriate error codes.
 - Invalid blocks can be explicitly marked using the InvalidateBlock method.
 
-#### Chain Reorganization
+#### Chain Reorganization and Longest Chain Tracking
 
-- Detects chain splits and reorganizations automatically.
-- Uses rollback and catch-up operations to handle chain reorganizations.
-- Limits reorganization depth for security (configurable).
+The Blockchain Service implements sophisticated chain reorganization handling with optimized longest chain tracking:
+
+##### Automatic Detection
+
+- Detects chain splits and reorganizations automatically through block header validation
+- Uses rollback and catch-up operations to handle chain reorganizations
+- Limits reorganization depth for security (configurable via `blockchain_maxReorgDepth`)
+
+##### Optimized Longest Chain Selection
+
+The service employs an optimized algorithm for tracking and selecting the longest valid chain:
+
+**Key Features:**
+
+- **Efficient Chain Comparison**: Uses cumulative proof-of-work (chainwork) rather than simple block height for chain selection
+- **Fast Fork Detection**: Maintains indexed fork points to quickly identify competing chains
+- **Minimal Database Queries**: Caches chain tips and their accumulated work to reduce database load
+- **Parallel Validation**: Can validate multiple competing chain tips simultaneously
+
+**Implementation Details:**
+
+1. **Chainwork Tracking**: Each block stores cumulative chainwork from genesis, allowing O(1) chain strength comparison
+2. **Fork Point Cache**: Maintains an in-memory cache of recent fork points for rapid reorganization detection
+3. **Tip Management**: Tracks multiple competing chain tips with their associated metadata:
+    - Total chainwork
+    - Block height
+    - Last validation timestamp
+    - Fork depth from main chain
+
+**Performance Benefits:**
+
+- Reduced latency in chain selection during high fork activity
+- Lower database load through intelligent caching
+- Faster recovery from network partitions
+- Improved resilience to chain split scenarios
+
+**Configuration Options:**
+
+- `blockchain_maxReorgDepth`: Maximum allowed reorganization depth (default: 6 blocks)
+- `blockchain_chainTipCacheSize`: Number of competing tips to track (default: 10)
+- `blockchain_forkPointCacheSize`: Size of fork point cache (default: 100)
 
 #### Storage Errors
 

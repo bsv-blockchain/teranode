@@ -38,7 +38,7 @@ type notificationMsg struct {
 	CommitHash    string  `json:"commit_hash,omitempty"`     // Git commit hash
 	BestBlockHash string  `json:"best_block_hash,omitempty"` // Best block hash
 	BestHeight    uint32  `json:"best_height"`               // Best block height
-	SubtreeCount  uint32  `json:"subtree_count,omitempty"`   // Number of subtrees
+	SubtreeCount  uint32  `json:"subtree_count,omitempty"`   // Number of subtrees in block assembly
 	FSMState      string  `json:"fsm_state,omitempty"`       // FSM state
 	StartTime     int64   `json:"start_time,omitempty"`      // Node start time
 	Uptime        float64 `json:"uptime,omitempty"`          // Node uptime in seconds

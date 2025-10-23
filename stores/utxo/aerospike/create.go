@@ -735,10 +735,7 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 
 	prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
-	// Get a new write policy which will allow CREATE or UPDATE
 	wPolicy := util.GetAerospikeWritePolicy(s.settings, 0)
-
-	// For all records, set the write policy to CREATE_ONLY
 	wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	for binIdx := len(binsToStore) - 1; binIdx >= 0; binIdx-- {
@@ -768,8 +765,11 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 			ok := errors.As(err, &aErr)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[StoreTransactionExternally][%s] bin %d already exists in store", bItem.txHash, binIdx))
-					return
+					// PAGINATION CORRUPTION RECOVERY: This bin was already written in a previous interrupted attempt.
+					// Skip it and continue with remaining bins to complete the partial record.
+					// This allows recovery from interrupted pagination writes.
+					s.logger.Infof("[StoreTransactionExternally][%s] bin %d already exists, skipping to write missing bins", bItem.txHash, binIdx)
+					continue
 				}
 			}
 
@@ -829,16 +829,11 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 
 	prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
-	// Get a new write policy which will allow CREATE or UPDATE
 	wPolicy := util.GetAerospikeWritePolicy(s.settings, 0)
+	wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	for i := len(binsToStore) - 1; i >= 0; i-- {
 		bins := binsToStore[i]
-
-		if i == 0 {
-			// For the "master" record, set the write policy to CREATE_ONLY
-			wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
-		}
 
 		iUint32, err := safeconversion.IntToUint32(i)
 		if err != nil {
@@ -862,9 +857,11 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[StorePartialTransactionExternally] %v already exists in store", bItem.txHash))
-
-					return
+					// PAGINATION CORRUPTION RECOVERY: This bin was already written in a previous interrupted attempt.
+					// Skip it and continue with remaining bins to complete the partial record.
+					// This allows recovery from interrupted pagination writes.
+					s.logger.Infof("[StorePartialTransactionExternally][%s] bin %d already exists, skipping to write missing bins", bItem.txHash, i)
+					continue
 				}
 			}
 

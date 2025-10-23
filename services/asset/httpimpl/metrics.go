@@ -41,6 +41,9 @@ var (
 
 	// prometheusAssetHTTPGetUTXO tracks UTXO retrievals
 	prometheusAssetHTTPGetUTXO *prometheus.CounterVec
+
+	// prometheusAssetHTTPGetMerkleProof tracks merkle proof retrievals
+	prometheusAssetHTTPGetMerkleProof *prometheus.CounterVec
 )
 
 // prometheusMetricsInitOnce ensures metrics are initialized exactly once
@@ -80,6 +83,7 @@ func initPrometheusMetrics() {
 //   - http_get_block_legacy: Legacy format block retrievals
 //   - http_get_last_n_blocks: Multiple block retrievals
 //   - http_get_utxo: UTXO retrievals
+//   - http_get_merkle_proof: Merkle proof retrievals
 func _initPrometheusMetrics() {
 	prometheusAssetHTTPGetTransaction = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -204,6 +208,19 @@ func _initPrometheusMetrics() {
 			Subsystem: "asset",
 			Name:      "http_get_utxo",
 			Help:      "Number of Get UTXO ops",
+		},
+		[]string{
+			"function",  // function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusAssetHTTPGetMerkleProof = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "asset",
+			Name:      "http_get_merkle_proof",
+			Help:      "Number of Get merkle proof ops",
 		},
 		[]string{
 			"function",  // function tracking the operation

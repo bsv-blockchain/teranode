@@ -1664,7 +1664,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 
 	stp.logger.Infof("reorgBlocks with %d moveBackBlocks and %d moveForwardBlocks", len(moveBackBlocks), len(moveForwardBlocks))
 
-	if len(moveForwardBlocks) > 0 {
+	if len(moveForwardBlocks) == 1 && len(moveBackBlocks) == 0 {
 		// wait for the last block to be processed first, mined_set etc.
 		ok, err := stp.waitForBlockBeingMined(ctx, moveForwardBlocks[len(moveForwardBlocks)-1].Hash())
 		if err != nil {
@@ -1673,6 +1673,16 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 
 		if !ok {
 			return errors.NewProcessingError("[reorgBlocks] timeout waiting for block being mined %s", moveForwardBlocks[len(moveForwardBlocks)-1].Hash().String())
+		}
+	} else {
+		// other operation, wait for all blocks to be processed first, mined_set etc.
+		ok, err := stp.waitForBlocksBeingMined(ctx)
+		if err != nil {
+			return errors.NewProcessingError("[reorgBlocks] error waiting for blocks being mined", err)
+		}
+
+		if !ok {
+			return errors.NewProcessingError("[reorgBlocks] timeout waiting for blocks being mined")
 		}
 	}
 
@@ -2614,6 +2624,32 @@ func (stp *SubtreeProcessor) waitForBlockBeingMined(ctx context.Context, blockHa
 				return true, nil
 			}
 
+			stp.logger.Infof("[waitForBlockBeingMined] waiting for block %s to be mined", blockHash.String())
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
+func (stp *SubtreeProcessor) waitForBlocksBeingMined(ctx context.Context) (bool, error) {
+	// try to wait for all blocks to be mined for maximum of 120 sec
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false, errors.NewProcessingError("[waitForBlocksBeingMined] blocks not mined within 120 seconds")
+		default:
+			blocksNotMined, err := stp.blockchainClient.GetBlocksMinedNotSet(ctx)
+			if err != nil {
+				return false, errors.NewProcessingError("[waitForBlocksBeingMined] error getting block mined status", err)
+			}
+
+			if len(blocksNotMined) == 0 {
+				return true, nil
+			}
+
+			stp.logger.Infof("[waitForBlocksBeingMined] waiting for %d blocks to be mined", len(blocksNotMined))
 			time.Sleep(1 * time.Second)
 		}
 	}

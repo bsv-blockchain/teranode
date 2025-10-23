@@ -18,12 +18,12 @@
         - [2.7.2. Ban Operations](#272-ban-operations)
         - [2.7.3. Ban Event Handling](#273-ban-event-handling)
         - [2.7.4. Configuration](#274-configuration)
-3. [Technology](#3-technology)
-4. [Data Model](#4-data-model)
-5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
-6. [How to run](#6-how-to-run)
-7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
-8. [Other Resources](#8-other-resources)
+    - [3. Technology](#3-technology)
+    - [4. Data Model](#4-data-model)
+    - [5. Directory Structure and Main Files](#5-directory-structure-and-main-files)
+    - [6. How to run](#6-how-to-run)
+    - [7. Configuration options (settings flags)](#7-configuration-options-settings-flags)
+    - [8. Other Resources](#8-other-resources)
 
 ## 1. Description
 
@@ -194,17 +194,17 @@ Once these steps are completed, the server is ready to accept peer connections, 
 
 ### 2.2. Peer Discovery and Connection
 
-In the previous section, the P2P Service created a `P2PNode as part of the initialization phase. This P2PNode is responsible for joining the network. The P2PNode utilizes a libp2p host and a Distributed Hash Table (DHT) for peer discovery and connection based on shared topics. This mechanism enables the node to become part of a decentralized network, facilitating communication and resource sharing among peers.
+In the previous section, the P2P Service created a `P2PClient as part of the initialization phase. This P2PClient is responsible for joining the network. The P2PClient utilizes a libp2p host and a Distributed Hash Table (DHT) for peer discovery and connection based on shared topics. This mechanism enables the client to become part of a decentralized network, facilitating communication and resource sharing among peers.
 
 ![p2p_peer_discovery.svg](img/plantuml/p2p/p2p_peer_discovery.svg)
 
 1. **Initialization of DHT and libp2p Host**:
 
-    - The `P2PNode` struct, upon invocation of its `Start` method, initializes the DHT using either `initDHT` or `initPrivateDHT` methods depending on the configuration. This step sets up the DHT for the libp2p host (`s.host`), which allows for peer discovery and content routing within the P2P network. The DHT is bootstrapped with default or configured peers to integrate the node into the existing network.
+    - The `P2PClient` struct, upon invocation of its `Start` method, initializes the DHT using either `initDHT` or `initPrivateDHT` methods depending on the configuration. This step sets up the DHT for the libp2p host (`s.host`), which allows for peer discovery and content routing within the P2P network. The DHT is bootstrapped with default or configured peers to integrate the client into the existing network.
 
 2. **Setting Up Routing Discovery**:
 
-    - Once the DHT is initialized, `P2PNode.Start` sets up `routingDiscovery` with the created DHT instance. This discovery service is responsible for locating peers within the network and advertising the node's own presence.
+    - Once the DHT is initialized, `P2PClient.Start` sets up `routingDiscovery` with the created DHT instance. This discovery service is responsible for locating peers within the network and advertising the client's own presence.
     - The DHT implementation supports two modes:
 
         - Standard mode (`initDHT`): Uses the public IPFS bootstrap nodes for initial discovery

@@ -1146,7 +1146,7 @@ func TestInvalidateHandler(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "invalid hash")
 	})
 
-	t.Run("invalidation fails", func(t *testing.T) {
+	t.Run("invalidation of non-existent block is idempotent", func(t *testing.T) {
 		validHash := chainhash.DoubleHashH([]byte("abc")).String()
 		req := httptest.NewRequest(http.MethodPost, "/invalidate/"+validHash, nil)
 		rec := httptest.NewRecorder()
@@ -1157,8 +1157,9 @@ func TestInvalidateHandler(t *testing.T) {
 		err := server.invalidateHandler(c)
 		require.NoError(t, err)
 
-		assert.Equal(t, http.StatusInternalServerError, rec.Code)
-		assert.Contains(t, rec.Body.String(), "error invalidating block")
+		// InvalidateBlock is now idempotent - returns success even if block doesn't exist
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "block invalidated")
 	})
 
 	t.Run("success", func(t *testing.T) {
@@ -2900,11 +2901,18 @@ func Test_GetBlockHeadersFromHeight(t *testing.T) {
 
 // Test_GetBlockHeadersByHeight tests the GetBlockHeadersByHeight gRPC method
 func Test_GetBlockHeadersByHeight(t *testing.T) {
-	ctx := setup(t)
-
-	// Create a chain of blocks for testing
+	// Use MockStore to avoid SQL recursive CTE issues
+	mockStore := blockchain_store.NewMockStore()
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings.BlockChain.GRPCListenAddress = ""
+	tSettings.BlockChain.HTTPListenAddress = ""
+
+	server, err := New(context.Background(), logger, tSettings, mockStore, nil)
+	require.NoError(t, err)
+	require.NoError(t, server.Init(context.Background()))
+
 	prevHash := tSettings.ChainCfgParams.GenesisHash
 
 	// Create and store a chain of blocks
@@ -2939,7 +2947,7 @@ func Test_GetBlockHeadersByHeight(t *testing.T) {
 			ID:               uint32(i + 1),
 		}
 
-		_, _, err = ctx.server.store.StoreBlock(context.Background(), block, "test")
+		_, _, err = mockStore.StoreBlock(context.Background(), block, "test")
 		require.NoError(t, err)
 		prevHash = block.Header.Hash()
 	}
@@ -3017,7 +3025,7 @@ func Test_GetBlockHeadersByHeight(t *testing.T) {
 				EndHeight:   tt.endHeight,
 			}
 
-			response, err := ctx.server.GetBlockHeadersByHeight(context.Background(), request)
+			response, err := server.GetBlockHeadersByHeight(context.Background(), request)
 
 			if tt.expectError {
 				require.Error(t, err)

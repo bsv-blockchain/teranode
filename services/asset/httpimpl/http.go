@@ -249,6 +249,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
 	apiGroup.GET("/bestblockheader/json", h.GetBestBlockHeader(JSON))
 
+	apiGroup.GET("/merkle_proof/:hash", h.GetMerkleProof(BINARY_STREAM))
+	apiGroup.GET("/merkle_proof/:hash/hex", h.GetMerkleProof(HEX))
+	apiGroup.GET("/merkle_proof/:hash/json", h.GetMerkleProof(JSON))
+
 	if h.settings.StatsPrefix != "" {
 		e.GET(h.settings.StatsPrefix+"stats", AdaptStdHandler(gocore.HandleStats))
 		e.GET(h.settings.StatsPrefix+"reset", AdaptStdHandler(gocore.ResetStats))

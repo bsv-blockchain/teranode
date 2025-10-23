@@ -192,3 +192,36 @@ The project includes a Bitcoin expert agent (`.claude/agents/bitcoin-expert.md`)
 - Use TestContainers for integration tests requiring external services
 - Don't use mock blockchain client/store - you can use a real one using the sqlitememory store
 - Don't use mock kafka - you can use in_memory_kafka.go
+
+## Git Workflow (Fork Mode)
+
+All developers work in forked repositories with `upstream` remote pointing to the original repo.
+
+### Pushing Work
+```bash
+# Always sync with upstream first
+git fetch upstream
+git reset --hard upstream/main
+
+# If conflicts occur: STOP and ask user for resolution guidance
+# After resolving (or if no conflicts):
+git push origin <current-branch>
+
+# Display push result message including PR creation links
+```
+
+**Important**: Never auto-resolve merge conflicts. Always show conflicting files and wait for user approval on resolution strategy.
+
+### Creating New Branches
+```bash
+# Always branch from synced main
+git checkout main
+git fetch upstream
+git reset --hard upstream/main
+git checkout -b <new-branch-name>
+```
+
+### Quick Reference
+- **Push work**: Sync upstream → resolve conflicts (with user approval) → push to fork → show PR link
+- **New branch**: Switch to main → sync upstream → create branch
+- **Sync with upstream**: `git checkout main && git fetch upstream && git reset --hard upstream/main`

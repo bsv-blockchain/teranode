@@ -170,7 +170,7 @@ export async function connectToP2PServer() {
             if (jsonData.type === 'node_status') {
               // Handle node_status messages - these provide comprehensive node information
               const nodeKey = jsonData.peer_id
-              
+
               // The very first node_status message we receive should be from our own node
               // (sent immediately upon WebSocket connection by the backend)
               let currentPeerID = get(currentNodePeerID)
@@ -181,18 +181,13 @@ export async function connectToP2PServer() {
                 firstNodeStatusReceived = true
                 console.log(`Current node identified: ${jsonData.peer_id}`)
               }
-              
+
               const isCurrentNode = jsonData.peer_id === currentPeerID
-              
-              // Extract txCount from the new block_assembly_details structure
-              // for backward compatibility with the table display
-              const txCountInAssembly = jsonData.block_assembly_details?.txCount || 0
+
               const existingNode = miningNodeSet[nodeKey]
               const newNode = {
                 ...miningNodeSet[nodeKey],
                 ...jsonData,
-                tx_count_in_assembly: txCountInAssembly, // Map for backward compatibility
-                block_assembly: jsonData.block_assembly_details, // Store full details for future use
                 receivedAt: new Date(),
                 isCurrentNode: isCurrentNode,
               }
@@ -217,7 +212,8 @@ export async function connectToP2PServer() {
                 existingNode.chain_work !== newNode.chain_work ||
                 existingNode.version !== newNode.version ||
                 existingNode.fsm_state !== newNode.fsm_state ||
-                existingNode.tx_count_in_assembly !== newNode.tx_count_in_assembly ||
+                existingNode.tx_count !== newNode.tx_count ||
+                existingNode.subtree_count !== newNode.subtree_count ||
                 existingNode.uptime !== newNode.uptime ||
                 existingNode.listen_mode !== newNode.listen_mode ||
                 existingNode.client_name !== newNode.client_name ||
@@ -225,8 +221,7 @@ export async function connectToP2PServer() {
                 existingNode.start_time !== newNode.start_time ||
                 existingNode.isCurrentNode !== newNode.isCurrentNode ||
                 existingNode.min_mining_tx_fee !== newNode.min_mining_tx_fee ||
-                existingNode.connected_peers_count !== newNode.connected_peers_count ||
-                JSON.stringify(existingNode.block_assembly) !== JSON.stringify(newNode.block_assembly)
+                existingNode.connected_peers_count !== newNode.connected_peers_count
               
               if (hasChanges || !existingNode) {
                 miningNodeSet[nodeKey] = newNode
@@ -257,8 +252,8 @@ export async function connectToP2PServer() {
               }
               
               if (!existingNode) {
-                miningNodeSet[nodeKey] = { 
-                  base_url: baseUrl, 
+                miningNodeSet[nodeKey] = {
+                  base_url: jsonData.base_url || '',
                   peer_id: jsonData.peer_id,
                   isCurrentNode: jsonData.peer_id === currentPeerID,
                   hash: jsonData.hash,

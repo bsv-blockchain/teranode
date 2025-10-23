@@ -51,7 +51,6 @@ COPY --from=0 /app/teranode.run ./teranode.run
 COPY --from=0 /app/teranode-cli ./teranode-cli
 COPY --from=0 /app/compose/wait.sh /app/wait.sh
 COPY --from=0 /go/bin/dlv .
-COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/settings.conf .
 
 RUN chmod +x ./wait.sh

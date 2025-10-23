@@ -14,7 +14,6 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -100,73 +99,5 @@ func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numb
 
 	defer rows.Close()
 
-	var (
-		subtreeCount     uint64
-		transactionCount uint64
-		sizeInBytes      uint64
-		subtreeBytes     []byte
-		hashPrevBlock    []byte
-		hashMerkleRoot   []byte
-		coinbaseTx       []byte
-		height           uint32
-		nBits            []byte
-	)
-
-	for rows.Next() {
-		block := &model.Block{
-			Header: &model.BlockHeader{},
-		}
-
-		if err = rows.Scan(
-			&block.ID,
-			&block.Header.Version,
-			&block.Header.Timestamp,
-			&nBits,
-			&block.Header.Nonce,
-			&hashPrevBlock,
-			&hashMerkleRoot,
-			&transactionCount,
-			&sizeInBytes,
-			&coinbaseTx,
-			&subtreeCount,
-			&subtreeBytes,
-			&height,
-		); err != nil {
-			return nil, errors.NewStorageError("failed to scan row", err)
-		}
-
-		bits, _ := model.NewNBitFromSlice(nBits)
-		block.Header.Bits = *bits
-
-		block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
-		if err != nil {
-			return nil, errors.NewStorageError("failed to convert hashPrevBlock", err)
-		}
-
-		block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
-		if err != nil {
-			return nil, errors.NewStorageError("failed to convert hashMerkleRoot", err)
-		}
-
-		block.TransactionCount = transactionCount
-		block.SizeInBytes = sizeInBytes
-
-		if len(coinbaseTx) > 0 {
-			block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
-			if err != nil {
-				return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
-			}
-		}
-
-		err = block.SubTreesFromBytes(subtreeBytes)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to convert subtrees", err)
-		}
-
-		block.Height = height
-
-		blocks = append(blocks, block)
-	}
-
-	return blocks, nil
+	return s.processFullBlockRows(rows)
 }

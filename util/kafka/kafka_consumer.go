@@ -522,7 +522,7 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 		Config:        cfg,
 		ConsumerGroup: consumerGroup,
 		watchdog:      &consumeWatchdog{}, // Initialize watchdog
-		saramaConfig:  config,              // Store config for force recovery
+		saramaConfig:  config,             // Store config for force recovery
 	}, nil
 }
 
@@ -896,8 +896,13 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 
 		go func() {
-			<-signals
-			cancel()
+			select {
+			case <-signals:
+				cancel()
+			case <-internalCtx.Done():
+				// Context cancelled, exit gracefully without cancelling again
+				return
+			}
 		}()
 
 		select {

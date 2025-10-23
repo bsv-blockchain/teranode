@@ -861,6 +861,8 @@ type NodeStatusMessage struct {
 	CommitHash          string   `json:"commit_hash"`
 	BestBlockHash       string   `json:"best_block_hash"`
 	BestHeight          uint32   `json:"best_height"`
+	TxCount             uint64   `json:"tx_count,omitempty"`      // Number of transactions in block assembly
+	SubtreeCount        uint32   `json:"subtree_count,omitempty"` // Number of subtrees in block assembly
 	FSMState            string   `json:"fsm_state"`
 	StartTime           int64    `json:"start_time"`
 	Uptime              float64  `json:"uptime"`
@@ -925,6 +927,8 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 		CommitHash:          nodeStatusMessage.CommitHash,
 		BestBlockHash:       nodeStatusMessage.BestBlockHash,
 		BestHeight:          nodeStatusMessage.BestHeight,
+		TxCount:             nodeStatusMessage.TxCount,
+		SubtreeCount:        nodeStatusMessage.SubtreeCount,
 		FSMState:            nodeStatusMessage.FSMState,
 		StartTime:           nodeStatusMessage.StartTime,
 		Uptime:              nodeStatusMessage.Uptime,
@@ -1200,6 +1204,18 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		connectedPeersCount = len(allPeers)
 	}
 
+	// Get block assembly state (tx count and subtree count)
+	txCount := uint64(0)
+	subtreeCount := uint32(0)
+	if s.blockAssemblyClient != nil {
+		if state, err := s.blockAssemblyClient.GetBlockAssemblyState(ctx); err == nil && state != nil {
+			txCount = state.TxCount
+			subtreeCount = state.SubtreeCount
+		} else if err != nil {
+			s.logger.Debugf("[getNodeStatusMessage] Failed to get block assembly state: %v", err)
+		}
+	}
+
 	// Return the notification message
 	return &notificationMsg{
 		Timestamp:           time.Now().UTC().Format(isoFormat),
@@ -1210,6 +1226,8 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		CommitHash:          commit,
 		BestBlockHash:       blockHashStr,
 		BestHeight:          height,
+		TxCount:             txCount,
+		SubtreeCount:        subtreeCount,
 		FSMState:            fsmState,
 		StartTime:           startTime,
 		Uptime:              uptime,
@@ -1242,6 +1260,8 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		CommitHash:          msg.CommitHash,
 		BestBlockHash:       msg.BestBlockHash,
 		BestHeight:          msg.BestHeight,
+		TxCount:             msg.TxCount,
+		SubtreeCount:        msg.SubtreeCount,
 		FSMState:            msg.FSMState,
 		StartTime:           msg.StartTime,
 		Uptime:              msg.Uptime,

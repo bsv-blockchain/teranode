@@ -17,6 +17,7 @@ type Settings struct {
 	Commit                       string
 	Version                      string
 	Context                      string
+	IsAllInOneMode               bool // Runtime-computed: true if daemon is running multiple services in a single process
 	ServiceName                  string
 	TracingEnabled               bool
 	TracingSampleRate            float64

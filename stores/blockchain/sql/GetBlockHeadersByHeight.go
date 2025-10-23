@@ -60,7 +60,11 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	capacity := max(1, endHeight-startHeight+1)
+	// Calculate capacity safely, avoiding uint32 underflow when startHeight > endHeight
+	var capacity uint32 = 1
+	if endHeight >= startHeight {
+		capacity = max(1, endHeight-startHeight+1)
+	}
 
 	blockHeaders := make([]*model.BlockHeader, 0, capacity)
 	blockMetas := make([]*model.BlockHeaderMeta, 0, capacity)
@@ -81,11 +85,34 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 		,b.block_time
 		,b.inserted_at
 		FROM blocks b
-		WHERE height >= $1 AND height <= $2
-		AND invalid = FALSE
-		ORDER BY height ASC
+		WHERE id IN (
+			SELECT id FROM blocks
+			WHERE id IN (
+				WITH RECURSIVE ChainBlocks AS (
+					SELECT id, parent_id, height
+					FROM blocks
+					WHERE invalid = false
+					AND hash = (
+						SELECT b.hash
+						FROM blocks b
+						WHERE b.invalid = false
+						ORDER BY chain_work DESC, peer_id ASC, id ASC
+						LIMIT 1
+					)
+					UNION ALL
+					SELECT bb.id, bb.parent_id, bb.height
+					FROM blocks bb
+					JOIN ChainBlocks cb ON bb.id = cb.parent_id
+					WHERE bb.id != cb.id
+					  AND bb.invalid = false
+				)
+				SELECT id FROM ChainBlocks
+				WHERE height >= $1 AND height <= $2
+				  AND invalid = FALSE
+				ORDER BY height ASC
+			)
+		)
 	`
-
 	rows, err := s.db.QueryContext(ctx, q, startHeight, endHeight)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

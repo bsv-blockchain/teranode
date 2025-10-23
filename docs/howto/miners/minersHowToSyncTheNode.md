@@ -206,7 +206,7 @@ docker run -it \
     -v /mnt/bitcoin-sv-data:/home/ubuntu/bitcoin-data:ro \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
     --entrypoint="" \
-    ghcr.io/bsv-blockchain/teranode:v0.10.8 \
+    ghcr.io/bsv-blockchain/teranode:v0.11.13 \
     /app/teranode-cli bitcointoutxoset \
         -bitcoinDir=/home/ubuntu/bitcoin-data \
         -outputDir=/mnt/teranode/seed/export
@@ -341,7 +341,7 @@ docker run -it \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
     --network my-teranode-network \
     --entrypoint="" \
-    ghcr.io/bsv-blockchain/teranode:v0.10.8 \
+    ghcr.io/bsv-blockchain/teranode:v0.11.13 \
     /app/teranode-cli seeder \
         -inputDir /mnt/teranode/seed/export \
         -hash 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
@@ -352,7 +352,7 @@ docker run -it \
 ```bash
 # Create a temporary seeder pod
 kubectl run teranode-seeder \
-    --image=ghcr.io/bsv-blockchain/teranode:v0.10.8 \
+    --image=ghcr.io/bsv-blockchain/teranode:v0.11.13 \
     --restart=Never \
     --rm -i --tty \
     -n teranode-operator \
@@ -471,7 +471,7 @@ docker run -it \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
     --network my-teranode-network \
     --entrypoint="" \
-    ghcr.io/bsv-blockchain/teranode:v0.10.8 \
+    ghcr.io/bsv-blockchain/teranode:v0.11.13 \
     /app/teranode-cli seeder \
         -inputDir /mnt/teranode/seed/export \
         -hash <blockhash-from-filename>
@@ -485,7 +485,7 @@ kubectl scale deployment blockchain --replicas=0 -n teranode-operator
 
 # Run seeder
 kubectl run teranode-seeder \
-    --image=ghcr.io/bsv-blockchain/teranode:v0.10.8 \
+    --image=ghcr.io/bsv-blockchain/teranode:v0.11.13 \
     --restart=Never --rm -i --tty \
     -n teranode-operator \
     -- /app/teranode-cli seeder \
