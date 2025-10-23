@@ -235,6 +235,20 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *peer_api.UnbanPeerRequest)
 
 Removes a ban on a specific peer, allowing it to reconnect immediately. The request is processed asynchronously through a channel to the internal server component.
 
+### Internal Methods
+
+```go
+func (s *Server) banPeer(peerAddr string, until int64) error
+```
+
+Internal method that handles the actual banning of a peer by address. This method searches through connected peers to find the matching peer and applies the ban with the specified expiration time.
+
+```go
+func (s *Server) logPeerStats(ctx context.Context)
+```
+
+Internal method that runs in a background goroutine to periodically log peer statistics and connection information. This provides operational visibility into the peer network status.
+
 ## Authentication
 
 The Legacy Service implements an authentication system for its gRPC API:
