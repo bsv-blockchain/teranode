@@ -140,7 +140,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UseDefaultBasePolicies: getBool("aerospike_useDefaultBasePolicies", false, alternativeContext...),
 			UseDefaultPolicies:     getBool("aerospike_useDefaultPolicies", false, alternativeContext...),
 			WarmUp:                 getBool("aerospike_warmUp", true, alternativeContext...),
-			StoreBatcherDuration:   getDuration("aerospike_storeBatcherDuration", 10*time.Millisecond, alternativeContext...),
 			StatsRefreshDuration:   getDuration("aerospike_statsRefresh", 5*time.Second, alternativeContext...),
 		},
 		Alert: AlertSettings{
