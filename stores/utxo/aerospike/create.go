@@ -211,6 +211,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		}()
 	}
 
+	time.Sleep(s.settings.Aerospike.StoreBatcherDuration * time.Duration(s.batchResponseWaitPercent) / 100)
 	err = <-errCh
 	if err != nil {
 		// return raw err, should already be wrapped
