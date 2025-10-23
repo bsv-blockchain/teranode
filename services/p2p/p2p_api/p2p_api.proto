@@ -166,7 +166,8 @@ message AddBanScoreRequest {
 
   // Report valid subtree reception
   message ReportValidSubtreeRequest {
-    string subtree_hash = 1;
+    string peer_id = 1;      // Peer ID that provided the subtree
+    string subtree_hash = 2;
   }
 
   message ReportValidSubtreeResponse {
@@ -176,7 +177,8 @@ message AddBanScoreRequest {
 
   // Report valid block reception
   message ReportValidBlockRequest {
-    string block_hash = 1;
+    string peer_id = 1;      // Peer ID that provided the block
+    string block_hash = 2;
   }
 
   message ReportValidBlockResponse {

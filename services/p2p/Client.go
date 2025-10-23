@@ -368,12 +368,14 @@ func (c *Client) GetPeersForCatchup(ctx context.Context) (*p2p_api.GetPeersForCa
 // ReportValidSubtree reports that a subtree was successfully fetched and validated from a peer.
 // Parameters:
 //   - ctx: Context for the operation
+//   - peerID: Peer ID that provided the subtree
 //   - subtreeHash: Hash of the validated subtree
 //
 // Returns:
 //   - error: Any error encountered during the operation
-func (c *Client) ReportValidSubtree(ctx context.Context, subtreeHash string) error {
+func (c *Client) ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error {
 	req := &p2p_api.ReportValidSubtreeRequest{
+		PeerId:      peerID,
 		SubtreeHash: subtreeHash,
 	}
 
@@ -392,12 +394,14 @@ func (c *Client) ReportValidSubtree(ctx context.Context, subtreeHash string) err
 // ReportValidBlock reports that a block was successfully received and validated from a peer.
 // Parameters:
 //   - ctx: Context for the operation
+//   - peerID: Peer ID that provided the block
 //   - blockHash: Hash of the validated block
 //
 // Returns:
 //   - error: Any error encountered during the operation
-func (c *Client) ReportValidBlock(ctx context.Context, blockHash string) error {
+func (c *Client) ReportValidBlock(ctx context.Context, peerID string, blockHash string) error {
 	req := &p2p_api.ReportValidBlockRequest{
+		PeerId:    peerID,
 		BlockHash: blockHash,
 	}
 

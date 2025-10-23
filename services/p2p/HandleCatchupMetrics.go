@@ -119,6 +119,20 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, req *p2p_api.GetPeersFo
 
 // ReportValidSubtree is a gRPC handler for reporting valid subtree reception
 func (s *Server) ReportValidSubtree(ctx context.Context, req *p2p_api.ReportValidSubtreeRequest) (*p2p_api.ReportValidSubtreeResponse, error) {
+	if s.peerRegistry == nil {
+		return &p2p_api.ReportValidSubtreeResponse{
+			Success: false,
+			Message: "peer registry not initialized",
+		}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
+	}
+
+	if req.PeerId == "" {
+		return &p2p_api.ReportValidSubtreeResponse{
+			Success: false,
+			Message: "peer ID is required",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("peer ID is required"))
+	}
+
 	if req.SubtreeHash == "" {
 		return &p2p_api.ReportValidSubtreeResponse{
 			Success: false,
@@ -126,14 +140,19 @@ func (s *Server) ReportValidSubtree(ctx context.Context, req *p2p_api.ReportVali
 		}, errors.WrapGRPC(errors.NewInvalidArgumentError("subtree hash is required"))
 	}
 
-	// Call the internal reportValidSubtreeInternal method
-	err := s.reportValidSubtreeInternal(ctx, req.SubtreeHash)
+	// Decode peer ID
+	peerID, err := peer.Decode(req.PeerId)
 	if err != nil {
 		return &p2p_api.ReportValidSubtreeResponse{
 			Success: false,
-			Message: err.Error(),
-		}, nil // Don't wrap error, just return unsuccessful response
+			Message: "invalid peer ID",
+		}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
 	}
+
+	// Record successful subtree reception directly with peer ID
+	// Use a nominal duration since we don't have timing info at this level
+	s.peerRegistry.RecordSubtreeReceived(peerID, 0)
+	s.logger.Debugf("[ReportValidSubtree] Recorded successful subtree %s from peer %s", req.SubtreeHash, req.PeerId)
 
 	return &p2p_api.ReportValidSubtreeResponse{
 		Success: true,
@@ -143,6 +162,20 @@ func (s *Server) ReportValidSubtree(ctx context.Context, req *p2p_api.ReportVali
 
 // ReportValidBlock is a gRPC handler for reporting valid block reception
 func (s *Server) ReportValidBlock(ctx context.Context, req *p2p_api.ReportValidBlockRequest) (*p2p_api.ReportValidBlockResponse, error) {
+	if s.peerRegistry == nil {
+		return &p2p_api.ReportValidBlockResponse{
+			Success: false,
+			Message: "peer registry not initialized",
+		}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
+	}
+
+	if req.PeerId == "" {
+		return &p2p_api.ReportValidBlockResponse{
+			Success: false,
+			Message: "peer ID is required",
+		}, errors.WrapGRPC(errors.NewInvalidArgumentError("peer ID is required"))
+	}
+
 	if req.BlockHash == "" {
 		return &p2p_api.ReportValidBlockResponse{
 			Success: false,
@@ -150,14 +183,19 @@ func (s *Server) ReportValidBlock(ctx context.Context, req *p2p_api.ReportValidB
 		}, errors.WrapGRPC(errors.NewInvalidArgumentError("block hash is required"))
 	}
 
-	// Call the internal reportValidBlockInternal method
-	err := s.reportValidBlockInternal(ctx, req.BlockHash)
+	// Decode peer ID
+	peerID, err := peer.Decode(req.PeerId)
 	if err != nil {
 		return &p2p_api.ReportValidBlockResponse{
 			Success: false,
-			Message: err.Error(),
-		}, nil // Don't wrap error, just return unsuccessful response
+			Message: "invalid peer ID",
+		}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
 	}
+
+	// Record successful block reception directly with peer ID
+	// Use a nominal duration since we don't have timing info at this level
+	s.peerRegistry.RecordBlockReceived(peerID, 0)
+	s.logger.Debugf("[ReportValidBlock] Recorded successful block %s from peer %s", req.BlockHash, req.PeerId)
 
 	return &p2p_api.ReportValidBlockResponse{
 		Success: true,

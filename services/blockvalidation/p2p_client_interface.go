@@ -31,5 +31,8 @@ type P2PClientI interface {
 	GetPeersForCatchup(ctx context.Context) (*p2p_api.GetPeersForCatchupResponse, error)
 
 	// ReportValidBlock reports that a block was successfully received and validated from a peer.
-	ReportValidBlock(ctx context.Context, blockHash string) error
+	ReportValidBlock(ctx context.Context, peerID string, blockHash string) error
+
+	// ReportValidSubtree reports that a subtree was successfully received and validated from a peer.
+	ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error
 }
