@@ -111,30 +111,30 @@ type batcherIfc[T any] interface {
 // Store implements the UTXO store interface using Aerospike.
 // It is thread-safe for concurrent access.
 type Store struct {
-	ctx                 context.Context // store the global context for things that run in the background
-	url                 *url.URL
-	client              *uaerospike.Client
-	namespace           string
-	setName             string
-	blockHeight         atomic.Uint32
-	medianBlockTime     atomic.Uint32
-	logger              ulogger.Logger
-	settings            *settings.Settings
-	batchID             atomic.Uint64
-	storeBatcher        batcherIfc[BatchStoreItem]
-	getBatcher          batcherIfc[batchGetItem]
-	spendBatcher        batcherIfc[batchSpend]
-	outpointBatcher     batcherIfc[batchOutpoint]
-	incrementBatcher    batcherIfc[batchIncrement]
-	setDAHBatcher       batcherIfc[batchDAH]
-	lockedBatcher       batcherIfc[batchLocked]
-	longestChainBatcher batcherIfc[batchLongestChain]
+	ctx                      context.Context // store the global context for things that run in the background
+	url                      *url.URL
+	client                   *uaerospike.Client
+	namespace                string
+	setName                  string
+	blockHeight              atomic.Uint32
+	medianBlockTime          atomic.Uint32
+	logger                   ulogger.Logger
+	settings                 *settings.Settings
+	batchID                  atomic.Uint64
+	storeBatcher             batcherIfc[BatchStoreItem]
+	getBatcher               batcherIfc[batchGetItem]
+	spendBatcher             batcherIfc[batchSpend]
+	outpointBatcher          batcherIfc[batchOutpoint]
+	incrementBatcher         batcherIfc[batchIncrement]
+	setDAHBatcher            batcherIfc[batchDAH]
+	lockedBatcher            batcherIfc[batchLocked]
+	longestChainBatcher      batcherIfc[batchLongestChain]
 	externalStore            blob.Store
 	utxoBatchSize            int
 	batchResponseWaitPercent int // Percentage (0-100) of batch duration to sleep before waiting on response channels
 	externalTxCache          *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
-	indexMutex          sync.Mutex // Mutex for index creation operations
-	indexOnce           sync.Once  // Ensures index creation/wait is only done once per process
+	indexMutex               sync.Mutex // Mutex for index creation operations
+	indexOnce                sync.Once  // Ensures index creation/wait is only done once per process
 }
 
 // New creates a new Aerospike-based UTXO store.
