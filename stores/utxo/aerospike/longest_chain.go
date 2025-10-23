@@ -37,6 +37,8 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				errCh:          errCh,
 			})
 
+			// Sleep a percentage of the batch duration before waiting for response to reduce CPU contention.
+			// Configurable via batchResponseWaitPercent (default 0 = disabled).
 			time.Sleep(time.Duration(s.settings.UtxoStore.LongestChainBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 			return <-errCh
 		})
