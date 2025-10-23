@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -36,6 +37,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				errCh:          errCh,
 			})
 
+			time.Sleep(time.Duration(s.settings.UtxoStore.LongestChainBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 			return <-errCh
 		})
 	}

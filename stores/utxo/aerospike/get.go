@@ -346,6 +346,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []fields.Field
 		}()
 	}
 
+	time.Sleep(time.Duration(s.settings.UtxoStore.GetBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 	data := <-done
 	if data.Err != nil {
 		if e, ok := data.Err.(*errors.Error); ok {
@@ -1117,6 +1118,7 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 
 	// Wait for all error channels to receive a result
 	for _, errChan := range errChans {
+		time.Sleep(time.Duration(s.settings.UtxoStore.OutpointBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 		if err := <-errChan; err != nil {
 			return err
 		}
