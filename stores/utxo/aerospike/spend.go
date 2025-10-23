@@ -326,7 +326,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 				ignoreLocked:      useIgnoreLocked,
 			})
 
-			// this waits for the batch to be sent and the response to be received from the batch operation
+			// Sleep a percentage of the batch duration before waiting for response to reduce CPU contention.
+			// Since batches take time to process, there's no benefit to immediately spinning on the channel.
+			// Configurable via batchResponseWaitPercent (default 0 = disabled).
 			time.Sleep(time.Duration(s.settings.UtxoStore.SpendBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 			batchErr := <-errCh
 
@@ -780,6 +782,8 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 			})
 		}()
 
+		// Sleep a percentage of the batch duration before waiting for response to reduce CPU contention.
+		// Configurable via batchResponseWaitPercent (default 0 = disabled).
 		time.Sleep(time.Duration(s.settings.UtxoStore.SetDAHBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 		errs[i] = <-errCh
 		if errs[i] != nil {
@@ -934,6 +938,8 @@ func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int) (inte
 		})
 	}()
 
+	// Sleep a percentage of the batch duration before waiting for response to reduce CPU contention.
+	// Configurable via batchResponseWaitPercent (default 0 = disabled).
 	time.Sleep(time.Duration(s.settings.UtxoStore.IncrementBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 	response := <-res
 
