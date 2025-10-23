@@ -212,6 +212,24 @@ type Server struct {
 	// The success rate can be calculated as: catchupSuccesses / catchupAttempts.
 	// The value persists for the lifetime of the server and is never reset.
 	catchupSuccesses atomic.Int64
+
+	// activeCatchupCtx stores the current catchup context for status reporting to the dashboard.
+	// This is updated when a catchup operation starts and cleared when it completes.
+	// Protected by activeCatchupCtxMu for thread-safe access.
+	activeCatchupCtx   *CatchupContext
+	activeCatchupCtxMu sync.RWMutex
+
+	// catchupProgress tracks the current progress through block headers during catchup.
+	// blocksFetched and blocksValidated are updated as blocks are processed.
+	// These counters are reset at the start of each catchup operation.
+	// Protected by activeCatchupCtxMu for thread-safe access.
+	blocksFetched   atomic.Int64
+	blocksValidated atomic.Int64
+
+	// previousCatchupAttempt stores details about the last failed catchup attempt.
+	// This is used to display in the dashboard why we switched from one peer to another.
+	// Protected by activeCatchupCtxMu for thread-safe access.
+	previousCatchupAttempt *PreviousAttempt
 }
 
 // New creates a new block validation server with the provided dependencies.
@@ -424,6 +442,61 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMes
 		Details:   details,
 		Timestamp: timestamppb.Now(),
 	}, errors.WrapGRPC(err)
+}
+
+// GetCatchupStatus returns the current catchup status via gRPC.
+// This method provides real-time information about ongoing catchup operations
+// for monitoring and dashboard display purposes.
+//
+// The response includes details about the peer being synced from, progress metrics,
+// and timing information. If no catchup is active, the response will indicate
+// IsCatchingUp=false and other fields will be empty/zero.
+//
+// This method is thread-safe and can be called concurrently with catchup operations.
+//
+// Parameters:
+//   - ctx: Context for the gRPC request
+//   - _: Empty request message (unused but required by gRPC interface)
+//
+// Returns:
+//   - *blockvalidation_api.CatchupStatusResponse: Current catchup status
+//   - error: Any error encountered (always nil for this method)
+func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.CatchupStatusResponse, error) {
+	status := u.getCatchupStatusInternal()
+
+	resp := &blockvalidation_api.CatchupStatusResponse{
+		IsCatchingUp:         status.IsCatchingUp,
+		PeerId:               status.PeerID,
+		PeerUrl:              status.PeerURL,
+		TargetBlockHash:      status.TargetBlockHash,
+		TargetBlockHeight:    status.TargetBlockHeight,
+		CurrentHeight:        status.CurrentHeight,
+		TotalBlocks:          int32(status.TotalBlocks),
+		BlocksFetched:        status.BlocksFetched,
+		BlocksValidated:      status.BlocksValidated,
+		StartTime:            status.StartTime,
+		DurationMs:           status.DurationMs,
+		ForkDepth:            status.ForkDepth,
+		CommonAncestorHash:   status.CommonAncestorHash,
+		CommonAncestorHeight: status.CommonAncestorHeight,
+	}
+
+	// Add previous attempt if available
+	if status.PreviousAttempt != nil {
+		resp.PreviousAttempt = &blockvalidation_api.PreviousCatchupAttempt{
+			PeerId:            status.PreviousAttempt.PeerID,
+			PeerUrl:           status.PreviousAttempt.PeerURL,
+			TargetBlockHash:   status.PreviousAttempt.TargetBlockHash,
+			TargetBlockHeight: status.PreviousAttempt.TargetBlockHeight,
+			ErrorMessage:      status.PreviousAttempt.ErrorMessage,
+			ErrorType:         status.PreviousAttempt.ErrorType,
+			AttemptTime:       status.PreviousAttempt.AttemptTime,
+			DurationMs:        status.PreviousAttempt.DurationMs,
+			BlocksValidated:   status.PreviousAttempt.BlocksValidated,
+		}
+	}
+
+	return resp, nil
 }
 
 // Init initializes the block validation server with required dependencies and services.

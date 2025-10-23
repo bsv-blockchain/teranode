@@ -4,6 +4,7 @@ package blockvalidation
 import (
 	"context"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -198,11 +199,21 @@ func (u *Server) acquireCatchupLock(ctx *CatchupContext) error {
 	}
 	u.catchupAttempts.Add(1)
 
+	// Store the active catchup context for status reporting
+	u.activeCatchupCtxMu.Lock()
+	u.activeCatchupCtx = ctx
+	u.activeCatchupCtxMu.Unlock()
+
+	// Reset progress counters
+	u.blocksFetched.Store(0)
+	u.blocksValidated.Store(0)
+
 	return nil
 }
 
 // releaseCatchupLock releases the catchup lock and records metrics.
 // Updates health check tracking and records success/failure metrics.
+// If catchup failed, stores details in previousCatchupAttempt for dashboard display.
 //
 // Parameters:
 //   - ctx: Catchup context containing operation state
@@ -212,6 +223,44 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 	if prometheusCatchupActive != nil {
 		prometheusCatchupActive.Set(0)
 	}
+
+	// Capture failure details for dashboard before clearing context
+	u.activeCatchupCtxMu.Lock()
+	if *err != nil && ctx != nil {
+		// Determine error type based on error characteristics
+		errorType := "unknown_error"
+		errorMsg := (*err).Error()
+
+		if errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid) {
+			errorType = "validation_failure"
+		} else if errors.IsNetworkError(*err) {
+			errorType = "network_error"
+		} else if strings.Contains(errorMsg, "secret mining") || strings.Contains(errorMsg, "secretly mined") {
+			errorType = "secret_mining"
+		} else if strings.Contains(errorMsg, "coinbase maturity") {
+			errorType = "coinbase_maturity_violation"
+		} else if strings.Contains(errorMsg, "checkpoint") {
+			errorType = "checkpoint_verification_failed"
+		} else if strings.Contains(errorMsg, "connection") || strings.Contains(errorMsg, "timeout") {
+			errorType = "connection_error"
+		}
+
+		u.previousCatchupAttempt = &PreviousAttempt{
+			PeerID:            ctx.peerID,
+			PeerURL:           ctx.baseURL,
+			TargetBlockHash:   ctx.blockUpTo.Hash().String(),
+			TargetBlockHeight: ctx.blockUpTo.Height,
+			ErrorMessage:      errorMsg,
+			ErrorType:         errorType,
+			AttemptTime:       time.Now().UnixMilli(),
+			DurationMs:        time.Since(ctx.startTime).Milliseconds(),
+			BlocksValidated:   u.blocksValidated.Load(),
+		}
+	}
+
+	// Clear the active catchup context
+	u.activeCatchupCtx = nil
+	u.activeCatchupCtxMu.Unlock()
 
 	// Update catchup tracking for health checks
 	u.catchupStatsMu.Lock()
@@ -852,6 +901,9 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 			if remaining%100 == 0 && remaining > 0 {
 				u.logger.Infof("[catchup:validateBlocksOnChannel][%s] %d blocks remaining", blockUpTo.Hash().String(), remaining)
 			}
+
+			// Update validated counter for progress tracking
+			u.blocksValidated.Add(1)
 		}
 	}
 

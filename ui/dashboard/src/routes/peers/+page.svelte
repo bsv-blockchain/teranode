@@ -43,10 +43,42 @@
     catchup_avg_response_ms: number
   }
 
+  interface PreviousAttemptData {
+    peer_id: string
+    peer_url: string
+    target_block_hash: string
+    target_block_height: number
+    error_message: string
+    error_type: string
+    attempt_time: number
+    duration_ms: number
+    blocks_validated: number
+  }
+
+  interface CatchupStatusData {
+    is_catching_up: boolean
+    peer_id: string
+    peer_url: string
+    target_block_hash: string
+    target_block_height: number
+    current_height: number
+    total_blocks: number
+    blocks_fetched: number
+    blocks_validated: number
+    start_time: number
+    duration_ms: number
+    fork_depth: number
+    common_ancestor_hash: string
+    common_ancestor_height: number
+    previous_attempt?: PreviousAttemptData
+  }
+
   let data: PeerData[] = []
+  let catchupStatus: CatchupStatusData | null = null
   let isLoading = false
   let error: string | null = null
   let refreshInterval: number | null = null
+  let catchupRefreshInterval: number | null = null
 
   // Fetch peer data from the API
   async function fetchPeers() {
@@ -79,6 +111,37 @@
     }
   }
 
+  // Fetch catchup status from the API
+  async function fetchCatchupStatus() {
+    try {
+      const response = await fetch('/api/catchup/status')
+
+      if (!response.ok) {
+        console.error(`Catchup status fetch failed: HTTP ${response.status}`)
+        catchupStatus = null
+        return
+      }
+
+      const result = await response.json()
+
+      if (result.error) {
+        console.error(`Catchup status error: ${result.error}`)
+        catchupStatus = null
+        return
+      }
+
+      // Store the catchup status if catching up, otherwise clear it
+      if (result.is_catching_up) {
+        catchupStatus = result
+      } else {
+        catchupStatus = null
+      }
+    } catch (err) {
+      console.error('Failed to fetch catchup status:', err)
+      catchupStatus = null
+    }
+  }
+
   // Format bytes to human-readable format
   function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B'
@@ -95,6 +158,20 @@
     if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
     if (ms < 3600000) return `${(ms / 60000).toFixed(1)}m`
     return `${(ms / 3600000).toFixed(1)}h`
+  }
+
+  // Format error type to human-readable string
+  function formatErrorType(errorType: string): string {
+    const errorTypeMap: Record<string, string> = {
+      'validation_failure': 'Validation Failed',
+      'network_error': 'Network Error',
+      'secret_mining': 'Secret Mining Detected',
+      'coinbase_maturity_violation': 'Coinbase Maturity Violation',
+      'checkpoint_verification_failed': 'Checkpoint Verification Failed',
+      'connection_error': 'Connection Error',
+      'unknown_error': 'Unknown Error',
+    }
+    return errorTypeMap[errorType] || errorType
   }
 
   // Column definitions for the table
@@ -383,20 +460,133 @@
     },
   }
 
-  // Auto-refresh every 10 seconds
+  // Auto-refresh every 10 seconds for peers, every 3 seconds for catchup status
   onMount(() => {
     fetchPeers()
+    fetchCatchupStatus()
     refreshInterval = window.setInterval(fetchPeers, 10000)
+    // Check catchup status more frequently to provide real-time updates
+    catchupRefreshInterval = window.setInterval(fetchCatchupStatus, 3000)
   })
 
   onDestroy(() => {
     if (refreshInterval) {
       clearInterval(refreshInterval)
     }
+    if (catchupRefreshInterval) {
+      clearInterval(catchupRefreshInterval)
+    }
   })
 </script>
 
 <PageWithMenu>
+  {#if catchupStatus && catchupStatus.is_catching_up}
+    <div class="catchup-status-wrapper">
+      <Card contentPadding="16px">
+        <div class="catchup-header">
+        <div class="catchup-title">
+          <div class="spinner"></div>
+          <Typo variant="title" size="h5" value="Block Catchup in Progress" />
+        </div>
+        <div class="catchup-duration">
+          {formatDuration(catchupStatus.duration_ms)}
+        </div>
+      </div>
+      <div class="catchup-details">
+        <div class="catchup-detail-item">
+          <span class="catchup-label">Syncing From</span>
+          <span class="catchup-value peer-id-value">{catchupStatus.peer_id || 'Unknown'}</span>
+        </div>
+        <div class="catchup-detail-item">
+          <span class="catchup-label">Peer URL</span>
+          <span class="catchup-value url-value">{catchupStatus.peer_url || '-'}</span>
+        </div>
+        <div class="catchup-detail-item">
+          <span class="catchup-label">Target Block</span>
+          <span class="catchup-value">
+            <span class="hash-value">{catchupStatus.target_block_hash?.slice(0, 8)}...{catchupStatus.target_block_hash?.slice(-8)}</span>
+            <span class="height-badge">#{catchupStatus.target_block_height?.toLocaleString()}</span>
+          </span>
+        </div>
+        <div class="catchup-detail-item">
+          <span class="catchup-label">Current Height</span>
+          <span class="catchup-value">#{catchupStatus.current_height?.toLocaleString()}</span>
+        </div>
+        <div class="catchup-detail-item">
+          <span class="catchup-label">Progress</span>
+          <span class="catchup-value progress-value">
+            {catchupStatus.blocks_validated || 0} / {catchupStatus.total_blocks || 0} blocks
+            {#if catchupStatus.total_blocks > 0}
+              <span class="progress-percentage">
+                ({((catchupStatus.blocks_validated / catchupStatus.total_blocks) * 100).toFixed(1)}%)
+              </span>
+            {/if}
+          </span>
+        </div>
+        {#if catchupStatus.fork_depth > 0}
+          <div class="catchup-detail-item">
+            <span class="catchup-label">Fork Depth</span>
+            <span class="catchup-value fork-depth">{catchupStatus.fork_depth} blocks</span>
+          </div>
+        {/if}
+        {#if catchupStatus.common_ancestor_hash}
+          <div class="catchup-detail-item">
+            <span class="catchup-label">Common Ancestor</span>
+            <span class="catchup-value">
+              <span class="hash-value">{catchupStatus.common_ancestor_hash?.slice(0, 8)}...{catchupStatus.common_ancestor_hash?.slice(-8)}</span>
+              {#if catchupStatus.common_ancestor_height}
+                <span class="height-badge-small">#{catchupStatus.common_ancestor_height?.toLocaleString()}</span>
+              {/if}
+            </span>
+          </div>
+        {/if}
+      </div>
+      <div class="progress-bar">
+        <div
+          class="progress-bar-fill"
+          style="width: {catchupStatus.total_blocks > 0 ? (catchupStatus.blocks_validated / catchupStatus.total_blocks) * 100 : 0}%"
+        ></div>
+      </div>
+      {#if catchupStatus.previous_attempt}
+        <div class="previous-attempt">
+          <div class="previous-attempt-header">
+            <Icon name="icon-status-light-glow-solid" size={14} color="#ffa500" />
+            <span class="previous-attempt-title">Previous Attempt Failed</span>
+          </div>
+          <div class="previous-attempt-grid">
+            <div class="previous-attempt-item">
+              <span class="attempt-label">Peer:</span>
+              <span class="attempt-value peer-id-value">{catchupStatus.previous_attempt.peer_id}</span>
+            </div>
+            <div class="previous-attempt-item">
+              <span class="attempt-label">Error Type:</span>
+              <span class="attempt-value error-value">
+                {formatErrorType(catchupStatus.previous_attempt.error_type)}
+              </span>
+            </div>
+            <div class="previous-attempt-item">
+              <span class="attempt-label">Duration:</span>
+              <span class="attempt-value">{formatDuration(catchupStatus.previous_attempt.duration_ms)}</span>
+            </div>
+            {#if catchupStatus.previous_attempt.blocks_validated > 0}
+              <div class="previous-attempt-item">
+                <span class="attempt-label">Blocks Validated:</span>
+                <span class="attempt-value">{catchupStatus.previous_attempt.blocks_validated.toLocaleString()}</span>
+              </div>
+            {/if}
+          </div>
+          <div class="error-message-container">
+            <div class="error-message-label">Error Message:</div>
+            <div class="error-message-box" title={catchupStatus.previous_attempt.error_message}>
+              {catchupStatus.previous_attempt.error_message}
+            </div>
+          </div>
+        </div>
+      {/if}
+      </Card>
+    </div>
+  {/if}
+
   <Card contentPadding="0">
     <div class="title" slot="title">
       <Typo variant="title" size="h4" value={t(`${pageKey}.title`, { defaultValue: 'Peer Registry' })} />
@@ -688,5 +878,267 @@
   :global(.success-rate-poor) {
     color: #ff6b6b !important;
     font-weight: 600;
+  }
+
+  /* Catchup status card styles */
+  .catchup-status-wrapper {
+    margin-bottom: 20px;
+  }
+
+  .catchup-status-wrapper :global(.card) {
+    background: linear-gradient(135deg, rgba(255, 152, 0, 0.1) 0%, rgba(255, 193, 7, 0.05) 100%) !important;
+    border-left: 4px solid #ff9800 !important;
+  }
+
+  .catchup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 152, 0, 0.2);
+  }
+
+  .catchup-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .spinner {
+    width: 18px;
+    height: 18px;
+    border: 3px solid rgba(255, 152, 0, 0.3);
+    border-top-color: #ff9800;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .catchup-duration {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: #ff9800;
+    font-weight: 600;
+  }
+
+  .catchup-details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px 24px;
+    margin-bottom: 20px;
+  }
+
+  .catchup-detail-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0; /* Allow items to shrink below content size */
+  }
+
+  .catchup-label {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .catchup-value {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.88);
+    font-weight: 500;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  }
+
+  .peer-id-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: #1878ff;
+    font-weight: 600;
+  }
+
+  .url-value {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.66);
+    word-break: break-all;
+    line-height: 1.4;
+  }
+
+  .hash-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.75);
+  }
+
+  .height-badge {
+    display: inline-block;
+    background: rgba(255, 152, 0, 0.2);
+    color: #ff9800;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  .height-badge-small {
+    display: inline-block;
+    background: rgba(255, 152, 0, 0.15);
+    color: #ffa500;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  .progress-value {
+    font-variant-numeric: tabular-nums;
+    line-height: 1.6;
+  }
+
+  .progress-percentage {
+    color: #ff9800;
+    font-weight: 700;
+    margin-left: 4px;
+    display: inline-block;
+  }
+
+  .fork-depth {
+    color: #ffa500 !important;
+    font-weight: 700;
+  }
+
+  .progress-bar {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 152, 0, 0.15);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 4px;
+  }
+
+  .progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #ff9800 0%, #ffc107 100%);
+    transition: width 0.3s ease-in-out;
+    border-radius: 4px;
+  }
+
+  /* Previous attempt styles */
+  .previous-attempt {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 152, 0, 0.2);
+  }
+
+  .previous-attempt-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .previous-attempt-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #ffa500;
+  }
+
+  .previous-attempt-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px 20px;
+    margin-bottom: 16px;
+  }
+
+  .previous-attempt-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .attempt-label {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .attempt-value {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.88);
+    font-weight: 500;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    word-break: break-all;
+  }
+
+  .attempt-value.peer-id-value {
+    word-break: break-all;
+    line-height: 1.4;
+  }
+
+  .error-value {
+    color: #ff6b6b !important;
+    font-weight: 600;
+  }
+
+  .error-message-container {
+    margin-top: 8px;
+  }
+
+  .error-message-label {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+  }
+
+  .error-message-box {
+    background: rgba(255, 107, 107, 0.1);
+    border-left: 3px solid #ff6b6b;
+    padding: 10px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.8);
+    line-height: 1.5;
+    font-family: 'JetBrains Mono', monospace;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    white-space: pre-wrap;
+    max-height: 120px;
+    overflow-y: auto;
+    cursor: help;
+  }
+
+  .error-message-box::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .error-message-box::-webkit-scrollbar-track {
+    background: rgba(255, 107, 107, 0.1);
+    border-radius: 3px;
+  }
+
+  .error-message-box::-webkit-scrollbar-thumb {
+    background: rgba(255, 107, 107, 0.3);
+    border-radius: 3px;
+  }
+
+  .error-message-box::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 107, 107, 0.5);
   }
 </style>

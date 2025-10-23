@@ -280,6 +280,7 @@ func (u *Server) orderedDelivery(gCtx context.Context, resultQueue <-chan result
 						delete(results, nextIndex)
 						nextIndex++
 						size.Add(-1)
+						// Note: blocksFetched counter is updated in Server, not here
 					case <-ctx.Done():
 						return ctx.Err()
 					}

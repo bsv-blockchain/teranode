@@ -327,6 +327,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.POST("/block/revalidate", blockHandler.RevalidateBlock)
 	apiGroup.GET("/blocks/invalid", blockHandler.GetLastNInvalidBlocks)
 
+	// Register catchup status endpoint
+	apiGroup.GET("/catchup/status", h.GetCatchupStatus)
+
 	// Add OPTIONS handlers for block operations
 	apiGroup.OPTIONS("/block/invalidate", func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
