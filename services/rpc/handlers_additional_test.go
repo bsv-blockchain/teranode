@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -28,8 +29,13 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/peer_api"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
+	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -471,12 +477,14 @@ func TestHandleSendRawTransactionValidation(t *testing.T) {
 		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
 	})
 
-	t.Run("successful transaction returns string txid", func(t *testing.T) {
+	t.Run("blob store failure returns error", func(t *testing.T) {
 		logger := mocklogger.NewTestLogger()
 
-		// Create a mock propagation client using the existing MockPropagationClient
-		mockPropClient := NewMockPropagationClient()
-		mockPropClient.On("ProcessTransaction", mock.Anything, mock.Anything).Return(nil)
+		// Create mock blob store that returns an error
+		mockBlobStore := &blob.MockStore{}
+		mockBlobStore.On("Set", mock.Anything, mock.Anything, fileformat.FileTypeTx, mock.Anything, mock.MatchedBy(func(opts []bloboptions.FileOption) bool {
+			return true
+		})).Return(assert.AnError)
 
 		// Create a simple test transaction
 		tx := bt.NewTx()
@@ -487,7 +495,101 @@ func TestHandleSendRawTransactionValidation(t *testing.T) {
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
-			propagationClient: mockPropClient,
+			txStore: mockBlobStore,
+		}
+
+		// Create command with hex-encoded transaction
+		cmd := &bsvjson.SendRawTransactionCmd{
+			HexTx: hex.EncodeToString(tx.Bytes()),
+		}
+
+		result, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+		assert.Nil(t, result)
+
+		// Verify it's an RPC error
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Failed to store transaction")
+	})
+
+	t.Run("validation failure returns error", func(t *testing.T) {
+		logger := mocklogger.NewTestLogger()
+
+		// Create mock blob store that returns success
+		mockBlobStore := &blob.MockStore{}
+		mockBlobStore.On("Set", mock.Anything, mock.Anything, fileformat.FileTypeTx, mock.Anything, mock.MatchedBy(func(opts []bloboptions.FileOption) bool {
+			return true
+		})).Return(nil)
+
+		// Create a simple test transaction
+		tx := bt.NewTx()
+		require.NotNil(t, tx)
+
+		// Create mock validator that returns an error
+		mockValidator := &validator.MockValidatorClient{
+			Errors: []error{assert.AnError},
+		}
+
+		s := &RPCServer{
+			logger: logger,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+			txStore:         mockBlobStore,
+			validatorClient: mockValidator,
+		}
+
+		// Create command with hex-encoded transaction
+		cmd := &bsvjson.SendRawTransactionCmd{
+			HexTx: hex.EncodeToString(tx.Bytes()),
+		}
+
+		result, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
+		require.Error(t, err)
+		assert.Nil(t, result)
+
+		// Verify it's an RPC error
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "TX rejected")
+	})
+
+	t.Run("successful transaction returns string txid", func(t *testing.T) {
+		logger := mocklogger.NewTestLogger()
+
+		// Create mock blob store that returns success
+		mockBlobStore := &blob.MockStore{}
+		mockBlobStore.On("Set", mock.Anything, mock.Anything, fileformat.FileTypeTx, mock.Anything, mock.MatchedBy(func(opts []bloboptions.FileOption) bool {
+			return true
+		})).Return(nil)
+
+		// Create a simple test transaction
+		tx := bt.NewTx()
+		require.NotNil(t, tx)
+
+		// Create mock UTXO store that returns metadata for the transaction
+		mockUtxoStore := &utxo.MockUtxostore{}
+		mockUtxoStore.On("Create", mock.Anything, mock.Anything, uint32(0), mock.Anything).Return(&utxometa.Data{
+			Tx:          tx,
+			SizeInBytes: uint64(len(tx.Bytes())),
+			Fee:         1000,
+		}, nil)
+
+		// Create mock validator that returns success with metadata
+		mockValidator := &validator.MockValidatorClient{
+			UtxoStore: mockUtxoStore,
+		}
+
+		s := &RPCServer{
+			logger: logger,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+			txStore:         mockBlobStore,
+			validatorClient: mockValidator,
 		}
 
 		// Create command with hex-encoded transaction
@@ -504,9 +606,6 @@ func TestHandleSendRawTransactionValidation(t *testing.T) {
 
 		// Verify the string matches the transaction ID
 		assert.Equal(t, tx.TxID(), txidResult)
-
-		// Verify the mock was called
-		mockPropClient.AssertExpectations(t)
 	})
 }
 

@@ -17,7 +17,7 @@
 //
 // - RPCServer: The core server implementation handling connections, authentication, and request routing
 // - Handlers: Individual command processors for each supported RPC method
-// - Propagation Client: Interface to propagation service for transaction submission
+// - Distributor: Component for reliable transaction propagation to the network
 // - Authentication: Two-tier system with admin and limited-access users
 //
 // Security features:
@@ -30,7 +30,6 @@
 // The RPC service integrates with several other Teranode components including:
 // - Blockchain service: For block data and chain state information
 // - Block Assembly service: For mining operations
-// - Propagation service: For transaction submission and validation
 // - P2P service: For peer information and management
 // - Legacy service: For compatibility with older network protocols
 // - UTXO store: For transaction validation
@@ -65,16 +64,17 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/p2p"
-	"github.com/bsv-blockchain/teranode/services/propagation"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
+	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/ordishs/gocore"
 	"go.opentelemetry.io/otel"
-	otelPropagation "go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // API version constants
@@ -687,10 +687,13 @@ type RPCServer struct {
 	// Used for transaction validation and UTXO queries
 	utxoStore utxo.Store
 
-	// propagationClient provides connection to the propagation service for transaction submission
-	// Used by sendrawtransaction to submit transactions to the cluster's propagation service
-	// This aligns with Issue #22's specification for simplified RPC transaction handling
-	propagationClient propagation.ClientInterface
+	// txStore provides access to the transaction blob store for persisting transactions
+	// Used for storing raw transaction data before validation
+	txStore blob.Store
+
+	// validatorClient provides access to the transaction validator service
+	// Used for synchronous transaction validation in sendrawtransaction RPC
+	validatorClient validator.Interface
 }
 
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
@@ -1290,7 +1293,7 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	rpcServeMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Extract trace context from incoming request headers
 		ctx := r.Context()
-		ctx = otel.GetTextMapPropagator().Extract(ctx, otelPropagation.HeaderCarrier(r.Header))
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
 
 		// Update request with the new context
 		r = r.WithContext(ctx)
@@ -1379,11 +1382,13 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 //   - blockAssemblyClient: Interface to the block assembly service for mining operations
 //   - peerClient: Interface to the legacy peer service
 //   - p2pClient: Interface to the P2P network service
+//   - txStore: Interface to the transaction blob store for persisting transactions
+//   - validatorClient: Interface to the validator service for transaction validation
 //
 // Returns:
 //   - *RPCServer: Configured server instance ready for initialization
 //   - error: Any error encountered during configuration
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI) (*RPCServer, error) {
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI, txStore blob.Store, validatorClient validator.Interface) (*RPCServer, error) {
 	initPrometheusMetrics()
 
 	assetHTTPAddress := tSettings.Asset.HTTPAddress
@@ -1394,28 +1399,6 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 	parsedURL, err := url.ParseRequestURI(assetHTTPAddress)
 	if err != nil {
 		return nil, errors.NewConfigurationError("Invalid URL", err)
-	}
-
-	// Create propagation client to connect to the cluster's propagation service
-	// This aligns with Issue #22's specification to use propagation client
-	// The client provides synchronous validation through blocking ProcessTransaction calls
-	propagationAddresses := tSettings.Propagation.GRPCAddresses
-	if len(propagationAddresses) == 0 {
-		return nil, errors.NewConfigurationError("no propagation service addresses configured")
-	}
-
-	pConn, err := util.GetGRPCClient(context.Background(), propagationAddresses[0],
-		&util.ConnectionOptions{
-			MaxRetries:   tSettings.GRPCMaxRetries,
-			RetryBackoff: tSettings.GRPCRetryBackoff,
-		}, tSettings)
-	if err != nil {
-		return nil, errors.NewServiceError("failed to connect to propagation service", err)
-	}
-
-	propagationClient, err := propagation.NewClient(context.Background(), logger, tSettings, pConn)
-	if err != nil {
-		return nil, errors.NewServiceError("failed to create propagation client", err)
 	}
 
 	rpc := RPCServer{
@@ -1432,7 +1415,8 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		blockAssemblyClient:    blockAssemblyClient,
 		peerClient:             peerClient,
 		p2pClient:              p2pClient,
-		propagationClient:      propagationClient,
+		txStore:                txStore,
+		validatorClient:        validatorClient,
 	}
 
 	rpcUser := tSettings.RPC.RPCUser
