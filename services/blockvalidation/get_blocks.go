@@ -235,7 +235,6 @@ func (u *Server) distributeBatchesToWorkers(ctx context.Context, batchQueue <-ch
 	return nil
 }
 
-
 // blockWorker processes blocks and fetches their subtree data in parallel
 func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan workItem, resultQueue chan<- resultItem, baseURL string, peerID string, blockUpTo *model.Block) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "blockWorker",
