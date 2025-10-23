@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,6 +123,10 @@ type BlockAssembler struct {
 
 	// bestBlockHeight atomically stores the current best block height
 	bestBlockHeight atomic.Uint32
+
+	// lastPersistedHeight tracks the last block height processed by block persister
+	// This is updated via BlockPersisted notifications and used to coordinate with cleanup
+	lastPersistedHeight atomic.Uint32
 
 	// currentChainMap maps block hashes to their heights
 	currentChainMap map[chainhash.Hash]uint32
@@ -342,6 +347,28 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 
 				if notification.Type == model.NotificationType_Block {
 					b.processNewBlockAnnouncement(ctx)
+				} else if notification.Type == model.NotificationType_BlockPersisted {
+					// RUNTIME COORDINATION: Update persisted height from block persister
+					//
+					// Block persister sends this notification after successfully persisting a block
+					// and creating its .subtree_data file. We track this height so cleanup can safely
+					// delete transactions from earlier blocks without breaking catchup.
+					//
+					// This notification-based update keeps our persisted height current during normal
+					// operation. Combined with the startup initialization from blockchain state,
+					// we always know how far block persister has progressed.
+					//
+					// Cleanup uses this via GetLastPersistedHeight() to calculate safe deletion height.
+					if notification.Metadata != nil && notification.Metadata.Metadata != nil {
+						if heightStr, ok := notification.Metadata.Metadata["height"]; ok {
+							if height, err := strconv.ParseUint(heightStr, 10, 32); err == nil {
+								b.lastPersistedHeight.Store(uint32(height))
+								b.logger.Debugf("[BlockAssembler] Block persister progress: height %d", height)
+							} else {
+								b.logger.Warnf("[BlockAssembler] Failed to parse persisted height from notification: %v", err)
+							}
+						}
+					}
 				}
 
 				b.setCurrentRunningState(StateRunning)
@@ -555,6 +582,15 @@ func (b *BlockAssembler) GetCurrentRunningState() State {
 	return b.currentRunningState.Load().(State)
 }
 
+// GetLastPersistedHeight returns the last block height processed by block persister.
+// This is used by cleanup service to avoid deleting transactions before they're persisted.
+//
+// Returns:
+//   - uint32: Last persisted block height
+func (b *BlockAssembler) GetLastPersistedHeight() uint32 {
+	return b.lastPersistedHeight.Load()
+}
+
 // Start initializes and begins the block assembler operations.
 //
 // Parameters:
@@ -585,6 +621,42 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		return errors.NewProcessingError("[BlockAssembler] failed to start channel listeners: %v", err)
 	}
 
+	// CRITICAL STARTUP COORDINATION: Initialize persisted height from block persister's state
+	//
+	// PROBLEM: Block persister creates .subtree_data files after a delay (BlockPersisterPersistAge blocks),
+	// but cleanup deletes transactions based only on delete_at_height. If cleanup runs before block persister
+	// has created .subtree_data files, those files will reference deleted transactions, causing catchup failures
+	// with "subtree length does not match tx data length" errors (actually missing transactions).
+	//
+	// SOLUTION: Cleanup coordinates with block persister by limiting deletion to:
+	//   max_cleanup_height = min(requested_cleanup_height, persisted_height + retention)
+	//
+	// STARTUP RACE: Block persister notifications arrive asynchronously after BlockAssembler starts.
+	// If cleanup runs before the first notification arrives, it doesn't know the persisted height and
+	// could delete transactions that block persister still needs.
+	//
+	// PREVENTION: Read block persister's last persisted height from blockchain state on startup.
+	// Block persister publishes this state on its own startup, so we have the current value immediately.
+	//
+	// SCENARIOS:
+	//   1. Block persister running: State available, cleanup immediately coordinates correctly
+	//   2. Block persister not deployed: State missing, cleanup proceeds normally (height=0 disables coordination)
+	//   3. Block persister hasn't started yet: State missing, will get notification soon, cleanup waits
+	//   4. Block persister disabled: State missing, cleanup works without coordination
+	//
+	// All scenarios are safe. This prevents premature cleanup during the startup window.
+	if state, err := b.blockchainClient.GetState(ctx, "BlockPersisterHeight"); err == nil && len(state) >= 4 {
+		height := binary.LittleEndian.Uint32(state)
+		if height > 0 {
+			b.lastPersistedHeight.Store(height)
+			b.logger.Infof("[BlockAssembler] Initialized persisted height from block persister state: %d", height)
+		}
+	} else if err != nil {
+		// State doesn't exist - block persister either not deployed, hasn't started, or first run.
+		// All cases are safe (cleanup checks for height=0 and proceeds normally without coordination).
+		b.logger.Debugf("[BlockAssembler] Block persister state not available: %v", err)
+	}
+
 	// Check if the UTXO store supports cleanup operations
 	if !b.settings.UtxoStore.DisableDAHCleaner {
 		if cleanupServiceProvider, ok := b.utxoStore.(cleanup.CleanupServiceProvider); ok {
@@ -596,6 +668,22 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 			}
 
 			if b.cleanupService != nil {
+				// CLEANUP COORDINATION: Wire up block persister progress tracking
+				//
+				// Cleanup needs to know how far block persister has progressed so it doesn't
+				// delete transactions that block persister still needs to create .subtree_data files.
+				//
+				// The cleanup service will call GetLastPersistedHeight() before each cleanup operation
+				// and limit deletion to: min(requested_height, persisted_height + retention)
+				//
+				// This getter provides the persisted height that was:
+				//   1. Initialized from blockchain state on startup (preventing startup race)
+				//   2. Updated via BlockPersisted notifications during runtime (keeping current)
+				//
+				// See processCleanupJob in cleanup_service.go for the coordination logic.
+				b.cleanupService.SetPersistedHeightGetter(b.GetLastPersistedHeight)
+				b.logger.Infof("[BlockAssembler] Configured cleanup service to coordinate with block persister")
+
 				b.logger.Infof("[BlockAssembler] starting cleanup service")
 				b.cleanupService.Start(ctx)
 			}
