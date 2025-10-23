@@ -13,11 +13,11 @@ The P2P Server is implemented through the Server struct, which coordinates all p
 ```go
 type Server struct {
     p2p_api.UnimplementedPeerServiceServer
-    P2PNode                           p2p.NodeI          // The P2P network node instance from github.com/bsv-blockchain/go-p2p
-    logger                            ulogger.Logger     // Logger instance for the server
-    settings                          *settings.Settings // Configuration settings
-    bitcoinProtocolID                 string             // Bitcoin protocol identifier (format: "teranode/bitcoin/{version}")
-    blockchainClient                  blockchain.ClientI // Client for blockchain interactions
+    P2PClient                         p2pMessageBus.P2PClient   // The P2P network client
+    logger                            ulogger.Logger            // Logger instance for the server
+    settings                          *settings.Settings       // Configuration settings
+    bitcoinProtocolVersion            string                    // Bitcoin protocol identifier
+    blockchainClient                  blockchain.ClientI       // Client for blockchain interactions
     blockValidationClient             blockvalidation.Interface
     blockAssemblyClient               blockassembly.ClientI     // Client for block assembly operations
     AssetHTTPAddressURL               string                    // HTTP address URL for assets
@@ -30,35 +30,35 @@ type Server struct {
     blocksKafkaProducerClient         kafka.KafkaAsyncProducerI // Kafka producer for blocks
     banList                           BanListI                  // List of banned peers
     banChan                           chan BanEvent             // Channel for ban events
-    banManager                        PeerBanManagerI           // Manager for peer banning (interface)
+    banManager                        PeerBanManagerI           // Manager for peer banning
     gCtx                              context.Context
     blockTopicName                    string
     subtreeTopicName                  string
-    miningOnTopicName                 string
     rejectedTxTopicName               string
-    invalidBlocksTopicName            string       // Kafka topic for invalid blocks
-    invalidSubtreeTopicName           string       // Kafka topic for invalid subtrees
-    handshakeTopicName                string       // pubsub topic for version/verack
-    nodeStatusTopicName               string       // pubsub topic for node status messages
-    topicPrefix                       string       // Chain identifier prefix for topic validation
-    blockPeerMap                      sync.Map     // Map to track which peer sent each block (hash -> peerMapEntry)
-    subtreePeerMap                    sync.Map     // Map to track which peer sent each subtree (hash -> peerMapEntry)
-    startTime                         time.Time    // Server start time for uptime calculation
-    syncManager                       *SyncManager // Manager for peer synchronization and best peer selection
-    peerBlockHashes                   sync.Map     // Map to track peer best block hashes (peerID -> hash string)
-    syncConnectionTimes               sync.Map     // Map to track when we first connected to each sync peer (peerID -> timestamp)
+    invalidBlocksTopicName            string             // Kafka topic for invalid blocks
+    invalidSubtreeTopicName           string             // Kafka topic for invalid subtrees
+    nodeStatusTopicName               string             // pubsub topic for node status messages
+    topicPrefix                       string             // Chain identifier prefix for topic validation
+    blockPeerMap                      sync.Map           // Map to track which peer sent each block (hash -> peerMapEntry)
+    subtreePeerMap                    sync.Map           // Map to track which peer sent each subtree (hash -> peerMapEntry)
+    startTime                         time.Time          // Server start time for uptime calculation
+    peerRegistry                      *PeerRegistry      // Central registry for all peer information
+    peerSelector                      *PeerSelector      // Stateless peer selection logic
+    peerHealthChecker                 *PeerHealthChecker // Async health monitoring
+    syncCoordinator                   *SyncCoordinator   // Orchestrates sync operations
+    syncConnectionTimes               sync.Map           // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
     // Cleanup configuration
-    peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
-    peerMapMaxSize       int           // Maximum number of entries in peer maps
-    peerMapTTL           time.Duration // Time-to-live for peer map entries
+    peerMapCleanupTicker              *time.Ticker       // Ticker for periodic cleanup of peer maps
+    peerMapMaxSize                    int                // Maximum number of entries in peer maps
+    peerMapTTL                        time.Duration      // Time-to-live for peer map entries
 }
 ```
 
 The server manages several key components, each serving a specific purpose in the P2P network:
 
-- The P2PNode handles direct peer connections and message routing through the p2p.NodeI interface from the public github.com/bsv-blockchain/go-p2p package
-- The bitcoinProtocolID contains the node's user agent string in format "teranode/bitcoin/{version}" where version is dynamically determined at build time from Git tags (e.g., "v1.2.3") or generated as a pseudo-version (e.g., "v0.0.0-20250731141601-18714b9")
+- The P2PClient handles direct peer connections and message routing through the p2pMessageBus.P2PClient interface
+- The bitcoinProtocolVersion contains the protocol version identifier for Bitcoin network communication
 - The various Kafka clients manage message distribution across the network
 - The ban system maintains network security by managing peer access through BanListI and PeerBanManager
 - The notification channel handles real-time event propagation
@@ -106,11 +106,15 @@ type NodeI interface {
 The server initializes through the NewServer function:
 
 ```go
-func NewServer( ctx context.Context,
+func NewServer(
+    ctx context.Context,
     logger ulogger.Logger,
     tSettings *settings.Settings,
     blockchainClient blockchain.ClientI,
+    blockAssemblyClient blockassembly.ClientI,
     rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI,
+    invalidBlocksKafkaConsumerClient kafka.KafkaConsumerGroupI,
+    invalidSubtreeKafkaConsumerClient kafka.KafkaConsumerGroupI,
     subtreeKafkaProducerClient kafka.KafkaAsyncProducerI,
     blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
 ) (*Server, error)
@@ -257,14 +261,41 @@ const (
 
 Peer scores automatically decay over time to allow for recovery from temporary issues.
 
+### Public API Methods
+
+```go
+func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeersResponse, error)
+```
+
+Returns a list of connected peers with their connection information and status.
+
+```go
+func (s *Server) BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error)
+```
+
+Bans a peer by their peer ID, preventing future connections from that peer.
+
+```go
+func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error)
+```
+
+Removes a ban on a specific peer, allowing them to reconnect.
+
+```go
+func (s *Server) IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error)
+```
+
+Checks if a specific peer ID is currently banned.
+
 ### Message Handlers
 
-- `handleHandshakeTopic`: Handles incoming handshake messages including version and verack exchanges.
-- `handleBlockTopic`: Handles incoming block messages.
-- `handleSubtreeTopic`: Handles incoming subtree messages.
-- `handleMiningOnTopic`: Handles incoming mining-on messages.
+- `handleBlockTopic`: Handles incoming block messages and validates block announcements.
+- `handleSubtreeTopic`: Handles incoming subtree messages and processes subtree data.
+- `handleRejectedTxTopic`: Handles rejected transaction notifications from peers.
 - `handleNodeStatusTopic`: Handles incoming node status update messages.
-- `handleBanEvent`: Handles banning and unbanning events.
+- `invalidBlockHandler`: Processes notifications about invalid blocks from Kafka.
+- `invalidSubtreeHandler`: Processes notifications about invalid subtrees from Kafka.
+- `rejectedTxHandler`: Processes rejected transaction notifications from Kafka.
 
 ### Message Structures
 
