@@ -583,14 +583,28 @@ func TestReportValidSubtree_GRPCEndpoint(t *testing.T) {
 		logger:       ulogger.TestLogger{},
 	}
 
-	// Test valid request returns success (even if peer not found - it returns success but doesn't record)
+	// Create a test peer
+	testPeerID, err := peer.Decode("12D3KooWBPqTBhshqRZMKZtqb5sfgckM9JYkWDR7eW5kSPEKwKCW")
+	require.NoError(t, err)
+
+	// Add peer to registry
+	p2pRegistry.AddPeer(testPeerID)
+
+	// Test valid request returns success
 	req := &p2p_api.ReportValidSubtreeRequest{
+		PeerId:      testPeerID.String(),
 		SubtreeHash: "test_subtree_hash_123",
 	}
 	resp, err := p2pServer.ReportValidSubtree(ctx, req)
 	require.NoError(t, err)
 	assert.True(t, resp.Success)
 	assert.Equal(t, "subtree validation recorded", resp.Message)
+
+	// Verify peer metrics were updated
+	info, exists := p2pRegistry.GetPeer(testPeerID)
+	require.True(t, exists)
+	assert.Equal(t, int64(1), info.SubtreesReceived)
+	assert.Equal(t, int64(1), info.InteractionSuccesses)
 }
 
 // TestReportValidSubtree_MissingHash tests error handling when subtree hash is missing
@@ -601,16 +615,26 @@ func TestReportValidSubtree_MissingHash(t *testing.T) {
 	p2pRegistry := NewPeerRegistry()
 	p2pServer := &Server{
 		peerRegistry: p2pRegistry,
+		logger:       ulogger.TestLogger{},
 	}
 
-	// Call with empty subtree hash
-	req := &p2p_api.ReportValidSubtreeRequest{
+	// Test missing peer ID
+	req1 := &p2p_api.ReportValidSubtreeRequest{
+		PeerId:      "",
+		SubtreeHash: "test_hash",
+	}
+	resp1, err1 := p2pServer.ReportValidSubtree(ctx, req1)
+	assert.Error(t, err1)
+	assert.False(t, resp1.Success)
+	assert.Contains(t, resp1.Message, "peer ID is required")
+
+	// Test missing subtree hash
+	req2 := &p2p_api.ReportValidSubtreeRequest{
+		PeerId:      "12D3KooWBPqTBhshqRZMKZtqb5sfgckM9JYkWDR7eW5kSPEKwKCW",
 		SubtreeHash: "",
 	}
-	resp, err := p2pServer.ReportValidSubtree(ctx, req)
-
-	// Should return error response
-	assert.Error(t, err)
-	assert.False(t, resp.Success)
-	assert.Contains(t, resp.Message, "subtree hash is required")
+	resp2, err2 := p2pServer.ReportValidSubtree(ctx, req2)
+	assert.Error(t, err2)
+	assert.False(t, resp2.Success)
+	assert.Contains(t, resp2.Message, "subtree hash is required")
 }

@@ -918,12 +918,14 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 	u.logger.Debugf("[getSubtreeTxHashes][%s] done with subtree response", subtreeHash.String())
 
-	// Report successful subtree fetch to improve peer reputation
-	if u.p2pClient != nil {
-		if err := u.p2pClient.ReportValidSubtree(spanCtx, subtreeHash.String()); err != nil {
-			u.logger.Warnf("[getSubtreeTxHashes][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
-		}
-	}
+	// TODO: Report successful subtree fetch to improve peer reputation
+	// Cannot call ReportValidSubtree here because we don't have peer ID, only baseURL (HTTP URL)
+	// Need to track peer ID through the call chain if we want to enable this
+	// if u.p2pClient != nil {
+	// 	if err := u.p2pClient.ReportValidSubtree(spanCtx, peerID, subtreeHash.String()); err != nil {
+	// 		u.logger.Warnf("[getSubtreeTxHashes][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
+	// 	}
+	// }
 
 	return txHashes, nil
 }
@@ -1216,12 +1218,14 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 									u.logger.Infof("[validateSubtree][%s] stored subtree data from %s", subtreeHash.String(), url)
 									subtreeDataExists = true
 
-									// Report successful subtree data fetch to improve peer reputation
-									if u.p2pClient != nil {
-										if err := u.p2pClient.ReportValidSubtree(ctx, subtreeHash.String()); err != nil {
-											u.logger.Warnf("[validateSubtree][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
-										}
-									}
+									// TODO: Report successful subtree data fetch to improve peer reputation
+									// Cannot call ReportValidSubtree here because we don't have peer ID, only baseURL (HTTP URL)
+									// Need to track peer ID through the call chain if we want to enable this
+									// if u.p2pClient != nil {
+									// 	if err := u.p2pClient.ReportValidSubtree(ctx, peerID, subtreeHash.String()); err != nil {
+									// 		u.logger.Warnf("[validateSubtree][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
+									// 	}
+									// }
 								}
 							}
 						}

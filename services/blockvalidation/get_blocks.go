@@ -649,12 +649,13 @@ func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n u
 // Parameters:
 //   - ctx: Context for cancellation and tracing
 //   - hash: Block hash to fetch
+//   - peerID: Peer ID for reputation tracking
 //   - baseURL: Peer URL to fetch from
 //
 // Returns:
 //   - *model.Block: The fetched block
 //   - error: If request fails or block is invalid
-func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, baseURL string) (*model.Block, error) {
+func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, peerID string, baseURL string) (*model.Block, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchSingleBlock",
 		tracing.WithParentStat(u.stats),
 	)
@@ -676,8 +677,8 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, bas
 	}
 
 	// Report successful block fetch to improve peer reputation
-	if u.p2pClient != nil {
-		if err := u.p2pClient.ReportValidBlock(ctx, hash.String()); err != nil {
+	if u.p2pClient != nil && peerID != "" {
+		if err := u.p2pClient.ReportValidBlock(ctx, peerID, hash.String()); err != nil {
 			u.logger.Warnf("[fetchSingleBlock][%s] failed to report valid block: %v", hash.String(), err)
 		}
 	}

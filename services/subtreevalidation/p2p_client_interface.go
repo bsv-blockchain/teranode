@@ -11,5 +11,5 @@ import (
 // This interface exists to avoid circular dependencies between subtreevalidation and p2p packages.
 type P2PClientI interface {
 	// ReportValidSubtree reports that a subtree was successfully fetched and validated from a peer.
-	ReportValidSubtree(ctx context.Context, subtreeHash string) error
+	ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error
 }

@@ -112,11 +112,9 @@ type ClientI interface {
 
 	// ReportValidSubtree reports that a subtree was successfully fetched and validated from a peer.
 	// This increases the peer's reputation score for providing valid data.
-	// The subtreeHash is used to identify which peer provided the subtree.
-	ReportValidSubtree(ctx context.Context, subtreeHash string) error
+	ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error
 
 	// ReportValidBlock reports that a block was successfully received and validated from a peer.
 	// This increases the peer's reputation score for providing valid blocks.
-	// The blockHash is used to identify which peer provided the block.
-	ReportValidBlock(ctx context.Context, blockHash string) error
+	ReportValidBlock(ctx context.Context, peerID string, blockHash string) error
 }

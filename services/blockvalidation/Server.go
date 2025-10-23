@@ -814,7 +814,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 	if shouldConsiderCatchup {
 		// Fetch the block to classify it before deciding on catchup
-		block, err := u.fetchSingleBlock(ctx, blockFound.hash, blockFound.baseURL)
+		block, err := u.fetchSingleBlock(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 		if err != nil {
 			if blockFound.errCh != nil {
 				blockFound.errCh <- err
@@ -1208,7 +1208,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	if len(useBlock) > 0 {
 		block = useBlock[0]
 	} else {
-		block, err = u.fetchSingleBlock(ctx, hash, baseURL)
+		block, err = u.fetchSingleBlock(ctx, hash, peerID, baseURL)
 		if err != nil {
 			return err
 		}
@@ -1478,7 +1478,7 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 	}
 
 	// Fetch the block to classify it
-	block, err := u.fetchSingleBlock(ctx, blockFound.hash, blockFound.baseURL)
+	block, err := u.fetchSingleBlock(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 	if err != nil {
 		u.logger.Errorf("[addBlockToPriorityQueue] Failed to fetch block %s: %v", blockFound.hash.String(), err)
 		if blockFound.errCh != nil {
