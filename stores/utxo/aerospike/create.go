@@ -211,6 +211,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		}()
 	}
 
+	// Sleep a percentage of the batch duration before waiting for response to reduce CPU contention.
+	// Since batches take time to process, there's no benefit to immediately spinning on the channel.
+	// Configurable via batchResponseWaitPercent (default 0 = disabled).
 	time.Sleep(s.settings.Aerospike.StoreBatcherDuration * time.Duration(s.batchResponseWaitPercent) / 100)
 	err = <-errCh
 	if err != nil {

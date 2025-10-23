@@ -41,6 +41,8 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 
 			// Now we need to get totalRecords and do all the child records if necessary...
 
+			// Sleep a percentage of the batch duration before waiting for response to reduce CPU contention.
+			// Configurable via batchResponseWaitPercent (default 0 = disabled).
 			time.Sleep(time.Duration(s.settings.UtxoStore.LockedBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 			return <-errCh
 		})
@@ -132,6 +134,8 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 						errCh:      errCh,
 					})
 
+					// Sleep a percentage of the batch duration before waiting for response to reduce CPU contention.
+					// Configurable via batchResponseWaitPercent (default 0 = disabled).
 					time.Sleep(time.Duration(s.settings.UtxoStore.LockedBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 					return <-errCh
 				})
