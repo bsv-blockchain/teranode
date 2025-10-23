@@ -33,9 +33,31 @@ go test -v ./test/chaos/...
 ```
 
 ### Run Specific Scenario
+
+**Using helper scripts (recommended):**
+```bash
+# Scenario 1: Database Latency
+./test/chaos/run_scenario_01.sh
+
+# Scenario 2: Kafka Broker Failure
+./test/chaos/run_scenario_02.sh
+```
+
+The helper scripts will:
+- Check if required services are running
+- Start docker compose if needed
+- Verify connectivity through toxiproxy
+- Reset toxiproxy to clean state
+- Run the test
+- Clean up after completion
+
+**Using go test directly:**
 ```bash
 # Scenario 1: Database Latency
 go test -v ./test/chaos -run TestScenario01_DatabaseLatency
+
+# Scenario 2: Kafka Broker Failure
+go test -v ./test/chaos -run TestScenario02_KafkaBrokerFailure
 ```
 
 ### Run in Verbose Mode
@@ -78,6 +100,42 @@ go test -v ./test/chaos -run TestScenario01_DatabaseLatency
 - ✅ Retry logic executes multiple attempts
 - ✅ System recovers fully after latency removal
 - ✅ No data corruption
+
+### Scenario 2: Kafka Broker Failure
+**File:** `scenario_02_kafka_broker_failure_test.go`
+
+**What it tests:**
+- System behavior when Kafka broker is unavailable
+- Producer error handling and retry logic
+- Consumer watchdog detection of stuck states
+- Message delivery guarantees
+- Recovery after broker restoration
+- Offset management and message consistency
+
+**How to run:**
+```bash
+go test -v ./test/chaos -run TestScenario02_KafkaBrokerFailure
+```
+
+**Test phases:**
+1. Establish baseline Kafka operations (produce and consume)
+2. Inject 3-second latency to simulate slow broker
+3. Test sync producer with latency
+4. Test async producer with latency
+5. Inject 100% connection drops (simulate broker failure)
+6. Verify producer failure handling
+7. Verify consumer watchdog detects stuck state
+8. Remove toxic and verify recovery
+9. Verify message consistency and no data loss
+
+**Expected results:**
+- ✅ Producers handle latency gracefully (slow but successful)
+- ✅ Async producers continue operating with latency
+- ✅ Producers fail appropriately when broker is down
+- ✅ Consumer watchdog detects stuck/failed connections
+- ✅ System recovers fully after broker restoration
+- ✅ No message loss (all published messages are retrievable)
+- ✅ Consumer offsets maintained correctly
 
 ## Test Structure
 
@@ -243,8 +301,9 @@ t.Logf("✅ Test completed successfully")
 
 ### Test Duration
 Chaos tests take longer than unit tests:
-- Scenario 1: ~30-45 seconds
-- Full suite: ~5-10 minutes (when more scenarios added)
+- Scenario 1 (Database Latency): ~30-45 seconds
+- Scenario 2 (Kafka Broker Failure): ~40-60 seconds
+- Full suite: ~2-3 minutes (grows with more scenarios)
 
 ## Troubleshooting
 
@@ -311,7 +370,7 @@ curl -X POST http://localhost:8474/reset
 
 ## Future Scenarios (Planned)
 
-- [ ] Scenario 2: Kafka Broker Failure
+- [x] Scenario 2: Kafka Broker Failure ✅ **Implemented**
 - [ ] Scenario 3: Network Partition
 - [ ] Scenario 4: Intermittent Connection Drops
 - [ ] Scenario 5: Bandwidth Constraints
