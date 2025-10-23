@@ -327,6 +327,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 			})
 
 			// this waits for the batch to be sent and the response to be received from the batch operation
+			time.Sleep(time.Duration(s.settings.UtxoStore.SpendBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 			batchErr := <-errCh
 
 			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) {
@@ -779,6 +780,7 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 			})
 		}()
 
+		time.Sleep(time.Duration(s.settings.UtxoStore.SetDAHBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 		errs[i] = <-errCh
 		if errs[i] != nil {
 			s.logger.Errorf("[setDAHForChildRecords][%s] failed to set DAH for child record %d: %v", txID.String(), i, errs[i])
@@ -932,6 +934,7 @@ func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int) (inte
 		})
 	}()
 
+	time.Sleep(time.Duration(s.settings.UtxoStore.IncrementBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 	response := <-res
 
 	return response.res, response.err
