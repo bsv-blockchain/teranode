@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -40,6 +41,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 
 			// Now we need to get totalRecords and do all the child records if necessary...
 
+			time.Sleep(time.Duration(s.settings.UtxoStore.LockedBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 			return <-errCh
 		})
 	}
@@ -130,6 +132,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 						errCh:      errCh,
 					})
 
+					time.Sleep(time.Duration(s.settings.UtxoStore.LockedBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 					return <-errCh
 				})
 			}
