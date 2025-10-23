@@ -129,9 +129,10 @@ type Store struct {
 	setDAHBatcher       batcherIfc[batchDAH]
 	lockedBatcher       batcherIfc[batchLocked]
 	longestChainBatcher batcherIfc[batchLongestChain]
-	externalStore       blob.Store
-	utxoBatchSize       int
-	externalTxCache     *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	externalStore            blob.Store
+	utxoBatchSize            int
+	batchResponseWaitPercent int // Percentage (0-100) of batch duration to sleep before waiting on response channels
+	externalTxCache          *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
 	indexMutex          sync.Mutex // Mutex for index creation operations
 	indexOnce           sync.Once  // Ensures index creation/wait is only done once per process
 }
@@ -198,10 +199,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		setName:   setName,
 		logger:    logger,
 
-		settings:        tSettings,
-		externalStore:   externalStore,
-		utxoBatchSize:   utxoBatchSize,
-		externalTxCache: externalTxCache,
+		settings:                 tSettings,
+		externalStore:            externalStore,
+		utxoBatchSize:            utxoBatchSize,
+		batchResponseWaitPercent: tSettings.UtxoStore.BatchResponseWaitPercent,
+		externalTxCache:          externalTxCache,
 	}
 
 	// Ensure index creation/wait is only done once per process
