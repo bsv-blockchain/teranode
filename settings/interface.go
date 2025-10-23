@@ -143,7 +143,6 @@ type AerospikeSettings struct {
 	UseDefaultBasePolicies bool
 	UseDefaultPolicies     bool
 	WarmUp                 bool
-	StoreBatcherDuration   time.Duration
 	StatsRefreshDuration   time.Duration
 }
 
