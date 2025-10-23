@@ -1119,11 +1119,12 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 		})
 	}
 
+	// Sleep a percentage of the batch duration before waiting for response to reduce CPU contention.
+	// Configurable via batchResponseWaitPercent (default 0 = disabled).
+	time.Sleep(time.Duration(s.settings.UtxoStore.OutpointBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
+
 	// Wait for all error channels to receive a result
 	for _, errChan := range errChans {
-		// Sleep a percentage of the batch duration before waiting for response to reduce CPU contention.
-		// Configurable via batchResponseWaitPercent (default 0 = disabled).
-		time.Sleep(time.Duration(s.settings.UtxoStore.OutpointBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 		if err := <-errChan; err != nil {
 			return err
 		}
