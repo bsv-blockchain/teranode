@@ -244,7 +244,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
-	storeBatchDuration := tSettings.Aerospike.StoreBatcherDuration
+	storeBatchDurationStr := tSettings.UtxoStore.StoreBatcherDurationMillis
+	storeBatchDuration := time.Duration(storeBatchDurationStr) * time.Millisecond
 
 	if storeBatchSize > 1 {
 		s.storeBatcher = batcher.New(storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
