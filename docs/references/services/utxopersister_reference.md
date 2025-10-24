@@ -210,6 +210,10 @@ type UTXOWrapper struct {
 
     // UTXOs contains the unspent transaction outputs
     UTXOs []*UTXO
+
+    // UTXOTotalValue is the total value of all UTXOs in this wrapper
+    // This field is not serialized but can be used for quick access to the total value
+    UTXOTotalValue uint64
 }
 ```
 
