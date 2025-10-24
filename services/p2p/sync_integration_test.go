@@ -36,6 +36,7 @@ func TestSyncCoordination_FullFlow(t *testing.T) {
 	registry.UpdateDataHubURL(healthyPeer, "http://healthy.test")
 	registry.UpdateHealth(healthyPeer, true)
 	registry.UpdateURLResponsiveness(healthyPeer, true)
+	registry.UpdateNodeMode(healthyPeer, "full")
 
 	// Add unhealthy peer
 	unhealthyPeer := peer.ID("unhealthy")
@@ -97,6 +98,7 @@ func TestSyncCoordination_FullFlow(t *testing.T) {
 		registry.UpdateDataHubURL(newHealthyPeer, "http://newhealthy.test")
 		registry.UpdateHealth(newHealthyPeer, true)
 		registry.UpdateURLResponsiveness(newHealthyPeer, true)
+		registry.UpdateNodeMode(newHealthyPeer, "full")
 
 		// Disconnect current sync peer
 		coordinator.HandlePeerDisconnected(healthyPeer)
@@ -122,6 +124,7 @@ func TestSyncCoordination_FullFlow(t *testing.T) {
 			registry.UpdateDataHubURL(testPeer, "http://ban-test.com")
 			registry.UpdateHealth(testPeer, true)
 			registry.UpdateURLResponsiveness(testPeer, true)
+			registry.UpdateNodeMode(testPeer, "full")
 
 			_ = coordinator.TriggerSync()
 			time.Sleep(50 * time.Millisecond)
@@ -397,6 +400,7 @@ func TestSyncCoordination_CatchupFailures(t *testing.T) {
 	registry.UpdateDataHubURL(goodPeer, "http://good.test")
 	registry.UpdateHealth(goodPeer, true)
 	registry.UpdateURLResponsiveness(goodPeer, true)
+	registry.UpdateNodeMode(goodPeer, "full")
 
 	badPeer := peer.ID("bad")
 	registry.AddPeer(badPeer)
@@ -404,6 +408,7 @@ func TestSyncCoordination_CatchupFailures(t *testing.T) {
 	registry.UpdateDataHubURL(badPeer, "http://bad.test")
 	registry.UpdateHealth(badPeer, true)
 	registry.UpdateURLResponsiveness(badPeer, true)
+	registry.UpdateNodeMode(badPeer, "full")
 
 	coordinator.Start(blockchainSetup.Ctx)
 	defer coordinator.Stop()
