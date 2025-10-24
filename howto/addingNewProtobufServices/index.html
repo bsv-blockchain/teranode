@@ -660,18 +660,36 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#example-adding-a-new-protobuf-dependency" class="md-nav__link">
+  <a href="#example-creating-a-complete-new-service" class="md-nav__link">
     <span class="md-ellipsis">
-      Example: Adding a New Protobuf Dependency
+      Example: Creating a Complete New Service
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-5-cleaning-up-generated-files-optional" class="md-nav__link">
+  <a href="#example-using-shared-protobuf-models" class="md-nav__link">
     <span class="md-ellipsis">
-      Step 5: Cleaning Up Generated Files (Optional)
+      Example: Using Shared Protobuf Models
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-5-implement-the-service-interface" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 5: Implement the Service Interface
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-6-cleaning-up-generated-files-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 6: Cleaning Up Generated Files (Optional)
     </span>
   </a>
   
@@ -4894,18 +4912,36 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#example-adding-a-new-protobuf-dependency" class="md-nav__link">
+  <a href="#example-creating-a-complete-new-service" class="md-nav__link">
     <span class="md-ellipsis">
-      Example: Adding a New Protobuf Dependency
+      Example: Creating a Complete New Service
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-5-cleaning-up-generated-files-optional" class="md-nav__link">
+  <a href="#example-using-shared-protobuf-models" class="md-nav__link">
     <span class="md-ellipsis">
-      Step 5: Cleaning Up Generated Files (Optional)
+      Example: Using Shared Protobuf Models
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-5-implement-the-service-interface" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 5: Implement the Service Interface
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-6-cleaning-up-generated-files-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 6: Cleaning Up Generated Files (Optional)
     </span>
   </a>
   
@@ -4953,37 +4989,39 @@
 <h4 id="step-1-define-the-new-protobuf-service-or-endpoint">Step 1: Define the New Protobuf Service or Endpoint</h4>
 <p>To start, you’ll need to define your new service or message by creating or modifying a <code>.proto</code> file. For example, if you want to add a new RPC method to an existing service or create a completely new service, you would write it in a <code>.proto</code> file.</p>
 <p>For example, to add a new RPC method in <code>subtreevalidation_api.proto</code>:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">service</span><span class="w"> </span><span class="n">SubtreeValidationService</span><span class="w"> </span><span class="p">{</span>
-<span class="k">rpc</span><span class="w"> </span><span class="n">ValidateSubtree</span><span class="w"> </span><span class="p">(</span><span class="n">SubtreeValidationRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">SubtreeValidationResponse</span><span class="p">);</span>
-<span class="k">rpc</span><span class="w"> </span><span class="n">NewValidationEndpoint</span><span class="w"> </span><span class="p">(</span><span class="n">NewValidationRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">NewValidationResponse</span><span class="p">);</span><span class="w"> </span><span class="c1">// New RPC method</span>
+<div class="highlight"><pre><span></span><code><span class="kd">service</span><span class="w"> </span><span class="n">SubtreeValidationAPI</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">CheckSubtreeFromBlock</span><span class="w"> </span><span class="p">(</span><span class="n">CheckSubtreeFromBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">CheckSubtreeFromBlockResponse</span><span class="p">)</span><span class="w"> </span><span class="p">{};</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">NewValidationEndpoint</span><span class="w"> </span><span class="p">(</span><span class="n">NewValidationRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">NewValidationResponse</span><span class="p">)</span><span class="w"> </span><span class="p">{};</span><span class="w"> </span><span class="c1">// New RPC method</span>
 <span class="p">}</span>
 
 <span class="kd">message</span><span class="w"> </span><span class="nc">NewValidationRequest</span><span class="w"> </span><span class="p">{</span>
-<span class="kt">string</span><span class="w"> </span><span class="na">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
 <span class="p">}</span>
 
 <span class="kd">message</span><span class="w"> </span><span class="nc">NewValidationResponse</span><span class="w"> </span><span class="p">{</span>
-<span class="kt">bool</span><span class="w"> </span><span class="na">success</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
-<span class="kt">string</span><span class="w"> </span><span class="kd">message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="na">success</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="kd">message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>You can also define a completely new service and corresponding messages in a new <code>.proto</code> file, such as <code>services/newservice/newservice_api.proto</code>.</p>
+<p><strong>Note:</strong> All service names in Teranode use the <code>API</code> suffix (e.g., <code>SubtreeValidationAPI</code>, <code>ValidatorAPI</code>, <code>BlockchainAPI</code>).</p>
+<p>You can also define a completely new service and corresponding messages in a new <code>.proto</code> file, such as <code>services/newservice/newservice_api/newservice_api.proto</code>.</p>
 <h4 id="step-2-update-the-makefile">Step 2: Update the <code>Makefile</code></h4>
 <p>Once your new or modified <code>.proto</code> file is ready, you need to update the <code>Makefile</code> to ensure the file is included in the Protobuf generation process.</p>
 <p>To add a new service or dependency, follow these steps:</p>
 <ol>
 <li><strong>Locate the <code>Makefile</code></strong> in the project root.</li>
-<li><strong>Add a new <code>protoc</code> command</strong> for your new <code>.proto</code> file under the <code>gen</code> section.</li>
+<li><strong>Add a new <code>protoc</code> command</strong> for your new <code>.proto</code> file under the <code>gen</code> target.</li>
 </ol>
-<p>For example, if you created a new <code>newservice_api.proto</code> file in the <code>services/newservice/</code> directory, add a new <code>protoc</code> command like this:</p>
+<p>For example, if you created a new <code>newservice_api.proto</code> file in the <code>services/newservice/newservice_api/</code> directory, add a new <code>protoc</code> command like this:</p>
 <div class="highlight"><pre><span></span><code><span class="err">protoc</span><span class="w"> </span><span class="err">\</span>
 <span class="nv">--proto_path</span><span class="o">=</span>.<span class="w"> </span><span class="se">\</span>
 --go_out<span class="o">=</span>.<span class="w"> </span><span class="se">\</span>
 --go_opt<span class="o">=</span><span class="nv">paths</span><span class="o">=</span>source_relative<span class="w"> </span><span class="se">\</span>
 --go-grpc_out<span class="o">=</span>.<span class="w"> </span><span class="se">\</span>
 --go-grpc_opt<span class="o">=</span><span class="nv">paths</span><span class="o">=</span>source_relative<span class="w"> </span><span class="se">\</span>
-<span class="err">services/newservice/newservice_api.proto</span>
+<span class="err">services/newservice/newservice_api/newservice_api.proto</span>
 </code></pre></div>
+<p><strong>Note:</strong> The directory structure follows the pattern <code>services/&lt;service_name&gt;/&lt;service_name&gt;_api/&lt;service_name&gt;_api.proto</code>.</p>
 <p>This ensures that the new <code>.proto</code> file is processed and generates the corresponding Go code (both the message definitions and the gRPC stubs).</p>
 <h4 id="step-3-regenerate-the-protobuf-files">Step 3: Regenerate the Protobuf Files</h4>
 <p>After updating the <code>Makefile</code>, you need to regenerate the Go files to reflect the changes in your new or modified <code>.proto</code> files.</p>
@@ -4994,41 +5032,135 @@
 <h4 id="step-4-verify-the-changes">Step 4: Verify the Changes</h4>
 <p>Once the Go files have been generated, you can verify that the new service or endpoint is available by checking the generated <code>.pb.go</code> and <code>_grpc.pb.go</code> files. For instance, after adding a new method, you should see:</p>
 <ul>
-<li>The new RPC method in the <code>SubtreeValidationServiceServer</code> interface in the <code>_grpc.pb.go</code> file.</li>
+<li>The new RPC method in the <code>SubtreeValidationAPIServer</code> interface in the <code>_grpc.pb.go</code> file.</li>
 <li>The new request and response message types in the <code>.pb.go</code> file.</li>
 </ul>
-<p>Here’s what you might expect in <code>subtreevalidation_api_grpc.pb.go</code>:</p>
-<div class="highlight"><pre><span></span><code><span class="c1">// SubtreeValidationServiceServer is the server API for SubtreeValidationService.</span>
-<span class="kd">type</span><span class="w"> </span><span class="nx">SubtreeValidationServiceServer</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-<span class="nx">ValidateSubtree</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="o">*</span><span class="nx">SubtreeValidationRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">SubtreeValidationResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-<span class="nx">NewValidationEndpoint</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="o">*</span><span class="nx">NewValidationRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">NewValidationResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="c1">// New RPC method</span>
+<p>Here's what you might expect in <code>subtreevalidation_api_grpc.pb.go</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// SubtreeValidationAPIServer is the server API for SubtreeValidationAPI.</span>
+<span class="kd">type</span><span class="w"> </span><span class="nx">SubtreeValidationAPIServer</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">CheckSubtreeFromBlock</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="o">*</span><span class="nx">CheckSubtreeFromBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">CheckSubtreeFromBlockResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">NewValidationEndpoint</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="o">*</span><span class="nx">NewValidationRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">NewValidationResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="c1">// New RPC method</span>
 <span class="p">}</span>
 </code></pre></div>
-<h4 id="example-adding-a-new-protobuf-dependency">Example: Adding a New Protobuf Dependency</h4>
-<p>Let’s say you want to add a new <code>.proto</code> file that defines a shared data model used across several services. This file could be called <code>common.proto</code> and might look like this:</p>
+<h4 id="example-creating-a-complete-new-service">Example: Creating a Complete New Service</h4>
+<p>When creating a new service from scratch, your <code>.proto</code> file should include all required elements. Here's a complete example for <code>services/newservice/newservice_api/newservice_api.proto</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="k">syntax</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;proto3&quot;</span><span class="p">;</span>
 
-<span class="kn">package</span><span class="w"> </span><span class="nn">common</span><span class="p">;</span>
+<span class="k">option</span><span class="w"> </span><span class="na">go_package</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;./;newservice_api&quot;</span><span class="p">;</span>
 
-<span class="kd">message</span><span class="w"> </span><span class="nc">CommonMessage</span><span class="w"> </span><span class="p">{</span>
-<span class="kt">string</span><span class="w"> </span><span class="na">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
-<span class="kt">string</span><span class="w"> </span><span class="na">content</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="kn">package</span><span class="w"> </span><span class="nn">newservice_api</span><span class="p">;</span>
+
+<span class="k">import</span><span class="w"> </span><span class="s">&quot;google/protobuf/timestamp.proto&quot;</span><span class="p">;</span>
+
+<span class="c1">// NewServiceAPI provides methods for the new service functionality</span>
+<span class="kd">service</span><span class="w"> </span><span class="n">NewServiceAPI</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// HealthGRPC checks the service&#39;s health status</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">HealthGRPC</span><span class="w"> </span><span class="p">(</span><span class="n">EmptyMessage</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">HealthResponse</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="w">  </span><span class="c1">// ProcessData performs the main service operation</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">ProcessData</span><span class="w"> </span><span class="p">(</span><span class="n">ProcessDataRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">ProcessDataResponse</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
+<span class="p">}</span>
+
+<span class="c1">// EmptyMessage represents an empty message structure used for health check requests</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">EmptyMessage</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="c1">// HealthResponse encapsulates the service health status information</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">HealthResponse</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="na">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">details</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">  </span><span class="n">google.protobuf.Timestamp</span><span class="w"> </span><span class="na">timestamp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// ProcessDataRequest defines the input for data processing</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">ProcessDataRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// ProcessDataResponse contains the processing result</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">ProcessDataResponse</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="na">success</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>To add this new <code>common.proto</code> file to your project and make it available to other services, follow these steps:</p>
+<p><strong>Key elements to include:</strong></p>
+<ul>
+<li><code>syntax = "proto3";</code> - Specifies the protobuf version</li>
+<li><code>option go_package = "./;newservice_api";</code> - Required for Go code generation</li>
+<li><code>package newservice_api;</code> - Package name matching the directory structure</li>
+<li>Import statements for dependencies (e.g., <code>google/protobuf/timestamp.proto</code>)</li>
+<li>Service definition with <code>API</code> suffix</li>
+<li>Common patterns like <code>HealthGRPC</code> endpoint (present in all services)</li>
+<li>Comprehensive comments for all messages and RPC methods</li>
+</ul>
+<h4 id="example-using-shared-protobuf-models">Example: Using Shared Protobuf Models</h4>
+<p>Teranode already provides shared data models in <code>model/model.proto</code> that can be used across services. To use these in your new service:</p>
 <ol>
-<li><strong>Add the <code>common.proto</code> file</strong> to the <code>model</code> or <code>shared</code> directory (or another appropriate location).</li>
-<li><strong>Update the <code>Makefile</code></strong> by adding a <code>protoc</code> command to generate the Go files for <code>common.proto</code>.</li>
+<li><strong>Import the model</strong> in your service's <code>.proto</code> file:</li>
 </ol>
-<p>For example:
-<div class="highlight"><pre><span></span><code><span class="err">protoc</span><span class="w"> </span><span class="err">\</span>
-<span class="nv">--proto_path</span><span class="o">=</span>.<span class="w"> </span><span class="se">\</span>
---go_out<span class="o">=</span>.<span class="w"> </span><span class="se">\</span>
---go_opt<span class="o">=</span><span class="nv">paths</span><span class="o">=</span>source_relative<span class="w"> </span><span class="se">\</span>
-<span class="err">model/common.proto</span>
-</code></pre></div></p>
-<p>This ensures that any service depending on <code>common.proto</code> can now reference the generated Go code.</p>
-<h4 id="step-5-cleaning-up-generated-files-optional">Step 5: Cleaning Up Generated Files (Optional)</h4>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="s">&quot;model/model.proto&quot;</span><span class="p">;</span>
+</code></pre></div>
+<ol>
+<li><strong>Reference the model types</strong> in your messages:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="kd">message</span><span class="w"> </span><span class="nc">MyServiceRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">model.MiningCandidate</span><span class="w"> </span><span class="na">candidate</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">additional_data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>If you need to add new shared models, update <code>model/model.proto</code> directly. The Makefile already includes this file in the <code>gen</code> target, so running <code>make gen</code> will regenerate the code.</p>
+<p><strong>Existing shared proto files:</strong></p>
+<ul>
+<li><code>model/model.proto</code> - Core data models (MiningCandidate, BlockInfo, etc.)</li>
+<li><code>errors/error.proto</code> - Error handling structures</li>
+<li><code>stores/utxo/status.proto</code> - UTXO status definitions</li>
+</ul>
+<h4 id="step-5-implement-the-service-interface">Step 5: Implement the Service Interface</h4>
+<p>After generating the protobuf files, you need to implement the service interface in your Go code. Create an implementation file (e.g., <code>services/newservice/service.go</code>):</p>
+<div class="highlight"><pre><span></span><code><span class="kn">package</span><span class="w"> </span><span class="nx">newservice</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="s">&quot;context&quot;</span>
+<span class="w">    </span><span class="s">&quot;github.com/bsv-blockchain/teranode/services/newservice/newservice_api&quot;</span>
+<span class="w">    </span><span class="s">&quot;google.golang.org/protobuf/types/known/timestamppb&quot;</span>
+<span class="p">)</span>
+
+<span class="c1">// Service implements the NewServiceAPIServer interface</span>
+<span class="kd">type</span><span class="w"> </span><span class="nx">Service</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">newservice_api</span><span class="p">.</span><span class="nx">UnimplementedNewServiceAPIServer</span>
+<span class="w">    </span><span class="c1">// Add your service dependencies here</span>
+<span class="p">}</span>
+
+<span class="c1">// NewService creates a new instance of the service</span>
+<span class="kd">func</span><span class="w"> </span><span class="nx">NewService</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Service</span><span class="p">{}</span>
+<span class="p">}</span>
+
+<span class="c1">// HealthGRPC implements the health check endpoint</span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">HealthGRPC</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">newservice_api</span><span class="p">.</span><span class="nx">EmptyMessage</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">newservice_api</span><span class="p">.</span><span class="nx">HealthResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">newservice_api</span><span class="p">.</span><span class="nx">HealthResponse</span><span class="p">{</span>
+<span class="w">        </span><span class="nx">Ok</span><span class="p">:</span><span class="w">        </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">Details</span><span class="p">:</span><span class="w">   </span><span class="s">&quot;Service is running&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">Timestamp</span><span class="p">:</span><span class="w"> </span><span class="nx">timestamppb</span><span class="p">.</span><span class="nx">Now</span><span class="p">(),</span>
+<span class="w">    </span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+<span class="p">}</span>
+
+<span class="c1">// ProcessData implements the main service operation</span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">ProcessData</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">newservice_api</span><span class="p">.</span><span class="nx">ProcessDataRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">newservice_api</span><span class="p">.</span><span class="nx">ProcessDataResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Implement your business logic here</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">newservice_api</span><span class="p">.</span><span class="nx">ProcessDataResponse</span><span class="p">{</span>
+<span class="w">        </span><span class="nx">Success</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">Result</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;Processed: &quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Data</span><span class="p">,</span>
+<span class="w">    </span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Next steps:</strong></p>
+<ol>
+<li>Register the service with the gRPC server in your main application</li>
+<li>Add configuration for the service in <code>settings.conf</code></li>
+<li>Write unit tests for your service implementation</li>
+<li>Add integration tests if needed</li>
+</ol>
+<h4 id="step-6-cleaning-up-generated-files-optional">Step 6: Cleaning Up Generated Files (Optional)</h4>
 <p>If you need to remove the previously generated files for some reason (e.g., during refactoring), you can use the following command:</p>
 <div class="highlight"><pre><span></span><code>make<span class="w"> </span>clean_gen
 </code></pre></div>

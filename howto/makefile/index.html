@@ -779,6 +779,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#setting-transaction-metadata-cache-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Setting Transaction Metadata Cache Flags
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#build-all-components" class="md-nav__link">
     <span class="md-ellipsis">
       Build All Components
@@ -815,9 +824,27 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#building-tools-and-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Building Tools and Utilities
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#testing" class="md-nav__link">
     <span class="md-ellipsis">
       Testing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chain-integrity-testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Chain Integrity Testing
     </span>
   </a>
   
@@ -859,8 +886,35 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Utilities
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environment Variables
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage Examples
+    </span>
+  </a>
   
 </li>
       
@@ -4963,6 +5017,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#setting-transaction-metadata-cache-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Setting Transaction Metadata Cache Flags
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#build-all-components" class="md-nav__link">
     <span class="md-ellipsis">
       Build All Components
@@ -4999,9 +5062,27 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#building-tools-and-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Building Tools and Utilities
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#testing" class="md-nav__link">
     <span class="md-ellipsis">
       Testing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chain-integrity-testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Chain Integrity Testing
     </span>
   </a>
   
@@ -5043,8 +5124,35 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Utilities
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environment Variables
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage Examples
+    </span>
+  </a>
   
 </li>
       
@@ -5073,136 +5181,478 @@
 
 
 
-<h1 id="makefile-documentation">🛠️ Makefile Documentation</h1>
+<h1 id="makefile-documentation">Makefile Documentation</h1>
 <p>This Makefile facilitates a variety of development and build tasks for the Teranode project.</p>
 <ul>
-<li><a href="#makefile-documentation">🛠️ Makefile Documentation</a></li>
+<li><a href="#makefile-documentation">Makefile Documentation</a><ul>
 <li><a href="#environment-configuration">Environment Configuration</a></li>
 <li><a href="#key-commands">Key Commands</a></li>
 <li><a href="#all-commands">All Commands</a><ul>
 <li><a href="#general-configuration">General Configuration</a></li>
 <li><a href="#setting-debug-flags">Setting Debug Flags</a></li>
+<li><a href="#setting-transaction-metadata-cache-flags">Setting Transaction Metadata Cache Flags</a></li>
 <li><a href="#build-all-components">Build All Components</a></li>
 <li><a href="#dependencies">Dependencies</a></li>
 <li><a href="#development">Development</a></li>
 <li><a href="#building">Building</a></li>
+<li><a href="#building-tools-and-utilities">Building Tools and Utilities</a></li>
 <li><a href="#testing">Testing</a></li>
+<li><a href="#chain-integrity-testing">Chain Integrity Testing</a></li>
 <li><a href="#code-generation">Code Generation</a></li>
 <li><a href="#cleanup">Cleanup</a></li>
 <li><a href="#linting-and-static-analysis">Linting and Static Analysis</a></li>
 <li><a href="#installation">Installation</a></li>
+<li><a href="#utilities">Utilities</a></li>
 </ul>
 </li>
+<li><a href="#environment-variables">Environment Variables</a></li>
+<li><a href="#usage-examples">Usage Examples</a></li>
 <li><a href="#notes">Notes</a></li>
+</ul>
+</li>
 </ul>
 <h2 id="environment-configuration">Environment Configuration</h2>
 <ul>
 <li><code>SHELL</code>: Indicates the shell for the make process. Set to <code>/bin/bash</code>.</li>
 <li><code>DEBUG_FLAGS</code>: Flags to use in debug mode.</li>
+<li><code>TXMETA_TAG</code>: Tag for transaction metadata cache configuration.</li>
+<li><code>SETTINGS_CONTEXT_DEFAULT</code>: Default settings context (set to <code>docker.ci</code>).</li>
+<li><code>LOCAL_TEST_START_FROM_STATE</code>: Optional parameter to configure test start state.</li>
 </ul>
 <h2 id="key-commands">Key Commands</h2>
-<ol>
-<li><strong>set_debug_flags</strong>: Configures debug flags based on the <code>DEBUG</code> variable.</li>
+<p><strong>Type</strong>: Target | <strong>Description</strong>: Description | <strong>Impact</strong>: What it does</p>
+<ul>
 <li><strong>all</strong>: Executes the following tasks in order: <code>deps</code>, <code>install</code>, <code>lint</code>, <code>build</code>, and <code>test</code>.</li>
 <li><strong>deps</strong>: Downloads required Go modules.</li>
+<li><strong>install</strong>: Installs all development dependencies including linting tools, protobuf tools, build tools, and git hooks.</li>
 <li><strong>dev</strong>: Runs both the <code>dev-dashboard</code> and <code>dev-teranode</code> concurrently.</li>
 <li><strong>dev-teranode</strong>: Executes the Go project.</li>
 <li><strong>dev-dashboard</strong>: Installs and runs the Node.js dashboard project located in <code>./ui/dashboard</code>.</li>
 <li><strong>build</strong>: Builds the Teranode application and dashboard.</li>
-<li><strong>test</strong>: Executes Go tests with race detection.</li>
-<li><strong>sequentialtest</strong>: Runs tests sequentially for more stability.</li>
-<li><strong>smoketest</strong>: Runs smoke tests for RPC functionality.</li>
+<li><strong>build-teranode</strong>: Builds the main Teranode binary without the dashboard.</li>
+<li><strong>build-teranode-ci</strong>: Builds Teranode with race detection for CI environments.</li>
+<li><strong>test</strong>: Executes Go tests with race detection (excludes <code>test/</code> directory).</li>
+<li><strong>testall</strong>: Runs all tests: <code>test</code>, <code>longtest</code>, and <code>sequentialtest</code>.</li>
 <li><strong>gen</strong>: Generates required Go code from <code>.proto</code> files for various services.</li>
-<li><strong>clean_gen</strong>: Removes generated Go files.</li>
 <li><strong>clean</strong>: Cleans up generated binaries and build artifacts.</li>
-<li><strong>install-lint</strong>: Installs linting tools (golangci-lint and staticcheck).</li>
-<li><strong>lint</strong>: Executes lint checks.</li>
-<li><strong>install</strong>: Installs all development dependencies including: golangci-lint, staticcheck, protobuf, protoc-gen-go, protoc-gen-go-grpc, libtool, autoconf, automake, and pre-commit hooks.</li>
-</ol>
+<li><strong>lint</strong>: Executes lint checks on changed files compared to main branch.</li>
+<li><strong>chain-integrity-test</strong>: Runs comprehensive chain integrity test with 3 nodes.</li>
+</ul>
 <h2 id="all-commands">All Commands</h2>
 <h3 id="general-configuration">General Configuration</h3>
 <ul>
 <li><code>SHELL=/bin/bash</code>: Sets the shell to bash for running commands.</li>
 <li><code>DEBUG_FLAGS=</code>: Initializes an empty variable for debug flags.</li>
+<li><code>TXMETA_TAG=</code>: Initializes transaction metadata cache tag.</li>
+<li><code>SETTINGS_CONTEXT_DEFAULT := docker.ci</code>: Sets default settings context.</li>
 </ul>
 <h3 id="setting-debug-flags">Setting Debug Flags</h3>
 <ul>
-<li><code>set_debug_flags</code>: Sets the debug flags if the <code>DEBUG</code> environment variable is set to <code>true</code>.</li>
+<li><strong>set_debug_flags</strong>: Sets the debug flags (<code>-N -l</code>) if the <code>DEBUG</code> environment variable is set to <code>true</code>.</li>
+</ul>
+<h3 id="setting-transaction-metadata-cache-flags">Setting Transaction Metadata Cache Flags</h3>
+<ul>
+<li>
+<p><strong>set_txmetacache_flag</strong>: Sets the <code>TXMETA_TAG</code> based on environment variables:</p>
+<ul>
+<li><code>TXMETA_SMALL_TAG=true</code>: Uses <code>smalltxmetacache</code></li>
+<li><code>TXMETA_TEST_TAG=true</code>: Uses <code>testtxmetacache</code></li>
+<li>Default: Uses <code>largetxmetacache</code></li>
+</ul>
+</li>
 </ul>
 <h3 id="build-all-components">Build All Components</h3>
 <ul>
-<li><code>all</code>: A composite task that runs <code>deps</code>, <code>install</code>, <code>lint</code>, <code>build</code>, and <code>test</code>.</li>
+<li><strong>all</strong>: A composite task that runs <code>deps</code>, <code>install</code>, <code>lint</code>, <code>build</code>, and <code>test</code>.</li>
 </ul>
 <h3 id="dependencies">Dependencies</h3>
 <ul>
-<li><code>deps</code>: Downloads necessary Go modules.</li>
+<li><strong>deps</strong>: Downloads necessary Go modules using <code>go mod download</code>.</li>
 </ul>
 <h3 id="development">Development</h3>
 <ul>
-<li><code>dev</code>: Runs both <code>dev-dashboard</code> and <code>dev-teranode</code>.</li>
-<li><code>dev-teranode</code>: Executes the main Go project.</li>
-<li><code>dev-dashboard</code>: Installs and runs a Node.js project located in <code>./ui/dashboard</code>.</li>
+<li><strong>dev</strong>: Runs both <code>dev-dashboard</code> and <code>dev-teranode</code> concurrently.</li>
+<li><strong>dev-teranode</strong>: Executes the main Go project with <code>go run .</code>.</li>
+<li><strong>dev-dashboard</strong>: Installs npm dependencies and runs the Node.js project in development mode at <code>./ui/dashboard</code>.</li>
 </ul>
 <h3 id="building">Building</h3>
 <ul>
-<li><code>build</code>: A composite task that runs <code>update_config</code>, <code>build-teranode-with-dashboard</code>, <code>build-teranode-cli</code>, and <code>clean_backup</code>.</li>
-<li><code>update_config</code>: Updates the configuration based on provided parameters.</li>
-<li><code>clean_backup</code>: Removes backup configuration files.</li>
-<li><code>build-teranode-with-dashboard</code>: Builds Teranode with the dashboard UI integrated.</li>
-<li><code>build-teranode</code>: Builds the main Teranode project with race detection and specific tags.</li>
-<li><code>build-teranode-no-debug</code>: Builds Teranode without debug symbols for production use.</li>
-<li><code>build-teranode-ci</code>: Builds Teranode for continuous integration environments.</li>
-<li><code>build-teranode-cli</code>: Builds the Teranode CLI tool.</li>
-<li><code>build-dashboard</code>: Installs npm dependencies and builds the dashboard UI.</li>
+<li><strong>build</strong>: A composite task that runs <code>update_config</code>, <code>build-teranode-with-dashboard</code>, <code>build-teranode-cli</code>, and <code>clean_backup</code>.</li>
+<li><strong>update_config</strong>: Updates the <code>settings_local.conf</code> configuration file based on <code>LOCAL_TEST_START_FROM_STATE</code> parameter.</li>
+<li><strong>clean_backup</strong>: Removes backup configuration files (<code>settings_local.conf.bak</code>).</li>
+<li><strong>build-teranode-with-dashboard</strong>: Builds Teranode with the dashboard UI integrated. Includes debug flags and transaction metadata cache configuration.</li>
+<li><strong>build-teranode</strong>: Builds the main Teranode project with specific build tags (<code>aerospike</code>, transaction metadata cache tag).</li>
+<li><strong>build-teranode-no-debug</strong>: Builds Teranode without debug symbols for production use (stripped binary).</li>
+<li><strong>build-teranode-ci</strong>: Builds Teranode for continuous integration environments with race detection enabled.</li>
+<li><strong>build-teranode-cli</strong>: Builds the Teranode CLI tool at <code>./cmd/teranodecli</code>.</li>
+<li><strong>build-dashboard</strong>: Installs npm dependencies and builds the dashboard UI for production.</li>
+</ul>
+<h3 id="building-tools-and-utilities">Building Tools and Utilities</h3>
+<ul>
+<li><strong>build-chainintegrity</strong>: Builds the chain integrity testing tool at <code>./compose/cmd/chainintegrity/</code>.</li>
+<li><strong>build-tx-blaster</strong>: Builds the transaction blaster performance testing tool at <code>./cmd/txblaster/</code>.</li>
+<li><strong>build-blockchainstatus</strong>: Builds the blockchain status utility at <code>./cmd/blockchainstatus/</code>.</li>
 </ul>
 <h3 id="testing">Testing</h3>
 <ul>
-<li><code>test</code>: Runs unit tests with race detection and configurable output format.</li>
-<li><code>buildtest</code>: Builds tests without running them for separate execution.</li>
-<li><code>sequentialtest</code>: Executes tests sequentially for more stable results.</li>
-<li><code>longtest</code>: Executes long tests.</li>
-<li><code>nightly-tests</code>: Runs comprehensive tests typically scheduled for nightly builds.</li>
-<li><code>smoketest</code>: Runs smoke tests focused on RPC functionality.</li>
-<li><code>install-tools</code>: Installs testing tools like the CTRF JSON reporter.</li>
+<li><strong>test</strong>: Runs unit tests with race detection and configurable output format. Excludes tests in the <code>test/</code> directory. Uses <code>testtxmetacache</code> tag and <code>SETTINGS_CONTEXT=test</code>.</li>
+<li><strong>buildtest</strong>: Builds tests without running them for separate execution.</li>
+<li><strong>sequentialtest</strong>: Executes tests in the <code>test/sequentialtest/</code> directory sequentially for more stable results.</li>
+<li><strong>longtest</strong>: Executes long-running tests in the <code>test/longtest/</code> directory with 5-minute timeout.</li>
+<li><strong>testall</strong>: Runs all test suites: <code>test</code>, <code>longtest</code>, and <code>sequentialtest</code>.</li>
+<li><strong>nightly-tests</strong>: Runs comprehensive tests typically scheduled for nightly builds. Builds Docker images and uses CTRF JSON reporter for results.</li>
+<li><strong>smoketest</strong>: Runs smoke tests in the <code>test/e2e/daemon/ready/</code> directory focused on basic functionality.</li>
+<li><strong>install-tools</strong>: Installs testing tools like the CTRF JSON reporter.</li>
+</ul>
+<h3 id="chain-integrity-testing">Chain Integrity Testing</h3>
+<p>The chain integrity test suite validates that multiple Teranode instances maintain consensus and produce identical blockchain states.</p>
+<ul>
+<li>
+<p><strong>chain-integrity-test</strong>: Full chain integrity test that:</p>
+<ul>
+<li>Builds the chainintegrity binary</li>
+<li>Cleans up old test data</li>
+<li>Builds Docker image for teranode</li>
+<li>Starts 3 teranode instances with block generators</li>
+<li>Waits for all nodes to reach height 120+ and synchronize</li>
+<li>Validates chain integrity by comparing node states</li>
+<li>Checks for error logs during execution</li>
+<li>Target: 120 blocks, Max wait: 10 minutes (120 attempts × 5 seconds)</li>
+</ul>
+</li>
+<li>
+<p><strong>chain-integrity-test-custom</strong>: Chain integrity test with customizable parameters:</p>
+<ul>
+<li>Usage: <code>make chain-integrity-test-custom REQUIRED_HEIGHT=&lt;height&gt; MAX_ATTEMPTS=&lt;attempts&gt; SLEEP=&lt;seconds&gt;</code></li>
+<li>Default values: <code>REQUIRED_HEIGHT=120</code>, <code>MAX_ATTEMPTS=120</code>, <code>SLEEP=5</code></li>
+<li>Allows testing different block heights and wait times</li>
+</ul>
+</li>
+<li>
+<p><strong>chain-integrity-test-quick</strong>: Quick chain integrity test for faster development iterations:</p>
+<ul>
+<li>Target: 50 blocks</li>
+<li>Max wait: 3 minutes (60 attempts × 3 seconds)</li>
+<li>Check interval: 3 seconds</li>
+<li>Use this for rapid testing during development</li>
+</ul>
+</li>
+<li>
+<p><strong>clean-chain-integrity</strong>: Cleans up chain integrity test artifacts:</p>
+<ul>
+<li>Removes all chainintegrity log files</li>
+<li>Removes chainintegrity binary</li>
+<li>Stops Docker Compose services</li>
+<li>Use this to reset between test runs</li>
+</ul>
+</li>
+<li>
+<p><strong>ecr-login</strong>: AWS ECR login for pulling required Docker images:</p>
+<ul>
+<li>Logs into AWS ECR (eu-north-1 region)</li>
+<li>Required before building or pulling ECR-hosted images</li>
+<li>Uses AWS CLI credentials</li>
+</ul>
+</li>
+<li>
+<p><strong>show-hashes</strong>: Displays hash analysis results from chainintegrity test:</p>
+<ul>
+<li>Extracts hash information from test output</li>
+<li>Shows consensus status among nodes</li>
+<li>Useful for debugging chain integrity issues</li>
+</ul>
+</li>
 </ul>
 <h3 id="code-generation">Code Generation</h3>
 <ul>
-<li><code>gen</code>: Generates Go code from Protocol Buffers for various services.</li>
+<li>
+<p><strong>gen</strong>: Generates Go code from Protocol Buffers for various services:</p>
+<ul>
+<li><code>model/model.proto</code></li>
+<li><code>errors/error.proto</code></li>
+<li><code>stores/utxo/status.proto</code></li>
+<li><code>services/validator/validator_api/validator_api.proto</code></li>
+<li><code>services/propagation/propagation_api/propagation_api.proto</code></li>
+<li><code>services/blockassembly/blockassembly_api/blockassembly_api.proto</code></li>
+<li><code>services/blockvalidation/blockvalidation_api/blockvalidation_api.proto</code></li>
+<li><code>services/subtreevalidation/subtreevalidation_api/subtreevalidation_api.proto</code></li>
+<li><code>services/blockchain/blockchain_api/blockchain_api.proto</code></li>
+<li><code>services/asset/asset_api/asset_api.proto</code></li>
+<li><code>services/alert/alert_api/alert_api.proto</code></li>
+<li><code>services/legacy/peer_api/peer_api.proto</code></li>
+<li><code>services/p2p/p2p_api/p2p_api.proto</code></li>
+<li><code>util/kafka/kafka_message/kafka_messages.proto</code></li>
+</ul>
+</li>
 </ul>
 <h3 id="cleanup">Cleanup</h3>
 <ul>
-<li><code>clean_gen</code>: Removes generated Go code.</li>
-<li><code>clean</code>: Cleans up built artifacts.</li>
+<li>
+<p><strong>clean_gen</strong>: Removes generated Go code (<code>.pb.go</code> files) from:</p>
+<ul>
+<li>All service API directories</li>
+<li>Model and error directories</li>
+<li>UTXO store directory</li>
+</ul>
+</li>
+<li>
+<p><strong>clean</strong>: Cleans up built artifacts:</p>
+<ul>
+<li>Removes <code>.tar.gz</code> archives</li>
+<li>Removes binary executables (<code>blaster.run</code>, <code>blockchainstatus.run</code>)</li>
+<li>Removes build directory</li>
+<li>Removes coverage output files</li>
+</ul>
+</li>
 </ul>
 <h3 id="linting-and-static-analysis">Linting and Static Analysis</h3>
 <ul>
-<li><code>install-lint</code>: Installs tools for linting and static analysis (golangci-lint and staticcheck).</li>
-<li><code>lint</code>: Runs linters to check changed files compared to main branch.</li>
-<li><code>lint-new</code>: Checks only unstaged/untracked changes, useful for quick validation.</li>
-<li><code>lint-full</code>: Runs linters on the entire codebase.</li>
-<li><code>lint-full-changed-dirs</code>: Runs linters on changed directories only.</li>
+<li>
+<p><strong>install-lint</strong>: Installs tools for linting and static analysis:</p>
+<ul>
+<li><code>golangci-lint</code> (comprehensive Go linter)</li>
+<li><code>staticcheck</code> (static analysis tool)</li>
+</ul>
+</li>
+<li>
+<p><strong>lint</strong>: Runs linters to check changed files compared to main branch:</p>
+<ul>
+<li>Fetches latest <code>origin/main</code></li>
+<li>Shows new linting errors/warnings introduced by your changes</li>
+<li>Only checks files modified since branching from main</li>
+</ul>
+</li>
+<li>
+<p><strong>lint-new</strong>: Checks only unstaged/untracked changes:</p>
+<ul>
+<li>Useful for quick validation during development</li>
+<li>Falls back to checking last commit if no uncommitted changes</li>
+<li>Faster than <code>lint</code> for incremental work</li>
+</ul>
+</li>
+<li>
+<p><strong>lint-full</strong>: Runs linters on the entire codebase:</p>
+<ul>
+<li>Shows all lint errors and warnings across all files</li>
+<li>Use before major releases or when refactoring</li>
+</ul>
+</li>
+<li>
+<p><strong>lint-full-changed-dirs</strong>: Runs linters on changed directories only:</p>
+<ul>
+<li>Checks all files in directories containing <code>.go</code> file changes</li>
+<li>More comprehensive than <code>lint</code> but faster than <code>lint-full</code></li>
+<li>Shows all errors in modified directories, not just new ones</li>
+</ul>
+</li>
 </ul>
 <h3 id="installation">Installation</h3>
 <ul>
 <li>
-<p><code>install</code>: Comprehensive installation command that installs:</p>
-</li>
-<li>
-<p>Linting tools (golangci-lint and staticcheck)</p>
-</li>
-<li>Protocol Buffers compiler and tools (protobuf, protoc-gen-go, protoc-gen-go-grpc)</li>
-<li>Build tools (libtool, autoconf, automake)</li>
-<li>Git hooks via pre-commit</li>
+<p><strong>install</strong>: Comprehensive installation command that sets up a complete development environment:</p>
+<ul>
+<li><strong>Quality tools</strong>: golangci-lint and staticcheck for linting</li>
+<li><strong>Core dependencies</strong>: Protocol Buffers compiler and Go protoc plugins (protobuf, protoc-gen-go, protoc-gen-go-grpc)</li>
+<li><strong>Build dependencies</strong>: Build tools for native code components (libtool, autoconf, automake)</li>
+<li><strong>Workflow tools</strong>: pre-commit hooks for team collaboration</li>
 </ul>
 <p>This is the preferred command for setting up a new development environment, as it installs all necessary dependencies.</p>
+</li>
+</ul>
+<h3 id="utilities">Utilities</h3>
+<ul>
+<li>
+<p><strong>reset-data</strong>: Resets test data from archive:</p>
+<ul>
+<li>Unzips <code>data.zip</code></li>
+<li>Sets proper permissions on data directory</li>
+<li>Use when test data becomes corrupted</li>
+</ul>
+</li>
+<li>
+<p><strong>generate_fsm_diagram</strong>: Generates finite state machine diagram:</p>
+<ul>
+<li>Runs FSM visualizer tool</li>
+<li>Outputs diagram to <code>docs/state-machine.diagram.md</code></li>
+<li>Visualizes blockchain service state transitions</li>
+</ul>
+</li>
+</ul>
+<h2 id="environment-variables">Environment Variables</h2>
+<p>The Makefile supports several environment variables to customize builds and tests:</p>
+<p><strong>Build Configuration:</strong></p>
+<ul>
+<li>
+<p><code>DEBUG</code>: Set to <code>true</code> to enable debug flags (<code>-N -l</code>) for debugging with delve or other debuggers</p>
+<ul>
+<li>Example: <code>DEBUG=true make build</code></li>
+</ul>
+</li>
+<li>
+<p><code>TXMETA_SMALL_TAG</code>: Set to <code>true</code> to use small transaction metadata cache</p>
+<ul>
+<li>Example: <code>TXMETA_SMALL_TAG=true make build-teranode</code></li>
+</ul>
+</li>
+<li>
+<p><code>TXMETA_TEST_TAG</code>: Set to <code>true</code> to use test-sized transaction metadata cache</p>
+<ul>
+<li>Example: <code>TXMETA_TEST_TAG=true make build-teranode</code></li>
+</ul>
+</li>
+<li>
+<p><code>LOCAL_TEST_START_FROM_STATE</code>: Configures the starting state for local tests</p>
+<ul>
+<li>Example: <code>make build LOCAL_TEST_START_FROM_STATE=genesis</code></li>
+</ul>
+</li>
+</ul>
+<p><strong>Version Information (auto-detected from git):</strong></p>
+<ul>
+<li><code>GIT_VERSION</code>: Git version string (auto-detected by <code>scripts/determine-git-version.sh</code>)</li>
+<li><code>GIT_COMMIT</code>: Full git commit hash</li>
+<li><code>GIT_SHA</code>: Short git SHA</li>
+<li><code>GIT_TAG</code>: Git tag if on a tagged commit</li>
+<li><code>GIT_TIMESTAMP</code>: Timestamp of the git commit</li>
+</ul>
+<p><strong>Test Configuration:</strong></p>
+<ul>
+<li><code>SETTINGS_CONTEXT</code>: Settings context for test execution (default: <code>test</code> for unit tests, <code>docker.ci</code> for integration tests)<ul>
+<li>Example: <code>SETTINGS_CONTEXT=docker go test ./...</code></li>
+</ul>
+</li>
+</ul>
+<p><strong>Chain Integrity Test Configuration:</strong></p>
+<ul>
+<li><code>REQUIRED_HEIGHT</code>: Target block height for chain integrity tests (default: 120)</li>
+<li><code>MAX_ATTEMPTS</code>: Maximum polling attempts (default: 120)</li>
+<li><code>SLEEP</code>: Seconds between polling attempts (default: 5)</li>
+</ul>
+<h2 id="usage-examples">Usage Examples</h2>
+<p><strong>Development workflow:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># First-time setup</span>
+make<span class="w"> </span>install
+
+<span class="c1"># Run in development mode (auto-reload)</span>
+make<span class="w"> </span>dev
+
+<span class="c1"># Run only teranode in development</span>
+make<span class="w"> </span>dev-teranode
+</code></pre></div>
+<p><strong>Building:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Build with dashboard (production)</span>
+make<span class="w"> </span>build
+
+<span class="c1"># Build with debug symbols</span>
+<span class="nv">DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>make<span class="w"> </span>build
+
+<span class="c1"># Build for CI with race detection</span>
+make<span class="w"> </span>build-teranode-ci
+
+<span class="c1"># Build with small cache for testing</span>
+<span class="nv">TXMETA_SMALL_TAG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>make<span class="w"> </span>build-teranode
+</code></pre></div>
+<p><strong>Testing:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Run all unit tests</span>
+make<span class="w"> </span><span class="nb">test</span>
+
+<span class="c1"># Run all test suites (unit + long + sequential)</span>
+make<span class="w"> </span>testall
+
+<span class="c1"># Run only smoke tests</span>
+make<span class="w"> </span>smoketest
+
+<span class="c1"># Run tests in specific directory</span>
+go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-race<span class="w"> </span>-tags<span class="w"> </span><span class="s2">&quot;testtxmetacache&quot;</span><span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>./services/validator/...
+</code></pre></div>
+<p><strong>Chain Integrity Testing:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Run full chain integrity test (120 blocks)</span>
+make<span class="w"> </span>chain-integrity-test
+
+<span class="c1"># Quick test (50 blocks)</span>
+make<span class="w"> </span>chain-integrity-test-quick
+
+<span class="c1"># Custom parameters</span>
+make<span class="w"> </span>chain-integrity-test-custom<span class="w"> </span><span class="nv">REQUIRED_HEIGHT</span><span class="o">=</span><span class="m">200</span><span class="w"> </span><span class="nv">MAX_ATTEMPTS</span><span class="o">=</span><span class="m">240</span><span class="w"> </span><span class="nv">SLEEP</span><span class="o">=</span><span class="m">3</span>
+
+<span class="c1"># View hash analysis results</span>
+make<span class="w"> </span>show-hashes
+
+<span class="c1"># Clean up after testing</span>
+make<span class="w"> </span>clean-chain-integrity
+</code></pre></div>
+<p><strong>Code generation:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Generate Go code from protobuf definitions</span>
+make<span class="w"> </span>gen
+
+<span class="c1"># Clean generated code</span>
+make<span class="w"> </span>clean_gen
+</code></pre></div>
+<p><strong>Linting:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check only your changes vs main</span>
+make<span class="w"> </span>lint
+
+<span class="c1"># Check only uncommitted changes</span>
+make<span class="w"> </span>lint-new
+
+<span class="c1"># Check entire codebase</span>
+make<span class="w"> </span>lint-full
+
+<span class="c1"># Check changed directories fully</span>
+make<span class="w"> </span>lint-full-changed-dirs
+</code></pre></div>
+<p><strong>Utilities:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Generate FSM state machine diagram</span>
+make<span class="w"> </span>generate_fsm_diagram
+
+<span class="c1"># Login to AWS ECR</span>
+make<span class="w"> </span>ecr-login
+
+<span class="c1"># Reset test data</span>
+make<span class="w"> </span>reset-data
+</code></pre></div>
 <h2 id="notes">Notes</h2>
 <ul>
-<li>The <code>PHONY</code> declarations before each command indicate that they do not produce or depend on any files, ensuring that the associated command is executed every time it's called.</li>
-<li>The Makefile includes a combination of Go build commands, Node.js commands, and various tooling setups.</li>
-<li>There's extensive use of conditional debug flags and platform-specific build tags.</li>
-<li>Several configuration variables are available like <code>DEBUG</code> for debug builds, <code>TXMETA_TAG</code> for transaction metadata cache configuration, and <code>LOCAL_TEST_START_FROM_STATE</code> for testing.</li>
-<li>The <code>generate_fsm_diagram</code> target creates visual state machine diagrams for the blockchain service.</li>
-<li>Some targets are commented out in the Makefile (like propagation-blaster, utxostore-blaster) but may be re-enabled as needed.</li>
+<li>
+<p><strong>PHONY declarations</strong>: All targets are declared as <code>.PHONY</code> to indicate that they do not produce or depend on any files. This ensures that the associated command is executed every time it's called, regardless of file timestamps.</p>
+</li>
+<li>
+<p><strong>Go modules</strong>: The Makefile uses <code>-mod=readonly</code> for production builds to ensure reproducible builds and prevent accidental dependency changes.</p>
+</li>
+<li>
+<p><strong>Build tags</strong>: Several build commands use tags like <code>aerospike</code> and transaction metadata cache tags (<code>smalltxmetacache</code>, <code>testtxmetacache</code>, <code>largetxmetacache</code>) to control conditional compilation.</p>
+</li>
+<li>
+<p><strong>Race detection</strong>: The <code>-race</code> flag is only used in CI builds (<code>build-teranode-ci</code>) and test commands to detect race conditions. It's not enabled in standard development builds due to performance overhead.</p>
+</li>
+<li>
+<p><strong>Trimpath</strong>: Production builds use <code>--trimpath</code> to remove absolute file paths from compiled binaries for reproducibility and security.</p>
+</li>
+<li>
+<p><strong>ldflags</strong>: Build commands inject version information at compile time using <code>-ldflags</code> to set <code>main.commit</code> and <code>main.version</code> variables.</p>
+</li>
+<li>
+<p><strong>Commented-out targets</strong>: Several targets are commented out in the Makefile but may be re-enabled as needed:</p>
+<ul>
+<li><code>build-propagation-blaster</code>: Propagation performance testing tool</li>
+<li><code>build-utxostore-blaster</code>: UTXO store performance testing tool</li>
+<li><code>build-s3-blaster</code>: S3 storage performance testing tool</li>
+<li><code>build-blockassembly-blaster</code>: Block assembly performance testing tool</li>
+<li><code>build-aerospiketest</code>: Aerospike database testing utility</li>
+</ul>
+</li>
+<li>
+<p><strong>Platform differences</strong>: The <code>update_config</code> target contains macOS-specific <code>sed</code> commands (BSD sed). Linux users should uncomment the GNU sed variant.</p>
+</li>
+<li>
+<p><strong>Docker Compose</strong>: Chain integrity tests use <code>docker-compose-3blasters.yml</code> to orchestrate multiple Teranode instances for consensus testing.</p>
+</li>
+<li>
+<p><strong>Test isolation</strong>: Unit tests use <code>SETTINGS_CONTEXT=test</code> to isolate test configuration from development and production settings.</p>
+</li>
+<li>
+<p><strong>Coverage reports</strong>: Test commands generate <code>coverage.out</code> files for code coverage analysis.</p>
+</li>
 </ul>
 
 

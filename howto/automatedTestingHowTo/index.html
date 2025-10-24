@@ -848,6 +848,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#available-test-tags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Available Test Tags
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#other-resources" class="md-nav__link">
     <span class="md-ellipsis">
       Other Resources
@@ -5109,6 +5118,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#available-test-tags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Available Test Tags
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#other-resources" class="md-nav__link">
     <span class="md-ellipsis">
       Other Resources
@@ -5138,45 +5156,48 @@
 <h2 id="setting-up-test-environment">Setting Up Test Environment</h2>
 <h3 id="how-to-set-up-your-local-test-environment">How to Set Up Your Local Test Environment</h3>
 <ol>
-<li>
-<p>Prerequisites:
+<li>Prerequisites:</li>
+</ol>
 <div class="highlight"><pre><span></span><code><span class="c1"># Install required tools</span>
 docker<span class="w"> </span>compose
 go<span class="w"> </span><span class="m">1</span>.21<span class="w"> </span>or<span class="w"> </span>higher
 make
-</code></pre></div></p>
-</li>
-<li>
-<p>Initial setup:
+</code></pre></div>
+<ol>
+<li>Initial setup:</li>
+</ol>
 <div class="highlight"><pre><span></span><code><span class="c1"># Clone and build</span>
 git<span class="w"> </span>clone<span class="w"> </span><span class="o">[</span>repository<span class="o">]</span>
 <span class="nb">cd</span><span class="w"> </span>teranode
 docker<span class="w"> </span>compose<span class="w"> </span>build
-</code></pre></div></p>
-</li>
-<li>
-<p>Verify setup:
-<div class="highlight"><pre><span></span><code><span class="c1"># Run smoke tests</span>
-make<span class="w"> </span>smoketests
-</code></pre></div></p>
-</li>
+</code></pre></div>
+<ol>
+<li>Verify setup:</li>
 </ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># Run smoke tests</span>
+make<span class="w"> </span>smoketest
+</code></pre></div>
 <h3 id="how-to-configure-test-settings">How to Configure Test Settings</h3>
 <ol>
-<li>
-<p>Create local settings:
+<li>Create local settings:</li>
+</ol>
 <div class="highlight"><pre><span></span><code>touch<span class="w"> </span>settings_local.conf
-</code></pre></div></p>
+</code></pre></div>
+<ol>
+<li>
+<p>Add required settings for your specific testing activity. Common test contexts:</p>
 </li>
 <li>
-<p>Add required settings for your specific testing activity in there. Recommended to use the docker.ci.tc1.run context.</p>
+<p><code>test</code> - Standard testing environment</p>
 </li>
+<li><code>docker</code> - Docker-based testing</li>
+<li><code>docker.ci</code> - CI environment testing</li>
 </ol>
 <h2 id="running-tests">Running Tests</h2>
 <h3 id="how-to-run-test-suites">How to Run Test Suites</h3>
 <ol>
-<li>
-<p>Run all tests in a suite:
+<li>Run all tests in a suite:</li>
+</ol>
 <div class="highlight"><pre><span></span><code><span class="c1"># Format</span>
 <span class="nb">cd</span><span class="w"> </span>/teranode/test/&lt;suite-name&gt;
 go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_&lt;suite-code&gt;
@@ -5186,224 +5207,320 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 <span class="nb">cd</span><span class="w"> </span>/teranode/test/tna
 go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tna
 
-<span class="c1"># Run TNC tests</span>
-<span class="nb">cd</span><span class="w"> </span>/teranode/test/tnc
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnc
-</code></pre></div></p>
-</li>
-<li>
-<p>Run specific test:
-<div class="highlight"><pre><span></span><code><span class="c1"># Format</span>
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^&lt;TestSuiteName&gt;</span>$<span class="s2">/&lt;TestName&gt;</span>$<span class="s2">&quot;</span>
+<span class="c1"># Run TNB tests</span>
+<span class="nb">cd</span><span class="w"> </span>/teranode/test/tnb
+go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnb
 
-<span class="c1"># Example: Run specific coinbase test</span>
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNC1TestSuite</span>$<span class="s2">/TestCoinbaseTXAmount</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tnc
-</code></pre></div></p>
-</li>
-<li>
-<p>Run with different options:
-<div class="highlight"><pre><span></span><code><span class="c1"># Format / Skip Build</span>
-go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_&lt;suite-code&gt;<span class="w"> </span>-timeout<span class="w"> </span>&lt;duration&gt;
-make<span class="w"> </span>smoketests<span class="w"> </span>no-build<span class="o">=</span><span class="m">1</span>
-
-<span class="c1"># Kill docker containers after test</span>
-make<span class="w"> </span>smoketests<span class="w"> </span>no-build<span class="o">=</span><span class="m">1</span><span class="w"> </span>kill-docker<span class="o">=</span><span class="m">1</span>
-
-<span class="c1"># Keep data directory</span>
-make<span class="w"> </span>smoketests<span class="w"> </span>no-build<span class="o">=</span><span class="m">1</span><span class="w"> </span>kill-docker<span class="o">=</span><span class="m">1</span><span class="w"> </span>no-reset<span class="o">=</span><span class="m">1</span>
-</code></pre></div></p>
-</li>
+<span class="c1"># Run TEC tests</span>
+<span class="nb">cd</span><span class="w"> </span>/teranode/test/tec
+go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tec
+</code></pre></div>
+<ol>
+<li>Run specific test:</li>
 </ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># Format</span>
+go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^&lt;TestSuiteName&gt;</span>$<span class="s2">/^&lt;TestName&gt;</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>&lt;test-tag&gt;
+
+<span class="c1"># Example: Run specific TNA test</span>
+go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA1TestSuite</span>$<span class="s2">/^TestBroadcastNewTxAllNodes</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
+</code></pre></div>
+<ol>
+<li>Run with different options:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># With timeout</span>
+go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tna<span class="w"> </span>-timeout<span class="w"> </span>10m
+
+<span class="c1"># With race detection</span>
+go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-race<span class="w"> </span>-tags<span class="w"> </span>test_tna
+
+<span class="c1"># With specific cache size</span>
+go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span><span class="s2">&quot;test_tna,testtxmetacache&quot;</span>
+</code></pre></div>
 <h3 id="how-to-debug-failed-tests">How to Debug Failed Tests</h3>
 <ol>
-<li>
-<p>Enable verbose logging:
+<li>Enable verbose logging:</li>
+</ol>
 <div class="highlight"><pre><span></span><code><span class="c1"># Set log level to DEBUG</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">LOG_LEVEL</span><span class="o">=</span>DEBUG
-</code></pre></div></p>
-</li>
-<li>
-<p>Check container logs:
-<div class="highlight"><pre><span></span><code><span class="c1"># View logs for specific node</span>
-docker<span class="w"> </span>logs<span class="w"> </span>teranode-1
-docker<span class="w"> </span>logs<span class="w"> </span>teranode-2
-docker<span class="w"> </span>logs<span class="w"> </span>teranode-3
-</code></pre></div></p>
-</li>
-<li>
-<p>Inspect test state:
-<div class="highlight"><pre><span></span><code><span class="c1"># Check node health</span>
-curl<span class="w"> </span>http://localhost:10090/health
-curl<span class="w"> </span>http://localhost:12090/health
-curl<span class="w"> </span>http://localhost:14090/health
-</code></pre></div></p>
-</li>
+go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tna
+</code></pre></div>
+<ol>
+<li>Check container logs:</li>
 </ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># View logs for specific node</span>
+docker<span class="w"> </span>logs<span class="w"> </span>teranode1
+docker<span class="w"> </span>logs<span class="w"> </span>teranode2
+docker<span class="w"> </span>logs<span class="w"> </span>teranode3
+</code></pre></div>
+<ol>
+<li>Inspect test state:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check node health (verify actual ports in your settings)</span>
+curl<span class="w"> </span>http://localhost:18090/api/v1/bestblockheader/json
+curl<span class="w"> </span>http://localhost:28090/api/v1/bestblockheader/json
+curl<span class="w"> </span>http://localhost:38090/api/v1/bestblockheader/json
+</code></pre></div>
 <h2 id="adding-new-tests">Adding New Tests</h2>
 <h3 id="how-to-add-a-new-test-case">How to Add a New Test Case</h3>
 <ol>
-<li>
-<p>Create test file:
-<div class="highlight"><pre><span></span><code><span class="c1">// test/tna/tna_new_test.go</span>
+<li>Create test file with proper structure:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="c1">//go:build test_tna || debug</span>
+
+<span class="c1">// How to run this test manually:</span>
+<span class="c1">// $ go test -v -run &quot;^TestTNA5TestSuite$/^TestNewFeature$&quot; -tags test_tna</span>
+
 <span class="kn">package</span><span class="w"> </span><span class="nx">tna</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 <span class="w">    </span><span class="s">&quot;testing&quot;</span>
-<span class="w">    </span><span class="s">&quot;github.com/bsv-blockchain/teranode/test/setup&quot;</span>
+<span class="w">    </span><span class="s">&quot;time&quot;</span>
+
+<span class="w">    </span><span class="nx">helper</span><span class="w"> </span><span class="s">&quot;github.com/bsv-blockchain/teranode/test/utils&quot;</span>
+<span class="w">    </span><span class="s">&quot;github.com/bsv-blockchain/teranode/test/utils/tconfig&quot;</span>
+<span class="w">    </span><span class="s">&quot;github.com/stretchr/testify/suite&quot;</span>
 <span class="p">)</span>
 
-<span class="kd">type</span><span class="w"> </span><span class="nx">TNANewTestSuite</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">setup</span><span class="p">.</span><span class="nx">BitcoinTestSuite</span>
+<span class="kd">type</span><span class="w"> </span><span class="nx">TNA5TestSuite</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">helper</span><span class="p">.</span><span class="nx">TeranodeTestSuite</span>
 <span class="p">}</span>
 
-<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">suite</span><span class="w"> </span><span class="o">*</span><span class="nx">TNANewTestSuite</span><span class="p">)</span><span class="w"> </span><span class="nx">TestNewFeature</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">t</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">suite</span><span class="p">.</span><span class="nx">T</span><span class="p">()</span>
-<span class="w">    </span><span class="nx">framework</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">suite</span><span class="p">.</span><span class="nx">Framework</span>
-
-<span class="w">    </span><span class="c1">// Your test logic here</span>
-<span class="p">}</span>
-
-<span class="kd">func</span><span class="w"> </span><span class="nx">TestTNANewTestSuite</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">suite</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nb">new</span><span class="p">(</span><span class="nx">TNANewTestSuite</span><span class="p">))</span>
-<span class="p">}</span>
-</code></pre></div></p>
-</li>
-<li>
-<p>Common test patterns:
-<div class="highlight"><pre><span></span><code><span class="c1">// Health check pattern</span>
-<span class="nx">blockchainHealth</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">framework</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">1</span><span class="p">].</span><span class="nx">BlockchainClient</span><span class="p">.</span><span class="nx">Health</span><span class="p">(</span><span class="nx">framework</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span>
-<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Failed to get health: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-<span class="p">}</span>
-<span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">blockchainHealth</span><span class="p">.</span><span class="nx">Ok</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Expected health to be OK&quot;</span><span class="p">)</span>
-<span class="p">}</span>
-
-<span class="c1">// Node restart pattern</span>
-<span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">framework</span><span class="p">.</span><span class="nx">RestartNodes</span><span class="p">(</span><span class="nx">settingsMap</span><span class="p">)</span>
-<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Failed to restart nodes: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div></p>
-</li>
-</ol>
-<h3 id="how-to-add-custom-test-configuration">How to Add Custom Test Configuration</h3>
-<ol>
-<li>
-<p>Create override file:
-<div class="highlight"><pre><span></span><code><span class="c1"># docker-compose.custom.override.yml</span>
-<span class="nt">services</span><span class="p">:</span>
-<span class="nt">teranode-1</span><span class="p">:</span>
-<span class="nt">environment</span><span class="p">:</span>
-<span class="nt">CUSTOM_SETTING</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;value&quot;</span>
-</code></pre></div></p>
-</li>
-<li>
-<p>Use in test:
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">suite</span><span class="w"> </span><span class="o">*</span><span class="nx">CustomTestSuite</span><span class="p">)</span><span class="w"> </span><span class="nx">SetupTest</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">composeFiles</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
-<span class="w">        </span><span class="s">&quot;../../docker-compose.e2etest.yml&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="s">&quot;../../docker-compose.custom.override.yml&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="p">}</span>
-
-<span class="w">    </span><span class="nx">suite</span><span class="p">.</span><span class="nx">SetupTestWithCustomComposeAndSettings</span><span class="p">(</span>
-<span class="w">        </span><span class="nx">suite</span><span class="p">.</span><span class="nx">DefaultSettingsMap</span><span class="p">(),</span>
-<span class="w">        </span><span class="nx">composeFiles</span><span class="p">,</span>
+<span class="kd">func</span><span class="w"> </span><span class="nx">TestTNA5TestSuite</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">suite</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">TNA5TestSuite</span><span class="p">{</span>
+<span class="w">        </span><span class="nx">TeranodeTestSuite</span><span class="p">:</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">TeranodeTestSuite</span><span class="p">{</span>
+<span class="w">            </span><span class="nx">TConfig</span><span class="p">:</span><span class="w"> </span><span class="nx">tconfig</span><span class="p">.</span><span class="nx">LoadTConfig</span><span class="p">(</span>
+<span class="w">                </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+<span class="w">                    </span><span class="nx">tconfig</span><span class="p">.</span><span class="nx">KeyTeranodeContexts</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
+<span class="w">                        </span><span class="s">&quot;docker.teranode1.test.tna5Test&quot;</span><span class="p">,</span>
+<span class="w">                        </span><span class="s">&quot;docker.teranode2.test.tna5Test&quot;</span><span class="p">,</span>
+<span class="w">                        </span><span class="s">&quot;docker.teranode3.test.tna5Test&quot;</span><span class="p">,</span>
+<span class="w">                    </span><span class="p">},</span>
+<span class="w">                </span><span class="p">},</span>
+<span class="w">            </span><span class="p">),</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">    </span><span class="p">},</span>
 <span class="w">    </span><span class="p">)</span>
 <span class="p">}</span>
-</code></pre></div></p>
-</li>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">suite</span><span class="w"> </span><span class="o">*</span><span class="nx">TNA5TestSuite</span><span class="p">)</span><span class="w"> </span><span class="nx">TestNewFeature</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Access test environment</span>
+<span class="w">    </span><span class="nx">testEnv</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">suite</span><span class="p">.</span><span class="nx">TeranodeTestEnv</span>
+<span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Context</span>
+<span class="w">    </span><span class="nx">t</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">suite</span><span class="p">.</span><span class="nx">T</span><span class="p">()</span>
+<span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Logger</span>
+
+<span class="w">    </span><span class="c1">// Access nodes</span>
+<span class="w">    </span><span class="nx">node1</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">node1</span><span class="p">.</span><span class="nx">BlockchainClient</span>
+
+<span class="w">    </span><span class="c1">// Your test logic here</span>
+<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Log</span><span class="p">(</span><span class="s">&quot;Starting test&quot;</span><span class="p">)</span>
+
+<span class="w">    </span><span class="c1">// Example: Check node health</span>
+<span class="w">    </span><span class="nx">health</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="p">.</span><span class="nx">Health</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to get health: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">health</span><span class="p">.</span><span class="nx">Ok</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Error</span><span class="p">(</span><span class="s">&quot;Expected health to be OK&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Log</span><span class="p">(</span><span class="s">&quot;Test completed successfully&quot;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<ol>
+<li>Common test patterns:</li>
 </ol>
+<div class="highlight"><pre><span></span><code><span class="c1">// Create and send transaction</span>
+<span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">CreateAndSendTx</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">node1</span><span class="p">)</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to create transaction: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="c1">// Mine a block</span>
+<span class="nx">blockHash</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">MineBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">node1</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">node1</span><span class="p">.</span><span class="nx">BlockAssemblyClient</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">)</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to mine block: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="c1">// Wait for block height</span>
+<span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">WaitForNodeBlockHeight</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="p">,</span><span class="w"> </span><span class="nx">targetHeight</span><span class="p">,</span><span class="w"> </span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to reach target height: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="c1">// Wait for nodes to sync</span>
+<span class="nx">blockchainClients</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">{</span>
+<span class="w">    </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">BlockchainClient</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">1</span><span class="p">].</span><span class="nx">BlockchainClient</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">2</span><span class="p">].</span><span class="nx">BlockchainClient</span><span class="p">,</span>
+<span class="p">}</span>
+<span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">WaitForNodesToSync</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClients</span><span class="p">,</span><span class="w"> </span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Nodes failed to sync: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="how-to-add-custom-test-configuration">How to Add Custom Test Configuration</h3>
+<ol>
+<li>Use TConfig system to customize settings:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">TestCustomTestSuite</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">suite</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">CustomTestSuite</span><span class="p">{</span>
+<span class="w">        </span><span class="nx">TeranodeTestSuite</span><span class="p">:</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">TeranodeTestSuite</span><span class="p">{</span>
+<span class="w">            </span><span class="nx">TConfig</span><span class="p">:</span><span class="w"> </span><span class="nx">tconfig</span><span class="p">.</span><span class="nx">LoadTConfig</span><span class="p">(</span>
+<span class="w">                </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+<span class="w">                    </span><span class="nx">tconfig</span><span class="p">.</span><span class="nx">KeyTeranodeContexts</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
+<span class="w">                        </span><span class="s">&quot;docker.teranode1.test.customTest&quot;</span><span class="p">,</span>
+<span class="w">                    </span><span class="p">},</span>
+<span class="w">                    </span><span class="nx">tconfig</span><span class="p">.</span><span class="nx">KeyComposeFiles</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
+<span class="w">                        </span><span class="s">&quot;docker-compose.e2etest.yml&quot;</span><span class="p">,</span>
+<span class="w">                        </span><span class="s">&quot;docker-compose.custom.override.yml&quot;</span><span class="p">,</span>
+<span class="w">                    </span><span class="p">},</span>
+<span class="w">                </span><span class="p">},</span>
+<span class="w">            </span><span class="p">),</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="p">}</span>
+</code></pre></div>
+<ol>
+<li>Create custom docker compose override:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># docker-compose.custom.override.yml</span>
+<span class="nt">services</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">teranode1</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CUSTOM_SETTING=value</span>
+</code></pre></div>
 <h2 id="working-with-multiple-nodes">Working with Multiple Nodes</h2>
 <h3 id="how-to-test-node-communication">How to Test Node Communication</h3>
 <ol>
-<li>
-<p>Setup multiple nodes:
+<li>Setup multiple nodes:</li>
+</ol>
 <div class="highlight"><pre><span></span><code><span class="c1">// Ensure all nodes are running</span>
-<span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">node</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">framework</span><span class="p">.</span><span class="nx">Nodes</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">blockchainHealth</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">node</span><span class="p">.</span><span class="nx">BlockchainClient</span><span class="p">.</span><span class="nx">Health</span><span class="p">(</span><span class="nx">framework</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span>
+<span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">node</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">health</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">node</span><span class="p">.</span><span class="nx">BlockchainClient</span><span class="p">.</span><span class="nx">Health</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Node health check failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Node %d health check failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">health</span><span class="p">.</span><span class="nx">Ok</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Node %d is not healthy&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
-</code></pre></div></p>
-</li>
-<li>
-<p>Test node interaction:
-<div class="highlight"><pre><span></span><code><span class="c1">// Send transaction to node 1</span>
-<span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">framework</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">BlockchainClient</span><span class="p">.</span><span class="nx">SubmitTransaction</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
-
-<span class="c1">// Verify propagation to node 2</span>
-<span class="nx">time</span><span class="p">.</span><span class="nx">Sleep</span><span class="p">(</span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span><span class="w">  </span><span class="c1">// Allow propagation</span>
-<span class="nx">verified</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">framework</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">1</span><span class="p">].</span><span class="nx">BlockchainClient</span><span class="p">.</span><span class="nx">VerifyTransaction</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
-</code></pre></div></p>
-</li>
+</code></pre></div>
+<ol>
+<li>Test transaction propagation:</li>
 </ol>
+<div class="highlight"><pre><span></span><code><span class="c1">// Send transaction to node 0</span>
+<span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">CreateAndSendTx</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to create transaction: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="c1">// Allow time for propagation</span>
+<span class="nx">time</span><span class="p">.</span><span class="nx">Sleep</span><span class="p">(</span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span>
+
+<span class="c1">// Verify on other nodes</span>
+<span class="nx">block</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">1</span><span class="p">].</span><span class="nx">BlockchainClient</span><span class="p">.</span><span class="nx">GetBestBlockHeader</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to get block from node 1: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
 <h3 id="how-to-test-node-failure-scenarios">How to Test Node Failure Scenarios</h3>
 <ol>
-<li>
-<p>Stop specific node:
-<div class="highlight"><pre><span></span><code><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">framework</span><span class="p">.</span><span class="nx">StopNode</span><span class="p">(</span><span class="s">&quot;teranode-2&quot;</span><span class="p">)</span>
-<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Failed to stop node: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div></p>
-</li>
-<li>
-<p>Restart node:
-<div class="highlight"><pre><span></span><code><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">framework</span><span class="p">.</span><span class="nx">StartNode</span><span class="p">(</span><span class="s">&quot;teranode-2&quot;</span><span class="p">)</span>
-<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;Failed to start node: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div></p>
-</li>
+<li>Stop specific containers:</li>
 </ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># Stop a specific node container</span>
+docker<span class="w"> </span>stop<span class="w"> </span>teranode2
+</code></pre></div>
+<ol>
+<li>Restart containers:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># Restart the node</span>
+docker<span class="w"> </span>start<span class="w"> </span>teranode2
+</code></pre></div>
+<ol>
+<li>Test resilience in code:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="c1">// Send transaction before node failure</span>
+<span class="nx">tx1</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">CreateAndSendTx</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+<span class="c1">// Simulate node failure by stopping docker container</span>
+<span class="c1">// (typically done manually or via docker SDK)</span>
+
+<span class="c1">// Verify other nodes continue working</span>
+<span class="nx">tx2</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">CreateAndSendTx</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Remaining nodes should continue working: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
 <h2 id="cleanup-and-maintenance">Cleanup and Maintenance</h2>
 <h3 id="how-to-clean-test-environment">How to Clean Test Environment</h3>
 <ol>
-<li>
-<p>Remove test data:
+<li>Remove test data:</li>
+</ol>
 <div class="highlight"><pre><span></span><code><span class="c1"># Clean data directory</span>
 rm<span class="w"> </span>-rf<span class="w"> </span>data/test/*
-</code></pre></div></p>
-</li>
-<li>
-<p>Remove containers:
+</code></pre></div>
+<ol>
+<li>Remove containers:</li>
+</ol>
 <div class="highlight"><pre><span></span><code><span class="c1"># Remove all test containers</span>
 docker<span class="w"> </span>ps<span class="w"> </span>-a<span class="w"> </span>-q<span class="w"> </span>--filter<span class="w"> </span><span class="nv">label</span><span class="o">=</span>com.docker.compose.project<span class="o">=</span>e2e<span class="w"> </span><span class="p">|</span><span class="w"> </span>xargs<span class="w"> </span>docker<span class="w"> </span>rm<span class="w"> </span>-f
-</code></pre></div></p>
-</li>
-<li>
-<p>Full cleanup:
-<div class="highlight"><pre><span></span><code><span class="c1"># Stop framework and clean up</span>
-framework.StopNodesWithRmVolume<span class="o">()</span>
-framework.Cancel<span class="o">()</span>
-</code></pre></div></p>
-</li>
+</code></pre></div>
+<ol>
+<li>Full cleanup in test code:</li>
 </ol>
+<div class="highlight"><pre><span></span><code><span class="c1">// TearDown is handled automatically by TeranodeTestSuite</span>
+<span class="c1">// But you can add custom cleanup in TearDownTest:</span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">suite</span><span class="w"> </span><span class="o">*</span><span class="nx">CustomTestSuite</span><span class="p">)</span><span class="w"> </span><span class="nx">TearDownTest</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Custom cleanup here</span>
+<span class="w">    </span><span class="nx">suite</span><span class="p">.</span><span class="nx">TeranodeTestSuite</span><span class="p">.</span><span class="nx">TearDownTest</span><span class="p">()</span><span class="w"> </span><span class="c1">// Call parent teardown</span>
+<span class="p">}</span>
+</code></pre></div>
 <h3 id="how-to-handle-common-issues">How to Handle Common Issues</h3>
 <ol>
-<li>
-<p>Port conflicts:
-<div class="highlight"><pre><span></span><code><span class="c1"># Check port usage</span>
-lsof<span class="w"> </span>-i<span class="w"> </span>:8084
-lsof<span class="w"> </span>-i<span class="w"> </span>:8085
-lsof<span class="w"> </span>-i<span class="w"> </span>:8087
-</code></pre></div></p>
-</li>
-<li>
-<p>Resource cleanup:
-<div class="highlight"><pre><span></span><code><span class="c1"># Force remove hanging containers</span>
-docker<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span><span class="k">$(</span>docker<span class="w"> </span>ps<span class="w"> </span>-a<span class="w"> </span>-q<span class="w"> </span>--filter<span class="w"> </span><span class="nv">label</span><span class="o">=</span>com.docker.compose.project<span class="o">=</span>e2e<span class="k">)</span>
-</code></pre></div></p>
-</li>
-<li>
-<p>Data persistence issues:
-<div class="highlight"><pre><span></span><code><span class="c1"># Reset all data</span>
-sudo<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>../../data/test
-</code></pre></div></p>
-</li>
+<li>Port conflicts:</li>
 </ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check port usage</span>
+lsof<span class="w"> </span>-i<span class="w"> </span>:8087
+lsof<span class="w"> </span>-i<span class="w"> </span>:8090
+lsof<span class="w"> </span>-i<span class="w"> </span>:9292
+</code></pre></div>
+<ol>
+<li>Resource cleanup:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># Force remove hanging containers</span>
+docker<span class="w"> </span>ps<span class="w"> </span>-a<span class="w"> </span>-q<span class="w"> </span>--filter<span class="w"> </span><span class="nv">label</span><span class="o">=</span>com.docker.compose.project<span class="o">=</span>e2e<span class="w"> </span><span class="p">|</span><span class="w"> </span>xargs<span class="w"> </span>docker<span class="w"> </span>rm<span class="w"> </span>-f
+
+<span class="c1"># Remove volumes</span>
+docker<span class="w"> </span>volume<span class="w"> </span>prune<span class="w"> </span>-f
+</code></pre></div>
+<ol>
+<li>Data persistence issues:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># Reset all data (use sudo if needed)</span>
+rm<span class="w"> </span>-rf<span class="w"> </span>./data/test
+
+<span class="c1"># Or if permission issues:</span>
+sudo<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>./data/test
+</code></pre></div>
+<h2 id="available-test-tags">Available Test Tags</h2>
+<p>Teranode uses build tags to control which tests run:</p>
+<ul>
+<li><code>test_tna</code> - TNA test suite</li>
+<li><code>test_tnb</code> - TNB test suite</li>
+<li><code>test_tec</code> - TEC test suite</li>
+<li><code>test_tnd</code> - TND test suite</li>
+<li><code>test_tnf</code> - TNF test suite</li>
+<li><code>test_tnj</code> - TNJ test suite</li>
+<li><code>test_smoke</code> - Smoke tests</li>
+<li><code>test_functional</code> - Functional tests</li>
+<li><code>testtxmetacache</code> - Use small transaction metadata cache</li>
+<li><code>largetxmetacache</code> - Use production-sized cache</li>
+<li><code>aerospike</code> - Tests requiring Aerospike</li>
+<li><code>debug</code> - Enable debug mode for tests</li>
+</ul>
 <h2 id="other-resources">Other Resources</h2>
 <ul>
 <li><a href="../../topics/functionalRequirementTests/">QA Guide &amp; Instructions for Functional Requirement Tests</a></li>

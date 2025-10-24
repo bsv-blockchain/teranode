@@ -680,9 +680,9 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#example-usage" class="md-nav__link">
+  <a href="#examples" class="md-nav__link">
     <span class="md-ellipsis">
-      Example Usage:
+      Examples
     </span>
   </a>
   
@@ -722,9 +722,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#example-usage_1" class="md-nav__link">
+  <a href="#component-selection-examples" class="md-nav__link">
     <span class="md-ellipsis">
-      Example Usage:
+      Component Selection Examples
     </span>
   </a>
   
@@ -5126,9 +5126,9 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#example-usage" class="md-nav__link">
+  <a href="#examples" class="md-nav__link">
     <span class="md-ellipsis">
-      Example Usage:
+      Examples
     </span>
   </a>
   
@@ -5168,9 +5168,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#example-usage_1" class="md-nav__link">
+  <a href="#component-selection-examples" class="md-nav__link">
     <span class="md-ellipsis">
-      Example Usage:
+      Component Selection Examples
     </span>
   </a>
   
@@ -5283,12 +5283,13 @@ utxostore.dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span
 <ol>
 <li><strong>Aerospike</strong> (High-performance option):</li>
 </ol>
-<p>!!! warning "Aerospike Requirements"</p>
-<div class="highlight"><pre><span></span><code>   - Requires both the appropriate settings AND the &#39;aerospike&#39; build tag
-   - See the Aerospike Integration section below
-   - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won&#39;t be compiled into the binary without it. If you configure Aerospike in settings but don&#39;t use the tag, the application will fail at runtime with an &#39;unknown database driver&#39; error.
-</code></pre></div>
 <blockquote>
+<p><strong>Warning: Aerospike Requirements</strong></p>
+<ul>
+<li>Requires both the appropriate settings AND the 'aerospike' build tag</li>
+<li>See the Aerospike Integration section below</li>
+<li><strong>Important</strong>: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.</li>
+</ul>
 <p><strong>Note:</strong> The database backend is determined by the connection string prefix in your settings:</p>
 <ul>
 <li>PostgreSQL: <code>postgres://</code></li>
@@ -5354,7 +5355,7 @@ utxostore.dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span
 <p>Launch the node with specific components using command-line options. This allows you to enable only the components you need for your development tasks.</p>
 <div class="highlight"><pre><span></span><code>rm<span class="w"> </span>-rf<span class="w"> </span>data<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
-<p>Enable or disable components by setting the corresponding option to <code>1</code> or <code>0</code>. Options are not case-sensitive.</p>
+<p>Enable or disable components by setting the corresponding option to <code>1</code> or <code>0</code>. <strong>Note: Options are case-sensitive and must be lowercase.</strong></p>
 <table>
 <thead>
 <tr>
@@ -5366,67 +5367,67 @@ utxostore.dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span
 <tbody>
 <tr>
 <td>Alert</td>
-<td><code>-Alert=1</code></td>
+<td><code>-alert=1</code></td>
 <td>Alert system for network notifications</td>
 </tr>
 <tr>
 <td>Asset</td>
-<td><code>-Asset=1</code></td>
+<td><code>-asset=1</code></td>
 <td>Asset handling service</td>
 </tr>
 <tr>
 <td>Block Assembly</td>
-<td><code>-BlockAssembly=1</code></td>
+<td><code>-blockassembly=1</code></td>
 <td>Block assembly service</td>
 </tr>
 <tr>
 <td>Block Persister</td>
-<td><code>-BlockPersister=1</code></td>
+<td><code>-blockpersister=1</code></td>
 <td>Block persistence service</td>
 </tr>
 <tr>
 <td>Block Validation</td>
-<td><code>-BlockValidation=1</code></td>
+<td><code>-blockvalidation=1</code></td>
 <td>Block validation service</td>
 </tr>
 <tr>
 <td>Blockchain</td>
-<td><code>-Blockchain=1</code></td>
+<td><code>-blockchain=1</code></td>
 <td>Blockchain processing service</td>
 </tr>
 <tr>
 <td>Legacy</td>
-<td><code>-Legacy=1</code></td>
+<td><code>-legacy=1</code></td>
 <td>Legacy API support</td>
 </tr>
 <tr>
 <td>P2P</td>
-<td><code>-P2P=1</code></td>
+<td><code>-p2p=1</code></td>
 <td>Peer-to-peer networking service</td>
 </tr>
 <tr>
 <td>Propagation</td>
-<td><code>-Propagation=1</code></td>
+<td><code>-propagation=1</code></td>
 <td>Data propagation service</td>
 </tr>
 <tr>
 <td>RPC</td>
-<td><code>-RPC=1</code></td>
+<td><code>-rpc=1</code></td>
 <td>RPC interface service</td>
 </tr>
 <tr>
 <td>Subtree Validation</td>
-<td><code>-SubtreeValidation=1</code></td>
+<td><code>-subtreevalidation=1</code></td>
 <td>Subtree validation service</td>
 </tr>
 <tr>
 <td>UTXO Persister</td>
-<td><code>-UTXOPersister=1</code></td>
+<td><code>-utxopersister=1</code></td>
 <td>UTXO persistence service</td>
 </tr>
 <tr>
 <td>Validator</td>
-<td><code>-Validator=1</code></td>
+<td><code>-validator=1</code></td>
 <td>Transaction validation service</td>
 </tr>
 </tbody>
@@ -5441,11 +5442,7 @@ utxostore.dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span
 </thead>
 <tbody>
 <tr>
-<td>-------------------------------</td>
-<td>-------------------------------------------------</td>
-</tr>
-<tr>
-<td><code>-all=&lt;1|0&gt;</code></td>
+<td><code>-all=&lt;1\|0&gt;</code></td>
 <td>Enable/disable all services unless explicitly overridden by other flags. By default (when no flags are specified), the system behaves as if <code>-all=1</code> was set.</td>
 </tr>
 <tr>
@@ -5462,9 +5459,9 @@ utxostore.dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span
 </tr>
 </tbody>
 </table>
-<h4 id="example-usage">Example Usage:</h4>
+<h4 id="examples">Examples</h4>
 <p>To start the node with only validation and UTXO storage:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-Validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>-UTXOPersister<span class="o">=</span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>-utxopersister<span class="o">=</span><span class="m">1</span>
 </code></pre></div>
 <h3 id="wait-for-postgresql">Wait For PostgreSQL</h3>
 <p>If you want Teranode to wait for PostgreSQL to be available before starting:</p>
@@ -5481,14 +5478,14 @@ utxostore.dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span
 <p>Teranode respects the <code>NO_COLOR</code> environment variable to disable colored output in logs.</p>
 <div class="highlight"><pre><span></span><code><span class="nv">NO_COLOR</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
 </code></pre></div>
-<h4 id="example-usage_1">Example Usage:</h4>
+<h4 id="component-selection-examples">Component Selection Examples</h4>
 <p><strong>Running specific components only:</strong></p>
 <p>To initiate the node with only specific components, such as <code>Validator</code>:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-Validator<span class="o">=</span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span>
 </code></pre></div>
 <p><strong>Disabling all services by default and enabling only specific ones:</strong></p>
 <p>This is particularly useful for development:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-all<span class="o">=</span><span class="m">0</span><span class="w"> </span>-Validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>-RPC<span class="o">=</span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-all<span class="o">=</span><span class="m">0</span><span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>-rpc<span class="o">=</span><span class="m">1</span>
 </code></pre></div>
 <h2 id="running-individual-services">🔧 Running Individual Services</h2>
 <p>You can also run each service on its own:</p>
