@@ -346,6 +346,10 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []fields.Field
 		}()
 	}
 
+	// Sleep a percentage of the batch duration before waiting for response to reduce CPU contention.
+	// Since batches take time to process, there's no benefit to immediately spinning on the channel.
+	// Configurable via batchResponseWaitPercent (default 0 = disabled).
+	time.Sleep(time.Duration(s.settings.UtxoStore.GetBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 	data := <-done
 	if data.Err != nil {
 		if e, ok := data.Err.(*errors.Error); ok {
@@ -1114,6 +1118,10 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error {
 			errCh:    errChan,
 		})
 	}
+
+	// Sleep a percentage of the batch duration before waiting for response to reduce CPU contention.
+	// Configurable via batchResponseWaitPercent (default 0 = disabled).
+	time.Sleep(time.Duration(s.settings.UtxoStore.OutpointBatcherDurationMillis) * time.Millisecond * time.Duration(s.batchResponseWaitPercent) / 100)
 
 	// Wait for all error channels to receive a result
 	for _, errChan := range errChans {

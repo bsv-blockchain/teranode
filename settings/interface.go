@@ -143,7 +143,6 @@ type AerospikeSettings struct {
 	UseDefaultBasePolicies bool
 	UseDefaultPolicies     bool
 	WarmUp                 bool
-	StoreBatcherDuration   time.Duration
 	StatsRefreshDuration   time.Duration
 }
 
@@ -357,6 +356,7 @@ type UtxoStoreSettings struct {
 	GetBatcherSize                    int
 	GetBatcherDurationMillis          int
 	DBTimeout                         time.Duration
+	BatchResponseWaitPercent          int // Percentage (0-100) of batch duration to sleep before waiting on response channels (default 0)
 	UseExternalTxCache                bool
 	ExternalizeAllTransactions        bool
 	PostgresMaxIdleConns              int

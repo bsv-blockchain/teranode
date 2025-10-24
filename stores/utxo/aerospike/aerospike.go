@@ -111,29 +111,30 @@ type batcherIfc[T any] interface {
 // Store implements the UTXO store interface using Aerospike.
 // It is thread-safe for concurrent access.
 type Store struct {
-	ctx                 context.Context // store the global context for things that run in the background
-	url                 *url.URL
-	client              *uaerospike.Client
-	namespace           string
-	setName             string
-	blockHeight         atomic.Uint32
-	medianBlockTime     atomic.Uint32
-	logger              ulogger.Logger
-	settings            *settings.Settings
-	batchID             atomic.Uint64
-	storeBatcher        batcherIfc[BatchStoreItem]
-	getBatcher          batcherIfc[batchGetItem]
-	spendBatcher        batcherIfc[batchSpend]
-	outpointBatcher     batcherIfc[batchOutpoint]
-	incrementBatcher    batcherIfc[batchIncrement]
-	setDAHBatcher       batcherIfc[batchDAH]
-	lockedBatcher       batcherIfc[batchLocked]
-	longestChainBatcher batcherIfc[batchLongestChain]
-	externalStore       blob.Store
-	utxoBatchSize       int
-	externalTxCache     *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
-	indexMutex          sync.Mutex // Mutex for index creation operations
-	indexOnce           sync.Once  // Ensures index creation/wait is only done once per process
+	ctx                      context.Context // store the global context for things that run in the background
+	url                      *url.URL
+	client                   *uaerospike.Client
+	namespace                string
+	setName                  string
+	blockHeight              atomic.Uint32
+	medianBlockTime          atomic.Uint32
+	logger                   ulogger.Logger
+	settings                 *settings.Settings
+	batchID                  atomic.Uint64
+	storeBatcher             batcherIfc[BatchStoreItem]
+	getBatcher               batcherIfc[batchGetItem]
+	spendBatcher             batcherIfc[batchSpend]
+	outpointBatcher          batcherIfc[batchOutpoint]
+	incrementBatcher         batcherIfc[batchIncrement]
+	setDAHBatcher            batcherIfc[batchDAH]
+	lockedBatcher            batcherIfc[batchLocked]
+	longestChainBatcher      batcherIfc[batchLongestChain]
+	externalStore            blob.Store
+	utxoBatchSize            int
+	batchResponseWaitPercent int // Percentage (0-100) of batch duration to sleep before waiting on response channels
+	externalTxCache          *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	indexMutex               sync.Mutex // Mutex for index creation operations
+	indexOnce                sync.Once  // Ensures index creation/wait is only done once per process
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -198,10 +199,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		setName:   setName,
 		logger:    logger,
 
-		settings:        tSettings,
-		externalStore:   externalStore,
-		utxoBatchSize:   utxoBatchSize,
-		externalTxCache: externalTxCache,
+		settings:                 tSettings,
+		externalStore:            externalStore,
+		utxoBatchSize:            utxoBatchSize,
+		batchResponseWaitPercent: tSettings.UtxoStore.BatchResponseWaitPercent,
+		externalTxCache:          externalTxCache,
 	}
 
 	// Ensure index creation/wait is only done once per process
@@ -242,7 +244,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
-	storeBatchDuration := tSettings.Aerospike.StoreBatcherDuration
+	storeBatchDurationStr := tSettings.UtxoStore.StoreBatcherDurationMillis
+	storeBatchDuration := time.Duration(storeBatchDurationStr) * time.Millisecond
 
 	if storeBatchSize > 1 {
 		s.storeBatcher = batcher.New(storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)

@@ -140,7 +140,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UseDefaultBasePolicies: getBool("aerospike_useDefaultBasePolicies", false, alternativeContext...),
 			UseDefaultPolicies:     getBool("aerospike_useDefaultPolicies", false, alternativeContext...),
 			WarmUp:                 getBool("aerospike_warmUp", true, alternativeContext...),
-			StoreBatcherDuration:   getDuration("aerospike_storeBatcherDuration", 10*time.Millisecond, alternativeContext...),
 			StatsRefreshDuration:   getDuration("aerospike_statsRefresh", 5*time.Second, alternativeContext...),
 		},
 		Alert: AlertSettings{
@@ -342,6 +341,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GetBatcherSize:                    getInt("utxostore_getBatcherSize", 1, alternativeContext...),
 			GetBatcherDurationMillis:          getInt("utxostore_getBatcherDurationMillis", 10, alternativeContext...),
 			DBTimeout:                         getDuration("utxostore_dbTimeoutDuration", 5*time.Second, alternativeContext...),
+			BatchResponseWaitPercent:          getInt("utxostore_batchResponseWaitPercent", 0, alternativeContext...),
 			UseExternalTxCache:                getBool("utxostore_useExternalTxCache", true, alternativeContext...),
 			ExternalizeAllTransactions:        getBool("utxostore_externalizeAllTransactions", false, alternativeContext...),
 			PostgresMaxIdleConns:              getInt("utxostore_utxo_postgresMaxIdleConns", 10, alternativeContext...),
