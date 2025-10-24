@@ -3,6 +3,7 @@ package p2p
 import (
 	"sort"
 
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -17,13 +18,15 @@ type SelectionCriteria struct {
 // PeerSelector handles peer selection logic
 // This is a stateless, pure function component
 type PeerSelector struct {
-	logger ulogger.Logger
+	logger   ulogger.Logger
+	settings *settings.Settings
 }
 
 // NewPeerSelector creates a new peer selector
-func NewPeerSelector(logger ulogger.Logger) *PeerSelector {
+func NewPeerSelector(logger ulogger.Logger, settings *settings.Settings) *PeerSelector {
 	return &PeerSelector{
-		logger: logger,
+		logger:   logger,
+		settings: settings,
 	}
 }
 
@@ -155,6 +158,34 @@ func (ps *PeerSelector) isEligible(p *PeerInfo, _ SelectionCriteria) bool {
 	if p.Height <= 0 {
 		ps.logger.Debugf("[PeerSelector] Peer %s has invalid height %d", p.ID, p.Height)
 		return false
+	}
+
+	// Check node mode requirement for catchup
+	if ps.settings != nil {
+		treatUnknownAs := ps.settings.P2P.TreatUnknownNodeModeAs
+		if treatUnknownAs == "" {
+			treatUnknownAs = "pruned" // Default: strict, only use confirmed full nodes
+		}
+
+		// If set to "full", allow all peers (backward compatible, no filtering)
+		if treatUnknownAs == "full" {
+			return true
+		}
+
+		// treatUnknownAs == "pruned": strict mode, only allow confirmed full nodes
+		nodeMode := p.NodeMode
+		if nodeMode == "" {
+			// Peer hasn't announced node mode (old version or not yet received)
+			// In strict mode, treat as pruned (filter out)
+			ps.logger.Debugf("[PeerSelector] Peer %s has unknown node mode, treating as pruned", p.ID)
+			return false
+		}
+
+		// Filter out non-full nodes
+		if nodeMode != "full" {
+			ps.logger.Debugf("[PeerSelector] Peer %s is not a full node (mode: %s)", p.ID, nodeMode)
+			return false
+		}
 	}
 
 	return true
