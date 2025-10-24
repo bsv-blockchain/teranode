@@ -144,6 +144,7 @@ func TestPeerSelector_SelectSyncPeer_PreferLowerBanScore(t *testing.T) {
 			BanScore:      50,
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("B"),
@@ -153,6 +154,7 @@ func TestPeerSelector_SelectSyncPeer_PreferLowerBanScore(t *testing.T) {
 			BanScore:      10, // Lower ban score, should be preferred
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("C"),
@@ -162,6 +164,7 @@ func TestPeerSelector_SelectSyncPeer_PreferLowerBanScore(t *testing.T) {
 			BanScore:      30,
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 	}
 
@@ -192,6 +195,7 @@ func TestPeerSelector_SelectSyncPeer_PreferHigherHeight(t *testing.T) {
 			BanScore:      10,
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("B"),
@@ -201,6 +205,7 @@ func TestPeerSelector_SelectSyncPeer_PreferHigherHeight(t *testing.T) {
 			BanScore:      10,
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("C"),
@@ -210,6 +215,7 @@ func TestPeerSelector_SelectSyncPeer_PreferHigherHeight(t *testing.T) {
 			BanScore:      10,
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 	}
 
@@ -270,6 +276,7 @@ func TestPeerSelector_SelectSyncPeer_RequireResponsiveURL(t *testing.T) {
 			IsHealthy:     true,
 			DataHubURL:    "http://hub1.com",
 			URLResponsive: false, // not responsive
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("B"),
@@ -277,6 +284,7 @@ func TestPeerSelector_SelectSyncPeer_RequireResponsiveURL(t *testing.T) {
 			IsHealthy:     true,
 			DataHubURL:    "http://hub2.com",
 			URLResponsive: true, // responsive
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("C"),
@@ -284,6 +292,7 @@ func TestPeerSelector_SelectSyncPeer_RequireResponsiveURL(t *testing.T) {
 			IsHealthy:     true,
 			DataHubURL:    "",
 			URLResponsive: false, // no URL
+			NodeMode:      "full",
 		},
 	}
 
@@ -346,6 +355,7 @@ func TestPeerSelector_SelectSyncPeer_InvalidHeight(t *testing.T) {
 			IsHealthy:     true,
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("B"),
@@ -353,6 +363,7 @@ func TestPeerSelector_SelectSyncPeer_InvalidHeight(t *testing.T) {
 			IsHealthy:     true,
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("C"),
@@ -360,6 +371,7 @@ func TestPeerSelector_SelectSyncPeer_InvalidHeight(t *testing.T) {
 			IsHealthy:     true,
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 	}
 
@@ -383,6 +395,7 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 			DataHubURL:    "http://hub.com",
 			URLResponsive: true,
 			BanScore:      0,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("B"),
@@ -392,6 +405,7 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 			DataHubURL:    "http://hub.com",
 			URLResponsive: true,
 			BanScore:      100,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("C"),
@@ -401,6 +415,7 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 			DataHubURL:    "", // fails DataHub requirement
 			URLResponsive: false,
 			BanScore:      10,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("D"),
@@ -410,6 +425,7 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 			DataHubURL:    "http://hub.com",
 			URLResponsive: false, // fails responsive URL check
 			BanScore:      20,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("E"),
@@ -419,6 +435,7 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 			DataHubURL:    "http://hub.com",
 			URLResponsive: true, // passes all checks
 			BanScore:      5,
+			NodeMode:      "full",
 		},
 	}
 
@@ -448,6 +465,7 @@ func TestPeerSelector_isEligible(t *testing.T) {
 				IsBanned:      false,
 				DataHubURL:    "http://test.com",
 				URLResponsive: true,
+				NodeMode:      "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: true,
@@ -461,6 +479,7 @@ func TestPeerSelector_isEligible(t *testing.T) {
 				IsBanned:      true,
 				DataHubURL:    "http://test.com",
 				URLResponsive: true,
+				NodeMode:      "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: false,
@@ -471,6 +490,7 @@ func TestPeerSelector_isEligible(t *testing.T) {
 				ID:        peer.ID("C"),
 				Height:    100,
 				IsHealthy: false,
+				NodeMode:  "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: false,
@@ -482,6 +502,7 @@ func TestPeerSelector_isEligible(t *testing.T) {
 				Height:     100,
 				IsHealthy:  true,
 				DataHubURL: "",
+				NodeMode:   "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: false,
@@ -494,6 +515,7 @@ func TestPeerSelector_isEligible(t *testing.T) {
 				IsHealthy:     true,
 				DataHubURL:    "http://hub.com",
 				URLResponsive: false,
+				NodeMode:      "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: false,
@@ -504,6 +526,7 @@ func TestPeerSelector_isEligible(t *testing.T) {
 				ID:        peer.ID("F"),
 				Height:    0,
 				IsHealthy: true,
+				NodeMode:  "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: false,
@@ -531,6 +554,7 @@ func TestPeerSelector_DeterministicSelectionAmongEqualPeers(t *testing.T) {
 			BanScore:      10,
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("B"),
@@ -539,6 +563,7 @@ func TestPeerSelector_DeterministicSelectionAmongEqualPeers(t *testing.T) {
 			BanScore:      10,
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 		{
 			ID:            peer.ID("C"),
@@ -547,6 +572,7 @@ func TestPeerSelector_DeterministicSelectionAmongEqualPeers(t *testing.T) {
 			BanScore:      10,
 			DataHubURL:    "http://test.com",
 			URLResponsive: true,
+			NodeMode:      "full",
 		},
 	}
 

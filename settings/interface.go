@@ -425,8 +425,8 @@ type P2PSettings struct {
 	PeerHealthRemoveAfterFailures int           // Consecutive failures before removing a peer (default: 3)
 
 	// Node mode configuration (full vs pruned)
-	FullNodeLagThreshold   uint32 // Maximum blocks behind for a node to be considered "full" (default: 10)
-	TreatUnknownNodeModeAs string // How to treat peers with unknown/empty node_mode field: "full" (permissive, backward compatible) or "pruned" (strict, only confirmed full nodes) (default: "pruned")
+	FullNodeLagThreshold     uint32 // Maximum blocks behind for a node to be considered "full" (default: 10)
+	AllowPrunedNodeFallback  bool   // If true, fall back to pruned nodes when no full nodes available (default: true). Selects youngest pruned node (smallest height) to minimize UTXO pruning risk.
 }
 
 type CoinbaseSettings struct {
