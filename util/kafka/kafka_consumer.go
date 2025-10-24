@@ -416,6 +416,10 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
 
+	// Disable go-metrics to prevent memory leak from exponential decay sample heap
+	// See: https://github.com/IBM/sarama/issues/1321
+	config.MetricRegistry = nil
+
 	// Enable Sarama debug logging for consumer diagnostics (only if configured)
 	// By default, SARAMA logs are too verbose and not needed in production
 	if cfg.EnableDebugLogging {

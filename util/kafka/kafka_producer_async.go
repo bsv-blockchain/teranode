@@ -191,6 +191,10 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 	config.Producer.Flush.Frequency = cfg.FlushFrequency
 	// config.Producer.Return.Successes = true
 
+	// Disable go-metrics to prevent memory leak from exponential decay sample heap
+	// See: https://github.com/IBM/sarama/issues/1321
+	config.MetricRegistry = nil
+
 	// Enable Sarama debug logging if configured
 	if cfg.EnableDebugLogging {
 		sarama.Logger = &saramaLoggerAdapter{logger: logger}
