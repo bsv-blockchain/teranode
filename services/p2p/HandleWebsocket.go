@@ -54,6 +54,7 @@ type notificationMsg struct {
 	// New fields for enhanced node status
 	MinMiningTxFee      *float64 `json:"min_mining_tx_fee,omitempty"`     // Minimum mining transaction fee configured for this node (nil = unknown, 0 = no fee)
 	ConnectedPeersCount int      `json:"connected_peers_count,omitempty"` // Number of connected peers
+	NodeMode            string   `json:"node_mode,omitempty"`             // Node mode: "full" (block persister running and caught up), "pruned" (no persister or lagging), or empty (old version)
 }
 
 // clientChannelMap manages a thread-safe collection of WebSocket client channels.

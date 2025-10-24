@@ -424,6 +424,10 @@ type P2PSettings struct {
 	PeerHealthCheckInterval       time.Duration // Interval between health checks (default: 30s)
 	PeerHealthHTTPTimeout         time.Duration // HTTP timeout for DataHub checks (default: 5s)
 	PeerHealthRemoveAfterFailures int           // Consecutive failures before removing a peer (default: 3)
+
+	// Node mode configuration (full vs pruned)
+	FullNodeLagThreshold   uint32 // Maximum blocks behind for a node to be considered "full" (default: 10)
+	TreatUnknownNodeModeAs string // How to treat peers with unknown/empty node_mode field: "full" (permissive, backward compatible) or "pruned" (strict, only confirmed full nodes) (default: "pruned")
 }
 
 type CoinbaseSettings struct {
