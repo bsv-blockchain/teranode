@@ -642,14 +642,17 @@ func TestSyncCoordinator_checkAndUpdateURLResponsiveness(t *testing.T) {
 		{
 			ID:         peer.ID("peer1"),
 			DataHubURL: successServer.URL,
+			NodeMode:   "full",
 		},
 		{
 			ID:         peer.ID("peer2"),
 			DataHubURL: "http://localhost:99999",
+			NodeMode:   "full",
 		},
 		{
 			ID:         peer.ID("peer3"),
 			DataHubURL: "",
+			NodeMode:   "full",
 		},
 	}
 
@@ -874,12 +877,14 @@ func TestSyncCoordinator_LogPeerList(t *testing.T) {
 			DataHubURL: "http://example1.com",
 			Height:     100,
 			BanScore:   5,
+			NodeMode:   "full",
 		},
 		{
 			ID:         peer.ID("peer2"),
 			DataHubURL: "http://example2.com",
 			Height:     200,
 			BanScore:   10,
+			NodeMode:   "full",
 		},
 	}
 
@@ -918,12 +923,14 @@ func TestSyncCoordinator_LogCandidateList(t *testing.T) {
 			DataHubURL: "http://candidate1.com",
 			Height:     150,
 			BanScore:   3,
+			NodeMode:   "full",
 		},
 		{
 			ID:         peer.ID("candidate2"),
 			DataHubURL: "http://candidate2.com",
 			Height:     250,
 			BanScore:   7,
+			NodeMode:   "full",
 		},
 	}
 
@@ -1585,11 +1592,11 @@ func TestSyncCoordinator_FilterEligiblePeers(t *testing.T) {
 	localHeight := int32(100)
 
 	peers := []*PeerInfo{
-		{ID: oldPeer, Height: 110},          // Old peer, should be skipped
-		{ID: peer.ID("peer1"), Height: 90},  // Below local height, should be skipped
-		{ID: peer.ID("peer2"), Height: 100}, // At local height, should be skipped
-		{ID: peer.ID("peer3"), Height: 120}, // Above local height, should be included
-		{ID: peer.ID("peer4"), Height: 115}, // Above local height, should be included
+		{ID: oldPeer, Height: 110, NodeMode: "full"},          // Old peer, should be skipped
+		{ID: peer.ID("peer1"), Height: 90, NodeMode: "full"},  // Below local height, should be skipped
+		{ID: peer.ID("peer2"), Height: 100, NodeMode: "full"}, // At local height, should be skipped
+		{ID: peer.ID("peer3"), Height: 120, NodeMode: "full"}, // Above local height, should be included
+		{ID: peer.ID("peer4"), Height: 115, NodeMode: "full"}, // Above local height, should be included
 	}
 
 	eligible := sc.filterEligiblePeers(peers, oldPeer, localHeight)
@@ -1625,8 +1632,8 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 
 	// Test case 1: Old peer is ahead of local height (should log that it's being skipped)
 	peers1 := []*PeerInfo{
-		{ID: oldPeer, Height: 110},          // Old peer ahead - should be skipped with logging
-		{ID: peer.ID("peer1"), Height: 120}, // New peer ahead - should be included
+		{ID: oldPeer, Height: 110, NodeMode: "full"},          // Old peer ahead - should be skipped with logging
+		{ID: peer.ID("peer1"), Height: 120, NodeMode: "full"}, // New peer ahead - should be included
 	}
 
 	eligible1 := sc.filterEligiblePeers(peers1, oldPeer, localHeight)
@@ -1635,8 +1642,8 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 
 	// Test case 2: Peer at same height as local (not old peer) - should be skipped but not logged
 	peers2 := []*PeerInfo{
-		{ID: peer.ID("peer2"), Height: 100}, // At local height, not old peer - skipped without special logging
-		{ID: peer.ID("peer3"), Height: 110}, // Above local height - included
+		{ID: peer.ID("peer2"), Height: 100, NodeMode: "full"}, // At local height, not old peer - skipped without special logging
+		{ID: peer.ID("peer3"), Height: 110, NodeMode: "full"}, // Above local height - included
 	}
 
 	eligible2 := sc.filterEligiblePeers(peers2, oldPeer, localHeight)
@@ -1645,8 +1652,8 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 
 	// Test case 3: Old peer behind local height - should be skipped
 	peers3 := []*PeerInfo{
-		{ID: oldPeer, Height: 90},           // Old peer behind - should be skipped
-		{ID: peer.ID("peer4"), Height: 105}, // New peer ahead - should be included
+		{ID: oldPeer, Height: 90, NodeMode: "full"},           // Old peer behind - should be skipped
+		{ID: peer.ID("peer4"), Height: 105, NodeMode: "full"}, // New peer ahead - should be included
 	}
 
 	eligible3 := sc.filterEligiblePeers(peers3, oldPeer, localHeight)
@@ -1655,11 +1662,11 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 
 	// Test case 4: Mix of peers to test all branches
 	peers4 := []*PeerInfo{
-		{ID: oldPeer, Height: 110},          // Old peer ahead - skipped with logging
-		{ID: peer.ID("peer5"), Height: 95},  // Below local - skipped
-		{ID: peer.ID("peer6"), Height: 100}, // At local - skipped
-		{ID: peer.ID("peer7"), Height: 115}, // Above local - included
-		{ID: peer.ID("peer8"), Height: 120}, // Above local - included
+		{ID: oldPeer, Height: 110, NodeMode: "full"},          // Old peer ahead - skipped with logging
+		{ID: peer.ID("peer5"), Height: 95, NodeMode: "full"},  // Below local - skipped
+		{ID: peer.ID("peer6"), Height: 100, NodeMode: "full"}, // At local - skipped
+		{ID: peer.ID("peer7"), Height: 115, NodeMode: "full"}, // Above local - included
+		{ID: peer.ID("peer8"), Height: 120, NodeMode: "full"}, // Above local - included
 	}
 
 	eligible4 := sc.filterEligiblePeers(peers4, oldPeer, localHeight)
