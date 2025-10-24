@@ -12,7 +12,7 @@ import (
 
 func TestPeerSelector_SelectSyncPeer_NoPeers(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	// Empty peer list
 	selected := ps.SelectSyncPeer([]*PeerInfo{}, SelectionCriteria{
@@ -24,7 +24,7 @@ func TestPeerSelector_SelectSyncPeer_NoPeers(t *testing.T) {
 
 func TestSelector_SkipsPeerMarkedUnhealthyByHealthChecker(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	// Health check servers: one OK, one 500
 	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +70,7 @@ func TestSelector_SkipsPeerMarkedUnhealthyByHealthChecker(t *testing.T) {
 
 func TestPeerSelector_SelectSyncPeer_NoEligiblePeers(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	// Create peers that are all banned
 	peers := []*PeerInfo{
@@ -87,7 +87,7 @@ func TestPeerSelector_SelectSyncPeer_NoEligiblePeers(t *testing.T) {
 
 func TestPeerSelector_SelectSyncPeer_NoPeersAhead(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	// Create peers that are all behind or at same height
 	peers := []*PeerInfo{
@@ -109,7 +109,7 @@ func TestPeerSelector_SelectSyncPeer_NoPeersAhead(t *testing.T) {
 
 func TestPeerSelector_SelectSyncPeer_BasicSelection(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	// Create peers with different heights
 	peers := []*PeerInfo{
@@ -132,7 +132,7 @@ func TestPeerSelector_SelectSyncPeer_BasicSelection(t *testing.T) {
 
 func TestPeerSelector_SelectSyncPeer_PreferLowerBanScore(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	// Create peers with different ban scores
 	peers := []*PeerInfo{
@@ -180,7 +180,7 @@ func TestPeerSelector_SelectSyncPeer_PreferLowerBanScore(t *testing.T) {
 
 func TestPeerSelector_SelectSyncPeer_PreferHigherHeight(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	// Create peers with same ban score but different heights
 	peers := []*PeerInfo{
@@ -223,7 +223,7 @@ func TestPeerSelector_SelectSyncPeer_PreferHigherHeight(t *testing.T) {
 
 func TestPeerSelector_SelectSyncPeer_RequireHealthy(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	peers := []*PeerInfo{
 		CreateTestPeerInfo(peer.ID("A"), 110, false, false, "http://test.com"), // unhealthy
@@ -244,7 +244,7 @@ func TestPeerSelector_SelectSyncPeer_RequireHealthy(t *testing.T) {
 
 func TestPeerSelector_SelectSyncPeer_RequireDataHub(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	peers := []*PeerInfo{
 		CreateTestPeerInfo(peer.ID("A"), 110, true, false, ""),               // no DataHub
@@ -261,7 +261,7 @@ func TestPeerSelector_SelectSyncPeer_RequireDataHub(t *testing.T) {
 
 func TestPeerSelector_SelectSyncPeer_RequireResponsiveURL(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	peers := []*PeerInfo{
 		{
@@ -296,7 +296,7 @@ func TestPeerSelector_SelectSyncPeer_RequireResponsiveURL(t *testing.T) {
 
 func TestPeerSelector_SelectSyncPeer_ForcedPeer(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	// Create multiple eligible peers
 	peers := []*PeerInfo{
@@ -337,7 +337,7 @@ func TestPeerSelector_SelectSyncPeer_ForcedPeer(t *testing.T) {
 
 func TestPeerSelector_SelectSyncPeer_InvalidHeight(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	peers := []*PeerInfo{
 		{
@@ -372,7 +372,7 @@ func TestPeerSelector_SelectSyncPeer_InvalidHeight(t *testing.T) {
 
 func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	peers := []*PeerInfo{
 		{
@@ -431,7 +431,7 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 
 func TestPeerSelector_isEligible(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	tests := []struct {
 		name     string
@@ -520,7 +520,7 @@ func TestPeerSelector_isEligible(t *testing.T) {
 
 func TestPeerSelector_DeterministicSelectionAmongEqualPeers(t *testing.T) {
 	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger)
+	ps := NewPeerSelector(logger, nil)
 
 	// Create multiple peers with same ban score and height
 	peers := []*PeerInfo{
