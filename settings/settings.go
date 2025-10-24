@@ -286,6 +286,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			FetchNumWorkers:                 getInt("blockvalidation_fetch_num_workers", 16, alternativeContext...),
 			FetchBufferSize:                 getInt("blockvalidation_fetch_buffer_size", 500, alternativeContext...),
 			SubtreeFetchConcurrency:         getInt("blockvalidation_subtree_fetch_concurrency", 8, alternativeContext...),
+			FetchPrefetchDepth:              getInt("blockvalidation_fetch_prefetch_depth", 5, alternativeContext...),
 			ExtendTransactionTimeout:        getDuration("blockvalidation_extend_transaction_timeout", 120*time.Second, alternativeContext...),
 			GetBlockTransactionsConcurrency: getInt("blockvalidation_get_block_transactions_concurrency", 64, alternativeContext...),
 			// Priority queue and fork processing settings

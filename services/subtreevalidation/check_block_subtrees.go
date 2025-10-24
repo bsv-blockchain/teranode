@@ -576,6 +576,14 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 	// Process each level in series, but all transactions within a level in parallel
 	for level := uint32(0); level <= maxLevel; level++ {
+		// Check for context cancellation (e.g., during shutdown) before processing each level
+		select {
+		case <-ctx.Done():
+			u.logger.Infof("[processTransactionsInLevels] Context cancelled at level %d/%d, stopping processing", level+1, maxLevel+1)
+			return ctx.Err()
+		default:
+		}
+
 		levelTxs := txsPerLevel[level]
 		if len(levelTxs) == 0 {
 			continue

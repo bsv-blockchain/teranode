@@ -33,15 +33,16 @@ type resultItem struct {
 	err   error
 }
 
-// fetchBlocksConcurrently fetches blocks from a peer using a high-performance worker pool architecture.
+// fetchBlocksConcurrently fetches blocks from a peer using a high-performance prefetch pipeline.
 // This function implements:
 // 1. Large batch fetching (~100 blocks per HTTP request) for maximum throughput
-// 2. Immediate distribution to multiple workers for parallel subtree data fetching
-// 3. Strict ordered delivery to validation channel after all subtree data is ready
+// 2. Prefetch pipeline that decouples batch fetching from worker distribution
+// 3. Parallel subtree data fetching across multiple workers
+// 4. Strict ordered delivery to validation channel after all subtree data is ready
 //
 // Architecture:
 //
-//	[Large Batch Fetch] → [Work Queue] → [Worker Pool] → [Ordered Buffer] → [validateBlocksChan]
+//	[Batch Fetch] → [Batch Queue] → [Distribution] → [Work Queue] → [Worker Pool] → [Ordered Buffer] → [validateBlocksChan]
 //
 // Parameters:
 //   - gCtx: Context for cancellation
@@ -72,6 +73,7 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 	largeBatchSize := 100 // Large batches for maximum HTTP efficiency (peer limit)
 	numWorkers := 16      // Number of worker goroutines for parallel processing
 	bufferSize := 500     // Buffer size for channels
+	prefetchDepth := 2    // Number of batches to prefetch ahead (default: 2)
 
 	// Use configured values if available in settings
 	if u.settings.BlockValidation.FetchLargeBatchSize > 0 {
@@ -83,6 +85,12 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 	if u.settings.BlockValidation.FetchBufferSize > 0 {
 		bufferSize = u.settings.BlockValidation.FetchBufferSize
 	}
+	if u.settings.BlockValidation.FetchPrefetchDepth >= 0 {
+		prefetchDepth = u.settings.BlockValidation.FetchPrefetchDepth
+	}
+
+	u.logger.Debugf("[catchup:fetchBlocksConcurrently][%s] pipeline config: batchSize=%d, workers=%d, buffer=%d, prefetchDepth=%d",
+		blockUpTo.Hash().String(), largeBatchSize, numWorkers, bufferSize, prefetchDepth)
 
 	// Channels for pipeline stages
 	workQueue := make(chan workItem, bufferSize)
@@ -104,10 +112,25 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 		return u.orderedDelivery(gCtx, resultQueue, validateBlocksChan, len(blockHeaders), blockUpTo, size)
 	})
 
-	// Start batch fetching and work distribution
+	// Use prefetch pipeline to allow batch fetching to run ahead of distribution
+	// This keeps the network pipeline full while validation processes earlier batches
+	// When prefetchDepth is 0, use capacity of 1 for minimal buffering
+	batchQueueSize := prefetchDepth
+	if batchQueueSize <= 0 {
+		batchQueueSize = 1
+	}
+	batchQueue := make(chan []*model.Block, batchQueueSize)
+
+	// Start batch fetching goroutine (fills prefetch queue)
+	g.Go(func() error {
+		defer close(batchQueue)
+		return u.batchFetchWithPrefetch(gCtx, blockHeaders, batchQueue, baseURL, blockUpTo, largeBatchSize)
+	})
+
+	// Start distribution goroutine (drains prefetch queue to workers)
 	g.Go(func() error {
 		defer close(workQueue)
-		return u.batchFetchAndDistribute(gCtx, blockHeaders, workQueue, baseURL, blockUpTo, largeBatchSize)
+		return u.distributeBatchesToWorkers(gCtx, batchQueue, workQueue, blockUpTo)
 	})
 
 	// Wait for all goroutines to complete
@@ -119,37 +142,41 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 	return g.Wait()
 }
 
-// batchFetchAndDistribute fetches blocks in large batches and immediately distributes them to workers
-func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*model.BlockHeader, workQueue chan<- workItem, baseURL string, blockUpTo *model.Block, batchSize int) error {
-	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "batchFetchAndDistribute",
+// batchFetchWithPrefetch fetches blocks in large batches and sends complete batches to batchQueue.
+// This decouples network fetching from worker distribution, allowing fetch to run ahead and
+// maximizing network throughput during block catchup operations.
+func (u *Server) batchFetchWithPrefetch(ctx context.Context, blockHeaders []*model.BlockHeader, batchQueue chan<- []*model.Block, baseURL string, blockUpTo *model.Block, batchSize int) error {
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "batchFetchWithPrefetch",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
 
-	u.logger.Debugf("[catchup:batchFetchAndDistribute][%s] fetching %d blocks in batches of %d", blockUpTo.Hash().String(), len(blockHeaders), batchSize)
+	u.logger.Infof("[catchup:batchFetchWithPrefetch][%s] fetching %d blocks in batches of %d with prefetch enabled", blockUpTo.Hash().String(), len(blockHeaders), batchSize)
 
-	currentIndex := 0
+	totalBatches := (len(blockHeaders) + batchSize - 1) / batchSize
+
 	for i := 0; i < len(blockHeaders); i += batchSize {
 		end := i + batchSize
 		if end > len(blockHeaders) {
 			end = len(blockHeaders)
 		}
 
+		batchNum := i/batchSize + 1
 		batchHeaders := blockHeaders[i:end]
-		u.logger.Debugf("[catchup:batchFetchAndDistribute][%s] fetching batch %d-%d (%d blocks)",
-			blockUpTo.Hash().String(), i, end-1, len(batchHeaders))
+		u.logger.Debugf("[catchup:batchFetchWithPrefetch][%s] fetching batch %d/%d (%d blocks, indices %d-%d)",
+			blockUpTo.Hash().String(), batchNum, totalBatches, len(batchHeaders), i, end-1)
 
 		// Fetch entire batch in one HTTP request, from last block, since the data is returned newest-first
 		blocks, err := u.fetchBlocksBatch(ctx, batchHeaders[len(batchHeaders)-1].Hash(), uint32(len(batchHeaders)), baseURL)
 		if err != nil {
-			return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] failed to fetch batch starting at %s", blockUpTo.Hash().String(), batchHeaders[0].Hash().String(), err)
+			return errors.NewProcessingError("[catchup:batchFetchWithPrefetch][%s] failed to fetch batch %d starting at %s", blockUpTo.Hash().String(), batchNum, batchHeaders[0].Hash().String(), err)
 		}
 
 		if len(blocks) != len(batchHeaders) {
-			return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] expected %d blocks, got %d", blockUpTo.Hash().String(), len(batchHeaders), len(blocks))
+			return errors.NewProcessingError("[catchup:batchFetchWithPrefetch][%s] expected %d blocks, got %d", blockUpTo.Hash().String(), len(batchHeaders), len(blocks))
 		}
 
-		// reverse the blocks to match the order of headers
+		// Reverse the blocks to match the order of headers
 		for j, k := 0, len(blocks)-1; j < k; j, k = j+1, k-1 {
 			blocks[j], blocks[k] = blocks[k], blocks[j]
 		}
@@ -157,12 +184,41 @@ func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*mo
 		// Verify each fetched block matches the expected header
 		for j, block := range blocks {
 			if block.Hash().String() != batchHeaders[j].Hash().String() {
-				return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] block hash mismatch at index %d: expected %s, got %s", blockUpTo.Hash().String(), j, batchHeaders[j].Hash().String(), block.Hash().String())
+				return errors.NewProcessingError("[catchup:batchFetchWithPrefetch][%s] block hash mismatch at index %d: expected %s, got %s", blockUpTo.Hash().String(), j, batchHeaders[j].Hash().String(), block.Hash().String())
 			}
 		}
 
-		// Immediately distribute blocks to workers
-		for _, block := range blocks {
+		// Send complete batch to prefetch queue
+		// This will block if queue is full (prefetchDepth batches ahead), naturally throttling fetches
+		select {
+		case batchQueue <- blocks:
+			u.logger.Debugf("[catchup:batchFetchWithPrefetch][%s] batch %d/%d queued for processing", blockUpTo.Hash().String(), batchNum, totalBatches)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	u.logger.Infof("[catchup:batchFetchWithPrefetch][%s] completed fetching %d batches", blockUpTo.Hash().String(), totalBatches)
+	return nil
+}
+
+// distributeBatchesToWorkers receives complete batches from batchQueue and distributes individual
+// blocks to the worker pool. This stage ensures workers receive a steady stream of blocks while
+// network fetching runs ahead, keeping both the network and compute resources fully utilized.
+func (u *Server) distributeBatchesToWorkers(ctx context.Context, batchQueue <-chan []*model.Block, workQueue chan<- workItem, blockUpTo *model.Block) error {
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "distributeBatchesToWorkers",
+		tracing.WithParentStat(u.stats),
+	)
+	defer deferFn()
+
+	currentIndex := 0
+	batchNum := 0
+
+	for batch := range batchQueue {
+		batchNum++
+		u.logger.Debugf("[catchup:distributeBatchesToWorkers][%s] distributing batch %d with %d blocks to workers", blockUpTo.Hash().String(), batchNum, len(batch))
+
+		for _, block := range batch {
 			select {
 			case workQueue <- workItem{
 				block: block,
@@ -175,7 +231,7 @@ func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*mo
 		}
 	}
 
-	u.logger.Debugf("[catchup:batchFetchAndDistribute][%s] completed distribution of %d blocks", blockUpTo.Hash().String(), currentIndex)
+	u.logger.Infof("[catchup:distributeBatchesToWorkers][%s] completed distribution of %d blocks across %d batches", blockUpTo.Hash().String(), currentIndex, batchNum)
 	return nil
 }
 
