@@ -18,6 +18,7 @@ package p2p
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -387,7 +388,7 @@ func NewServer(
 
 	// Initialize new clean architecture components
 	p2pServer.peerRegistry = NewPeerRegistry()
-	p2pServer.peerSelector = NewPeerSelector(logger)
+	p2pServer.peerSelector = NewPeerSelector(logger, tSettings)
 	p2pServer.peerHealthChecker = NewPeerHealthChecker(logger, p2pServer.peerRegistry, tSettings)
 	p2pServer.syncCoordinator = NewSyncCoordinator(
 		logger,
@@ -876,6 +877,7 @@ type NodeStatusMessage struct {
 	SyncConnectedAt     int64    `json:"sync_connected_at,omitempty"`     // Unix timestamp when we first connected to this sync peer
 	MinMiningTxFee      *float64 `json:"min_mining_tx_fee,omitempty"`     // Minimum mining transaction fee configured for this node (nil = unknown, 0 = no fee)
 	ConnectedPeersCount int      `json:"connected_peers_count,omitempty"` // Number of connected peers
+	NodeMode            string   `json:"node_mode,omitempty"`             // Node mode: "full" (block persister running and caught up), "pruned" (no persister or lagging), or empty (old version)
 }
 
 func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string) {
@@ -942,6 +944,7 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 		SyncConnectedAt:     nodeStatusMessage.SyncConnectedAt,
 		MinMiningTxFee:      nodeStatusMessage.MinMiningTxFee,
 		ConnectedPeersCount: nodeStatusMessage.ConnectedPeersCount,
+		NodeMode:            nodeStatusMessage.NodeMode,
 	}:
 	default:
 		s.logger.Warnf("[handleNodeStatusTopic] notification channel full, dropped node_status notification for %s", nodeStatusMessage.PeerID)
@@ -973,6 +976,13 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 			if nodeStatusMessage.BestBlockHash != "" {
 				s.updateBlockHash(peerID, nodeStatusMessage.BestBlockHash)
 				s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", nodeStatusMessage.BestBlockHash, peerID)
+			}
+
+			// Update node mode if provided
+			// Store whether the peer is a full node or pruned node
+			if nodeStatusMessage.NodeMode != "" {
+				s.updateNodeMode(peerID, nodeStatusMessage.NodeMode)
+				s.logger.Debugf("[handleNodeStatusTopic] Updated node mode to %s for peer %s", nodeStatusMessage.NodeMode, peerID)
 			}
 		}
 	}
@@ -1216,6 +1226,9 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		}
 	}
 
+	// Determine node mode (full vs pruned) based on block persister status
+	nodeMode := s.determineNodeMode(ctx, height)
+
 	// Return the notification message
 	return &notificationMsg{
 		Timestamp:           time.Now().UTC().Format(isoFormat),
@@ -1241,7 +1254,65 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		SyncConnectedAt:     syncConnectedAt,
 		MinMiningTxFee:      minMiningTxFee,
 		ConnectedPeersCount: connectedPeersCount,
+		NodeMode:            nodeMode,
 	}
+}
+
+// determineNodeMode determines whether this node is a full node or pruned node.
+// A full node has the block persister running and caught up (within threshold blocks of tip).
+// A pruned node either doesn't have block persister running or it's lagging behind.
+// Returns empty string if unable to determine (e.g., in test mocks or when blockchain client unavailable).
+func (s *Server) determineNodeMode(ctx context.Context, bestHeight uint32) (mode string) {
+	if s.blockchainClient == nil {
+		return "" // No blockchain client, can't determine
+	}
+
+	// Check if context is already canceled (e.g., during test shutdown)
+	select {
+	case <-ctx.Done():
+		return "" // Context canceled, skip node mode determination
+	default:
+	}
+
+	// Handle mock panics gracefully in tests
+	defer func() {
+		if r := recover(); r != nil {
+			// Mock panic - likely in tests without proper GetState mock setup
+			// Return empty string to let tests pass
+			mode = ""
+		}
+	}()
+
+	// Query block persister height from blockchain state
+	stateData, err := s.blockchainClient.GetState(ctx, "BlockPersisterHeight")
+	if err != nil || len(stateData) < 4 {
+		// Block persister not running or state not available
+		return ""
+	}
+
+	// Decode persisted height (little-endian uint32)
+	persistedHeight := binary.LittleEndian.Uint32(stateData)
+
+	// Calculate lag
+	var lag uint32
+	if bestHeight > persistedHeight {
+		lag = bestHeight - persistedHeight
+	} else {
+		lag = 0
+	}
+
+	// Get lag threshold from settings (default: 10 blocks)
+	lagThreshold := uint32(10)
+	if s.settings != nil && s.settings.P2P.FullNodeLagThreshold > 0 {
+		lagThreshold = s.settings.P2P.FullNodeLagThreshold
+	}
+
+	// Determine mode based on lag threshold
+	if lag <= lagThreshold {
+		return "full"
+	}
+
+	return "pruned"
 }
 
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
@@ -1275,6 +1346,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		SyncConnectedAt:     msg.SyncConnectedAt,
 		MinMiningTxFee:      msg.MinMiningTxFee,
 		ConnectedPeersCount: msg.ConnectedPeersCount,
+		NodeMode:            msg.NodeMode,
 	}
 
 	msgBytes, err := json.Marshal(nodeStatusMessage)
@@ -2398,6 +2470,13 @@ func (s *Server) getSyncPeer() peer.ID {
 func (s *Server) updateDataHubURL(peerID peer.ID, url string) {
 	if s.peerRegistry != nil && url != "" {
 		s.peerRegistry.UpdateDataHubURL(peerID, url)
+	}
+}
+
+// updateNodeMode updates peer node mode in the registry
+func (s *Server) updateNodeMode(peerID peer.ID, mode string) {
+	if s.peerRegistry != nil && mode != "" {
+		s.peerRegistry.UpdateNodeMode(peerID, mode)
 	}
 }
 

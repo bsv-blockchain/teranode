@@ -53,7 +53,7 @@ func TestSyncCoordination_FullFlow(t *testing.T) {
 	registry.UpdateBanStatus(bannedPeer, 50, true)
 
 	// Create peer selector
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 
 	// Create health checker
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
@@ -228,7 +228,7 @@ func TestSyncCoordination_WithHTTPServer(t *testing.T) {
 	// Create components
 	banManager := NewPeerBanManager(blockchainSetup.Ctx, nil, settings)
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 
 	// Add peer with test server URL
@@ -278,7 +278,7 @@ func TestSyncCoordination_ConcurrentOperations(t *testing.T) {
 
 	banManager := NewPeerBanManager(blockchainSetup.Ctx, nil, settings)
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 
 	coordinator := NewSyncCoordinator(
@@ -376,7 +376,7 @@ func TestSyncCoordination_CatchupFailures(t *testing.T) {
 	banManager := NewPeerBanManager(blockchainSetup.Ctx, banHandler, settings)
 
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 
 	coordinator := NewSyncCoordinator(
@@ -434,7 +434,7 @@ func TestSyncCoordination_PeerEvaluation(t *testing.T) {
 
 	banManager := NewPeerBanManager(blockchainSetup.Ctx, nil, settings)
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 
 	coordinator := NewSyncCoordinator(
