@@ -84,7 +84,33 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	ids := make([]uint32, 0, numberOfHeaders)
+	// Pre-allocate slice capacity with a reasonable cap to balance performance and safety.
+	//
+	// Background:
+	// - The SQL query LIMIT clause constrains actual results, but numberOfHeaders can be
+	//   arbitrarily large (e.g., when global_blockHeightRetention=999999999)
+	// - Pre-allocating based on numberOfHeaders directly would cause: make([]uint32, 0, 2_000_000_000)
+	//   → 8GB allocation → instant OOM on 4Gi memory limit
+	//
+	// Benefits of capped pre-allocation:
+	// - Prevents OOM from misconfigured settings (safe regardless of numberOfHeaders value)
+	// - Optimal performance for common cases (<10k headers): zero reallocations
+	// - Minimal memory overhead: caps pre-allocation at 40KB (10k * 4 bytes)
+	//
+	// Drawbacks of capped pre-allocation:
+	// - For queries returning >10k results: slice will need ~log₂(n/10000) reallocations
+	//   Example: 870k results requires ~6 reallocations with ~870k extra copies
+	//   Performance cost: ~1-2ms additional (negligible compared to SQL query time)
+	//
+	// Alternative considered (no pre-allocation):
+	// - make([]uint32, 0) would be safest but causes ~20 reallocations for 870k results
+	// - The capped approach provides better performance with acceptable safety tradeoff
+	const reasonableInitialCapacity = 10_000
+	initialCap := numberOfHeaders
+	if initialCap > reasonableInitialCapacity {
+		initialCap = reasonableInitialCapacity
+	}
+	ids := make([]uint32, 0, initialCap)
 
 	q := `
 		WITH RECURSIVE ChainBlocks AS (
