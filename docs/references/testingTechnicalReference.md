@@ -410,6 +410,7 @@ const (
 ```text
 test/
 ├── aerospike/           # Aerospike database tests
+├── chaos/              # Chaos engineering tests
 ├── config/             # Test configuration files
 ├── consensus/          # Consensus mechanism tests
 ├── e2e/               # End-to-end integration tests
