@@ -18,8 +18,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1924,15 +1922,28 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	return u.subtreeValidationClient.CheckBlockSubtrees(ctx, block, baseURL)
 }
 
-// checkOldBlockIDs verifies that referenced blocks are in the current chain.
-// It prevents invalid chain reorganizations and maintains chain consistency.
+// checkOldBlockIDs verifies that referenced blocks exist in the block's ancestry.
+// This is a critical consensus check that ensures transactions only reference UTXOs
+// that exist in the block's own chain history, not from competing forks.
+//
+// Bitcoin consensus requires that a block can only spend UTXOs from its ancestry.
+// When validating a block (including fork blocks), we must verify that all parent
+// transactions exist in that block's chain, walking backward from the block being
+// validated. This prevents a fork block from incorrectly spending UTXOs that exist
+// on the main chain but not in the fork's history.
+//
+// The function fetches up to 100,000 ancestors of the block being validated and
+// checks that all parent block IDs referenced by transactions exist within that
+// ancestry. The 100K limit covers approximately 695 days of history, which is
+// sufficient for any realistic chain reorganization scenario while maintaining
+// excellent performance.
 //
 // Parameters:
 //   - ctx: Context for the operation
-//   - oldBlockIDsMap: Map of transaction IDs to their parent block IDs
-//   - block: Block to check IDs for
+//   - oldBlockIDsMap: Map of transaction IDs to their parent block IDs (populated by block.Valid())
+//   - block: Block being validated
 //
-// Returns an error if block verification fails.
+// Returns an error if any transaction references a block not in the ancestry.
 func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
 	block *model.Block,
 ) (iterationError error) {
@@ -1942,73 +1953,53 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 
 	defer deferFn()
 
-	currentChainBlockIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Hash(), 10_000)
+	// Fetch ancestors of the block being validated up to the configured depth limit.
+	// IMPORTANT: We walk backward from the block being validated, NOT from the current
+	// best block. This ensures fork blocks are validated against their own ancestry,
+	// which is required for Bitcoin consensus.
+	//
+	// The default 100K limit covers ~695 days of blockchain history (100K blocks × 10 min/block).
+	// Transactions referencing blocks beyond this depth are extremely rare and likely invalid.
+	// This limit is configurable via blockvalidation_maxAncestorDepthCheck setting.
+	maxAncestorDepth := u.settings.BlockValidation.MaxAncestorDepthCheck
+	blockAncestorIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Hash(), maxAncestorDepth)
 	if err != nil {
-		return errors.NewServiceError("[Block Validation][checkOldBlockIDs][%s] failed to get block header ids", block.String(), err)
+		return errors.NewServiceError("[Block Validation][checkOldBlockIDs][%s] failed to get block ancestor ids", block.String(), err)
 	}
 
-	currentChainBlockIDsMap := make(map[uint32]struct{}, len(currentChainBlockIDs))
-	for _, blockID := range currentChainBlockIDs {
-		currentChainBlockIDsMap[blockID] = struct{}{}
+	// Build a map for O(1) lookup performance
+	blockAncestorIDsMap := make(map[uint32]struct{}, len(blockAncestorIDs))
+	for _, blockID := range blockAncestorIDs {
+		blockAncestorIDsMap[blockID] = struct{}{}
 	}
 
-	currentChainLookupCache := make(map[string]bool, len(currentChainBlockIDs))
-
-	var builder strings.Builder
-
-	// range over the oldBlockIDsMap to get txID - oldBlockID pairs
+	// Validate that all parent block IDs exist in the block's ancestry
 	oldBlockIDsMap.Iterate(func(txID chainhash.Hash, blockIDs []uint32) bool {
 		if len(blockIDs) == 0 {
 			iterationError = errors.NewProcessingError("[Block Validation][checkOldBlockIDs][%s] blockIDs is empty for txID: %v", block.String(), txID)
 			return false
 		}
 
-		// check whether the blockIDs are in the current chain we just fetched
+		// Check if any of the parent blocks exist in this block's ancestry
+		foundInAncestry := false
 		for _, blockID := range blockIDs {
-			if _, ok := currentChainBlockIDsMap[blockID]; ok {
-				// all good, continue
-				return true
+			if _, ok := blockAncestorIDsMap[blockID]; ok {
+				foundInAncestry = true
+				break
 			}
 		}
 
-		slices.Sort(blockIDs)
-
-		builder.Reset()
-
-		for i, id := range blockIDs {
-			if i > 0 {
-				builder.WriteString(",") // Add a separator
-			}
-
-			builder.WriteString(strconv.Itoa(int(id)))
-		}
-
-		blockIDsString := builder.String()
-
-		// check whether we already checked exactly the same blockIDs and can use a cache
-		if blocksPartOfCurrentChain, ok := currentChainLookupCache[blockIDsString]; ok {
-			if !blocksPartOfCurrentChain {
-				iterationError = errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not valid. Transaction's (%v) parent blocks (%v) are not from current chain using cache", block.String(), txID, blockIDs)
-				return false
-			}
-
-			return true
-		}
-
-		// Flag to check if the old blocks are part of the current chain
-		blocksPartOfCurrentChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, blockIDs)
-		// if err is not nil, log the error and continue iterating for the next transaction
-		if err != nil {
-			iterationError = errors.NewProcessingError("[Block Validation][checkOldBlockIDs][%s] failed to check if old blocks are part of the current chain", block.String(), err)
-			return false
-		}
-
-		// set the cache for the blockIDs
-		currentChainLookupCache[blockIDsString] = blocksPartOfCurrentChain
-
-		// if the blocks are not part of the current chain, stop iteration, set the iterationError and return false
-		if !blocksPartOfCurrentChain {
-			iterationError = errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not valid. Transaction's (%v) parent blocks (%v) are not from current chain", block.String(), txID, blockIDs)
+		if !foundInAncestry {
+			// CONSENSUS RULE VIOLATION: Transaction references blocks not in this block's ancestry.
+			// This could mean:
+			// 1. Parent blocks are on a competing fork (not in this chain's history)
+			// 2. Parent blocks are >100K deep (extremely unlikely for valid transactions)
+			// 3. Parent blocks don't exist at all (malformed transaction)
+			slices.Sort(blockIDs)
+			iterationError = errors.NewBlockInvalidError(
+				"[Block Validation][checkOldBlockIDs][%s] block is invalid. Transaction %v references parent blocks %v that are not in this block's ancestry (checked %d ancestors)",
+				block.String(), txID, blockIDs, len(blockAncestorIDs),
+			)
 			return false
 		}
 

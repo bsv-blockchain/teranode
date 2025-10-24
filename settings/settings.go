@@ -241,6 +241,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GRPCListenAddress:                                getString("blockvalidation_grpcListenAddress", ":8088", alternativeContext...),
 			KafkaWorkers:                                     getInt("blockvalidation_kafkaWorkers", 0, alternativeContext...),
 			LocalSetTxMinedConcurrency:                       getInt("blockvalidation_localSetTxMinedConcurrency", 8, alternativeContext...),
+			MaxAncestorDepthCheck:                            getUint64("blockvalidation_maxAncestorDepthCheck", 100_000, alternativeContext...),
 			MaxPreviousBlockHeadersToCheck:                   getUint64("blockvalidation_maxPreviousBlockHeadersToCheck", 100, alternativeContext...),
 			MissingTransactionsBatchSize:                     getInt("blockvalidation_missingTransactionsBatchSize", 5000, alternativeContext...),
 			ProcessTxMetaUsingCacheBatchSize:                 getInt("blockvalidation_processTxMetaUsingCache_BatchSize", 1024, alternativeContext...),

@@ -250,6 +250,7 @@ type BlockValidationSettings struct {
 	GRPCListenAddress                                string
 	KafkaWorkers                                     int
 	LocalSetTxMinedConcurrency                       int
+	MaxAncestorDepthCheck                            uint64
 	MaxPreviousBlockHeadersToCheck                   uint64
 	MissingTransactionsBatchSize                     int
 	ProcessTxMetaUsingCacheBatchSize                 int

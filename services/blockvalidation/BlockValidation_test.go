@@ -1991,9 +1991,11 @@ func Test_checkOldBlockIDs(t *testing.T) {
 	initPrometheusMetrics()
 
 	t.Run("empty map", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		blockchainMock := &blockchain.Mock{}
 		blockValidation := &BlockValidation{
 			blockchainClient: blockchainMock,
+			settings:         tSettings,
 		}
 
 		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
@@ -2005,9 +2007,11 @@ func Test_checkOldBlockIDs(t *testing.T) {
 	})
 
 	t.Run("empty parents", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		blockchainMock := &blockchain.Mock{}
 		blockValidation := &BlockValidation{
 			blockchainClient: blockchainMock,
+			settings:         tSettings,
 		}
 
 		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
@@ -2024,10 +2028,12 @@ func Test_checkOldBlockIDs(t *testing.T) {
 		require.Contains(t, err.Error(), "blockIDs is empty for txID")
 	})
 
-	t.Run("simple map", func(t *testing.T) {
+	t.Run("parents in ancestry", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		blockchainMock := &blockchain.Mock{}
 		blockValidation := &BlockValidation{
 			blockchainClient: blockchainMock,
+			settings:         tSettings,
 		}
 
 		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
@@ -2041,52 +2047,35 @@ func Test_checkOldBlockIDs(t *testing.T) {
 			blockIDs = append(blockIDs, i)
 		}
 
-		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
+		// All parent blocks are in the ancestry - should pass
 		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(blockIDs, nil).Once()
 
 		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, &model.Block{})
 		require.NoError(t, err)
 	})
 
-	t.Run("lookup and use cache", func(t *testing.T) {
+	t.Run("parents not in ancestry", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
 		blockchainMock := &blockchain.Mock{}
 		blockValidation := &BlockValidation{
 			blockchainClient: blockchainMock,
+			settings:         tSettings,
 		}
 
 		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
+		// Set transactions referencing block ID 999
 		for i := uint32(0); i < 100; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
-			oldBlockIDsMap.Set(txHash, []uint32{1})
+			oldBlockIDsMap.Set(txHash, []uint32{999})
 		}
 
-		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Once()
-		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil).Once()
-
-		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, &model.Block{})
-		require.NoError(t, err)
-	})
-
-	t.Run("not present", func(t *testing.T) {
-		blockchainMock := &blockchain.Mock{}
-		blockValidation := &BlockValidation{
-			blockchainClient: blockchainMock,
-		}
-
-		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
-
-		for i := uint32(0); i < 100; i++ {
-			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
-			oldBlockIDsMap.Set(txHash, []uint32{1})
-		}
-
-		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(false, nil).Once()
-		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil).Once()
+		// Return empty ancestry (block 999 is not in ancestry)
+		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1, 2, 3}, nil).Once()
 
 		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, &model.Block{})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "are not from current chain")
+		require.Contains(t, err.Error(), "not in this block's ancestry")
 	})
 }
 
