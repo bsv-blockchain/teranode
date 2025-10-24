@@ -1350,9 +1350,25 @@ func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingT
 			return level
 		}
 
-		// If no dependencies in subtree, level is 0
+		// Get parents that are in the subtree
 		parents := dependencies[txHash]
+
+		// If no dependencies in subtree, check if transaction has ANY inputs
+		// Transactions with external parents (inputs not in subtree) should NOT be level 0
+		// because they depend on UTXOs that may not be available yet
 		if len(parents) == 0 {
+			// Get the actual transaction to check if it has inputs
+			if wrapper, exists := txMap[txHash]; exists && wrapper.missingTx.tx != nil {
+				// If transaction has inputs but no parents in subtree, it depends on external UTXOs
+				// These should be processed at a higher level to ensure parent UTXOs are available
+				if len(wrapper.missingTx.tx.Inputs) > 0 {
+					// Assign to level 1 to ensure external dependencies are resolved first
+					levelCache[txHash] = 1
+					return 1
+				}
+			}
+
+			// No inputs at all (shouldn't happen for non-coinbase) - level 0
 			levelCache[txHash] = 0
 			return 0
 		}
